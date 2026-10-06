@@ -39,3 +39,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .gfx .hint, #perf { font-size: 12px; margin: 0; }
 .cache-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 !important; }
 .cache-line button { padding: 2px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+.orbit-pivot {
+  position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; pointer-events: none;
+  border: 2px solid #fff; border-radius: 50%; background: #2563eb; box-shadow: 0 0 0 1px rgba(0,0,0,.4);
+}
+.orbit-pivot[hidden] { display: none; }

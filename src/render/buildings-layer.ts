@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
+import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights } from '../osm/heights';
 import type { Feature3D, LonLat } from '../osm/model';
 import { buildTriangles, type Pt } from './building-geometry';
@@ -182,12 +182,17 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   /** Возвращает ключ ближайшего здания под точкой экрана (CSS px). */
   pick(point: PointLike): string | undefined {
+    return this.pickHit(point)?.key;
+  }
+
+  /** Ближайшее здание под точкой экрана и 3D-точка попадания (lng/lat + высота в метрах). */
+  pickHit(point: PointLike): { key: string; lngLat: LngLat; altitude: number } | undefined {
     if (!this.visible || !this.map) return;
     const [px, py] = Array.isArray(point) ? point : [point.x, point.y];
     const canvas = this.map.getCanvas();
     const x = (px / canvas.clientWidth) * 2 - 1;
     const y = 1 - (py / canvas.clientHeight) * 2;
-    let best: { key: string; depth: number } | undefined;
+    let best: { key: string; depth: number; g: MeshGroup; p: THREE.Vector3 } | undefined;
     for (const g of this.groups.values()) {
       const m = g.camera.projectionMatrix;
       const inv = m.clone().invert();
@@ -197,9 +202,12 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (!hit) continue;
       // Группы в разных локальных системах — сравниваем по глубине в clip space
       const depth = hit.point.clone().applyMatrix4(m).z;
-      if (!best || depth < best.depth) best = { key: hit.object.userData.key, depth };
+      if (!best || depth < best.depth) best = { key: hit.object.userData.key, depth, g, p: hit.point };
     }
-    return best?.key;
+    if (!best) return;
+    const { g, p } = best;
+    const merc = new MercatorCoordinate(g.origin.x + p.x * g.metersToMerc, g.origin.y - p.y * g.metersToMerc, 0);
+    return { key: best.key, lngLat: merc.toLngLat(), altitude: p.z };
   }
 
   select(key: string | undefined) {

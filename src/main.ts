@@ -8,6 +8,7 @@ import { incompleteBuildingRelations, parseBuildings } from './osm/model';
 import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './render/buildings-layer';
 import { queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles } from './view/overpass-tiles';
+import { CursorOrbit } from './view/orbit';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
@@ -43,9 +44,9 @@ let editAreaIds: number[] = [];
  */
 const userHidden = new Set<string>();
 
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean }
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; orbitAtCursor: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: false, monochrome: false, hemisphere: false, groundAO: false, edges: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: false, monochrome: false, orbitAtCursor: false, hemisphere: false, groundAO: false, edges: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try { return JSON.parse(localStorage.getItem(GFX_KEY) ?? '{}'); } catch { return {}; }
@@ -158,6 +159,21 @@ monoToggle.addEventListener('change', () => {
   saveGraphics();
   applyMonochrome();
 });
+// Вращение вокруг точки под курсором (как в SketchUp)
+const orbit = new CursorOrbit(map, (x, y) => {
+  const hit = (editing ? editLayer : overpassLayer).pickHit([x, y]);
+  // Не попали в 3D-слой (тайловое здание или пусто) — точка на земле
+  return hit ?? { lngLat: map.unproject([x, y]), altitude: 0 };
+});
+const orbitToggle = document.getElementById('orbit-toggle') as HTMLInputElement;
+orbitToggle.checked = gfx.orbitAtCursor;
+orbit.setEnabled(gfx.orbitAtCursor);
+orbitToggle.addEventListener('change', () => {
+  gfx.orbitAtCursor = orbitToggle.checked;
+  saveGraphics();
+  orbit.setEnabled(gfx.orbitAtCursor);
+});
+
 function applyMonochrome() {
   for (const layer of [overpassLayer, editLayer]) layer.setMonochrome(gfx.monochrome);
 }
@@ -492,4 +508,4 @@ const esc = (s: unknown) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeA
 const tagTable = (tags: Record<string, unknown>) =>
   `<table>${Object.entries(tags).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
 
-if (import.meta.env.DEV) Object.assign(window, { map, editLayer, overpassLayer, overpass });
+if (import.meta.env.DEV) Object.assign(window, { map, editLayer, overpassLayer, overpass, orbit });

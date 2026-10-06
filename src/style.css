@@ -37,3 +37,5 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .gfx summary { cursor: pointer; padding: 2px 0; }
 .gfx .toggle { margin: 6px 0; }
 .gfx .hint, #perf { font-size: 12px; margin: 0; }
+.cache-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 !important; }
+.cache-line button { padding: 2px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }

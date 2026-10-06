@@ -173,6 +173,18 @@ function applyGraphics() {
 }
 applyGraphics();
 
+// Постоянный кеш тайлов Overpass (IndexedDB)
+const cacheInfo = document.getElementById('cache-info')!;
+async function showCacheInfo() {
+  cacheInfo.textContent = `Кэш тайлов: ${await overpass.store.count()}`;
+}
+document.getElementById('cache-clear')!.addEventListener('click', async () => {
+  await overpass.clearStore();
+  await showCacheInfo();
+});
+document.getElementById('gfx')!.addEventListener('toggle', () => void showCacheInfo());
+void showCacheInfo();
+
 // FPS считаем по кадрам MapLibre (рисует по требованию — смотреть при движении карты)
 const perfEl = document.getElementById('perf')!;
 let frames = 0;

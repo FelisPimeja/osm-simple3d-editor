@@ -6,7 +6,8 @@ import { fetchArea, fetchMap, type Bbox } from './osm/api';
 import { computeHeights } from './osm/heights';
 import { incompleteBuildingRelations, parseBuildings } from './osm/model';
 import { BuildingsLayer, type RenderedFeature } from './render/buildings-layer';
-import { queryTileBuildings, type TileBuildingFeature } from './tiles/tile-features';
+import { queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
+import { OverpassTiles } from './view/overpass-tiles';
 import { computeOutlineRemainders, overlapShares, inPolygon, interiorPoint, polygonsOf, type Ring } from './tiles/outlines';
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
@@ -17,6 +18,8 @@ const MERGED_HIGHLIGHT_LAYER = 'simple3d-merged-highlight';
 const TILE_LAYERS = [BUILDINGS_LAYER, REMAINDERS_LAYER, MERGED_LAYER];
 const HIGHLIGHT_LAYER = 'simple3d-highlight';
 const MIN_EDIT_ZOOM = 16;
+// Начиная с этого зума здания тайлов z14 подменяются данными Overpass
+const OVERPASS_MIN_ZOOM = 15;
 // Замена контуров с частями на «контур минус части» (src/tiles/outlines.ts). Временно выключено:
 // по тайлам контур не отличить от части, эвристика даёт артефакты — см. PLAN.md.
 const OUTLINE_REMAINDERS = false;
@@ -28,13 +31,9 @@ const MAX_EDIT_AREA = 0.0004;
 // Склеенные фичи (id с суффиксом 0) рисуем отдельным слоем, разрезанными на полигоны
 const BASE_FILTER: ExpressionSpecification = ['all', ['!=', ['get', 'hide_3d'], true], ['!=', ['%', ['id'], 10], 0]];
 
-// В тайлах colour — сырое значение тега: CSS-имя, hex или несколько цветов через ';'.
-// Берём первый, невалидный заменяем цветом по умолчанию (иначе здание становится чёрным).
-const TILE_COLOUR: ExpressionSpecification = [
-  'let', 'c', ['coalesce', ['get', 'colour'], ''],
-  ['let', 'i', ['index-of', ';', ['var', 'c']],
-    ['to-color', ['case', ['>=', ['var', 'i'], 0], ['slice', ['var', 'c'], 0, ['var', 'i']], ['var', 'c']], '#d9d0c9']],
-];
+// Здания из тайлов — условные (без крыш и частей), рисуем белыми, чтобы отличать от данных Overpass/API.
+// Цвет из тайла (colour, с разбором 'a;b') — см. тег openfreemap-tiles.
+const TILE_FILL = '#ffffff';
 
 /** id тайловых фич-контуров, заменённых остатком «контур минус части». */
 let replacedIds: number[] = [];
@@ -59,10 +58,16 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
 
 const infoEl = document.getElementById('info')!;
 const statusEl = document.getElementById('status')!;
+const opIndicator = document.getElementById('op-indicator')!;
 const editBtn = document.getElementById('edit-btn') as HTMLButtonElement;
 const mergedBtn = document.getElementById('merged-btn') as HTMLButtonElement;
 
-const editLayer = new BuildingsLayer();
+const editLayer = new BuildingsLayer('osm-edit-buildings');
+const overpassLayer = new BuildingsLayer('osm-overpass-buildings');
+const overpass = new OverpassTiles(map, overpassLayer, () => {
+  updateTileFilter();
+  showOverpassStatus();
+});
 let editing: Map<string, RenderedFeature> | undefined;
 
 map.on('load', () => {
@@ -86,7 +91,7 @@ map.on('load', () => {
     filter: BASE_FILTER,
     paint: {
       ...extrusion,
-      'fill-extrusion-color': TILE_COLOUR,
+      'fill-extrusion-color': TILE_FILL,
     },
   });
 
@@ -96,7 +101,7 @@ map.on('load', () => {
     type: 'fill-extrusion',
     source: 'outline-remainders',
     minzoom: 14,
-    paint: { ...extrusion, 'fill-extrusion-color': TILE_COLOUR },
+    paint: { ...extrusion, 'fill-extrusion-color': TILE_FILL },
   });
 
   map.addSource('merged-exploded', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -105,7 +110,7 @@ map.on('load', () => {
     type: 'fill-extrusion',
     source: 'merged-exploded',
     minzoom: 14,
-    paint: { ...extrusion, 'fill-extrusion-color': TILE_COLOUR },
+    paint: { ...extrusion, 'fill-extrusion-color': TILE_FILL },
   });
   map.addLayer({
     id: MERGED_HIGHLIGHT_LAYER,
@@ -126,10 +131,29 @@ map.on('load', () => {
     paint: { ...extrusion, 'fill-extrusion-color': '#ff7a00' },
   });
 
+  map.addLayer(overpassLayer);
+
   // До загрузки стиля добавленные слои и фильтры потерялись бы
   editBtn.disabled = false;
   mergedBtn.disabled = false;
+  refreshOverpass();
 });
+
+map.on('moveend', () => refreshOverpass());
+
+function refreshOverpass() {
+  if (!map.getLayer(overpassLayer.id)) return;
+  overpass.enabled = !editing && map.getZoom() >= OVERPASS_MIN_ZOOM;
+  overpass.update();
+}
+
+function showOverpassStatus() {
+  updateOverpassIndicator();
+  if (editing) return;
+  if (!overpass.enabled) return setStatus(`Здания из тайлов. С z ≥ ${OVERPASS_MIN_ZOOM} — из Overpass.`);
+  const { ready, total, loading, waiting } = overpass.status();
+  setStatus(`Overpass: ${ready}/${total} тайлов${loading ? `, загружается ${loading}` : ''}${waiting ? `, ждут повтора ${waiting} (лимит/ошибка, см. консоль)` : ''}.`);
+}
 
 // Временно: скрыть полигоны склеенных фич, на >50% перекрытые другими зданиями
 let hideOverlapped = false;
@@ -188,7 +212,7 @@ function explodeMerged(features: TileBuildingFeature[]): GeoJSON.Feature<GeoJSON
       out.set(key, {
         type: 'Feature',
         geometry: { type: 'Polygon', coordinates: poly },
-        properties: { ...f.properties, src: f.id, key },
+        properties: { ...f.properties, src: f.id, key, tile: f.tile ?? '' },
       });
     }
   }
@@ -208,11 +232,16 @@ function explodeMerged(features: TileBuildingFeature[]): GeoJSON.Feature<GeoJSON
 function updateTileFilter() {
   const notIn = (ids: number[]): ExpressionSpecification => ['!', ['in', ['id'], ['literal', ids]]];
   const hiddenIds = [...userHidden].map(Number).filter(Number.isFinite);
-  map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...editAreaIds, ...hiddenIds])]);
+  // Тайлы, здания которых уже нарисованы из Overpass
+  const overpassTiles = overpass.displayed();
+  const byTile = overpassTiles.length ? tileFeatureIdsByTile(map, 'openmaptiles', 'building') : new Map<string, number[]>();
+  const overpassIds = overpassTiles.flatMap((k) => byTile.get(k) ?? []);
+  map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...editAreaIds, ...hiddenIds, ...overpassIds])]);
   map.setFilter(REMAINDERS_LAYER, notIn([...editAreaIds, ...hiddenIds]));
   map.setFilter(MERGED_LAYER, ['all',
     hideOverlapped ? ['!=', ['get', 'overlapped'], true] : true,
     ['!', ['in', ['get', 'src'], ['literal', editAreaIds]]],
+    ['!', ['in', ['get', 'tile'], ['literal', overpassTiles]]],
     ['!', ['in', ['get', 'key'], ['literal', [...userHidden]]]]]);
 }
 
@@ -229,9 +258,11 @@ async function enterEditMode() {
   setStatus('Загрузка данных из OSM API…');
   try {
     const { features, skipped } = parseBuildings(await fetchArea(bbox, incompleteBuildingRelations));
-    const rendered = editLayer.setFeatures(features, [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]);
+    const rendered = editLayer.setGroup('edit', features, [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]);
     if (!map.getLayer(editLayer.id)) map.addLayer(editLayer);
     editing = new Map(rendered.map((r) => [r.feature.key, r]));
+    overpassLayer.select(undefined);
+    refreshOverpass(); // в режиме редактирования Overpass-слой выключен
     hideTileBuildingsIn(bbox);
     clearSelection();
 
@@ -249,13 +280,15 @@ async function enterEditMode() {
 
 function exitEditMode() {
   editing = undefined;
+  editLayer.clear();
   if (map.getLayer(editLayer.id)) map.removeLayer(editLayer.id);
+  refreshOverpass();
   editAreaIds = [];
   updateTileFilter();
   clearSelection();
   editBtn.textContent = 'Редактировать область';
   editBtn.classList.remove('active');
-  setStatus('Режим просмотра.');
+  showOverpassStatus();
 }
 
 /**
@@ -280,6 +313,14 @@ map.on('click', (e) => {
     infoEl.innerHTML = r ? describeOsm(r) : '';
     return;
   }
+  const key = overpassLayer.pick(e.point);
+  overpassLayer.select(key);
+  const r = key ? overpass.get(key) : undefined;
+  if (r) {
+    clearTileHighlight();
+    infoEl.innerHTML = `<p class="hint">Данные Overpass</p>${describeOsm(r)}`;
+    return;
+  }
   const f = map.queryRenderedFeatures(e.point, { layers: TILE_LAYERS })[0];
   infoEl.innerHTML = f ? describeTile(f) : '';
   map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], f?.layer.id === MERGED_LAYER ? -1 : f?.id ?? -1]);
@@ -288,7 +329,9 @@ map.on('click', (e) => {
 });
 
 map.on('mousemove', (e) => {
-  const hit = editing ? !!editLayer.pick(e.point) : map.queryRenderedFeatures(e.point, { layers: TILE_LAYERS }).length > 0;
+  const hit = editing
+    ? !!editLayer.pick(e.point)
+    : !!overpassLayer.pick(e.point) || map.queryRenderedFeatures(e.point, { layers: TILE_LAYERS }).length > 0;
   map.getCanvas().style.cursor = hit ? 'pointer' : '';
 });
 
@@ -307,8 +350,28 @@ infoEl.addEventListener('click', (e) => {
 
 function clearSelection() {
   infoEl.innerHTML = '';
+  overpassLayer.select(undefined);
+  clearTileHighlight();
+}
+
+function clearTileHighlight() {
   map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], -1]);
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], '']);
+}
+
+/** Минимальный индикатор Overpass в углу карты: точка цвета состояния + счётчик тайлов. */
+function updateOverpassIndicator() {
+  const { ready, total, loading, waiting } = overpass.status();
+  const state = !overpass.enabled ? 'off' : loading ? 'loading' : waiting ? 'waiting' : 'ready';
+  opIndicator.dataset.state = state;
+  opIndicator.hidden = state === 'off';
+  opIndicator.querySelector('.label')!.textContent = `Overpass ${ready}/${total}`;
+  opIndicator.title = {
+    off: '',
+    loading: `Загружается тайлов: ${loading}`,
+    waiting: `Ждут повтора: ${waiting} (лимит или ошибка Overpass, подробности в консоли)`,
+    ready: 'Все видимые тайлы загружены',
+  }[state];
 }
 
 function setStatus(text: string, error = false) {
@@ -384,4 +447,4 @@ const esc = (s: unknown) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeA
 const tagTable = (tags: Record<string, unknown>) =>
   `<table>${Object.entries(tags).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
 
-if (import.meta.env.DEV) Object.assign(window, { map, editLayer });
+if (import.meta.env.DEV) Object.assign(window, { map, editLayer, overpassLayer, overpass });

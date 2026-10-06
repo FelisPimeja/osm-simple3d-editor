@@ -8,6 +8,8 @@ const CLIP_EPS = 1e-7;
 
 export interface TileBuildingFeature {
   id: number;
+  /** Ключ тайла сетки z14 (`14/x/y`), в который попадает исходный тайл. */
+  tile?: string;
   properties: Record<string, any>;
   /** Полигоны, обрезанные по границе своего тайла (без буфера). */
   polys: Ring[][];
@@ -56,7 +58,7 @@ export function queryTileBuildings(map: MlMap, sourceId: string, sourceLayer: st
     for (const f of features) {
       if (typeof f.id !== 'number') continue;
       const polys = polygonsOf(f.geometry).flatMap((p) => clipToBounds(p, bounds));
-      if (polys.length) out.push({ id: f.id, properties: f.properties ?? {}, polys });
+      if (polys.length) out.push({ id: f.id, tile: gridKey(x, y, z), properties: f.properties ?? {}, polys });
     }
   }
   return out;
@@ -84,4 +86,37 @@ function clipToBounds(poly: Ring[], [w, s, e, n]: Bounds): Ring[][] {
   } catch {
     return [poly];
   }
+}
+
+export const GRID_ZOOM = 14;
+
+/**
+ * Ключ тайла сетки z14, содержащего тайл z/x/y. MapLibre при overzoom хранит тайлы
+ * с координатами текущего зума (17/79233/40977), а не исходного z14.
+ */
+export function gridKey(x: number, y: number, z: number): string {
+  const d = Math.max(0, z - GRID_ZOOM);
+  return `${Math.min(z, GRID_ZOOM)}/${x >> d}/${y >> d}`;
+}
+
+/** id тайловых фич зданий по тайлам сетки z14: `14/x/y` → id (без обрезки, для фильтров). */
+export function tileFeatureIdsByTile(map: MlMap, sourceId: string, sourceLayer: string): Map<string, number[]> {
+  const tm = (map as unknown as { style?: { tileManagers?: Record<string, TileManagerLike> } }).style?.tileManagers?.[sourceId];
+  const out = new Map<string, number[]>();
+  if (!tm?.getRenderableIds || !tm.getTileByID) return out;
+  const seen = new Set<string>();
+  for (const id of tm.getRenderableIds()) {
+    const tile = tm.getTileByID(id);
+    if (!tile) continue;
+    const { x, y, z } = tile.tileID.canonical;
+    if (seen.has(`${z}/${x}/${y}`)) continue;
+    seen.add(`${z}/${x}/${y}`);
+    const features: Feature<Geometry>[] = [];
+    tile.querySourceFeatures(features, { sourceLayer });
+    const key = gridKey(x, y, z);
+    const ids = out.get(key) ?? out.set(key, []).get(key)!;
+    for (const f of features) if (typeof f.id === 'number') ids.push(f.id);
+  }
+  for (const [key, ids] of out) out.set(key, [...new Set(ids)]);
+  return out;
 }

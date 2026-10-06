@@ -9,7 +9,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .hint { color: #666; margin: 0 0 8px; }
 #info { font-size: 12px; white-space: pre-wrap; margin: 0; }
 @media (max-width: 500px) { #panel { width: auto; right: 12px; max-height: 40%; } }
-#edit-btn { width: 100%; padding: 8px; margin-bottom: 8px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; font: inherit; cursor: pointer; }
+#edit-btn, #merged-btn { width: 100%; padding: 8px; margin-bottom: 8px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; font: inherit; cursor: pointer; }
 #edit-btn:disabled { opacity: .6; cursor: progress; }
 #edit-btn.active { background: #6b7280; }
 #status.error { color: #b91c1c; }
@@ -20,3 +20,5 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 #info td:first-child { color: #555; white-space: nowrap; word-break: normal; }
 #info .warn { color: #b45309; font-size: 12px; margin: 4px 0; }
 #info pre { font-size: 12px; white-space: pre-wrap; margin: 0; }
+#info button { padding: 4px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+#merged-btn.secondary { background: #e5e7eb; color: #111; }

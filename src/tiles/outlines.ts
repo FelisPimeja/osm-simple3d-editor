@@ -155,3 +155,67 @@ export function interiorPoint(poly: Ring[]): [number, number] | undefined {
 export function polygonsOf(g: Geometry): Ring[][] {
   return g.type === 'Polygon' ? [g.coordinates as Ring[]] : g.type === 'MultiPolygon' ? (g.coordinates as Ring[][]) : [];
 }
+
+const SAMPLES = 12;
+
+export interface OverlapSubject { key: string; src: number; poly: Ring[] }
+export interface OverlapOther { id: number; polys: Ring[][] }
+
+/**
+ * Доля площади каждого полигона, перекрытая чужими полигонами зданий меньшей площади
+ * (контур перекрыт своими частями, а не наоборот). Полигоны той же исходной фичи не считаются —
+ * это дубли из соседних тайлов.
+ */
+export function overlapShares(subjects: OverlapSubject[], others: OverlapOther[]): Map<string, number> {
+  const cell = 0.0005;
+  const grid = new Map<string, { id: number; poly: Ring[]; bbox: number[]; area: number }[]>();
+  const bboxOf = (r: Ring) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of r) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+    return [x0, y0, x1, y1];
+  };
+  for (const o of others) {
+    for (const poly of o.polys) {
+      const bbox = bboxOf(poly[0]);
+      const area = polyArea(poly);
+      for (let gx = Math.floor(bbox[0] / cell); gx <= Math.floor(bbox[2] / cell); gx++) {
+        for (let gy = Math.floor(bbox[1] / cell); gy <= Math.floor(bbox[3] / cell); gy++) {
+          const k = `${gx}:${gy}`;
+          (grid.get(k) ?? grid.set(k, []).get(k)!).push({ id: o.id, poly, bbox, area });
+        }
+      }
+    }
+  }
+
+  const shares = new Map<string, number>();
+  for (const s of subjects) {
+    const [x0, y0, x1, y1] = bboxOf(s.poly[0]);
+    const own = polyArea(s.poly);
+    const cands = new Set<Ring[]>();
+    for (let gx = Math.floor(x0 / cell); gx <= Math.floor(x1 / cell); gx++) {
+      for (let gy = Math.floor(y0 / cell); gy <= Math.floor(y1 / cell); gy++) {
+        for (const c of grid.get(`${gx}:${gy}`) ?? []) {
+          if (c.id !== s.src && c.area < own * 0.98 && c.bbox[0] < x1 && c.bbox[2] > x0 && c.bbox[1] < y1 && c.bbox[3] > y0) cands.add(c.poly);
+        }
+      }
+    }
+    if (!cands.size || own <= 0) { shares.set(s.key, 0); continue; }
+    // Оценка по сетке точек внутри полигона: точное объединение сотен кандидатов слишком медленное
+    const list = [...cands];
+    let inside = 0, covered = 0;
+    for (let i = 0; i < SAMPLES; i++) {
+      for (let j = 0; j < SAMPLES; j++) {
+        const p: [number, number] = [x0 + ((i + 0.5) / SAMPLES) * (x1 - x0), y0 + ((j + 0.5) / SAMPLES) * (y1 - y0)];
+        if (!inPolygon(p, s.poly)) continue;
+        inside++;
+        if (list.some((c) => inPolygon(p, c))) covered++;
+      }
+    }
+    shares.set(s.key, inside ? covered / inside : 0);
+  }
+  return shares;
+}
+
+function polyArea(poly: Ring[]): number {
+  return ringArea(poly[0]) - poly.slice(1).reduce((s, h) => s + ringArea(h), 0);
+}

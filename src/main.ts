@@ -6,21 +6,27 @@ import { fetchArea, fetchMap, type Bbox } from './osm/api';
 import { computeHeights } from './osm/heights';
 import { incompleteBuildingRelations, parseBuildings } from './osm/model';
 import { BuildingsLayer, type RenderedFeature } from './render/buildings-layer';
-import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
+import { queryTileBuildings, type TileBuildingFeature } from './tiles/tile-features';
+import { computeOutlineRemainders, overlapShares, inPolygon, interiorPoint, polygonsOf, type Ring } from './tiles/outlines';
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const BUILDINGS_LAYER = 'simple3d-buildings';
 const REMAINDERS_LAYER = 'simple3d-outline-remainders';
-const TILE_LAYERS = [BUILDINGS_LAYER, REMAINDERS_LAYER];
+const MERGED_LAYER = 'simple3d-merged-exploded';
+const MERGED_HIGHLIGHT_LAYER = 'simple3d-merged-highlight';
+const TILE_LAYERS = [BUILDINGS_LAYER, REMAINDERS_LAYER, MERGED_LAYER];
 const HIGHLIGHT_LAYER = 'simple3d-highlight';
 const MIN_EDIT_ZOOM = 16;
 // Замена контуров с частями на «контур минус части» (src/tiles/outlines.ts). Временно выключено:
 // по тайлам контур не отличить от части, эвристика даёт артефакты — см. PLAN.md.
 const OUTLINE_REMAINDERS = false;
+// Доля площади полигона склеенной фичи, перекрытая другими зданиями, начиная с которой он считается лишним
+const OVERLAP_THRESHOLD = 0.5;
 // Ограничение самого API — 0.25 deg², но берём заметно меньше, чтобы не упираться в 50k узлов
 const MAX_EDIT_AREA = 0.0004;
 
-const BASE_FILTER: ExpressionSpecification = ['!=', ['get', 'hide_3d'], true];
+// Склеенные фичи (id с суффиксом 0) рисуем отдельным слоем, разрезанными на полигоны
+const BASE_FILTER: ExpressionSpecification = ['all', ['!=', ['get', 'hide_3d'], true], ['!=', ['%', ['id'], 10], 0]];
 
 // В тайлах colour — сырое значение тега: CSS-имя, hex или несколько цветов через ';'.
 // Берём первый, невалидный заменяем цветом по умолчанию (иначе здание становится чёрным).
@@ -34,6 +40,11 @@ const TILE_COLOUR: ExpressionSpecification = [
 let replacedIds: number[] = [];
 /** id тайловых фич, перекрытых областью редактирования. */
 let editAreaIds: number[] = [];
+/**
+ * Временно: скрытые вручную кнопкой «Скрыть» (для изучения наложений).
+ * Ключ — id тайловой фичи или `key` полигона склеенной фичи.
+ */
+const userHidden = new Set<string>();
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -49,6 +60,7 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
 const infoEl = document.getElementById('info')!;
 const statusEl = document.getElementById('status')!;
 const editBtn = document.getElementById('edit-btn') as HTMLButtonElement;
+const mergedBtn = document.getElementById('merged-btn') as HTMLButtonElement;
 
 const editLayer = new BuildingsLayer();
 let editing: Map<string, RenderedFeature> | undefined;
@@ -87,6 +99,23 @@ map.on('load', () => {
     paint: { ...extrusion, 'fill-extrusion-color': TILE_COLOUR },
   });
 
+  map.addSource('merged-exploded', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: MERGED_LAYER,
+    type: 'fill-extrusion',
+    source: 'merged-exploded',
+    minzoom: 14,
+    paint: { ...extrusion, 'fill-extrusion-color': TILE_COLOUR },
+  });
+  map.addLayer({
+    id: MERGED_HIGHLIGHT_LAYER,
+    type: 'fill-extrusion',
+    source: 'merged-exploded',
+    minzoom: 14,
+    filter: ['==', ['get', 'key'], ''],
+    paint: { ...extrusion, 'fill-extrusion-color': '#ff7a00' },
+  });
+
   map.addLayer({
     id: HIGHLIGHT_LAYER,
     type: 'fill-extrusion',
@@ -99,6 +128,15 @@ map.on('load', () => {
 
   // До загрузки стиля добавленные слои и фильтры потерялись бы
   editBtn.disabled = false;
+  mergedBtn.disabled = false;
+});
+
+// Временно: скрыть полигоны склеенных фич, на >50% перекрытые другими зданиями
+let hideOverlapped = false;
+mergedBtn.addEventListener('click', () => {
+  hideOverlapped = !hideOverlapped;
+  mergedBtn.textContent = hideOverlapped ? 'Показать перекрытые склеенные' : 'Скрыть перекрытые склеенные';
+  updateTileFilter();
 });
 
 // Пересчитываем контуры с частями, когда догрузились новые тайлы
@@ -107,28 +145,75 @@ map.on('sourcedata', (e) => {
   if (e.sourceId === 'openmaptiles' && e.isSourceLoaded) tilesChanged = true;
 });
 map.on('idle', () => {
-  if (!OUTLINE_REMAINDERS || !tilesChanged || !map.getLayer(BUILDINGS_LAYER)) return;
+  if (!tilesChanged || !map.getLayer(BUILDINGS_LAYER)) return;
   tilesChanged = false;
-  const { replacedIds: ids, remainders } = computeOutlineRemainders(
-    map.querySourceFeatures('openmaptiles', { sourceLayer: 'building' })
-      .filter((f) => typeof f.id === 'number' && !f.properties.hide_3d)
-      .map((f) => ({
-        id: f.id as number,
-        geometry: f.geometry,
-        height: f.properties.render_height ?? 0,
-        minHeight: f.properties.render_min_height ?? 0,
-        colour: f.properties.colour,
-      })),
-  );
-  replacedIds = [...ids];
-  (map.getSource('outline-remainders') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features: remainders });
+  (map.getSource('merged-exploded') as maplibregl.GeoJSONSource).setData({
+    type: 'FeatureCollection',
+    features: explodeMerged(queryTileBuildings(map, 'openmaptiles', 'building')),
+  });
+  const tileFeatures = map.querySourceFeatures('openmaptiles', { sourceLayer: 'building' });
+  if (OUTLINE_REMAINDERS) {
+    const { replacedIds: ids, remainders } = computeOutlineRemainders(
+      tileFeatures
+        .filter((f) => typeof f.id === 'number' && !f.properties.hide_3d)
+        .map((f) => ({
+          id: f.id as number,
+          geometry: f.geometry,
+          height: f.properties.render_height ?? 0,
+          minHeight: f.properties.render_min_height ?? 0,
+          colour: f.properties.colour,
+        })),
+    );
+    replacedIds = [...ids];
+    (map.getSource('outline-remainders') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features: remainders });
+  }
   updateTileFilter();
 });
 
+/**
+ * Planetiler склеивает в одну фичу (id с суффиксом 0) все полигоны тайла с одинаковыми атрибутами —
+ * это разные, часто разбросанные здания. Режем на отдельные полигоны, чтобы работать с каждым.
+ * key — стабильный в пределах тайла ключ полигона: исходный id + центр.
+ */
+function explodeMerged(features: TileBuildingFeature[]): GeoJSON.Feature<GeoJSON.Polygon>[] {
+  const visible = features.filter((f) => !f.properties.hide_3d);
+  const out = new Map<string, GeoJSON.Feature<GeoJSON.Polygon>>();
+  for (const f of visible) {
+    if (f.id % 10 !== 0) continue;
+    for (const poly of f.polys) {
+      const ring = poly[0];
+      const cx = ring.reduce((s, p) => s + p[0], 0) / ring.length;
+      const cy = ring.reduce((s, p) => s + p[1], 0) / ring.length;
+      const key = `${f.id}@${cx.toFixed(5)},${cy.toFixed(5)}`;
+      out.set(key, {
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: poly },
+        properties: { ...f.properties, src: f.id, key },
+      });
+    }
+  }
+  // Полигоны, на >50% перекрытые другими зданиями, — кандидаты в контуры поверх частей
+  const shares = overlapShares(
+    [...out.values()].map((f) => ({ key: f.properties!.key, src: f.properties!.src, poly: f.geometry.coordinates as Ring[] })),
+    visible.map((f) => ({ id: f.id, polys: f.polys })),
+  );
+  for (const f of out.values()) {
+    const share = shares.get(f.properties!.key) ?? 0;
+    f.properties!.overlap = Math.round(share * 100) / 100;
+    f.properties!.overlapped = share > OVERLAP_THRESHOLD;
+  }
+  return [...out.values()];
+}
+
 function updateTileFilter() {
   const notIn = (ids: number[]): ExpressionSpecification => ['!', ['in', ['id'], ['literal', ids]]];
-  map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...editAreaIds])]);
-  map.setFilter(REMAINDERS_LAYER, notIn(editAreaIds));
+  const hiddenIds = [...userHidden].map(Number).filter(Number.isFinite);
+  map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...editAreaIds, ...hiddenIds])]);
+  map.setFilter(REMAINDERS_LAYER, notIn([...editAreaIds, ...hiddenIds]));
+  map.setFilter(MERGED_LAYER, ['all',
+    hideOverlapped ? ['!=', ['get', 'overlapped'], true] : true,
+    ['!', ['in', ['get', 'src'], ['literal', editAreaIds]]],
+    ['!', ['in', ['get', 'key'], ['literal', [...userHidden]]]]]);
 }
 
 editBtn.addEventListener('click', () => (editing ? exitEditMode() : enterEditMode()));
@@ -197,7 +282,8 @@ map.on('click', (e) => {
   }
   const f = map.queryRenderedFeatures(e.point, { layers: TILE_LAYERS })[0];
   infoEl.innerHTML = f ? describeTile(f) : '';
-  map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], f?.id ?? -1]);
+  map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], f?.layer.id === MERGED_LAYER ? -1 : f?.id ?? -1]);
+  map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], f?.layer.id === MERGED_LAYER ? f.properties.key : '']);
   if (f) resolveTileFeature(f);
 });
 
@@ -206,9 +292,23 @@ map.on('mousemove', (e) => {
   map.getCanvas().style.cursor = hit ? 'pointer' : '';
 });
 
+infoEl.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest('button');
+  if (!btn) return;
+  if (btn.dataset.hide) userHidden.add(btn.dataset.hide);
+  else if (btn.dataset.unhideAll !== undefined) userHidden.clear();
+  else return;
+  updateTileFilter();
+  clearSelection();
+  if (userHidden.size) {
+    infoEl.innerHTML = `<p>Скрыто вручную: ${userHidden.size}</p><p><button type="button" data-unhide-all>Показать все</button></p>`;
+  }
+});
+
 function clearSelection() {
   infoEl.innerHTML = '';
   map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], -1]);
+  map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], '']);
 }
 
 function setStatus(text: string, error = false) {
@@ -240,7 +340,14 @@ function decodeTileId(id: unknown): string {
 }
 
 function describeTile(f: MapGeoJSONFeature): string {
-  return `<h2>Здание из тайла</h2><p>feature.id: ${f.id ?? '—'}<br>OSM: ${decodeTileId(f.id)}</p>
+  const merged = f.layer.id === MERGED_LAYER;
+  const id = merged ? f.properties.src : f.id;
+  const hideKey = merged ? f.properties.key : f.id;
+  const hideBtns = hideKey !== undefined
+    ? `<p><button type="button" data-hide="${esc(hideKey)}">Скрыть${merged ? ' полигон' : ''}</button>
+       ${userHidden.size ? `<button type="button" data-unhide-all>Показать все (${userHidden.size})</button>` : ''}</p>`
+    : '';
+  return `<h2>Здание из тайла</h2><p>feature.id: ${id ?? '—'}${merged ? ' (полигон склеенной фичи)' : ''}<br>OSM: ${decodeTileId(id)}</p>${hideBtns}
     <p id="resolved" class="hint">Ищем объекты OSM внутри фичи…</p>${tagTable(f.properties)}`;
 }
 

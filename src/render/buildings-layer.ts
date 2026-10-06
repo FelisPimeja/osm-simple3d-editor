@@ -20,9 +20,11 @@ export interface GraphicsOptions {
   edges: boolean;
 }
 
-/** Высота, на которой затемнение у земли сходит на нет, м. */
+/** Высота, на которой затемнение у земли сходит на нет, м (для зданий выше AO_HEIGHT). */
 const AO_HEIGHT = 6;
-/** Яркость у самой земли. */
+/** Доля высоты здания, на которой затемнение сходит на нет, — для низких зданий. */
+const AO_FADE_SHARE = 0.5;
+/** Яркость у самой земли для зданий не ниже AO_HEIGHT; у низких затемнение слабее. */
 const AO_MIN = 0.55;
 /** Порог угла между гранями для контуров, градусы: швы триангуляции на плоских гранях не рисуем. */
 const EDGE_ANGLE = 25;
@@ -37,7 +39,8 @@ class MeshGroup {
   readonly model: THREE.Matrix4;
   readonly camera = new THREE.Camera();
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
-  private readonly hemi = new THREE.HemisphereLight(0xffffff, 0x8a8478, 1.6);
+  // Цвет «земли» — посередине между белым и 0x8a8478: контраст неба и земли вдвое меньше
+  private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
 
   constructor(center: LonLat) {
     this.origin = MercatorCoordinate.fromLngLat({ lng: center[0], lat: center[1] }, 0);
@@ -127,13 +130,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const f of features) {
       if (f.hasParts) continue;
       const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
-      const tri = buildTriangles(polys, computeHeights(f.tags), f.tags);
+      const heights = computeHeights(f.tags);
+      const tri = buildTriangles(polys, heights, f.tags);
       const geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.Float32BufferAttribute([...tri.walls, ...tri.roof], 3));
       geom.addGroup(0, tri.walls.length / 3, 0);
       geom.addGroup(tri.walls.length / 3, tri.roof.length / 3, 1);
       geom.computeVertexNormals();
-      geom.setAttribute('color', groundAOColors(geom));
+      geom.setAttribute('color', groundAOColors(geom, heights.top));
       const wall = f.tags['building:colour'] ?? f.tags.colour ?? DEFAULT_WALL;
       const roof = f.tags['roof:colour'] ?? (f.tags['roof:shape'] && f.tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
       const mesh = new THREE.Mesh(geom, [material(wall), material(roof)]);
@@ -269,13 +273,19 @@ function disposeEdges(mesh: THREE.Mesh) {
   delete mesh.userData.edges;
 }
 
-/** Цвет вершин для затемнения у земли: от AO_MIN на z=0 до 1 на AO_HEIGHT (плавно). */
-function groundAOColors(geom: THREE.BufferGeometry): THREE.BufferAttribute {
+/**
+ * Цвет вершин для затемнения у земли, относительно высоты здания:
+ * - затемнение сходит на нет на min(AO_HEIGHT, AO_FADE_SHARE · высота) — у низких зданий только самый низ;
+ * - глубина пропорциональна высоте до AO_HEIGHT — сарай в 2 м темнеет у земли лишь до ~85%.
+ */
+function groundAOColors(geom: THREE.BufferGeometry, top: number): THREE.BufferAttribute {
+  const fade = Math.max(0.5, Math.min(AO_HEIGHT, AO_FADE_SHARE * top));
+  const depth = (1 - AO_MIN) * Math.min(1, top / AO_HEIGHT);
   const pos = geom.getAttribute('position');
   const colors = new Float32Array(pos.count * 3);
   for (let i = 0; i < pos.count; i++) {
-    const t = Math.min(1, Math.max(0, pos.getZ(i) / AO_HEIGHT));
-    const k = AO_MIN + (1 - AO_MIN) * t * t * (3 - 2 * t);
+    const t = Math.min(1, Math.max(0, pos.getZ(i) / fade));
+    const k = 1 - depth * (1 - t * t * (3 - 2 * t));
     colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = k;
   }
   return new THREE.BufferAttribute(colors, 3);

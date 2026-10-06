@@ -43,9 +43,9 @@ let editAreaIds: number[] = [];
  */
 const userHidden = new Set<string>();
 
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean }
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: false, hemisphere: false, groundAO: false, edges: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: false, monochrome: false, hemisphere: false, groundAO: false, edges: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try { return JSON.parse(localStorage.getItem(GFX_KEY) ?? '{}'); } catch { return {}; }
@@ -152,9 +152,16 @@ map.on('load', () => {
 map.on('moveend', () => refreshOverpass());
 
 // Все здания белым — тайловые и так белые, переключаем только слои с данными OSM
+monoToggle.checked = gfx.monochrome;
 monoToggle.addEventListener('change', () => {
-  for (const layer of [overpassLayer, editLayer]) layer.setMonochrome(monoToggle.checked);
+  gfx.monochrome = monoToggle.checked;
+  saveGraphics();
+  applyMonochrome();
 });
+function applyMonochrome() {
+  for (const layer of [overpassLayer, editLayer]) layer.setMonochrome(gfx.monochrome);
+}
+applyMonochrome();
 
 // Настройки графики: отдельные галки, чтобы сравнивать влияние на производительность
 for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {

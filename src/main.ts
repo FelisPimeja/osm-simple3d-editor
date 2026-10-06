@@ -5,7 +5,7 @@ import './style.css';
 import { fetchArea, fetchMap, type Bbox } from './osm/api';
 import { computeHeights } from './osm/heights';
 import { incompleteBuildingRelations, parseBuildings } from './osm/model';
-import { BuildingsLayer, type RenderedFeature } from './render/buildings-layer';
+import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './render/buildings-layer';
 import { queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles } from './view/overpass-tiles';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
@@ -43,8 +43,21 @@ let editAreaIds: number[] = [];
  */
 const userHidden = new Set<string>();
 
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean }
+const GFX_KEY = 'osm3d.graphics';
+const gfx: GraphicsSettings = { antialias: false, hemisphere: false, groundAO: false, edges: false, ...loadGraphics() };
+
+function loadGraphics(): Partial<GraphicsSettings> {
+  try { return JSON.parse(localStorage.getItem(GFX_KEY) ?? '{}'); } catch { return {}; }
+}
+function saveGraphics() {
+  try { localStorage.setItem(GFX_KEY, JSON.stringify(gfx)); } catch { /* приватный режим и т.п. */ }
+}
+
 const map = new maplibregl.Map({
   container: 'map',
+  // MSAA задаётся только при создании контекста — переключение требует перезагрузки
+  canvasContextAttributes: { antialias: gfx.antialias },
   style: STYLE_URL,
   center: [37.6205, 55.7535],
   zoom: 16,
@@ -57,6 +70,7 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
 const infoEl = document.getElementById('info')!;
 const statusEl = document.getElementById('status')!;
 const opIndicator = document.getElementById('op-indicator')!;
+const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
 const editBtn = document.getElementById('edit-btn') as HTMLButtonElement;
 
 const editLayer = new BuildingsLayer('osm-edit-buildings');
@@ -136,6 +150,38 @@ map.on('load', () => {
 });
 
 map.on('moveend', () => refreshOverpass());
+
+// Все здания белым — тайловые и так белые, переключаем только слои с данными OSM
+monoToggle.addEventListener('change', () => {
+  for (const layer of [overpassLayer, editLayer]) layer.setMonochrome(monoToggle.checked);
+});
+
+// Настройки графики: отдельные галки, чтобы сравнивать влияние на производительность
+for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
+  const key = input.dataset.gfx as keyof GraphicsSettings;
+  input.checked = gfx[key];
+  input.addEventListener('change', () => {
+    gfx[key] = input.checked;
+    saveGraphics();
+    if (key === 'antialias') return location.reload();
+    applyGraphics();
+  });
+}
+
+function applyGraphics() {
+  for (const layer of [overpassLayer, editLayer]) layer.setGraphics(gfx);
+}
+applyGraphics();
+
+// FPS считаем по кадрам MapLibre (рисует по требованию — смотреть при движении карты)
+const perfEl = document.getElementById('perf')!;
+let frames = 0;
+map.on('render', () => frames++);
+setInterval(() => {
+  const triangles = overpassLayer.lastTriangles + editLayer.lastTriangles;
+  perfEl.textContent = `FPS: ${frames} · треугольников: ${triangles.toLocaleString('ru')}`;
+  frames = 0;
+}, 1000);
 
 function refreshOverpass() {
   if (!map.getLayer(overpassLayer.id)) return;

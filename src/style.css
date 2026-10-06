@@ -32,3 +32,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 #op-indicator[data-state="loading"] .dot { background: #2563eb; animation: op-pulse 1s ease-in-out infinite; }
 #op-indicator[data-state="waiting"] .dot { background: #f59e0b; }
 @keyframes op-pulse { 50% { opacity: .25; } }
+.toggle { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; cursor: pointer; user-select: none; }
+.gfx { margin-bottom: 8px; border: 1px solid #e5e7eb; border-radius: 6px; padding: 4px 8px; }
+.gfx summary { cursor: pointer; padding: 2px 0; }
+.gfx .toggle { margin: 6px 0; }
+.gfx .hint, #perf { font-size: 12px; margin: 0; }

@@ -1,0 +1,22 @@
+html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
+#map { position: absolute; inset: 0; }
+#panel {
+  position: absolute; top: 12px; left: 12px; width: 320px; max-height: calc(100% - 24px);
+  overflow: auto; background: rgba(255,255,255,.95); border-radius: 8px; padding: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.2);
+}
+#panel h1 { font-size: 16px; margin: 0 0 6px; }
+.hint { color: #666; margin: 0 0 8px; }
+#info { font-size: 12px; white-space: pre-wrap; margin: 0; }
+@media (max-width: 500px) { #panel { width: auto; right: 12px; max-height: 40%; } }
+#edit-btn { width: 100%; padding: 8px; margin-bottom: 8px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; font: inherit; cursor: pointer; }
+#edit-btn:disabled { opacity: .6; cursor: progress; }
+#edit-btn.active { background: #6b7280; }
+#status.error { color: #b91c1c; }
+#info h2 { font-size: 14px; margin: 8px 0 4px; }
+#info a { color: #2563eb; }
+#info table { border-collapse: collapse; width: 100%; font-size: 12px; }
+#info td { border-top: 1px solid #eee; padding: 2px 4px; vertical-align: top; word-break: break-all; }
+#info td:first-child { color: #555; white-space: nowrap; word-break: normal; }
+#info .warn { color: #b45309; font-size: 12px; margin: 4px 0; }
+#info pre { font-size: 12px; white-space: pre-wrap; margin: 0; }

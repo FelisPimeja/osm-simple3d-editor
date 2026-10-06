@@ -1,7 +1,7 @@
 import type { Map as MlMap } from 'maplibre-gl';
 import type { Bbox } from '../osm/api';
 import { parseBuildings, type Feature3D } from '../osm/model';
-import { fetchBuildings, OverpassBusyError } from '../osm/overpass';
+import { fetchBuildings, OverpassBusyError, OverpassPool } from '../osm/overpass';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 
 import { GRID_ZOOM } from '../tiles/tile-features';
@@ -11,7 +11,6 @@ export const OVERPASS_TILE_ZOOM = GRID_ZOOM;
 const CACHE_SIZE = 48;
 /** Сколько ближайших к центру тайлов загружать одновременно видимыми. */
 const MAX_VISIBLE = 12;
-const MAX_PARALLEL = 2;
 
 type Entry =
   | { state: 'loading'; abort: AbortController }
@@ -25,7 +24,8 @@ type Entry =
 export class OverpassTiles {
   private readonly cache = new Map<string, Entry>(); // порядок вставки = LRU
   private wanted: string[] = [];
-  private active = 0;
+  readonly pool = new OverpassPool();
+  private pumpTimer?: ReturnType<typeof setTimeout>;
   /** Нарисованные здания по ключу OSM — для панели по клику. */
   private readonly rendered = new Map<string, RenderedFeature>();
   enabled = false;
@@ -69,33 +69,46 @@ export class OverpassTiles {
 
   private pump() {
     for (const key of this.wanted) {
-      if (this.active >= MAX_PARALLEL) break;
       const e = this.cache.get(key);
       if (e?.state === 'ready' || e?.state === 'loading') continue;
       if (e?.state === 'error' && Date.now() < e.retryAt) continue;
-      void this.load(key, e?.state === 'error' ? e.attempts : 0);
+      const ep = this.pool.acquire();
+      if (!ep) {
+        // Все инстансы заняты или остывают — попробуем, когда какой-то освободится
+        const wait = this.pool.nextAvailableIn();
+        if (wait > 0) this.schedulePump(wait);
+        break;
+      }
+      void this.load(key, e?.state === 'error' ? e.attempts : 0, ep);
     }
   }
 
-  private async load(key: string, attempts: number) {
+  private schedulePump(ms: number) {
+    clearTimeout(this.pumpTimer);
+    this.pumpTimer = setTimeout(() => this.update(), ms + 50);
+  }
+
+  private async load(key: string, attempts: number, ep: ReturnType<OverpassPool['acquire']> & object) {
     const abort = new AbortController();
     this.cache.set(key, { state: 'loading', abort });
-    this.active++;
+    let result: 'ok' | 'busy' | 'error' | 'aborted' = 'ok';
     try {
-      const { features } = parseBuildings(await fetchBuildings(tileBbox(key), abort.signal));
+      const { features } = parseBuildings(await fetchBuildings(ep.url, tileBbox(key), abort.signal));
       this.cache.set(key, { state: 'ready', features });
       this.evict();
       if (this.wanted.includes(key)) this.show(key, features);
     } catch (err) {
-      if (abort.signal.aborted) return;
-      // Экспоненциальная пауза; при перегрузке Overpass — дольше
-      // Первый повтор быстрый — скорее всего, уже на другом инстансе Overpass
-      const delay = Math.min(60_000, (err instanceof OverpassBusyError ? 3_000 : 2_000) * 2 ** attempts);
+      if (abort.signal.aborted) { result = 'aborted'; return; }
+      const busy = err instanceof OverpassBusyError;
+      result = busy ? 'busy' : 'error';
+      // При перегрузке инстанса повтор сразу уйдёт на другой — пауза короткая;
+      // при прочих ошибках — экспоненциальная
+      const delay = busy ? 1_000 : Math.min(60_000, 2_000 * 2 ** attempts);
       this.cache.set(key, { state: 'error', retryAt: Date.now() + delay, attempts: attempts + 1 });
       console.warn(`Overpass ${key}:`, (err as Error).message);
-      setTimeout(() => this.update(), delay);
+      this.schedulePump(delay);
     } finally {
-      this.active--;
+      this.pool.release(ep, result);
       this.pump();
       this.onChange();
     }

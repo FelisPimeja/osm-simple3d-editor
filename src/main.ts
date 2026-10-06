@@ -8,7 +8,7 @@ import { incompleteBuildingRelations, parseBuildings } from './osm/model';
 import { BuildingsLayer, type RenderedFeature } from './render/buildings-layer';
 import { queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles } from './view/overpass-tiles';
-import { computeOutlineRemainders, overlapShares, inPolygon, interiorPoint, polygonsOf, type Ring } from './tiles/outlines';
+import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const BUILDINGS_LAYER = 'simple3d-buildings';
@@ -23,8 +23,6 @@ const OVERPASS_MIN_ZOOM = 15;
 // Замена контуров с частями на «контур минус части» (src/tiles/outlines.ts). Временно выключено:
 // по тайлам контур не отличить от части, эвристика даёт артефакты — см. PLAN.md.
 const OUTLINE_REMAINDERS = false;
-// Доля площади полигона склеенной фичи, перекрытая другими зданиями, начиная с которой он считается лишним
-const OVERLAP_THRESHOLD = 0.5;
 // Ограничение самого API — 0.25 deg², но берём заметно меньше, чтобы не упираться в 50k узлов
 const MAX_EDIT_AREA = 0.0004;
 
@@ -60,7 +58,6 @@ const infoEl = document.getElementById('info')!;
 const statusEl = document.getElementById('status')!;
 const opIndicator = document.getElementById('op-indicator')!;
 const editBtn = document.getElementById('edit-btn') as HTMLButtonElement;
-const mergedBtn = document.getElementById('merged-btn') as HTMLButtonElement;
 
 const editLayer = new BuildingsLayer('osm-edit-buildings');
 const overpassLayer = new BuildingsLayer('osm-overpass-buildings');
@@ -135,7 +132,6 @@ map.on('load', () => {
 
   // До загрузки стиля добавленные слои и фильтры потерялись бы
   editBtn.disabled = false;
-  mergedBtn.disabled = false;
   refreshOverpass();
 });
 
@@ -154,14 +150,6 @@ function showOverpassStatus() {
   const { ready, total, loading, waiting } = overpass.status();
   setStatus(`Overpass: ${ready}/${total} тайлов${loading ? `, загружается ${loading}` : ''}${waiting ? `, ждут повтора ${waiting} (лимит/ошибка, см. консоль)` : ''}.`);
 }
-
-// Временно: скрыть полигоны склеенных фич, на >50% перекрытые другими зданиями
-let hideOverlapped = false;
-mergedBtn.addEventListener('click', () => {
-  hideOverlapped = !hideOverlapped;
-  mergedBtn.textContent = hideOverlapped ? 'Показать перекрытые склеенные' : 'Скрыть перекрытые склеенные';
-  updateTileFilter();
-});
 
 // Пересчитываем контуры с частями, когда догрузились новые тайлы
 let tilesChanged = false;
@@ -216,16 +204,6 @@ function explodeMerged(features: TileBuildingFeature[]): GeoJSON.Feature<GeoJSON
       });
     }
   }
-  // Полигоны, на >50% перекрытые другими зданиями, — кандидаты в контуры поверх частей
-  const shares = overlapShares(
-    [...out.values()].map((f) => ({ key: f.properties!.key, src: f.properties!.src, poly: f.geometry.coordinates as Ring[] })),
-    visible.map((f) => ({ id: f.id, polys: f.polys })),
-  );
-  for (const f of out.values()) {
-    const share = shares.get(f.properties!.key) ?? 0;
-    f.properties!.overlap = Math.round(share * 100) / 100;
-    f.properties!.overlapped = share > OVERLAP_THRESHOLD;
-  }
   return [...out.values()];
 }
 
@@ -239,7 +217,6 @@ function updateTileFilter() {
   map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...editAreaIds, ...hiddenIds, ...overpassIds])]);
   map.setFilter(REMAINDERS_LAYER, notIn([...editAreaIds, ...hiddenIds]));
   map.setFilter(MERGED_LAYER, ['all',
-    hideOverlapped ? ['!=', ['get', 'overlapped'], true] : true,
     ['!', ['in', ['get', 'src'], ['literal', editAreaIds]]],
     ['!', ['in', ['get', 'tile'], ['literal', overpassTiles]]],
     ['!', ['in', ['get', 'key'], ['literal', [...userHidden]]]]]);
@@ -366,12 +343,15 @@ function updateOverpassIndicator() {
   opIndicator.dataset.state = state;
   opIndicator.hidden = state === 'off';
   opIndicator.querySelector('.label')!.textContent = `Overpass ${ready}/${total}`;
+  const servers = overpass.pool.endpoints
+    .map((e) => `${e.host}: ${e.active} в работе, ок ${e.ok}, ошибок ${e.failed}${e.coolUntil > Date.now() ? ', остывает' : ''}`)
+    .join('\n');
   opIndicator.title = {
     off: '',
     loading: `Загружается тайлов: ${loading}`,
     waiting: `Ждут повтора: ${waiting} (лимит или ошибка Overpass, подробности в консоли)`,
     ready: 'Все видимые тайлы загружены',
-  }[state];
+  }[state] + (state === 'off' ? '' : `\n\n${servers}`);
 }
 
 function setStatus(text: string, error = false) {

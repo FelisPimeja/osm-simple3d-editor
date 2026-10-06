@@ -14,6 +14,9 @@ const REMAINDERS_LAYER = 'simple3d-outline-remainders';
 const TILE_LAYERS = [BUILDINGS_LAYER, REMAINDERS_LAYER];
 const HIGHLIGHT_LAYER = 'simple3d-highlight';
 const MIN_EDIT_ZOOM = 16;
+// Замена контуров с частями на «контур минус части» (src/tiles/outlines.ts). Временно выключено:
+// по тайлам контур не отличить от части, эвристика даёт артефакты — см. PLAN.md.
+const OUTLINE_REMAINDERS = false;
 // Ограничение самого API — 0.25 deg², но берём заметно меньше, чтобы не упираться в 50k узлов
 const MAX_EDIT_AREA = 0.0004;
 
@@ -104,7 +107,7 @@ map.on('sourcedata', (e) => {
   if (e.sourceId === 'openmaptiles' && e.isSourceLoaded) tilesChanged = true;
 });
 map.on('idle', () => {
-  if (!tilesChanged || !map.getLayer(BUILDINGS_LAYER)) return;
+  if (!OUTLINE_REMAINDERS || !tilesChanged || !map.getLayer(BUILDINGS_LAYER)) return;
   tilesChanged = false;
   const { replacedIds: ids, remainders } = computeOutlineRemainders(
     map.querySourceFeatures('openmaptiles', { sourceLayer: 'building' })

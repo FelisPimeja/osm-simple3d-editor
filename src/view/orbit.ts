@@ -1,7 +1,11 @@
 import { MercatorCoordinate, type LngLat, type Map as MlMap } from 'maplibre-gl';
 
 /** Точка, вокруг которой вращаем: координаты и высота над землёй, м. */
-export interface Pivot { lngLat: LngLat; altitude: number }
+export interface Pivot {
+  lngLat: LngLat; altitude: number;
+  /** Где точка на экране (px), если не под курсором — для маркера. */
+  point?: [number, number];
+}
 
 /**
  * Градусов на пиксель движения мыши — как у стандартного вращения MapLibre
@@ -56,9 +60,11 @@ export class CursorOrbit {
     e.stopPropagation();
     const rect = this.map.getCanvas().getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
-    this.drag = { pivot: this.pickPivot(x, y), x: e.clientX, y: e.clientY, pointerId: e.pointerId };
-    this.marker.style.left = `${x}px`;
-    this.marker.style.top = `${y}px`;
+    const pivot = this.pickPivot(x, y);
+    this.drag = { pivot, x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+    const [mx, my] = pivot.point ?? [x, y];
+    this.marker.style.left = `${mx}px`;
+    this.marker.style.top = `${my}px`;
     this.marker.hidden = false;
     // Чтобы получать движение и отпускание кнопки даже за пределами карты
     try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch { /* не критично */ }

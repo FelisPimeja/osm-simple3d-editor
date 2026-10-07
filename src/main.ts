@@ -124,6 +124,12 @@ let editGroups = new Map<string, EditGroup>();
 let editMemberGroup = new Map<string, string>();
 /** Группа, в которую «провалились» двойным кликом: внутри неё выделяются отдельные части. */
 let drill: BuildingGroup | undefined;
+/** Режим одного здания (группа, в которую вошли двойным кликом): окружение скрыто. */
+let focus: BuildingGroup | undefined;
+/** Видимость слоёв стиля до входа в режим одного здания. */
+let focusHiddenLayers: { id: string; visibility: string }[] = [];
+/** Слои зданий тайлов, ждущие возврата после выхода из режима здания. */
+let pendingTileLayers: { id: string; visibility: string }[] = [];
 /** Группа в сессии: ещё и члены с ролями (их можно править). */
 type EditGroup = BuildingGroup & Tagged & { relMembers: OsmMember[] };
 let osmUser: OsmUser | undefined;
@@ -210,6 +216,8 @@ monoToggle.addEventListener('change', () => {
 // Вращение вокруг точки под курсором (как в SketchUp)
 const orbit = new CursorOrbit(map, (x, y) => {
   const hit = overpassLayer.pickHit([x, y]);
+  // В режиме здания мимо геометрии — вокруг центра здания
+  if (!hit && focus) { const c = overpassLayer.focusCenter(); if (c) return c; }
   // Не попали в 3D-слой (тайловое здание или пусто) — точка на земле
   return hit ?? { lngLat: map.unproject([x, y]), altitude: 0 };
 });
@@ -219,7 +227,7 @@ orbit.setEnabled(gfx.orbitAtCursor);
 orbitToggle.addEventListener('change', () => {
   gfx.orbitAtCursor = orbitToggle.checked;
   saveGraphics();
-  orbit.setEnabled(gfx.orbitAtCursor);
+  orbit.setEnabled(gfx.orbitAtCursor || !!focus); // в режиме здания вращение вокруг курсора всегда
 });
 
 function applyMonochrome() {
@@ -271,7 +279,8 @@ setInterval(() => {
 }, 1000);
 
 function refreshOverpass() {
-  if (!map.getLayer(overpassLayer.id)) return;
+  // В режиме здания окружение не видно — тайлы не грузим и не собираем (у горизонта их в кадре десятки)
+  if (!map.getLayer(overpassLayer.id) || focus) return;
   timed('refreshOverpass', refreshOverpassImpl);
 }
 
@@ -423,10 +432,11 @@ function entity(key: string): Tagged | undefined {
 
 /** Что выделить по клику: вне группы — группу целиком; внутри группы — часть; клик мимо группы — выход к ней. */
 function resolveClick(key: string | undefined): string | undefined {
+  if (focus) return key && focus.members.includes(key) ? key : undefined; // из режима здания клик не выводит
   if (drill) {
     if (key && drill.members.includes(key)) return key;
     const g = drill;
-    drill = undefined;
+    leaveDrill();
     return g.key;
   }
   return key ? (groupOf(key)?.key ?? key) : undefined;
@@ -460,15 +470,83 @@ map.on('click', (e) => {
   if (f) resolveTileFeature(f);
 });
 
-// Двойной клик по группе — «провалиться» в неё и выделить часть под курсором (вместо приближения карты)
+// Двойной клик по группе — режим одного здания (вместо приближения карты); ничего не выделяется
 map.on('dblclick', (e) => {
   const key = overpassLayer.pick(e.point);
+  if (focus) {
+    // Двойной клик мимо здания — назад к карте
+    e.preventDefault();
+    if (!key) closeFocus();
+    return;
+  }
   const g = key ? groupOf(key) : undefined;
-  if (!key || !g || drill?.key === g.key) return;
+  if (!g) return;
   e.preventDefault();
-  drill = g;
-  select(key);
+  enterFocus(g);
 });
+
+/** Члены группы для отрисовки: из сессии (с правками) или из тайлов. */
+function groupFeatures(g: BuildingGroup): Feature3D[] {
+  return g.members.map((k) => (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature).filter((f): f is Feature3D => !!f);
+}
+
+function enterFocus(g: BuildingGroup) {
+  if (!focus) {
+    focusHiddenLayers = [];
+    for (const l of map.getStyle().layers) {
+      if (l.id === overpassLayer.id || l.type === 'background') continue;
+      const pending = pendingTileLayers.find((p) => p.id === l.id);
+      focusHiddenLayers.push(pending ?? { id: l.id, visibility: (map.getLayoutProperty(l.id, 'visibility') as string | undefined) ?? 'visible' });
+      map.setLayoutProperty(l.id, 'visibility', 'none');
+    }
+  }
+  drill = focus = g;
+  orbit.setEnabled(true);
+  overpassLayer.setFocus(groupFeatures(g));
+  addingTo = undefined;
+  addPending = [];
+  selection = [];
+  selectedKey = undefined;
+  clearTileHighlight();
+  paintSelection();
+  renderSelected();
+}
+
+function exitFocus() {
+  if (!focus) return;
+  focus = undefined;
+  orbit.setEnabled(gfx.orbitAtCursor);
+  overpassLayer.setFocus(undefined);
+  const restore = (ls: typeof focusHiddenLayers) => {
+    for (const { id, visibility } of ls) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility as 'visible' | 'none');
+  };
+  // Здания из векторных тайлов — только после того, как тайлы догрузятся и фильтр скроет то, что уже есть
+  // из Overpass; иначе на миг мелькает их грубая геометрия
+  const tileLayers = pendingTileLayers = focusHiddenLayers.filter((l) => TILE_LAYERS.includes(l.id));
+  restore(focusHiddenLayers.filter((l) => !TILE_LAYERS.includes(l.id)));
+  focusHiddenLayers = [];
+  map.once('idle', () => {
+    if (focus || pendingTileLayers !== tileLayers) return; // успели снова войти в режим здания — вернёт следующий выход
+    pendingTileLayers = [];
+    updateTileFilter();
+    restore(tileLayers);
+  });
+  refreshOverpass(); // камера могла уйти — догружаем тайлы
+}
+
+/** Выйти из группы (и из режима одного здания). */
+function leaveDrill() {
+  drill = undefined;
+  exitFocus();
+}
+
+/** Выйти из режима одного здания, оставив группу выделенной. */
+function closeFocus() {
+  const g = focus;
+  if (!g) return;
+  leaveDrill();
+  select(g.key);
+}
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
 function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
@@ -487,6 +565,7 @@ infoEl.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('button');
   if (!btn) return;
   if (btn.dataset.merge !== undefined) return mergeIntoBuilding();
+  if (btn.dataset.focusExit !== undefined) return closeFocus();
   if (btn.dataset.exclude !== undefined) return excludeFromGroup();
   if (btn.dataset.addParts !== undefined) return startAdding();
   if (btn.dataset.addConfirm !== undefined) return confirmAdding();
@@ -502,7 +581,7 @@ infoEl.addEventListener('click', (e) => {
 });
 
 function clearSelection() {
-  drill = undefined;
+  leaveDrill();
   addingTo = undefined;
   addPending = [];
   selection = [];
@@ -561,8 +640,8 @@ function select(key: string | undefined): boolean {
   addingTo = undefined;
   addPending = [];
   // Переход из списка правок или undo к объекту вне текущей группы — выходим из неё
-  if (drill && key && key !== drill.key && !drill.members.includes(key)) drill = undefined;
-  if (drill && key === drill.key) drill = undefined;
+  if (drill && key && key !== drill.key && !drill.members.includes(key)) leaveDrill();
+  if (drill && key === drill.key) leaveDrill();
   // Вне группы её член выделяется вместе с ней
   if (!drill && key) key = groupOf(key)?.key ?? key;
   if (key && !entity(key)) key = undefined; // нет в данных или отменили создание группы
@@ -781,7 +860,7 @@ function mergeIntoBuilding() {
   };
   editGroups.set(key, group);
   session.create(group);
-  drill = undefined;
+  leaveDrill();
   select(key);
 }
 
@@ -797,7 +876,8 @@ function excludeFromGroup() {
   const drop = new Set(selection);
   const members = g.relMembers.filter((m) => !drop.has(`${m.type}/${m.ref}`));
   session.setMembers(g.key, members);
-  select(g.key); // выходим на уровень группы
+  if (focus) select(undefined); // в режиме здания остаёмся, состав обновит onSessionChange
+  else select(g.key); // выходим на уровень группы
 }
 
 /** Выбор контура, когда кандидатов несколько (наведение подсвечивает кандидата на карте). */
@@ -848,7 +928,11 @@ function renderMulti() {
 
 function renderSelected() {
   outlineOverlay = undefined;
-  try { renderSelectedImpl(); } finally { overpassLayer.setOverlay(outlineOverlay); }
+  try {
+    renderSelectedImpl();
+    // В режиме здания выход доступен при любом выделении (у describeFocus кнопка своя)
+    if (focus && selection.length) infoEl.insertAdjacentHTML('afterbegin', focusExitButton());
+  } finally { overpassLayer.setOverlay(outlineOverlay); }
 }
 
 function renderSelectedImpl() {
@@ -859,7 +943,23 @@ function renderSelectedImpl() {
   // Отношение type=building — только контейнер: высоты, крыша и прочее живут на контуре и частях
   if (g) { infoEl.innerHTML = describeGroup(g); return; }
   const r = selectedKey ? overpass.get(selectedKey) : undefined;
+  if (!r && focus && !selection.length) { infoEl.innerHTML = describeFocus(focus); return; }
   infoEl.innerHTML = r ? drillHint(r.feature.key) + excludeButton() + describeOsm(r, form) : '';
+}
+
+/** Панель режима одного здания, пока ничего не выделено. */
+function describeFocus(g: BuildingGroup): string {
+  const name = g.tags.name ?? outlineTags(g)?.name;
+  return `
+    <h2>Режим здания</h2>
+    ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
+    <p class="hint"><a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>, членов: ${g.members.length}.
+      Клик по части — выделить её, Shift — несколько. Двойной клик мимо здания — выход.</p>
+    ${focusExitButton('Esc')}`;
+}
+
+function focusExitButton(keys = 'Esc ×2'): string {
+  return `<p><button type="button" data-focus-exit>Выйти из режима здания</button> <span class="hint">(${keys})</span></p>`;
 }
 
 /** Подсказка над частью, выделенной внутри группы. */
@@ -867,7 +967,7 @@ function drillHint(key: string): string {
   if (!drill || !drill.members.includes(key)) return '';
   const name = drill.tags.name ?? outlineTags(drill)?.name;
   return `<p class="hint drill">Внутри группы <a href="${server().web}/${drill.key}" target="_blank" rel="noopener">${drill.key}</a>${
-    name ? ` «${esc(name)}»` : ''} — клик вне группы вернёт к ней.</p>`;
+    name ? ` «${esc(name)}»` : ''} — ${focus ? 'Esc снимет выделение, повторный Esc — выход из режима здания' : 'клик вне группы вернёт к ней'}.</p>`;
 }
 
 /** Теги контура группы (роль outline) — название и адрес здания обычно на нём. */
@@ -885,7 +985,7 @@ function describeGroup(g: BuildingGroup): string {
     ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
     ${addr ? `<p class="hint">${esc(addr)}</p>` : ''}
     <h2>type=building — <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>${g.version ? ` v${g.version}` : ''}</h2>
-    <p class="hint">Членов: ${g.members.length}. Двойной клик по зданию — выделение отдельных частей.
+    <p class="hint">Членов: ${g.members.length}. Двойной клик по зданию — режим одного здания.
       Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.</p>
     <p><button type="button" data-add-parts>Добавить части</button></p>
     ${tagTable(g.tags)}`;
@@ -906,6 +1006,11 @@ function onSessionChange(keys: string[]) {
     paintSelection();
   }
   overpass.refreshFeatures(keys);
+  // Состав здания в режиме одного здания поменялся (исключение, undo/redo) — пересобрать сцену
+  if (focus && keys.includes(focus.key)) {
+    const g = groupOf(focus.key);
+    if (g) { drill = focus = g; overpassLayer.setFocus(groupFeatures(g)); } else closeFocus();
+  }
   if (selectedKey && keys.includes(selectedKey)) {
     const active = document.activeElement as HTMLElement | null;
     const focusTag = active?.closest('.tag-form') ? active.dataset.tag : undefined;
@@ -1088,6 +1193,13 @@ onSkeletons(() => {
   timed('пересборка зданий со скелетами', () => {
     overpassLayer.rebuildPending();
   });
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !focus || (e.target as HTMLElement).closest('input, select, textarea')) return;
+  // Esc: сначала снять выделение части, затем выйти из режима здания
+  if (selection.length) select(undefined);
+  else closeFocus();
 });
 
 document.addEventListener('keydown', (e) => {

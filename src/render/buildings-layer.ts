@@ -135,6 +135,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Треугольников в последнем кадре — для оценки производительности. */
   lastTriangles = 0;
   visible = true;
+  /** Режим одного здания: рисуется и выбирается только группа FOCUS_GROUP (здание + земля). */
+  private focused = false;
 
   constructor(readonly id: string) {}
 
@@ -158,13 +160,59 @@ export class BuildingsLayer implements CustomLayerInterface {
     const renderer = this.renderer!;
     const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
     let triangles = 0;
-    for (const g of this.groups.values()) {
+    for (const g of this.activeGroups()) {
       g.camera.projectionMatrix = main.clone().multiply(g.model);
       renderer.resetState();
       renderer.render(g.scene, g.camera);
       triangles += renderer.info.render.triangles;
     }
     this.lastTriangles = triangles;
+  }
+
+  /** Группы, которые сейчас рисуются и выбираются. */
+  private activeGroups(): MeshGroup[] {
+    if (!this.focused) return [...this.groups].filter(([k]) => k !== FOCUS_GROUP).map(([, g]) => g);
+    const g = this.groups.get(FOCUS_GROUP);
+    return g ? [g] : [];
+  }
+
+  /**
+   * Режим одного здания: только эти объекты и плоскость земли с сеткой под ними, остальное не рисуется.
+   * undefined — выйти. Пока режим включён, правки объектов обновляют и его копию (updateFeature).
+   */
+  setFocus(features: Feature3D[] | undefined) {
+    this.removeGroup(FOCUS_GROUP);
+    this.focused = !!features;
+    if (!features?.length) { this.map?.triggerRepaint(); return; }
+    const box = new THREE.Box2();
+    for (const f of features) for (const p of f.polygons) for (const [lng, lat] of p.outer) box.expandByPoint(new THREE.Vector2(lng, lat));
+    const c = box.getCenter(new THREE.Vector2());
+    const g = new MeshGroup([c.x, c.y]);
+    for (const f of features) if (shouldRender(f)) this.addItem(g, f);
+    // Земля: квадрат с запасом вокруг здания, сетка 10 м
+    const [x0, y0] = g.toLocal([box.min.x, box.min.y]), [x1, y1] = g.toLocal([box.max.x, box.max.y]);
+    const size = Math.ceil((Math.max(x1 - x0, y1 - y0) * 3 + 60) / 20) * 20;
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ color: GROUND_COLOUR }));
+    ground.position.z = -0.02;
+    const grid = new THREE.GridHelper(size, size / 10, GRID_COLOUR, GRID_COLOUR);
+    grid.rotation.x = Math.PI / 2; // GridHelper лежит в XZ, у нас земля — XY
+    grid.position.z = -0.01;
+    g.scene.add(ground, grid);
+    this.install(FOCUS_GROUP, g);
+  }
+
+  /** Центр здания в режиме одного здания: координаты, высота (середина) и положение на экране. */
+  focusCenter(): { lngLat: LngLat; altitude: number; point: [number, number] } | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!this.focused || !g || !this.map) return;
+    const box = groupBox(g);
+    if (box.isEmpty()) return;
+    const p = box.getCenter(new THREE.Vector3());
+    const ndc = p.clone().applyMatrix4(g.camera.projectionMatrix);
+    const canvas = this.map.getCanvas();
+    const point: [number, number] = [(ndc.x + 1) / 2 * canvas.clientWidth, (1 - ndc.y) / 2 * canvas.clientHeight];
+    const merc = new MercatorCoordinate(g.origin.x + p.x * g.metersToMerc, g.origin.y - p.y * g.metersToMerc, 0);
+    return { lngLat: merc.toLngLat(), altitude: p.z, point };
   }
 
   /** Заменяет содержимое группы (или создаёт её) — синхронно. */
@@ -211,6 +259,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Пересобирает одно здание группы (после правки тегов). Выделение сохраняется. */
   updateFeature(groupKey: string, f: Feature3D): RenderedFeature | undefined {
     const g = this.groups.get(groupKey);
+    const focus = this.groups.get(FOCUS_GROUP);
+    if (focus?.byKey.has(f.key)) this.replaceItems(focus, [f]);
     if (!g || !g.byKey.has(f.key)) return;
     this.replaceItems(g, [f]);
     return rendered(g.byKey.get(f.key)!);
@@ -272,7 +322,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     this.overlay = [];
     for (const key of keys === undefined ? [] : typeof keys === 'string' ? [keys] : keys) {
-      const g = [...this.groups.values()].find((x) => x.byKey.has(key));
+      const g = this.activeGroups().find((x) => x.byKey.has(key));
       const it = g?.byKey.get(key);
       if (!g || !it) continue;
       const z = it.box.isEmpty() ? 0 : it.box.max.z + 0.05;
@@ -314,8 +364,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     return this.groups.has(key);
   }
 
+  /** Группы тайлов (без сцены режима одного здания — ею управляет setFocus). */
   groupKeys(): string[] {
-    return [...this.groups.keys()];
+    return [...this.groups.keys()].filter((k) => k !== FOCUS_GROUP);
   }
 
   removeGroup(key: string) {
@@ -355,7 +406,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const y = 1 - (py / canvas.clientHeight) * 2;
     let best: { key: string; depth: number; g: MeshGroup; p: THREE.Vector3 } | undefined;
     const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), hitPoint = new THREE.Vector3();
-    for (const g of this.groups.values()) {
+    for (const g of this.activeGroups()) {
       const m = g.camera.projectionMatrix;
       const inv = m.clone().invert();
       const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv);
@@ -530,6 +581,10 @@ function itemEdges(it: Item): Float32Array {
 }
 
 /** Габариты всей группы — чтобы не перебирать здания тайлов, мимо которых луч проходит. */
+const FOCUS_GROUP = '@focus';
+const GROUND_COLOUR = 0xe8e6e1;
+const GRID_COLOUR = 0xc9c6bf;
+
 function groupBox(g: MeshGroup): THREE.Box3 {
   if (!g.mesh) return new THREE.Box3();
   const geom = g.mesh.geometry;

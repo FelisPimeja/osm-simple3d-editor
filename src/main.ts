@@ -627,6 +627,8 @@ async function doUpload() {
       saved.set(e.key, { version, tags });
     }
     session.markSaved(saved);
+    // Overpass отдаёт только боевую базу — правки с тестового сервера в его кеш не кладём
+    if (s.id === 'prod') void overpass.applySaved(saved);
     uploadComment = '';
     const link = `<a href="${s.web}/changeset/${res.changeset}" target="_blank" rel="noopener">changeset ${res.changeset}</a>`;
     setStatus(`Сохранено: ${saved.size} объектов.` + (res.rebased.size ? ` Поверх чужих правок перенесено: ${res.rebased.size} (геометрия в 3D может быть устаревшей — перезагрузите область).` : ''));

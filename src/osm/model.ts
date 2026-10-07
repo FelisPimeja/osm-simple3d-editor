@@ -31,7 +31,7 @@ export function incompleteBuildingRelations(elements: OsmElement[]): number[] {
     .map((r) => r.id);
 }
 
-function kindOf(tags?: Record<string, string>): Feature3D['kind'] | undefined {
+export function kindOf(tags?: Record<string, string>): Feature3D['kind'] | undefined {
   if (!tags) return;
   if (tags['building:part'] && tags['building:part'] !== 'no') return 'part';
   if (tags.building && tags.building !== 'no') return 'building';

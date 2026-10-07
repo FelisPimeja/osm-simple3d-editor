@@ -1,6 +1,6 @@
 import type { Map as MlMap } from 'maplibre-gl';
 import type { Bbox } from '../osm/api';
-import { centroid, markOutlinesWithParts, parseBuildings, type Feature3D } from '../osm/model';
+import { centroid, kindOf, markOutlinesWithParts, parseBuildings, type Feature3D } from '../osm/model';
 import { fetchBuildings, OverpassBusyError, OverpassPool } from '../osm/overpass';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
@@ -210,6 +210,41 @@ export class OverpassTiles {
       this.pool.release(ep, result);
       this.pump();
       this.onChange();
+    }
+  }
+
+  /**
+   * Отправленные правки — сразу в данные тайлов (память и IndexedDB), без перезапроса Overpass:
+   * иначе до фонового обновления тайла кеш показывал бы старые теги. fetchedAt не трогаем.
+   */
+  async applySaved(saved: Map<string, { version: number; tags: Record<string, string> }>) {
+    const patch = (features: Feature3D[]): Feature3D[] | undefined => {
+      if (!features.some((f) => saved.has(f.key))) return;
+      const out: Feature3D[] = [];
+      for (const f of features) {
+        const s = saved.get(f.key);
+        if (!s) { out.push(f); continue; }
+        const kind = kindOf(s.tags);
+        if (kind) out.push({ ...f, kind, version: s.version, tags: s.tags, hasParts: false });
+      }
+      markOutlinesWithParts(out);
+      return out;
+    };
+    const inMemory = new Set<string>();
+    for (const [key, e] of this.cache) {
+      if (e.state !== 'ready') continue;
+      inMemory.add(key);
+      const features = patch(e.features);
+      if (!features) continue;
+      e.features = features;
+      void this.store.put(key, features, e.fetchedAt);
+      if (this.layer.groupKeys().includes(key)) this.show(key);
+    }
+    for (const key of this.stored) {
+      if (inMemory.has(key)) continue;
+      const stored = await this.store.get(key);
+      const features = stored && patch(stored.features);
+      if (features) await this.store.put(key, features, stored.fetchedAt);
     }
   }
 

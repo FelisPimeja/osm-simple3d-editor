@@ -159,16 +159,28 @@ export class BuildingsLayer implements CustomLayerInterface {
     return { feature: f, roofApproximated };
   }
 
-  /** Пересобирает все здания (например, когда догрузился straight skeleton). */
-  rebuildAll(): RenderedFeature[] {
-    const out: RenderedFeature[] = [];
+  /**
+   * Пересобирает здания, подходящие под условие (например, когда догрузился straight skeleton).
+   * Работа делится на порции по ~8 мс за кадр, чтобы не подвешивать страницу на тысячах зданий.
+   */
+  async rebuildWhere(pred: (f: Feature3D) => boolean, onRebuilt: (r: RenderedFeature) => void = () => {}) {
+    const todo: [string, Feature3D][] = [];
     for (const [key, g] of this.groups) {
-      for (const o of [...g.root.children]) {
-        const r = this.updateFeature(key, o.userData.feature as Feature3D);
-        if (r) out.push(r);
+      for (const o of g.root.children) {
+        const f = o.userData.feature as Feature3D;
+        if (pred(f)) todo.push([key, f]);
       }
     }
-    return out;
+    let i = 0;
+    while (i < todo.length) {
+      await new Promise(requestAnimationFrame);
+      const deadline = performance.now() + 8;
+      while (i < todo.length && performance.now() < deadline) {
+        const [key, f] = todo[i++];
+        const r = this.updateFeature(key, f); // группа могла исчезнуть, пока ждали кадр
+        if (r) onRebuilt(r);
+      }
+    }
   }
 
   private buildMesh(g: MeshGroup, f: Feature3D): { mesh: THREE.Mesh; roofApproximated: boolean } {

@@ -7,7 +7,7 @@ import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights } from './osm/heights';
-import { incompleteBuildingRelations, parseBuildings } from './osm/model';
+import { incompleteBuildingRelations, parseBuildings, type Feature3D } from './osm/model';
 import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './render/buildings-layer';
 import { queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles } from './view/overpass-tiles';
@@ -617,12 +617,19 @@ void refreshUser();
 
 bindTagForms(infoEl, () => session);
 
-// Скатные крыши сложной формы появляются, когда догрузится straight skeleton
+// Скатные крыши сложной формы появляются, когда догрузится straight skeleton.
+// Пересобираем только здания, которые до этого были упрощены до плоской крыши.
 void skeletonReady.then((ok) => {
   if (!ok) return;
-  overpassLayer.rebuildAll();
-  for (const r of editLayer.rebuildAll()) editing?.set(r.feature.key, r);
-  renderSelected();
+  const needsSkeleton = (f: Feature3D) => {
+    const shape = f.tags['roof:shape'];
+    return (shape === 'gabled' || shape === 'hipped') && !(f.polygons.length === 1 && !f.polygons[0].inners.length && f.polygons[0].outer.length === 4);
+  };
+  void overpassLayer.rebuildWhere(needsSkeleton);
+  void editLayer.rebuildWhere(needsSkeleton, (r) => {
+    editing?.set(r.feature.key, r);
+    if (r.feature.key === selectedKey) renderSelected();
+  });
 });
 
 document.addEventListener('keydown', (e) => {

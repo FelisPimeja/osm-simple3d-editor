@@ -105,6 +105,24 @@ export class EditSession {
     return tag ? f.tags[tag] !== orig[tag] : !sameTags(f.tags, orig);
   }
 
+  /**
+   * После загрузки в OSM: записанные теги становятся исходными, версии — новыми.
+   * История очищается — отменять уже отправленное нельзя.
+   */
+  markSaved(saved: Map<string, { version: number; tags: Tags }>) {
+    for (const [key, { version, tags }] of saved) {
+      const f = this.features.get(key);
+      if (!f) continue;
+      f.version = version;
+      this.original.set(key, { ...tags });
+      for (const t of Object.keys(f.tags)) delete f.tags[t];
+      Object.assign(f.tags, tags);
+    }
+    this.undoStack = [];
+    this.redoStack = [];
+    this.onChange([...saved.keys()]);
+  }
+
   private apply(key: string, tags: Tags) {
     const f = this.features.get(key)!;
     // Меняем объект тегов на месте — на него ссылаются рендер и панель

@@ -64,3 +64,12 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .change-list ul { padding-left: 14px; margin: 2px 0 6px; }
 .change-list del { color: #b91c1c; }
 .change-list ins { color: #15803d; text-decoration: none; }
+
+/* Сервер и отправка */
+.server-line { display: flex; gap: 6px; align-items: center; font-size: 12px; margin-bottom: 6px; }
+.server-line select { flex: 1; min-width: 0; }
+.upload { margin-top: 10px; padding: 8px; border: 1px solid #c9d6e8; border-radius: 6px; background: #f3f7fc; }
+.upload.prod { border-color: #e0a48a; background: #fdf3ee; }
+.upload h3 { margin: 0 0 6px; font-size: 12px; }
+.upload .account { margin: 0 0 6px; font-size: 12px; }
+.upload textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; margin-bottom: 6px; resize: vertical; }

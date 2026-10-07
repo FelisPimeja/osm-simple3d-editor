@@ -22,7 +22,7 @@
    building / building:part / мультиполигоны, свой рендер стен + flat/pyramidal крыш, выбор raycast'ом.
 3. [x] Панель тегов: `height`, `min_height`, `building:levels`, `building:min_level`,
    `roof:shape`, `roof:height`, `building:colour`, `roof:colour`. Undo/redo, diff «было → стало».
-4. [ ] OAuth + генерация osmChange + upload (dev-сервер, затем боевой). Обработка 409 Conflict.
+4. [x] OAuth + генерация osmChange + upload (dev-сервер, затем боевой). Обработка 409 Conflict.
 5. [ ] Крыши gabled/hipped (сначала для четырёхугольников, затем straight skeleton).
 6. [ ] (опционально) Создание `building:part` из контура.
 
@@ -95,3 +95,16 @@
     направление 0–360/румбы, CSS-цвета), пустое поле удаляет тег, нестандартные значения select сохраняются.
   - После правки пересобирается только меш изменённого объекта (`BuildingsLayer.updateFeature`).
   - Выход из режима и закрытие страницы с несохранёнными правками — с подтверждением.
+- 2026-10-07, этап 4 (вход и отправка) — проверено на dev-сервере:
+  - Сервер выбирается в панели (dev по умолчанию); данные для редактирования грузятся с него же — id и версии
+    на dev и боевом не совпадают. Поиск по id тайлов в просмотре всегда идёт в боевой API.
+  - OAuth 2.0 PKCE во всплывающем окне, возврат через `oauth.html` (postMessage), токен в localStorage по серверу.
+    client_id — из `VITE_OSM_DEV_CLIENT_ID` / `VITE_OSM_CLIENT_ID` (`.env.local`, см. `.env.example`).
+  - `src/osm/upload.ts`: changeset create → upload osmChange (`<modify>` с полной геометрией из API) → close
+    (close и при ошибке). На 409 — перечитываем элементы и переносим правки на свежую версию, если чужие правки
+    не трогали те же теги; иначе `ConflictError`. Повтор один раз. После успеха записанные теги становятся
+    исходными, история очищается.
+  - На боевом сервере перед отправкой — подтверждение.
+  - Грабли: сайт OSM отдаёт COOP → `window.opener` в окне возврата пуст, `popup.closed` сразу true;
+    code передаём через BroadcastChannel. Приложение OAuth должно быть не «конфиденциальным» (иначе
+    `invalid_client`). `/changeset/{id}/upload` требует `Accept: application/xml|json` (иначе 406).

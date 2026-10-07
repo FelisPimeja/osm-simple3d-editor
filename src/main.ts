@@ -2,7 +2,10 @@ import * as maplibregl from 'maplibre-gl';
 import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJSONFeature } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
-import { fetchArea, fetchMap, type Bbox } from './osm/api';
+import { fetchArea, fetchMap, type Bbox, type OsmRelation, type OsmWay } from './osm/api';
+import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
+import { SERVERS, server, setServer, type ServerId } from './osm/servers';
+import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights } from './osm/heights';
 import { incompleteBuildingRelations, parseBuildings } from './osm/model';
 import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './render/buildings-layer';
@@ -86,6 +89,11 @@ let editing: Map<string, RenderedFeature> | undefined;
 /** Правки тегов в текущей области редактирования. */
 let session: EditSession | undefined;
 let selectedKey: string | undefined;
+/** Исходные элементы API области редактирования (геометрия и члены нужны для osmChange). */
+let rawElements = new Map<string, OsmWay | OsmRelation>();
+let osmUser: OsmUser | undefined;
+let uploadComment = '';
+let uploading = false;
 const changesEl = document.getElementById('changes')!;
 
 map.on('load', () => {
@@ -321,7 +329,11 @@ async function enterEditMode() {
   editBtn.disabled = true;
   setStatus('Загрузка данных из OSM API…');
   try {
-    const { features, skipped } = parseBuildings(await fetchArea(bbox, incompleteBuildingRelations));
+    const elements = await fetchArea(bbox, incompleteBuildingRelations);
+    rawElements = new Map(
+      elements.filter((e): e is OsmWay | OsmRelation => e.type !== 'node').map((e) => [`${e.type}/${e.id}`, e]),
+    );
+    const { features, skipped } = parseBuildings(elements);
     const rendered = editLayer.setGroup('edit', features, [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]);
     if (!map.getLayer(editLayer.id)) map.addLayer(editLayer);
     editing = new Map(rendered.map((r) => [r.feature.key, r]));
@@ -336,6 +348,7 @@ async function enterEditMode() {
     setStatus(`Загружено: ${rendered.length} объектов (контуров с частями: ${outlines}, пропущено: ${skipped.length}). Кликните по зданию.`);
     if (skipped.length) console.info('Пропущены:', skipped);
     editBtn.textContent = 'Выйти из редактирования';
+    serverSelect.disabled = true;
     editBtn.classList.add('active');
   } catch (err) {
     setStatus(`Ошибка загрузки: ${(err as Error).message}`, true);
@@ -349,6 +362,7 @@ function exitEditMode() {
   if (n && !confirm(`Есть несохранённые изменения (${n} объектов). Выйти и потерять их?`)) return;
   session = undefined;
   selectedKey = undefined;
+  rawElements = new Map();
   renderChanges();
   editing = undefined;
   editLayer.clear();
@@ -358,6 +372,7 @@ function exitEditMode() {
   updateTileFilter();
   clearSelection();
   editBtn.textContent = 'Редактировать область';
+  serverSelect.disabled = false;
   editBtn.classList.remove('active');
   showOverpassStatus();
 }
@@ -492,16 +507,112 @@ function renderChanges() {
       <button type="button" data-undo ${session.canUndo() ? '' : 'disabled'} title="Ctrl+Z">↶ Отменить</button>
       <button type="button" data-redo ${session.canRedo() ? '' : 'disabled'} title="Ctrl+Shift+Z">↷ Повторить</button>
     </p>
-    ${changes.length ? `<ul class="change-list">${list}</ul>` : '<p class="hint">Пока нет изменений.</p>'}`;
+    ${changes.length ? `<ul class="change-list">${list}</ul>` : '<p class="hint">Пока нет изменений.</p>'}
+    ${renderUpload(changes.length)}`;
+}
+
+function renderUpload(count: number): string {
+  const s = server();
+  const account = osmUser
+    ? `Вы вошли как <a href="${s.web}/user/${encodeURIComponent(osmUser.name)}" target="_blank" rel="noopener">${esc(osmUser.name)}</a>
+       <button type="button" data-logout>Выйти</button>`
+    : `<button type="button" data-login ${uploading ? 'disabled' : ''}>Войти в OSM</button>`;
+  const canUpload = osmUser && count > 0 && uploadComment.trim() && !uploading;
+  return `
+    <div class="upload${s.id === 'prod' ? ' prod' : ''}">
+      <h3>Отправка: ${esc(s.label)}</h3>
+      <p class="account">${account}</p>
+      <textarea data-comment rows="2" placeholder="Комментарий к пакету правок (обязательно)" ${uploading ? 'disabled' : ''}>${esc(uploadComment)}</textarea>
+      <button type="button" data-upload ${canUpload ? '' : 'disabled'}>${uploading ? 'Отправка…' : `Сохранить в OSM (${count})`}</button>
+    </div>`;
+}
+
+async function doLogin() {
+  try {
+    await login();
+    osmUser = await fetchUser();
+    setStatus(osmUser ? `Вход выполнен: ${osmUser.name}.` : 'Не удалось получить данные пользователя.', !osmUser);
+  } catch (err) {
+    setStatus((err as Error).message, true);
+  }
+  renderChanges();
+}
+
+async function refreshUser() {
+  osmUser = undefined;
+  if (getToken()) {
+    try { osmUser = await fetchUser(); } catch (err) { console.warn('OSM user:', err); }
+  }
+  renderChanges();
+}
+
+async function doUpload() {
+  if (!session || uploading) return;
+  const changes = session.changes();
+  const s = server();
+  if (s.id === 'prod' && !confirm(`Отправить ${changes.length} изменений в боевую базу OpenStreetMap?`)) return;
+  uploading = true;
+  renderChanges();
+  try {
+    const edits = changes.map((c) => {
+      const element = rawElements.get(c.key);
+      if (!element) throw new Error(`Нет исходных данных для ${c.key}`);
+      return { key: c.key, element, before: c.before, after: c.after };
+    });
+    const res = await uploadEdits(edits, uploadComment.trim(), (t) => setStatus(t));
+    const saved = new Map<string, { version: number; tags: Record<string, string> }>();
+    for (const e of edits) {
+      const version = res.versions.get(e.key);
+      if (version === undefined) continue;
+      const rebased = res.rebased.get(e.key);
+      const tags = rebased?.tags ?? e.after;
+      rawElements.set(e.key, { ...(rebased?.element ?? e.element), version, tags });
+      saved.set(e.key, { version, tags });
+    }
+    session.markSaved(saved);
+    uploadComment = '';
+    const link = `<a href="${s.web}/changeset/${res.changeset}" target="_blank" rel="noopener">changeset ${res.changeset}</a>`;
+    setStatus(`Сохранено: ${saved.size} объектов.` + (res.rebased.size ? ` Поверх чужих правок перенесено: ${res.rebased.size} (геометрия в 3D может быть устаревшей — перезагрузите область).` : ''));
+    statusEl.insertAdjacentHTML('beforeend', ` ${link}`);
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      setStatus(`${err.message}. Эти теги уже изменил кто-то другой — выйдите из редактирования, загрузите область заново и повторите правки.`, true);
+    } else {
+      setStatus(`Ошибка отправки: ${(err as Error).message}`, true);
+    }
+  } finally {
+    uploading = false;
+    renderChanges();
+  }
 }
 
 changesEl.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
   if (t.closest('[data-undo]')) return selectEdited(session?.undo() ?? selectedKey);
   if (t.closest('[data-redo]')) return selectEdited(session?.redo() ?? selectedKey);
+  if (t.closest('[data-login]')) return void doLogin();
+  if (t.closest('[data-logout]')) { logout(); osmUser = undefined; return renderChanges(); }
+  if (t.closest('[data-upload]')) return void doUpload();
   const link = t.closest<HTMLElement>('[data-select]');
   if (link) { e.preventDefault(); selectEdited(link.dataset.select); }
 });
+
+changesEl.addEventListener('input', (e) => {
+  const t = e.target as HTMLTextAreaElement;
+  if (!t.matches('[data-comment]')) return;
+  uploadComment = t.value;
+  const btn = changesEl.querySelector<HTMLButtonElement>('[data-upload]');
+  if (btn) btn.disabled = !(osmUser && session?.changes().length && uploadComment.trim() && !uploading);
+});
+
+const serverSelect = document.getElementById('server-select') as HTMLSelectElement;
+serverSelect.innerHTML = Object.values(SERVERS).map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('');
+serverSelect.value = server().id;
+serverSelect.addEventListener('change', () => {
+  setServer(serverSelect.value as ServerId);
+  void refreshUser();
+});
+void refreshUser();
 
 bindTagForms(infoEl, () => session);
 
@@ -528,7 +639,7 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: s
   ].filter(Boolean);
   return `
     <h2>${f.kind === 'part' ? 'building:part' : 'building'} —
-      <a href="https://www.openstreetmap.org/${f.key}" target="_blank" rel="noopener">${f.key}</a> v${f.version}</h2>
+      <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a> v${f.version}</h2>
     <pre>высота: ${fmt(h.min)} → ${fmt(roofApproximated ? h.top : h.wallTop)} → ${fmt(h.top)} м (${h.source})\nкрыша: ${h.roofShape}, ${fmt(h.roofHeight)} м</pre>
     ${warn.map((w) => `<p class="warn">⚠ ${w}</p>`).join('')}
     ${form ? `${form}<details class="all-tags"><summary>Все теги</summary>${tagTable(f.tags)}</details>` : tagTable(f.tags)}`;
@@ -563,7 +674,7 @@ async function resolveTileFeature(f: MapGeoJSONFeature) {
   const out = (html: string) => { if (seq === resolveSeq) document.getElementById('resolved')!.innerHTML = html; };
   if ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) > MAX_EDIT_AREA) return out('Фича слишком большая для запроса к API.');
   try {
-    const { features } = parseBuildings(await fetchMap(bbox));
+    const { features } = parseBuildings(await fetchMap(bbox, SERVERS.prod.api)); // id тайлов — боевые
     const h = f.properties.render_height ?? Infinity, min = f.properties.render_min_height ?? 0;
     const matches = features.filter((o) => {
       if (o.hasParts) return false;
@@ -582,7 +693,7 @@ async function resolveTileFeature(f: MapGeoJSONFeature) {
 
 const osmLink = (type: string, id: number) => `<a href="https://www.openstreetmap.org/${type}/${id}" target="_blank" rel="noopener">${type}/${id}</a>`;
 const fmt = (n: number) => String(Math.round(n * 10) / 10);
-const esc = (s: unknown) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+function esc(s: unknown): string { return String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`); }
 const tagTable = (tags: Record<string, unknown>) =>
   `<table>${Object.entries(tags).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
 

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Вход в OSM</title>
+</head>
+<body>
+  <p>Возвращаемся в редактор…</p>
+  <script>
+    // Отдаём code основному окну через BroadcastChannel (window.opener после сайта OSM пуст из-за COOP)
+    const p = new URLSearchParams(location.search);
+    const channel = new BroadcastChannel('osm3d-oauth');
+    channel.postMessage({ type: 'osm-oauth', code: p.get('code'), state: p.get('state'), error: p.get('error_description') || p.get('error') });
+    channel.close();
+    document.querySelector('p').textContent = 'Готово — это окно можно закрыть.';
+    window.close();
+  </script>
+</body>
+</html>

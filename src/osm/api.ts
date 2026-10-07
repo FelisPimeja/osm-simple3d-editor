@@ -1,4 +1,4 @@
-export const OSM_API = 'https://api.openstreetmap.org/api/0.6';
+import { server } from './servers';
 
 export type Bbox = [west: number, south: number, east: number, north: number];
 
@@ -10,8 +10,8 @@ export type OsmElement = OsmNode | OsmWay | OsmRelation;
 
 // /map отдаёт все узлы и пути в bbox плюс отношения, которые на них ссылаются.
 // Члены отношений за пределами bbox не приходят — такие мультиполигоны будут неполными.
-export async function fetchMap(bbox: Bbox): Promise<OsmElement[]> {
-  const res = await fetch(`${OSM_API}/map.json?bbox=${bbox.join(',')}`);
+export async function fetchMap(bbox: Bbox, api = server().api): Promise<OsmElement[]> {
+  const res = await fetch(`${api}/map.json?bbox=${bbox.join(',')}`);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`OSM API ${res.status}: ${text || res.statusText}`);
@@ -22,7 +22,7 @@ export async function fetchMap(bbox: Bbox): Promise<OsmElement[]> {
 
 /** Отношение со всеми членами и их узлами. */
 export async function fetchRelationFull(id: number): Promise<OsmElement[]> {
-  const res = await fetch(`${OSM_API}/relation/${id}/full.json`);
+  const res = await fetch(`${server().api}/relation/${id}/full.json`);
   if (!res.ok) throw new Error(`OSM API ${res.status} для relation/${id}`);
   return ((await res.json()) as { elements: OsmElement[] }).elements;
 }

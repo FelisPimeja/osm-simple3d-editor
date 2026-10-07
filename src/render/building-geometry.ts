@@ -21,9 +21,9 @@ export interface BuildingTriangles {
 const SUPPORTED_ANY_POLYGON = new Set(['flat', 'pyramidal', 'dome', 'onion', 'skillion']);
 const SUPPORTED_QUAD = new Set(['gabled', 'hipped']);
 /** Крыши по straight skeleton на контурах любой формы (gabled/hipped на четырёхугольниках — свой код). */
-const SKELETON_SHAPES = new Set(['gabled', 'hipped', 'round', 'gambrel', 'mansard', 'half-hipped']);
+const SKELETON_SHAPES = new Set(['gabled', 'hipped', 'round', 'gambrel', 'mansard', 'half-hipped', 'saltbox']);
 /** Формы, которые на почти прямоугольных контурах строятся вдоль оси описанного прямоугольника. */
-const AXIS_SHAPES = new Set(['gabled', 'round', 'gambrel', 'half-hipped']);
+const AXIS_SHAPES = new Set(['gabled', 'round', 'gambrel', 'half-hipped', 'saltbox']);
 
 export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Record<string, string>): BuildingTriangles {
   const walls: number[] = [];
@@ -63,6 +63,8 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
     addPyramid(roof, single!.outer, h.wallTop, h.top);
   } else if (shape === 'dome' || shape === 'onion') {
     addDome(roof, single!.outer, h.wallTop, h.top, shape === 'onion');
+  } else if (axis && shape === 'saltbox') {
+    addSaltboxRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across', tags['roof:direction']);
   } else if (axis && shape === 'half-hipped') {
     addHalfHippedRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across');
   } else if (axis) {
@@ -340,6 +342,32 @@ function addHalfHippedRoof(roof: number[], walls: number[], ring: Pt[], ax: Rect
   addPlanesRoof(roof, walls, ring, planes, z0, top);
 }
 
+/** Смещение конька saltbox от середины, в долях полуширины. */
+const SALTBOX_RIDGE = 1 / 3;
+
+/**
+ * Saltbox: двускатная с коньком, смещённым к одной стороне, — короткий крутой скат и длинный пологий.
+ * Карнизы на одной высоте, фронтоны несимметричные. roof:direction — куда смотрит длинный скат
+ * (как направление ската у skillion); без него длинный скат — с «левой» стороны оси.
+ */
+function addSaltboxRoof(roof: number[], walls: number[], ring: Pt[], ax: RectAxis, z0: number, roofHeight: number, across: boolean, direction?: string) {
+  const along: Pt = across ? [-ax.dir[1], ax.dir[0]] : ax.dir;
+  let n: Pt = [-along[1], along[0]]; // поперёк конька; длинный скат смотрит в -n
+  const deg = direction === undefined ? NaN : CARDINAL[direction.toUpperCase()] ?? Number(direction);
+  if (Number.isFinite(deg)) {
+    const rad = (deg * Math.PI) / 180;
+    const d: Pt = [Math.sin(rad), Math.cos(rad)]; // x — восток, y — север
+    if (-(n[0] * d[0] + n[1] * d[1]) < 0) n = [-n[0], -n[1]];
+  }
+  const halfW = (across ? ax.length : ax.width) / 2 || 1;
+  const [cx, cy] = ax.center;
+  const ridge = halfW * SALTBOX_RIDGE; // конёк сдвинут в сторону +n
+  const kLong = roofHeight / (halfW + ridge), kShort = roofHeight / (halfW - ridge);
+  // z = z0 + k · (расстояние от карниза), расстояние меряем вдоль d от линии s = -halfW
+  const plane = (d: Pt, k: number): Plane => [k * d[0], k * d[1], z0 - k * (d[0] * cx + d[1] * cy) + k * halfW];
+  addPlanesRoof(roof, walls, ring, [plane(n, kLong), plane([-n[0], -n[1]], kShort)], z0, z0 + roofHeight);
+}
+
 /**
  * Крыша как минимум из плоскостей: контур режется на области, где каждая плоскость ниже остальных
  * (это пересечение полуплоскостей — каждая область плоская), стены поднимаются до той же поверхности.
@@ -408,8 +436,8 @@ const PROFILES: Record<string, Profile | undefined> = {
 };
 
 /** Крыши с фронтонами на торцах (остальные скатные — со скатами со всех сторон). */
-// half-hipped на сложных контурах (без оси) — упрощённо как двускатная
-const GABLED_SHAPES = new Set(['gabled', 'round', 'gambrel', 'half-hipped']);
+// half-hipped и saltbox на сложных контурах (без оси) — упрощённо как двускатная
+const GABLED_SHAPES = new Set(['gabled', 'round', 'gambrel', 'half-hipped', 'saltbox']);
 
 /** Отсечение многоугольника по третьей координате: sign=1 — оставить t ≥ level, -1 — t ≤ level. */
 function clipT(poly: V3[], level: number, sign: 1 | -1): V3[] {

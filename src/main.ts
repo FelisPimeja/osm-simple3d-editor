@@ -623,7 +623,7 @@ void skeletonReady.then((ok) => {
   if (!ok) return;
   const needsSkeleton = (f: Feature3D) => {
     const shape = f.tags['roof:shape'];
-    return shape === 'round' || shape === 'gambrel' || shape === 'mansard' || ((shape === 'gabled' || shape === 'hipped') && !(f.polygons.length === 1 && !f.polygons[0].inners.length && f.polygons[0].outer.length === 4));
+    return shape === 'round' || shape === 'gambrel' || shape === 'mansard' || shape === 'half-hipped' || ((shape === 'gabled' || shape === 'hipped') && !(f.polygons.length === 1 && !f.polygons[0].inners.length && f.polygons[0].outer.length === 4));
   };
   void overpassLayer.rebuildWhere(needsSkeleton);
   void editLayer.rebuildWhere(needsSkeleton, (r) => {

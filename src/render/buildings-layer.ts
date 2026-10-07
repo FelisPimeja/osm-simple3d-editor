@@ -129,28 +129,53 @@ export class BuildingsLayer implements CustomLayerInterface {
     const rendered: RenderedFeature[] = [];
     for (const f of features) {
       if (f.hasParts) continue;
-      const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
-      const heights = computeHeights(f.tags);
-      const tri = buildTriangles(polys, heights, f.tags);
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.Float32BufferAttribute([...tri.walls, ...tri.roof], 3));
-      geom.addGroup(0, tri.walls.length / 3, 0);
-      geom.addGroup(tri.walls.length / 3, tri.roof.length / 3, 1);
-      geom.computeVertexNormals();
-      geom.setAttribute('color', groundAOColors(geom, heights.top));
-      const wall = f.tags['building:colour'] ?? f.tags.colour ?? DEFAULT_WALL;
-      const roof = f.tags['roof:colour'] ?? (f.tags['roof:shape'] && f.tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
-      const mesh = new THREE.Mesh(geom, [material(wall), material(roof)]);
-      mesh.userData.key = f.key;
-      this.paint(mesh);
-      this.applyMeshGraphics(mesh);
+      const { mesh, roofApproximated } = this.buildMesh(g, f);
       g.root.add(mesh);
-      rendered.push({ feature: f, roofApproximated: tri.roofApproximated });
+      rendered.push({ feature: f, roofApproximated });
     }
     g.applyLighting(this.graphics);
     this.groups.set(key, g);
     this.map?.triggerRepaint();
     return rendered;
+  }
+
+  /** Пересобирает одно здание группы (после правки тегов). Выделение сохраняется. */
+  updateFeature(groupKey: string, f: Feature3D): RenderedFeature | undefined {
+    const g = this.groups.get(groupKey);
+    const old = g?.root.children.find((o) => o.userData.key === f.key) as THREE.Mesh | undefined;
+    if (!g || !old) return;
+    const wasSelected = old === this.selected;
+    const { mesh, roofApproximated } = this.buildMesh(g, f);
+    disposeEdges(old);
+    old.geometry.dispose();
+    for (const m of old.material as THREE.Material[]) m.dispose();
+    g.root.remove(old);
+    g.root.add(mesh);
+    if (wasSelected) {
+      this.selected = mesh;
+      this.paint(mesh);
+    }
+    this.map?.triggerRepaint();
+    return { feature: f, roofApproximated };
+  }
+
+  private buildMesh(g: MeshGroup, f: Feature3D): { mesh: THREE.Mesh; roofApproximated: boolean } {
+    const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+    const heights = computeHeights(f.tags);
+    const tri = buildTriangles(polys, heights, f.tags);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([...tri.walls, ...tri.roof], 3));
+    geom.addGroup(0, tri.walls.length / 3, 0);
+    geom.addGroup(tri.walls.length / 3, tri.roof.length / 3, 1);
+    geom.computeVertexNormals();
+    geom.setAttribute('color', groundAOColors(geom, heights.top));
+    const wall = f.tags['building:colour'] ?? f.tags.colour ?? DEFAULT_WALL;
+    const roof = f.tags['roof:colour'] ?? (f.tags['roof:shape'] && f.tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
+    const mesh = new THREE.Mesh(geom, [material(wall), material(roof)]);
+    mesh.userData.key = f.key;
+    this.paint(mesh);
+    this.applyMeshGraphics(mesh);
+    return { mesh, roofApproximated: tri.roofApproximated };
   }
 
   hasGroup(key: string): boolean {

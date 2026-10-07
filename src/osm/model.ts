@@ -138,11 +138,33 @@ function centroid(ring: LonLat[]): LonLat {
   return [x / ring.length, y / ring.length];
 }
 
-/** Simple 3D: контур здания не рисуется, если внутри него есть building:part. */
+/** Площадь полигона в условных единицах (градусы², долгота сжата на cos широты). */
+function area(p: Polygon): number {
+  const k = Math.cos((p.outer[0][1] * Math.PI) / 180);
+  const ringArea = (r: LonLat[]) => {
+    let a = 0;
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += (r[j][0] - r[i][0]) * (r[j][1] + r[i][1]);
+    return Math.abs(a / 2) * k;
+  };
+  return ringArea(p.outer) - p.inners.reduce((s, h) => s + ringArea(h), 0);
+}
+
+/** Доля площади контура, при которой части считаются его заменой. */
+const PARTS_COVERAGE = 0.5;
+
+/**
+ * Simple 3D: контур здания не рисуется, если внутри него есть building:part.
+ * Но часто частями размечены только надстройки (пентхаусы, башенки), а объём здания задан контуром
+ * (например, relation/3756395) — поэтому скрываем контур, только если части покрывают заметную долю площади.
+ */
 function markOutlinesWithParts(features: Feature3D[]) {
-  const parts = features.filter((f) => f.kind === 'part').map((f) => centroid(f.polygons[0].outer));
+  const parts = features
+    .filter((f) => f.kind === 'part')
+    .flatMap((f) => f.polygons.map((p) => ({ c: centroid(p.outer), area: area(p) })));
   for (const b of features) {
     if (b.kind !== 'building') continue;
-    b.hasParts = parts.some((c) => b.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h))));
+    const inside = (c: LonLat) => b.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
+    const covered = parts.filter((p) => inside(p.c)).reduce((s, p) => s + p.area, 0);
+    b.hasParts = covered >= PARTS_COVERAGE * b.polygons.reduce((s, p) => s + area(p), 0);
   }
 }

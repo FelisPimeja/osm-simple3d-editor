@@ -44,3 +44,23 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
   border: 2px solid #fff; border-radius: 50%; background: #2563eb; box-shadow: 0 0 0 1px rgba(0,0,0,.4);
 }
 .orbit-pivot[hidden] { display: none; }
+.tag-form { display: grid; gap: 4px; margin: 8px 0; }
+.tag-row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 6px; font-size: 13px; }
+.tag-row > span { color: #555; }
+.tag-row input[type="text"], .tag-row select { width: 100%; box-sizing: border-box; padding: 3px 5px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
+.tag-row.changed > span { color: #b45309; font-weight: 600; }
+.tag-row.changed input[type="text"], .tag-row.changed select { border-color: #f59e0b; background: #fffbeb; }
+.tag-row .invalid { border-color: #dc2626 !important; background: #fef2f2 !important; }
+.colour-field { display: flex; gap: 4px; }
+.colour-field input[type="color"] { width: 32px; height: 26px; padding: 0; border: 1px solid #ccc; border-radius: 4px; flex: none; }
+.tag-form [data-revert] { justify-self: start; margin-top: 4px; }
+.all-tags summary { cursor: pointer; font-size: 12px; color: #555; margin: 4px 0; }
+#changes { border-top: 1px solid #e5e7eb; margin-top: 8px; padding-top: 4px; }
+#changes h2 { font-size: 14px; margin: 4px 0; }
+#changes .history { display: flex; gap: 6px; margin: 4px 0; }
+#changes button { padding: 3px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+#changes button:disabled { opacity: .5; cursor: default; }
+.change-list { margin: 4px 0; padding-left: 16px; font-size: 12px; }
+.change-list ul { padding-left: 14px; margin: 2px 0 6px; }
+.change-list del { color: #b91c1c; }
+.change-list ins { color: #15803d; text-decoration: none; }

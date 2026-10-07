@@ -3,7 +3,7 @@ import type { Feature3D } from '../osm/model';
 const DB_NAME = 'osm-simple3d';
 const STORE = 'overpass-tiles';
 /** Версия формата записи: при изменении Feature3D старые записи игнорируются. */
-const FORMAT = 1;
+const FORMAT = 2;
 /** Сколько тайлов хранить; при превышении удаляются самые старые. */
 const MAX_TILES = 300;
 

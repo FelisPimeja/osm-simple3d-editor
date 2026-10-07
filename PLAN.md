@@ -20,7 +20,7 @@
    Проверить, есть ли в тайлах OSM id (`feature.id`).
 2. [x] Режим редактирования: загрузка bbox из API, парсинг OSM XML, модель
    building / building:part / мультиполигоны, свой рендер стен + flat/pyramidal крыш, выбор raycast'ом.
-3. [ ] Панель тегов: `height`, `min_height`, `building:levels`, `building:min_level`,
+3. [x] Панель тегов: `height`, `min_height`, `building:levels`, `building:min_level`,
    `roof:shape`, `roof:height`, `building:colour`, `roof:colour`. Undo/redo, diff «было → стало».
 4. [ ] OAuth + генерация osmChange + upload (dev-сервер, затем боевой). Обработка 409 Conflict.
 5. [ ] Крыши gabled/hipped (сначала для четырёхугольников, затем straight skeleton).
@@ -89,3 +89,9 @@
     текущего зума (17/x/y), поэтому ключи приводятся к родителю z14.
   - Overpass-api.de: 4 слота на IP; без браузерного User-Agent отвечает 406 (только для отладки из node).
     Тайл z14 с Кремлём — ~1600–2600 объектов.
+- 2026-10-06, этап 3 (редактирование тегов):
+  - `src/edit/session.ts` — исходные теги из API, текущие (Feature3D.tags меняется на месте), история undo/redo,
+    список изменений с diff по тегам. `src/edit/tag-form.ts` — форма с валидацией (длины, целые,
+    направление 0–360/румбы, CSS-цвета), пустое поле удаляет тег, нестандартные значения select сохраняются.
+  - После правки пересобирается только меш изменённого объекта (`BuildingsLayer.updateFeature`).
+  - Выход из режима и закрытие страницы с несохранёнными правками — с подтверждением.

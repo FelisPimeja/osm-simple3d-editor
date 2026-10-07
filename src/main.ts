@@ -9,6 +9,8 @@ import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './re
 import { queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
+import { EditSession } from './edit/session';
+import { bindTagForms, renderTagForm } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
@@ -81,6 +83,10 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
   showOverpassStatus();
 });
 let editing: Map<string, RenderedFeature> | undefined;
+/** Правки тегов в текущей области редактирования. */
+let session: EditSession | undefined;
+let selectedKey: string | undefined;
+const changesEl = document.getElementById('changes')!;
 
 map.on('load', () => {
   // Убираем штатные экструзии стиля и добавляем свою с учётом Simple 3D
@@ -319,6 +325,8 @@ async function enterEditMode() {
     const rendered = editLayer.setGroup('edit', features, [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]);
     if (!map.getLayer(editLayer.id)) map.addLayer(editLayer);
     editing = new Map(rendered.map((r) => [r.feature.key, r]));
+    session = new EditSession(features, onSessionChange);
+    renderChanges();
     overpassLayer.select(undefined);
     refreshOverpass(); // в режиме редактирования Overpass-слой выключен
     hideTileBuildingsIn(bbox);
@@ -337,6 +345,11 @@ async function enterEditMode() {
 }
 
 function exitEditMode() {
+  const n = session?.changes().length ?? 0;
+  if (n && !confirm(`Есть несохранённые изменения (${n} объектов). Выйти и потерять их?`)) return;
+  session = undefined;
+  selectedKey = undefined;
+  renderChanges();
   editing = undefined;
   editLayer.clear();
   if (map.getLayer(editLayer.id)) map.removeLayer(editLayer.id);
@@ -365,10 +378,7 @@ function hideTileBuildingsIn([w, s, e, n]: Bbox) {
 
 map.on('click', (e) => {
   if (editing) {
-    const key = editLayer.pick(e.point);
-    editLayer.select(key);
-    const r = key ? editing.get(key) : undefined;
-    infoEl.innerHTML = r ? describeOsm(r) : '';
+    selectEdited(editLayer.pick(e.point));
     return;
   }
   const key = overpassLayer.pick(e.point);
@@ -440,7 +450,75 @@ function setStatus(text: string, error = false) {
   statusEl.classList.toggle('error', error);
 }
 
-function describeOsm({ feature: f, roofApproximated }: RenderedFeature): string {
+function selectEdited(key: string | undefined) {
+  selectedKey = key;
+  editLayer.select(key);
+  renderSelected();
+}
+
+function renderSelected() {
+  const r = selectedKey ? editing?.get(selectedKey) : undefined;
+  infoEl.innerHTML = r ? describeOsm(r, session ? renderTagForm(r.feature.key, session) : undefined) : '';
+}
+
+/** После правки тегов: пересобрать меши, обновить панель и список изменений. */
+function onSessionChange(keys: string[]) {
+  for (const key of keys) {
+    const f = session?.get(key);
+    const r = f && editLayer.updateFeature('edit', f);
+    if (r) editing?.set(key, r);
+  }
+  if (selectedKey && keys.includes(selectedKey)) {
+    const active = document.activeElement as HTMLElement | null;
+    const focusTag = active?.closest('.tag-form') ? active.dataset.tag : undefined;
+    renderSelected();
+    // Возвращаем фокус в то же поле (Tab уже мог увести его дальше — тогда в следующее)
+    if (focusTag) infoEl.querySelector<HTMLElement>(`[data-tag="${CSS.escape(focusTag)}"]`)?.focus();
+  }
+  renderChanges();
+}
+
+function renderChanges() {
+  const changes = session?.changes() ?? [];
+  changesEl.hidden = !session;
+  if (!session) { changesEl.innerHTML = ''; return; }
+  const list = changes.map((c) => `
+    <li><a href="#" data-select="${esc(c.key)}">${esc(c.key)}</a>
+      <ul>${c.diff.map((d) => `<li><code>${esc(d.tag)}</code>: <del>${esc(d.from ?? '—')}</del> → <ins>${esc(d.to ?? '—')}</ins></li>`).join('')}</ul>
+    </li>`).join('');
+  changesEl.innerHTML = `
+    <h2>Изменения (${changes.length})</h2>
+    <p class="history">
+      <button type="button" data-undo ${session.canUndo() ? '' : 'disabled'} title="Ctrl+Z">↶ Отменить</button>
+      <button type="button" data-redo ${session.canRedo() ? '' : 'disabled'} title="Ctrl+Shift+Z">↷ Повторить</button>
+    </p>
+    ${changes.length ? `<ul class="change-list">${list}</ul>` : '<p class="hint">Пока нет изменений.</p>'}`;
+}
+
+changesEl.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest('[data-undo]')) return selectEdited(session?.undo() ?? selectedKey);
+  if (t.closest('[data-redo]')) return selectEdited(session?.redo() ?? selectedKey);
+  const link = t.closest<HTMLElement>('[data-select]');
+  if (link) { e.preventDefault(); selectEdited(link.dataset.select); }
+});
+
+bindTagForms(infoEl, () => session);
+
+document.addEventListener('keydown', (e) => {
+  if (!session || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
+  // В полях ввода оставляем родной undo браузера
+  if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+  e.preventDefault();
+  const key = e.shiftKey ? session.redo() : session.undo();
+  if (key) selectEdited(key);
+});
+
+window.addEventListener('beforeunload', (e) => {
+  if (session?.changes().length) e.preventDefault();
+});
+
+function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: string): string {
   const h = computeHeights(f.tags);
   const warn = [
     roofApproximated && `Форма крыши «${h.roofShape}» пока не поддерживается для этой геометрии — показаны стены до верха и плоская крыша.`,
@@ -453,7 +531,7 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature): string 
       <a href="https://www.openstreetmap.org/${f.key}" target="_blank" rel="noopener">${f.key}</a> v${f.version}</h2>
     <pre>высота: ${fmt(h.min)} → ${fmt(roofApproximated ? h.top : h.wallTop)} → ${fmt(h.top)} м (${h.source})\nкрыша: ${h.roofShape}, ${fmt(h.roofHeight)} м</pre>
     ${warn.map((w) => `<p class="warn">⚠ ${w}</p>`).join('')}
-    ${tagTable(f.tags)}`;
+    ${form ? `${form}<details class="all-tags"><summary>Все теги</summary>${tagTable(f.tags)}</details>` : tagTable(f.tags)}`;
 }
 
 /** Planetiler: id = osmId * 10 + (1 — node, 2 — way, 3 — relation); 0 — фича, склеенная из нескольких зданий. */
@@ -508,4 +586,4 @@ const esc = (s: unknown) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeA
 const tagTable = (tags: Record<string, unknown>) =>
   `<table>${Object.entries(tags).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
 
-if (import.meta.env.DEV) Object.assign(window, { map, editLayer, overpassLayer, overpass, orbit });
+if (import.meta.env.DEV) Object.assign(window, { map, editLayer, overpassLayer, overpass, orbit, selectEdited, getSession: () => session });

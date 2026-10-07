@@ -19,7 +19,7 @@ export interface BuildingTriangles {
 const SUPPORTED_ANY_POLYGON = new Set(['flat', 'pyramidal', 'dome', 'onion', 'skillion']);
 const SUPPORTED_QUAD = new Set(['gabled', 'hipped']);
 /** Крыши по straight skeleton на контурах любой формы (gabled/hipped на четырёхугольниках — свой код). */
-const SKELETON_SHAPES = new Set(['gabled', 'hipped', 'round']);
+const SKELETON_SHAPES = new Set(['gabled', 'hipped', 'round', 'gambrel', 'mansard']);
 
 export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Record<string, string>): BuildingTriangles {
   const walls: number[] = [];
@@ -29,7 +29,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   const single = polygons.length === 1 && polygons[0].inners.length === 0 ? polygons[0] : undefined;
   const quadRoof = single && single.outer.length === 4 && SUPPORTED_QUAD.has(shape) && shape !== 'gabled';
   // Двускатная и сводчатая на почти прямоугольных контурах — вдоль оси описанного прямоугольника (учитывает roof:orientation)
-  const axis = single && (shape === 'gabled' || shape === 'round') ? rectAxis(single.outer) : undefined;
+  const axis = single && (shape === 'gabled' || shape === 'round' || shape === 'gambrel') ? rectAxis(single.outer) : undefined;
   // Скатные крыши на остальных контурах (в т.ч. с дырами и из нескольких полигонов) — по straight skeleton
   const skeletons = !quadRoof && !axis && SKELETON_SHAPES.has(shape) ? polygons.map((p) => skeletonOf(p.outer, p.inners)) : undefined;
   const skeletonRoof = !!skeletons?.length && skeletons.every(Boolean);
@@ -59,11 +59,11 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   } else if (shape === 'dome' || shape === 'onion') {
     addDome(roof, single!.outer, h.wallTop, h.top, shape === 'onion');
   } else if (axis) {
-    addAxisRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across', shape === 'round' ? ROUND_PROFILE : undefined);
+    addAxisRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across', PROFILES[shape]);
   } else if (quadRoof) {
     addQuadRoof(roof, walls, single!.outer, h.wallTop, h.top, shape === 'hipped', tags['roof:orientation'] === 'across');
   } else {
-    for (const sk of skeletons!) addSkeletonRoof(roof, walls, sk!, h.wallTop, h.roofHeight, shape === 'gabled' || shape === 'round', shape === 'round' ? ROUND_PROFILE : undefined);
+    for (const sk of skeletons!) addSkeletonRoof(roof, walls, sk!, h.wallTop, h.roofHeight, GABLED_SHAPES.has(shape), PROFILES[shape]);
   }
 
   return { walls, roof, roofApproximated: !supported };
@@ -163,13 +163,14 @@ function addQuadRoof(roof: number[], walls: number[], ring: Pt[], z0: number, z1
 /**
  * Вальмовая или двускатная крыша по straight skeleton: каждая грань скелета — скат над своей стороной контура,
  * высота точки пропорциональна расстоянию до контура (самая дальняя точка — конёк на высоте roofHeight).
- * Round — двускатная со сводчатым профилем (profile): грани режутся на полосы по расстоянию до контура.
+ * Профиль (round, gambrel, mansard) — высота как функция расстояния до контура; грани режутся на полосы
+ * по точкам излома профиля, внутри полосы высота линейна.
  * Двускатная: треугольные грани (торцы вальмовой) превращаются во фронтоны — вершина треугольника
  * переносится на его сторону контура, соседние скаты при этом дотягиваются до торца.
  */
 function addSkeletonRoof(
   roof: number[], walls: number[], sk: NonNullable<ReturnType<typeof skeletonOf>>,
-  z0: number, roofHeight: number, gabled: boolean, profile?: (t: number) => number,
+  z0: number, roofHeight: number, gabled: boolean, profile: Profile = LINEAR,
 ) {
   const verts = sk.vertices.map(([x, y, t]) => [x, y, t] as V3);
   const maxT = Math.max(...verts.map((v) => v[2])) || 1;
@@ -200,15 +201,16 @@ function addSkeletonRoof(
     }
   }
 
-  const bands = profile ? ROUND_BANDS : 1;
-  const z = (t: number) => z0 + roofHeight * (profile ? profile(Math.min(1, t / maxT)) : t / maxT);
+  const z = (t: number) => z0 + roofHeight * profile.z(Math.min(1, t / maxT));
+  const levels = [0, ...profile.breaks, 1].map((l) => l * maxT);
+  levels[0] = -Infinity;
+  levels[levels.length - 1] = Infinity;
   for (const f of sk.polygons) {
     const out = gables.has(f) ? walls : roof;
     const poly = f.map((i) => verts[i]);
     // Полосы по «времени» (расстоянию до контура): внутри полосы высота линейна, по полосам — по профилю
-    for (let b = 0; b < bands; b++) {
-      const lo = (maxT * b) / bands, hi = (maxT * (b + 1)) / bands;
-      const band = bands === 1 ? poly : clipT(clipT(poly, lo, 1), hi, -1);
+    for (let b = 0; b + 1 < levels.length; b++) {
+      const band = levels.length === 2 ? poly : clipT(clipT(poly, levels[b], 1), levels[b + 1], -1);
       if (band.length < 3) continue;
       for (const [p, q, r] of triangulate3(band)) tri(out, [p[0], p[1], z(p[2])], [q[0], q[1], z(q[2])], [r[0], r[1], z(r[2])]);
     }
@@ -255,7 +257,7 @@ function rectAxis(ring: Pt[]): RectAxis | undefined {
  */
 function addAxisRoof(
   roof: number[], walls: number[], ring: Pt[], ax: RectAxis,
-  z0: number, roofHeight: number, across: boolean, profile?: (t: number) => number,
+  z0: number, roofHeight: number, across: boolean, profile: Profile = LINEAR,
 ) {
   const n: Pt = across ? ax.dir : [-ax.dir[1], ax.dir[0]]; // поперёк конька
   const half = (across ? ax.length : ax.width) / 2 || 1;
@@ -263,12 +265,12 @@ function addAxisRoof(
   const sOf = (p: Pt) => ((p[0] - ax.center[0]) * n[0] + (p[1] - ax.center[1]) * n[1]) / half;
   const z = (sv: number) => {
     const t = 1 - Math.min(1, Math.abs(sv));
-    return z0 + roofHeight * (profile ? profile(t) : t);
+    return z0 + roofHeight * profile.z(t);
   };
-  const strips = profile ? ROUND_BANDS * 2 : 2;
-  const levels = Array.from({ length: strips + 1 }, (_, i) => -1 + (2 * i) / strips);
-  levels[0] = -Infinity;
-  levels[strips] = Infinity;
+  // Полосы симметрично от конька (s = 0) к карнизам (|s| = 1) по точкам излома профиля
+  const fromRidge = profile.breaks.map((b) => 1 - b).sort((a, b) => a - b);
+  const levels = [-Infinity, ...[...fromRidge].reverse().map((l) => -l), 0, ...fromRidge, Infinity];
+  const strips = levels.length - 1;
 
   const poly: V3[] = ring.map((p) => [p[0], p[1], sOf(p)]);
   for (let i = 0; i < strips; i++) {
@@ -301,8 +303,32 @@ function addAxisRoof(
 }
 
 /** Цилиндрический свод: дуга окружности, t — доля пути от карниза к коньку. */
-const ROUND_PROFILE = (t: number) => Math.sqrt(1 - (1 - t) * (1 - t));
+/**
+ * Профиль ската: z(t) — доля высоты крыши, t — доля пути от карниза к коньку (0…1).
+ * breaks — точки t, где профиль меняет наклон (по ним режутся полосы).
+ */
+interface Profile { z: (t: number) => number; breaks: number[] }
+
+const LINEAR: Profile = { z: (t) => t, breaks: [] };
+
+/** Ломаная из двух отрезков через (tb, zb). */
+const twoPitch = (tb: number, zb: number): Profile => ({
+  z: (t) => (t <= tb ? (t / tb) * zb : zb + ((t - tb) / (1 - tb)) * (1 - zb)),
+  breaks: [tb],
+});
+
 const ROUND_BANDS = 8;
+
+const PROFILES: Record<string, Profile | undefined> = {
+  // Цилиндрический свод: дуга окружности
+  round: { z: (t) => Math.sqrt(1 - (1 - t) * (1 - t)), breaks: Array.from({ length: ROUND_BANDS - 1 }, (_, i) => (i + 1) / ROUND_BANDS) },
+  // Ломаные крыши: крутой нижний скат и пологий верхний. Пропорции — типичные, теги их не задают
+  gambrel: twoPitch(0.3, 0.7),
+  mansard: twoPitch(0.25, 0.75),
+};
+
+/** Крыши с фронтонами на торцах (остальные скатные — со скатами со всех сторон). */
+const GABLED_SHAPES = new Set(['gabled', 'round', 'gambrel']);
 
 /** Отсечение многоугольника по третьей координате: sign=1 — оставить t ≥ level, -1 — t ≤ level. */
 function clipT(poly: V3[], level: number, sign: 1 | -1): V3[] {

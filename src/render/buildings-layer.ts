@@ -4,6 +4,7 @@ import { computeHeights } from '../osm/heights';
 import type { Feature3D, LonLat } from '../osm/model';
 import { buildTriangles, type Pt } from './building-geometry';
 import { timed } from '../perf';
+import { orientedFrame, type LocalFrame } from './oriented-box';
 
 const DEFAULT_WALL = '#d9d0c9';
 const DEFAULT_ROOF = '#a89c94';
@@ -139,6 +140,10 @@ export class BuildingsLayer implements CustomLayerInterface {
   private focused = false;
   /** Матрица проекции MapLibre из последнего кадра — чтобы проецировать сцену режима здания до её первой отрисовки. */
   private lastMain?: THREE.Matrix4;
+  /** Локальная система координат здания в режиме одного здания (в метрах сцены режима). */
+  focusAxes?: LocalFrame;
+  /** Точки привязки режима одного здания (в метрах сцены режима); undefined — пересчитать. */
+  private snaps?: SnapPoint[];
 
   constructor(readonly id: string) {}
 
@@ -185,6 +190,8 @@ export class BuildingsLayer implements CustomLayerInterface {
    */
   setFocus(features: Feature3D[] | undefined) {
     this.removeGroup(FOCUS_GROUP);
+    this.focusAxes = undefined;
+    this.snaps = undefined;
     this.focused = !!features;
     if (!features?.length) { this.map?.triggerRepaint(); return; }
     const box = new THREE.Box2();
@@ -201,6 +208,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     grid.rotation.x = Math.PI / 2; // GridHelper лежит в XZ, у нас земля — XY
     grid.position.z = -0.01;
     g.scene.add(ground, grid);
+    const pts: Pt[] = features.flatMap((f) => f.polygons.flatMap((p) => p.outer.map(g.toLocal)));
+    this.focusAxes = orientedFrame(pts);
+    // Начало — снаружи угла bbox, чтобы обозначение не сливалось со стенами
+    if (this.focusAxes) {
+      const { origin: o, x, y } = this.focusAxes;
+      this.focusAxes.origin = [o[0] - (x[0] + y[0]) * ORIGIN_OFFSET, o[1] - (x[1] + y[1]) * ORIGIN_OFFSET];
+    }
+    if (this.focusAxes) g.scene.add(axesGizmo(this.focusAxes, Math.max(...this.focusAxes.size)));
     this.install(FOCUS_GROUP, g);
   }
 
@@ -227,6 +242,34 @@ export class BuildingsLayer implements CustomLayerInterface {
     const c = box.getCenter(new THREE.Vector3());
     const merc = new MercatorCoordinate(g.origin.x + c.x * g.metersToMerc, g.origin.y - c.y * g.metersToMerc, 0);
     return { rect: [x0, y0, x1, y1], center: merc.toLngLat() };
+  }
+
+  /**
+   * Ближайшая к точке экрана привязка режима одного здания в пределах radius px.
+   * Вершины важнее середин рёбер, середины — центров: при близких расстояниях побеждает более важная.
+   */
+  snapAt(point: [number, number], radius = SNAP_RADIUS_PX): SnapHit | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!this.focused || !g || !this.map || !this.lastMain) return;
+    this.snaps ??= collectSnaps(g);
+    const m = this.lastMain.clone().multiply(g.model);
+    const canvas = this.map.getCanvas();
+    const v = new THREE.Vector4();
+    let best: { s: SnapPoint; d: number; px: [number, number] } | undefined;
+    for (const s of this.snaps) {
+      v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
+      if (v.w <= 0) continue;
+      const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
+      const d = Math.hypot(px[0] - point[0], px[1] - point[1]);
+      if (d > radius) continue;
+      // Штраф за менее важный тип — вершина в 6 px «ближе» середины ребра
+      const score = d + SNAP_PRIORITY[s.kind] * 6;
+      if (!best || score < best.d) best = { s, d: score, px };
+    }
+    if (!best) return;
+    const { s, px } = best;
+    const merc = new MercatorCoordinate(g.origin.x + s.p.x * g.metersToMerc, g.origin.y - s.p.y * g.metersToMerc, 0);
+    return { kind: s.kind, key: s.key, local: s.p.clone(), lngLat: merc.toLngLat(), altitude: s.p.z, point: px };
   }
 
   /** Центр здания в режиме одного здания: координаты, высота (середина) и положение на экране. */
@@ -288,7 +331,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   updateFeature(groupKey: string, f: Feature3D): RenderedFeature | undefined {
     const g = this.groups.get(groupKey);
     const focus = this.groups.get(FOCUS_GROUP);
-    if (focus?.byKey.has(f.key)) this.replaceItems(focus, [f]);
+    if (focus?.byKey.has(f.key)) { this.replaceItems(focus, [f]); this.snaps = undefined; }
     if (!g || !g.byKey.has(f.key)) return;
     this.replaceItems(g, [f]);
     return rendered(g.byKey.get(f.key)!);
@@ -610,6 +653,88 @@ function itemEdges(it: Item): Float32Array {
 
 /** Габариты всей группы — чтобы не перебирать здания тайлов, мимо которых луч проходит. */
 const FOCUS_GROUP = '@focus';
+export type SnapKind = 'vertex' | 'midpoint' | 'center';
+interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3 }
+/** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
+export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number] }
+const SNAP_RADIUS_PX = 12;
+const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, center: 2 };
+
+/**
+ * Точки привязки здания: вершины контуров внизу и на верху стен, середины рёбер (нижних, верхних
+ * и вертикальных) и центры габаритов объектов. Крыши пока не учитываются, кроме конька в центре.
+ */
+function collectSnaps(g: MeshGroup): SnapPoint[] {
+  const out: SnapPoint[] = [];
+  const seen = new Set<string>();
+  const add = (kind: SnapKind, key: string, x: number, y: number, z: number) => {
+    // Общие вершины соседних частей — одна точка
+    const id = `${kind}:${x.toFixed(2)}:${y.toFixed(2)}:${z.toFixed(2)}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push({ kind, key, p: new THREE.Vector3(x, y, z) });
+  };
+  for (const it of g.items) {
+    if (it.box.isEmpty()) continue;
+    const key = it.feature.key;
+    const z0 = it.box.min.z;
+    const z1 = Math.max(z0, Math.min(computeHeights(it.feature.tags).wallTop, it.box.max.z));
+    const levels = z1 - z0 > 0.2 ? [z0, z1] : [z0]; // у плоских следов — один уровень
+    for (const p of it.feature.polygons) {
+      for (const ring of [p.outer, ...p.inners]) {
+        const pts = ring.map(g.toLocal);
+        for (let i = 0; i < pts.length; i++) {
+          const [ax, ay] = pts[i], [bx, by] = pts[(i + 1) % pts.length];
+          for (const z of levels) {
+            add('vertex', key, ax, ay, z);
+            add('midpoint', key, (ax + bx) / 2, (ay + by) / 2, z);
+          }
+          if (levels.length > 1) add('midpoint', key, ax, ay, (z0 + z1) / 2); // вертикальное ребро
+        }
+      }
+    }
+    const c = it.box.getCenter(new THREE.Vector3());
+    add('center', key, c.x, c.y, c.z);
+  }
+  return out;
+}
+
+/** Отступ начала координат от угла bbox наружу по x и y, м. */
+const ORIGIN_OFFSET = 5;
+const AXIS_COLOURS = [0xd43a3a, 0x3fa34d, 0x3a52b4]; // x, y, z — как в 3D-редакторах
+
+/**
+ * Обозначение начала координат: оси x/y/z стрелками в положительную сторону, отрицательные — тонкой линией.
+ * Рисуется поверх геометрии (без проверки глубины), чтобы не терялось за стенами.
+ */
+function axesGizmo(frame: LocalFrame, size: number): THREE.Object3D {
+  const len = Math.min(Math.max(size * 0.18, 2.5), 30);
+  const r = len * 0.012, head = len * 0.12;
+  const root = new THREE.Group();
+  // Базис: x, y — оси здания на земле, z — вверх
+  root.matrixAutoUpdate = false;
+  root.matrix.makeBasis(
+    new THREE.Vector3(frame.x[0], frame.x[1], 0), new THREE.Vector3(frame.y[0], frame.y[1], 0), new THREE.Vector3(0, 0, 1),
+  ).setPosition(frame.origin[0], frame.origin[1], 0);
+  const dirs = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
+  const up = new THREE.Vector3(0, 1, 0); // цилиндр и конус в three.js вытянуты по y
+  dirs.forEach((d, i) => {
+    const mat = new THREE.MeshBasicMaterial({ color: AXIS_COLOURS[i], depthTest: false, depthWrite: false, transparent: true });
+    const q = new THREE.Quaternion().setFromUnitVectors(up, d);
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len - head, 8), mat);
+    shaft.quaternion.copy(q);
+    shaft.position.copy(d).multiplyScalar((len - head) / 2);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(head * 0.35, head, 12), mat);
+    tip.quaternion.copy(q);
+    tip.position.copy(d).multiplyScalar(len - head / 2);
+    const neg = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), d.clone().multiplyScalar(-len * 0.6)]),
+      new THREE.LineBasicMaterial({ color: AXIS_COLOURS[i], depthTest: false, depthWrite: false, transparent: true, opacity: 0.5 }),
+    );
+    for (const o of [shaft, tip, neg]) { o.renderOrder = 1001; root.add(o); }
+  });
+  return root;
+}
 const GROUND_COLOUR = 0xe8e6e1;
 const GRID_COLOUR = 0xc9c6bf;
 

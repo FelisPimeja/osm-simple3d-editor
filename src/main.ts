@@ -8,7 +8,7 @@ import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights } from './osm/heights';
 import { centroid, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat } from './osm/model';
-import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './render/buildings-layer';
+import { BuildingsLayer, type GraphicsOptions, type RenderedFeature, type SnapHit } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
@@ -521,18 +521,16 @@ function enterFocus(g: BuildingGroup) {
   renderSelected();
 }
 
-/** Доля свободной области экрана, которую занимает здание после подлёта. */
+/** Доля экрана, которую занимает здание после подлёта. */
 const FOCUS_FILL = 0.8;
 
-/** Плавный подлёт к зданию режима: оно занимает 80% ширины (без правой колонки) или высоты; наклон и поворот те же. */
+/** Плавный подлёт к зданию режима: оно занимает 80% ширины или высоты экрана; наклон и поворот те же. */
 function flyToFocus() {
   const center = overpassLayer.focusFrame()?.center;
   if (!center) return;
   const canvas = map.getCanvas();
-  const right = document.getElementById('right-col')!;
-  // На узком экране колонка внизу — тогда ширину не урезаем
-  const rightW = right.offsetTop < 100 ? canvas.clientWidth - right.offsetLeft : 0;
-  const availW = canvas.clientWidth - rightW, availH = canvas.clientHeight;
+  // Центр и размер — по всему экрану, панели не вычитаем (так нагляднее)
+  const availW = canvas.clientWidth, availH = canvas.clientHeight;
   // Размер на экране зависит от удалённости от камеры (перспектива) — меряем на пробной камере,
   // уже наведённой на здание, и уточняем зум несколько раз
   type Tr = { clone(): Tr; setCenter(c: maplibregl.LngLat): void; setZoom(z: number): void; getProjectionDataForCustomLayer(): { mainMatrix: ArrayLike<number> } };
@@ -565,13 +563,13 @@ function flyToFocus() {
     const scale = Math.min(availW * FOCUS_FILL / Math.max(now[2] - now[0], 1), availH * FOCUS_FILL / Math.max(now[3] - now[1], 1));
     zoom = Math.min(map.getZoom() + Math.log2(scale), map.getMaxZoom());
   }
-  // Пробная камера смотрит в основание здания — сдвигаем так, чтобы в центр свободной области попал весь объём
+  // Пробная камера смотрит в основание здания — сдвигаем так, чтобы в центр экрана попал весь объём
   const dx = rect ? (rect[0] + rect[2]) / 2 - canvas.clientWidth / 2 : 0;
   const dy = rect ? (rect[1] + rect[3]) / 2 - canvas.clientHeight / 2 : 0;
   map.easeTo({
     center,
     zoom,
-    offset: [-rightW / 2 - dx, -dy],
+    offset: [-dx, -dy],
     duration: 800,
   });
 }
@@ -579,6 +577,7 @@ function flyToFocus() {
 function exitFocus() {
   if (!focus) return;
   focus = undefined;
+  updateSnap(undefined);
   orbit.setEnabled(gfx.orbitAtCursor);
   overpassLayer.setFocus(undefined);
   const restore = (ls: typeof focusHiddenLayers) => {
@@ -611,6 +610,28 @@ function closeFocus() {
   leaveDrill();
   select(g.key);
 }
+
+// Привязки в режиме здания: маркер у ближайшей вершины, середины ребра или центра объекта
+const snapEl = document.createElement('div');
+snapEl.className = 'snap-marker';
+snapEl.hidden = true;
+map.getContainer().appendChild(snapEl);
+const SNAP_LABELS = { vertex: 'Вершина', midpoint: 'Середина', center: 'Центр' } as const;
+/** Текущая привязка под курсором — для будущих инструментов геометрии. */
+let currentSnap: SnapHit | undefined;
+
+function updateSnap(point: [number, number] | undefined) {
+  currentSnap = focus && point ? overpassLayer.snapAt(point) : undefined;
+  snapEl.hidden = !currentSnap;
+  if (!currentSnap) return;
+  snapEl.className = `snap-marker ${currentSnap.kind}`;
+  snapEl.dataset.label = SNAP_LABELS[currentSnap.kind];
+  snapEl.style.left = `${currentSnap.point[0]}px`;
+  snapEl.style.top = `${currentSnap.point[1]}px`;
+}
+map.on('mousemove', (e) => updateSnap([e.point.x, e.point.y]));
+map.on('movestart', () => updateSnap(undefined));
+map.getCanvasContainer().addEventListener('mouseleave', () => updateSnap(undefined));
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
 function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {

@@ -67,6 +67,21 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
   border: 2px solid #fff; border-radius: 50%; background: #2563eb; box-shadow: 0 0 0 1px rgba(0,0,0,.4);
 }
 .orbit-pivot[hidden] { display: none; }
+/* Привязка под курсором (режим здания): вершина — квадрат, середина ребра — треугольник, центр — круг */
+.snap-marker {
+  position: absolute; width: 10px; height: 10px; margin: -6px 0 0 -6px; pointer-events: none; z-index: 2;
+  border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.45);
+}
+.snap-marker[hidden] { display: none; }
+.snap-marker.vertex { background: #16a34a; }
+.snap-marker.midpoint { background: #0891b2; border: 0; box-shadow: none; width: 14px; height: 12px; margin: -8px 0 0 -7px;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.snap-marker.center { background: #9333ea; border-radius: 50%; }
+.snap-marker::after {
+  content: attr(data-label); position: absolute; left: 14px; top: -4px; white-space: nowrap;
+  font: 11px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.65); padding: 1px 5px; border-radius: 3px;
+}
+.snap-marker.midpoint::after { content: none; }
 .tag-form { display: grid; gap: 4px; margin: 8px 0; }
 .tag-row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 6px; font-size: 13px; }
 .tag-row > span { color: #555; }

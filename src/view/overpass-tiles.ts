@@ -141,6 +141,11 @@ export class OverpassTiles {
     return this.rendered.get(key);
   }
 
+  /** Объекты, нарисованные сейчас. */
+  renderedFeatures(): RenderedFeature[] {
+    return [...this.rendered.values()].filter((r) => this.layer.hasFeature(r.feature.key));
+  }
+
   /** Группа type=building, в которую входит объект (или сама группа по её ключу). */
   groupOf(key: string): BuildingGroup | undefined {
     return this.groups.get(this.memberGroup.get(key) ?? key);

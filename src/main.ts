@@ -7,7 +7,7 @@ import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights } from './osm/heights';
-import { centroid, parseBuildings, pointInRing, type BuildingGroup, type Feature3D } from './osm/model';
+import { centroid, parseBuildings, pointInRing, type BuildingGroup, type Feature3D, type LonLat } from './osm/model';
 import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
@@ -440,6 +440,7 @@ function highlightKeys(key: string | undefined): string[] {
 }
 
 map.on('click', (e) => {
+  if (suppressClick) return;
   const key = overpassLayer.pick(e.point);
   if (addingTo) {
     if (e.originalEvent.shiftKey) { if (key) toggleAddPending(key); return; }
@@ -566,6 +567,78 @@ function toggleSelection(key: string) {
   renderSelected();
 }
 
+/** Добавить к выделению несколько объектов (рамкой). */
+function addToSelection(keys: string[]) {
+  const add = keys.filter((k) => !selection.includes(k) && entity(k));
+  if (!add.length) return;
+  clearTileHighlight();
+  selection = [...selection, ...add];
+  selectedKey = selection.at(-1);
+  paintSelection();
+  renderSelected();
+}
+
+// Выделение рамкой: Shift + перетаскивание. Объект попадает в рамку, если в неё попал центр его основания.
+const boxEl = document.createElement('div');
+boxEl.className = 'select-box';
+boxEl.hidden = true;
+map.getCanvasContainer().appendChild(boxEl);
+let boxStart: maplibregl.Point | undefined;
+
+map.getCanvasContainer().addEventListener('mousedown', (e) => {
+  if (!e.shiftKey || e.button !== 0) return;
+  const r = map.getCanvas().getBoundingClientRect();
+  boxStart = new maplibregl.Point(e.clientX - r.left, e.clientY - r.top);
+  map.dragPan.disable();
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!boxStart) return;
+  const r = map.getCanvas().getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  if (boxEl.hidden && Math.hypot(x - boxStart.x, y - boxStart.y) < 5) return; // ещё похоже на клик
+  boxEl.hidden = false;
+  Object.assign(boxEl.style, {
+    left: `${Math.min(x, boxStart.x)}px`, top: `${Math.min(y, boxStart.y)}px`,
+    width: `${Math.abs(x - boxStart.x)}px`, height: `${Math.abs(y - boxStart.y)}px`,
+  });
+});
+
+window.addEventListener('mouseup', (e) => {
+  if (!boxStart) return;
+  const start = boxStart;
+  boxStart = undefined;
+  map.dragPan.enable();
+  if (boxEl.hidden) return; // это был Shift+клик — его обработает click
+  boxEl.hidden = true;
+  const r = map.getCanvas().getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const [x0, x1] = [Math.min(x, start.x), Math.max(x, start.x)];
+  const [y0, y1] = [Math.min(y, start.y), Math.max(y, start.y)];
+  const keys = new Set<string>();
+  const inBox = overpass.renderedFeatures().filter(({ feature: f }) => {
+    const p = map.project(centroid(f.polygons[0].outer));
+    return p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
+  });
+  if (addingTo) {
+    // Режим «добавить части»: рамкой отмечаем кандидатов (подходящие молча, без сообщений о неподходящих)
+    for (const { feature: f } of inBox) if (!addPending.includes(f.key) && !addReason(f.key)) addPending.push(f.key);
+    paintSelection();
+    renderSelected();
+    return;
+  }
+  for (const { feature: f } of inBox) {
+    // Как у Shift+клика: внутри группы — только её члены, снаружи — группа целиком
+    if (drill) { if (drill.members.includes(f.key)) keys.add(f.key); }
+    else keys.add(groupOf(f.key)?.key ?? f.key);
+  }
+  addToSelection([...keys]);
+  // Клик после перетаскивания MapLibre не шлёт, но на всякий случай гасим ближайший
+  suppressClick = true;
+  setTimeout(() => (suppressClick = false), 0);
+});
+let suppressClick = false;
+
 function paintSelection() {
   overpassLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
 }
@@ -631,7 +704,11 @@ function renderAdding() {
        <button type="button" data-add-cancel>Отмена</button></p>`;
 }
 
-type MergePlan = { members: { key: string; role: 'outline' | 'part' }[] } | { reason: string };
+/** candidates — кандидаты в контур, если их несколько (для выбора в панели). */
+type MergePlan = { members: { key: string; role: 'outline' | 'part' }[]; candidates?: Feature3D[] } | { reason: string; candidates?: Feature3D[] };
+
+/** Контур, выбранный вручную, когда кандидатов несколько. */
+let chosenOutline: string | undefined;
 
 /** Можно ли объединить выделенное в здание type=building: один контур (выделенный или скрытый под частями) и части. */
 function mergePlan(keys: string[]): MergePlan {
@@ -641,20 +718,36 @@ function mergePlan(keys: string[]): MergePlan {
   // Контур — всё с тегом building, даже если на нём же стоит building:part (так часто размечают)
   const isBuilding = (f: Feature3D) => !!f.tags.building && f.tags.building !== 'no';
   const outlines = new Set(feats.filter(isBuilding));
-  const parts = feats.filter((f) => f.kind === 'part' && !outlines.has(f));
+  const parts = feats.filter((f) => f.kind === 'part' && !(outlines.has(f) && f.kind !== 'part'));
   if (!parts.length) return { reason: 'Выделите части здания (building:part).' };
-  // Контур, целиком закрытый частями, не рисуется и не выделяется — ищем его под частями
-  const centres = parts.flatMap((p) => p.polygons.map((poly) => centroid(poly.outer)));
-  for (const f of overpass.allFeatures()) {
-    if (f.kind === 'building' && f.hasParts && centres.some((c) => f.polygons.some((p) => pointInRing(c, p.outer)))) outlines.add(f);
+  // Контур под частями часто не выделить: закрыт ими (не рисуется) или нулевой высоты — ищем его сами,
+  // если явно не выделен. Годится любое здание (тег building), внутри которого лежат центры частей.
+  if (!outlines.size) {
+    const centres = parts.flatMap((p) => p.polygons.map((poly) => centroid(poly.outer)));
+    const partKeys = new Set(parts.map((p) => p.key));
+    for (const f of overpass.allFeatures()) {
+      if (partKeys.has(f.key) || !isBuilding(f)) continue;
+      const inside = (c: LonLat) => f.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
+      if (centres.some(inside)) outlines.add(f);
+    }
   }
   if (!outlines.size) return { reason: 'Не найден контур здания (building) вокруг частей — выделите его тоже.' };
-  if (outlines.size > 1) return { reason: `Найдено контуров: ${outlines.size} — в здании должен быть один.` };
-  const [outline] = outlines;
+  const candidates = [...outlines];
+  // Выбор контура: вручную → единственный «чистый» building (без building:part) → единственный кандидат
+  const pure = candidates.filter((f) => f.kind !== 'part');
+  const outline = candidates.find((f) => f.key === chosenOutline) ?? (pure.length === 1 ? pure[0] : candidates.length === 1 ? candidates[0] : undefined);
+  if (!outline) return { reason: `Найдено контуров: ${candidates.length} — выберите, какой из них контур здания.`, candidates };
+  // Прочие «чистые» здания частями быть не могут
+  const extra = pure.filter((f) => f !== outline);
+  if (extra.length) return { reason: `${extra.map((f) => f.key).join(', ')} — здание без building:part: уберите из выделения или выберите контуром.`, candidates };
   if (groupOf(outline.key)) return { reason: `Контур ${outline.key} уже входит в здание type=building.` };
   // Контур с building:part одновременно и часть — входит в отношение в обеих ролях
   const outlineAsPart = outline.kind === 'part' ? [{ key: outline.key, role: 'part' as const }] : [];
-  return { members: [{ key: outline.key, role: 'outline' }, ...outlineAsPart, ...parts.map((p) => ({ key: p.key, role: 'part' as const }))] };
+  const rest = parts.filter((p) => p !== outline);
+  return {
+    members: [{ key: outline.key, role: 'outline' }, ...outlineAsPart, ...rest.map((p) => ({ key: p.key, role: 'part' as const }))],
+    candidates: candidates.length > 1 ? candidates : undefined,
+  };
 }
 
 function mergeIntoBuilding() {
@@ -691,6 +784,34 @@ function excludeFromGroup() {
   select(g.key); // выходим на уровень группы
 }
 
+/** Выбор контура, когда кандидатов несколько (наведение подсвечивает кандидата на карте). */
+function outlineChooser(plan: MergePlan): string {
+  const cands = plan.candidates;
+  if (!cands || cands.length < 2) return '';
+  const current = 'members' in plan ? plan.members[0].key : chosenOutline;
+  outlineOverlay = current;
+  const list = cands.map((f) => `<label class="outline-cand" data-outline-cand="${esc(f.key)}"><input type="radio" name="outline" value="${
+    esc(f.key)}" ${f.key === current ? 'checked' : ''} /><span>${esc(f.key)} — building=${esc(f.tags.building)}${
+    f.tags['building:part'] ? `, building:part=${esc(f.tags['building:part'])}` : ''}${f.tags.name ? ` «${esc(f.tags.name)}»` : ''}</span></label>`).join('');
+  return `<fieldset class="outline-choice"><legend>Контур здания</legend>${list}</fieldset>`;
+}
+
+infoEl.addEventListener('change', (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t.name !== 'outline') return;
+  chosenOutline = t.value;
+  renderSelected();
+});
+/** Выбранный контур подсвечивается поверх частей (плоский контур под ними иначе не видно). */
+let outlineOverlay: string | undefined;
+infoEl.addEventListener('mouseover', (e) => {
+  const key = (e.target as HTMLElement).closest<HTMLElement>('[data-outline-cand]')?.dataset.outlineCand;
+  if (key) overpassLayer.setOverlay(key);
+});
+infoEl.addEventListener('mouseout', (e) => {
+  if ((e.target as HTMLElement).closest('[data-outline-cand]')) overpassLayer.setOverlay(outlineOverlay);
+});
+
 function renderMulti() {
   const plan = mergePlan(selection);
   const list = selection.map((k) => `<li><a href="#" data-select="${esc(k)}">${esc(k)}</a>${
@@ -701,10 +822,16 @@ function renderMulti() {
     ${drill ? excludeButton() : `<p><button type="button" data-merge ${'reason' in plan ? 'disabled' : ''}>Объединить в здание</button></p>`}
     ${drill ? '' : 'reason' in plan ? `<p class="hint">${esc(plan.reason)}</p>` : `<p class="hint">Будет создано отношение type=building: контур ${
       esc(plan.members[0].key)} и частей ${plan.members.filter((m) => m.role === 'part').length}.</p>`}
+    ${drill ? '' : outlineChooser(plan)}
     <p class="hint">Shift+клик — добавить или убрать объект.</p>`;
 }
 
 function renderSelected() {
+  outlineOverlay = undefined;
+  try { renderSelectedImpl(); } finally { overpassLayer.setOverlay(outlineOverlay); }
+}
+
+function renderSelectedImpl() {
   if (addingTo) return renderAdding();
   if (selection.length > 1) return renderMulti();
   const form = selectedKey ? renderTagForm(selectedKey, session) : undefined;

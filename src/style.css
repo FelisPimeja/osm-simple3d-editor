@@ -89,3 +89,10 @@ body:has(#info:not(:empty)) .maplibregl-ctrl-top-right { right: 334px; }
 
 .account-line { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; margin: 0 0 6px; }
 .account-line button { padding: 3px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+.select-box { position: absolute; border: 1px solid #ff7a00; background: rgba(255,122,0,.12); pointer-events: none; z-index: 2; }
+.outline-choice { border: 1px solid #e5e7eb; border-radius: 6px; margin: 6px 0; padding: 4px 8px; font-size: 12px; }
+.outline-cand { display: block; padding: 2px 0; cursor: pointer; }
+.outline-cand:hover { background: #fff3e6; }
+.outline-choice { white-space: normal; }
+.outline-cand { display: flex; gap: 6px; align-items: flex-start; line-height: 1.3; }
+.outline-cand input { margin: 2px 0 0; flex: none; }

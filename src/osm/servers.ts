@@ -36,7 +36,7 @@ function load(): ServerId {
     const v = localStorage.getItem(STORAGE_KEY);
     if (v === 'dev' || v === 'prod') return v;
   } catch { /* хранилище недоступно */ }
-  return 'dev';
+  return 'prod';
 }
 
 let current: OsmServer = SERVERS[load()];

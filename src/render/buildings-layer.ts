@@ -7,7 +7,9 @@ import { timed } from '../perf';
 
 const DEFAULT_WALL = '#d9d0c9';
 const DEFAULT_ROOF = '#a89c94';
-const HIGHLIGHT = new THREE.Color('#2f7cff');
+/** Подсветка поверх всего (выбор контура) — яркий оранжевый, чтобы отличалась от выделения. */
+const OVERLAY_COLOUR = new THREE.Color('#ff6a00');
+const HIGHLIGHT = new THREE.Color('#97beff'); // #2f7cff, смешанный с белым пополам
 const MONOCHROME = new THREE.Color('#ffffff');
 
 export interface RenderedFeature { feature: Feature3D; roofApproximated: boolean }
@@ -257,6 +259,56 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  private overlay?: { scene: THREE.Scene; obj: THREE.Object3D };
+
+  /**
+   * Подсветка поверх всего (без проверки глубины): контур объекта и полупрозрачная заливка на уровне его верха.
+   * Нужна, чтобы показать объект, закрытый другими (например, плоский контур под частями).
+   */
+  setOverlay(key: string | undefined) {
+    if (this.overlay) {
+      this.overlay.scene.remove(this.overlay.obj);
+      this.overlay.obj.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
+      this.overlay = undefined;
+    }
+    const g = key ? [...this.groups.values()].find((x) => x.byKey.has(key)) : undefined;
+    const it = key && g?.byKey.get(key);
+    if (g && it) {
+      const z = it.box.isEmpty() ? 0 : it.box.max.z + 0.05;
+      const obj = new THREE.Group();
+      const lines: number[] = [];
+      const fill: number[] = [];
+      for (const p of it.feature.polygons) {
+        const outer = p.outer.map(g.toLocal), holes = p.inners.map((r) => r.map(g.toLocal));
+        for (const ring of [outer, ...holes]) {
+          for (let i = 0; i < ring.length; i++) {
+            const a = ring[i], b = ring[(i + 1) % ring.length];
+            lines.push(a[0], a[1], z, b[0], b[1], z);
+          }
+        }
+        const v2 = (r: Pt[]) => r.map(([x, y]) => new THREE.Vector2(x, y));
+        const flat = [...outer, ...holes.flat()];
+        for (const t of THREE.ShapeUtils.triangulateShape(v2(outer), holes.map(v2))) for (const i of t) fill.push(flat[i][0], flat[i][1], z);
+      }
+      const overlayMat = { depthTest: false, depthWrite: false, transparent: true };
+      const lineGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+      const fillGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(fill, 3));
+      const fillMesh = new THREE.Mesh(fillGeo, new THREE.MeshBasicMaterial({ color: OVERLAY_COLOUR, opacity: 0.55, side: THREE.DoubleSide, ...overlayMat }));
+      const lineMesh = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ color: OVERLAY_COLOUR, ...overlayMat }));
+      fillMesh.renderOrder = lineMesh.renderOrder = 1000;
+      obj.add(fillMesh, lineMesh);
+      g.scene.add(obj);
+      this.overlay = { scene: g.scene, obj };
+    }
+    this.map?.triggerRepaint();
+  }
+
+  /** Нарисован ли объект в какой-либо группе. */
+  hasFeature(key: string): boolean {
+    for (const g of this.groups.values()) if (g.byKey.has(key)) return true;
+    return false;
+  }
+
   hasGroup(key: string): boolean {
     return this.groups.has(key);
   }
@@ -490,11 +542,10 @@ const rendered = (it: Item): RenderedFeature => ({ feature: it.feature, roofAppr
 const S3D_TAGS = ['height', 'min_height', 'building:levels', 'building:min_level', 'roof:shape', 'roof:height', 'roof:levels'];
 
 /**
- * Рисуем ли здание: контур с частями — нет (Simple 3D), подземное (location=underground) без тегов
+ * Рисуем ли здание (контур с частями — да, но плоским следом, см. buildItem): подземное (location=underground) без тегов
  * Simple 3D — тоже нет: иначе парковки и переходы под площадями торчат над землёй дефолтной коробкой.
  */
 function shouldRender(f: Feature3D): boolean {
-  if (f.hasParts) return false;
   if (f.tags.location === 'underground' && !S3D_TAGS.some((t) => f.tags[t] !== undefined)) return false;
   return true;
 }
@@ -506,9 +557,17 @@ function describeFeature(f: Feature3D): string {
   return `${f.key}, roof:shape=${f.tags['roof:shape'] ?? 'flat'}, вершин ${vertices}, полигонов ${f.polygons.length}, дыр ${holes}`;
 }
 
+/** Высота плоского следа на земле, м: чуть выше земли, чтобы не мерцать с подложкой. */
+const FOOTPRINT_HEIGHT = 0.1;
+
 function buildItem(g: MeshGroup, f: Feature3D): Item {
   const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
-  const heights = computeHeights(f.tags);
+  let heights = computeHeights(f.tags);
+  // Контур под частями и здания нулевой высоты — плоский след на земле: видно и можно выделить
+  if (f.hasParts || heights.top - heights.min < FOOTPRINT_HEIGHT) {
+    const min = f.hasParts ? 0 : heights.min;
+    heights = { ...heights, min, wallTop: min + FOOTPRINT_HEIGHT, top: min + FOOTPRINT_HEIGHT, roofShape: 'flat', roofHeight: 0 };
+  }
   const tri = buildTriangles(polys, heights, f.tags);
   const positions = new Float32Array(tri.walls.length + tri.roof.length);
   positions.set(tri.walls, 0);

@@ -64,6 +64,9 @@ function saveGraphics() {
   try { localStorage.setItem(GFX_KEY, JSON.stringify(gfx)); } catch { /* приватный режим и т.п. */ }
 }
 
+// В сборке воркер MapLibre лежит в maplibre/ рядом со страницей (см. vite.config.ts); в dev — штатно из node_modules
+if (import.meta.env.PROD) maplibregl.setWorkerUrl(new URL('maplibre/maplibre-gl-worker.mjs', document.baseURI).href);
+
 const map = new maplibregl.Map({
   container: 'map',
   // MSAA задаётся только при создании контекста — переключение требует перезагрузки

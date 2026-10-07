@@ -259,21 +259,22 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
-  private overlay?: { scene: THREE.Scene; obj: THREE.Object3D };
+  private overlay: { scene: THREE.Scene; obj: THREE.Object3D }[] = [];
 
   /**
    * Подсветка поверх всего (без проверки глубины): контур объекта и полупрозрачная заливка на уровне его верха.
    * Нужна, чтобы показать объект, закрытый другими (например, плоский контур под частями).
    */
-  setOverlay(key: string | undefined) {
-    if (this.overlay) {
-      this.overlay.scene.remove(this.overlay.obj);
-      this.overlay.obj.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
-      this.overlay = undefined;
+  setOverlay(keys: string | string[] | undefined) {
+    for (const { scene, obj } of this.overlay) {
+      scene.remove(obj);
+      obj.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
     }
-    const g = key ? [...this.groups.values()].find((x) => x.byKey.has(key)) : undefined;
-    const it = key && g?.byKey.get(key);
-    if (g && it) {
+    this.overlay = [];
+    for (const key of keys === undefined ? [] : typeof keys === 'string' ? [keys] : keys) {
+      const g = [...this.groups.values()].find((x) => x.byKey.has(key));
+      const it = g?.byKey.get(key);
+      if (!g || !it) continue;
       const z = it.box.isEmpty() ? 0 : it.box.max.z + 0.05;
       const obj = new THREE.Group();
       const lines: number[] = [];
@@ -298,7 +299,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       fillMesh.renderOrder = lineMesh.renderOrder = 1000;
       obj.add(fillMesh, lineMesh);
       g.scene.add(obj);
-      this.overlay = { scene: g.scene, obj };
+      this.overlay.push({ scene: g.scene, obj });
     }
     this.map?.triggerRepaint();
   }

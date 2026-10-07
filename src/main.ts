@@ -7,7 +7,7 @@ import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights } from './osm/heights';
-import { centroid, parseBuildings, pointInRing, type BuildingGroup, type Feature3D, type LonLat } from './osm/model';
+import { centroid, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat } from './osm/model';
 import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
@@ -532,7 +532,23 @@ function updateOverpassIndicator() {
     loading: `Загружается тайлов: ${loading}${overpass.viaApi.size ? ` (из OSM API вместо Overpass: ${overpass.viaApi.size})` : ''}`,
     waiting: `Ждут повтора: ${waiting} (лимит или ошибка Overpass, подробности в консоли)`,
     ready: 'Все видимые тайлы загружены',
-  }[state] + (state === 'off' ? '' : `\n\n${servers}`);
+  }[state] + (state === 'off' ? '' : `\n${describeFreshness()}\n\n${servers}`);
+}
+
+/** Откуда и когда получены видимые тайлы — чтобы было видно, что на экране старые или неполные данные. */
+function describeFreshness(): string {
+  const f = overpass.freshness();
+  const parts = [f.overpass && `из Overpass: ${f.overpass}`, f.api && `из OSM API: ${f.api}`, f.unknown && `источник неизвестен: ${f.unknown}`].filter(Boolean);
+  if (!parts.length) return '';
+  const age = f.oldest ? ` · самый старый загружен ${formatAge(Date.now() - f.oldest)} назад` : '';
+  return `Тайлы ${parts.join(', ')}${age}`;
+}
+
+function formatAge(ms: number): string {
+  const min = Math.round(ms / 60_000);
+  if (min < 60) return `${min} мин`;
+  const h = Math.round(min / 60);
+  return h < 48 ? `${h} ч` : `${Math.round(h / 24)} дн`;
 }
 
 function setStatus(text: string, error = false) {
@@ -723,7 +739,7 @@ function mergePlan(keys: string[]): MergePlan {
   // Контур под частями часто не выделить: закрыт ими (не рисуется) или нулевой высоты — ищем его сами,
   // если явно не выделен. Годится любое здание (тег building), внутри которого лежат центры частей.
   if (!outlines.size) {
-    const centres = parts.flatMap((p) => p.polygons.map((poly) => centroid(poly.outer)));
+    const centres = parts.flatMap((p) => p.polygons.map(pointOnSurface));
     const partKeys = new Set(parts.map((p) => p.key));
     for (const f of overpass.allFeatures()) {
       if (partKeys.has(f.key) || !isBuilding(f)) continue;
@@ -805,16 +821,20 @@ infoEl.addEventListener('change', (e) => {
 /** Выбранный контур подсвечивается поверх частей (плоский контур под ними иначе не видно). */
 let outlineOverlay: string | undefined;
 infoEl.addEventListener('mouseover', (e) => {
-  const key = (e.target as HTMLElement).closest<HTMLElement>('[data-outline-cand]')?.dataset.outlineCand;
-  if (key) overpassLayer.setOverlay(key);
+  const el = e.target as HTMLElement;
+  const key = el.closest<HTMLElement>('[data-outline-cand]')?.dataset.outlineCand;
+  if (key) return overpassLayer.setOverlay(key);
+  // Строка списка выделенного: подсветить объект (группу — всеми членами) поверх остальных
+  const item = el.closest<HTMLElement>('[data-hover-key]')?.dataset.hoverKey;
+  if (item) overpassLayer.setOverlay(highlightKeys(item));
 });
 infoEl.addEventListener('mouseout', (e) => {
-  if ((e.target as HTMLElement).closest('[data-outline-cand]')) overpassLayer.setOverlay(outlineOverlay);
+  if ((e.target as HTMLElement).closest('[data-outline-cand], [data-hover-key]')) overpassLayer.setOverlay(outlineOverlay);
 });
 
 function renderMulti() {
   const plan = mergePlan(selection);
-  const list = selection.map((k) => `<li><a href="#" data-select="${esc(k)}">${esc(k)}</a>${
+  const list = selection.map((k) => `<li data-hover-key="${esc(k)}"><a href="#" data-select="${esc(k)}">${esc(k)}</a>${
     editGroups.has(k) ? ' (type=building)' : ''}</li>`).join('');
   infoEl.innerHTML = `
     <h2>Выделено: ${selection.length}</h2>
@@ -845,12 +865,25 @@ function renderSelectedImpl() {
 /** Подсказка над частью, выделенной внутри группы. */
 function drillHint(key: string): string {
   if (!drill || !drill.members.includes(key)) return '';
+  const name = drill.tags.name ?? outlineTags(drill)?.name;
   return `<p class="hint drill">Внутри группы <a href="${server().web}/${drill.key}" target="_blank" rel="noopener">${drill.key}</a>${
-    drill.tags.name ? ` «${esc(drill.tags.name)}»` : ''} — клик вне группы вернёт к ней.</p>`;
+    name ? ` «${esc(name)}»` : ''} — клик вне группы вернёт к ней.</p>`;
+}
+
+/** Теги контура группы (роль outline) — название и адрес здания обычно на нём. */
+function outlineTags(g: BuildingGroup): Record<string, string> | undefined {
+  const key = g.members.find((_, i) => g.roles[i] === 'outline');
+  if (!key) return;
+  return (session.get(key) ?? overpass.get(key)?.feature)?.tags;
 }
 
 function describeGroup(g: BuildingGroup): string {
+  const t = outlineTags(g);
+  const name = g.tags.name ?? t?.name;
+  const addr = t && [t['addr:street'], t['addr:housenumber']].filter(Boolean).join(', ');
   return `
+    ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
+    ${addr ? `<p class="hint">${esc(addr)}</p>` : ''}
     <h2>type=building — <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>${g.version ? ` v${g.version}` : ''}</h2>
     <p class="hint">Членов: ${g.members.length}. Двойной клик по зданию — выделение отдельных частей.
       Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.</p>

@@ -1,3 +1,4 @@
+import { computeHeights } from './heights';
 import type { OsmElement, OsmNode, OsmRelation, OsmWay } from './api';
 
 export type LonLat = [number, number];
@@ -172,6 +173,38 @@ function area(p: Polygon): number {
   return ringArea(p.outer) - p.inners.reduce((s, h) => s + ringArea(h), 0);
 }
 
+/**
+ * Точка заведомо внутри полигона: центр вершин, а если он снаружи (П- и Г-образные контуры) —
+ * середина самого широкого внутреннего отрезка горизонтали через середину по высоте.
+ */
+export function pointOnSurface(p: Polygon): LonLat {
+  const inside = (c: LonLat) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h));
+  const c = centroid(p.outer);
+  if (inside(c)) return c;
+  let s = Infinity, n = -Infinity;
+  for (const [, y] of p.outer) { s = Math.min(s, y); n = Math.max(n, y); }
+  for (const t of [0.5, 0.25, 0.75, 0.1, 0.9]) {
+    const y = s + (n - s) * t;
+    const xs: number[] = [];
+    for (const ring of [p.outer, ...p.inners]) {
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = ring[i], [xj, yj] = ring[j];
+        if ((yi > y) !== (yj > y)) xs.push(xi + ((y - yi) / (yj - yi)) * (xj - xi));
+      }
+    }
+    xs.sort((a, b) => a - b);
+    let best: LonLat | undefined, width = 0;
+    for (let i = 0; i + 1 < xs.length; i += 2) {
+      if (xs[i + 1] - xs[i] > width) { width = xs[i + 1] - xs[i]; best = [(xs[i] + xs[i + 1]) / 2, y]; }
+    }
+    if (best) return best;
+  }
+  return c;
+}
+
+/** Запас по высоте (м): часть, начинающаяся не ниже «верх контура − запас», стоит на контуре, а не внутри него. */
+const ON_TOP_TOLERANCE = 1;
+
 /** Доля площади контура, при которой части считаются его заменой. */
 const PARTS_COVERAGE = 0.5;
 
@@ -179,28 +212,34 @@ const PARTS_COVERAGE = 0.5;
  * Simple 3D: контур здания не рисуется, если внутри него есть building:part.
  * Но часто частями размечены только надстройки (пентхаусы, башенки), а объём здания задан контуром
  * (например, relation/3756395) — поэтому скрываем контур, только если части покрывают заметную долю площади.
+ * Считаем только части внутри объёма контура (начинаются ниже его верха). Части поверх контура —
+ * надстройка (relation/2142333: контур 12 этажей, части с 12-го), объём под ними рисует контур.
+ * Нижних этажей среди частей может и не быть (лежат в незагруженном соседнем тайле) — это не повод
+ * рисовать контур коробкой поверх остальных частей (relation/3271452, Троицкая башня).
  */
 export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[] = features) {
   // Части раскладываем по сетке ~0.0005° (≈50 м): здание смотрит только ячейки под своими габаритами
   const CELL = 0.0005;
-  const grid = new Map<string, { c: LonLat; area: number }[]>();
+  const grid = new Map<string, { c: LonLat; area: number; min: number }[]>();
   for (const f of features) {
     if (f.kind !== 'part') continue;
+    const min = computeHeights(f.tags).min;
     for (const p of f.polygons) {
-      const c = centroid(p.outer);
+      const c = pointOnSurface(p);
       const k = `${Math.floor(c[0] / CELL)},${Math.floor(c[1] / CELL)}`;
-      (grid.get(k) ?? grid.set(k, []).get(k)!).push({ c, area: area(p) });
+      (grid.get(k) ?? grid.set(k, []).get(k)!).push({ c, area: area(p), min });
     }
   }
   for (const b of targets) {
     if (b.kind !== 'building') continue;
+    const top = computeHeights(b.tags).top;
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
     for (const p of b.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
     const inside = (c: LonLat) => b.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
     let covered = 0;
     for (let i = Math.floor(w / CELL); i <= Math.floor(e / CELL); i++) {
       for (let j = Math.floor(s / CELL); j <= Math.floor(n / CELL); j++) {
-        for (const part of grid.get(`${i},${j}`) ?? []) if (inside(part.c)) covered += part.area;
+        for (const part of grid.get(`${i},${j}`) ?? []) if (part.min < top - ON_TOP_TOLERANCE && inside(part.c)) covered += part.area;
       }
     }
     b.hasParts = covered >= PARTS_COVERAGE * b.polygons.reduce((sum, p) => sum + area(p), 0);

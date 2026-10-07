@@ -4,7 +4,7 @@ import { centroid, incompleteBuildingRelations, kindOf, markOutlinesWithParts, p
 import { fetchBuildings, OverpassBusyError, OverpassPool } from '../osm/overpass';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
-import { TileStore } from './tile-store';
+import { TileStore, type TileVia } from './tile-store';
 import { timed } from '../perf';
 
 export const OVERPASS_TILE_ZOOM = GRID_ZOOM;
@@ -23,7 +23,7 @@ type Entry =
   | { state: 'lookup' } // ищем в IndexedDB
   | { state: 'queued' } // в IndexedDB нет, ждёт свободного инстанса Overpass
   | { state: 'loading'; abort: AbortController }
-  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number; refreshing?: AbortController; refreshAfter?: number }
+  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number; via?: TileVia; refreshing?: AbortController; refreshAfter?: number }
   | { state: 'error'; retryAt: number; attempts: number };
 
 /**
@@ -176,6 +176,19 @@ export class OverpassTiles {
     };
   }
 
+  /** Сводка о видимых тайлах для подсказки индикатора: откуда данные и насколько они старые. */
+  freshness(): { overpass: number; api: number; unknown: number; oldest?: number } {
+    const out: { overpass: number; api: number; unknown: number; oldest?: number } = { overpass: 0, api: 0, unknown: 0 };
+    for (const k of this.wanted) {
+      const e = this.cache.get(k);
+      if (e?.state !== 'ready') continue;
+      out[e.via ?? 'unknown']++;
+      // fetchedAt = 0 — тайл помечен устаревшим (кнопкой или старый формат), возраст неизвестен
+      if (e.fetchedAt && (out.oldest === undefined || e.fetchedAt < out.oldest)) out.oldest = e.fetchedAt;
+    }
+    return out;
+  }
+
   /** Пересчитать нужные тайлы после движения карты. */
   update() {
     this.wanted = this.mode === 'full' ? this.visibleTiles() : this.mode === 'cached' ? this.cachedVisibleTiles() : [];
@@ -283,6 +296,7 @@ export class OverpassTiles {
     try {
       const source = this.source;
       let elements;
+      let via: TileVia = source.kind === 'api' ? 'api' : 'overpass';
       if (source.kind === 'api') {
         elements = await fetchArea(tileBbox(key), incompleteBuildingRelations, source.api, abort.signal);
       } else {
@@ -297,6 +311,7 @@ export class OverpassTiles {
           this.onChange();
           try {
             elements = await fetchArea(tileBbox(key), incompleteBuildingRelations, source.fallbackApi, abort.signal);
+            via = 'api';
           } finally {
             this.viaApi.delete(key);
           }
@@ -304,10 +319,10 @@ export class OverpassTiles {
       }
       const { features, groups } = timed('overpass: разбор ответа', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const fetchedAt = Date.now();
-      this.cache.set(key, { state: 'ready', features, groups, fetchedAt });
+      this.cache.set(key, { state: 'ready', features, groups, fetchedAt, via });
       this.reloading.delete(key);
       this.reloadFailed.delete(key);
-      void this.store.put(key, { features, groups, fetchedAt });
+      void this.store.put(key, { features, groups, fetchedAt, via });
       this.stored.add(key);
       this.evict();
       this.tileReady(key);

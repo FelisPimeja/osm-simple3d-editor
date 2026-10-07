@@ -96,3 +96,5 @@ body:has(#info:not(:empty)) .maplibregl-ctrl-top-right { right: 334px; }
 .outline-choice { white-space: normal; }
 .outline-cand { display: flex; gap: 6px; align-items: flex-start; line-height: 1.3; }
 .outline-cand input { margin: 2px 0 0; flex: none; }
+#info [data-hover-key]:hover { background: #fff3e6; }
+#info .group-name { font-size: 15px; margin-bottom: 2px; }

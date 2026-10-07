@@ -55,12 +55,17 @@ export async function fetchArea(
   bbox: Bbox, isIncomplete: (elements: OsmElement[]) => number[], api = server().api, signal?: AbortSignal,
 ): Promise<OsmElement[]> {
   const elements = await fetchMapSplit(bbox, api, signal);
-  const missing = isIncomplete(elements).slice(0, 200);
+  const missing = isIncomplete(elements);
+  // Неполный результат (часть зданий без геометрии) не должен выглядеть как полный — иначе он попадёт в кеш
+  if (missing.length > 200) throw new Error(`слишком много неполных мультиполигонов (${missing.length})`);
   const extra: OsmElement[] = [];
   // Небольшими пачками, чтобы не заваливать API параллельными запросами
   for (let i = 0; i < missing.length; i += 6) {
     const batch = await Promise.allSettled(missing.slice(i, i + 6).map((id) => fetchRelationFull(id, api, signal)));
-    for (const r of batch) if (r.status === 'fulfilled') extra.push(...r.value);
+    for (const r of batch) {
+      if (r.status === 'rejected') throw new Error(`не догрузилось отношение: ${(r.reason as Error).message}`);
+      extra.push(...r.value);
+    }
   }
   const seen = new Set(elements.map((e) => `${e.type}/${e.id}`));
   for (const e of extra) {

@@ -8,9 +8,12 @@ export const UNKNOWN_ROLE = '?';
 /** Сколько тайлов хранить; при превышении удаляются самые старые. */
 const MAX_TILES = 300;
 
-interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[]; groups: BuildingGroup[] }
+interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[]; groups: BuildingGroup[]; via?: TileVia }
 
-export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number }
+/** Откуда пришли данные тайла: Overpass или OSM API (резервная загрузка или тестовый сервер). */
+export type TileVia = 'overpass' | 'api';
+
+export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number; via?: TileVia }
 
 /**
  * Постоянный кеш тайлов Overpass в IndexedDB.
@@ -44,7 +47,7 @@ export class TileStore {
 
   async get(key: string): Promise<StoredTile | undefined> {
     const rec = await this.request<TileRecord | undefined>('readonly', (s) => s.get(key));
-    if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, fetchedAt: rec.fetchedAt };
+    if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, fetchedAt: rec.fetchedAt, via: rec.via };
     // Формат 3 — группы без ролей: читаем (роли неизвестны) и считаем тайл устаревшим, чтобы он обновился в фоне
     if (rec?.format === 3) {
       const groups = rec.groups.map((g) => ({ ...g, roles: g.roles ?? g.members.map(() => UNKNOWN_ROLE) }));
@@ -53,8 +56,8 @@ export class TileStore {
     return undefined;
   }
 
-  async put(key: string, { features, groups, fetchedAt }: StoredTile) {
-    const rec: TileRecord = { key, format: FORMAT, fetchedAt, features, groups };
+  async put(key: string, { features, groups, fetchedAt, via }: StoredTile) {
+    const rec: TileRecord = { key, format: FORMAT, fetchedAt, features, groups, via };
     const ok = await this.request('readwrite', (s) => s.put(rec));
     if (ok === undefined) {
       // Скорее всего, квота: освобождаем половину и пробуем ещё раз

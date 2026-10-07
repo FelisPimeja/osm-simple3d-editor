@@ -81,6 +81,23 @@ const map = new maplibregl.Map({
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
 
 const infoEl = document.getElementById('info')!;
+
+// Сворачивание панелей в заголовок; состояние запоминается.
+for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
+  const storeKey = `osm3d.collapsed.${panel.id}`;
+  const btn = panel.querySelector<HTMLButtonElement>('.collapse-btn')!;
+  const apply = (collapsed: boolean) => {
+    panel.classList.toggle('collapsed', collapsed);
+    btn.setAttribute('aria-expanded', String(!collapsed));
+    btn.title = collapsed ? 'Развернуть' : 'Свернуть';
+  };
+  try { apply(localStorage.getItem(storeKey) === '1'); } catch { /* нет хранилища */ }
+  panel.querySelector('.panel-head')!.addEventListener('click', () => {
+    const collapsed = !panel.classList.contains('collapsed');
+    apply(collapsed);
+    try { localStorage.setItem(storeKey, collapsed ? '1' : '0'); } catch { /* нет хранилища */ }
+  });
+}
 const statusEl = document.getElementById('status')!;
 const opIndicator = document.getElementById('op-indicator')!;
 const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
@@ -102,6 +119,7 @@ let osmUser: OsmUser | undefined;
 let uploadComment = '';
 let uploading = false;
 const changesEl = document.getElementById('changes')!;
+const accountEl = document.getElementById('account')!;
 
 map.on('load', () => {
   // Убираем штатные экструзии стиля и добавляем свою с учётом Simple 3D
@@ -526,9 +544,12 @@ function onSessionChange(keys: string[]) {
 }
 
 function renderChanges() {
+  renderAccount();
   const changes = session?.changes() ?? [];
-  changesEl.hidden = !session;
-  if (!session) { changesEl.innerHTML = ''; return; }
+  // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
+  const show = !!session && (changes.length > 0 || session.canUndo() || session.canRedo());
+  changesEl.hidden = !show;
+  if (!show || !session) { changesEl.innerHTML = ''; return; }
   const list = changes.map((c) => `
     <li><a href="#" data-select="${esc(c.key)}">${esc(c.key)}</a>
       <ul>${c.diff.map((d) => `<li><code>${esc(d.tag)}</code>: <del>${esc(d.from ?? '—')}</del> → <ins>${esc(d.to ?? '—')}</ins></li>`).join('')}</ul>
@@ -543,17 +564,21 @@ function renderChanges() {
     ${renderUpload(changes.length)}`;
 }
 
+function renderAccount() {
+  const s = server();
+  accountEl.innerHTML = osmUser
+    ? `Вы вошли как <a href="${s.web}/user/${encodeURIComponent(osmUser.name)}" target="_blank" rel="noopener">${esc(osmUser.name)}</a>
+       <button type="button" data-logout ${uploading ? 'disabled' : ''}>Выйти</button>`
+    : `<button type="button" data-login ${uploading ? 'disabled' : ''}>Войти в OSM</button>`;
+}
+
 function renderUpload(count: number): string {
   const s = server();
-  const account = osmUser
-    ? `Вы вошли как <a href="${s.web}/user/${encodeURIComponent(osmUser.name)}" target="_blank" rel="noopener">${esc(osmUser.name)}</a>
-       <button type="button" data-logout>Выйти</button>`
-    : `<button type="button" data-login ${uploading ? 'disabled' : ''}>Войти в OSM</button>`;
   const canUpload = osmUser && count > 0 && uploadComment.trim() && !uploading;
   return `
     <div class="upload${s.id === 'prod' ? ' prod' : ''}">
       <h3>Отправка: ${esc(s.label)}</h3>
-      <p class="account">${account}</p>
+      ${osmUser ? '' : '<p class="hint">Для отправки войдите в OSM.</p>'}
       <textarea data-comment rows="2" placeholder="Комментарий к пакету правок (обязательно)" ${uploading ? 'disabled' : ''}>${esc(uploadComment)}</textarea>
       <button type="button" data-upload ${canUpload ? '' : 'disabled'}>${uploading ? 'Отправка…' : `Сохранить в OSM (${count})`}</button>
     </div>`;
@@ -622,8 +647,6 @@ changesEl.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
   if (t.closest('[data-undo]')) return selectEdited(session?.undo() ?? selectedKey);
   if (t.closest('[data-redo]')) return selectEdited(session?.redo() ?? selectedKey);
-  if (t.closest('[data-login]')) return void doLogin();
-  if (t.closest('[data-logout]')) { logout(); osmUser = undefined; return renderChanges(); }
   if (t.closest('[data-upload]')) return void doUpload();
   const link = t.closest<HTMLElement>('[data-select]');
   if (link) { e.preventDefault(); selectEdited(link.dataset.select); }
@@ -635,6 +658,12 @@ changesEl.addEventListener('input', (e) => {
   uploadComment = t.value;
   const btn = changesEl.querySelector<HTMLButtonElement>('[data-upload]');
   if (btn) btn.disabled = !(osmUser && session?.changes().length && uploadComment.trim() && !uploading);
+});
+
+accountEl.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest('[data-login]')) return void doLogin();
+  if (t.closest('[data-logout]')) { logout(); osmUser = undefined; renderChanges(); }
 });
 
 const serverSelect = document.getElementById('server-select') as HTMLSelectElement;

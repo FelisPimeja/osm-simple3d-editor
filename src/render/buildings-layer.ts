@@ -430,7 +430,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.writeColors(g, it);
     const attr = g.mesh?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
     if (!attr) return;
-    attr.clearUpdateRanges();
+    // Диапазоны копятся до загрузки в GPU (three сам очищает их после неё):
+    // при смене выделения старое и новое здание часто лежат в одной группе.
     attr.addUpdateRange(it.start * 3, it.positions.length);
     attr.needsUpdate = true;
   }

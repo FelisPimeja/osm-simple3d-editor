@@ -20,7 +20,12 @@ export interface Endpoint { url: string; host: string; active: number; coolUntil
 
 /** Пул инстансов: запрос уходит на наименее загруженный здоровый инстанс. */
 export class OverpassPool {
-  readonly endpoints: Endpoint[] = ENDPOINTS.map((url) => ({ url, host: new URL(url).host, active: 0, coolUntil: 0, ok: 0, failed: 0 }));
+  readonly endpoints: Endpoint[];
+
+  /** urls — инстансы Overpass (по умолчанию публичные) или единственный адрес OSM API. */
+  constructor(urls: string[] = ENDPOINTS) {
+    this.endpoints = urls.map((url) => ({ url, host: new URL(url).host, active: 0, coolUntil: 0, ok: 0, failed: 0 }));
+  }
 
   /** Свободный инстанс или undefined, если все заняты или остывают. */
   acquire(): Endpoint | undefined {

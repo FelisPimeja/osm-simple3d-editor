@@ -10,31 +10,56 @@ export type OsmElement = OsmNode | OsmWay | OsmRelation;
 
 // /map отдаёт все узлы и пути в bbox плюс отношения, которые на них ссылаются.
 // Члены отношений за пределами bbox не приходят — такие мультиполигоны будут неполными.
-export async function fetchMap(bbox: Bbox, api = server().api): Promise<OsmElement[]> {
-  const res = await fetch(`${api}/map.json?bbox=${bbox.join(',')}`);
+export async function fetchMap(bbox: Bbox, api = server().api, signal?: AbortSignal): Promise<OsmElement[]> {
+  const res = await fetch(`${api}/map.json?bbox=${bbox.join(',')}`, { signal });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`OSM API ${res.status}: ${text || res.statusText}`);
+    throw new ApiError(res.status, `OSM API ${res.status}: ${text || res.statusText}`);
   }
   const data = (await res.json()) as { elements: OsmElement[] };
   return data.elements;
 }
 
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
+/**
+ * /map по области любого размера: при отказе «слишком много узлов/большая область» (400)
+ * делим на четыре и запрашиваем по частям (до depth уровней).
+ */
+export async function fetchMapSplit(bbox: Bbox, api = server().api, signal?: AbortSignal, depth = 4): Promise<OsmElement[]> {
+  try {
+    return await fetchMap(bbox, api, signal);
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.status !== 400 || depth <= 0) throw err;
+  }
+  const [w, s, e, n] = bbox;
+  const mx = (w + e) / 2, my = (s + n) / 2;
+  const quads: Bbox[] = [[w, s, mx, my], [mx, s, e, my], [w, my, mx, n], [mx, my, e, n]];
+  const seen = new Map<string, OsmElement>();
+  // По очереди — не заваливать API параллельными тяжёлыми запросами
+  for (const q of quads) for (const el of await fetchMapSplit(q, api, signal, depth - 1)) seen.set(`${el.type}/${el.id}`, el);
+  return [...seen.values()];
+}
+
 /** Отношение со всеми членами и их узлами. */
-export async function fetchRelationFull(id: number): Promise<OsmElement[]> {
-  const res = await fetch(`${server().api}/relation/${id}/full.json`);
+export async function fetchRelationFull(id: number, api = server().api, signal?: AbortSignal): Promise<OsmElement[]> {
+  const res = await fetch(`${api}/relation/${id}/full.json`, { signal });
   if (!res.ok) throw new Error(`OSM API ${res.status} для relation/${id}`);
   return ((await res.json()) as { elements: OsmElement[] }).elements;
 }
 
 /** /map + догрузка мультиполигонов, у которых часть членов вне bbox. */
-export async function fetchArea(bbox: Bbox, isIncomplete: (elements: OsmElement[]) => number[]): Promise<OsmElement[]> {
-  const elements = await fetchMap(bbox);
+export async function fetchArea(
+  bbox: Bbox, isIncomplete: (elements: OsmElement[]) => number[], api = server().api, signal?: AbortSignal,
+): Promise<OsmElement[]> {
+  const elements = await fetchMapSplit(bbox, api, signal);
   const missing = isIncomplete(elements).slice(0, 200);
   const extra: OsmElement[] = [];
   // Небольшими пачками, чтобы не заваливать API параллельными запросами
   for (let i = 0; i < missing.length; i += 6) {
-    const batch = await Promise.allSettled(missing.slice(i, i + 6).map(fetchRelationFull));
+    const batch = await Promise.allSettled(missing.slice(i, i + 6).map((id) => fetchRelationFull(id, api, signal)));
     for (const r of batch) if (r.status === 'fulfilled') extra.push(...r.value);
   }
   const seen = new Set(elements.map((e) => `${e.type}/${e.id}`));
@@ -43,4 +68,18 @@ export async function fetchArea(bbox: Bbox, isIncomplete: (elements: OsmElement[
     if (!seen.has(key)) { seen.add(key); elements.push(e); }
   }
   return elements;
+}
+
+/** Текущие версии путей и отношений (multi-fetch, пачками по 100). */
+export async function fetchElements(keys: string[], api = server().api): Promise<Map<string, OsmWay | OsmRelation>> {
+  const out = new Map<string, OsmWay | OsmRelation>();
+  for (const type of ['way', 'relation'] as const) {
+    const ids = keys.filter((k) => k.startsWith(`${type}/`)).map((k) => k.split('/')[1]);
+    for (let i = 0; i < ids.length; i += 100) {
+      const res = await fetch(`${api}/${type}s.json?${type}s=${ids.slice(i, i + 100).join(',')}`);
+      if (!res.ok) throw new Error(`OSM API ${res.status}: ${(await res.text()) || res.statusText}`);
+      for (const e of ((await res.json()) as { elements: (OsmWay | OsmRelation)[] }).elements) out.set(`${e.type}/${e.id}`, e);
+    }
+  }
+  return out;
 }

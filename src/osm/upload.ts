@@ -1,22 +1,21 @@
-import type { OsmElement, OsmRelation, OsmWay } from './api';
+import { fetchElements, type OsmMember, type OsmRelation, type OsmWay } from './api';
 import { getToken } from './auth';
 import { server } from './servers';
 
 type Tags = Record<string, string>;
 
-/** Изменение тегов одного пути или отношения. */
+/** Правка одного пути или отношения. Геометрию и версию берём с сервера в момент отправки. */
 export interface TagEdit {
   key: string; // 'way/123'
-  /** Элемент, как он пришёл из API (геометрия, члены, версия). */
-  element: OsmWay | OsmRelation;
   /** Теги, с которых начиналась правка. */
   before: Tags;
   /** Теги, которые надо записать. */
   after: Tags;
-  /** Новый объект: отрицательный id, уходит в <create>. */
-  created?: boolean;
-  /** У отношения изменён состав членов (element.members — уже новый). */
-  membersChanged?: boolean;
+  /** Новое отношение (отрицательный id) — уходит в <create>. */
+  created?: OsmRelation;
+  /** Новый состав членов отношения и исходный (если менялся). */
+  members?: OsmMember[];
+  membersBefore?: OsmMember[];
 }
 
 export interface UploadResult {
@@ -25,8 +24,10 @@ export interface UploadResult {
   versions: Map<string, number>;
   /** Ключи созданных объектов: временный ('relation/-1') → настоящий. */
   newKeys: Map<string, string>;
-  /** Объекты, изменённые на сервере параллельно: записаны поверх свежей версии с этими тегами. */
-  rebased: Map<string, { element: OsmWay | OsmRelation; tags: Tags }>;
+  /** Записанные теги (могут включать параллельные чужие правки других тегов). */
+  written: Map<string, Tags>;
+  /** Объекты, которые кто-то изменил после загрузки данных: наши правки перенесены поверх. */
+  rebased: Set<string>;
 }
 
 /** Конфликт, который нельзя разрешить автоматически: кто-то изменил те же теги. */
@@ -79,16 +80,12 @@ async function call(method: string, path: string, body?: string, accept = 'text/
   return text;
 }
 
-async function fetchElement(key: string): Promise<OsmWay | OsmRelation> {
-  const text = await call('GET', `/${key}.json`, undefined, 'application/json');
-  return (JSON.parse(text) as { elements: OsmElement[] }).elements[0] as OsmWay | OsmRelation;
-}
-
 /**
  * Применяет нашу правку поверх свежей версии с сервера.
  * Можно, если параллельно не трогали те же теги (геометрию и прочие теги берём с сервера).
  */
 function rebase(edit: TagEdit, fresh: OsmWay | OsmRelation): { tags: Tags } | { conflict: string[] } {
+
   const serverTags = fresh.tags ?? {};
   const touched = [...new Set([...Object.keys(edit.before), ...Object.keys(edit.after)])]
     .filter((t) => edit.before[t] !== edit.after[t]);
@@ -117,11 +114,34 @@ function parseDiffResult(xml: string): Pick<UploadResult, 'versions' | 'newKeys'
 }
 
 /**
- * Загрузка правок одним changeset: create → upload → close.
- * При 409 (версия устарела) перечитывает изменённые элементы, переносит правки поверх свежих версий
- * и повторяет загрузку один раз; если те же теги изменил кто-то ещё — ConflictError.
+ * Загрузка правок одним changeset. Сначала читаем текущие версии с сервера и переносим правки на них:
+ * данные для показа (Overpass) без версий и могут отставать. Если те же теги успел изменить
+ * кто-то ещё — ConflictError, ничего не отправляется.
  */
 export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (s: string) => void = () => {}): Promise<UploadResult> {
+  onStatus('Получаем текущие версии объектов…');
+  const fresh = await fetchElements(edits.filter((e) => !e.created).map((e) => e.key));
+  const conflicts: { key: string; tags: string[] }[] = [];
+  const payload: Parameters<typeof buildOsmChange>[0] = [];
+  const written = new Map<string, Tags>();
+  const rebased = new Set<string>();
+  for (const edit of edits) {
+    if (edit.created) {
+      payload.push({ element: { ...edit.created, members: edit.members ?? edit.created.members }, tags: edit.after, created: true });
+      written.set(edit.key, edit.after);
+      continue;
+    }
+    const f = fresh.get(edit.key);
+    if (!f) { conflicts.push({ key: edit.key, tags: ['объект удалён на сервере'] }); continue; }
+    const r = rebase(edit, f);
+    if ('conflict' in r) { conflicts.push({ key: edit.key, tags: r.conflict }); continue; }
+    const element = edit.members && f.type === 'relation' ? { ...f, members: mergeMembers(f.members, edit.membersBefore ?? [], edit.members) } : f;
+    payload.push({ element, tags: r.tags });
+    written.set(edit.key, r.tags);
+    if (!sameTags(r.tags, edit.after)) rebased.add(edit.key);
+  }
+  if (conflicts.length) throw new ConflictError(conflicts);
+
   onStatus('Открываем changeset…');
   const changesetXml = `<osm><changeset>${tagsXml({
     comment,
@@ -129,34 +149,32 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
     hashtags: '#simple3d',
   })}</changeset></osm>`;
   const changeset = Number(await call('PUT', '/changeset/create', changesetXml));
-  const rebased: UploadResult['rebased'] = new Map();
   try {
-    let payload: Parameters<typeof buildOsmChange>[0] = edits.map((e) => ({ element: e.element, tags: e.after, created: e.created }));
-    for (let attempt = 0; ; attempt++) {
-      onStatus(`Загружаем ${payload.length} объектов в changeset ${changeset}…`);
-      try {
-        const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
-        return { changeset, ...diff, rebased };
-      } catch (err) {
-        if (!(err instanceof OsmApiError) || err.status !== 409 || attempt > 0) throw err;
-        onStatus('Объекты изменились на сервере — переносим правки на свежие версии…');
-        const conflicts: { key: string; tags: string[] }[] = [];
-        payload = [];
-        for (const edit of edits) {
-          if (edit.created) { payload.push({ element: edit.element, tags: edit.after, created: true }); continue; }
-          const fresh = await fetchElement(edit.key);
-          if (fresh.version === edit.element.version) { payload.push({ element: edit.element, tags: edit.after }); continue; }
-          // Состав членов автоматически не сливаем — пусть пользователь перезагрузит область
-          if (edit.membersChanged) { conflicts.push({ key: edit.key, tags: ['состав членов'] }); continue; }
-          const r = rebase(edit, fresh);
-          if ('conflict' in r) conflicts.push({ key: edit.key, tags: r.conflict });
-          else { payload.push({ element: fresh, tags: r.tags }); rebased.set(edit.key, { element: fresh, tags: r.tags }); }
-        }
-        if (conflicts.length) throw new ConflictError(conflicts);
-      }
-    }
+    onStatus(`Загружаем ${payload.length} объектов в changeset ${changeset}…`);
+    const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
+    return { changeset, ...diff, written, rebased };
   } finally {
     // Закрываем и при ошибке, чтобы не висел пустой changeset
     try { await call('PUT', `/changeset/${changeset}/close`); } catch { /* закроется сам через час */ }
   }
+}
+
+/**
+ * Переносит нашу правку состава (что добавили и что убрали) на актуальный список членов с сервера:
+ * параллельные чужие изменения состава и члены-точки, которых мы не показываем, сохраняются.
+ */
+function mergeMembers(server: OsmMember[], before: OsmMember[], after: OsmMember[]): OsmMember[] {
+  const id = (m: OsmMember) => `${m.type}/${m.ref}/${m.role}`;
+  const was = new Set(before.map(id)), now = new Set(after.map(id));
+  const removed = before.filter((m) => !now.has(id(m)));
+  // Роль '?' (из старого кеша) — совпадение только по type/ref
+  const isRemoved = (m: OsmMember) => removed.some((r) => r.type === m.type && r.ref === m.ref && (r.role === '?' || r.role === m.role));
+  const kept = server.filter((m) => !isRemoved(m));
+  const have = new Set(kept.map(id));
+  return [...kept, ...after.filter((m) => !was.has(id(m)) && !have.has(id(m)))];
+}
+
+function sameTags(a: Tags, b: Tags): boolean {
+  const ka = Object.keys(a), kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) => a[k] === b[k]);
 }

@@ -13,8 +13,9 @@ export interface TagChange {
   after: Tags;
   /** Новый объект (ещё нет в OSM). */
   created: boolean;
-  /** Новый список членов отношения, если он менялся. */
+  /** Новый список членов отношения, если он менялся, и исходный. */
   members?: OsmMember[];
+  membersBefore?: OsmMember[];
   /** Изменённые теги: значение undefined — тег удалён/отсутствует. */
   diff: { tag: string; from?: string; to?: string }[];
 }
@@ -42,6 +43,21 @@ export class EditSession {
       this.original.set(f.key, { ...f.tags });
       if (f.relMembers) this.originalMembers.set(f.key, f.relMembers.map((m) => ({ ...m })));
     }
+  }
+
+  /** Начать отслеживать объект (если ещё не отслеживается): его текущие теги становятся исходными. */
+  track(entity: Tagged): Tagged {
+    const known = this.features.get(entity.key);
+    if (known) return known;
+    this.features.set(entity.key, entity);
+    this.original.set(entity.key, { ...entity.tags });
+    if (entity.relMembers) this.originalMembers.set(entity.key, entity.relMembers.map((m) => ({ ...m })));
+    return entity;
+  }
+
+  /** Отслеживается ли объект (созданный и отменённый — тоже). */
+  has(key: string): boolean {
+    return this.features.has(key);
   }
 
   /** Заменить членов отношения (шаг истории). */
@@ -149,7 +165,8 @@ export class EditSession {
         const orig = this.originalMembers.get(key)!;
         diff.push({ tag: '(члены)', from: String(orig.length), to: String(f.relMembers!.length) });
       }
-      out.push({ key, feature: f, created, before, after: { ...f.tags }, diff, members: members ? f.relMembers : undefined });
+      out.push({ key, feature: f, created, before, after: { ...f.tags }, diff,
+        members: members ? f.relMembers : undefined, membersBefore: members ? this.originalMembers.get(key) : undefined });
     }
     return out;
   }

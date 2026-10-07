@@ -1,6 +1,6 @@
 import type { Map as MlMap } from 'maplibre-gl';
-import type { Bbox } from '../osm/api';
-import { centroid, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D } from '../osm/model';
+import { fetchArea, type Bbox } from '../osm/api';
+import { centroid, incompleteBuildingRelations, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D } from '../osm/model';
 import { fetchBuildings, OverpassBusyError, OverpassPool } from '../osm/overpass';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
@@ -33,6 +33,9 @@ type Entry =
  */
 export type OverpassMode = 'full' | 'cached' | 'off';
 
+/** Откуда брать данные тайлов: публичный Overpass (боевая база) или /map API конкретного сервера (тестовый). */
+export type TileSource = { kind: 'overpass'; fallbackApi?: string } | { kind: 'api'; api: string; db: string };
+
 /**
  * Подменяет тайловые здания данными Overpass по сетке тайлов z14.
  * Источники по порядку: память (LRU) → IndexedDB → Overpass. Устаревшие тайлы показываются сразу,
@@ -41,8 +44,9 @@ export type OverpassMode = 'full' | 'cached' | 'off';
 export class OverpassTiles {
   private readonly cache = new Map<string, Entry>(); // порядок вставки = LRU
   private wanted: string[] = [];
-  readonly pool = new OverpassPool();
-  readonly store = new TileStore();
+  pool = new OverpassPool();
+  store = new TileStore();
+  private source: TileSource = { kind: 'overpass' };
   private pumpTimer?: ReturnType<typeof setTimeout>;
   /** Нарисованные здания по ключу OSM — для панели по клику. */
   private readonly rendered = new Map<string, RenderedFeature>();
@@ -57,13 +61,76 @@ export class OverpassTiles {
   private readonly reloading = new Map<string, number>(); // ключ → число неудачных попыток
   /** Перезапрос не удался после всех попыток — в индикаторе это «ждут повтора». */
   private readonly reloadFailed = new Set<string>();
+  /** Тайлы, которые сейчас грузятся из OSM API вместо Overpass. */
+  readonly viaApi = new Set<string>();
   mode: OverpassMode = 'off';
 
-  constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, private readonly onChange: () => void) {
-    void this.store.keys().then((keys) => {
+  /**
+   * overlay — подмена объекта перед отрисовкой (несохранённые правки живут поверх данных тайлов
+   * и переживают их перезагрузку).
+   */
+  constructor(
+    private readonly map: MlMap, private readonly layer: BuildingsLayer, private readonly onChange: () => void,
+    private readonly overlay: (f: Feature3D) => Feature3D = (f) => f,
+  ) {
+    this.loadStoredKeys();
+  }
+
+  private loadStoredKeys() {
+    const store = this.store;
+    void store.keys().then((keys) => {
+      if (store !== this.store) return; // источник успели сменить
       for (const k of keys) this.stored.add(k);
       if (this.mode === 'cached') this.update();
     });
+  }
+
+  /** Сменить источник данных: всё загруженное сбрасывается, кеш — свой у каждого источника. */
+  setSource(source: TileSource) {
+    this.source = source;
+    for (const e of this.cache.values()) {
+      if (e.state === 'loading') e.abort.abort();
+      if (e.state === 'ready') e.refreshing?.abort();
+    }
+    this.cache.clear();
+    this.layer.clear();
+    this.rendered.clear();
+    this.hiddenOutlines.clear();
+    this.groups.clear();
+    this.memberGroup.clear();
+    this.reloading.clear();
+    this.reloadFailed.clear();
+    this.stored = new Set();
+    this.pool = source.kind === 'api' ? new OverpassPool([source.api]) : new OverpassPool();
+    this.store = source.kind === 'api' ? new TileStore(source.db) : new TileStore();
+    this.loadStoredKeys();
+    this.update();
+  }
+
+  get sourceLabel(): string {
+    return this.source.kind === 'api' ? 'OSM API' : 'Overpass';
+  }
+
+  /** Перерисовать объекты (после правки тегов): берётся версия из overlay. */
+  refreshFeatures(keys: string[]) {
+    for (const tile of this.layer.groupKeys()) {
+      const e = this.cache.get(tile);
+      if (e?.state !== 'ready') continue;
+      for (const f of e.features) {
+        if (!keys.includes(f.key)) continue;
+        const r = this.layer.updateFeature(tile, this.overlay(f));
+        if (r) this.rendered.set(f.key, r);
+      }
+    }
+  }
+
+  /** Все объекты загруженных тайлов (без повторов, с правками) — например, для поиска контура под частями. */
+  allFeatures(): Feature3D[] {
+    const out = new Map<string, Feature3D>();
+    for (const e of this.cache.values()) {
+      if (e.state === 'ready') for (const f of e.features) if (!out.has(f.key)) out.set(f.key, this.overlay(f));
+    }
+    return [...out.values()];
   }
 
   get enabled(): boolean {
@@ -206,8 +273,30 @@ export class OverpassTiles {
     if (refreshing) refreshing.refreshing = abort;
     else this.cache.set(key, { state: 'loading', abort });
     let result: 'ok' | 'busy' | 'error' | 'aborted' = 'ok';
+    // Ошибка Overpass, после которой тайл взяли из API: инстанс всё равно надо «наказать»
+    let overpassFailed: 'busy' | 'error' | undefined;
     try {
-      const elements = await fetchBuildings(ep.url, tileBbox(key), abort.signal);
+      const source = this.source;
+      let elements;
+      if (source.kind === 'api') {
+        elements = await fetchArea(tileBbox(key), incompleteBuildingRelations, source.api, abort.signal);
+      } else {
+        try {
+          elements = await fetchBuildings(ep.url, tileBbox(key), abort.signal);
+        } catch (err) {
+          // Overpass не отдал тайл — берём из OSM API (дольше и тяжелее, но работает при сбоях Overpass)
+          if (abort.signal.aborted || !source.fallbackApi) throw err;
+          overpassFailed = err instanceof OverpassBusyError ? 'busy' : 'error';
+          console.warn(`Overpass ${key}: ${(err as Error).message} — грузим из OSM API`);
+          this.viaApi.add(key);
+          this.onChange();
+          try {
+            elements = await fetchArea(tileBbox(key), incompleteBuildingRelations, source.fallbackApi, abort.signal);
+          } finally {
+            this.viaApi.delete(key);
+          }
+        }
+      }
       const { features, groups } = timed('overpass: разбор ответа', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const fetchedAt = Date.now();
       this.cache.set(key, { state: 'ready', features, groups, fetchedAt });
@@ -250,7 +339,7 @@ export class OverpassTiles {
       this.schedulePump(delay);
     } finally {
       if (result === 'aborted') this.reloading.delete(key);
-      this.pool.release(ep, result);
+      this.pool.release(ep, result === 'ok' ? overpassFailed ?? 'ok' : result);
       this.pump();
       this.onChange();
     }
@@ -345,16 +434,17 @@ export class OverpassTiles {
   private ownedFeatures(key: string): { features: Feature3D[]; hidden: string } {
     const own = this.cache.get(key);
     if (own?.state !== 'ready') return { features: [], hidden: '' };
+    const ownFeatures = own.features.map(this.overlay);
     const union = new Map<string, Feature3D>();
-    for (const f of own.features) union.set(f.key, f); // свои объекты — первыми: их hasParts и пойдёт в рендер
+    for (const f of ownFeatures) union.set(f.key, f); // свои объекты — первыми: их hasParts и пойдёт в рендер
     for (const n of neighbours(key)) {
       const e = this.cache.get(n);
-      if (e?.state === 'ready') for (const f of e.features) if (!union.has(f.key)) union.set(f.key, f);
+      if (e?.state === 'ready') for (const f of e.features) if (!union.has(f.key)) union.set(f.key, this.overlay(f));
     }
     // Пересчитываем только свои здания — части берём из всех девяти тайлов
-    timed('overpass: части у контуров', () => markOutlinesWithParts([...union.values()], own.features), () => `${key}, ${union.size} объектов`);
+    timed('overpass: части у контуров', () => markOutlinesWithParts([...union.values()], ownFeatures), () => `${key}, ${union.size} объектов`);
     const [w, s, e, n] = tileBbox(key);
-    const features = own.features.filter((f) => {
+    const features = ownFeatures.filter((f) => {
       const [x, y] = centroid(f.polygons[0].outer);
       return x >= w && x < e && y > s && y <= n;
     });

@@ -2,15 +2,15 @@ import * as maplibregl from 'maplibre-gl';
 import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJSONFeature } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
-import { fetchArea, fetchMap, type Bbox, type OsmRelation, type OsmWay } from './osm/api';
+import { fetchMap, type Bbox, type OsmMember } from './osm/api';
 import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights } from './osm/heights';
-import { centroid, incompleteBuildingRelations, parseBuildings, pointInRing, type BuildingGroup, type Feature3D } from './osm/model';
+import { centroid, parseBuildings, pointInRing, type BuildingGroup, type Feature3D } from './osm/model';
 import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
-import { OverpassTiles } from './view/overpass-tiles';
+import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
 import { EditSession, type Tagged } from './edit/session';
 import { onSkeletons } from './render/skeleton';
@@ -25,7 +25,6 @@ const MERGED_LAYER = 'simple3d-merged-exploded';
 const MERGED_HIGHLIGHT_LAYER = 'simple3d-merged-highlight';
 const TILE_LAYERS = [BUILDINGS_LAYER, REMAINDERS_LAYER, MERGED_LAYER];
 const HIGHLIGHT_LAYER = 'simple3d-highlight';
-const MIN_EDIT_ZOOM = 16;
 // Начиная с этого зума здания тайлов z14 подменяются данными Overpass
 const OVERPASS_MIN_ZOOM = 15;
 /** Ниже OVERPASS_MIN_ZOOM — только тайлы, уже лежащие в кеше (без запросов к Overpass). */
@@ -34,7 +33,7 @@ const CACHED_MIN_ZOOM = 10;
 // по тайлам контур не отличить от части, эвристика даёт артефакты — см. PLAN.md.
 const OUTLINE_REMAINDERS = false;
 // Ограничение самого API — 0.25 deg², но берём заметно меньше, чтобы не упираться в 50k узлов
-const MAX_EDIT_AREA = 0.0004;
+const MAX_API_AREA = 0.0004;
 
 // Склеенные фичи (id с суффиксом 0) рисуем отдельным слоем, разрезанными на полигоны
 const BASE_FILTER: ExpressionSpecification = ['all', ['!=', ['get', 'hide_3d'], true], ['!=', ['%', ['id'], 10], 0]];
@@ -45,8 +44,6 @@ const TILE_FILL = '#ffffff';
 
 /** id тайловых фич-контуров, заменённых остатком «контур минус части». */
 let replacedIds: number[] = [];
-/** id тайловых фич, перекрытых областью редактирования. */
-let editAreaIds: number[] = [];
 /**
  * Временно: скрытые вручную кнопкой «Скрыть» (для изучения наложений).
  * Ключ — id тайловой фичи или `key` полигона склеенной фичи.
@@ -103,34 +100,32 @@ for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
 const statusEl = document.getElementById('status')!;
 const opIndicator = document.getElementById('op-indicator')!;
 const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
-const editBtn = document.getElementById('edit-btn') as HTMLButtonElement;
 
-const editLayer = new BuildingsLayer('osm-edit-buildings');
+/**
+ * Правки поверх данных тайлов. Объект попадает в сессию (копией), когда его выделяют;
+ * при отрисовке тайлов отслеживаемые объекты подменяются этими копиями — правки переживают перезагрузку тайлов.
+ */
+let session = new EditSession([], onSessionChange);
 const overpassLayer = new BuildingsLayer('osm-overpass-buildings');
 const overpass = new OverpassTiles(map, overpassLayer, () => {
   updateTileFilter();
   showOverpassStatus();
-});
-let editing: Map<string, RenderedFeature> | undefined;
-/** Правки тегов в текущей области редактирования. */
-let session: EditSession | undefined;
+}, (f) => (session.get(f.key) as Feature3D | undefined) ?? f);
 let selectedKey: string | undefined;
 /** Все выделенные объекты (Shift+клик добавляет); selectedKey — последний из них. */
 let selection: string[] = [];
-/** Здания и части области редактирования — для поиска скрытого контура при объединении. */
-let editFeatures: Feature3D[] = [];
 /** Режим «добавить части»: группа, в которую добавляем, и отмеченные Shift+кликом кандидаты. */
 let addingTo: BuildingGroup | undefined;
 let addPending: string[] = [];
 /** Временные отрицательные id для создаваемых отношений. */
 let nextNewId = -1;
-/** Отношения type=building области редактирования и индекс «член → группа». */
-let editGroups = new Map<string, BuildingGroup>();
+/** Отношения type=building, попавшие в сессию (выделенные, изменённые, созданные), и индекс «член → группа». */
+let editGroups = new Map<string, EditGroup>();
 let editMemberGroup = new Map<string, string>();
 /** Группа, в которую «провалились» двойным кликом: внутри неё выделяются отдельные части. */
 let drill: BuildingGroup | undefined;
-/** Исходные элементы API области редактирования (геометрия и члены нужны для osmChange). */
-let rawElements = new Map<string, OsmWay | OsmRelation>();
+/** Группа в сессии: ещё и члены с ролями (их можно править). */
+type EditGroup = BuildingGroup & Tagged & { relMembers: OsmMember[] };
 let osmUser: OsmUser | undefined;
 let uploadComment = '';
 let uploading = false;
@@ -199,9 +194,7 @@ map.on('load', () => {
   });
 
   map.addLayer(overpassLayer);
-
-  // До загрузки стиля добавленные слои и фильтры потерялись бы
-  editBtn.disabled = false;
+  overpass.setSource(tileSource());
   refreshOverpass();
 });
 
@@ -216,7 +209,7 @@ monoToggle.addEventListener('change', () => {
 });
 // Вращение вокруг точки под курсором (как в SketchUp)
 const orbit = new CursorOrbit(map, (x, y) => {
-  const hit = (editing ? editLayer : overpassLayer).pickHit([x, y]);
+  const hit = overpassLayer.pickHit([x, y]);
   // Не попали в 3D-слой (тайловое здание или пусто) — точка на земле
   return hit ?? { lngLat: map.unproject([x, y]), altitude: 0 };
 });
@@ -230,7 +223,7 @@ orbitToggle.addEventListener('change', () => {
 });
 
 function applyMonochrome() {
-  for (const layer of [overpassLayer, editLayer]) layer.setMonochrome(gfx.monochrome);
+  overpassLayer.setMonochrome(gfx.monochrome);
 }
 applyMonochrome();
 
@@ -247,7 +240,7 @@ for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
 }
 
 function applyGraphics() {
-  for (const layer of [overpassLayer, editLayer]) layer.setGraphics(gfx);
+  overpassLayer.setGraphics(gfx);
 }
 applyGraphics();
 
@@ -261,8 +254,8 @@ document.getElementById('cache-clear')!.addEventListener('click', async () => {
   await showCacheInfo();
 });
 document.getElementById('tiles-reload')!.addEventListener('click', () => {
-  if (!overpass.enabled) return setStatus(`Тайлы Overpass загружаются с z ≥ ${OVERPASS_MIN_ZOOM} вне режима редактирования.`, true);
-  setStatus(`Перезапрашиваем из Overpass тайлов: ${overpass.reloadVisible()}.`);
+  if (overpass.mode !== 'full') return setStatus(`Тайлы загружаются с z ≥ ${OVERPASS_MIN_ZOOM}.`, true);
+  setStatus(`Перезапрашиваем тайлов (${overpass.sourceLabel}): ${overpass.reloadVisible()}.`);
 });
 document.getElementById('gfx')!.addEventListener('toggle', () => void showCacheInfo());
 void showCacheInfo();
@@ -272,7 +265,7 @@ const perfEl = document.getElementById('perf')!;
 let frames = 0;
 map.on('render', () => frames++);
 setInterval(() => {
-  const triangles = overpassLayer.lastTriangles + editLayer.lastTriangles;
+  const triangles = overpassLayer.lastTriangles;
   perfEl.textContent = `FPS: ${frames} · треугольников: ${triangles.toLocaleString('ru')}`;
   frames = 0;
 }, 1000);
@@ -284,19 +277,20 @@ function refreshOverpass() {
 
 function refreshOverpassImpl() {
   const z = map.getZoom();
-  overpass.mode = editing ? 'off' : z >= OVERPASS_MIN_ZOOM ? 'full' : z >= CACHED_MIN_ZOOM ? 'cached' : 'off';
+  overpass.mode = z >= OVERPASS_MIN_ZOOM ? 'full' : z >= CACHED_MIN_ZOOM ? 'cached' : 'off';
   overpass.update();
 }
 
 function showOverpassStatus() {
   updateOverpassIndicator();
-  if (editing) return;
-  if (!overpass.enabled) return setStatus(`Здания из тайлов. С z ≥ ${OVERPASS_MIN_ZOOM} — из Overpass.`);
+  if (uploading) return;
+  const src = overpass.sourceLabel;
+  if (!overpass.enabled) return setStatus(`Здания из тайлов. С z ≥ ${OVERPASS_MIN_ZOOM} — из ${src}.`);
   const { ready, total, loading, waiting } = overpass.status();
   if (overpass.mode === 'cached') {
-    return setStatus(`Здания из тайлов${ready ? `, рядом с центром — из кеша Overpass (${ready} тайлов)` : ''}. С z ≥ ${OVERPASS_MIN_ZOOM} — из Overpass.`);
+    return setStatus(`Здания из тайлов${ready ? `, рядом с центром — из кеша ${src} (${ready} тайлов)` : ''}. С z ≥ ${OVERPASS_MIN_ZOOM} — из ${src}.`);
   }
-  setStatus(`Overpass: ${ready}/${total} тайлов${loading ? `, загружается ${loading}` : ''}${waiting ? `, ждут повтора ${waiting} (лимит/ошибка, см. консоль)` : ''}.`);
+  setStatus(`${src}: ${ready}/${total} тайлов${loading ? `, загружается ${loading}` : ''}${waiting ? `, ждут повтора ${waiting} (лимит/ошибка, см. консоль)` : ''}.`);
 }
 
 // Пересчитываем контуры с частями, когда догрузились новые тайлы
@@ -375,116 +369,56 @@ function updateTileFilter() {
   const byTile = overpassTiles.length ? timed('тайлы: id по клеткам', () => tileFeatureIdsByTile(map, 'openmaptiles', 'building')) : new Map<string, number[]>();
   const overpassIds = overpassTiles.flatMap((k) => byTile.get(k) ?? []);
   // setFilter перестраивает бакеты всех тайлов слоя — вызываем, только если набор скрытого изменился
-  const sig = [replacedIds.length, editAreaIds.join(), hiddenIds.join(), overpassTiles.sort().join(), overpassIds.length].join('|');
+  const sig = [replacedIds.length, hiddenIds.join(), overpassTiles.sort().join(), overpassIds.length].join('|');
   if (sig === lastFilterSig) return;
   lastFilterSig = sig;
   console.debug(`[perf] setFilter: скрыто ${overpassIds.length} фич тайлов под Overpass`);
-  map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...editAreaIds, ...hiddenIds, ...overpassIds])]);
-  map.setFilter(REMAINDERS_LAYER, notIn([...editAreaIds, ...hiddenIds]));
+  map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...hiddenIds, ...overpassIds])]);
+  map.setFilter(REMAINDERS_LAYER, notIn(hiddenIds));
   map.setFilter(MERGED_LAYER, ['all',
-    ['!', ['in', ['get', 'src'], ['literal', editAreaIds]]],
     ['!', ['in', ['get', 'tile'], ['literal', overpassTiles]]],
     ['!', ['in', ['get', 'key'], ['literal', [...userHidden]]]]]);
 }
 
-editBtn.addEventListener('click', () => (editing ? exitEditMode() : enterEditMode()));
-
-async function enterEditMode() {
-  if (map.getZoom() < MIN_EDIT_ZOOM) return setStatus(`Приблизьте карту до z ≥ ${MIN_EDIT_ZOOM}.`, true);
-  const b = map.getBounds();
-  const bbox: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((v) => +v.toFixed(6)) as Bbox;
-  const area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]);
-  if (area > MAX_EDIT_AREA) return setStatus('Область слишком большая — приблизьте карту или уменьшите наклон.', true);
-
-  editBtn.disabled = true;
-  setStatus('Загрузка данных из OSM API…');
-  try {
-    const elements = await fetchArea(bbox, incompleteBuildingRelations);
-    rawElements = new Map(
-      elements.filter((e): e is OsmWay | OsmRelation => e.type !== 'node').map((e) => [`${e.type}/${e.id}`, e]),
-    );
-    const { features, groups, skipped } = parseBuildings(elements);
-    editGroups = new Map(groups.map((g) => [g.key, g]));
-    for (const g of groups) {
-      const rel = rawElements.get(g.key);
-      if (rel?.type === 'relation') (g as BuildingGroup & Tagged).relMembers = rel.members.map((m) => ({ ...m }));
-    }
-    editFeatures = features;
-    const rendered = editLayer.setGroup('edit', features, [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]);
-    if (!map.getLayer(editLayer.id)) map.addLayer(editLayer);
-    editing = new Map(rendered.map((r) => [r.feature.key, r]));
-    session = new EditSession([...features, ...groups], onSessionChange);
-    rebuildGroupIndex();
-    renderChanges();
-    overpassLayer.select(undefined);
-    refreshOverpass(); // в режиме редактирования Overpass-слой выключен
-    hideTileBuildingsIn(bbox);
-    clearSelection();
-
-    const outlines = features.filter((f) => f.hasParts).length;
-    setStatus(`Загружено: ${rendered.length} объектов (контуров с частями: ${outlines}, пропущено: ${skipped.length}). Кликните по зданию.`);
-    if (skipped.length) console.info('Пропущены:', skipped);
-    editBtn.textContent = 'Выйти из редактирования';
-    serverSelect.disabled = true;
-    editBtn.classList.add('active');
-  } catch (err) {
-    setStatus(`Ошибка загрузки: ${(err as Error).message}`, true);
-  } finally {
-    editBtn.disabled = false;
-  }
-}
-
-function exitEditMode() {
-  const n = session?.changes().length ?? 0;
-  if (n && !confirm(`Есть несохранённые изменения (${n} объектов). Выйти и потерять их?`)) return;
-  session = undefined;
-  selectedKey = undefined;
-  selection = [];
-  editFeatures = [];
-  editGroups = new Map();
-  editMemberGroup = new Map();
-  rawElements = new Map();
-  renderChanges();
-  editing = undefined;
-  editLayer.clear();
-  if (map.getLayer(editLayer.id)) map.removeLayer(editLayer.id);
-  refreshOverpass();
-  editAreaIds = [];
-  updateTileFilter();
-  clearSelection();
-  editBtn.textContent = 'Редактировать область';
-  serverSelect.disabled = false;
-  editBtn.classList.remove('active');
-  showOverpassStatus();
-}
-
-/**
- * Скрывает тайловые здания, задевающие область редактирования: их перерисовывает наш слой.
- * Сопоставлять по OSM id ненадёжно — склеенные фичи (суффикс 0) объединяют несколько зданий.
- */
-function hideTileBuildingsIn([w, s, e, n]: Bbox) {
-  const inside = ([x, y]: number[]) => x >= w && x <= e && y >= s && y <= n;
-  editAreaIds = [...new Set(
-    map.querySourceFeatures('openmaptiles', { sourceLayer: 'building' })
-      .filter((f) => typeof f.id === 'number' && polygonsOf(f.geometry).some((p) => p[0].some(inside)))
-      .map((f) => f.id as number),
-  )];
-  updateTileFilter();
-}
-
 /** Группа type=building объекта (или сама группа по своему ключу) в текущем режиме. */
 function groupOf(key: string): BuildingGroup | undefined {
-  if (editing) return editGroups.get(editMemberGroup.get(key) ?? key);
-  return overpass.groupOf(key);
+  // Группы из сессии (с правками состава, созданные) главнее данных тайлов
+  const own = editMemberGroup.get(key) ?? (editGroups.has(key) && session.get(key) ? key : undefined);
+  if (own) return editGroups.get(own);
+  const g = overpass.groupOf(key);
+  // Группа есть в сессии, но объекта в ней уже нет (исключили) — или её создание отменили
+  if (g && editGroups.has(g.key)) return undefined;
+  return g;
 }
 
-/** Индекс «член → группа» по существующим сейчас группам (созданные можно отменить). */
+/** Индекс «член → группа» по существующим сейчас группам сессии (созданные можно отменить). */
 function rebuildGroupIndex() {
   editMemberGroup = new Map();
   for (const g of [...editGroups.values()]) {
-    if (!session?.get(g.key)) continue;
+    if (!session.get(g.key)) continue;
     for (const m of g.members) if (!editMemberGroup.has(m)) editMemberGroup.set(m, g.key);
   }
+}
+
+/** Объект сессии по ключу; при первом обращении — копия из данных тайлов. */
+function entity(key: string): Tagged | undefined {
+  if (session.has(key)) return session.get(key);
+  const g = overpass.groupOf(key);
+  if (g?.key === key) {
+    const copy: EditGroup = {
+      ...g, tags: { ...g.tags }, members: [...g.members], roles: [...g.roles],
+      relMembers: g.members.map((k, i) => {
+        const [type, ref] = k.split('/');
+        return { type: type as 'way' | 'relation', ref: Number(ref), role: g.roles[i] ?? '' };
+      }),
+    };
+    editGroups.set(key, copy);
+    session.track(copy);
+    rebuildGroupIndex();
+    return copy;
+  }
+  const f = overpass.get(key)?.feature;
+  return f ? session.track({ ...f, tags: { ...f.tags } }) : undefined;
 }
 
 /** Что выделить по клику: вне группы — группу целиком; внутри группы — часть; клик мимо группы — выход к ней. */
@@ -505,25 +439,8 @@ function highlightKeys(key: string | undefined): string[] {
   return g?.key === key ? g.members : [key];
 }
 
-/** Выделение в режиме просмотра (Overpass). false — под курсором нет нашего объекта. */
-function selectOverpass(key: string | undefined): boolean {
-  selection = key ? [key] : [];
-  overpassLayer.select(highlightKeys(key));
-  const g = key ? groupOf(key) : undefined;
-  if (key && g?.key === key) {
-    clearTileHighlight();
-    infoEl.innerHTML = `<p class="hint">Данные Overpass</p>${describeGroup(g)}`;
-    return true;
-  }
-  const r = key ? overpass.get(key) : undefined;
-  if (!r) return false;
-  clearTileHighlight();
-  infoEl.innerHTML = `<p class="hint">Данные Overpass</p>${drillHint(key!)}${describeOsm(r)}`;
-  return true;
-}
-
 map.on('click', (e) => {
-  const key = (editing ? editLayer : overpassLayer).pick(e.point);
+  const key = overpassLayer.pick(e.point);
   if (addingTo) {
     if (e.originalEvent.shiftKey) { if (key) toggleAddPending(key); return; }
     stopAdding(); // обычный клик — выходим из режима добавления
@@ -534,11 +451,7 @@ map.on('click', (e) => {
     if (k) toggleSelection(k);
     return;
   }
-  if (editing) {
-    selectEdited(resolveClick(key));
-    return;
-  }
-  if (selectOverpass(resolveClick(key))) return;
+  if (select(resolveClick(key))) return;
   const f = queryTileLayers(e.point)[0];
   infoEl.innerHTML = f ? describeTile(f) : '';
   map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], f?.layer.id === MERGED_LAYER ? -1 : f?.id ?? -1]);
@@ -548,13 +461,12 @@ map.on('click', (e) => {
 
 // Двойной клик по группе — «провалиться» в неё и выделить часть под курсором (вместо приближения карты)
 map.on('dblclick', (e) => {
-  const key = (editing ? editLayer : overpassLayer).pick(e.point);
+  const key = overpassLayer.pick(e.point);
   const g = key ? groupOf(key) : undefined;
   if (!key || !g || drill?.key === g.key) return;
   e.preventDefault();
   drill = g;
-  if (editing) selectEdited(key);
-  else selectOverpass(key);
+  select(key);
 });
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
@@ -564,15 +476,13 @@ function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
 }
 
 map.on('mousemove', (e) => {
-  const hit = editing
-    ? !!editLayer.pick(e.point)
-    : !!overpassLayer.pick(e.point) || queryTileLayers(e.point).length > 0;
+  const hit = !!overpassLayer.pick(e.point) || queryTileLayers(e.point).length > 0;
   map.getCanvas().style.cursor = hit ? 'pointer' : '';
 });
 
 infoEl.addEventListener('click', (e) => {
   const link = (e.target as HTMLElement).closest<HTMLElement>('a[data-select]');
-  if (link) { e.preventDefault(); if (editing) selectEdited(link.dataset.select); else selectOverpass(link.dataset.select); return; }
+  if (link) { e.preventDefault(); select(link.dataset.select); return; }
   const btn = (e.target as HTMLElement).closest('button');
   if (!btn) return;
   if (btn.dataset.merge !== undefined) return mergeIntoBuilding();
@@ -595,6 +505,7 @@ function clearSelection() {
   addingTo = undefined;
   addPending = [];
   selection = [];
+  selectedKey = undefined;
   infoEl.innerHTML = '';
   overpassLayer.select(undefined);
   clearTileHighlight();
@@ -617,7 +528,7 @@ function updateOverpassIndicator() {
     .join('\n');
   opIndicator.title = {
     off: '',
-    loading: `Загружается тайлов: ${loading}`,
+    loading: `Загружается тайлов: ${loading}${overpass.viaApi.size ? ` (из OSM API вместо Overpass: ${overpass.viaApi.size})` : ''}`,
     waiting: `Ждут повтора: ${waiting} (лимит или ошибка Overpass, подробности в консоли)`,
     ready: 'Все видимые тайлы загружены',
   }[state] + (state === 'off' ? '' : `\n\n${servers}`);
@@ -628,7 +539,8 @@ function setStatus(text: string, error = false) {
   statusEl.classList.toggle('error', error);
 }
 
-function selectEdited(key: string | undefined) {
+/** Выделить объект (или группу); false — выделять нечего. */
+function select(key: string | undefined): boolean {
   addingTo = undefined;
   addPending = [];
   // Переход из списка правок или undo к объекту вне текущей группы — выходим из неё
@@ -636,34 +548,31 @@ function selectEdited(key: string | undefined) {
   if (drill && key === drill.key) drill = undefined;
   // Вне группы её член выделяется вместе с ней
   if (!drill && key) key = groupOf(key)?.key ?? key;
-  if (key && !session?.get(key)) key = undefined; // например, отменили создание группы
+  if (key && !entity(key)) key = undefined; // нет в данных или отменили создание группы
   selection = key ? [key] : [];
   selectedKey = key;
+  if (key) clearTileHighlight();
   paintSelection();
   renderSelected();
+  return !!key;
 }
 
 function toggleSelection(key: string) {
+  if (!entity(key)) return;
+  clearTileHighlight();
   selection = selection.includes(key) ? selection.filter((k) => k !== key) : [...selection, key];
-  if (!editing) {
-    clearTileHighlight();
-    const one = selection.length === 1 ? selection[0] : undefined;
-    if (selection.length > 1) { overpassLayer.select(selection.flatMap(highlightKeys)); renderMulti(); }
-    else if (!one || !selectOverpass(one)) clearSelection();
-    return;
-  }
   selectedKey = selection.at(-1);
   paintSelection();
   renderSelected();
 }
 
 function paintSelection() {
-  editLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
+  overpassLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
 }
 
 /** Почему объект нельзя добавить в группу (undefined — можно). */
 function addReason(key: string): string | undefined {
-  const f = session?.get(key);
+  const f = entity(key);
   if (!f || !('polygons' in f)) return 'это не здание и не часть';
   if (!f.tags['building:part'] || f.tags['building:part'] === 'no') return 'нет тега building:part';
   const g = groupOf(key);
@@ -698,8 +607,8 @@ function stopAdding() {
 }
 
 function confirmAdding() {
-  const g = addingTo as (BuildingGroup & Tagged) | undefined;
-  if (!g?.relMembers || !session || !addPending.length) return;
+  const g = addingTo ? editGroups.get(addingTo.key) : undefined;
+  if (!g || !addPending.length) return;
   const extra = addPending.map((k) => {
     const [type, ref] = k.split('/');
     return { type: type as 'way' | 'relation', ref: Number(ref), role: 'part' };
@@ -707,7 +616,7 @@ function confirmAdding() {
   addingTo = undefined;
   addPending = [];
   session.setMembers(g.key, [...g.relMembers, ...extra]);
-  selectEdited(g.key);
+  select(g.key);
 }
 
 function renderAdding() {
@@ -728,7 +637,7 @@ type MergePlan = { members: { key: string; role: 'outline' | 'part' }[] } | { re
 function mergePlan(keys: string[]): MergePlan {
   if (keys.some((k) => editGroups.has(k))) return { reason: 'В выделении есть здание type=building — объединять можно только отдельные объекты.' };
   if (keys.some((k) => groupOf(k))) return { reason: 'Часть объектов уже входит в здание type=building.' };
-  const feats = keys.map((k) => session?.get(k)).filter((f): f is Feature3D => !!f && 'polygons' in f);
+  const feats = keys.map(entity).filter((f): f is Feature3D => !!f && 'polygons' in f);
   // Контур — всё с тегом building, даже если на нём же стоит building:part (так часто размечают)
   const isBuilding = (f: Feature3D) => !!f.tags.building && f.tags.building !== 'no';
   const outlines = new Set(feats.filter(isBuilding));
@@ -736,7 +645,7 @@ function mergePlan(keys: string[]): MergePlan {
   if (!parts.length) return { reason: 'Выделите части здания (building:part).' };
   // Контур, целиком закрытый частями, не рисуется и не выделяется — ищем его под частями
   const centres = parts.flatMap((p) => p.polygons.map((poly) => centroid(poly.outer)));
-  for (const f of editFeatures) {
+  for (const f of overpass.allFeatures()) {
     if (f.kind === 'building' && f.hasParts && centres.some((c) => f.polygons.some((p) => pointInRing(c, p.outer)))) outlines.add(f);
   }
   if (!outlines.size) return { reason: 'Не найден контур здания (building) вокруг частей — выделите его тоже.' };
@@ -750,42 +659,40 @@ function mergePlan(keys: string[]): MergePlan {
 
 function mergeIntoBuilding() {
   const plan = mergePlan(selection);
-  if (!session || 'reason' in plan) return;
+  if ('reason' in plan) return;
   const id = nextNewId--;
   const key = `relation/${id}`;
-  const tags = { type: 'building' };
-  rawElements.set(key, {
-    type: 'relation', id, version: 0, tags: { ...tags },
-    members: plan.members.map((m) => {
+  const group: EditGroup = {
+    key, type: 'relation', id, version: 0, tags: { type: 'building' },
+    members: plan.members.map((m) => m.key), roles: plan.members.map((m) => m.role),
+    relMembers: plan.members.map((m) => {
       const [type, ref] = m.key.split('/');
       return { type: type as 'way' | 'relation', ref: Number(ref), role: m.role };
     }),
-  });
-  const rel = rawElements.get(key) as OsmRelation;
-  const group: BuildingGroup & Tagged = { key, type: 'relation', id, version: 0, tags, members: plan.members.map((m) => m.key), relMembers: rel.members };
+  };
   editGroups.set(key, group);
-  session.create(editGroups.get(key)!);
+  session.create(group);
   drill = undefined;
-  selectEdited(key);
+  select(key);
 }
 
 /** Кнопка исключения выделенных частей из группы, в которую «провалились». */
 function excludeButton(): string {
-  if (!editing || !drill || !selection.length || !selection.every((k) => drill!.members.includes(k))) return '';
+  if (!drill || !selection.length || !selection.every((k) => drill!.members.includes(k))) return '';
   return `<p><button type="button" data-exclude>Исключить из этого здания${selection.length > 1 ? ` (${selection.length})` : ''}</button></p>`;
 }
 
 function excludeFromGroup() {
-  const g = drill as (BuildingGroup & Tagged) | undefined;
-  if (!g?.relMembers || !session) return;
+  const g = drill ? editGroups.get(drill.key) : undefined;
+  if (!g) return;
   const drop = new Set(selection);
   const members = g.relMembers.filter((m) => !drop.has(`${m.type}/${m.ref}`));
   session.setMembers(g.key, members);
-  selectEdited(g.key); // выходим на уровень группы
+  select(g.key); // выходим на уровень группы
 }
 
 function renderMulti() {
-  const plan: MergePlan = editing ? mergePlan(selection) : { reason: 'Объединять в здание можно в режиме редактирования.' };
+  const plan = mergePlan(selection);
   const list = selection.map((k) => `<li><a href="#" data-select="${esc(k)}">${esc(k)}</a>${
     editGroups.has(k) ? ' (type=building)' : ''}</li>`).join('');
   infoEl.innerHTML = `
@@ -800,11 +707,11 @@ function renderMulti() {
 function renderSelected() {
   if (addingTo) return renderAdding();
   if (selection.length > 1) return renderMulti();
-  const form = selectedKey && session ? renderTagForm(selectedKey, session) : undefined;
+  const form = selectedKey ? renderTagForm(selectedKey, session) : undefined;
   const g = selectedKey ? editGroups.get(selectedKey) : undefined;
   // Отношение type=building — только контейнер: высоты, крыша и прочее живут на контуре и частях
-  if (g) { infoEl.innerHTML = describeGroup(g, true); return; }
-  const r = selectedKey ? editing?.get(selectedKey) : undefined;
+  if (g) { infoEl.innerHTML = describeGroup(g); return; }
+  const r = selectedKey ? overpass.get(selectedKey) : undefined;
   infoEl.innerHTML = r ? drillHint(r.feature.key) + excludeButton() + describeOsm(r, form) : '';
 }
 
@@ -815,12 +722,12 @@ function drillHint(key: string): string {
     drill.tags.name ? ` «${esc(drill.tags.name)}»` : ''} — клик вне группы вернёт к ней.</p>`;
 }
 
-function describeGroup(g: BuildingGroup, editable = false): string {
+function describeGroup(g: BuildingGroup): string {
   return `
-    <h2>type=building — <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a> v${g.version}</h2>
+    <h2>type=building — <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>${g.version ? ` v${g.version}` : ''}</h2>
     <p class="hint">Членов: ${g.members.length}. Двойной клик по зданию — выделение отдельных частей.
       Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.</p>
-    ${editable ? '<p><button type="button" data-add-parts>Добавить части</button></p>' : ''}
+    <p><button type="button" data-add-parts>Добавить части</button></p>
     ${tagTable(g.tags)}`;
 }
 
@@ -829,17 +736,16 @@ function onSessionChange(keys: string[]) {
   // Созданные группы могли появиться или исчезнуть, у групп — смениться состав (undo/redo)
   if (keys.some((k) => editGroups.has(k))) {
     for (const k of keys) {
-      const g = editGroups.get(k) as (BuildingGroup & Tagged) | undefined;
-      if (g?.relMembers) g.members = g.relMembers.filter((m) => m.type !== 'node').map((m) => `${m.type}/${m.ref}`);
+      const g = editGroups.get(k);
+      if (!g) continue;
+      const rel = g.relMembers.filter((m) => m.type !== 'node');
+      g.members = rel.map((m) => `${m.type}/${m.ref}`);
+      g.roles = rel.map((m) => m.role);
     }
     rebuildGroupIndex();
     paintSelection();
   }
-  for (const key of keys) {
-    const f = session?.get(key);
-    const r = f && 'polygons' in f && editLayer.updateFeature('edit', f as Feature3D);
-    if (r) editing?.set(key, r);
-  }
+  overpass.refreshFeatures(keys);
   if (selectedKey && keys.includes(selectedKey)) {
     const active = document.activeElement as HTMLElement | null;
     const focusTag = active?.closest('.tag-form') ? active.dataset.tag : undefined;
@@ -852,11 +758,11 @@ function onSessionChange(keys: string[]) {
 
 function renderChanges() {
   renderAccount();
-  const changes = session?.changes() ?? [];
+  const changes = session.changes();
   // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
-  const show = !!session && (changes.length > 0 || session.canUndo() || session.canRedo());
+  const show = changes.length > 0 || session.canUndo() || session.canRedo();
   changesEl.hidden = !show;
-  if (!show || !session) { changesEl.innerHTML = ''; return; }
+  if (!show) { changesEl.innerHTML = ''; return; }
   const list = changes.map((c) => `
     <li><a href="#" data-select="${esc(c.key)}">${esc(c.key)}</a>${c.created ? ' (новое)' : ''}
       <ul>${c.diff.map((d) => `<li><code>${esc(d.tag)}</code>: <del>${esc(d.from ?? '—')}</del> → <ins>${esc(d.to ?? '—')}</ins></li>`).join('')}</ul>
@@ -911,7 +817,7 @@ async function refreshUser() {
 }
 
 async function doUpload() {
-  if (!session || uploading) return;
+  if (uploading) return;
   const changes = session.changes();
   const s = server();
   if (s.id === 'prod' && !confirm(`Отправить ${changes.length} изменений в боевую базу OpenStreetMap?`)) return;
@@ -919,46 +825,43 @@ async function doUpload() {
   renderChanges();
   try {
     const edits = changes.map((c) => {
-      const element = rawElements.get(c.key);
-      if (!element) throw new Error(`Нет исходных данных для ${c.key}`);
-      const withMembers = c.members && element.type === 'relation' ? { ...element, members: c.members } : element;
-      return { key: c.key, element: withMembers, before: c.before, after: c.after, created: c.created, membersChanged: !!c.members };
+      const g = editGroups.get(c.key);
+      const created = c.created && g
+        ? { type: 'relation' as const, id: g.id, version: 0, tags: c.after, members: g.relMembers }
+        : undefined;
+      return { key: c.key, before: c.before, after: c.after, created, members: c.members, membersBefore: c.membersBefore };
     });
     const res = await uploadEdits(edits, uploadComment.trim(), (t) => setStatus(t));
     const saved = new Map<string, { version: number; tags: Record<string, string>; newKey?: string }>();
     for (const e of edits) {
       const version = res.versions.get(e.key);
       if (version === undefined) continue;
-      const rebased = res.rebased.get(e.key);
-      const tags = rebased?.tags ?? e.after;
+      const tags = res.written.get(e.key) ?? e.after;
       const newKey = res.newKeys.get(e.key);
-      const element = { ...(rebased?.element ?? e.element), version, tags };
       if (newKey) {
         // Созданное отношение получило настоящий id
-        element.id = Number(newKey.split('/')[1]);
-        rawElements.delete(e.key);
         const g = editGroups.get(e.key);
-        if (g) { editGroups.delete(e.key); g.id = element.id; editGroups.set(newKey, g); }
+        if (g) { editGroups.delete(e.key); g.id = Number(newKey.split('/')[1]); editGroups.set(newKey, g); }
         selection = selection.map((k) => (k === e.key ? newKey : k));
         if (selectedKey === e.key) selectedKey = newKey;
       }
-      rawElements.set(newKey ?? e.key, element);
       saved.set(e.key, { version, tags, newKey });
     }
     session.markSaved(saved);
-    // Overpass отдаёт только боевую базу — правки с тестового сервера в его кеш не кладём
-    if (s.id === 'prod') {
-      const savedGroups = [...saved].map(([k, v]) => editGroups.get(v.newKey ?? k)).filter((g): g is BuildingGroup => !!g)
-        .map((g) => ({ key: g.key, type: g.type, id: g.id, version: g.version, tags: { ...g.tags }, members: [...g.members] }));
-      void overpass.applySaved(saved, savedGroups);
-    }
+    rebuildGroupIndex();
+    // Сразу в кеш тайлов текущего источника — не ждать, пока Overpass догонит
+    const savedGroups = [...saved].map(([k, v]) => editGroups.get(v.newKey ?? k)).filter((g): g is EditGroup => !!g)
+      .map((g) => ({ key: g.key, type: g.type, id: g.id, version: g.version, tags: { ...g.tags }, members: [...g.members], roles: [...g.roles] }));
+    void overpass.applySaved(new Map([...saved].map(([k, v]) => [v.newKey ?? k, v])), savedGroups);
     uploadComment = '';
     const link = `<a href="${s.web}/changeset/${res.changeset}" target="_blank" rel="noopener">changeset ${res.changeset}</a>`;
-    setStatus(`Сохранено: ${saved.size} объектов.` + (res.rebased.size ? ` Поверх чужих правок перенесено: ${res.rebased.size} (геометрия в 3D может быть устаревшей — перезагрузите область).` : ''));
+    uploading = false;
+    setStatus(`Сохранено: ${saved.size} объектов.` + (res.rebased.size ? ` Поверх чужих правок других тегов перенесено: ${res.rebased.size}.` : ''));
     statusEl.insertAdjacentHTML('beforeend', ` ${link}`);
   } catch (err) {
+    uploading = false;
     if (err instanceof ConflictError) {
-      setStatus(`${err.message}. Эти теги уже изменил кто-то другой — выйдите из редактирования, загрузите область заново и повторите правки.`, true);
+      setStatus(`${err.message}. Эти теги уже изменил кто-то другой — перезагрузите тайлы, отмените свои правки этих объектов и повторите.`, true);
     } else {
       setStatus(`Ошибка отправки: ${(err as Error).message}`, true);
     }
@@ -970,11 +873,11 @@ async function doUpload() {
 
 changesEl.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
-  if (t.closest('[data-undo]')) return selectEdited(session?.undo() ?? selectedKey);
-  if (t.closest('[data-redo]')) return selectEdited(session?.redo() ?? selectedKey);
+  if (t.closest('[data-undo]')) return void select(session.undo() ?? selectedKey);
+  if (t.closest('[data-redo]')) return void select(session.redo() ?? selectedKey);
   if (t.closest('[data-upload]')) return void doUpload();
   const link = t.closest<HTMLElement>('[data-select]');
-  if (link) { e.preventDefault(); selectEdited(link.dataset.select); }
+  if (link) { e.preventDefault(); select(link.dataset.select); }
 });
 
 changesEl.addEventListener('input', (e) => {
@@ -982,7 +885,7 @@ changesEl.addEventListener('input', (e) => {
   if (!t.matches('[data-comment]')) return;
   uploadComment = t.value;
   const btn = changesEl.querySelector<HTMLButtonElement>('[data-upload]');
-  if (btn) btn.disabled = !(osmUser && session?.changes().length && uploadComment.trim() && !uploading);
+  if (btn) btn.disabled = !(osmUser && session.changes().length && uploadComment.trim() && !uploading);
 });
 
 accountEl.addEventListener('click', (e) => {
@@ -995,9 +898,27 @@ const serverSelect = document.getElementById('server-select') as HTMLSelectEleme
 serverSelect.innerHTML = Object.values(SERVERS).map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('');
 serverSelect.value = server().id;
 serverSelect.addEventListener('change', () => {
+  const n = session.changes().length;
+  if (n && !confirm(`Есть несохранённые изменения (${n} объектов) — при смене сервера они пропадут. Продолжить?`)) {
+    serverSelect.value = server().id;
+    return;
+  }
   setServer(serverSelect.value as ServerId);
+  // Данные — с выбранного сервера: правки прежнего к нему не относятся
+  session = new EditSession([], onSessionChange);
+  editGroups = new Map();
+  editMemberGroup = new Map();
+  clearSelection();
+  if (map.getLayer(overpassLayer.id)) overpass.setSource(tileSource()); // до загрузки стиля — в обработчике load
+  renderChanges();
   void refreshUser();
 });
+
+/** Источник тайлов для текущего сервера: боевой — Overpass, тестовый — его /map API (свой кеш). */
+function tileSource(): TileSource {
+  const s = server();
+  return s.id === 'prod' ? { kind: 'overpass', fallbackApi: s.api } : { kind: 'api', api: s.api, db: `osm-simple3d-${s.id}` };
+}
 void refreshUser();
 
 bindTagForms(infoEl, () => session);
@@ -1006,24 +927,20 @@ bindTagForms(infoEl, () => session);
 onSkeletons(() => {
   timed('пересборка зданий со скелетами', () => {
     overpassLayer.rebuildPending();
-    editLayer.rebuildPending((r) => {
-      editing?.set(r.feature.key, r);
-      if (r.feature.key === selectedKey) renderSelected();
-    });
   });
 });
 
 document.addEventListener('keydown', (e) => {
-  if (!session || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
   // В полях ввода оставляем родной undo браузера
   if ((e.target as HTMLElement).closest('input, select, textarea')) return;
   e.preventDefault();
   const key = e.shiftKey ? session.redo() : session.undo();
-  if (key) selectEdited(key);
+  if (key) select(key);
 });
 
 window.addEventListener('beforeunload', (e) => {
-  if (session?.changes().length) e.preventDefault();
+  if (session.changes().length) e.preventDefault();
 });
 
 function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: string): string {
@@ -1036,7 +953,7 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: s
   ].filter(Boolean);
   return `
     <h2>${f.kind === 'part' ? 'building:part' : 'building'} —
-      <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a> v${f.version}</h2>
+      <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a>${f.version ? ` v${f.version}` : ''}</h2>
     <pre>высота: ${fmt(h.min)} → ${fmt(roofApproximated ? h.top : h.wallTop)} → ${fmt(h.top)} м (${h.source})\nкрыша: ${h.roofShape}, ${fmt(h.roofHeight)} м</pre>
     ${warn.map((w) => `<p class="warn">⚠ ${w}</p>`).join('')}
     ${form ? `${form}<details class="all-tags"><summary>Все теги</summary>${tagTable(f.tags)}</details>` : tagTable(f.tags)}`;
@@ -1069,7 +986,7 @@ async function resolveTileFeature(f: MapGeoJSONFeature) {
   const xs = polys.flatMap((p) => p[0].map((c) => c[0])), ys = polys.flatMap((p) => p[0].map((c) => c[1]));
   const bbox: Bbox = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
   const out = (html: string) => { if (seq === resolveSeq) document.getElementById('resolved')!.innerHTML = html; };
-  if ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) > MAX_EDIT_AREA) return out('Фича слишком большая для запроса к API.');
+  if ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) > MAX_API_AREA) return out('Фича слишком большая для запроса к API.');
   try {
     const { features } = parseBuildings(await fetchMap(bbox, SERVERS.prod.api)); // id тайлов — боевые
     const h = f.properties.render_height ?? Infinity, min = f.properties.render_min_height ?? 0;
@@ -1094,4 +1011,4 @@ function esc(s: unknown): string { return String(s).replace(/[&<>"]/g, (c) => `&
 const tagTable = (tags: Record<string, unknown>) =>
   `<table>${Object.entries(tags).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
 
-if (import.meta.env.DEV) Object.assign(window, { map, editLayer, overpassLayer, overpass, orbit, selectEdited, getSession: () => session });
+if (import.meta.env.DEV) Object.assign(window, { map, overpassLayer, overpass, orbit, select, getSession: () => session });

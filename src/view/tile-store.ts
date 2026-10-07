@@ -1,9 +1,10 @@
 import type { BuildingGroup, Feature3D } from '../osm/model';
 
-const DB_NAME = 'osm-simple3d';
 const STORE = 'overpass-tiles';
 /** Версия формата записи: при изменении Feature3D старые записи игнорируются. */
-const FORMAT = 3;
+const FORMAT = 4;
+/** Роль члена, которая неизвестна (кеш старого формата): при отправке сверяемся с сервером только по type/ref. */
+export const UNKNOWN_ROLE = '?';
 /** Сколько тайлов хранить; при превышении удаляются самые старые. */
 const MAX_TILES = 300;
 
@@ -19,10 +20,13 @@ export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; fe
 export class TileStore {
   private db?: Promise<IDBDatabase | undefined>;
 
+  /** dbName — своя база на каждый источник данных (боевой Overpass, API тестового сервера). */
+  constructor(private readonly dbName = 'osm-simple3d') {}
+
   private open(): Promise<IDBDatabase | undefined> {
     this.db ??= new Promise((resolve) => {
       try {
-        const req = indexedDB.open(DB_NAME, 1);
+        const req = indexedDB.open(this.dbName, 1);
         req.onupgradeneeded = () => {
           const store = req.result.createObjectStore(STORE, { keyPath: 'key' });
           store.createIndex('fetchedAt', 'fetchedAt');
@@ -40,7 +44,13 @@ export class TileStore {
 
   async get(key: string): Promise<StoredTile | undefined> {
     const rec = await this.request<TileRecord | undefined>('readonly', (s) => s.get(key));
-    return rec?.format === FORMAT ? { features: rec.features, groups: rec.groups, fetchedAt: rec.fetchedAt } : undefined;
+    if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, fetchedAt: rec.fetchedAt };
+    // Формат 3 — группы без ролей: читаем (роли неизвестны) и считаем тайл устаревшим, чтобы он обновился в фоне
+    if (rec?.format === 3) {
+      const groups = rec.groups.map((g) => ({ ...g, roles: g.roles ?? g.members.map(() => UNKNOWN_ROLE) }));
+      return { features: rec.features, groups, fetchedAt: 0 };
+    }
+    return undefined;
   }
 
   async put(key: string, { features, groups, fetchedAt }: StoredTile) {

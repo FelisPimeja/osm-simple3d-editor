@@ -26,9 +26,6 @@ body:has(#info:not(:empty)) .maplibregl-ctrl-top-right { right: 334px; }
   #info-panel { width: auto; left: 12px; top: auto; bottom: 28px; max-height: 40%; }
   body:has(#info:not(:empty)) .maplibregl-ctrl-top-right { right: 0; }
 }
-#edit-btn { width: 100%; padding: 8px; margin-bottom: 8px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; font: inherit; cursor: pointer; }
-#edit-btn:disabled { opacity: .6; cursor: progress; }
-#edit-btn.active { background: #6b7280; }
 #status.error { color: #b91c1c; }
 #info h2 { font-size: 14px; margin: 8px 0 4px; }
 #info a { color: #2563eb; }

@@ -26,6 +26,8 @@ export interface BuildingGroup {
   tags: Record<string, string>;
   /** Ключи членов-путей и отношений (в т. ч. не загруженных). */
   members: string[];
+  /** Роли членов (outline, part…) — параллельно members. */
+  roles: string[];
 }
 
 export interface ParseResult {
@@ -87,6 +89,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
       groups.push({
         key: `relation/${r.id}`, type: 'relation', id: r.id, version: r.version, tags: r.tags,
         members: r.members.filter((m) => m.type !== 'node').map((m) => `${m.type}/${m.ref}`),
+        roles: r.members.filter((m) => m.type !== 'node').map((m) => m.role),
       });
       continue;
     }

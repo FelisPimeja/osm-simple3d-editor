@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Heights } from '../osm/heights';
-import { skeletonOf } from './skeleton';
+import { skeletonOf, type Skeleton } from './skeleton';
 
 /** Локальная точка в метрах: x — восток, y — север. */
 export type Pt = [number, number];
@@ -14,6 +14,8 @@ export interface BuildingTriangles {
   roof: number[];
   /** Форма крыши не поддерживается для этой геометрии и заменена плоской. */
   roofApproximated: boolean;
+  /** Скелет ещё считается в воркере — крыша временно упрощённая, здание надо будет пересобрать. */
+  pending?: boolean;
 }
 
 const SUPPORTED_ANY_POLYGON = new Set(['flat', 'pyramidal', 'dome', 'onion', 'skillion']);
@@ -34,7 +36,8 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   const axis = single && AXIS_SHAPES.has(shape) ? rectAxis(single.outer) : undefined;
   // Скатные крыши на остальных контурах (в т.ч. с дырами и из нескольких полигонов) — по straight skeleton
   const skeletons = !quadRoof && !axis && SKELETON_SHAPES.has(shape) ? polygons.map((p) => skeletonOf(p.outer, p.inners)) : undefined;
-  const skeletonRoof = !!skeletons?.length && skeletons.every(Boolean);
+  const pending = !!skeletons?.some((sk) => sk === 'pending');
+  const skeletonRoof = !!skeletons?.length && skeletons.every((sk) => sk && sk !== 'pending');
   const supported =
     shape === 'flat' ||
     (shape === 'skillion' && polygons.length === 1) ||
@@ -67,10 +70,10 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   } else if (quadRoof) {
     addQuadRoof(roof, walls, single!.outer, h.wallTop, h.top, shape === 'hipped', tags['roof:orientation'] === 'across');
   } else {
-    for (const sk of skeletons!) addSkeletonRoof(roof, walls, sk!, h.wallTop, h.roofHeight, GABLED_SHAPES.has(shape), PROFILES[shape]);
+    for (const sk of skeletons!) addSkeletonRoof(roof, walls, sk as Skeleton, h.wallTop, h.roofHeight, GABLED_SHAPES.has(shape), PROFILES[shape]);
   }
 
-  return { walls, roof, roofApproximated: !supported };
+  return { walls, roof, roofApproximated: !supported && !pending, pending };
 }
 
 function tri(out: number[], a: V3, b: V3, c: V3) {
@@ -173,7 +176,7 @@ function addQuadRoof(roof: number[], walls: number[], ring: Pt[], z0: number, z1
  * переносится на его сторону контура, соседние скаты при этом дотягиваются до торца.
  */
 function addSkeletonRoof(
-  roof: number[], walls: number[], sk: NonNullable<ReturnType<typeof skeletonOf>>,
+  roof: number[], walls: number[], sk: Skeleton,
   z0: number, roofHeight: number, gabled: boolean, profile: Profile = LINEAR,
 ) {
   const verts = sk.vertices.map(([x, y, t]) => [x, y, t] as V3);

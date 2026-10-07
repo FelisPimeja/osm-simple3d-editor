@@ -1,10 +1,11 @@
 import type { Map as MlMap } from 'maplibre-gl';
 import type { Bbox } from '../osm/api';
-import { parseBuildings, type Feature3D } from '../osm/model';
+import { centroid, markOutlinesWithParts, parseBuildings, type Feature3D } from '../osm/model';
 import { fetchBuildings, OverpassBusyError, OverpassPool } from '../osm/overpass';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
 import { TileStore } from './tile-store';
+import { timed } from '../perf';
 
 export const OVERPASS_TILE_ZOOM = GRID_ZOOM;
 /** Сколько тайлов держать в кеше данных. */
@@ -24,6 +25,13 @@ type Entry =
   | { state: 'error'; retryAt: number; attempts: number };
 
 /**
+ * full — видимые тайлы грузятся (память → IndexedDB → Overpass);
+ * cached — только то, что уже есть в кеше, без запросов к Overpass (мелкие зумы);
+ * off — слой выключен.
+ */
+export type OverpassMode = 'full' | 'cached' | 'off';
+
+/**
  * Подменяет тайловые здания данными Overpass по сетке тайлов z14.
  * Источники по порядку: память (LRU) → IndexedDB → Overpass. Устаревшие тайлы показываются сразу,
  * а в фоне перезапрашиваются. Меши есть только у видимых тайлов.
@@ -36,9 +44,22 @@ export class OverpassTiles {
   private pumpTimer?: ReturnType<typeof setTimeout>;
   /** Нарисованные здания по ключу OSM — для панели по клику. */
   private readonly rendered = new Map<string, RenderedFeature>();
-  enabled = false;
+  /** Какие контуры каждого показанного тайла скрыты из-за частей — чтобы перестраивать тайл, только если это изменилось. */
+  private readonly hiddenOutlines = new Map<string, string>();
+  /** Ключи тайлов в IndexedDB — для режима cached не нужно опрашивать базу по каждому тайлу экрана. */
+  private stored = new Set<string>();
+  mode: OverpassMode = 'off';
 
-  constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, private readonly onChange: () => void) {}
+  constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, private readonly onChange: () => void) {
+    void this.store.keys().then((keys) => {
+      for (const k of keys) this.stored.add(k);
+      if (this.mode === 'cached') this.update();
+    });
+  }
+
+  get enabled(): boolean {
+    return this.mode !== 'off';
+  }
 
   get(key: string): RenderedFeature | undefined {
     return this.rendered.get(key);
@@ -56,10 +77,15 @@ export class OverpassTiles {
 
   /** Пересчитать нужные тайлы после движения карты. */
   update() {
-    this.wanted = this.enabled ? this.visibleTiles() : [];
+    this.wanted = this.mode === 'full' ? this.visibleTiles() : this.mode === 'cached' ? this.cachedVisibleTiles() : [];
     const wanted = new Set(this.wanted);
 
-    for (const key of this.layer.groupKeys()) if (!wanted.has(key)) this.layer.removeGroup(key);
+    // И показанные, и ещё собирающиеся (их сборку removeGroup отменит)
+    for (const key of new Set([...this.layer.groupKeys(), ...this.hiddenOutlines.keys()])) {
+      if (wanted.has(key)) continue;
+      this.layer.removeGroup(key);
+      this.hiddenOutlines.delete(key);
+    }
     for (const [key, e] of this.cache) {
       // Ушедшие из вида загрузки отменяем, чтобы не занимать слоты Overpass
       if (wanted.has(key)) continue;
@@ -71,7 +97,7 @@ export class OverpassTiles {
       const e = this.cache.get(key);
       if (e?.state === 'ready') {
         this.touch(key, e);
-        if (!this.layer.hasGroup(key)) this.show(key, e.features);
+        if (!this.layer.hasGroup(key) && !this.hiddenOutlines.has(key)) this.show(key);
       }
     }
     this.pump();
@@ -79,6 +105,11 @@ export class OverpassTiles {
   }
 
   private pump() {
+    if (this.mode === 'cached') {
+      // Без сети: только поиск в IndexedDB
+      for (const key of this.wanted) if (!this.cache.has(key)) void this.lookup(key);
+      return;
+    }
     const refresh: string[] = [];
     for (const key of this.wanted) {
       const e = this.cache.get(key);
@@ -120,7 +151,11 @@ export class OverpassTiles {
     if (stored) {
       this.cache.set(key, { state: 'ready', ...stored });
       this.evict();
-      if (this.wanted.includes(key)) this.show(key, stored.features);
+      this.tileReady(key);
+    } else if (this.mode === 'cached') {
+      // Запись вытеснена или старого формата — в режиме cached такой тайл не нужен
+      this.stored.delete(key);
+      this.cache.delete(key);
     } else {
       // Нет в IndexedDB — сразу в очередь на Overpass (удалять запись нельзя: pump снова пошёл бы в IndexedDB)
       this.cache.set(key, { state: 'queued' });
@@ -143,12 +178,14 @@ export class OverpassTiles {
     else this.cache.set(key, { state: 'loading', abort });
     let result: 'ok' | 'busy' | 'error' | 'aborted' = 'ok';
     try {
-      const { features } = parseBuildings(await fetchBuildings(ep.url, tileBbox(key), abort.signal));
+      const elements = await fetchBuildings(ep.url, tileBbox(key), abort.signal);
+      const { features } = timed('overpass: разбор ответа', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const fetchedAt = Date.now();
       this.cache.set(key, { state: 'ready', features, fetchedAt });
       void this.store.put(key, features, fetchedAt);
+      this.stored.add(key);
       this.evict();
-      if (this.wanted.includes(key)) this.show(key, features);
+      this.tileReady(key);
     } catch (err) {
       if (abort.signal.aborted) {
         result = 'aborted';
@@ -178,14 +215,55 @@ export class OverpassTiles {
 
   async clearStore() {
     await this.store.clear();
+    this.stored.clear();
     // Данные в памяти считаем устаревшими — перезапросятся в фоне
     for (const e of this.cache.values()) if (e.state === 'ready') e.fetchedAt = 0;
     this.update();
   }
 
-  private show(key: string, features: Feature3D[]) {
+  /** Тайл получил данные: показать его и, если надо, перестроить соседей (их контуры могли «увидеть» части). */
+  private tileReady(key: string) {
+    if (this.wanted.includes(key)) this.show(key);
+    for (const n of neighbours(key)) {
+      if (!this.hiddenOutlines.has(n)) continue;
+      if (this.ownedFeatures(n).hidden !== this.hiddenOutlines.get(n)) this.show(n);
+    }
+  }
+
+  /**
+   * Здания, принадлежащие тайлу: Overpass отдаёт всё, что задевает bbox, поэтому здание на границе приходит
+   * в обоих тайлах — рисуем его только в том, где его центр. Части ищем и в соседних тайлах:
+   * иначе контур, чьи части лежат по ту сторону границы, рисуется поверх них.
+   */
+  private ownedFeatures(key: string): { features: Feature3D[]; hidden: string } {
+    const own = this.cache.get(key);
+    if (own?.state !== 'ready') return { features: [], hidden: '' };
+    const union = new Map<string, Feature3D>();
+    for (const f of own.features) union.set(f.key, f); // свои объекты — первыми: их hasParts и пойдёт в рендер
+    for (const n of neighbours(key)) {
+      const e = this.cache.get(n);
+      if (e?.state === 'ready') for (const f of e.features) if (!union.has(f.key)) union.set(f.key, f);
+    }
+    // Пересчитываем только свои здания — части берём из всех девяти тайлов
+    timed('overpass: части у контуров', () => markOutlinesWithParts([...union.values()], own.features), () => `${key}, ${union.size} объектов`);
     const [w, s, e, n] = tileBbox(key);
-    for (const r of this.layer.setGroup(key, features, [(w + e) / 2, (s + n) / 2])) this.rendered.set(r.feature.key, r);
+    const features = own.features.filter((f) => {
+      const [x, y] = centroid(f.polygons[0].outer);
+      return x >= w && x < e && y > s && y <= n;
+    });
+    const hidden = features.filter((f) => f.hasParts).map((f) => f.key).join(',');
+    return { features, hidden };
+  }
+
+  private show(key: string) {
+    const { features, hidden } = timed('overpass: отбор зданий тайла', () => this.ownedFeatures(key), () => key);
+    this.hiddenOutlines.set(key, hidden);
+    const [w, s, e, n] = tileBbox(key);
+    void this.layer.setGroupAsync(key, features, [(w + e) / 2, (s + n) / 2]).then((rendered) => {
+      if (!rendered) return; // сборку отменили — тайл ушёл из вида или пересобирается заново
+      for (const r of rendered) this.rendered.set(r.feature.key, r);
+      this.onChange();
+    });
   }
 
   private touch(key: string, e: Entry) {
@@ -198,6 +276,26 @@ export class OverpassTiles {
       if (this.cache.size <= CACHE_SIZE) break;
       if (e.state === 'ready' && !this.wanted.includes(key)) this.cache.delete(key);
     }
+  }
+
+  /** Мелкие зумы: ближайшие к центру тайлы из кеша, попадающие в экран. */
+  private cachedVisibleTiles(): string[] {
+    const b = this.map.getBounds();
+    const c = this.map.getCenter();
+    const [cx, cy] = lngLatToTile(c.lng, c.lat, OVERPASS_TILE_ZOOM, false);
+    const keys = new Set([...this.stored, ...[...this.cache].filter(([, e]) => e.state === 'ready').map(([k]) => k)]);
+    return [...keys]
+      .filter((k) => {
+        const [w, s, e, n] = tileBbox(k);
+        return e >= b.getWest() && w <= b.getEast() && n >= b.getSouth() && s <= b.getNorth();
+      })
+      .map((key) => {
+        const [, x, y] = key.split('/').map(Number);
+        return { key, d: Math.hypot(x + 0.5 - cx, y + 0.5 - cy) };
+      })
+      .sort((a, b) => a.d - b.d)
+      .slice(0, MAX_VISIBLE)
+      .map((t) => t.key);
   }
 
   private visibleTiles(): string[] {
@@ -214,6 +312,13 @@ export class OverpassTiles {
     // При сильном наклоне в bbox попадает горизонт — берём только ближайшие к центру
     return tiles.sort((a, b) => a.d - b.d).slice(0, MAX_VISIBLE).map((t) => t.key);
   }
+}
+
+function neighbours(key: string): string[] {
+  const [z, x, y] = key.split('/').map(Number);
+  const out: string[] = [];
+  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (dx || dy) out.push(`${z}/${x + dx}/${y + dy}`);
+  return out;
 }
 
 function lngLatToTile(lng: number, lat: number, z: number, floor = true): [number, number] {

@@ -3,6 +3,7 @@ import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type Custom
 import { computeHeights } from '../osm/heights';
 import type { Feature3D, LonLat } from '../osm/model';
 import { buildTriangles, type Pt } from './building-geometry';
+import { timed } from '../perf';
 
 const DEFAULT_WALL = '#d9d0c9';
 const DEFAULT_ROOF = '#a89c94';
@@ -29,15 +30,42 @@ const AO_MIN = 0.55;
 /** Порог угла между гранями для контуров, градусы: швы триангуляции на плоских гранях не рисуем. */
 const EDGE_ANGLE = 25;
 const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: 0.55 });
+/** Цвет берётся из вершин (стены/крыша, подсветка, затемнение) — один материал на всё. */
+const MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+/** Бюджет асинхронной сборки группы на кадр, мс. */
+const FRAME_BUDGET_MS = 8;
 
-/** Группа зданий со своей локальной системой координат (метры от origin). */
+/** Здание внутри группы: треугольники в локальных метрах и всё, что нужно для раскраски и выбора. */
+interface Item {
+  feature: Feature3D;
+  roofApproximated: boolean;
+  /** Ждёт скелет из воркера. */
+  pending: boolean;
+  /** Треугольники: сначала стены, потом крыша, xyz. */
+  positions: Float32Array;
+  wallVertices: number;
+  wall: THREE.Color;
+  roof: THREE.Color;
+  top: number;
+  box: THREE.Box3;
+  /** Первая вершина в общей геометрии группы. */
+  start: number;
+}
+
+/**
+ * Группа зданий со своей локальной системой координат (метры от origin).
+ * Все здания группы слиты в одну геометрию — один draw call на группу вместо двух на здание.
+ */
 class MeshGroup {
   readonly scene = new THREE.Scene();
-  readonly root = new THREE.Group();
   readonly origin: MercatorCoordinate;
   readonly metersToMerc: number;
   readonly model: THREE.Matrix4;
   readonly camera = new THREE.Camera();
+  items: Item[] = [];
+  readonly byKey = new Map<string, Item>();
+  mesh?: THREE.Mesh;
+  edges?: THREE.LineSegments;
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
   // Цвет «земли» — посередине между белым и 0x8a8478: контраст неба и земли вдвое меньше
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
@@ -52,7 +80,7 @@ class MeshGroup {
     this.hemi.position.set(0, 0, 1);
     const sun = new THREE.DirectionalLight(0xffffff, 1.8);
     sun.position.set(-0.5, -1, 1.5);
-    this.scene.add(this.ambient, this.hemi, sun, this.root);
+    this.scene.add(this.ambient, this.hemi, sun);
   }
 
   applyLighting(o: GraphicsOptions) {
@@ -66,13 +94,19 @@ class MeshGroup {
     return [(c.x - this.origin.x) / this.metersToMerc, -(c.y - this.origin.y) / this.metersToMerc];
   };
 
-  dispose() {
-    for (const o of [...this.root.children] as THREE.Mesh[]) {
-      disposeEdges(o);
-      o.geometry.dispose();
-      for (const m of o.material as THREE.Material[]) m.dispose();
-      this.root.remove(o);
-    }
+  disposeMesh() {
+    this.disposeEdges();
+    if (!this.mesh) return;
+    this.mesh.geometry.dispose();
+    this.scene.remove(this.mesh);
+    this.mesh = undefined;
+  }
+
+  disposeEdges() {
+    if (!this.edges) return;
+    this.edges.geometry.dispose();
+    this.scene.remove(this.edges);
+    this.edges = undefined;
   }
 }
 
@@ -88,7 +122,9 @@ export class BuildingsLayer implements CustomLayerInterface {
   private map?: MlMap;
   private renderer?: THREE.WebGLRenderer;
   private readonly groups = new Map<string, MeshGroup>();
-  private selected?: THREE.Mesh;
+  /** Асинхронные сборки групп: новая сборка или удаление группы отменяет предыдущую. */
+  private readonly pending = new Map<string, symbol>();
+  private selectedKey?: string;
   /** Все здания белым, без цветов из тегов. */
   private monochrome = false;
   private graphics: GraphicsOptions = { hemisphere: false, groundAO: false, edges: false };
@@ -111,96 +147,100 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   render(_gl: WebGL2RenderingContext, options: CustomRenderMethodInput) {
     if (!this.visible || !this.renderer) return;
+    timed(`${this.id}: кадр (CPU)`, () => this.renderGroups(options), () => `${this.groups.size} групп`);
+  }
+
+  private renderGroups(options: CustomRenderMethodInput) {
+    const renderer = this.renderer!;
     const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
     let triangles = 0;
     for (const g of this.groups.values()) {
       g.camera.projectionMatrix = main.clone().multiply(g.model);
-      this.renderer.resetState();
-      this.renderer.render(g.scene, g.camera);
-      triangles += this.renderer.info.render.triangles;
+      renderer.resetState();
+      renderer.render(g.scene, g.camera);
+      triangles += renderer.info.render.triangles;
     }
     this.lastTriangles = triangles;
   }
 
-  /** Заменяет содержимое группы (или создаёт её). */
+  /** Заменяет содержимое группы (или создаёт её) — синхронно. */
   setGroup(key: string, features: Feature3D[], center: LonLat): RenderedFeature[] {
-    this.removeGroup(key);
+    this.pending.delete(key);
     const g = new MeshGroup(center);
-    const rendered: RenderedFeature[] = [];
-    for (const f of features) {
-      if (f.hasParts) continue;
-      const { mesh, roofApproximated } = this.buildMesh(g, f);
-      g.root.add(mesh);
-      rendered.push({ feature: f, roofApproximated });
+    timed(`${this.id}: треугольники (синхронно)`, () => { for (const f of features) if (!f.hasParts) this.addItem(g, f); }, () => `${key}, ${features.length}`);
+    this.install(key, g);
+    return g.items.map(rendered);
+  }
+
+  /**
+   * То же, но здания собираются порциями по кадрам, а группа подменяется целиком в конце —
+   * старая остаётся на экране до готовности новой. undefined — сборку отменили.
+   */
+  async setGroupAsync(key: string, features: Feature3D[], center: LonLat): Promise<RenderedFeature[] | undefined> {
+    const token = Symbol(key);
+    this.pending.set(key, token);
+    const g = new MeshGroup(center);
+    const todo = features.filter((f) => !f.hasParts);
+    let i = 0;
+    while (i < todo.length) {
+      await new Promise(requestAnimationFrame);
+      if (this.pending.get(key) !== token) return;
+      const deadline = performance.now() + FRAME_BUDGET_MS;
+      timed(`${this.id}: треугольники (порция)`, () => {
+        while (i < todo.length && performance.now() < deadline) this.addItem(g, todo[i++]);
+      });
     }
+    if (this.pending.get(key) !== token) return;
+    this.pending.delete(key);
+    this.install(key, g);
+    return g.items.map(rendered);
+  }
+
+  private install(key: string, g: MeshGroup) {
+    this.removeGroup(key);
     g.applyLighting(this.graphics);
+    timed(`${this.id}: слияние геометрии`, () => this.rebuildGeometry(g), () => `${key}, ${g.items.length} зданий`);
     this.groups.set(key, g);
     this.map?.triggerRepaint();
-    return rendered;
   }
 
   /** Пересобирает одно здание группы (после правки тегов). Выделение сохраняется. */
   updateFeature(groupKey: string, f: Feature3D): RenderedFeature | undefined {
     const g = this.groups.get(groupKey);
-    const old = g?.root.children.find((o) => o.userData.key === f.key) as THREE.Mesh | undefined;
-    if (!g || !old) return;
-    const wasSelected = old === this.selected;
-    const { mesh, roofApproximated } = this.buildMesh(g, f);
-    disposeEdges(old);
-    old.geometry.dispose();
-    for (const m of old.material as THREE.Material[]) m.dispose();
-    g.root.remove(old);
-    g.root.add(mesh);
-    if (wasSelected) {
-      this.selected = mesh;
-      this.paint(mesh);
-    }
-    this.map?.triggerRepaint();
-    return { feature: f, roofApproximated };
+    if (!g || !g.byKey.has(f.key)) return;
+    this.replaceItems(g, [f]);
+    return rendered(g.byKey.get(f.key)!);
   }
 
   /**
    * Пересобирает здания, подходящие под условие (например, когда догрузился straight skeleton).
-   * Работа делится на порции по ~8 мс за кадр, чтобы не подвешивать страницу на тысячах зданий.
+   * Треугольники считаются порциями по кадрам, геометрия группы пересобирается один раз в конце.
    */
   async rebuildWhere(pred: (f: Feature3D) => boolean, onRebuilt: (r: RenderedFeature) => void = () => {}) {
-    const todo: [string, Feature3D][] = [];
-    for (const [key, g] of this.groups) {
-      for (const o of g.root.children) {
-        const f = o.userData.feature as Feature3D;
-        if (pred(f)) todo.push([key, f]);
+    for (const [key, g] of [...this.groups]) {
+      const todo = g.items.map((it) => it.feature).filter(pred);
+      const done: Feature3D[] = [];
+      while (done.length < todo.length) {
+        await new Promise(requestAnimationFrame);
+        const deadline = performance.now() + FRAME_BUDGET_MS;
+        while (done.length < todo.length && performance.now() < deadline) done.push(todo[done.length]);
+        if (this.groups.get(key) !== g) break; // группу убрали или заменили, пока ждали кадр
       }
-    }
-    let i = 0;
-    while (i < todo.length) {
-      await new Promise(requestAnimationFrame);
-      const deadline = performance.now() + 8;
-      while (i < todo.length && performance.now() < deadline) {
-        const [key, f] = todo[i++];
-        const r = this.updateFeature(key, f); // группа могла исчезнуть, пока ждали кадр
-        if (r) onRebuilt(r);
-      }
+      if (this.groups.get(key) !== g || !done.length) continue;
+      this.replaceItems(g, done);
+      for (const f of done) onRebuilt(rendered(g.byKey.get(f.key)!));
     }
   }
 
-  private buildMesh(g: MeshGroup, f: Feature3D): { mesh: THREE.Mesh; roofApproximated: boolean } {
-    const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
-    const heights = computeHeights(f.tags);
-    const tri = buildTriangles(polys, heights, f.tags);
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.Float32BufferAttribute([...tri.walls, ...tri.roof], 3));
-    geom.addGroup(0, tri.walls.length / 3, 0);
-    geom.addGroup(tri.walls.length / 3, tri.roof.length / 3, 1);
-    geom.computeVertexNormals();
-    geom.setAttribute('color', groundAOColors(geom, heights.top));
-    const wall = f.tags['building:colour'] ?? f.tags.colour ?? DEFAULT_WALL;
-    const roof = f.tags['roof:colour'] ?? (f.tags['roof:shape'] && f.tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
-    const mesh = new THREE.Mesh(geom, [material(wall), material(roof)]);
-    mesh.userData.key = f.key;
-    mesh.userData.feature = f;
-    this.paint(mesh);
-    this.applyMeshGraphics(mesh);
-    return { mesh, roofApproximated: tri.roofApproximated };
+  /** Пересобирает здания, ждавшие скелет (вызывать, когда воркер досчитал). */
+  rebuildPending(onRebuilt: (r: RenderedFeature) => void = () => {}) {
+    for (const g of this.groups.values()) {
+      const waiting = g.items.filter((it) => it.pending).map((it) => it.feature);
+      if (!waiting.length) continue;
+      this.replaceItems(g, waiting);
+      // Ещё не досчитанные снова помечены pending — пересоберутся со следующей порцией
+      for (const f of waiting) onRebuilt(rendered(g.byKey.get(f.key)!));
+    }
   }
 
   hasGroup(key: string): boolean {
@@ -212,17 +252,17 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   removeGroup(key: string) {
+    this.pending.delete(key);
     const g = this.groups.get(key);
     if (!g) return;
-    if (this.selected && g.root.children.includes(this.selected)) this.selected = undefined;
-    g.dispose();
+    g.disposeMesh();
     this.groups.delete(key);
     this.map?.triggerRepaint();
   }
 
   clear() {
     this.lastTriangles = 0;
-    for (const key of [...this.groups.keys()]) this.removeGroup(key);
+    for (const key of [...this.groups.keys(), ...this.pending.keys()]) this.removeGroup(key);
   }
 
   setVisible(visible: boolean) {
@@ -237,22 +277,40 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   /** Ближайшее здание под точкой экрана и 3D-точка попадания (lng/lat + высота в метрах). */
   pickHit(point: PointLike): { key: string; lngLat: LngLat; altitude: number } | undefined {
+    return timed(`${this.id}: выбор под курсором`, () => this.pickHitImpl(point));
+  }
+
+  private pickHitImpl(point: PointLike): { key: string; lngLat: LngLat; altitude: number } | undefined {
     if (!this.visible || !this.map) return;
     const [px, py] = Array.isArray(point) ? point : [point.x, point.y];
     const canvas = this.map.getCanvas();
     const x = (px / canvas.clientWidth) * 2 - 1;
     const y = 1 - (py / canvas.clientHeight) * 2;
     let best: { key: string; depth: number; g: MeshGroup; p: THREE.Vector3 } | undefined;
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), hitPoint = new THREE.Vector3();
     for (const g of this.groups.values()) {
       const m = g.camera.projectionMatrix;
       const inv = m.clone().invert();
       const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv);
       const far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
-      const hit = new THREE.Raycaster(near, far.sub(near).normalize()).intersectObjects(g.root.children, false)[0];
-      if (!hit) continue;
+      const ray = new THREE.Ray(near, far.sub(near).normalize());
+      if (!ray.intersectsBox(groupBox(g))) continue;
+      // Сначала габариты зданий, треугольники — только у задетых
+      let groupBest: { item: Item; dist: number; p: THREE.Vector3 } | undefined;
+      for (const item of g.items) {
+        if (!ray.intersectsBox(item.box)) continue;
+        const pos = item.positions;
+        for (let i = 0; i < pos.length; i += 9) {
+          a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
+          if (!ray.intersectTriangle(a, b, c, false, hitPoint)) continue;
+          const dist = hitPoint.distanceTo(ray.origin);
+          if (!groupBest || dist < groupBest.dist) groupBest = { item, dist, p: hitPoint.clone() };
+        }
+      }
+      if (!groupBest) continue;
       // Группы в разных локальных системах — сравниваем по глубине в clip space
-      const depth = hit.point.clone().applyMatrix4(m).z;
-      if (!best || depth < best.depth) best = { key: hit.object.userData.key, depth, g, p: hit.point };
+      const depth = groupBest.p.clone().applyMatrix4(m).z;
+      if (!best || depth < best.depth) best = { key: groupBest.item.feature.key, depth, g, p: groupBest.p };
     }
     if (!best) return;
     const { g, p } = best;
@@ -261,16 +319,14 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   select(key: string | undefined) {
-    const prev = this.selected;
-    this.selected = undefined;
-    if (key) {
-      for (const g of this.groups.values()) {
-        this.selected = g.root.children.find((o) => o.userData.key === key) as THREE.Mesh | undefined;
-        if (this.selected) break;
+    const prev = this.selectedKey;
+    this.selectedKey = key;
+    for (const g of this.groups.values()) {
+      for (const k of [prev, key]) {
+        const item = k ? g.byKey.get(k) : undefined;
+        if (item) this.paintItem(g, item);
       }
     }
-    if (prev) this.paint(prev);
-    if (this.selected) this.paint(this.selected);
     this.map?.triggerRepaint();
   }
 
@@ -278,73 +334,172 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.graphics = { ...o };
     for (const g of this.groups.values()) {
       g.applyLighting(o);
-      for (const m of g.root.children) this.applyMeshGraphics(m as THREE.Mesh);
+      this.paintGroup(g);
+      this.applyEdges(g);
     }
     this.map?.triggerRepaint();
-  }
-
-  private applyMeshGraphics(mesh: THREE.Mesh) {
-    for (const m of mesh.material as THREE.MeshLambertMaterial[]) {
-      if (m.vertexColors !== this.graphics.groundAO) {
-        m.vertexColors = this.graphics.groundAO;
-        m.needsUpdate = true; // смена define в шейдере
-      }
-    }
-    // Контуры создаём лениво: выключенные ничего не стоят
-    if (this.graphics.edges && !mesh.userData.edges) {
-      const lines = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, EDGE_ANGLE), EDGE_MATERIAL);
-      mesh.add(lines);
-      mesh.userData.edges = lines;
-    } else if (!this.graphics.edges && mesh.userData.edges) {
-      disposeEdges(mesh);
-    }
   }
 
   setMonochrome(on: boolean) {
     this.monochrome = on;
-    for (const g of this.groups.values()) for (const o of g.root.children) this.paint(o as THREE.Mesh);
+    for (const g of this.groups.values()) this.paintGroup(g);
     this.map?.triggerRepaint();
   }
 
-  /** Цвет материалов меша: выбранное — подсветка целиком (поверх цвета теряется на рыжем кирпиче). */
-  private paint(mesh: THREE.Mesh) {
-    for (const m of mesh.material as THREE.MeshLambertMaterial[]) {
-      m.color.copy(mesh === this.selected ? HIGHLIGHT : this.monochrome ? MONOCHROME : m.userData.color);
+  private addItem(g: MeshGroup, f: Feature3D) {
+    const item = timed('здание: треугольники', () => buildItem(g, f), () => describeFeature(f));
+    g.byKey.set(f.key, item);
+    g.items.push(item);
+  }
+
+  private replaceItems(g: MeshGroup, features: Feature3D[]) {
+    for (const f of features) {
+      const old = g.byKey.get(f.key);
+      if (!old) continue;
+      const item = timed('здание: треугольники', () => buildItem(g, f), () => describeFeature(f));
+      g.items[g.items.indexOf(old)] = item;
+      g.byKey.set(f.key, item);
+    }
+    this.rebuildGeometry(g);
+    this.map?.triggerRepaint();
+  }
+
+  /** Сливает здания группы в одну геометрию. */
+  private rebuildGeometry(g: MeshGroup) {
+    g.disposeMesh();
+    let total = 0;
+    for (const it of g.items) { it.start = total; total += it.positions.length / 3; }
+    const positions = new Float32Array(total * 3);
+    for (const it of g.items) positions.set(it.positions, it.start * 3);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(total * 3), 3));
+    geom.computeVertexNormals(); // без индексов — нормаль на треугольник
+    g.mesh = new THREE.Mesh(geom, MATERIAL);
+    g.mesh.frustumCulled = false; // своя матрица проекции — штатный culling не годится
+    g.scene.add(g.mesh);
+    this.paintGroup(g);
+    this.applyEdges(g);
+  }
+
+  private applyEdges(g: MeshGroup) {
+    // Контуры создаём лениво: выключенные ничего не стоят
+    if (this.graphics.edges && !g.edges && g.mesh) {
+      g.edges = new THREE.LineSegments(new THREE.EdgesGeometry(g.mesh.geometry, EDGE_ANGLE), EDGE_MATERIAL);
+      g.edges.frustumCulled = false;
+      g.scene.add(g.edges);
+    } else if (!this.graphics.edges) {
+      g.disposeEdges();
+    }
+  }
+
+  private paintGroup(g: MeshGroup) {
+    for (const it of g.items) this.writeColors(g, it);
+    const attr = g.mesh?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (attr) attr.needsUpdate = true;
+  }
+
+  private paintItem(g: MeshGroup, it: Item) {
+    this.writeColors(g, it);
+    const attr = g.mesh?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!attr) return;
+    attr.clearUpdateRanges();
+    attr.addUpdateRange(it.start * 3, it.positions.length);
+    attr.needsUpdate = true;
+  }
+
+  /**
+   * Цвет вершин здания: стены/крыша из тегов (или белый/подсветка) × затемнение у земли:
+   * - сходит на нет на min(AO_HEIGHT, AO_FADE_SHARE · высота) — у низких зданий только самый низ;
+   * - глубина пропорциональна высоте до AO_HEIGHT — сарай в 2 м темнеет у земли лишь до ~85%.
+   */
+  private writeColors(g: MeshGroup, it: Item) {
+    const attr = g.mesh?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!attr) return;
+    const colors = attr.array as Float32Array;
+    const selected = it.feature.key === this.selectedKey;
+    const ao = this.graphics.groundAO;
+    const fade = Math.max(0.5, Math.min(AO_HEIGHT, AO_FADE_SHARE * it.top));
+    const depth = (1 - AO_MIN) * Math.min(1, it.top / AO_HEIGHT);
+    const n = it.positions.length / 3;
+    for (let v = 0; v < n; v++) {
+      const base = selected ? HIGHLIGHT : this.monochrome ? MONOCHROME : v < it.wallVertices ? it.wall : it.roof;
+      let k = 1;
+      if (ao) {
+        const t = Math.min(1, Math.max(0, it.positions[v * 3 + 2] / fade));
+        k = 1 - depth * (1 - t * t * (3 - 2 * t));
+      }
+      const o = (it.start + v) * 3;
+      colors[o] = base.r * k;
+      colors[o + 1] = base.g * k;
+      colors[o + 2] = base.b * k;
     }
   }
 }
 
-function material(colour: string): THREE.MeshLambertMaterial {
-  const color = new THREE.Color(DEFAULT_WALL);
-  // В OSM бывает несколько цветов через ';' — берём первый
-  try { color.setStyle(colour.split(';')[0].trim()); } catch { /* невалидный цвет — оставляем дефолт */ }
-  const m = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide });
-  m.userData.color = color.clone();
-  return m;
+/** Габариты всей группы — чтобы не перебирать здания тайлов, мимо которых луч проходит. */
+function groupBox(g: MeshGroup): THREE.Box3 {
+  if (!g.mesh) return new THREE.Box3();
+  const geom = g.mesh.geometry;
+  if (!geom.boundingBox) geom.computeBoundingBox();
+  return geom.boundingBox!;
 }
 
-function disposeEdges(mesh: THREE.Mesh) {
-  const lines = mesh.userData.edges as THREE.LineSegments | undefined;
-  if (!lines) return;
-  lines.geometry.dispose();
-  mesh.remove(lines);
-  delete mesh.userData.edges;
+const rendered = (it: Item): RenderedFeature => ({ feature: it.feature, roofApproximated: it.roofApproximated });
+
+/** Для лога медленных зданий: ключ, форма крыши, число вершин и полигонов. */
+function describeFeature(f: Feature3D): string {
+  const vertices = f.polygons.reduce((n, p) => n + p.outer.length + p.inners.reduce((m, r) => m + r.length, 0), 0);
+  const holes = f.polygons.reduce((n, p) => n + p.inners.length, 0);
+  return `${f.key}, roof:shape=${f.tags['roof:shape'] ?? 'flat'}, вершин ${vertices}, полигонов ${f.polygons.length}, дыр ${holes}`;
 }
+
+function buildItem(g: MeshGroup, f: Feature3D): Item {
+  const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+  const heights = computeHeights(f.tags);
+  const tri = buildTriangles(polys, heights, f.tags);
+  const positions = new Float32Array(tri.walls.length + tri.roof.length);
+  positions.set(tri.walls, 0);
+  positions.set(tri.roof, tri.walls.length);
+  const wall = f.tags['building:colour'] ?? f.tags.colour ?? DEFAULT_WALL;
+  const roof = f.tags['roof:colour'] ?? (f.tags['roof:shape'] && f.tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
+  const box = new THREE.Box3();
+  if (positions.length) box.setFromArray(positions);
+  return {
+    feature: f,
+    roofApproximated: tri.roofApproximated,
+    pending: !!tri.pending,
+    positions,
+    wallVertices: tri.walls.length / 3,
+    wall: parseColour(wall),
+    roof: parseColour(roof),
+    top: heights.top,
+    box,
+    start: 0,
+  };
+}
+
+/** Разобранные цвета: одинаковых значений тегов мало, а зданий — тысячи. */
+const colourCache = new Map<string, THREE.Color>();
+const unknownColours = new Set<string>();
 
 /**
- * Цвет вершин для затемнения у земли, относительно высоты здания:
- * - затемнение сходит на нет на min(AO_HEIGHT, AO_FADE_SHARE · высота) — у низких зданий только самый низ;
- * - глубина пропорциональна высоте до AO_HEIGHT — сарай в 2 м темнеет у земли лишь до ~85%.
+ * Цвет из тега; в OSM бывает несколько через ';' — берём первый. Вершинные цвета — в линейном пространстве.
+ * Опечатки в тегах (lightgre, rgey) — частое дело: проверяем через CSS.supports, чтобы three.js
+ * не писал предупреждение в консоль на каждое здание, и сообщаем о каждом значении один раз.
  */
-function groundAOColors(geom: THREE.BufferGeometry, top: number): THREE.BufferAttribute {
-  const fade = Math.max(0.5, Math.min(AO_HEIGHT, AO_FADE_SHARE * top));
-  const depth = (1 - AO_MIN) * Math.min(1, top / AO_HEIGHT);
-  const pos = geom.getAttribute('position');
-  const colors = new Float32Array(pos.count * 3);
-  for (let i = 0; i < pos.count; i++) {
-    const t = Math.min(1, Math.max(0, pos.getZ(i) / fade));
-    const k = 1 - depth * (1 - t * t * (3 - 2 * t));
-    colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = k;
+function parseColour(colour: string): THREE.Color {
+  const value = colour.split(';')[0].trim();
+  let color = colourCache.get(value);
+  if (!color) {
+    color = new THREE.Color(DEFAULT_WALL);
+    const valid = typeof CSS === 'undefined' ? /^#[0-9a-f]{3,8}$/i.test(value) : CSS.supports('color', value);
+    if (valid) color.setStyle(value);
+    else if (!unknownColours.has(value)) {
+      unknownColours.add(value);
+      console.debug(`Неизвестный цвет в теге: «${value}» — рисуем цветом по умолчанию`);
+    }
+    colourCache.set(value, color);
   }
-  return new THREE.BufferAttribute(colors, 3);
+  return color;
 }

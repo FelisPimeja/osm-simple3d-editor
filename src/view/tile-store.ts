@@ -54,6 +54,11 @@ export class TileStore {
     await this.evict(MAX_TILES);
   }
 
+  /** Ключи всех сохранённых тайлов (формат записи не проверяется — при чтении устаревшая запись просто не найдётся). */
+  async keys(): Promise<string[]> {
+    return ((await this.request<IDBValidKey[]>('readonly', (s) => s.getAllKeys())) ?? []).map(String);
+  }
+
   async count(): Promise<number> {
     return (await this.request<number>('readonly', (s) => s.count())) ?? 0;
   }

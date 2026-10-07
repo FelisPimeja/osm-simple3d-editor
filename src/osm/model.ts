@@ -132,7 +132,7 @@ export function pointInRing([x, y]: LonLat, ring: LonLat[]): boolean {
   return inside;
 }
 
-function centroid(ring: LonLat[]): LonLat {
+export function centroid(ring: LonLat[]): LonLat {
   let x = 0, y = 0;
   for (const p of ring) { x += p[0]; y += p[1]; }
   return [x / ring.length, y / ring.length];
@@ -157,14 +157,29 @@ const PARTS_COVERAGE = 0.5;
  * Но часто частями размечены только надстройки (пентхаусы, башенки), а объём здания задан контуром
  * (например, relation/3756395) — поэтому скрываем контур, только если части покрывают заметную долю площади.
  */
-function markOutlinesWithParts(features: Feature3D[]) {
-  const parts = features
-    .filter((f) => f.kind === 'part')
-    .flatMap((f) => f.polygons.map((p) => ({ c: centroid(p.outer), area: area(p) })));
-  for (const b of features) {
+export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[] = features) {
+  // Части раскладываем по сетке ~0.0005° (≈50 м): здание смотрит только ячейки под своими габаритами
+  const CELL = 0.0005;
+  const grid = new Map<string, { c: LonLat; area: number }[]>();
+  for (const f of features) {
+    if (f.kind !== 'part') continue;
+    for (const p of f.polygons) {
+      const c = centroid(p.outer);
+      const k = `${Math.floor(c[0] / CELL)},${Math.floor(c[1] / CELL)}`;
+      (grid.get(k) ?? grid.set(k, []).get(k)!).push({ c, area: area(p) });
+    }
+  }
+  for (const b of targets) {
     if (b.kind !== 'building') continue;
+    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+    for (const p of b.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
     const inside = (c: LonLat) => b.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
-    const covered = parts.filter((p) => inside(p.c)).reduce((s, p) => s + p.area, 0);
-    b.hasParts = covered >= PARTS_COVERAGE * b.polygons.reduce((s, p) => s + area(p), 0);
+    let covered = 0;
+    for (let i = Math.floor(w / CELL); i <= Math.floor(e / CELL); i++) {
+      for (let j = Math.floor(s / CELL); j <= Math.floor(n / CELL); j++) {
+        for (const part of grid.get(`${i},${j}`) ?? []) if (inside(part.c)) covered += part.area;
+      }
+    }
+    b.hasParts = covered >= PARTS_COVERAGE * b.polygons.reduce((sum, p) => sum + area(p), 0);
   }
 }

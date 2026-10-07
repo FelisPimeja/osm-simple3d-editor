@@ -1,7 +1,10 @@
 /**
  * Straight skeleton (CGAL в WebAssembly, пакет straight-skeleton) для скатных крыш на контурах любой формы.
- * Модуль весит ~2 МБ, поэтому грузится отдельным чанком; пока он не готов, skeletonOf возвращает null,
- * а после загрузки слои пересобираются (onSkeletonReady).
+ *
+ * Считается в Web Worker: на отдельных (вырожденных) контурах CGAL работает секундами, и в главном потоке
+ * это замораживало карту. skeletonOf синхронный: отдаёт готовый скелет из кеша или 'pending' и ставит
+ * контур в очередь; по готовности вызываются подписчики onSkeletons — слои пересобирают ждавшие здания.
+ * Без Worker (node, тесты) — считаем в том же потоке, как раньше.
  */
 import type { Pt } from './building-geometry';
 
@@ -14,20 +17,13 @@ export interface Skeleton {
 
 type Builder = { init(): Promise<void>; buildFromPolygon(rings: number[][][]): Skeleton | null };
 
-let builder: Builder | undefined;
+/** Сколько ждать один контур, прежде чем перезапустить воркер и оставить крышу плоской. */
+const TIMEOUT_MS = 2000;
+/** Сколько результатов помнить (ключ — координаты в локальной системе группы). */
+const CACHE_SIZE = 20000;
 
-export const skeletonReady: Promise<boolean> = import('straight-skeleton')
-  .then(async (m) => {
-    const b = ((m as { SkeletonBuilder?: Builder }).SkeletonBuilder ??
-      (m as { default: { SkeletonBuilder: Builder } }).default.SkeletonBuilder);
-    await b.init();
-    builder = b;
-    return true;
-  })
-  .catch((err) => {
-    console.warn('straight skeleton недоступен — сложные крыши будут плоскими:', err);
-    return false;
-  });
+const cache = new Map<string, Skeleton | null>();
+const listeners = new Set<() => void>();
 
 const signedArea = (r: Pt[]) => {
   let a = 0;
@@ -35,17 +31,117 @@ const signedArea = (r: Pt[]) => {
   return a / 2; // > 0 — против часовой
 };
 
-/** Скелет полигона (внешнее кольцо + дыры, без повторённой точки). null — модуль не готов или CGAL не справился. */
-export function skeletonOf(outer: Pt[], inners: Pt[][]): Skeleton | null {
-  if (!builder) return null;
+function toRings(outer: Pt[], inners: Pt[][]): number[][][] {
   const orient = (r: Pt[], ccw: boolean) => {
     const ring = signedArea(r) > 0 === ccw ? r : [...r].reverse();
     return [...ring, ring[0]];
   };
-  try {
-    return builder.buildFromPolygon([orient(outer, true), ...inners.map((r) => orient(r, false))]);
-  } catch (err) {
-    console.warn('straight skeleton:', err);
-    return null;
+  return [orient(outer, true), ...inners.map((r) => orient(r, false))];
+}
+
+const keyOf = (rings: number[][][]) => rings.map((r) => r.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' ')).join('|');
+
+function remember(key: string, s: Skeleton | null) {
+  if (cache.size >= CACHE_SIZE) cache.delete(cache.keys().next().value!);
+  cache.set(key, s);
+}
+
+/** Подписка на «досчитались новые скелеты» (вызывается не чаще раза за кадр). */
+export function onSkeletons(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+
+let notifyScheduled = false;
+function notify() {
+  if (notifyScheduled) return;
+  notifyScheduled = true;
+  requestAnimationFrame(() => {
+    notifyScheduled = false;
+    for (const cb of listeners) cb();
+  });
+}
+
+// ---- Воркер с очередью и сторожевым таймером
+
+interface Job { id: number; key: string; rings: number[][][] }
+const queue: Job[] = [];
+const queued = new Set<string>();
+let worker: Worker | undefined;
+let current: Job | undefined;
+let timer: ReturnType<typeof setTimeout> | undefined;
+let nextId = 1;
+const useWorker = typeof Worker !== 'undefined';
+
+function startWorker() {
+  worker = new Worker(new URL('./skeleton-worker.ts', import.meta.url), { type: 'module' });
+  worker.onmessage = (e: MessageEvent<{ id: number; skeleton: Skeleton | null }>) => {
+    if (!current || e.data.id !== current.id) return;
+    finish(current, e.data.skeleton);
+  };
+  worker.onerror = (e) => {
+    console.warn('straight skeleton: ошибка воркера — сложные крыши будут плоскими:', e.message);
+    if (current) finish(current, null);
+  };
+}
+
+function finish(job: Job, s: Skeleton | null) {
+  clearTimeout(timer);
+  current = undefined;
+  queued.delete(job.key);
+  remember(job.key, s);
+  notify();
+  pumpWorker();
+}
+
+function pumpWorker() {
+  if (current || !queue.length) return;
+  if (!worker) startWorker();
+  current = queue.shift()!;
+  const job = current;
+  timer = setTimeout(() => {
+    // Завис на этом контуре: убиваем воркер (WASM не прервать иначе), контур оставляем плоским
+    console.warn(`straight skeleton: контур не посчитан за ${TIMEOUT_MS} мс (${job.rings[0].length - 1} вершин) — крыша будет плоской`);
+    worker?.terminate();
+    worker = undefined;
+    finish(job, null);
+  }, TIMEOUT_MS);
+  worker!.postMessage({ id: job.id, rings: job.rings });
+}
+
+// ---- Синхронный режим (без Worker)
+
+let builder: Builder | undefined;
+/** Готовность синхронного режима — для тестов в node. */
+export const skeletonReady: Promise<boolean> = useWorker
+  ? Promise.resolve(true)
+  : import('straight-skeleton').then(async (m) => {
+      const b = (m as { SkeletonBuilder?: Builder }).SkeletonBuilder ?? (m as { default: { SkeletonBuilder: Builder } }).default.SkeletonBuilder;
+      await b.init();
+      builder = b;
+      return true;
+    }).catch(() => false);
+
+/**
+ * Скелет полигона (внешнее кольцо + дыры, без повторённой точки):
+ * готовый скелет, null — посчитать не удалось, 'pending' — считается, крыша пока упрощённая.
+ */
+export function skeletonOf(outer: Pt[], inners: Pt[][]): Skeleton | null | 'pending' {
+  const rings = toRings(outer, inners);
+  const key = keyOf(rings);
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit;
+  if (!useWorker) {
+    if (!builder) return null;
+    let s: Skeleton | null = null;
+    try { s = builder.buildFromPolygon(rings); } catch { /* плоская */ }
+    remember(key, s);
+    return s;
   }
+  if (!queued.has(key)) {
+    queued.add(key);
+    queue.push({ id: nextId++, key, rings });
+    pumpWorker();
+  }
+  return 'pending';
 }

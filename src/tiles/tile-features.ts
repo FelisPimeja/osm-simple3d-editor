@@ -8,7 +8,7 @@ const CLIP_EPS = 1e-7;
 
 export interface TileBuildingFeature {
   id: number;
-  /** Ключ тайла сетки z14 (`14/x/y`), в который попадает исходный тайл. */
+  /** Ключ тайла сетки z14 (`14/x/y`), в который попадает исходный тайл; нет — исходный тайл мельче z14. */
   tile?: string;
   properties: Record<string, any>;
   /** Полигоны, обрезанные по границе своего тайла (без буфера). */
@@ -19,6 +19,13 @@ interface TileLike {
   tileID: { canonical: { x: number; y: number; z: number } };
   querySourceFeatures(result: Feature<Geometry>[], params: { sourceLayer: string }): void;
 }
+/**
+ * Содержимое загруженного тайла не меняется — результаты разбора кешируем на объекте тайла.
+ * WeakMap: выгруженный MapLibre тайл уходит из кеша вместе с ним.
+ */
+const clippedCache = new WeakMap<TileLike, Map<string, TileBuildingFeature[]>>();
+const idsCache = new WeakMap<TileLike, Map<string, Map<string, number[]>>>();
+
 interface TileManagerLike {
   getRenderableIds(): string[];
   getTileByID(id: string): TileLike | undefined;
@@ -32,12 +39,16 @@ interface TileManagerLike {
  * Чтобы обрезать фичу по её тайлу, нужно знать тайл, поэтому идём через внутренний
  * style.tileManagers (не публичное API MapLibre). Если его нет — фичи без обрезки.
  */
-export function queryTileBuildings(map: MlMap, sourceId: string, sourceLayer: string): TileBuildingFeature[] {
+export function queryTileBuildings(
+  map: MlMap, sourceId: string, sourceLayer: string,
+  /** Отбор фич до обрезки (обрезка — самое дорогое). */
+  accept: (id: number) => boolean = () => true,
+): TileBuildingFeature[] {
   const tm = (map as unknown as { style?: { tileManagers?: Record<string, TileManagerLike> } }).style?.tileManagers?.[sourceId];
   if (!tm?.getRenderableIds || !tm.getTileByID) {
     console.warn('tileManagers недоступен — геометрия тайлов без обрезки по границам');
     return map.querySourceFeatures(sourceId, { sourceLayer })
-      .filter((f) => typeof f.id === 'number')
+      .filter((f) => typeof f.id === 'number' && accept(f.id))
       .map((f) => ({ id: f.id as number, properties: f.properties, polys: polygonsOf(f.geometry) }));
   }
 
@@ -52,14 +63,23 @@ export function queryTileBuildings(map: MlMap, sourceId: string, sourceLayer: st
     if (seen.has(key)) continue;
     seen.add(key);
 
-    const bounds = tileBounds(x, y, z);
-    const features: Feature<Geometry>[] = [];
-    tile.querySourceFeatures(features, { sourceLayer });
-    for (const f of features) {
-      if (typeof f.id !== 'number') continue;
-      const polys = polygonsOf(f.geometry).flatMap((p) => clipToBounds(p, bounds));
-      if (polys.length) out.push({ id: f.id, tile: gridKey(x, y, z), properties: f.properties ?? {}, polys });
+    const perTile = clippedCache.get(tile) ?? clippedCache.set(tile, new Map()).get(tile)!;
+    const cacheKey = `${sourceLayer}|${accept.toString()}`;
+    let clipped = perTile.get(cacheKey);
+    if (!clipped) {
+      clipped = [];
+      const bounds = tileBounds(x, y, z);
+      const features: Feature<Geometry>[] = [];
+      tile.querySourceFeatures(features, { sourceLayer });
+      for (const f of features) {
+        if (typeof f.id !== 'number' || !accept(f.id)) continue;
+        const polys = polygonsOf(f.geometry).flatMap((p) => clipToBounds(p, bounds));
+        // Тайл мельче сетки: клетку определяет потребитель по каждому полигону
+        if (polys.length) clipped.push({ id: f.id, tile: z >= GRID_ZOOM ? gridKey(x, y, z) : undefined, properties: f.properties ?? {}, polys });
+      }
+      perTile.set(cacheKey, clipped);
     }
+    out.push(...clipped);
   }
   return out;
 }
@@ -111,12 +131,44 @@ export function tileFeatureIdsByTile(map: MlMap, sourceId: string, sourceLayer: 
     const { x, y, z } = tile.tileID.canonical;
     if (seen.has(`${z}/${x}/${y}`)) continue;
     seen.add(`${z}/${x}/${y}`);
-    const features: Feature<Geometry>[] = [];
-    tile.querySourceFeatures(features, { sourceLayer });
-    const key = gridKey(x, y, z);
-    const ids = out.get(key) ?? out.set(key, []).get(key)!;
-    for (const f of features) if (typeof f.id === 'number') ids.push(f.id);
+    const perTile = idsCache.get(tile) ?? idsCache.set(tile, new Map()).get(tile)!;
+    let byGrid = perTile.get(sourceLayer);
+    if (!byGrid) {
+      byGrid = new Map();
+      const features: Feature<Geometry>[] = [];
+      tile.querySourceFeatures(features, { sourceLayer });
+      for (const f of features) {
+        if (typeof f.id !== 'number') continue;
+        // Тайл мельче сетки (z < 14) покрывает несколько её клеток — клетку берём по первой точке фичи
+        const key = z >= GRID_ZOOM ? gridKey(x, y, z) : gridKeyOfPoint(firstPoint(f.geometry));
+        if (!key) continue;
+        (byGrid.get(key) ?? byGrid.set(key, []).get(key)!).push(f.id);
+      }
+      perTile.set(sourceLayer, byGrid);
+    }
+    for (const [key, tileIds] of byGrid) {
+      const ids = out.get(key) ?? out.set(key, []).get(key)!;
+      ids.push(...tileIds);
+    }
   }
   for (const [key, ids] of out) out.set(key, [...new Set(ids)]);
   return out;
+}
+
+function firstPoint(g: Geometry): number[] | undefined {
+  switch (g.type) {
+    case 'Polygon': return g.coordinates[0]?.[0];
+    case 'MultiPolygon': return g.coordinates[0]?.[0]?.[0];
+    default: return undefined;
+  }
+}
+
+/** Клетка сетки z14, содержащая точку [lng, lat]. */
+export function gridKeyOfPoint(p: number[] | undefined): string | undefined {
+  if (!p) return;
+  const n = 2 ** GRID_ZOOM;
+  const x = Math.floor(((p[0] + 180) / 360) * n);
+  const r = (p[1] * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.asinh(Math.tan(r)) / Math.PI) / 2) * n);
+  return `${GRID_ZOOM}/${x}/${y}`;
 }

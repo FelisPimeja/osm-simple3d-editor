@@ -9,11 +9,12 @@ import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights } from './osm/heights';
 import { incompleteBuildingRelations, parseBuildings, type Feature3D } from './osm/model';
 import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './render/buildings-layer';
-import { queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
+import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
 import { EditSession } from './edit/session';
-import { skeletonReady } from './render/skeleton';
+import { onSkeletons } from './render/skeleton';
+import { timed } from './perf';
 import { bindTagForms, renderTagForm } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 
@@ -27,6 +28,8 @@ const HIGHLIGHT_LAYER = 'simple3d-highlight';
 const MIN_EDIT_ZOOM = 16;
 // Начиная с этого зума здания тайлов z14 подменяются данными Overpass
 const OVERPASS_MIN_ZOOM = 15;
+/** Ниже OVERPASS_MIN_ZOOM — только тайлы, уже лежащие в кеше (без запросов к Overpass). */
+const CACHED_MIN_ZOOM = 10;
 // Замена контуров с частями на «контур минус части» (src/tiles/outlines.ts). Временно выключено:
 // по тайлам контур не отличить от части, эвристика даёт артефакты — см. PLAN.md.
 const OUTLINE_REMAINDERS = false;
@@ -235,7 +238,12 @@ setInterval(() => {
 
 function refreshOverpass() {
   if (!map.getLayer(overpassLayer.id)) return;
-  overpass.enabled = !editing && map.getZoom() >= OVERPASS_MIN_ZOOM;
+  timed('refreshOverpass', refreshOverpassImpl);
+}
+
+function refreshOverpassImpl() {
+  const z = map.getZoom();
+  overpass.mode = editing ? 'off' : z >= OVERPASS_MIN_ZOOM ? 'full' : z >= CACHED_MIN_ZOOM ? 'cached' : 'off';
   overpass.update();
 }
 
@@ -244,23 +252,36 @@ function showOverpassStatus() {
   if (editing) return;
   if (!overpass.enabled) return setStatus(`Здания из тайлов. С z ≥ ${OVERPASS_MIN_ZOOM} — из Overpass.`);
   const { ready, total, loading, waiting } = overpass.status();
+  if (overpass.mode === 'cached') {
+    return setStatus(`Здания из тайлов${ready ? `, рядом с центром — из кеша Overpass (${ready} тайлов)` : ''}. С z ≥ ${OVERPASS_MIN_ZOOM} — из Overpass.`);
+  }
   setStatus(`Overpass: ${ready}/${total} тайлов${loading ? `, загружается ${loading}` : ''}${waiting ? `, ждут повтора ${waiting} (лимит/ошибка, см. консоль)` : ''}.`);
 }
 
 // Пересчитываем контуры с частями, когда догрузились новые тайлы
 let tilesChanged = false;
+let lastMergedSig = '';
+const isMergedId = (id: number) => id % 10 === 0;
 map.on('sourcedata', (e) => {
   if (e.sourceId === 'openmaptiles' && e.isSourceLoaded) tilesChanged = true;
 });
 map.on('idle', () => {
   if (!tilesChanged || !map.getLayer(BUILDINGS_LAYER)) return;
   tilesChanged = false;
-  (map.getSource('merged-exploded') as maplibregl.GeoJSONSource).setData({
-    type: 'FeatureCollection',
-    features: explodeMerged(queryTileBuildings(map, 'openmaptiles', 'building')),
-  });
-  const tileFeatures = map.querySourceFeatures('openmaptiles', { sourceLayer: 'building' });
+  timed('idle: склеенные фичи и фильтр', onTilesIdle);
+});
+
+function onTilesIdle() {
+  // Склеенные фичи (суффикс 0) — только они нужны для разрезанного слоя; обрезка кешируется на тайле
+  const merged = timed('тайлы: склеенные фичи', () => explodeMerged(queryTileBuildings(map, 'openmaptiles', 'building', isMergedId)), (r) => `${r.length} полигонов`);
+  const mergedSig = merged.map((f) => f.properties!.key).join('|');
+  if (mergedSig !== lastMergedSig) {
+    // setData заставляет MapLibre заново обработать весь GeoJSON в воркере — только если состав изменился
+    lastMergedSig = mergedSig;
+    (map.getSource('merged-exploded') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features: merged });
+  }
   if (OUTLINE_REMAINDERS) {
+    const tileFeatures = map.querySourceFeatures('openmaptiles', { sourceLayer: 'building' });
     const { replacedIds: ids, remainders } = computeOutlineRemainders(
       tileFeatures
         .filter((f) => typeof f.id === 'number' && !f.properties.hide_3d)
@@ -276,7 +297,7 @@ map.on('idle', () => {
     (map.getSource('outline-remainders') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features: remainders });
   }
   updateTileFilter();
-});
+}
 
 /**
  * Planetiler склеивает в одну фичу (id с суффиксом 0) все полигоны тайла с одинаковыми атрибутами —
@@ -296,20 +317,27 @@ function explodeMerged(features: TileBuildingFeature[]): GeoJSON.Feature<GeoJSON
       out.set(key, {
         type: 'Feature',
         geometry: { type: 'Polygon', coordinates: poly },
-        properties: { ...f.properties, src: f.id, key, tile: f.tile ?? '' },
+        properties: { ...f.properties, src: f.id, key, tile: f.tile ?? gridKeyOfPoint(ring[0]) ?? '' },
       });
     }
   }
   return [...out.values()];
 }
 
+let lastFilterSig = '';
+
 function updateTileFilter() {
   const notIn = (ids: number[]): ExpressionSpecification => ['!', ['in', ['id'], ['literal', ids]]];
   const hiddenIds = [...userHidden].map(Number).filter(Number.isFinite);
   // Тайлы, здания которых уже нарисованы из Overpass
   const overpassTiles = overpass.displayed();
-  const byTile = overpassTiles.length ? tileFeatureIdsByTile(map, 'openmaptiles', 'building') : new Map<string, number[]>();
+  const byTile = overpassTiles.length ? timed('тайлы: id по клеткам', () => tileFeatureIdsByTile(map, 'openmaptiles', 'building')) : new Map<string, number[]>();
   const overpassIds = overpassTiles.flatMap((k) => byTile.get(k) ?? []);
+  // setFilter перестраивает бакеты всех тайлов слоя — вызываем, только если набор скрытого изменился
+  const sig = [replacedIds.length, editAreaIds.join(), hiddenIds.join(), overpassTiles.sort().join(), overpassIds.length].join('|');
+  if (sig === lastFilterSig) return;
+  lastFilterSig = sig;
+  console.debug(`[perf] setFilter: скрыто ${overpassIds.length} фич тайлов под Overpass`);
   map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...editAreaIds, ...hiddenIds, ...overpassIds])]);
   map.setFilter(REMAINDERS_LAYER, notIn([...editAreaIds, ...hiddenIds]));
   map.setFilter(MERGED_LAYER, ['all',
@@ -617,18 +645,14 @@ void refreshUser();
 
 bindTagForms(infoEl, () => session);
 
-// Скатные крыши сложной формы появляются, когда догрузится straight skeleton.
-// Пересобираем только здания, которые до этого были упрощены до плоской крыши.
-void skeletonReady.then((ok) => {
-  if (!ok) return;
-  const needsSkeleton = (f: Feature3D) => {
-    const shape = f.tags['roof:shape'];
-    return shape === 'round' || shape === 'gambrel' || shape === 'mansard' || shape === 'half-hipped' || ((shape === 'gabled' || shape === 'hipped') && !(f.polygons.length === 1 && !f.polygons[0].inners.length && f.polygons[0].outer.length === 4));
-  };
-  void overpassLayer.rebuildWhere(needsSkeleton);
-  void editLayer.rebuildWhere(needsSkeleton, (r) => {
-    editing?.set(r.feature.key, r);
-    if (r.feature.key === selectedKey) renderSelected();
+// Скелеты для сложных крыш считаются в воркере; досчитанные — пересобираем ждавшие здания
+onSkeletons(() => {
+  timed('пересборка зданий со скелетами', () => {
+    overpassLayer.rebuildPending();
+    editLayer.rebuildPending((r) => {
+      editing?.set(r.feature.key, r);
+      if (r.feature.key === selectedKey) renderSelected();
+    });
   });
 });
 

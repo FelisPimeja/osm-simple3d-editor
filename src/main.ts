@@ -7,7 +7,9 @@ import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights } from './osm/heights';
-import { centroid, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat } from './osm/model';
+import { centroid, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type Polygon } from './osm/model';
+import { MoveTool } from './edit/move-tool';
+import * as THREE from 'three';
 import { BuildingsLayer, type GraphicsOptions, type RenderedFeature, type SnapHit } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
@@ -457,6 +459,7 @@ function highlightKeys(key: string | undefined): string[] {
 
 map.on('click', (e) => {
   if (suppressClick) return;
+  if (moveTool.active) { moveTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   const key = overpassLayer.pick(e.point);
   if (addingTo) {
     if (e.originalEvent.shiftKey) { if (key) toggleAddPending(key); return; }
@@ -482,6 +485,7 @@ map.on('dblclick', (e) => {
   if (focus) {
     // Двойной клик мимо здания — назад к карте
     e.preventDefault();
+    if (moveTool.active) return;
     if (!key) closeFocus();
     return;
   }
@@ -508,6 +512,7 @@ function enterFocus(g: BuildingGroup) {
   }
   const fly = !focus;
   drill = focus = g;
+  focusToolbar.hidden = false;
   orbit.setEnabled(true);
   overpassLayer.setFocus(groupFeatures(g));
   // На следующем кадре: внутри обработки dblclick MapLibre после обработчиков останавливает камеру (stop)
@@ -577,6 +582,8 @@ function flyToFocus() {
 function exitFocus() {
   if (!focus) return;
   focus = undefined;
+  moveTool.stop();
+  focusToolbar.hidden = true;
   updateSnap(undefined);
   orbit.setEnabled(gfx.orbitAtCursor);
   overpassLayer.setFocus(undefined);
@@ -621,7 +628,10 @@ const SNAP_LABELS = { vertex: 'Вершина', midpoint: 'Середина', ce
 let currentSnap: SnapHit | undefined;
 
 function updateSnap(point: [number, number] | undefined) {
-  currentSnap = focus && point ? overpassLayer.snapAt(point) : undefined;
+  if (point && moveTool.state === 'move') moveTool.move(point);
+  currentSnap = !focus || !point ? undefined
+    : moveTool.state === 'move' ? moveTool.snap
+    : overpassLayer.snapAt(point, moveTool.state === 'pick' ? moveTool.pickFilter : undefined);
   snapEl.hidden = !currentSnap;
   if (!currentSnap) return;
   snapEl.className = `snap-marker ${currentSnap.kind}`;
@@ -630,8 +640,118 @@ function updateSnap(point: [number, number] | undefined) {
   snapEl.style.top = `${currentSnap.point[1]}px`;
 }
 map.on('mousemove', (e) => updateSnap([e.point.x, e.point.y]));
-map.on('movestart', () => updateSnap(undefined));
+map.on('movestart', () => { if (moveTool.state !== 'move') updateSnap(undefined); });
 map.getCanvasContainer().addEventListener('mouseleave', () => updateSnap(undefined));
+
+// --- Инструменты режима здания ---
+const focusToolbar = document.getElementById('focus-tools')!;
+const moveBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="move"]')!;
+const popupEl = document.getElementById('popup')!;
+const moveTool = new MoveTool(overpassLayer, map.getContainer(), commitMove, (hint) => {
+  moveBtn.classList.toggle('active', moveTool.active);
+  if (hint) setStatus(hint);
+  else showOverpassStatus();
+});
+
+moveBtn.addEventListener('click', () => (moveTool.active ? moveTool.stop() : startMove()));
+
+/** Попап посреди карты; пустой html — закрыть. */
+function showPopup(html: string) {
+  popupEl.innerHTML = html ? `<div class="popup-card">${html}<p><button type="button" data-popup-close>Понятно</button></p></div>` : '';
+  if (!html) renderSelected(); // вернуть обычную подсветку
+}
+popupEl.addEventListener('click', (e) => {
+  if ((e.target as HTMLElement).closest('[data-popup-close]') || e.target === popupEl) showPopup('');
+});
+
+/** Узлы объекта; undefined — в данных нет id узлов (старый кеш). */
+function nodeIds(f: Feature3D): number[] | undefined {
+  const ids: number[] = [];
+  for (const p of f.polygons) {
+    if (!p.outerIds || (p.inners.length && !p.innerIds)) return;
+    ids.push(...p.outerIds, ...(p.innerIds ?? []).flat());
+  }
+  return ids;
+}
+
+/** Проверить выделение и включить перемещение: объекты не должны делить узлы ни с кем, кроме друг друга. */
+function startMove() {
+  if (!focus) return;
+  const keys = selection.filter((k) => focus!.members.includes(k));
+  if (!keys.length) return setStatus('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Переместить».', true);
+  const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
+  const own = new Set<number>();
+  for (const f of features) {
+    const ids = nodeIds(f);
+    if (!ids) return setStatus('В кеше нет id узлов этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
+    ids.forEach((id) => own.add(id));
+  }
+  const chosen = new Set(keys);
+  const linked = new Map<string, number>();
+  for (const f of overpass.allFeatures()) {
+    if (chosen.has(f.key)) continue;
+    const shared = (nodeIds(f) ?? []).filter((id) => own.has(id)).length;
+    if (shared) linked.set(f.key, shared);
+  }
+  if (linked.size) {
+    const list = [...linked].map(([k, n]) => `<li><a href="${server().web}/${k}" target="_blank" rel="noopener">${k}</a> — общих узлов: ${n}${
+      focus!.members.includes(k) ? '' : ' (вне этого здания)'}</li>`).join('');
+    showPopup(`<h3>Нельзя переместить</h3>
+      <p>${keys.length > 1 ? 'Выбранные объекты делят' : 'Объект делит'} узлы с другими объектами — при сдвиге они бы деформировались:</p>
+      <ul>${list}</ul>
+      <p class="hint">Перемещать можно объекты без общих узлов или связанные только между собой — выберите их вместе (Shift).</p>`);
+    overpassLayer.setOverlay([...linked.keys()]);
+    return;
+  }
+  moveTool.start(keys);
+}
+
+/** Применить сдвиг: x/y — координаты узлов, z — высоты (теги). */
+function commitMove(keys: string[], offset: THREE.Vector3) {
+  const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
+  // Ниже земли не опускаем
+  const minBase = Math.min(...features.map((f) => computeHeights(f.tags).min));
+  const dz = Math.max(offset.z, -minBase);
+  const shift = (c: LonLat): LonLat => {
+    const [x, y] = overpassLayer.focusToLocal(c)!;
+    return overpassLayer.focusToLngLat(x + offset.x, y + offset.y)!;
+  };
+  const moved = Math.hypot(offset.x, offset.y) > 1e-4;
+  session.editMany(features.map((f) => ({
+    key: f.key,
+    polygons: moved ? f.polygons.map((p) => ({ ...p, outer: p.outer.map(shift), inners: p.inners.map((r) => r.map(shift)) })) : undefined,
+    tags: Math.abs(dz) > 1e-4 ? shiftHeights(f.tags, dz) : undefined,
+  })));
+  setStatus(`Перемещено объектов: ${features.length} на ${offset.length().toFixed(2)} м.`);
+}
+
+/** Поднять или опустить объект на dz метров, сохранив способ разметки (этажи — если сдвиг кратен этажу). */
+function shiftHeights(tags: Record<string, string>, dz: number): Record<string, string> {
+  const h = computeHeights(tags);
+  const out = { ...tags };
+  const fmt = (v: number) => String(Math.round(v * 100) / 100);
+  const levels = dz / 3;
+  if (!tags.height && !tags.min_height && tags['building:levels'] && Math.abs(levels - Math.round(levels)) < 1e-6) {
+    const k = Math.round(levels);
+    const minLevel = Number(tags['building:min_level'] ?? 0) + k;
+    if (minLevel) out['building:min_level'] = String(minLevel); else delete out['building:min_level'];
+    out['building:levels'] = String(Number(tags['building:levels']) + k);
+    return out;
+  }
+  const min = h.min + dz;
+  if (min > 1e-4 || tags.min_height) out.min_height = fmt(min); else delete out.min_height;
+  out.height = fmt(h.top + dz);
+  delete out['building:min_level']; // высоты теперь заданы метрами
+  return out;
+}
+
+document.addEventListener('keydown', (e) => {
+  if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+  if (e.key === 'Escape' && popupEl.childElementCount) { showPopup(''); e.stopImmediatePropagation(); return; }
+  if (moveTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+  if (focus && !moveTool.active && (e.key === 'm' || e.key === 'M' || e.key === 'ь' || e.key === 'Ь') && !e.ctrlKey && !e.metaKey) startMove();
+}, { capture: true });
+document.addEventListener('keyup', (e) => { if (moveTool.key(e)) e.preventDefault(); });
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
 function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
@@ -766,7 +886,7 @@ map.getCanvasContainer().appendChild(boxEl);
 let boxStart: maplibregl.Point | undefined;
 
 map.getCanvasContainer().addEventListener('mousedown', (e) => {
-  if (!e.shiftKey || e.button !== 0) return;
+  if (!e.shiftKey || e.button !== 0 || moveTool.active) return;
   const r = map.getCanvas().getBoundingClientRect();
   boxStart = new maplibregl.Point(e.clientX - r.left, e.clientY - r.top);
   map.dragPan.disable();
@@ -1183,12 +1303,14 @@ async function doUpload() {
       const created = c.created && g
         ? { type: 'relation' as const, id: g.id, version: 0, tags: c.after, members: g.relMembers }
         : undefined;
-      return { key: c.key, before: c.before, after: c.after, created, members: c.members, membersBefore: c.membersBefore };
+      return { key: c.key, before: c.before, after: c.after, created, members: c.members, membersBefore: c.membersBefore,
+        nodeMoves: c.nodeMoves, version: c.feature.version, polygons: c.feature.polygons };
     });
     const res = await uploadEdits(edits, uploadComment.trim(), (t) => setStatus(t));
-    const saved = new Map<string, { version: number; tags: Record<string, string>; newKey?: string }>();
+    const saved = new Map<string, { version: number; tags: Record<string, string>; newKey?: string; polygons?: Polygon[] }>();
     for (const e of edits) {
-      const version = res.versions.get(e.key);
+      // Сдвинуты только узлы — путь не отправлялся, версия прежняя
+      const version = res.versions.get(e.key) ?? (res.geometrySaved.has(e.key) ? e.version : undefined);
       if (version === undefined) continue;
       const tags = res.written.get(e.key) ?? e.after;
       const newKey = res.newKeys.get(e.key);
@@ -1199,7 +1321,7 @@ async function doUpload() {
         selection = selection.map((k) => (k === e.key ? newKey : k));
         if (selectedKey === e.key) selectedKey = newKey;
       }
-      saved.set(e.key, { version, tags, newKey });
+      saved.set(e.key, { version, tags, newKey, polygons: e.polygons });
     }
     session.markSaved(saved);
     rebuildGroupIndex();
@@ -1285,7 +1407,7 @@ onSkeletons(() => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape' || !focus || (e.target as HTMLElement).closest('input, select, textarea')) return;
+  if (e.key !== 'Escape' || !focus || moveTool.active || popupEl.childElementCount || (e.target as HTMLElement).closest('input, select, textarea')) return;
   // Esc: сначала снять выделение части, затем выйти из режима здания
   if (selection.length) select(undefined);
   else closeFocus();

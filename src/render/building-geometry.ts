@@ -42,6 +42,8 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
     shape === 'flat' ||
     (shape === 'skillion' && polygons.length === 1) ||
     (single && SUPPORTED_ANY_POLYGON.has(shape)) ||
+    // Пирамида — на каждом полигоне мультиполигона своя вершина (без внутренних дворов)
+    (shape === 'pyramidal' && polygons.every((p) => p.inners.length === 0)) ||
     quadRoof ||
     !!axis ||
     skeletonRoof;
@@ -60,7 +62,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   if (!supported || shape === 'flat') {
     for (const p of polygons) addFlat(roof, p, wallTop);
   } else if (shape === 'pyramidal') {
-    addPyramid(roof, single!.outer, h.wallTop, h.top);
+    for (const p of polygons) addPyramid(roof, p.outer, h.wallTop, h.top);
   } else if (shape === 'dome' || shape === 'onion') {
     addDome(roof, single!.outer, h.wallTop, h.top, shape === 'onion');
   } else if (axis && shape === 'saltbox') {
@@ -105,6 +107,16 @@ function addFlat(out: number[], p: LocalPolygon, z: number) {
   }
 }
 
+function areaCentroid(ring: Pt[]): Pt | undefined {
+  let a = 0, x = 0, y = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const [x0, y0] = ring[i], [x1, y1] = ring[(i + 1) % ring.length];
+    const c = x0 * y1 - x1 * y0;
+    a += c; x += (x0 + x1) * c; y += (y0 + y1) * c;
+  }
+  return Math.abs(a) < 1e-9 ? undefined : [x / (3 * a), y / (3 * a)];
+}
+
 function center(ring: Pt[]): Pt {
   let x = 0, y = 0;
   for (const p of ring) { x += p[0]; y += p[1]; }
@@ -112,7 +124,8 @@ function center(ring: Pt[]): Pt {
 }
 
 function addPyramid(out: number[], ring: Pt[], z0: number, z1: number) {
-  const [cx, cy] = center(ring);
+  // Центр масс площади, а не среднее вершин: у контуров с неравномерными вершинами (дуги) иначе вершина смещена
+  const [cx, cy] = areaCentroid(ring) ?? center(ring);
   for (let i = 0; i < ring.length; i++) {
     const a = ring[i];
     const b = ring[(i + 1) % ring.length];

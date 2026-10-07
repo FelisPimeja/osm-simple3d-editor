@@ -4,7 +4,8 @@ import type { OsmElement, OsmNode, OsmRelation, OsmWay } from './api';
 export type LonLat = [number, number];
 
 /** Кольца без повторённой замыкающей точки. */
-export interface Polygon { outer: LonLat[]; inners: LonLat[][] }
+/** outerIds/innerIds — id узлов колец (параллельно координатам); в старом кеше их нет. */
+export interface Polygon { outer: LonLat[]; inners: LonLat[][]; outerIds?: number[]; innerIds?: number[][] }
 
 export interface Feature3D {
   key: string; // 'way/123' | 'relation/456'
@@ -82,7 +83,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     if (w.nodes[0] !== w.nodes[w.nodes.length - 1]) { skipped.push({ key, reason: 'незамкнутый путь' }); continue; }
     const outer = toCoords(w.nodes);
     if (!outer) { skipped.push({ key, reason: 'нет узлов' }); continue; }
-    features.push({ key, type: 'way', id: w.id, version: w.version, tags: w.tags!, kind, polygons: [{ outer, inners: [] }], hasParts: false });
+    features.push({ key, type: 'way', id: w.id, version: w.version, tags: w.tags!, kind, polygons: [{ outer, inners: [], outerIds: w.nodes.slice(0, -1), innerIds: [] }], hasParts: false });
   }
 
   for (const r of relations) {
@@ -112,12 +113,13 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     const polygons: Polygon[] = [];
     for (const ring of outerRings) {
       const outer = toCoords(ring);
-      if (outer) polygons.push({ outer, inners: [] });
+      if (outer) polygons.push({ outer, inners: [], outerIds: ring.slice(0, -1), innerIds: [] });
     }
     for (const ring of innerRings) {
       const inner = toCoords(ring);
       if (!inner) continue;
-      polygons.find((p) => pointInRing(inner[0], p.outer))?.inners.push(inner);
+      const p = polygons.find((p) => pointInRing(inner[0], p.outer));
+      if (p) { p.inners.push(inner); p.innerIds!.push(ring.slice(0, -1)); }
     }
     if (!polygons.length) { skipped.push({ key, reason: 'нет узлов' }); continue; }
     features.push({ key, type: 'relation', id: r.id, version: r.version, tags: r.tags!, kind, polygons, hasParts: false });

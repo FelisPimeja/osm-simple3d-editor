@@ -76,6 +76,17 @@ export async function fetchArea(
 }
 
 /** Текущие версии путей и отношений (multi-fetch, пачками по 100). */
+/** Текущие узлы (с версиями и тегами) по id. */
+export async function fetchNodes(ids: number[], api = server().api): Promise<Map<number, OsmNode & { version: number }>> {
+  const out = new Map<number, OsmNode & { version: number }>();
+  for (let i = 0; i < ids.length; i += 100) {
+    const res = await fetch(`${api}/nodes.json?nodes=${ids.slice(i, i + 100).join(',')}`);
+    if (!res.ok) throw new Error(`OSM API ${res.status}: ${(await res.text()) || res.statusText}`);
+    for (const e of ((await res.json()) as { elements: (OsmNode & { version: number })[] }).elements) out.set(e.id, e);
+  }
+  return out;
+}
+
 export async function fetchElements(keys: string[], api = server().api): Promise<Map<string, OsmWay | OsmRelation>> {
   const out = new Map<string, OsmWay | OsmRelation>();
   for (const type of ['way', 'relation'] as const) {

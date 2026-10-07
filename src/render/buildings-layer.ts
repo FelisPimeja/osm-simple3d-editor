@@ -189,6 +189,7 @@ export class BuildingsLayer implements CustomLayerInterface {
    * undefined — выйти. Пока режим включён, правки объектов обновляют и его копию (updateFeature).
    */
   setFocus(features: Feature3D[] | undefined) {
+    this.moveGuide = undefined;
     this.removeGroup(FOCUS_GROUP);
     this.focusAxes = undefined;
     this.snaps = undefined;
@@ -248,7 +249,7 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Ближайшая к точке экрана привязка режима одного здания в пределах radius px.
    * Вершины важнее середин рёбер, середины — центров: при близких расстояниях побеждает более важная.
    */
-  snapAt(point: [number, number], radius = SNAP_RADIUS_PX): SnapHit | undefined {
+  snapAt(point: [number, number], filter: (key: string) => boolean = () => true, radius = SNAP_RADIUS_PX): SnapHit | undefined {
     const g = this.groups.get(FOCUS_GROUP);
     if (!this.focused || !g || !this.map || !this.lastMain) return;
     this.snaps ??= collectSnaps(g);
@@ -257,6 +258,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const v = new THREE.Vector4();
     let best: { s: SnapPoint; d: number; px: [number, number] } | undefined;
     for (const s of this.snaps) {
+      if (!filter(s.key)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;
       const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
@@ -270,6 +272,98 @@ export class BuildingsLayer implements CustomLayerInterface {
     const { s, px } = best;
     const merc = new MercatorCoordinate(g.origin.x + s.p.x * g.metersToMerc, g.origin.y - s.p.y * g.metersToMerc, 0);
     return { kind: s.kind, key: s.key, local: s.p.clone(), lngLat: merc.toLngLat(), altitude: s.p.z, point: px };
+  }
+
+  /** Луч из камеры через точку экрана — в метрах сцены режима одного здания. */
+  focusRay(point: [number, number]): THREE.Ray | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g || !this.map || !this.lastMain) return;
+    const canvas = this.map.getCanvas();
+    const inv = this.lastMain.clone().multiply(g.model).invert();
+    const x = (point[0] / canvas.clientWidth) * 2 - 1, y = 1 - (point[1] / canvas.clientHeight) * 2;
+    const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+    return new THREE.Ray(near, far.sub(near).normalize());
+  }
+
+  /** Точка сцены режима одного здания на экране (px); undefined — за камерой. */
+  focusProject(p: THREE.Vector3): [number, number] | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g || !this.map || !this.lastMain) return;
+    const v = new THREE.Vector4(p.x, p.y, p.z, 1).applyMatrix4(this.lastMain.clone().multiply(g.model));
+    if (v.w <= 0) return;
+    const canvas = this.map.getCanvas();
+    return [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
+  }
+
+  /** Метры сцены режима → координаты. */
+  focusToLngLat(x: number, y: number): LonLat | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g) return;
+    const ll = new MercatorCoordinate(g.origin.x + x * g.metersToMerc, g.origin.y - y * g.metersToMerc, 0).toLngLat();
+    return [ll.lng, ll.lat];
+  }
+
+  /** Координаты → метры сцены режима. */
+  focusToLocal(p: LonLat): Pt | undefined {
+    return this.groups.get(FOCUS_GROUP)?.toLocal(p);
+  }
+
+  /**
+   * Превью перемещения: вершины объектов сдвигаются прямо в слитой геометрии (без пересборки).
+   * offset undefined — вернуть на место.
+   */
+  setMovePreview(keys: string[], offset: THREE.Vector3 | undefined) {
+    const g = this.groups.get(FOCUS_GROUP);
+    const attr = g?.mesh?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!g || !attr) return;
+    const pos = attr.array as Float32Array;
+    const [dx, dy, dz] = offset ? [offset.x, offset.y, offset.z] : [0, 0, 0];
+    for (const k of keys) {
+      const it = g.byKey.get(k);
+      if (!it) continue;
+      const base = it.positions, o = it.start * 3;
+      for (let i = 0; i < base.length; i += 3) {
+        pos[o + i] = base[i] + dx; pos[o + i + 1] = base[i + 1] + dy; pos[o + i + 2] = base[i + 2] + dz;
+      }
+    }
+    attr.needsUpdate = true;
+    if (g.edges) g.edges.visible = !offset; // рёбра не двигаем — прячем на время
+    this.map?.triggerRepaint();
+  }
+
+  private moveGuide?: THREE.Object3D;
+
+  /**
+   * Направляющие инструмента перемещения: значок осей в точке захвата и линия до текущей точки
+   * (цветом оси, если движение по оси). undefined — убрать.
+   */
+  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2 } | undefined) {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (this.moveGuide) {
+      this.moveGuide.parent?.remove(this.moveGuide);
+      this.moveGuide.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.Line) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
+      this.moveGuide = undefined;
+    }
+    if (guide && g && this.focusAxes) {
+      const root = new THREE.Group();
+      const frame = { ...this.focusAxes, origin: [guide.from.x, guide.from.y] as Pt };
+      const gizmo = axesGizmo(frame, Math.max(...this.focusAxes.size), guide.locked);
+      gizmo.matrix.elements[14] = guide.from.z; // значок на высоте точки захвата
+      root.add(gizmo);
+      if (guide.to) {
+        const line = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([guide.from, guide.to]),
+          new THREE.LineDashedMaterial({ color: guide.axis === undefined ? 0x333333 : AXIS_COLOURS[guide.axis], dashSize: 0.5, gapSize: 0.3,
+            depthTest: false, depthWrite: false, transparent: true }),
+        );
+        line.computeLineDistances();
+        line.renderOrder = 1002;
+        root.add(line);
+      }
+      g.scene.add(root);
+      this.moveGuide = root;
+    }
+    this.map?.triggerRepaint();
   }
 
   /** Центр здания в режиме одного здания: координаты, высота (середина) и положение на экране. */
@@ -465,11 +559,11 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Ближайшее здание под точкой экрана и 3D-точка попадания (lng/lat + высота в метрах). */
-  pickHit(point: PointLike): { key: string; lngLat: LngLat; altitude: number } | undefined {
+  pickHit(point: PointLike): { key: string; lngLat: LngLat; altitude: number; local: THREE.Vector3 } | undefined {
     return timed(`${this.id}: выбор под курсором`, () => this.pickHitImpl(point));
   }
 
-  private pickHitImpl(point: PointLike): { key: string; lngLat: LngLat; altitude: number } | undefined {
+  private pickHitImpl(point: PointLike): { key: string; lngLat: LngLat; altitude: number; local: THREE.Vector3 } | undefined {
     if (!this.visible || !this.map) return;
     const [px, py] = Array.isArray(point) ? point : [point.x, point.y];
     const canvas = this.map.getCanvas();
@@ -504,7 +598,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!best) return;
     const { g, p } = best;
     const merc = new MercatorCoordinate(g.origin.x + p.x * g.metersToMerc, g.origin.y - p.y * g.metersToMerc, 0);
-    return { key: best.key, lngLat: merc.toLngLat(), altitude: p.z };
+    return { key: best.key, lngLat: merc.toLngLat(), altitude: p.z, local: p };
   }
 
   /** Подсветить объект или несколько (группу type=building). */
@@ -701,13 +795,16 @@ function collectSnaps(g: MeshGroup): SnapPoint[] {
 
 /** Отступ начала координат от угла bbox наружу по x и y, м. */
 const ORIGIN_OFFSET = 5;
+const AXIS_DIM_COLOUR = 0x9ca3af;
+/** Длина направляющей зафиксированной оси в каждую сторону, м. */
+const LOCK_GUIDE_M = 300;
 const AXIS_COLOURS = [0xd43a3a, 0x3fa34d, 0x3a52b4]; // x, y, z — как в 3D-редакторах
 
 /**
  * Обозначение начала координат: оси x/y/z стрелками в положительную сторону, отрицательные — тонкой линией.
  * Рисуется поверх геометрии (без проверки глубины), чтобы не терялось за стенами.
  */
-function axesGizmo(frame: LocalFrame, size: number): THREE.Object3D {
+function axesGizmo(frame: LocalFrame, size: number, locked?: number): THREE.Object3D {
   const len = Math.min(Math.max(size * 0.18, 2.5), 30);
   const r = len * 0.012, head = len * 0.12;
   const root = new THREE.Group();
@@ -719,7 +816,10 @@ function axesGizmo(frame: LocalFrame, size: number): THREE.Object3D {
   const dirs = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
   const up = new THREE.Vector3(0, 1, 0); // цилиндр и конус в three.js вытянуты по y
   dirs.forEach((d, i) => {
-    const mat = new THREE.MeshBasicMaterial({ color: AXIS_COLOURS[i], depthTest: false, depthWrite: false, transparent: true });
+    // Ось зафиксирована — остальные серые и бледные
+    const dim = locked !== undefined && locked !== i;
+    const colour = dim ? AXIS_DIM_COLOUR : AXIS_COLOURS[i];
+    const mat = new THREE.MeshBasicMaterial({ color: colour, depthTest: false, depthWrite: false, transparent: true, opacity: dim ? 0.45 : 1 });
     const q = new THREE.Quaternion().setFromUnitVectors(up, d);
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len - head, 8), mat);
     shaft.quaternion.copy(q);
@@ -729,8 +829,17 @@ function axesGizmo(frame: LocalFrame, size: number): THREE.Object3D {
     tip.position.copy(d).multiplyScalar(len - head / 2);
     const neg = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), d.clone().multiplyScalar(-len * 0.6)]),
-      new THREE.LineBasicMaterial({ color: AXIS_COLOURS[i], depthTest: false, depthWrite: false, transparent: true, opacity: 0.5 }),
+      new THREE.LineBasicMaterial({ color: colour, depthTest: false, depthWrite: false, transparent: true, opacity: dim ? 0.25 : 0.5 }),
     );
+    // Зафиксированная ось — длинная направляющая в обе стороны
+    if (locked === i) {
+      const guide = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([d.clone().multiplyScalar(-LOCK_GUIDE_M), d.clone().multiplyScalar(LOCK_GUIDE_M)]),
+        new THREE.LineBasicMaterial({ color: colour, depthTest: false, depthWrite: false, transparent: true, opacity: 0.6 }),
+      );
+      guide.renderOrder = 1001;
+      root.add(guide);
+    }
     for (const o of [shaft, tip, neg]) { o.renderOrder = 1001; root.add(o); }
   });
   return root;

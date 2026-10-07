@@ -9,7 +9,29 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 #left-col { left: 12px; }
 #right-col { right: 12px; }
 #toolbars { display: flex; flex-direction: column; gap: 8px; align-self: flex-start; }
-#toolbars:empty { display: none; }
+#toolbars:not(:has(.toolbar:not([hidden]))) { display: none; }
+.toolbar { display: flex; flex-direction: column; gap: 4px; padding: 4px; background: rgba(255,255,255,.95);
+  border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+.toolbar[hidden] { display: none; }
+.toolbar button { width: 36px; height: 36px; border: 1px solid transparent; border-radius: 6px; background: transparent;
+  font-size: 20px; line-height: 1; cursor: pointer; color: #333; }
+.toolbar button:hover { background: #f3f4f6; }
+.toolbar button.active { background: #dbeafe; border-color: #93c5fd; }
+/* Ввод расстояния (как VCB в SketchUp) */
+.vcb { position: absolute; right: 346px; bottom: 36px; z-index: 3; display: flex; align-items: baseline; gap: 6px;
+  padding: 6px 10px; background: rgba(255,255,255,.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.2); font-size: 13px; }
+.vcb[hidden] { display: none; }
+.vcb-label, .vcb-axis { color: #666; font-size: 12px; }
+.vcb-value { min-width: 60px; text-align: right; font: 600 14px ui-monospace, monospace; }
+.vcb-value.typed { color: #1d4ed8; }
+#popup:empty { display: none; }
+#popup { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.15); }
+.popup-card { max-width: 420px; max-height: 70%; overflow: auto; padding: 12px 16px; background: #fff; border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.3); font-size: 13px; }
+.popup-card h3 { margin: 0 0 8px; font-size: 15px; }
+.popup-card ul { padding-left: 18px; margin: 4px 0; }
+.popup-card a { color: #2563eb; }
+.popup-card button { padding: 4px 12px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
 .panel {
   min-height: 0; flex: 0 1 auto;
   display: flex; flex-direction: column;

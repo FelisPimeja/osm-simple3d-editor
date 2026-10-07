@@ -8,6 +8,7 @@
 </head>
 <body>
   <div id="map"></div>
+  <div id="popup"></div>
   <div id="op-indicator" hidden><span class="dot"></span><span class="label"></span></div>
   <div id="left-col" class="col">
   <aside id="panel" class="panel">
@@ -30,7 +31,11 @@
     </div>
   </aside>
   <!-- Вертикальные панели инструментов (режим здания и др.) -->
-  <div id="toolbars"></div>
+  <div id="toolbars">
+    <div id="focus-tools" class="toolbar" hidden>
+      <button type="button" data-tool="move" title="Переместить (M)">✥</button>
+    </div>
+  </div>
   </div>
   <div id="right-col" class="col">
   <aside id="info-panel" class="panel">

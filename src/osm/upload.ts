@@ -1,4 +1,4 @@
-import { fetchElements, type OsmMember, type OsmRelation, type OsmWay } from './api';
+import { fetchElements, fetchNodes, type OsmMember, type OsmNode, type OsmRelation, type OsmWay } from './api';
 import { getToken } from './auth';
 import { server } from './servers';
 
@@ -16,6 +16,8 @@ export interface TagEdit {
   /** Новый состав членов отношения и исходный (если менялся). */
   members?: OsmMember[];
   membersBefore?: OsmMember[];
+  /** Сдвинутые узлы: from — координаты, с которых начиналась правка. */
+  nodeMoves?: { id: number; from: [number, number]; to: [number, number] }[];
 }
 
 export interface UploadResult {
@@ -28,6 +30,8 @@ export interface UploadResult {
   written: Map<string, Tags>;
   /** Объекты, которые кто-то изменил после загрузки данных: наши правки перенесены поверх. */
   rebased: Set<string>;
+  /** Объекты, у которых записана геометрия (узлы), даже если сам путь не менялся. */
+  geometrySaved: Set<string>;
 }
 
 /** Конфликт, который нельзя разрешить автоматически: кто-то изменил те же теги. */
@@ -52,9 +56,10 @@ const tagsXml = (tags: Tags) =>
   Object.entries(tags).map(([k, v]) => `<tag k="${xmlEsc(k)}" v="${xmlEsc(v)}"/>`).join('');
 
 /** osmChange: новые элементы — в <create>, изменённые — в <modify>. */
-export function buildOsmChange(edits: { element: OsmWay | OsmRelation; tags: Tags; created?: boolean }[], changeset: number): string {
+export function buildOsmChange(edits: { element: OsmWay | OsmRelation | (OsmNode & { version: number }); tags: Tags; created?: boolean }[], changeset: number): string {
   const xml = ({ element: e, tags, created }: (typeof edits)[number]) => {
     const attrs = `id="${e.id}"${created ? '' : ` version="${e.version}"`} changeset="${changeset}"`;
+    if (e.type === 'node') return `<node ${attrs} lat="${e.lat.toFixed(7)}" lon="${e.lon.toFixed(7)}">${tagsXml(tags)}</node>`;
     if (e.type === 'way') {
       return `<way ${attrs}>${e.nodes.map((n) => `<nd ref="${n}"/>`).join('')}${tagsXml(tags)}</way>`;
     }
@@ -125,6 +130,18 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
   const payload: Parameters<typeof buildOsmChange>[0] = [];
   const written = new Map<string, Tags>();
   const rebased = new Set<string>();
+  const geometrySaved = new Set<string>();
+  // Узлы: двигаем, только если на сервере они там же, где были у нас (иначе — конфликт)
+  const moves = edits.flatMap((e) => (e.nodeMoves ?? []).map((m) => ({ ...m, key: e.key })));
+  const nodes = moves.length ? await fetchNodes([...new Set(moves.map((m) => m.id))]) : new Map();
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-7;
+  for (const m of moves) {
+    const n = nodes.get(m.id);
+    if (!n) { conflicts.push({ key: m.key, tags: [`узел ${m.id} удалён на сервере`] }); continue; }
+    if (!near(n.lon, m.from[0]) || !near(n.lat, m.from[1])) { conflicts.push({ key: m.key, tags: [`узел ${m.id} уже сдвинут`] }); continue; }
+    payload.push({ element: { ...n, lon: m.to[0], lat: m.to[1] }, tags: n.tags ?? {} });
+    geometrySaved.add(m.key);
+  }
   for (const edit of edits) {
     if (edit.created) {
       payload.push({ element: { ...edit.created, members: edit.members ?? edit.created.members }, tags: edit.after, created: true });
@@ -135,6 +152,8 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
     if (!f) { conflicts.push({ key: edit.key, tags: ['объект удалён на сервере'] }); continue; }
     const r = rebase(edit, f);
     if ('conflict' in r) { conflicts.push({ key: edit.key, tags: r.conflict }); continue; }
+    // Сдвинуты только узлы — сам путь не трогаем
+    if (sameTags(r.tags, f.tags ?? {}) && !edit.members) continue;
     const element = edit.members && f.type === 'relation' ? { ...f, members: mergeMembers(f.members, edit.membersBefore ?? [], edit.members) } : f;
     payload.push({ element, tags: r.tags });
     written.set(edit.key, r.tags);
@@ -152,7 +171,7 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
   try {
     onStatus(`Загружаем ${payload.length} объектов в changeset ${changeset}…`);
     const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
-    return { changeset, ...diff, written, rebased };
+    return { changeset, ...diff, written, rebased, geometrySaved };
   } finally {
     // Закрываем и при ошибке, чтобы не висел пустой changeset
     try { await call('PUT', `/changeset/${changeset}/close`); } catch { /* закроется сам через час */ }

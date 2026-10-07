@@ -1,6 +1,6 @@
 import type { Map as MlMap } from 'maplibre-gl';
 import { fetchArea, type Bbox } from '../osm/api';
-import { centroid, incompleteBuildingRelations, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D } from '../osm/model';
+import { centroid, incompleteBuildingRelations, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type Polygon } from '../osm/model';
 import { fetchBuildings, OverpassBusyError, OverpassPool } from '../osm/overpass';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
@@ -369,7 +369,7 @@ export class OverpassTiles {
    * Отправленные правки — сразу в данные тайлов (память и IndexedDB), без перезапроса Overpass:
    * иначе до фонового обновления тайла кеш показывал бы старые теги. fetchedAt не трогаем.
    */
-  async applySaved(saved: Map<string, { version: number; tags: Record<string, string> }>, savedGroups: BuildingGroup[] = []) {
+  async applySaved(saved: Map<string, { version: number; tags: Record<string, string>; polygons?: Polygon[] }>, savedGroups: BuildingGroup[] = []) {
     // Группы (новые или с другим составом) кладём целиком в тайлы, где лежит хоть один их член
     const groupFor = (t: { features: Feature3D[] }) => savedGroups.filter((g) => t.features.some((f) => g.members.includes(f.key)));
     const patchGroups = (t: { features: Feature3D[]; groups: BuildingGroup[] }) => {
@@ -390,7 +390,7 @@ export class OverpassTiles {
         const s = saved.get(f.key);
         if (!s) { out.push(f); continue; }
         const kind = kindOf(s.tags);
-        if (kind) out.push({ ...f, kind, version: s.version, tags: s.tags, hasParts: false });
+        if (kind) out.push({ ...f, kind, version: s.version, tags: s.tags, polygons: s.polygons ?? f.polygons, hasParts: false });
       }
       markOutlinesWithParts(out);
       return out;

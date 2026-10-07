@@ -13,6 +13,7 @@ import { queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } fr
 import { OverpassTiles } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
 import { EditSession } from './edit/session';
+import { skeletonReady } from './render/skeleton';
 import { bindTagForms, renderTagForm } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 
@@ -615,6 +616,14 @@ serverSelect.addEventListener('change', () => {
 void refreshUser();
 
 bindTagForms(infoEl, () => session);
+
+// Скатные крыши сложной формы появляются, когда догрузится straight skeleton
+void skeletonReady.then((ok) => {
+  if (!ok) return;
+  overpassLayer.rebuildAll();
+  for (const r of editLayer.rebuildAll()) editing?.set(r.feature.key, r);
+  renderSelected();
+});
 
 document.addEventListener('keydown', (e) => {
   if (!session || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;

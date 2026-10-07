@@ -159,6 +159,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     return { feature: f, roofApproximated };
   }
 
+  /** Пересобирает все здания (например, когда догрузился straight skeleton). */
+  rebuildAll(): RenderedFeature[] {
+    const out: RenderedFeature[] = [];
+    for (const [key, g] of this.groups) {
+      for (const o of [...g.root.children]) {
+        const r = this.updateFeature(key, o.userData.feature as Feature3D);
+        if (r) out.push(r);
+      }
+    }
+    return out;
+  }
+
   private buildMesh(g: MeshGroup, f: Feature3D): { mesh: THREE.Mesh; roofApproximated: boolean } {
     const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
     const heights = computeHeights(f.tags);
@@ -173,6 +185,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const roof = f.tags['roof:colour'] ?? (f.tags['roof:shape'] && f.tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
     const mesh = new THREE.Mesh(geom, [material(wall), material(roof)]);
     mesh.userData.key = f.key;
+    mesh.userData.feature = f;
     this.paint(mesh);
     this.applyMeshGraphics(mesh);
     return { mesh, roofApproximated: tri.roofApproximated };

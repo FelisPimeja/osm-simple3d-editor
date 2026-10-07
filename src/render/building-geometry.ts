@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Heights } from '../osm/heights';
+import { skeletonOf } from './skeleton';
 
 /** Локальная точка в метрах: x — восток, y — север. */
 export type Pt = [number, number];
@@ -24,11 +25,16 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
 
   const shape = h.roofShape;
   const single = polygons.length === 1 && polygons[0].inners.length === 0 ? polygons[0] : undefined;
+  const quadRoof = single && single.outer.length === 4 && SUPPORTED_QUAD.has(shape);
+  // Скатные крыши на остальных контурах (в т.ч. с дырами и из нескольких полигонов) — по straight skeleton
+  const skeletons = !quadRoof && SUPPORTED_QUAD.has(shape) ? polygons.map((p) => skeletonOf(p.outer, p.inners)) : undefined;
+  const skeletonRoof = !!skeletons?.length && skeletons.every(Boolean);
   const supported =
     shape === 'flat' ||
     (shape === 'skillion' && polygons.length === 1) ||
     (single && SUPPORTED_ANY_POLYGON.has(shape)) ||
-    (single && single.outer.length === 4 && SUPPORTED_QUAD.has(shape));
+    quadRoof ||
+    skeletonRoof;
   // Неподдерживаемая крыша: стены до самого верха и плоская крыша
   const wallTop = supported ? h.wallTop : h.top;
 
@@ -47,8 +53,10 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
     addPyramid(roof, single!.outer, h.wallTop, h.top);
   } else if (shape === 'dome' || shape === 'onion') {
     addDome(roof, single!.outer, h.wallTop, h.top, shape === 'onion');
-  } else {
+  } else if (quadRoof) {
     addQuadRoof(roof, walls, single!.outer, h.wallTop, h.top, shape === 'hipped', tags['roof:orientation'] === 'across');
+  } else {
+    for (const sk of skeletons!) addSkeletonRoof(roof, walls, sk!, h.wallTop, h.roofHeight, shape === 'gabled');
   }
 
   return { walls, roof, roofApproximated: !supported };
@@ -143,6 +151,57 @@ function addQuadRoof(roof: number[], walls: number[], ring: Pt[], z0: number, z1
   const ends = hipped ? roof : walls;
   tri(ends, p1, p2, m1);
   tri(ends, p3, p0, m2);
+}
+
+/**
+ * Вальмовая или двускатная крыша по straight skeleton: каждая грань скелета — скат над своей стороной контура,
+ * высота точки пропорциональна расстоянию до контура (самая дальняя точка — конёк на высоте roofHeight).
+ * Двускатная: треугольные грани (торцы вальмовой) превращаются во фронтоны — вершина треугольника
+ * переносится на его сторону контура, соседние скаты при этом дотягиваются до торца.
+ */
+function addSkeletonRoof(roof: number[], walls: number[], sk: NonNullable<ReturnType<typeof skeletonOf>>, z0: number, roofHeight: number, gabled: boolean) {
+  const verts = sk.vertices.map(([x, y, t]) => [x, y, t] as V3);
+  const maxT = Math.max(...verts.map((v) => v[2])) || 1;
+  const k = roofHeight / maxT;
+  const isContour = (i: number) => sk.vertices[i][2] < 1e-9;
+  const gables = new Set<number[]>();
+
+  if (gabled) {
+    const moved = new Set<number>();
+    // Сначала короткие торцы: на квадратоподобных формах вершину делят несколько треугольников
+    const ends = sk.polygons
+      .filter((f) => f.length === 3 && f.filter(isContour).length === 2)
+      .map((f) => {
+        const [a, b] = [f[f.length - 1], f[0]].map((i) => sk.vertices[i]);
+        return { f, len: Math.hypot(b[0] - a[0], b[1] - a[1]) };
+      })
+      .sort((p, q) => p.len - q.len);
+    for (const { f } of ends) {
+      const apex = f.find((i) => !isContour(i))!;
+      if (moved.has(apex)) continue;
+      const [a, b] = [f[f.length - 1], f[0]].map((i) => sk.vertices[i]);
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const len2 = dx * dx + dy * dy || 1;
+      const v = verts[apex];
+      const t = ((v[0] - a[0]) * dx + (v[1] - a[1]) * dy) / len2;
+      verts[apex] = [a[0] + dx * t, a[1] + dy * t, v[2]];
+      moved.add(apex);
+      gables.add(f);
+    }
+  }
+
+  const at = (i: number): V3 => [verts[i][0], verts[i][1], z0 + verts[i][2] * k];
+  for (const f of sk.polygons) {
+    const out = gables.has(f) ? walls : roof;
+    // Грань может быть невыпуклой — триангулируем в её плоскости по проекции на xy
+    const pts = f.map((i) => new THREE.Vector2(verts[i][0], verts[i][1]));
+    if (gables.has(f) || f.length === 3) {
+      // Фронтон вертикален (проекция вырождена), треугольник — уже треугольник
+      tri(out, at(f[0]), at(f[1]), at(f[2]));
+      continue;
+    }
+    for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(pts, [])) tri(out, at(f[a]), at(f[b]), at(f[c]));
+  }
 }
 
 const CARDINAL: Record<string, number> = {

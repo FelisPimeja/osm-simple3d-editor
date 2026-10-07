@@ -23,7 +23,7 @@
 3. [x] Панель тегов: `height`, `min_height`, `building:levels`, `building:min_level`,
    `roof:shape`, `roof:height`, `building:colour`, `roof:colour`. Undo/redo, diff «было → стало».
 4. [x] OAuth + генерация osmChange + upload (dev-сервер, затем боевой). Обработка 409 Conflict.
-5. [ ] Крыши gabled/hipped (сначала для четырёхугольников, затем straight skeleton).
+5. [x] Крыши gabled/hipped (сначала для четырёхугольников, затем straight skeleton).
 6. [ ] (опционально) Создание `building:part` из контура.
 
 ## Известные риски
@@ -108,3 +108,9 @@
   - Грабли: сайт OSM отдаёт COOP → `window.opener` в окне возврата пуст, `popup.closed` сразу true;
     code передаём через BroadcastChannel. Приложение OAuth должно быть не «конфиденциальным» (иначе
     `invalid_client`). `/changeset/{id}/upload` требует `Accept: application/xml|json` (иначе 406).
+- 2026-10-07, этап 5 (скатные крыши на сложных контурах):
+  - `straight-skeleton` (CGAL в Wasm, UMD, ~336 КБ gzip) — отдельный чанк через dynamic import; пока грузится,
+    сложные крыши плоские, затем `BuildingsLayer.rebuildAll()`. В node нужны шимы `self` и `window`.
+  - Грань скелета = скат над стороной контура (сторона — последняя и первая вершины грани), z = время × roofHeight / maxTime.
+  - gabled: треугольные грани с двумя вершинами контура → фронтоны, вершина проецируется на сторону;
+    короткие торцы первыми, общую вершину не двигаем дважды. Четырёхугольники — прежний код (учитывает roof:orientation).

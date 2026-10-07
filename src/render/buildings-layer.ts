@@ -50,6 +50,8 @@ interface Item {
   box: THREE.Box3;
   /** Первая вершина в общей геометрии группы. */
   start: number;
+  /** Рёбра здания (отрезки xyz) — считаются один раз, когда контуры включены. */
+  edges?: Float32Array;
 }
 
 /**
@@ -167,7 +169,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   setGroup(key: string, features: Feature3D[], center: LonLat): RenderedFeature[] {
     this.pending.delete(key);
     const g = new MeshGroup(center);
-    timed(`${this.id}: треугольники (синхронно)`, () => { for (const f of features) if (!f.hasParts) this.addItem(g, f); }, () => `${key}, ${features.length}`);
+    timed(`${this.id}: треугольники (синхронно)`, () => { for (const f of features) if (shouldRender(f)) this.addItem(g, f); }, () => `${key}, ${features.length}`);
     this.install(key, g);
     return g.items.map(rendered);
   }
@@ -180,7 +182,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const token = Symbol(key);
     this.pending.set(key, token);
     const g = new MeshGroup(center);
-    const todo = features.filter((f) => !f.hasParts);
+    const todo = features.filter(shouldRender);
     let i = 0;
     while (i < todo.length) {
       await new Promise(requestAnimationFrame);
@@ -232,15 +234,27 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
   }
 
-  /** Пересобирает здания, ждавшие скелет (вызывать, когда воркер досчитал). */
+  /**
+   * Пересобирает здания, ждавшие скелет (вызывать, когда воркер досчитал). Слитая геометрия тайла
+   * пересобирается, только если хоть одно здание действительно получило крышу.
+   */
   rebuildPending(onRebuilt: (r: RenderedFeature) => void = () => {}) {
     for (const g of this.groups.values()) {
-      const waiting = g.items.filter((it) => it.pending).map((it) => it.feature);
-      if (!waiting.length) continue;
-      this.replaceItems(g, waiting);
-      // Ещё не досчитанные снова помечены pending — пересоберутся со следующей порцией
-      for (const f of waiting) onRebuilt(rendered(g.byKey.get(f.key)!));
+      const done: Feature3D[] = [];
+      for (let i = 0; i < g.items.length; i++) {
+        const old = g.items[i];
+        if (!old.pending) continue;
+        const item = buildItem(g, old.feature);
+        if (item.pending) continue; // скелет ещё считается — геометрия та же
+        g.items[i] = item;
+        g.byKey.set(item.feature.key, item);
+        done.push(item.feature);
+      }
+      if (!done.length) continue;
+      timed(`${this.id}: слияние геометрии (крыши)`, () => this.rebuildGeometry(g), () => `${g.items.length} зданий, новых крыш ${done.length}`);
+      for (const f of done) onRebuilt(rendered(g.byKey.get(f.key)!));
     }
+    this.map?.triggerRepaint();
   }
 
   hasGroup(key: string): boolean {
@@ -348,6 +362,8 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   private addItem(g: MeshGroup, f: Feature3D) {
     const item = timed('здание: треугольники', () => buildItem(g, f), () => describeFeature(f));
+    // Контуры включены — считаем рёбра здесь, в порционной сборке, а не разом при слиянии
+    if (this.graphics.edges) item.edges = itemEdges(item);
     g.byKey.set(f.key, item);
     g.items.push(item);
   }
@@ -382,15 +398,26 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.applyEdges(g);
   }
 
+  /**
+   * Контуры рёбер: считаются по зданиям и кешируются на них (EdgesGeometry на весь тайл — ~150 мс,
+   * а тайл пересобирается при каждой порции крыш), при слиянии только склеиваются.
+   */
   private applyEdges(g: MeshGroup) {
-    // Контуры создаём лениво: выключенные ничего не стоят
-    if (this.graphics.edges && !g.edges && g.mesh) {
-      g.edges = new THREE.LineSegments(new THREE.EdgesGeometry(g.mesh.geometry, EDGE_ANGLE), EDGE_MATERIAL);
-      g.edges.frustumCulled = false;
-      g.scene.add(g.edges);
-    } else if (!this.graphics.edges) {
-      g.disposeEdges();
+    g.disposeEdges();
+    if (!this.graphics.edges || !g.mesh) return;
+    let total = 0;
+    for (const it of g.items) {
+      it.edges ??= itemEdges(it);
+      total += it.edges.length;
     }
+    const lines = new Float32Array(total);
+    let o = 0;
+    for (const it of g.items) { lines.set(it.edges!, o); o += it.edges!.length; }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(lines, 3));
+    g.edges = new THREE.LineSegments(geom, EDGE_MATERIAL);
+    g.edges.frustumCulled = false;
+    g.scene.add(g.edges);
   }
 
   private paintGroup(g: MeshGroup) {
@@ -437,6 +464,16 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 }
 
+function itemEdges(it: Item): Float32Array {
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(it.positions, 3));
+  const edges = new THREE.EdgesGeometry(geom, EDGE_ANGLE);
+  const out = edges.getAttribute('position').array as Float32Array;
+  edges.dispose();
+  geom.dispose();
+  return out;
+}
+
 /** Габариты всей группы — чтобы не перебирать здания тайлов, мимо которых луч проходит. */
 function groupBox(g: MeshGroup): THREE.Box3 {
   if (!g.mesh) return new THREE.Box3();
@@ -446,6 +483,19 @@ function groupBox(g: MeshGroup): THREE.Box3 {
 }
 
 const rendered = (it: Item): RenderedFeature => ({ feature: it.feature, roofApproximated: it.roofApproximated });
+
+/** Теги Simple 3D, задающие объём: с ними подземный объект рисуем (автор явно задал его форму). */
+const S3D_TAGS = ['height', 'min_height', 'building:levels', 'building:min_level', 'roof:shape', 'roof:height', 'roof:levels'];
+
+/**
+ * Рисуем ли здание: контур с частями — нет (Simple 3D), подземное (location=underground) без тегов
+ * Simple 3D — тоже нет: иначе парковки и переходы под площадями торчат над землёй дефолтной коробкой.
+ */
+function shouldRender(f: Feature3D): boolean {
+  if (f.hasParts) return false;
+  if (f.tags.location === 'underground' && !S3D_TAGS.some((t) => f.tags[t] !== undefined)) return false;
+  return true;
+}
 
 /** Для лога медленных зданий: ключ, форма крыши, число вершин и полигонов. */
 function describeFeature(f: Feature3D): string {

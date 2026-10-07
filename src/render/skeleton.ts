@@ -46,20 +46,33 @@ function remember(key: string, s: Skeleton | null) {
   cache.set(key, s);
 }
 
-/** Подписка на «досчитались новые скелеты» (вызывается не чаще раза за кадр). */
+/**
+ * Подписка на «досчитались новые скелеты». Пересборка слитой геометрии тайла дорогая (сотни мс на плотный
+ * тайл), поэтому уведомляем пачками: когда очередь опустела или не чаще раза в NOTIFY_MS.
+ */
 export function onSkeletons(cb: () => void): () => void {
   listeners.add(cb);
   return () => listeners.delete(cb);
 }
 
-let notifyScheduled = false;
+const NOTIFY_MS = 1000;
+let notifyTimer: ReturnType<typeof setTimeout> | undefined;
+let lastNotify = 0;
 function notify() {
-  if (notifyScheduled) return;
-  notifyScheduled = true;
-  requestAnimationFrame(() => {
-    notifyScheduled = false;
+  const fire = () => {
+    notifyTimer = undefined;
+    lastNotify = performance.now();
     for (const cb of listeners) cb();
-  });
+  };
+  if (!queue.length && !current) {
+    // Всё посчитано — сразу (в следующем кадре), отменяя отложенное
+    clearTimeout(notifyTimer);
+    notifyTimer = undefined;
+    requestAnimationFrame(fire);
+    return;
+  }
+  if (notifyTimer) return;
+  notifyTimer = setTimeout(fire, Math.max(0, lastNotify + NOTIFY_MS - performance.now()));
 }
 
 // ---- Воркер с очередью и сторожевым таймером
@@ -90,8 +103,8 @@ function finish(job: Job, s: Skeleton | null) {
   current = undefined;
   queued.delete(job.key);
   remember(job.key, s);
-  notify();
   pumpWorker();
+  notify();
 }
 
 function pumpWorker() {

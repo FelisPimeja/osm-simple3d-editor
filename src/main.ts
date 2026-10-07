@@ -82,21 +82,27 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
 const infoEl = document.getElementById('info')!;
 
 // Сворачивание панелей в заголовок; состояние запоминается.
-for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
-  const storeKey = `osm3d.collapsed.${panel.id}`;
+function setCollapsed(panel: HTMLElement, collapsed: boolean) {
   const btn = panel.querySelector<HTMLButtonElement>('.collapse-btn')!;
-  const apply = (collapsed: boolean) => {
-    panel.classList.toggle('collapsed', collapsed);
-    btn.setAttribute('aria-expanded', String(!collapsed));
-    btn.title = collapsed ? 'Развернуть' : 'Свернуть';
-  };
-  try { apply(localStorage.getItem(storeKey) === '1'); } catch { /* нет хранилища */ }
+  panel.classList.toggle('collapsed', collapsed);
+  btn.setAttribute('aria-expanded', String(!collapsed));
+  btn.title = collapsed ? 'Развернуть' : 'Свернуть';
+}
+for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
+  // Панель правок сворачивается и раскрывается сама (renderChanges) — состояние не запоминаем
+  const auto = panel.hasAttribute('data-auto-collapse');
+  const storeKey = `osm3d.collapsed.${panel.id}`;
+  if (!auto) try { setCollapsed(panel, localStorage.getItem(storeKey) === '1'); } catch { /* нет хранилища */ }
   panel.querySelector('.panel-head')!.addEventListener('click', () => {
     const collapsed = !panel.classList.contains('collapsed');
-    apply(collapsed);
-    try { localStorage.setItem(storeKey, collapsed ? '1' : '0'); } catch { /* нет хранилища */ }
+    setCollapsed(panel, collapsed);
+    if (!auto) try { localStorage.setItem(storeKey, collapsed ? '1' : '0'); } catch { /* нет хранилища */ }
   });
 }
+const editsPanel = document.getElementById('edits-panel')!;
+const editsCount = document.getElementById('edits-count')!;
+/** Было ли в панели правок что показать при прошлой отрисовке: раскрываем/сворачиваем только на переходе. */
+let editsHadContent = false;
 const statusEl = document.getElementById('status')!;
 const opIndicator = document.getElementById('op-indicator')!;
 const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
@@ -500,9 +506,12 @@ function enterFocus(g: BuildingGroup) {
       map.setLayoutProperty(l.id, 'visibility', 'none');
     }
   }
+  const fly = !focus;
   drill = focus = g;
   orbit.setEnabled(true);
   overpassLayer.setFocus(groupFeatures(g));
+  // На следующем кадре: внутри обработки dblclick MapLibre после обработчиков останавливает камеру (stop)
+  if (fly) requestAnimationFrame(flyToFocus);
   addingTo = undefined;
   addPending = [];
   selection = [];
@@ -510,6 +519,61 @@ function enterFocus(g: BuildingGroup) {
   clearTileHighlight();
   paintSelection();
   renderSelected();
+}
+
+/** Доля свободной области экрана, которую занимает здание после подлёта. */
+const FOCUS_FILL = 0.8;
+
+/** Плавный подлёт к зданию режима: оно занимает 80% ширины (без правой колонки) или высоты; наклон и поворот те же. */
+function flyToFocus() {
+  const center = overpassLayer.focusFrame()?.center;
+  if (!center) return;
+  const canvas = map.getCanvas();
+  const right = document.getElementById('right-col')!;
+  // На узком экране колонка внизу — тогда ширину не урезаем
+  const rightW = right.offsetTop < 100 ? canvas.clientWidth - right.offsetLeft : 0;
+  const availW = canvas.clientWidth - rightW, availH = canvas.clientHeight;
+  // Размер на экране зависит от удалённости от камеры (перспектива) — меряем на пробной камере,
+  // уже наведённой на здание, и уточняем зум несколько раз
+  type Tr = { clone(): Tr; setCenter(c: maplibregl.LngLat): void; setZoom(z: number): void; getProjectionDataForCustomLayer(): { mainMatrix: ArrayLike<number> } };
+  const measure = (z: number) => {
+    // В maplibre-gl 6 состояние камеры — во внутреннем map._camera.transform
+    const tr = (map as unknown as { _camera: { transform: Tr } })._camera.transform.clone();
+    tr.setCenter(center);
+    tr.setZoom(z);
+    return overpassLayer.focusFrame(tr.getProjectionDataForCustomLayer().mainMatrix)?.rect;
+  };
+  let zoom = map.getZoom();
+  let rect: [number, number, number, number] | undefined;
+  try {
+    rect = measure(zoom);
+    for (let i = 0; rect && i < 5; i++) {
+      const [x0, y0, x1, y1] = rect;
+      const step = Math.log2(Math.min(availW * FOCUS_FILL / Math.max(x1 - x0, 1), availH * FOCUS_FILL / Math.max(y1 - y0, 1)));
+      if (!Number.isFinite(step)) { rect = undefined; break; }
+      zoom = Math.min(zoom + step, map.getMaxZoom());
+      rect = measure(zoom);
+      if (Math.abs(step) < 0.02) break;
+    }
+  } catch (err) {
+    console.warn('[focus] замер на пробной камере не удался', err);
+    rect = undefined;
+  }
+  // Запасной вариант: по текущему виду, без учёта перспективы
+  const now = overpassLayer.focusFrame()?.rect;
+  if (!rect && now) {
+    const scale = Math.min(availW * FOCUS_FILL / Math.max(now[2] - now[0], 1), availH * FOCUS_FILL / Math.max(now[3] - now[1], 1));
+    zoom = Math.min(map.getZoom() + Math.log2(scale), map.getMaxZoom());
+  }
+  // Пробная камера смотрит в основание здания — сдвигаем так, чтобы в центр свободной области попал весь объём
+  const dx = rect ? (rect[0] + rect[2]) / 2 - canvas.clientWidth / 2 : 0;
+  const dy = rect ? (rect[1] + rect[3]) / 2 - canvas.clientHeight / 2 : 0;
+  map.easeTo({
+    center,
+    zoom,
+    offset: [-rightW / 2 - dx, -dy],
+    duration: 800,
+  });
 }
 
 function exitFocus() {
@@ -1027,6 +1091,10 @@ function renderChanges() {
   // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
   const show = changes.length > 0 || session.canUndo() || session.canRedo();
   changesEl.hidden = !show;
+  editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : '· не выполнен вход';
+  // Появились правки — раскрываем панель, исчезли — сворачиваем; в остальное время решает пользователь
+  if (show !== editsHadContent) setCollapsed(editsPanel, !show);
+  editsHadContent = show;
   if (!show) { changesEl.innerHTML = ''; return; }
   const list = changes.map((c) => `
     <li><a href="#" data-select="${esc(c.key)}">${esc(c.key)}</a>${c.created ? ' (новое)' : ''}

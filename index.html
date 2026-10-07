@@ -9,11 +9,11 @@
 <body>
   <div id="map"></div>
   <div id="op-indicator" hidden><span class="dot"></span><span class="label"></span></div>
+  <div id="left-col" class="col">
   <aside id="panel" class="panel">
     <header class="panel-head"><h1>OSM Simple 3D</h1><button type="button" class="collapse-btn" title="Свернуть" aria-expanded="true"></button></header>
     <div class="panel-body">
     <label class="server-line">Сервер OSM <select id="server-select" title="Откуда загружать данные для редактирования и куда отправлять"></select></label>
-    <p id="account" class="account-line"></p>
     <label class="toggle"><input id="mono-toggle" type="checkbox" /> Убрать цвета</label>
     <label class="toggle" title="Правая или средняя кнопка мыши, либо Ctrl + левая"><input id="orbit-toggle" type="checkbox" /> Вращение вокруг точки под курсором</label>
     <details id="gfx" class="gfx">
@@ -27,13 +27,24 @@
       <p id="perf" class="hint">FPS: — · треугольников: —</p>
     </details>
     <p id="status" class="hint">Приблизьте карту (z ≥ 15) и кликните по зданию.</p>
-    <section id="changes" hidden></section>
     </div>
   </aside>
+  <!-- Вертикальные панели инструментов (режим здания и др.) -->
+  <div id="toolbars"></div>
+  </div>
+  <div id="right-col" class="col">
   <aside id="info-panel" class="panel">
     <header class="panel-head"><h1>Свойства</h1><button type="button" class="collapse-btn" title="Свернуть" aria-expanded="true"></button></header>
     <div class="panel-body"><div id="info"></div></div>
   </aside>
+  <aside id="edits-panel" class="panel collapsed" data-auto-collapse>
+    <header class="panel-head"><h1>Правки <span id="edits-count" class="hint"></span></h1><button type="button" class="collapse-btn" title="Развернуть" aria-expanded="false"></button></header>
+    <div class="panel-body">
+      <p id="account" class="account-line"></p>
+      <section id="changes" hidden></section>
+    </div>
+  </aside>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

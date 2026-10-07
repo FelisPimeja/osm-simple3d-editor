@@ -137,6 +137,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   visible = true;
   /** Режим одного здания: рисуется и выбирается только группа FOCUS_GROUP (здание + земля). */
   private focused = false;
+  /** Матрица проекции MapLibre из последнего кадра — чтобы проецировать сцену режима здания до её первой отрисовки. */
+  private lastMain?: THREE.Matrix4;
 
   constructor(readonly id: string) {}
 
@@ -159,6 +161,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private renderGroups(options: CustomRenderMethodInput) {
     const renderer = this.renderer!;
     const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
+    this.lastMain = main;
     let triangles = 0;
     for (const g of this.activeGroups()) {
       g.camera.projectionMatrix = main.clone().multiply(g.model);
@@ -199,6 +202,31 @@ export class BuildingsLayer implements CustomLayerInterface {
     grid.position.z = -0.01;
     g.scene.add(ground, grid);
     this.install(FOCUS_GROUP, g);
+  }
+
+  /**
+   * Здание режима одного здания при текущей камере: прямоугольник его 3D-габаритов на экране (px)
+   * и центр основания — для подлёта. mainMatrix — проекция другой (пробной) камеры MapLibre.
+   */
+  focusFrame(mainMatrix?: ArrayLike<number>): { rect: [number, number, number, number]; center: LngLat } | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    const main = mainMatrix ? new THREE.Matrix4().fromArray(Array.from(mainMatrix)) : this.lastMain;
+    if (!g || !this.map || !main) return;
+    const box = groupBox(g);
+    if (box.isEmpty()) return;
+    const m = main.clone().multiply(g.model);
+    const canvas = this.map.getCanvas();
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) {
+      const v = new THREE.Vector4(x, y, z, 1).applyMatrix4(m);
+      if (v.w <= 0) continue; // точка за камерой
+      const px = (v.x / v.w + 1) / 2 * canvas.clientWidth, py = (1 - v.y / v.w) / 2 * canvas.clientHeight;
+      x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py);
+    }
+    if (!Number.isFinite(x0)) return;
+    const c = box.getCenter(new THREE.Vector3());
+    const merc = new MercatorCoordinate(g.origin.x + c.x * g.metersToMerc, g.origin.y - c.y * g.metersToMerc, 0);
+    return { rect: [x0, y0, x1, y1], center: merc.toLngLat() };
   }
 
   /** Центр здания в режиме одного здания: координаты, высота (середина) и положение на экране. */

@@ -1,6 +1,6 @@
 import type { Map as MlMap } from 'maplibre-gl';
 import type { Bbox } from '../osm/api';
-import { centroid, kindOf, markOutlinesWithParts, parseBuildings, type Feature3D } from '../osm/model';
+import { centroid, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D } from '../osm/model';
 import { fetchBuildings, OverpassBusyError, OverpassPool } from '../osm/overpass';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
@@ -21,7 +21,7 @@ type Entry =
   | { state: 'lookup' } // ищем в IndexedDB
   | { state: 'queued' } // в IndexedDB нет, ждёт свободного инстанса Overpass
   | { state: 'loading'; abort: AbortController }
-  | { state: 'ready'; features: Feature3D[]; fetchedAt: number; refreshing?: AbortController; refreshAfter?: number }
+  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number; refreshing?: AbortController; refreshAfter?: number }
   | { state: 'error'; retryAt: number; attempts: number };
 
 /**
@@ -48,6 +48,11 @@ export class OverpassTiles {
   private readonly hiddenOutlines = new Map<string, string>();
   /** Ключи тайлов в IndexedDB — для режима cached не нужно опрашивать базу по каждому тайлу экрана. */
   private stored = new Set<string>();
+  /** Отношения type=building из загруженных тайлов и обратный индекс «член → группа». */
+  private readonly groups = new Map<string, BuildingGroup>();
+  private readonly memberGroup = new Map<string, string>();
+  /** Тайлы, перезапрошенные кнопкой: до прихода ответа считаются загружающимися в индикаторе. */
+  private readonly reloading = new Set<string>();
   mode: OverpassMode = 'off';
 
   constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, private readonly onChange: () => void) {
@@ -65,14 +70,30 @@ export class OverpassTiles {
     return this.rendered.get(key);
   }
 
+  /** Группа type=building, в которую входит объект (или сама группа по её ключу). */
+  groupOf(key: string): BuildingGroup | undefined {
+    return this.groups.get(this.memberGroup.get(key) ?? key);
+  }
+
+  private indexGroups(groups: BuildingGroup[]) {
+    for (const g of groups) {
+      this.groups.set(g.key, g);
+      for (const m of g.members) {
+        const cur = this.memberGroup.get(m);
+        if (!cur || cur === g.key || !this.groups.has(cur)) this.memberGroup.set(m, g.key);
+      }
+    }
+  }
+
   /** Ключи тайлов, чьи здания сейчас нарисованы нашим слоем. */
   displayed(): string[] {
     return this.layer.groupKeys();
   }
 
   status(): { ready: number; total: number; loading: number; waiting: number } {
-    const count = (state: Entry['state']) => this.wanted.filter((k) => this.cache.get(k)?.state === state).length;
-    return { ready: count('ready'), total: this.wanted.length, loading: count('loading') + count('lookup') + count('queued'), waiting: count('error') };
+    const count = (state: Entry['state']) => this.wanted.filter((k) => this.cache.get(k)?.state === state && !this.reloading.has(k)).length;
+    const reloading = this.wanted.filter((k) => this.reloading.has(k)).length;
+    return { ready: count('ready'), total: this.wanted.length, loading: count('loading') + count('lookup') + count('queued') + reloading, waiting: count('error') };
   }
 
   /** Пересчитать нужные тайлы после движения карты. */
@@ -179,10 +200,10 @@ export class OverpassTiles {
     let result: 'ok' | 'busy' | 'error' | 'aborted' = 'ok';
     try {
       const elements = await fetchBuildings(ep.url, tileBbox(key), abort.signal);
-      const { features } = timed('overpass: разбор ответа', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
+      const { features, groups } = timed('overpass: разбор ответа', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const fetchedAt = Date.now();
-      this.cache.set(key, { state: 'ready', features, fetchedAt });
-      void this.store.put(key, features, fetchedAt);
+      this.cache.set(key, { state: 'ready', features, groups, fetchedAt });
+      void this.store.put(key, { features, groups, fetchedAt });
       this.stored.add(key);
       this.evict();
       this.tileReady(key);
@@ -207,6 +228,7 @@ export class OverpassTiles {
       this.cache.set(key, { state: 'error', retryAt: Date.now() + delay, attempts: attempts + 1 });
       this.schedulePump(delay);
     } finally {
+      this.reloading.delete(key);
       this.pool.release(ep, result);
       this.pump();
       this.onChange();
@@ -217,9 +239,22 @@ export class OverpassTiles {
    * Отправленные правки — сразу в данные тайлов (память и IndexedDB), без перезапроса Overpass:
    * иначе до фонового обновления тайла кеш показывал бы старые теги. fetchedAt не трогаем.
    */
-  async applySaved(saved: Map<string, { version: number; tags: Record<string, string> }>) {
-    const patch = (features: Feature3D[]): Feature3D[] | undefined => {
-      if (!features.some((f) => saved.has(f.key))) return;
+  async applySaved(saved: Map<string, { version: number; tags: Record<string, string> }>, savedGroups: BuildingGroup[] = []) {
+    // Группы (новые или с другим составом) кладём целиком в тайлы, где лежит хоть один их член
+    const groupFor = (t: { features: Feature3D[] }) => savedGroups.filter((g) => t.features.some((f) => g.members.includes(f.key)));
+    const patchGroups = (t: { features: Feature3D[]; groups: BuildingGroup[] }) => {
+      const fresh = new Map(groupFor(t).map((g) => [g.key, g]));
+      const out = t.groups.map((g) => {
+        const s = saved.get(g.key);
+        return fresh.get(g.key) ?? (s ? { ...g, version: s.version, tags: s.tags } : g);
+      });
+      for (const g of fresh.values()) if (!t.groups.some((x) => x.key === g.key)) out.push(g);
+      return out;
+    };
+    const touched = (t: { features: Feature3D[]; groups: BuildingGroup[] }) =>
+      t.features.some((f) => saved.has(f.key)) || t.groups.some((g) => saved.has(g.key)) || groupFor(t).length > 0;
+    const patch = (features: Feature3D[]): Feature3D[] => {
+      if (!features.some((f) => saved.has(f.key))) return features;
       const out: Feature3D[] = [];
       for (const f of features) {
         const s = saved.get(f.key);
@@ -234,18 +269,32 @@ export class OverpassTiles {
     for (const [key, e] of this.cache) {
       if (e.state !== 'ready') continue;
       inMemory.add(key);
-      const features = patch(e.features);
-      if (!features) continue;
-      e.features = features;
-      void this.store.put(key, features, e.fetchedAt);
+      if (!touched(e)) continue;
+      e.groups = patchGroups(e);
+      e.features = patch(e.features);
+      this.indexGroups(e.groups);
+      void this.store.put(key, e);
       if (this.layer.groupKeys().includes(key)) this.show(key);
     }
     for (const key of this.stored) {
       if (inMemory.has(key)) continue;
       const stored = await this.store.get(key);
-      const features = stored && patch(stored.features);
-      if (features) await this.store.put(key, features, stored.fetchedAt);
+      if (stored && touched(stored)) {
+        await this.store.put(key, { ...stored, groups: patchGroups(stored), features: patch(stored.features) });
+      }
     }
+  }
+
+  /** Отладка: перезапросить видимые тайлы из Overpass (старые данные остаются на экране до прихода новых). */
+  reloadVisible(): number {
+    let n = 0;
+    for (const key of this.wanted) {
+      const e = this.cache.get(key);
+      if (e?.state === 'ready') { e.fetchedAt = 0; e.refreshAfter = undefined; this.reloading.add(key); n++; }
+    }
+    this.update();
+    this.onChange();
+    return n;
   }
 
   async clearStore() {
@@ -258,6 +307,8 @@ export class OverpassTiles {
 
   /** Тайл получил данные: показать его и, если надо, перестроить соседей (их контуры могли «увидеть» части). */
   private tileReady(key: string) {
+    const e = this.cache.get(key);
+    if (e?.state === 'ready') this.indexGroups(e.groups);
     if (this.wanted.includes(key)) this.show(key);
     for (const n of neighbours(key)) {
       if (!this.hiddenOutlines.has(n)) continue;

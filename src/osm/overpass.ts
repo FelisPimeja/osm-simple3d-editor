@@ -59,6 +59,7 @@ export async function fetchBuildings(endpoint: string, [w, s, e, n]: Bbox, signa
   way["building:part"](${bbox});
   relation["building"]["type"="multipolygon"](${bbox});
   relation["building:part"]["type"="multipolygon"](${bbox});
+  relation["type"="building"](${bbox});
 );
 out body;
 >;

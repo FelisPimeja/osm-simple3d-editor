@@ -13,12 +13,18 @@ export interface TagEdit {
   before: Tags;
   /** Теги, которые надо записать. */
   after: Tags;
+  /** Новый объект: отрицательный id, уходит в <create>. */
+  created?: boolean;
+  /** У отношения изменён состав членов (element.members — уже новый). */
+  membersChanged?: boolean;
 }
 
 export interface UploadResult {
   changeset: number;
   /** key → новая версия. */
   versions: Map<string, number>;
+  /** Ключи созданных объектов: временный ('relation/-1') → настоящий. */
+  newKeys: Map<string, string>;
   /** Объекты, изменённые на сервере параллельно: записаны поверх свежей версии с этими тегами. */
   rebased: Map<string, { element: OsmWay | OsmRelation; tags: Tags }>;
 }
@@ -44,17 +50,20 @@ const xmlEsc = (s: string | number) =>
 const tagsXml = (tags: Tags) =>
   Object.entries(tags).map(([k, v]) => `<tag k="${xmlEsc(k)}" v="${xmlEsc(v)}"/>`).join('');
 
-/** osmChange с блоком <modify> для изменённых элементов. */
-export function buildOsmChange(edits: { element: OsmWay | OsmRelation; tags: Tags }[], changeset: number): string {
-  const body = edits.map(({ element: e, tags }) => {
-    const attrs = `id="${e.id}" version="${e.version}" changeset="${changeset}"`;
+/** osmChange: новые элементы — в <create>, изменённые — в <modify>. */
+export function buildOsmChange(edits: { element: OsmWay | OsmRelation; tags: Tags; created?: boolean }[], changeset: number): string {
+  const xml = ({ element: e, tags, created }: (typeof edits)[number]) => {
+    const attrs = `id="${e.id}"${created ? '' : ` version="${e.version}"`} changeset="${changeset}"`;
     if (e.type === 'way') {
       return `<way ${attrs}>${e.nodes.map((n) => `<nd ref="${n}"/>`).join('')}${tagsXml(tags)}</way>`;
     }
     const members = e.members.map((m) => `<member type="${m.type}" ref="${m.ref}" role="${xmlEsc(m.role)}"/>`).join('');
     return `<relation ${attrs}>${members}${tagsXml(tags)}</relation>`;
-  });
-  return `<osmChange version="0.6" generator="${GENERATOR}"><modify>${body.join('')}</modify></osmChange>`;
+  };
+  const create = edits.filter((e) => e.created).map(xml).join('');
+  const modify = edits.filter((e) => !e.created).map(xml).join('');
+  return `<osmChange version="0.6" generator="${GENERATOR}">${create ? `<create>${create}</create>` : ''}${
+    modify ? `<modify>${modify}</modify>` : ''}</osmChange>`;
 }
 
 async function call(method: string, path: string, body?: string, accept = 'text/plain'): Promise<string> {
@@ -93,15 +102,18 @@ function rebase(edit: TagEdit, fresh: OsmWay | OsmRelation): { tags: Tags } | { 
   return { tags };
 }
 
-/** Новые версии из diffResult. */
-function parseDiffResult(xml: string): Map<string, number> {
+/** Новые версии и id из diffResult (ключи — по старым id). */
+function parseDiffResult(xml: string): Pick<UploadResult, 'versions' | 'newKeys'> {
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
-  const out = new Map<string, number>();
+  const versions = new Map<string, number>();
+  const newKeys = new Map<string, string>();
   for (const el of Array.from(doc.documentElement.children)) {
-    const id = el.getAttribute('old_id'), v = el.getAttribute('new_version');
-    if (id && v) out.set(`${el.tagName}/${id}`, Number(v));
+    const id = el.getAttribute('old_id'), v = el.getAttribute('new_version'), nid = el.getAttribute('new_id');
+    if (!id || !v) continue;
+    versions.set(`${el.tagName}/${id}`, Number(v));
+    if (nid && nid !== id) newKeys.set(`${el.tagName}/${id}`, `${el.tagName}/${nid}`);
   }
-  return out;
+  return { versions, newKeys };
 }
 
 /**
@@ -119,20 +131,23 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
   const changeset = Number(await call('PUT', '/changeset/create', changesetXml));
   const rebased: UploadResult['rebased'] = new Map();
   try {
-    let payload = edits.map((e) => ({ element: e.element, tags: e.after }));
+    let payload: Parameters<typeof buildOsmChange>[0] = edits.map((e) => ({ element: e.element, tags: e.after, created: e.created }));
     for (let attempt = 0; ; attempt++) {
       onStatus(`Загружаем ${payload.length} объектов в changeset ${changeset}…`);
       try {
-        const versions = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
-        return { changeset, versions, rebased };
+        const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
+        return { changeset, ...diff, rebased };
       } catch (err) {
         if (!(err instanceof OsmApiError) || err.status !== 409 || attempt > 0) throw err;
         onStatus('Объекты изменились на сервере — переносим правки на свежие версии…');
         const conflicts: { key: string; tags: string[] }[] = [];
         payload = [];
         for (const edit of edits) {
+          if (edit.created) { payload.push({ element: edit.element, tags: edit.after, created: true }); continue; }
           const fresh = await fetchElement(edit.key);
           if (fresh.version === edit.element.version) { payload.push({ element: edit.element, tags: edit.after }); continue; }
+          // Состав членов автоматически не сливаем — пусть пользователь перезагрузит область
+          if (edit.membersChanged) { conflicts.push({ key: edit.key, tags: ['состав членов'] }); continue; }
           const r = rebase(edit, fresh);
           if ('conflict' in r) conflicts.push({ key: edit.key, tags: r.conflict });
           else { payload.push({ element: fresh, tags: r.tags }); rebased.set(edit.key, { element: fresh, tags: r.tags }); }

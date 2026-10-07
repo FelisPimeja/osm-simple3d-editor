@@ -126,7 +126,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private readonly groups = new Map<string, MeshGroup>();
   /** Асинхронные сборки групп: новая сборка или удаление группы отменяет предыдущую. */
   private readonly pending = new Map<string, symbol>();
-  private selectedKey?: string;
+  private selected = new Set<string>();
   /** Все здания белым, без цветов из тегов. */
   private monochrome = false;
   private graphics: GraphicsOptions = { hemisphere: false, groundAO: false, edges: false };
@@ -332,11 +332,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     return { key: best.key, lngLat: merc.toLngLat(), altitude: p.z };
   }
 
-  select(key: string | undefined) {
-    const prev = this.selectedKey;
-    this.selectedKey = key;
+  /** Подсветить объект или несколько (группу type=building). */
+  select(keys: string | string[] | undefined) {
+    const prev = this.selected;
+    this.selected = new Set(keys === undefined ? [] : typeof keys === 'string' ? [keys] : keys);
     for (const g of this.groups.values()) {
-      for (const k of [prev, key]) {
+      for (const k of new Set([...prev, ...this.selected])) {
         const item = k ? g.byKey.get(k) : undefined;
         if (item) this.paintItem(g, item);
       }
@@ -445,7 +446,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const attr = g.mesh?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
     if (!attr) return;
     const colors = attr.array as Float32Array;
-    const selected = it.feature.key === this.selectedKey;
+    const selected = this.selected.has(it.feature.key);
     const ao = this.graphics.groundAO;
     const fade = Math.max(0.5, Math.min(AO_HEIGHT, AO_FADE_SHARE * it.top));
     const depth = (1 - AO_MIN) * Math.min(1, it.top / AO_HEIGHT);

@@ -7,12 +7,12 @@ import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights } from './osm/heights';
-import { incompleteBuildingRelations, parseBuildings, type Feature3D } from './osm/model';
+import { centroid, incompleteBuildingRelations, parseBuildings, pointInRing, type BuildingGroup, type Feature3D } from './osm/model';
 import { BuildingsLayer, type GraphicsOptions, type RenderedFeature } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
-import { EditSession } from './edit/session';
+import { EditSession, type Tagged } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { bindTagForms, renderTagForm } from './edit/tag-form';
@@ -72,6 +72,8 @@ const map = new maplibregl.Map({
   // MSAA задаётся только при создании контекста — переключение требует перезагрузки
   canvasContextAttributes: { antialias: gfx.antialias },
   style: STYLE_URL,
+  // Shift+клик — множественное выделение; зум рамкой с Shift перехватывал бы клик
+  boxZoom: false,
   center: [37.6205, 55.7535],
   zoom: 16,
   pitch: 60,
@@ -113,6 +115,20 @@ let editing: Map<string, RenderedFeature> | undefined;
 /** Правки тегов в текущей области редактирования. */
 let session: EditSession | undefined;
 let selectedKey: string | undefined;
+/** Все выделенные объекты (Shift+клик добавляет); selectedKey — последний из них. */
+let selection: string[] = [];
+/** Здания и части области редактирования — для поиска скрытого контура при объединении. */
+let editFeatures: Feature3D[] = [];
+/** Режим «добавить части»: группа, в которую добавляем, и отмеченные Shift+кликом кандидаты. */
+let addingTo: BuildingGroup | undefined;
+let addPending: string[] = [];
+/** Временные отрицательные id для создаваемых отношений. */
+let nextNewId = -1;
+/** Отношения type=building области редактирования и индекс «член → группа». */
+let editGroups = new Map<string, BuildingGroup>();
+let editMemberGroup = new Map<string, string>();
+/** Группа, в которую «провалились» двойным кликом: внутри неё выделяются отдельные части. */
+let drill: BuildingGroup | undefined;
 /** Исходные элементы API области редактирования (геометрия и члены нужны для osmChange). */
 let rawElements = new Map<string, OsmWay | OsmRelation>();
 let osmUser: OsmUser | undefined;
@@ -243,6 +259,10 @@ async function showCacheInfo() {
 document.getElementById('cache-clear')!.addEventListener('click', async () => {
   await overpass.clearStore();
   await showCacheInfo();
+});
+document.getElementById('tiles-reload')!.addEventListener('click', () => {
+  if (!overpass.enabled) return setStatus(`Тайлы Overpass загружаются с z ≥ ${OVERPASS_MIN_ZOOM} вне режима редактирования.`, true);
+  setStatus(`Перезапрашиваем из Overpass тайлов: ${overpass.reloadVisible()}.`);
 });
 document.getElementById('gfx')!.addEventListener('toggle', () => void showCacheInfo());
 void showCacheInfo();
@@ -383,11 +403,18 @@ async function enterEditMode() {
     rawElements = new Map(
       elements.filter((e): e is OsmWay | OsmRelation => e.type !== 'node').map((e) => [`${e.type}/${e.id}`, e]),
     );
-    const { features, skipped } = parseBuildings(elements);
+    const { features, groups, skipped } = parseBuildings(elements);
+    editGroups = new Map(groups.map((g) => [g.key, g]));
+    for (const g of groups) {
+      const rel = rawElements.get(g.key);
+      if (rel?.type === 'relation') (g as BuildingGroup & Tagged).relMembers = rel.members.map((m) => ({ ...m }));
+    }
+    editFeatures = features;
     const rendered = editLayer.setGroup('edit', features, [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]);
     if (!map.getLayer(editLayer.id)) map.addLayer(editLayer);
     editing = new Map(rendered.map((r) => [r.feature.key, r]));
-    session = new EditSession(features, onSessionChange);
+    session = new EditSession([...features, ...groups], onSessionChange);
+    rebuildGroupIndex();
     renderChanges();
     overpassLayer.select(undefined);
     refreshOverpass(); // в режиме редактирования Overpass-слой выключен
@@ -412,6 +439,10 @@ function exitEditMode() {
   if (n && !confirm(`Есть несохранённые изменения (${n} объектов). Выйти и потерять их?`)) return;
   session = undefined;
   selectedKey = undefined;
+  selection = [];
+  editFeatures = [];
+  editGroups = new Map();
+  editMemberGroup = new Map();
   rawElements = new Map();
   renderChanges();
   editing = undefined;
@@ -441,24 +472,89 @@ function hideTileBuildingsIn([w, s, e, n]: Bbox) {
   updateTileFilter();
 }
 
-map.on('click', (e) => {
-  if (editing) {
-    selectEdited(editLayer.pick(e.point));
-    return;
+/** Группа type=building объекта (или сама группа по своему ключу) в текущем режиме. */
+function groupOf(key: string): BuildingGroup | undefined {
+  if (editing) return editGroups.get(editMemberGroup.get(key) ?? key);
+  return overpass.groupOf(key);
+}
+
+/** Индекс «член → группа» по существующим сейчас группам (созданные можно отменить). */
+function rebuildGroupIndex() {
+  editMemberGroup = new Map();
+  for (const g of [...editGroups.values()]) {
+    if (!session?.get(g.key)) continue;
+    for (const m of g.members) if (!editMemberGroup.has(m)) editMemberGroup.set(m, g.key);
   }
-  const key = overpassLayer.pick(e.point);
-  overpassLayer.select(key);
-  const r = key ? overpass.get(key) : undefined;
-  if (r) {
+}
+
+/** Что выделить по клику: вне группы — группу целиком; внутри группы — часть; клик мимо группы — выход к ней. */
+function resolveClick(key: string | undefined): string | undefined {
+  if (drill) {
+    if (key && drill.members.includes(key)) return key;
+    const g = drill;
+    drill = undefined;
+    return g.key;
+  }
+  return key ? (groupOf(key)?.key ?? key) : undefined;
+}
+
+/** Ключи для подсветки: у группы — все её члены. */
+function highlightKeys(key: string | undefined): string[] {
+  if (!key) return [];
+  const g = groupOf(key);
+  return g?.key === key ? g.members : [key];
+}
+
+/** Выделение в режиме просмотра (Overpass). false — под курсором нет нашего объекта. */
+function selectOverpass(key: string | undefined): boolean {
+  selection = key ? [key] : [];
+  overpassLayer.select(highlightKeys(key));
+  const g = key ? groupOf(key) : undefined;
+  if (key && g?.key === key) {
     clearTileHighlight();
-    infoEl.innerHTML = `<p class="hint">Данные Overpass</p>${describeOsm(r)}`;
+    infoEl.innerHTML = `<p class="hint">Данные Overpass</p>${describeGroup(g)}`;
+    return true;
+  }
+  const r = key ? overpass.get(key) : undefined;
+  if (!r) return false;
+  clearTileHighlight();
+  infoEl.innerHTML = `<p class="hint">Данные Overpass</p>${drillHint(key!)}${describeOsm(r)}`;
+  return true;
+}
+
+map.on('click', (e) => {
+  const key = (editing ? editLayer : overpassLayer).pick(e.point);
+  if (addingTo) {
+    if (e.originalEvent.shiftKey) { if (key) toggleAddPending(key); return; }
+    stopAdding(); // обычный клик — выходим из режима добавления
+  }
+  if (e.originalEvent.shiftKey && key) {
+    // Shift+клик: добавить/убрать объект; внутри группы — только её члены
+    const k = drill ? (drill.members.includes(key) ? key : undefined) : (groupOf(key)?.key ?? key);
+    if (k) toggleSelection(k);
     return;
   }
+  if (editing) {
+    selectEdited(resolveClick(key));
+    return;
+  }
+  if (selectOverpass(resolveClick(key))) return;
   const f = map.queryRenderedFeatures(e.point, { layers: TILE_LAYERS })[0];
   infoEl.innerHTML = f ? describeTile(f) : '';
   map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], f?.layer.id === MERGED_LAYER ? -1 : f?.id ?? -1]);
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], f?.layer.id === MERGED_LAYER ? f.properties.key : '']);
   if (f) resolveTileFeature(f);
+});
+
+// Двойной клик по группе — «провалиться» в неё и выделить часть под курсором (вместо приближения карты)
+map.on('dblclick', (e) => {
+  const key = (editing ? editLayer : overpassLayer).pick(e.point);
+  const g = key ? groupOf(key) : undefined;
+  if (!key || !g || drill?.key === g.key) return;
+  e.preventDefault();
+  drill = g;
+  if (editing) selectEdited(key);
+  else selectOverpass(key);
 });
 
 map.on('mousemove', (e) => {
@@ -469,8 +565,15 @@ map.on('mousemove', (e) => {
 });
 
 infoEl.addEventListener('click', (e) => {
+  const link = (e.target as HTMLElement).closest<HTMLElement>('a[data-select]');
+  if (link) { e.preventDefault(); if (editing) selectEdited(link.dataset.select); else selectOverpass(link.dataset.select); return; }
   const btn = (e.target as HTMLElement).closest('button');
   if (!btn) return;
+  if (btn.dataset.merge !== undefined) return mergeIntoBuilding();
+  if (btn.dataset.exclude !== undefined) return excludeFromGroup();
+  if (btn.dataset.addParts !== undefined) return startAdding();
+  if (btn.dataset.addConfirm !== undefined) return confirmAdding();
+  if (btn.dataset.addCancel !== undefined) return stopAdding();
   if (btn.dataset.hide) userHidden.add(btn.dataset.hide);
   else if (btn.dataset.unhideAll !== undefined) userHidden.clear();
   else return;
@@ -482,6 +585,10 @@ infoEl.addEventListener('click', (e) => {
 });
 
 function clearSelection() {
+  drill = undefined;
+  addingTo = undefined;
+  addPending = [];
+  selection = [];
   infoEl.innerHTML = '';
   overpassLayer.select(undefined);
   clearTileHighlight();
@@ -516,21 +623,215 @@ function setStatus(text: string, error = false) {
 }
 
 function selectEdited(key: string | undefined) {
+  addingTo = undefined;
+  addPending = [];
+  // Переход из списка правок или undo к объекту вне текущей группы — выходим из неё
+  if (drill && key && key !== drill.key && !drill.members.includes(key)) drill = undefined;
+  if (drill && key === drill.key) drill = undefined;
+  // Вне группы её член выделяется вместе с ней
+  if (!drill && key) key = groupOf(key)?.key ?? key;
+  if (key && !session?.get(key)) key = undefined; // например, отменили создание группы
+  selection = key ? [key] : [];
   selectedKey = key;
-  editLayer.select(key);
+  paintSelection();
   renderSelected();
 }
 
+function toggleSelection(key: string) {
+  selection = selection.includes(key) ? selection.filter((k) => k !== key) : [...selection, key];
+  if (!editing) {
+    clearTileHighlight();
+    const one = selection.length === 1 ? selection[0] : undefined;
+    if (selection.length > 1) { overpassLayer.select(selection.flatMap(highlightKeys)); renderMulti(); }
+    else if (!one || !selectOverpass(one)) clearSelection();
+    return;
+  }
+  selectedKey = selection.at(-1);
+  paintSelection();
+  renderSelected();
+}
+
+function paintSelection() {
+  editLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
+}
+
+/** Почему объект нельзя добавить в группу (undefined — можно). */
+function addReason(key: string): string | undefined {
+  const f = session?.get(key);
+  if (!f || !('polygons' in f)) return 'это не здание и не часть';
+  if (!f.tags['building:part'] || f.tags['building:part'] === 'no') return 'нет тега building:part';
+  const g = groupOf(key);
+  if (g) return g.key === addingTo?.key ? 'уже в этом здании' : `уже входит в ${g.key}`;
+}
+
+let addMessage = '';
+
+function toggleAddPending(key: string) {
+  const reason = addPending.includes(key) ? undefined : addReason(key);
+  addMessage = reason ? `${key}: ${reason}.` : '';
+  if (!reason) addPending = addPending.includes(key) ? addPending.filter((k) => k !== key) : [...addPending, key];
+  paintSelection();
+  renderSelected();
+}
+
+function startAdding() {
+  const g = selectedKey ? editGroups.get(selectedKey) : undefined;
+  if (!g) return;
+  addingTo = g;
+  addPending = [];
+  addMessage = '';
+  renderSelected();
+}
+
+function stopAdding() {
+  addingTo = undefined;
+  addPending = [];
+  addMessage = '';
+  paintSelection();
+  renderSelected();
+}
+
+function confirmAdding() {
+  const g = addingTo as (BuildingGroup & Tagged) | undefined;
+  if (!g?.relMembers || !session || !addPending.length) return;
+  const extra = addPending.map((k) => {
+    const [type, ref] = k.split('/');
+    return { type: type as 'way' | 'relation', ref: Number(ref), role: 'part' };
+  });
+  addingTo = undefined;
+  addPending = [];
+  session.setMembers(g.key, [...g.relMembers, ...extra]);
+  selectEdited(g.key);
+}
+
+function renderAdding() {
+  const g = addingTo!;
+  const list = addPending.map((k) => `<li>${esc(k)}</li>`).join('');
+  infoEl.innerHTML = `
+    <h2>Добавить части в <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a></h2>
+    <p class="hint">Shift+клик по частям — отметить или снять. Обычный клик — отмена.</p>
+    ${list ? `<ul class="change-list">${list}</ul>` : '<p class="hint">Пока ничего не отмечено.</p>'}
+    ${addMessage ? `<p class="warn">⚠ ${esc(addMessage)}</p>` : ''}
+    <p><button type="button" data-add-confirm ${addPending.length ? '' : 'disabled'}>Добавить (${addPending.length})</button>
+       <button type="button" data-add-cancel>Отмена</button></p>`;
+}
+
+type MergePlan = { members: { key: string; role: 'outline' | 'part' }[] } | { reason: string };
+
+/** Можно ли объединить выделенное в здание type=building: один контур (выделенный или скрытый под частями) и части. */
+function mergePlan(keys: string[]): MergePlan {
+  if (keys.some((k) => editGroups.has(k))) return { reason: 'В выделении есть здание type=building — объединять можно только отдельные объекты.' };
+  if (keys.some((k) => groupOf(k))) return { reason: 'Часть объектов уже входит в здание type=building.' };
+  const feats = keys.map((k) => session?.get(k)).filter((f): f is Feature3D => !!f && 'polygons' in f);
+  // Контур — всё с тегом building, даже если на нём же стоит building:part (так часто размечают)
+  const isBuilding = (f: Feature3D) => !!f.tags.building && f.tags.building !== 'no';
+  const outlines = new Set(feats.filter(isBuilding));
+  const parts = feats.filter((f) => f.kind === 'part' && !outlines.has(f));
+  if (!parts.length) return { reason: 'Выделите части здания (building:part).' };
+  // Контур, целиком закрытый частями, не рисуется и не выделяется — ищем его под частями
+  const centres = parts.flatMap((p) => p.polygons.map((poly) => centroid(poly.outer)));
+  for (const f of editFeatures) {
+    if (f.kind === 'building' && f.hasParts && centres.some((c) => f.polygons.some((p) => pointInRing(c, p.outer)))) outlines.add(f);
+  }
+  if (!outlines.size) return { reason: 'Не найден контур здания (building) вокруг частей — выделите его тоже.' };
+  if (outlines.size > 1) return { reason: `Найдено контуров: ${outlines.size} — в здании должен быть один.` };
+  const [outline] = outlines;
+  if (groupOf(outline.key)) return { reason: `Контур ${outline.key} уже входит в здание type=building.` };
+  // Контур с building:part одновременно и часть — входит в отношение в обеих ролях
+  const outlineAsPart = outline.kind === 'part' ? [{ key: outline.key, role: 'part' as const }] : [];
+  return { members: [{ key: outline.key, role: 'outline' }, ...outlineAsPart, ...parts.map((p) => ({ key: p.key, role: 'part' as const }))] };
+}
+
+function mergeIntoBuilding() {
+  const plan = mergePlan(selection);
+  if (!session || 'reason' in plan) return;
+  const id = nextNewId--;
+  const key = `relation/${id}`;
+  const tags = { type: 'building' };
+  rawElements.set(key, {
+    type: 'relation', id, version: 0, tags: { ...tags },
+    members: plan.members.map((m) => {
+      const [type, ref] = m.key.split('/');
+      return { type: type as 'way' | 'relation', ref: Number(ref), role: m.role };
+    }),
+  });
+  const rel = rawElements.get(key) as OsmRelation;
+  const group: BuildingGroup & Tagged = { key, type: 'relation', id, version: 0, tags, members: plan.members.map((m) => m.key), relMembers: rel.members };
+  editGroups.set(key, group);
+  session.create(editGroups.get(key)!);
+  drill = undefined;
+  selectEdited(key);
+}
+
+/** Кнопка исключения выделенных частей из группы, в которую «провалились». */
+function excludeButton(): string {
+  if (!editing || !drill || !selection.length || !selection.every((k) => drill!.members.includes(k))) return '';
+  return `<p><button type="button" data-exclude>Исключить из этого здания${selection.length > 1 ? ` (${selection.length})` : ''}</button></p>`;
+}
+
+function excludeFromGroup() {
+  const g = drill as (BuildingGroup & Tagged) | undefined;
+  if (!g?.relMembers || !session) return;
+  const drop = new Set(selection);
+  const members = g.relMembers.filter((m) => !drop.has(`${m.type}/${m.ref}`));
+  session.setMembers(g.key, members);
+  selectEdited(g.key); // выходим на уровень группы
+}
+
+function renderMulti() {
+  const plan: MergePlan = editing ? mergePlan(selection) : { reason: 'Объединять в здание можно в режиме редактирования.' };
+  const list = selection.map((k) => `<li><a href="#" data-select="${esc(k)}">${esc(k)}</a>${
+    editGroups.has(k) ? ' (type=building)' : ''}</li>`).join('');
+  infoEl.innerHTML = `
+    <h2>Выделено: ${selection.length}</h2>
+    <ul class="change-list">${list}</ul>
+    ${drill ? excludeButton() : `<p><button type="button" data-merge ${'reason' in plan ? 'disabled' : ''}>Объединить в здание</button></p>`}
+    ${drill ? '' : 'reason' in plan ? `<p class="hint">${esc(plan.reason)}</p>` : `<p class="hint">Будет создано отношение type=building: контур ${
+      esc(plan.members[0].key)} и частей ${plan.members.filter((m) => m.role === 'part').length}.</p>`}
+    <p class="hint">Shift+клик — добавить или убрать объект.</p>`;
+}
+
 function renderSelected() {
+  if (addingTo) return renderAdding();
+  if (selection.length > 1) return renderMulti();
+  const form = selectedKey && session ? renderTagForm(selectedKey, session) : undefined;
+  const g = selectedKey ? editGroups.get(selectedKey) : undefined;
+  // Отношение type=building — только контейнер: высоты, крыша и прочее живут на контуре и частях
+  if (g) { infoEl.innerHTML = describeGroup(g, true); return; }
   const r = selectedKey ? editing?.get(selectedKey) : undefined;
-  infoEl.innerHTML = r ? describeOsm(r, session ? renderTagForm(r.feature.key, session) : undefined) : '';
+  infoEl.innerHTML = r ? drillHint(r.feature.key) + excludeButton() + describeOsm(r, form) : '';
+}
+
+/** Подсказка над частью, выделенной внутри группы. */
+function drillHint(key: string): string {
+  if (!drill || !drill.members.includes(key)) return '';
+  return `<p class="hint drill">Внутри группы <a href="${server().web}/${drill.key}" target="_blank" rel="noopener">${drill.key}</a>${
+    drill.tags.name ? ` «${esc(drill.tags.name)}»` : ''} — клик вне группы вернёт к ней.</p>`;
+}
+
+function describeGroup(g: BuildingGroup, editable = false): string {
+  return `
+    <h2>type=building — <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a> v${g.version}</h2>
+    <p class="hint">Членов: ${g.members.length}. Двойной клик по зданию — выделение отдельных частей.
+      Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.</p>
+    ${editable ? '<p><button type="button" data-add-parts>Добавить части</button></p>' : ''}
+    ${tagTable(g.tags)}`;
 }
 
 /** После правки тегов: пересобрать меши, обновить панель и список изменений. */
 function onSessionChange(keys: string[]) {
+  // Созданные группы могли появиться или исчезнуть, у групп — смениться состав (undo/redo)
+  if (keys.some((k) => editGroups.has(k))) {
+    for (const k of keys) {
+      const g = editGroups.get(k) as (BuildingGroup & Tagged) | undefined;
+      if (g?.relMembers) g.members = g.relMembers.filter((m) => m.type !== 'node').map((m) => `${m.type}/${m.ref}`);
+    }
+    rebuildGroupIndex();
+    paintSelection();
+  }
   for (const key of keys) {
     const f = session?.get(key);
-    const r = f && editLayer.updateFeature('edit', f);
+    const r = f && 'polygons' in f && editLayer.updateFeature('edit', f as Feature3D);
     if (r) editing?.set(key, r);
   }
   if (selectedKey && keys.includes(selectedKey)) {
@@ -551,7 +852,7 @@ function renderChanges() {
   changesEl.hidden = !show;
   if (!show || !session) { changesEl.innerHTML = ''; return; }
   const list = changes.map((c) => `
-    <li><a href="#" data-select="${esc(c.key)}">${esc(c.key)}</a>
+    <li><a href="#" data-select="${esc(c.key)}">${esc(c.key)}</a>${c.created ? ' (новое)' : ''}
       <ul>${c.diff.map((d) => `<li><code>${esc(d.tag)}</code>: <del>${esc(d.from ?? '—')}</del> → <ins>${esc(d.to ?? '—')}</ins></li>`).join('')}</ul>
     </li>`).join('');
   changesEl.innerHTML = `
@@ -614,21 +915,37 @@ async function doUpload() {
     const edits = changes.map((c) => {
       const element = rawElements.get(c.key);
       if (!element) throw new Error(`Нет исходных данных для ${c.key}`);
-      return { key: c.key, element, before: c.before, after: c.after };
+      const withMembers = c.members && element.type === 'relation' ? { ...element, members: c.members } : element;
+      return { key: c.key, element: withMembers, before: c.before, after: c.after, created: c.created, membersChanged: !!c.members };
     });
     const res = await uploadEdits(edits, uploadComment.trim(), (t) => setStatus(t));
-    const saved = new Map<string, { version: number; tags: Record<string, string> }>();
+    const saved = new Map<string, { version: number; tags: Record<string, string>; newKey?: string }>();
     for (const e of edits) {
       const version = res.versions.get(e.key);
       if (version === undefined) continue;
       const rebased = res.rebased.get(e.key);
       const tags = rebased?.tags ?? e.after;
-      rawElements.set(e.key, { ...(rebased?.element ?? e.element), version, tags });
-      saved.set(e.key, { version, tags });
+      const newKey = res.newKeys.get(e.key);
+      const element = { ...(rebased?.element ?? e.element), version, tags };
+      if (newKey) {
+        // Созданное отношение получило настоящий id
+        element.id = Number(newKey.split('/')[1]);
+        rawElements.delete(e.key);
+        const g = editGroups.get(e.key);
+        if (g) { editGroups.delete(e.key); g.id = element.id; editGroups.set(newKey, g); }
+        selection = selection.map((k) => (k === e.key ? newKey : k));
+        if (selectedKey === e.key) selectedKey = newKey;
+      }
+      rawElements.set(newKey ?? e.key, element);
+      saved.set(e.key, { version, tags, newKey });
     }
     session.markSaved(saved);
     // Overpass отдаёт только боевую базу — правки с тестового сервера в его кеш не кладём
-    if (s.id === 'prod') void overpass.applySaved(saved);
+    if (s.id === 'prod') {
+      const savedGroups = [...saved].map(([k, v]) => editGroups.get(v.newKey ?? k)).filter((g): g is BuildingGroup => !!g)
+        .map((g) => ({ key: g.key, type: g.type, id: g.id, version: g.version, tags: { ...g.tags }, members: [...g.members] }));
+      void overpass.applySaved(saved, savedGroups);
+    }
     uploadComment = '';
     const link = `<a href="${s.web}/changeset/${res.changeset}" target="_blank" rel="noopener">changeset ${res.changeset}</a>`;
     setStatus(`Сохранено: ${saved.size} объектов.` + (res.rebased.size ? ` Поверх чужих правок перенесено: ${res.rebased.size} (геометрия в 3D может быть устаревшей — перезагрузите область).` : ''));

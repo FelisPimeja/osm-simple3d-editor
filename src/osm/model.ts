@@ -17,8 +17,20 @@ export interface Feature3D {
   hasParts: boolean;
 }
 
+/** Отношение type=building: здание, собранное из контура и частей. Своей геометрии нет. */
+export interface BuildingGroup {
+  key: string; // 'relation/456'
+  type: 'relation';
+  id: number;
+  version: number;
+  tags: Record<string, string>;
+  /** Ключи членов-путей и отношений (в т. ч. не загруженных). */
+  members: string[];
+}
+
 export interface ParseResult {
   features: Feature3D[];
+  groups: BuildingGroup[];
   skipped: { key: string; reason: string }[];
 }
 
@@ -48,6 +60,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
   }
 
   const features: Feature3D[] = [];
+  const groups: BuildingGroup[] = [];
   const skipped: ParseResult['skipped'] = [];
   const toCoords = (ring: number[]): LonLat[] | null => {
     const out: LonLat[] = [];
@@ -70,6 +83,13 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
   }
 
   for (const r of relations) {
+    if (r.tags?.type === 'building') {
+      groups.push({
+        key: `relation/${r.id}`, type: 'relation', id: r.id, version: r.version, tags: r.tags,
+        members: r.members.filter((m) => m.type !== 'node').map((m) => `${m.type}/${m.ref}`),
+      });
+      continue;
+    }
     const kind = kindOf(r.tags);
     if (!kind || r.tags?.type !== 'multipolygon') continue;
     const key = `relation/${r.id}`;
@@ -100,7 +120,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
   }
 
   markOutlinesWithParts(features);
-  return { features, skipped };
+  return { features, groups, skipped };
 }
 
 /** Склеивает пути в замкнутые кольца по общим концевым узлам. null — если кольцо не замыкается. */

@@ -1,15 +1,15 @@
-import type { Feature3D } from '../osm/model';
+import type { BuildingGroup, Feature3D } from '../osm/model';
 
 const DB_NAME = 'osm-simple3d';
 const STORE = 'overpass-tiles';
 /** Версия формата записи: при изменении Feature3D старые записи игнорируются. */
-const FORMAT = 2;
+const FORMAT = 3;
 /** Сколько тайлов хранить; при превышении удаляются самые старые. */
 const MAX_TILES = 300;
 
-interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[] }
+interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[]; groups: BuildingGroup[] }
 
-export interface StoredTile { features: Feature3D[]; fetchedAt: number }
+export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number }
 
 /**
  * Постоянный кеш тайлов Overpass в IndexedDB.
@@ -40,11 +40,11 @@ export class TileStore {
 
   async get(key: string): Promise<StoredTile | undefined> {
     const rec = await this.request<TileRecord | undefined>('readonly', (s) => s.get(key));
-    return rec?.format === FORMAT ? { features: rec.features, fetchedAt: rec.fetchedAt } : undefined;
+    return rec?.format === FORMAT ? { features: rec.features, groups: rec.groups, fetchedAt: rec.fetchedAt } : undefined;
   }
 
-  async put(key: string, features: Feature3D[], fetchedAt: number) {
-    const rec: TileRecord = { key, format: FORMAT, fetchedAt, features };
+  async put(key: string, { features, groups, fetchedAt }: StoredTile) {
+    const rec: TileRecord = { key, format: FORMAT, fetchedAt, features, groups };
     const ok = await this.request('readwrite', (s) => s.put(rec));
     if (ok === undefined) {
       // Скорее всего, квота: освобождаем половину и пробуем ещё раз

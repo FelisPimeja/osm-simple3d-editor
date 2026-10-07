@@ -35,7 +35,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   // Двускатная и сводчатая на почти прямоугольных контурах — вдоль оси описанного прямоугольника (учитывает roof:orientation)
   const axis = single && AXIS_SHAPES.has(shape) ? rectAxis(single.outer) : undefined;
   // Скатные крыши на остальных контурах (в т.ч. с дырами и из нескольких полигонов) — по straight skeleton
-  const skeletons = !quadRoof && !axis && SKELETON_SHAPES.has(shape) ? polygons.map((p) => skeletonOf(p.outer, p.inners)) : undefined;
+  const skeletons = !quadRoof && !axis && SKELETON_SHAPES.has(shape) ? polygons.map((p) => skeletonOf(dropCollinear(p.outer), p.inners.map(dropCollinear))) : undefined;
   const pending = !!skeletons?.some((sk) => sk === 'pending');
   const skeletonRoof = !!skeletons?.length && skeletons.every((sk) => sk && sk !== 'pending');
   const supported =
@@ -224,6 +224,30 @@ function addSkeletonRoof(
       for (const [p, q, r] of triangulate3(band)) tri(out, [p[0], p[1], z(p[2])], [q[0], q[1], z(q[2])], [r[0], r[1], z(r[2])]);
     }
   }
+}
+
+/** Порог «почти прямой» стены: излом меньше угла и отклонение меньше расстояния. */
+const COLLINEAR_DEG = 12;
+const COLLINEAR_DIST = 0.5;
+
+/**
+ * Убирает вершины на почти прямых стенах. Иначе скелет делит торец на несколько граней:
+ * фронтоном становится только одна, остальные выходят скатами (у round — «веер» на торце).
+ */
+function dropCollinear(ring: Pt[]): Pt[] {
+  const out = [...ring];
+  for (let changed = true; changed && out.length > 3;) {
+    changed = false;
+    for (let i = 0; i < out.length && out.length > 3; i++) {
+      const a = out[(i + out.length - 1) % out.length], p = out[i], b = out[(i + 1) % out.length];
+      const ux = p[0] - a[0], uy = p[1] - a[1], vx = b[0] - p[0], vy = b[1] - p[1];
+      const turn = Math.abs(Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy)) * 180 / Math.PI;
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const dist = Math.abs((b[0] - a[0]) * (a[1] - p[1]) - (a[0] - p[0]) * (b[1] - a[1])) / len;
+      if (turn < COLLINEAR_DEG && dist < COLLINEAR_DIST) { out.splice(i, 1); changed = true; i--; }
+    }
+  }
+  return out;
 }
 
 /** Описанный прямоугольник минимальной площади (по направлениям сторон контура). */

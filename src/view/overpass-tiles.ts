@@ -16,6 +16,8 @@ const MAX_VISIBLE = 12;
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** Пауза перед повторной попыткой фонового обновления после ошибки. */
 const REFRESH_RETRY_MS = 5 * 60 * 1000;
+/** Сколько раз пробовать тайл, перезапрошенный кнопкой, прежде чем сдаться. */
+const RELOAD_ATTEMPTS = 3;
 
 type Entry =
   | { state: 'lookup' } // ищем в IndexedDB
@@ -52,7 +54,9 @@ export class OverpassTiles {
   private readonly groups = new Map<string, BuildingGroup>();
   private readonly memberGroup = new Map<string, string>();
   /** Тайлы, перезапрошенные кнопкой: до прихода ответа считаются загружающимися в индикаторе. */
-  private readonly reloading = new Set<string>();
+  private readonly reloading = new Map<string, number>(); // ключ → число неудачных попыток
+  /** Перезапрос не удался после всех попыток — в индикаторе это «ждут повтора». */
+  private readonly reloadFailed = new Set<string>();
   mode: OverpassMode = 'off';
 
   constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, private readonly onChange: () => void) {
@@ -93,7 +97,11 @@ export class OverpassTiles {
   status(): { ready: number; total: number; loading: number; waiting: number } {
     const count = (state: Entry['state']) => this.wanted.filter((k) => this.cache.get(k)?.state === state && !this.reloading.has(k)).length;
     const reloading = this.wanted.filter((k) => this.reloading.has(k)).length;
-    return { ready: count('ready'), total: this.wanted.length, loading: count('loading') + count('lookup') + count('queued') + reloading, waiting: count('error') };
+    const failed = this.wanted.filter((k) => this.reloadFailed.has(k) && !this.reloading.has(k)).length;
+    return {
+      ready: count('ready') - failed, total: this.wanted.length,
+      loading: count('loading') + count('lookup') + count('queued') + reloading, waiting: count('error') + failed,
+    };
   }
 
   /** Пересчитать нужные тайлы после движения карты. */
@@ -203,6 +211,8 @@ export class OverpassTiles {
       const { features, groups } = timed('overpass: разбор ответа', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const fetchedAt = Date.now();
       this.cache.set(key, { state: 'ready', features, groups, fetchedAt });
+      this.reloading.delete(key);
+      this.reloadFailed.delete(key);
       void this.store.put(key, { features, groups, fetchedAt });
       this.stored.add(key);
       this.evict();
@@ -217,8 +227,19 @@ export class OverpassTiles {
       result = busy ? 'busy' : 'error';
       console.warn(`Overpass ${key}${refreshing ? ' (обновление)' : ''}:`, (err as Error).message);
       if (refreshing) {
-        // Данные есть — не мучаем сервер, попробуем обновить позже
         refreshing.refreshing = undefined;
+        const tries = this.reloading.get(key);
+        if (tries !== undefined && tries + 1 < RELOAD_ATTEMPTS) {
+          // Перезапрос по кнопке — повторяем вскоре (инстанс с ошибкой остынет, пойдёт другой)
+          this.reloading.set(key, tries + 1);
+          const delay = busy ? 1_000 : 2_000 * 2 ** tries;
+          refreshing.refreshAfter = Date.now() + delay;
+          this.schedulePump(delay);
+          return;
+        }
+        if (tries !== undefined) this.reloadFailed.add(key);
+        this.reloading.delete(key);
+        // Данные есть — не мучаем сервер, попробуем обновить позже
         refreshing.refreshAfter = Date.now() + REFRESH_RETRY_MS;
         return;
       }
@@ -228,7 +249,7 @@ export class OverpassTiles {
       this.cache.set(key, { state: 'error', retryAt: Date.now() + delay, attempts: attempts + 1 });
       this.schedulePump(delay);
     } finally {
-      this.reloading.delete(key);
+      if (result === 'aborted') this.reloading.delete(key);
       this.pool.release(ep, result);
       this.pump();
       this.onChange();
@@ -290,7 +311,7 @@ export class OverpassTiles {
     let n = 0;
     for (const key of this.wanted) {
       const e = this.cache.get(key);
-      if (e?.state === 'ready') { e.fetchedAt = 0; e.refreshAfter = undefined; this.reloading.add(key); n++; }
+      if (e?.state === 'ready') { e.fetchedAt = 0; e.refreshAfter = undefined; this.reloading.set(key, 0); this.reloadFailed.delete(key); n++; }
     }
     this.update();
     this.onChange();

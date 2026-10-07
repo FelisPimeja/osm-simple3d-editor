@@ -539,7 +539,7 @@ map.on('click', (e) => {
     return;
   }
   if (selectOverpass(resolveClick(key))) return;
-  const f = map.queryRenderedFeatures(e.point, { layers: TILE_LAYERS })[0];
+  const f = queryTileLayers(e.point)[0];
   infoEl.innerHTML = f ? describeTile(f) : '';
   map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], f?.layer.id === MERGED_LAYER ? -1 : f?.id ?? -1]);
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], f?.layer.id === MERGED_LAYER ? f.properties.key : '']);
@@ -557,10 +557,16 @@ map.on('dblclick', (e) => {
   else selectOverpass(key);
 });
 
+/** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
+function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
+  const layers = TILE_LAYERS.filter((id) => map.getLayer(id));
+  return layers.length ? map.queryRenderedFeatures(point, { layers }) : [];
+}
+
 map.on('mousemove', (e) => {
   const hit = editing
     ? !!editLayer.pick(e.point)
-    : !!overpassLayer.pick(e.point) || map.queryRenderedFeatures(e.point, { layers: TILE_LAYERS }).length > 0;
+    : !!overpassLayer.pick(e.point) || queryTileLayers(e.point).length > 0;
   map.getCanvas().style.cursor = hit ? 'pointer' : '';
 });
 

@@ -108,6 +108,7 @@ export class EditSession {
         const c = e.create;
         this.features.set(c.key, c);
         this.original.set(c.key, {});
+        if (c.relMembers) this.originalMembers.set(c.key, []);
         this.created.add(c.key);
         step.push({ key: c.key, before: null, after: { ...c.tags }, gAfter: c.polygons });
         continue;

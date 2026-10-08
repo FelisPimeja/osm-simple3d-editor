@@ -70,7 +70,9 @@ export function buildOsmChange(edits: { element: OsmWay | OsmRelation | (OsmNode
     const members = e.members.map((m) => `<member type="${m.type}" ref="${m.ref}" role="${xmlEsc(m.role)}"/>`).join('');
     return `<relation ${attrs}>${members}${tagsXml(tags)}</relation>`;
   };
-  const create = edits.filter((e) => e.created).map(xml).join('');
+  // Новые: узлы, затем пути, затем отношения — на них ссылаются следующие
+  const rank = { node: 0, way: 1, relation: 2 } as const;
+  const create = edits.filter((e) => e.created).sort((x, y) => rank[x.element.type] - rank[y.element.type]).map(xml).join('');
   const modify = edits.filter((e) => !e.created).map(xml).join('');
   return `<osmChange version="0.6" generator="${GENERATOR}">${create ? `<create>${create}</create>` : ''}${
     modify ? `<modify>${modify}</modify>` : ''}</osmChange>`;

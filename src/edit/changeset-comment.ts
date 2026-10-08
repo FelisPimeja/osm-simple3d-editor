@@ -35,6 +35,8 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
     return e;
   };
 
+  // Отношения, созданные в этом пакете (новое здание из частей или из рассечённого отдельного здания)
+  const created = new Set(changes.filter((c) => c.created && ctx.isGroup(c.key)).map((c) => c.key));
   for (const c of changes) {
     if (ctx.isGroup(c.key)) {
       // Состав отношения: сколько членов добавлено и убрано
@@ -57,8 +59,9 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
 
   // 1. Подробно: по блоку на здание с пунктами
   const blocks: string[] = [];
-  [...buildings.values()].forEach((e, i) => {
-    blocks.push([`Правки в отношение здания${names[i] ? ` «${names[i]}»` : ''}:`, ...points(e, 'частей')].join('\n'));
+  [...buildings].forEach(([key, e], i) => {
+    const title = created.has(key) ? 'Новое отношение здания' : 'Правки в отношение здания';
+    blocks.push([`${title}${names[i] ? ` «${names[i]}»` : ''}:`, ...points(e, 'частей')].join('\n'));
   });
   if (loosePoints.length) blocks.push(['Правки отдельных зданий:', ...loosePoints].join('\n'));
   const full = blocks.join('\n\n');
@@ -70,7 +73,8 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
     all.added += e.added; all.removed += e.removed;
     all.attributes ||= e.attributes; all.moved ||= e.moved;
   }
-  const head = (list: string) => `Правки в отношения зданий${list}:`;
+  const allNew = [...buildings.keys()].every((k) => created.has(k));
+  const head = (list: string) => `${allNew ? 'Новые отношения зданий' : 'Правки в отношения зданий'}${list}:`;
   const named = names.filter((n): n is string => !!n).map((n) => `«${n}»`);
   const tail = [...(buildings.size ? points(all, 'частей') : []), ...(loosePoints.length ? ['* правки отдельных зданий'] : [])];
   const lines = (list: string) => (buildings.size ? [head(list), ...tail] : ['Правки отдельных зданий:', ...loosePoints]).join('\n');

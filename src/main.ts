@@ -524,11 +524,23 @@ map.on('dblclick', (e) => {
     if (!key) closeFocus();
     return;
   }
-  const g = key ? groupOf(key) : undefined;
+  if (!key) return;
+  const g = groupOf(key) ?? soloGroup(key);
   if (!g) return;
   e.preventDefault();
   enterFocus(g);
 });
+
+/** Префикс ключа «группы» отдельного здания (без отношения type=building) в режиме здания. */
+const SOLO = 'solo:';
+const isSolo = (g: BuildingGroup | undefined) => !!g?.key.startsWith(SOLO);
+
+/** Отдельное здание (путь или мультиполигон с building=*) — как группа из одного объекта; отношения нет. */
+function soloGroup(key: string): BuildingGroup | undefined {
+  const f = entity(key) as Feature3D | undefined;
+  if (!f?.polygons?.length || 'relMembers' in f) return;
+  return { key: SOLO + key, type: 'relation', id: 0, version: 0, tags: {}, members: [key], roles: [''] };
+}
 
 /** Члены группы для отрисовки: из сессии (с правками) или из тайлов. */
 function groupFeatures(g: BuildingGroup): Feature3D[] {
@@ -538,8 +550,10 @@ function groupFeatures(g: BuildingGroup): Feature3D[] {
 /** Контуры отношения без своей высоты — в режиме здания рисуются плоским полигоном. */
 function bareOutlines(g: BuildingGroup): string[] {
   return g.members.filter((k, i) => {
-    const t = g.roles[i] === 'outline' ? entity(k)?.tags : undefined;
-    return !!t && isBareOutlineTags(t);
+    if (g.roles[i] !== 'outline') return false;
+    const t = entity(k)?.tags;
+    // Контур нового отношения целиком покрыт частями (рассекли отдельное здание) — плоским следом
+    return !!t && (isBareOutlineTags(t) || (g.id < 0 && g.roles.includes('part')));
   });
 }
 
@@ -673,7 +687,7 @@ function closeFocus() {
   const g = focus;
   if (!g) return;
   leaveDrill();
-  select(g.key);
+  select(isSolo(g) ? g.members[0] : g.key);
 }
 
 // Привязки в режиме здания: маркер у ближайшей вершины, середины ребра или центра объекта
@@ -823,8 +837,9 @@ function inLocalRing([x, y]: [number, number], ring: [number, number][]): boolea
  */
 function splitFeature(key: string, a: CutPoint, b: CutPoint): string | undefined {
   const f = entity(key) as Feature3D | undefined;
-  const g = focus && (entity(focus.key) as EditGroup | undefined);
-  if (!f || !g) return 'Объект не найден.';
+  const solo = isSolo(focus);
+  const g = focus && !solo ? (entity(focus.key) as EditGroup | undefined) : undefined;
+  if (!f || (!g && !solo)) return 'Объект не найден.';
   const poly = f.polygons[0];
   const ids = poly.outerIds!;
   const local = poly.outer.map((c) => overpassLayer.focusToLocal(c)!);
@@ -860,10 +875,28 @@ function splitFeature(key: string, a: CutPoint, b: CutPoint): string | undefined
   for (const x of fresh) coord.set(x.id, lngLat(x.p));
   const toPoly = (vs: V[]) => ({ outer: vs.map((v) => coord.get(v.id)!), inners: [], outerIds: vs.map((v) => v.id), innerIds: [] });
 
+  if (solo) return splitSolo(f, toPoly(ring), toPoly(keep), toPoly(part), fresh, coord);
   const wayId = nextNewId--;
   const created: Feature3D = { key: `way/${wayId}`, type: 'way', id: wayId, version: 0, kind: f.kind, tags: copyTags(f), polygons: [toPoly(part)], hasParts: false };
 
-  // Соседи с тем же отрезком u–v: вставить новый узел и в них
+  const neighbours = insertIntoNeighbours(key, fresh, coord);
+  if (typeof neighbours === 'string') return neighbours;
+  const members = [...g!.relMembers, { type: 'way' as const, ref: wayId, role: 'part' }];
+  session.editMany([
+    { key, polygons: [toPoly(keep)] },
+    { key: created.key, create: created },
+    ...[...neighbours].map(([k, polygons]) => ({ key: k, polygons })),
+    { key: g!.key, members },
+  ]);
+  select(created.key);
+  setStatus(`Рассечено: ${key} и новая часть ${created.key}${neighbours.size ? `, узлы добавлены в соседей: ${neighbours.size}` : ''}.`);
+  return;
+}
+
+type FreshNode = { id: number; p: [number, number]; u: number; v: number };
+
+/** Соседи с тем же отрезком u–v: вставить в них новые узлы разреза. Строка — ошибка. */
+function insertIntoNeighbours(key: string, fresh: FreshNode[], coord: Map<number, LonLat>): Map<string, Feature3D['polygons']> | string {
   const neighbours = new Map<string, Feature3D['polygons']>();
   for (const x of fresh) {
     for (const o of overpass.allFeatures()) {
@@ -895,15 +928,46 @@ function splitFeature(key: string, a: CutPoint, b: CutPoint): string | undefined
     }
   }
 
-  const members = [...g.relMembers, { type: 'way' as const, ref: wayId, role: 'part' }];
+  return neighbours;
+}
+
+/** Теги объёма, которые переходят от отдельного здания к его частям. */
+const PART_TAGS = /^(height|min_height|building:levels|building:min_level|roof:|building:colou?r|building:material|colou?r|material)/;
+
+/**
+ * Рассечь отдельное здание: исходный путь остаётся контуром (outline, с новыми узлами разреза), обе половины —
+ * новые части building:part=yes с тегами объёма, всё в новом отношении type=building. Одним шагом истории;
+ * режим здания переходит на новое отношение.
+ */
+function splitSolo(f: Feature3D, whole: Polygon, a: Polygon, b: Polygon, fresh: FreshNode[], coord: Map<number, LonLat>): string | undefined {
+  const neighbours = insertIntoNeighbours(f.key, fresh, coord);
+  if (typeof neighbours === 'string') return neighbours;
+  const tags: Record<string, string> = { 'building:part': 'yes' };
+  for (const [k, v] of Object.entries(f.tags)) if (PART_TAGS.test(k)) tags[k] = v;
+  const parts: Feature3D[] = [a, b].map((poly) => {
+    const id = nextNewId--;
+    return { key: `way/${id}`, type: 'way', id, version: 0, kind: 'part', tags: { ...tags }, polygons: [poly], hasParts: false };
+  });
+  const relId = nextNewId--;
+  const [type, ref] = f.key.split('/');
+  const relMembers = [
+    { type: type as 'way' | 'relation', ref: Number(ref), role: 'outline' },
+    ...parts.map((p) => ({ type: 'way' as const, ref: p.id, role: 'part' })),
+  ];
+  const group: EditGroup = {
+    key: `relation/${relId}`, type: 'relation', id: relId, version: 0, tags: { type: 'building' },
+    members: relMembers.map((m) => `${m.type}/${m.ref}`), roles: relMembers.map((m) => m.role), relMembers,
+  };
+  editGroups.set(group.key, group);
   session.editMany([
-    { key, polygons: [toPoly(keep)] },
-    { key: created.key, create: created },
+    ...(f.type === 'way' ? [{ key: f.key, polygons: [whole] }] : []),
+    ...parts.map((p) => ({ key: p.key, create: p })),
+    { key: group.key, create: group },
     ...[...neighbours].map(([k, polygons]) => ({ key: k, polygons })),
-    { key: g.key, members },
   ]);
-  select(created.key);
-  setStatus(`Рассечено: ${key} и новая часть ${created.key}${neighbours.size ? `, узлы добавлены в соседей: ${neighbours.size}` : ''}.`);
+  enterFocus(group);
+  select(parts[0].key);
+  setStatus(`Создано здание ${group.key}: контур ${f.key} и части ${parts.map((p) => p.key).join(', ')}.`);
   return;
 }
 
@@ -1882,7 +1946,14 @@ function onSessionChange(keys: string[]) {
   // Состав здания в режиме одного здания поменялся (исключение, undo/redo) — пересобрать сцену
   if (focus && keys.includes(focus.key)) {
     const g = groupOf(focus.key);
-    if (g) { drill = focus = g; overpassLayer.setFocus(groupFeatures(g), bareOutlines(g)); overpassLayer.setFocusHidden(focusHidden); } else closeFocus();
+    // Отменили создание отношения из отдельного здания — назад к нему одному
+    const outline = focus.members.find((_, i) => focus!.roles[i] === 'outline');
+    const back = !g && focus.id < 0 && outline ? soloGroup(outline) : undefined;
+    if (g || back) { drill = focus = (g ?? back)!; overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus)); overpassLayer.setFocusHidden(focusHidden); } else closeFocus();
+  } else if (isSolo(focus)) {
+    // Повтор рассечения: отдельное здание снова в отношении
+    const g = groupOf(focus!.members[0]);
+    if (g) enterFocus(g);
   }
   if (selectedKey && keys.includes(selectedKey)) {
     const active = document.activeElement as HTMLElement | null;

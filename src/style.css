@@ -140,26 +140,52 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .colour-field input[type="color"] { width: 32px; height: 26px; padding: 0; border: 1px solid #ccc; border-radius: 4px; flex: none; }
 .tag-form [data-revert] { justify-self: start; margin-top: 4px; }
 .all-tags summary { cursor: pointer; font-size: 12px; color: #555; margin: 4px 0; }
-#changes { margin-top: 4px; }
-#changes h2 { font-size: 14px; margin: 4px 0; }
-#changes .history { display: flex; gap: 6px; margin: 4px 0; }
-#changes button { padding: 3px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
-#changes button:disabled { opacity: .5; cursor: default; }
-.change-list { margin: 4px 0; padding-left: 16px; font-size: 12px; }
-.change-list ul { padding-left: 14px; margin: 2px 0 6px; }
-.change-list del { color: #b91c1c; }
+/* Панель правок: строки как в списке частей, отмена/повтор — значками в заголовке */
+.head-tools { display: flex; gap: 2px; }
+.head-tools[hidden] { display: none; }
+.icon-btn { width: 26px; height: 26px; padding: 3px; border: 0; border-radius: 4px; background: transparent; color: #444; cursor: pointer; display: grid; place-items: center; }
+.icon-btn svg { width: 18px; height: 18px; display: block; }
+.icon-btn:hover:not(:disabled) { background: #f0f2f5; color: #000; }
+.icon-btn:disabled { opacity: .3; cursor: default; }
+#changes .hint { margin: 4px 0; }
+.change-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.change-list > li { display: grid; grid-template-columns: 18px 1fr auto; column-gap: 6px; align-items: start; padding: 4px; border-radius: 4px; cursor: pointer; }
+.change-list > li:hover { background: #f0f2f5; }
+.change-list > li.selected { background: #dbe7ff; }
+.change-list .ch-icon { color: #444; padding-top: 1px; }
+.change-list .ch-icon svg { width: 16px; height: 16px; display: block; }
+.change-list .ch-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-list .ch-key { color: #888; font-size: 11px; margin-left: 4px; }
+.change-list .ch-new { color: #15803d; font-size: 11px; margin-left: 4px; }
+.change-list .ch-diff { grid-column: 2; font-size: 12px; color: #555; }
+.change-list .ch-diff div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-list .ch-tag { color: #777; }
+.change-list del { color: #b91c1c; text-decoration: line-through; }
 .change-list ins { color: #15803d; text-decoration: none; }
+.change-list .ch-revert { grid-column: 3; grid-row: 1; width: 22px; height: 22px; opacity: 0; }
+.change-list > li:hover .ch-revert { opacity: 1; }
 
 /* Сервер и отправка */
 .server-line { display: flex; gap: 6px; align-items: center; font-size: 12px; margin-bottom: 6px; }
 .server-line select { flex: 1; min-width: 0; }
-.upload { margin-top: 10px; padding: 8px; border: 1px solid #c9d6e8; border-radius: 6px; background: #f3f7fc; }
-.upload.prod { border-color: #e0a48a; background: #fdf3ee; }
-.upload h3 { margin: 0 0 6px; font-size: 12px; }
-.upload textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; margin-bottom: 6px; resize: vertical; }
+.upload { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb; display: grid; gap: 6px; }
+.upload textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 6px; resize: vertical; min-height: 32px; }
+.upload-label { font-size: 12px; font-weight: 600; color: #444; margin-bottom: -2px; }
+.upload-btn { width: 100%; padding: 7px 10px; border: 0; border-radius: 6px; background: #2f7cff; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+.upload-btn:hover:not(:disabled) { background: #1f6ae6; }
+.upload-btn:disabled { background: #c7d2e3; cursor: default; }
+.upload-meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #777; }
+.server-tag { padding: 1px 6px; border-radius: 10px; background: #eef0f3; color: #555; }
+.server-tag.prod { background: #fde7dc; color: #b4471b; }
 
-.account-line { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; margin: 0 0 6px; }
-.account-line button { padding: 3px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+.account-line { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; font-size: 12px; color: #777; margin: 8px 0 0; }
+#changes[hidden] + .account-line { margin-top: 0; }
+.account-line a { color: #555; text-decoration: none; }
+.account-line a:hover { text-decoration: underline; }
+.link-btn { padding: 0; border: 0; background: none; color: #2563eb; font: inherit; cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+.link-btn:disabled { color: #aaa; cursor: default; }
+.login-btn { padding: 5px 12px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; font: inherit; font-size: 13px; color: #222; cursor: pointer; }
 .select-box { position: absolute; border: 1px solid #ff7a00; background: rgba(255,122,0,.12); pointer-events: none; z-index: 2; }
 .outline-choice { border: 1px solid #e5e7eb; border-radius: 6px; margin: 6px 0; padding: 4px 8px; font-size: 12px; }
 .outline-cand { display: block; padding: 2px 0; cursor: pointer; }

@@ -76,7 +76,7 @@ export function renderTagForm(key: string, session: EditSession): string {
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
   }).join('');
-  const revert = session.isChanged(key) ? '<button type="button" data-revert>Вернуть исходные теги</button>' : '';
+  const revert = session.isChanged(key) ? '<button type="button" data-revert>Вернуть как было</button>' : '';
   return `<form class="tag-form" data-key="${esc(key)}" onsubmit="return false">${rows}${revert}</form>`;
 }
 

@@ -47,10 +47,15 @@
     <div class="panel-body"><div id="info"></div></div>
   </aside>
   <aside id="edits-panel" class="panel collapsed" data-auto-collapse>
-    <header class="panel-head"><h1>Правки <span id="edits-count" class="hint"></span></h1><button type="button" class="collapse-btn" title="Развернуть" aria-expanded="false"></button></header>
+    <header class="panel-head"><h1>Правки <span id="edits-count" class="hint"></span></h1>
+      <span id="edits-history" class="head-tools" hidden>
+        <button type="button" class="icon-btn" data-undo title="Отменить (Ctrl+Z)"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 14.5C15.5 9.5 12.5 7 8.5 7.5c-1.6.2-3 .9-4.2 2"/><path d="M3.5 5.5v4.5H8"/></svg></button>
+        <button type="button" class="icon-btn" data-redo title="Повторить (Ctrl+Shift+Z)"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 14.5C4.5 9.5 7.5 7 11.5 7.5c1.6.2 3 .9 4.2 2"/><path d="M16.5 5.5v4.5H12"/></svg></button>
+      </span>
+      <button type="button" class="collapse-btn" title="Развернуть" aria-expanded="false"></button></header>
     <div class="panel-body">
-      <p id="account" class="account-line"></p>
       <section id="changes" hidden></section>
+      <p id="account" class="account-line"></p>
     </div>
   </aside>
   </div>

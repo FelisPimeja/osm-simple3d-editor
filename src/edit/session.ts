@@ -165,13 +165,18 @@ export class EditSession {
     this.push([{ key, before, after }]);
   }
 
-  /** Вернуть объект к исходным тегам (тоже шаг истории). */
+  /** Вернуть объект к исходным тегам, составу и геометрии (тоже шаг истории). */
   revert(key: string) {
     if (this.created.has(key)) return;
     const f = this.get(key);
     const orig = this.original.get(key);
-    if (!f || !orig || sameTags(f.tags, orig)) return;
-    this.push([{ key, before: { ...f.tags }, after: { ...orig } }]);
+    if (!f || !orig || !this.isChanged(key)) return;
+    const members = this.membersChanged(key) ? this.originalMembers.get(key)!.map((m) => ({ ...m })) : undefined;
+    const geometry = this.originalGeometry.get(key);
+    const moved = geometry && f.polygons !== geometry;
+    this.push([{ key, before: { ...f.tags }, after: { ...orig },
+      ...(members ? { mBefore: f.relMembers, mAfter: members } : {}),
+      ...(moved ? { gBefore: f.polygons, gAfter: geometry } : {}) }]);
   }
 
   undo(): string | undefined {

@@ -562,7 +562,8 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Подсветка поверх всего (без проверки глубины): контур объекта и полупрозрачная заливка на уровне его верха.
    * Нужна, чтобы показать объект, закрытый другими (например, плоский контур под частями).
    */
-  setOverlay(keys: string | string[] | undefined) {
+  /** at: 'top' — залитый след по верху; 'base' — только контур на уровне основания. */
+  setOverlay(keys: string | string[] | undefined, at: 'top' | 'base' = 'top') {
     for (const { scene, obj } of this.overlay) {
       scene.remove(obj);
       obj.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
@@ -572,7 +573,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const g = this.activeGroups().find((x) => x.byKey.has(key));
       const it = g?.byKey.get(key);
       if (!g || !it) continue;
-      const z = it.box.isEmpty() ? 0 : it.box.max.z + 0.05;
+      const z = it.box.isEmpty() ? 0 : at === 'base' ? it.box.min.z + 0.05 : it.box.max.z + 0.05;
       const obj = new THREE.Group();
       const lines: number[] = [];
       const fill: number[] = [];
@@ -594,7 +595,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       const fillMesh = new THREE.Mesh(fillGeo, new THREE.MeshBasicMaterial({ color: OVERLAY_COLOUR, opacity: 0.55, side: THREE.DoubleSide, ...overlayMat }));
       const lineMesh = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ color: OVERLAY_COLOUR, ...overlayMat }));
       fillMesh.renderOrder = lineMesh.renderOrder = 1000;
-      obj.add(fillMesh, lineMesh);
+      if (at === 'top') obj.add(fillMesh, lineMesh);
+      else { fillGeo.dispose(); (fillMesh.material as THREE.Material).dispose(); obj.add(lineMesh); }
       g.scene.add(obj);
       this.overlay.push({ scene: g.scene, obj });
     }

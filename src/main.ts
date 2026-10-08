@@ -14,7 +14,8 @@ import { BuildingsLayer, type GraphicsOptions, type RenderedFeature, type SnapHi
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
-import { EditSession, type Tagged } from './edit/session';
+import { suggestComment } from './edit/changeset-comment';
+import { EditSession, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { bindTagForms, renderTagForm } from './edit/tag-form';
@@ -953,6 +954,7 @@ let suppressClick = false;
 function paintSelection() {
   overpassLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
   renderOutliner();
+  for (const li of changesEl.querySelectorAll<HTMLElement>('li[data-key]')) li.classList.toggle('selected', selection.includes(li.dataset.key!));
 }
 
 const ICON_EYE = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 8s2.6-4.5 7-4.5S15 8 15 8s-2.6 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="2"/></svg>';
@@ -1378,48 +1380,93 @@ function onSessionChange(keys: string[]) {
   renderOutliner();
 }
 
+const editsHistory = document.getElementById('edits-history')!;
+const undoBtn = editsHistory.querySelector<HTMLButtonElement>('[data-undo]')!;
+const redoBtn = editsHistory.querySelector<HTMLButtonElement>('[data-redo]')!;
+/** Отношение type=building — несколько кубиков. */
+const ICON_GROUP = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M5 1.8l3.5 2v4L5 9.8l-3.5-2v-4z"/><path d="M11 6.2l3.5 2v4L11 14.2l-3.5-2v-4z"/></svg>';
+const ICON_REVERT = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 14.5C15.5 9.5 12.5 7 8.5 7.5c-1.6.2-3 .9-4.2 2"/><path d="M3.5 5.5v4.5H8"/></svg>';
+
 function renderChanges() {
   renderAccount();
   const changes = session.changes();
   // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
   const show = changes.length > 0 || session.canUndo() || session.canRedo();
   changesEl.hidden = !show;
+  editsHistory.hidden = !show;
+  undoBtn.disabled = !session.canUndo();
+  redoBtn.disabled = !session.canRedo();
   editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : '· не выполнен вход';
   // Появились правки — раскрываем панель, исчезли — сворачиваем; в остальное время решает пользователь
   if (show !== editsHadContent) setCollapsed(editsPanel, !show);
   editsHadContent = show;
   if (!show) { changesEl.innerHTML = ''; return; }
-  const list = changes.map((c) => `
-    <li><a href="#" data-select="${esc(c.key)}">${esc(c.key)}</a>${c.created ? ' (новое)' : ''}
-      <ul>${c.diff.map((d) => `<li><code>${esc(d.tag)}</code>: <del>${esc(d.from ?? '—')}</del> → <ins>${esc(d.to ?? '—')}</ins></li>`).join('')}</ul>
-    </li>`).join('');
+  const list = changes.map((c) => {
+    const group = editGroups.has(c.key);
+    const icon = group ? ICON_GROUP : (c.feature as Feature3D).kind === 'part' ? ICON_PART : ICON_OUTLINE;
+    const name = c.after.name ?? c.before.name;
+    const diff = c.diff.map((d) => d.tag === '(члены)' ? membersDiff(c)
+      : d.tag.startsWith('(')
+      ? `<div>${esc(d.tag.slice(1, -1))}: ${esc(d.to ?? '')}</div>`
+      : `<div><span class="ch-tag">${esc(d.tag)}</span> ${d.from === undefined ? '' : `<del>${esc(d.from)}</del> → `}${d.to === undefined ? '<del>удалён</del>' : `<ins>${esc(d.to)}</ins>`}</div>`).join('');
+    const revert = c.created ? '' : `<button type="button" class="icon-btn ch-revert" data-revert-key="${esc(c.key)}" title="Вернуть как было">${ICON_REVERT}</button>`;
+    return `<li data-key="${esc(c.key)}" class="${selection.includes(c.key) ? 'selected' : ''}" title="${esc(c.key)}">
+      <span class="ch-icon">${icon}</span>
+      <span class="ch-title">${name ? esc(name) : ''}<span class="ch-key">${esc(c.key)}</span>${c.created ? '<span class="ch-new">новый</span>' : ''}</span>
+      ${revert}
+      <div class="ch-diff">${diff}</div></li>`;
+  }).join('');
   changesEl.innerHTML = `
-    <h2>Изменения (${changes.length})</h2>
-    <p class="history">
-      <button type="button" data-undo ${session.canUndo() ? '' : 'disabled'} title="Ctrl+Z">↶ Отменить</button>
-      <button type="button" data-redo ${session.canRedo() ? '' : 'disabled'} title="Ctrl+Shift+Z">↷ Повторить</button>
-    </p>
-    ${changes.length ? `<ul class="change-list">${list}</ul>` : '<p class="hint">Пока нет изменений.</p>'}
+    ${changes.length ? `<ul class="change-list">${list}</ul>` : '<p class="hint">Изменений нет — можно повторить отменённое.</p>'}
     ${renderUpload(changes.length)}`;
+}
+
+/** Состав отношения: было → стало и сколько членов добавлено/убрано. */
+function membersDiff(c: TagChange): string {
+  const before = c.membersBefore ?? [], after = c.members ?? [];
+  const id = (m: { type: string; ref: number }) => `${m.type}/${m.ref}`;
+  const was = new Set(before.map(id)), now = new Set(after.map(id));
+  const added = after.filter((m) => !was.has(id(m))).length, removed = before.filter((m) => !now.has(id(m))).length;
+  const delta = [added && `+${added}`, removed && `−${removed}`].filter(Boolean).join(', ');
+  return `<div><span class="ch-tag">члены</span> <del>${before.length}</del> → <ins>${after.length}</ins>${delta ? ` (${delta})` : ''}</div>`;
 }
 
 function renderAccount() {
   const s = server();
   accountEl.innerHTML = osmUser
-    ? `Вы вошли как <a href="${s.web}/user/${encodeURIComponent(osmUser.name)}" target="_blank" rel="noopener">${esc(osmUser.name)}</a>
-       <button type="button" data-logout ${uploading ? 'disabled' : ''}>Выйти</button>`
-    : `<button type="button" data-login ${uploading ? 'disabled' : ''}>Войти в OSM</button>`;
+    ? `<a href="${s.web}/user/${encodeURIComponent(osmUser.name)}" target="_blank" rel="noopener">${esc(osmUser.name)}</a> ·
+       <button type="button" class="link-btn" data-logout ${uploading ? 'disabled' : ''}>выйти</button>`
+    : `<button type="button" class="login-btn" data-login ${uploading ? 'disabled' : ''}>Войти в OSM</button>`;
+}
+
+/** Предложенный комментарий: показывается серым в пустом поле, Tab вставляет его для правки. */
+let suggestedComment = '';
+
+function commentSuggestion(): string {
+  const groupKey = (key: string) => editGroups.get(key)?.key ?? groupOf(key)?.key;
+  return suggestComment(session.changes(), {
+    groupOf: (key) => { const g = groupKey(key); return g && g !== key ? g : undefined; },
+    isGroup: (key) => editGroups.has(key),
+    buildingName: (key) => {
+      const g = editGroups.get(key) ?? groupOf(key);
+      return g ? g.tags.name ?? outlineTags(g)?.name : undefined;
+    },
+  });
 }
 
 function renderUpload(count: number): string {
+  if (!count) return '';
   const s = server();
-  const canUpload = osmUser && count > 0 && uploadComment.trim() && !uploading;
+  const canUpload = osmUser && uploadComment.trim() && !uploading;
+  suggestedComment = commentSuggestion();
+  const rows = Math.min(8, Math.max(1, (uploadComment || suggestedComment).split('\n').length));
   return `
-    <div class="upload${s.id === 'prod' ? ' prod' : ''}">
-      <h3>Отправка: ${esc(s.label)}</h3>
-      ${osmUser ? '' : '<p class="hint">Для отправки войдите в OSM.</p>'}
-      <textarea data-comment rows="2" placeholder="Комментарий к пакету правок (обязательно)" ${uploading ? 'disabled' : ''}>${esc(uploadComment)}</textarea>
-      <button type="button" data-upload ${canUpload ? '' : 'disabled'}>${uploading ? 'Отправка…' : `Сохранить в OSM (${count})`}</button>
+    <div class="upload">
+      <label class="upload-label" for="upload-comment">Комментарий к пакету правок</label>
+      <textarea id="upload-comment" data-comment rows="${rows}" placeholder="${esc(suggestedComment)}" ${uploading ? 'disabled' : ''}>${esc(uploadComment)}</textarea>
+      <button type="button" class="upload-btn" data-upload ${canUpload ? '' : 'disabled'}>${uploading ? 'Отправка…' : `Сохранить в OSM (${count})`}</button>
+      <div class="upload-meta"><span>${osmUser ? commentHint() : 'для отправки войдите в OSM'}</span>
+        <span class="server-tag${s.id === 'prod' ? ' prod' : ''}" title="${esc(s.label)}">${s.id === 'prod' ? 'боевой сервер' : 'тестовый сервер'}</span></div>
     </div>`;
 }
 
@@ -1499,13 +1546,44 @@ async function doUpload() {
   }
 }
 
-changesEl.addEventListener('click', (e) => {
+editsHistory.addEventListener('click', (e) => {
+  e.stopPropagation(); // не сворачивать панель
   const t = e.target as HTMLElement;
   if (t.closest('[data-undo]')) return void select(session.undo() ?? selectedKey);
   if (t.closest('[data-redo]')) return void select(session.redo() ?? selectedKey);
+});
+
+changesEl.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
   if (t.closest('[data-upload]')) return void doUpload();
-  const link = t.closest<HTMLElement>('[data-select]');
-  if (link) { e.preventDefault(); select(link.dataset.select); }
+  const revert = t.closest<HTMLElement>('[data-revert-key]');
+  if (revert) return void session.revert(revert.dataset.revertKey!);
+  const row = t.closest<HTMLElement>('li[data-key]');
+  if (row) select(row.dataset.key);
+});
+// Наведение на строку — подсветка объекта на карте
+changesEl.addEventListener('mouseover', (e) => {
+  const key = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]')?.dataset.key;
+  // Отношение — контуром всех членов по основанию; отдельный объект — как в списке частей: объём и скрытые рёбра
+  const group = key && editGroups.has(key);
+  overpassLayer.setHover(key && !group ? key : undefined);
+  if (group) overpassLayer.setOverlay(highlightKeys(key), 'base'); else overpassLayer.setOverlay(outlineOverlay);
+});
+changesEl.addEventListener('mouseleave', () => { overpassLayer.setHover(undefined); overpassLayer.setOverlay(outlineOverlay); });
+
+function commentHint(): string {
+  if (uploadComment.trim()) return '';
+  return suggestedComment ? 'Tab в поле — вставить предложенный' : 'нужен комментарий';
+}
+
+// Tab в пустом поле — вставить предложенный комментарий (дальше его можно править)
+changesEl.addEventListener('keydown', (e) => {
+  const t = e.target as HTMLTextAreaElement;
+  if (e.key !== 'Tab' || e.shiftKey || !t.matches('[data-comment]') || t.value || !suggestedComment) return;
+  e.preventDefault();
+  t.value = suggestedComment;
+  t.rows = Math.min(8, suggestedComment.split('\n').length);
+  t.dispatchEvent(new Event('input', { bubbles: true }));
 });
 
 changesEl.addEventListener('input', (e) => {
@@ -1514,6 +1592,8 @@ changesEl.addEventListener('input', (e) => {
   uploadComment = t.value;
   const btn = changesEl.querySelector<HTMLButtonElement>('[data-upload]');
   if (btn) btn.disabled = !(osmUser && session.changes().length && uploadComment.trim() && !uploading);
+  const hint = changesEl.querySelector('.upload-meta span');
+  if (hint && osmUser) hint.textContent = commentHint();
 });
 
 accountEl.addEventListener('click', (e) => {

@@ -997,6 +997,82 @@ outlinerEl.addEventListener('click', (e) => {
   if (!entity(key)) return;
   if (e.shiftKey) toggleSelection(key); else select(key);
 });
+// Контекстное меню частей (список и сцена): действует на выделение (правый клик вне выделения выделяет объект)
+const ctxMenu = document.createElement('ul');
+ctxMenu.className = 'ctx-menu';
+ctxMenu.hidden = true;
+document.body.appendChild(ctxMenu);
+
+function closeCtxMenu() { ctxMenu.hidden = true; }
+
+outlinerEl.addEventListener('contextmenu', (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
+  if (!li || !focus) return;
+  e.preventDefault();
+  const key = li.dataset.key!;
+  if (!entity(key)) return;
+  if (!selection.includes(key)) select(key);
+  openCtxMenu(e.clientX, e.clientY);
+});
+
+// То же меню в сцене: правый клик по части здания (не по выделенной — сначала выделяет её).
+// Правой кнопкой ещё и вращают карту — меню только если мышь почти не сдвинулась
+// Слушаем canvas напрямую: вращение (orbit) перехватывает pointerdown, и map.on('contextmenu') не срабатывает.
+// На macOS contextmenu приходит уже при нажатии — меню открываем при отпускании, если мышь почти не сдвинулась
+// (иначе это было вращение камеры)
+let rightDown: [number, number] | undefined;
+// На контейнере, а не на canvas: orbit на canvas останавливает распространение pointerdown
+map.getContainer().addEventListener('pointerdown', (e) => { if (e.button === 2) rightDown = [e.clientX, e.clientY]; }, { capture: true });
+// Системное меню глушим на всём контейнере карты: при вращении событие приходит не на canvas, а на слой поверх,
+// и системное меню уводит фокус из окна — наше тут же закрывается
+map.getContainer().addEventListener('contextmenu', (e) => { if (focus) e.preventDefault(); }, { capture: true });
+window.addEventListener('pointerup', (e) => {
+  if (e.button !== 2 || !rightDown) return;
+  const moved = Math.hypot(e.clientX - rightDown[0], e.clientY - rightDown[1]) > 4;
+  rightDown = undefined;
+  if (!focus || moved || moveTool.state === 'move') return;
+  const rect = map.getCanvas().getBoundingClientRect();
+  const key = overpassLayer.pickHit([e.clientX - rect.left, e.clientY - rect.top])?.key;
+  if (!key || !focus.members.includes(key)) return;
+  if (!selection.includes(key)) select(key);
+  openCtxMenu(e.clientX, e.clientY, true);
+}, { capture: true });
+
+/** inScene — меню из сцены: скрытые там не выбрать, поэтому вместо «Показать» — «Показать всё скрытое». */
+function openCtxMenu(x: number, y: number, inScene = false) {
+  if (!focus) return;
+  const keys = selection.filter((k) => focus!.members.includes(k));
+  const anyShown = keys.some((k) => !focusHidden.has(k)), anyHidden = keys.some((k) => focusHidden.has(k));
+  const n = keys.length > 1 ? ` (${keys.length})` : '';
+  ctxMenu.innerHTML = `
+    <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>Скрыть объекты${n}</button></li>
+    ${inScene
+      ? `<li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё скрытое${focusHidden.size ? ` (${focusHidden.size})` : ''}</button></li>`
+      : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>Показать объекты${n}</button></li>`}
+    <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>Исключить из модели${n}</button></li>`;
+  ctxMenu.hidden = false;
+  // Не выходим за край окна
+  const { width, height } = ctxMenu.getBoundingClientRect();
+  ctxMenu.style.left = `${Math.min(x, innerWidth - width - 4)}px`;
+  ctxMenu.style.top = `${Math.min(y, innerHeight - height - 4)}px`;
+}
+
+ctxMenu.addEventListener('click', (e) => {
+  const action = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ctx]:not(:disabled)')?.dataset.ctx;
+  if (!action || !focus) return;
+  closeCtxMenu();
+  const keys = selection.filter((k) => focus!.members.includes(k));
+  if (action === 'exclude') return excludeFromGroup();
+  if (action === 'show-all') focusHidden.clear();
+  else for (const k of keys) if (action === 'hide') focusHidden.add(k); else focusHidden.delete(k);
+  if (action === 'hide') outlinerUnhover();
+  overpassLayer.setFocusHidden(focusHidden);
+  renderOutliner();
+});
+document.addEventListener('pointerdown', (e) => { if (!ctxMenu.contains(e.target as Node)) closeCtxMenu(); }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !ctxMenu.hidden) { closeCtxMenu(); e.stopPropagation(); } }, true);
+window.addEventListener('blur', closeCtxMenu);
+
 // Наведение на строку — подсветка части в сцене (как у списка выделенного); скрытые не подсвечиваем
 // Объём — бледно-голубым, как выделение, плюс пунктир закрытых рёбер
 outlinerEl.addEventListener('mouseover', (e) => {
@@ -1203,8 +1279,6 @@ function renderSelected() {
   outlineOverlay = undefined;
   try {
     renderSelectedImpl();
-    // В режиме здания выход доступен при любом выделении (у describeFocus кнопка своя)
-    if (focus && selection.length) infoEl.insertAdjacentHTML('afterbegin', focusExitButton());
   } finally { overpassLayer.setOverlay(outlineOverlay); }
 }
 
@@ -1217,7 +1291,8 @@ function renderSelectedImpl() {
   if (g) { infoEl.innerHTML = describeGroup(g); return; }
   const r = selectedKey ? overpass.get(selectedKey) : undefined;
   if (!r && focus && !selection.length) { infoEl.innerHTML = describeFocus(focus); return; }
-  infoEl.innerHTML = r ? drillHint(r.feature.key) + excludeButton() + describeOsm(r, form) : '';
+  // В режиме здания подсказка о группе не нужна (выход — Esc и панель частей); «Исключить» — под свойствами
+  infoEl.innerHTML = r ? (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + excludeButton() : '';
 }
 
 /** Панель режима одного здания, пока ничего не выделено. */
@@ -1504,8 +1579,7 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: s
       'height и building:levels заметно расходятся.',
   ].filter(Boolean);
   return `
-    <h2>${f.kind === 'part' ? 'building:part' : 'building'} —
-      <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a>${f.version ? ` v${f.version}` : ''}</h2>
+    <h2>${f.kind === 'part' ? 'building:part' : 'building'} — <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a>${f.version ? ` v${f.version}` : ''}</h2>
     <pre>высота: ${fmt(h.min)} → ${fmt(roofApproximated ? h.top : h.wallTop)} → ${fmt(h.top)} м (${h.source})\nкрыша: ${h.roofShape}, ${fmt(h.roofHeight)} м</pre>
     ${warn.map((w) => `<p class="warn">⚠ ${w}</p>`).join('')}
     ${form ? `${form}<details class="all-tags"><summary>Все теги</summary>${tagTable(f.tags)}</details>` : tagTable(f.tags)}`;

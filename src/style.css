@@ -40,6 +40,14 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 }
 #info-panel:has(#info:empty) { display: none; }
 #outliner-panel[hidden] { display: none; }
+/* Контекстное меню списка частей */
+.ctx-menu { position: fixed; z-index: 20; min-width: 180px; padding: 4px; margin: 0; list-style: none; background: #fff;
+  border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 13px; }
+.ctx-menu[hidden] { display: none; }
+.ctx-menu button { display: block; width: 100%; padding: 5px 10px; border: 0; border-radius: 4px; background: transparent;
+  font: inherit; text-align: left; cursor: pointer; }
+.ctx-menu button:hover:not(:disabled) { background: #dbe7ff; }
+.ctx-menu button:disabled { color: #aaa; cursor: default; }
 #outliner-panel { flex-shrink: 1; max-height: 30%; }
 #outliner-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
 /* Дерево частей в режиме здания (как Outliner в SketchUp): глазик, значок, название */
@@ -67,7 +75,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .collapse-btn::before { content: "▲"; }
 .panel.collapsed .collapse-btn::before { content: "▼"; }
 .hint { color: #666; margin: 0 0 8px; }
-#info { font-size: 12px; white-space: pre-wrap; margin: 0; }
+#info { font-size: 12px; margin: 0; }
 @media (max-width: 500px) {
   #left-col { width: auto; right: 12px; bottom: auto; max-height: 40%; }
   #right-col { width: auto; left: 12px; top: auto; bottom: 28px; max-height: 40%; justify-content: flex-end; }

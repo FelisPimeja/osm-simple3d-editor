@@ -91,7 +91,7 @@ export class MoveTool {
     const ray = this.layer.focusRay(point);
     if (!axes || !ray) return;
     const fixed = this.locked;
-    this.snap = this.layer.snapAt(point, (k) => !this.keys.has(k));
+    this.snap = this.layer.snapAt(point, (k) => !this.keys.has(k), undefined, { from: this.from });
     let axis: Axis | undefined = fixed;
     const offset = new THREE.Vector3();
     if (this.snap) {

@@ -130,6 +130,9 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .snap-marker.midpoint { background: #0891b2; border: 0; box-shadow: none; width: 14px; height: 12px; margin: -8px 0 0 -7px;
   clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 .snap-marker.center { background: #9333ea; border-radius: 50%; }
+.snap-marker.edge { background: #ea580c; border-radius: 50%; width: 8px; height: 8px; margin: -5px 0 0 -5px; }
+.snap-marker.perpendicular { background: #db2777; border: 0; box-shadow: none; width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  clip-path: polygon(0 0, 22% 0, 22% 78%, 100% 78%, 100% 100%, 0 100%); }
 .snap-marker.grid { background: #6b7280; border-radius: 1px; outline: 1px solid #6b7280; outline-offset: 2px; }
 .snap-marker::after {
   content: attr(data-label); position: absolute; left: 14px; top: -4px; white-space: nowrap;

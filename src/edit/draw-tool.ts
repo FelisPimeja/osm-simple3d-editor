@@ -117,7 +117,8 @@ export class DrawTool {
 
   /** Точка на плоскости рисования под курсором: привязка, иначе луч на плоскость (с выравниванием по оси). */
   private pointAt(point: [number, number]): Pt | undefined {
-    this.snap = this.layer.snapAt(point);
+    const last = this.pts[this.pts.length - 1];
+    this.snap = this.layer.snapAt(point, undefined, undefined, { from: last && new THREE.Vector3(last[0], last[1], this.z) });
     if (this.snap?.kind === 'center') this.snap = undefined;
     this.axis = undefined;
     if (!this.pts.length) {

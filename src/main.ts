@@ -734,7 +734,7 @@ const snapEl = document.createElement('div');
 snapEl.className = 'snap-marker';
 snapEl.hidden = true;
 map.getContainer().appendChild(snapEl);
-const SNAP_LABELS = { vertex: 'Вершина', midpoint: 'Середина', center: 'Центр', grid: 'Сетка' } as const;
+const SNAP_LABELS = { vertex: 'Вершина', midpoint: 'Середина', center: 'Центр', grid: 'Сетка', perpendicular: 'Перпендикуляр', edge: 'На ребре' } as const;
 /** Текущая привязка под курсором — для будущих инструментов геометрии. */
 let currentSnap: SnapHit | undefined;
 
@@ -747,6 +747,7 @@ function updateSnap(point: [number, number] | undefined) {
     // Рассечение: подсвечиваем вершины и середины рёбер объектов (концы разреза)
     currentSnap = pushTool.active ? (pushTool.state === 'push' ? pushTool.snap : undefined)
       : drawTool.active ? (point ? drawTool.snap : undefined)
+      : splitTool.state === 'cut' ? (point ? splitTool.snap : undefined)
       : point ? overpassLayer.snapAt(point) : undefined;
     if (currentSnap?.kind === 'center') currentSnap = undefined;
     snapEl.hidden = !currentSnap;

@@ -133,7 +133,7 @@ export class PushTool {
   move(point: [number, number]) {
     if (this.state !== 'push' || !this.target) return;
     const t = this.target;
-    this.snap = this.layer.snapAt(point, (k) => k !== t.key);
+    this.snap = this.layer.snapAt(point, (k) => k !== t.key, undefined, { noEdge: true });
     // Направление движения: вертикаль для верха/низа, нормаль стены для боковой грани
     const dir = t.edge ? t.edge.n : new THREE.Vector3(0, 0, 1);
     let d: number;

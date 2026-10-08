@@ -184,7 +184,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Локальная система координат здания в режиме одного здания (в метрах сцены режима). */
   focusAxes?: LocalFrame;
   /** Точки привязки режима одного здания (в метрах сцены режима); undefined — пересчитать. */
-  private snaps?: SnapPoint[];
+  private snaps?: { points: SnapPoint[]; edges: SnapEdge[] };
 
   constructor(readonly id: string) {}
 
@@ -311,7 +311,12 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Привязки включены (S в режиме здания). Выключены — инструменты двигают свободно. */
   snapsEnabled = true;
 
-  snapAt(point: [number, number], filter: (key: string) => boolean = () => true, radius = SNAP_RADIUS_PX): SnapHit | undefined {
+  /**
+   * opts.from — последняя точка инструмента: от неё ищем основание перпендикуляра на ребре.
+   * opts.noEdge — без точки на ребре (вытягиванию нужны высоты, а не произвольные точки вертикальных рёбер).
+   */
+  snapAt(point: [number, number], filter: (key: string) => boolean = () => true, radius = SNAP_RADIUS_PX,
+    opts: { from?: THREE.Vector3; noEdge?: boolean } = {}): SnapHit | undefined {
     if (!this.snapsEnabled) return;
     const g = this.groups.get(FOCUS_GROUP);
     if (!this.focused || !g || !this.map || !this.lastMain) return;
@@ -321,7 +326,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const v = new THREE.Vector4();
     let best: { s: SnapPoint; d: number; px: [number, number] } | undefined;
     const near: { s: SnapPoint; d: number; px: [number, number] }[] = [];
-    for (const s of this.snaps) {
+    for (const s of this.snaps.points) {
       if (!filter(s.key)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;
@@ -330,6 +335,34 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (d > radius) continue;
       // Штраф за менее важный тип — вершина в 6 px «ближе» середины ребра; выделенный объект — ещё на 8 px
       near.push({ s, d: d + SNAP_PRIORITY[s.kind] * 6 - (this.selected.has(s.key) ? SNAP_SELECTED_BONUS_PX : 0), px });
+    }
+    // Рёбра: ближайшая к лучу курсора точка ребра и основание перпендикуляра из opts.from
+    const ray = this.focusRay(point);
+    const onSeg = new THREE.Vector3(), foot = new THREE.Vector3(), ab = new THREE.Vector3();
+    const toPx = (p: THREE.Vector3): [number, number] | undefined => {
+      v.set(p.x, p.y, p.z, 1).applyMatrix4(m);
+      return v.w > 0 ? [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight] : undefined;
+    };
+    const bonus = (key: string) => (this.selected.has(key) ? SNAP_SELECTED_BONUS_PX : 0);
+    if (ray) for (const e of this.snaps.edges) {
+      if (!filter(e.key)) continue;
+      if (opts.from) {
+        ab.subVectors(e.b, e.a);
+        const l2 = ab.lengthSq();
+        const t = l2 ? foot.subVectors(opts.from, e.a).dot(ab) / l2 : -1;
+        // Только внутри ребра и не в его концах (там — вершины); from не на самой прямой
+        if (t > 0.01 && t < 0.99) {
+          foot.copy(e.a).addScaledVector(ab, t);
+          const px = foot.distanceTo(opts.from) > 0.05 ? toPx(foot) : undefined;
+          const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
+          if (px && d <= radius) near.push({ s: { kind: 'perpendicular', key: e.key, p: foot.clone() }, d: d + SNAP_PRIORITY.perpendicular * 6 - bonus(e.key), px });
+        }
+      }
+      if (opts.noEdge) continue;
+      ray.distanceSqToSegment(e.a, e.b, undefined, onSeg);
+      const px = toPx(onSeg);
+      const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
+      if (px && d <= radius) near.push({ s: { kind: 'edge', key: e.key, p: onSeg.clone() }, d: d + SNAP_PRIORITY.edge * 6 - bonus(e.key), px });
     }
     // Узел сетки основания (земля, вдоль осей здания) под курсором
     const grid = filter(GRID_SNAP_KEY) ? this.gridSnap(point) : undefined;
@@ -1234,10 +1267,11 @@ function pointInLocalRing([x, y]: Pt, ring: Pt[]): boolean {
   return inside;
 }
 
-export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'grid';
+export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'grid' | 'perpendicular' | 'edge';
 /** Ключ привязки к узлу сетки основания: фильтр snapAt пропускает его, если инструменту нужна и сетка. */
 export const GRID_SNAP_KEY = '@grid';
 interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3 }
+interface SnapEdge { key: string; a: THREE.Vector3; b: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number] }
 const SNAP_RADIUS_PX = 12;
@@ -1249,7 +1283,8 @@ const TOOL_AXES_LENGTH = 2;
 const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
 const SNAP_HIDDEN_PENALTY_PX = 100;
-const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, grid: 2, center: 2 };
+/** Точка на ребре — последней: курсор у ребра почти всегда, она не должна перебивать вершины и середины. */
+const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, grid: 2, center: 2, edge: 3 };
 /** Шаг сетки основания режима здания, м. */
 const GRID_STEP = 10;
 
@@ -1257,9 +1292,18 @@ const GRID_STEP = 10;
  * Точки привязки здания: вершины контуров внизу и на верху стен, вершины крыши выше стен, середины рёбер (нижних, верхних
  * и вертикальных) и центры габаритов объектов. Крыши пока не учитываются, кроме конька в центре.
  */
-function collectSnaps(g: MeshGroup): SnapPoint[] {
+function collectSnaps(g: MeshGroup): { points: SnapPoint[]; edges: SnapEdge[] } {
   const out: SnapPoint[] = [];
+  const edges: SnapEdge[] = [];
   const seen = new Set<string>();
+  const addEdge = (key: string, ax: number, ay: number, az: number, bx: number, by: number, bz: number) => {
+    // Общие рёбра соседних частей — одно (в любом направлении)
+    const p = `${ax.toFixed(2)}:${ay.toFixed(2)}:${az.toFixed(2)}`, q = `${bx.toFixed(2)}:${by.toFixed(2)}:${bz.toFixed(2)}`;
+    const id = `e:${p < q ? p + q : q + p}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    edges.push({ key, a: new THREE.Vector3(ax, ay, az), b: new THREE.Vector3(bx, by, bz) });
+  };
   const add = (kind: SnapKind, key: string, x: number, y: number, z: number) => {
     // Общие вершины соседних частей — одна точка
     const id = `${kind}:${x.toFixed(2)}:${y.toFixed(2)}:${z.toFixed(2)}`;
@@ -1281,8 +1325,9 @@ function collectSnaps(g: MeshGroup): SnapPoint[] {
           for (const z of levels) {
             add('vertex', key, ax, ay, z);
             add('midpoint', key, (ax + bx) / 2, (ay + by) / 2, z);
+            addEdge(key, ax, ay, z, bx, by, z);
           }
-          if (levels.length > 1) add('midpoint', key, ax, ay, (z0 + z1) / 2); // вертикальное ребро
+          if (levels.length > 1) { add('midpoint', key, ax, ay, (z0 + z1) / 2); addEdge(key, ax, ay, z0, ax, ay, z1); } // вертикальное ребро
         }
       }
     }
@@ -1294,7 +1339,7 @@ function collectSnaps(g: MeshGroup): SnapPoint[] {
     const c = it.box.getCenter(new THREE.Vector3());
     add('center', key, c.x, c.y, c.z);
   }
-  return out;
+  return { points: out, edges };
 }
 
 /** Отступ начала координат от угла bbox наружу по x и y, м. */

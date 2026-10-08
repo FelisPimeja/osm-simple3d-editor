@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { BuildingsLayer } from '../render/buildings-layer';
+import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 
 type Pt = [number, number];
 
@@ -16,6 +16,8 @@ export class SplitTool {
   state: 'off' | 'pick' | 'cut' = 'off';
   private target?: string;
   private start?: CutPoint;
+  /** Привязка последнего пересчёта точки разреза — для маркера. */
+  snap?: SnapHit;
   private z = 0;
 
   constructor(
@@ -95,7 +97,9 @@ export class SplitTool {
   private cutPointAt(point: [number, number]): CutPoint | undefined {
     const ring = this.target ? this.layer.focusPolygons(this.target)?.[0]?.outer : undefined;
     if (!ring) return;
-    const snap = this.layer.snapAt(point, (k) => k === this.target);
+    // Второй конец разреза — и перпендикуляр из первого на рёбра
+    const from = this.start && new THREE.Vector3(this.start.p[0], this.start.p[1], this.z);
+    const snap = this.snap = this.layer.snapAt(point, (k) => k === this.target, undefined, { from });
     const onTop = snap && Math.abs(snap.local.z - this.z) < 0.05 && snap.kind !== 'center';
     const q: Pt | undefined = onTop ? [snap.local.x, snap.local.y] : this.planePoint(point);
     if (!q) return;

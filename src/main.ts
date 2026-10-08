@@ -1,3 +1,4 @@
+import polygonClipping from 'polygon-clipping';
 import * as maplibregl from 'maplibre-gl';
 import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJSONFeature } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -619,6 +620,7 @@ function enterFocus(g: BuildingGroup) {
   }
   drill = focus = g;
   focusToolbar.hidden = false;
+  syncMapTools();
   orbit.setEnabled(true);
   orbit.setUnderground(true);
   overpassLayer.setFocus(groupFeatures(g), bareOutlines(g));
@@ -722,11 +724,13 @@ function deleteSelected() {
 
 /** Тайлы карты устарели (правки в режиме здания) — перерисовать при выходе. */
 let tilesStale = false;
+/** Объекты, правленные в режиме здания: при выходе перерисовываются только их тайлы. */
+const staleKeys = new Set<string>();
 
 function exitFocus() {
   if (!focus) return;
   focus = undefined;
-  if (tilesStale) { tilesStale = false; overpass.rerender(); }
+  if (tilesStale) { tilesStale = false; overpass.rerenderFeatures(staleKeys); staleKeys.clear(); }
   focusHidden.clear();
   session.dropViewActions();
   overpassLayer.setHover(undefined);
@@ -735,6 +739,7 @@ function exitFocus() {
   splitTool.stop();
   drawTool.stop();
   focusToolbar.hidden = true;
+  syncMapTools();
   renderOutliner();
   updateSnap(undefined);
   orbit.setUnderground(false);
@@ -890,12 +895,78 @@ const rectBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="rect"
 const polyBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="polygon"]')!;
 map.on('move', () => { if (drawTool.active) drawTool.relabel(); });
 const drawTool = new DrawTool(overpassLayer, map.getContainer(), createDrawn, (hint, error) => {
+  // Инструмент выключили посреди наброска (Esc, пробел) — набросок тоже
+  if (!drawTool.active && sketching) endSketch();
+  else syncMapTools();
   rectBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'rect');
   polyBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'polygon');
   if (hint) setStatus(hint, error); else showOverpassStatus();
 });
 rectBtn.addEventListener('click', () => toggleDraw('rect'));
 polyBtn.addEventListener('click', () => toggleDraw('polygon'));
+
+// Новое здание прямо с карты: «Прямоугольник» и «Полигон» рисуют контур на земле поверх карты (набросок),
+// готовый контур — отдельное здание building=yes нулевой высоты; сразу открывается в режиме здания с «Вытянуть»
+const mapToolbar = document.getElementById('map-tools')!;
+const mapRectBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="rect"]')!;
+const mapPolyBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="polygon"]')!;
+let sketching = false;
+mapRectBtn.addEventListener('click', () => toggleSketch('rect'));
+mapPolyBtn.addEventListener('click', () => toggleSketch('polygon'));
+
+function toggleSketch(shape: DrawShape) {
+  if (sketching && drawTool.shape === shape) return drawTool.stop();
+  startSketch(shape);
+}
+
+function startSketch(shape: DrawShape) {
+  if (focus) return startDraw(shape);
+  if (map.getZoom() < 15) return setStatus('Приблизьте карту (z ≥ 15), чтобы нарисовать здание.', true);
+  cancelCopyPick();
+  select(undefined);
+  const c = map.getCenter();
+  overpassLayer.setSketch([c.lng, c.lat]);
+  sketching = true;
+  drawTool.begin(shape);
+  syncMapTools();
+}
+
+function endSketch() {
+  if (!sketching) return;
+  sketching = false;
+  overpassLayer.setSketch(undefined);
+  updateSnap(undefined);
+  syncMapTools();
+}
+
+function syncMapTools() {
+  mapToolbar.hidden = !!focus;
+  mapRectBtn.classList.toggle('active', sketching && drawTool.shape === 'rect');
+  mapPolyBtn.classList.toggle('active', sketching && drawTool.shape === 'polygon');
+}
+
+/** Готовый контур наброска — новое отдельное здание; открыть его в режиме здания и включить «Вытянуть». */
+function createSketched(ring: [number, number][]): string | undefined {
+  const ll = ring.map((p) => overpassLayer.focusToLngLat(p[0], p[1])!);
+  const ids = ll.map(() => nextNewId--);
+  const wayId = nextNewId--;
+  const key = `way/${wayId}`;
+  const building: Feature3D = { key, type: 'way', id: wayId, version: 0, kind: 'building', tags: { building: 'yes', height: '0' },
+    polygons: [{ outer: ll, inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
+  session.editMany([{ key, create: building }]);
+  // После возврата из инструмента (он ещё дочищает своё состояние) — выход из наброска и вход в здание
+  requestAnimationFrame(() => {
+    drawTool.stop();
+    endSketch();
+    const g = soloGroup(key);
+    if (!g) return;
+    enterFocus(g);
+    select(key);
+    startPush();
+    setStatus(`Новое здание ${key}. Задайте высоту: клик по крыше и тяните вверх (или число + Enter).`);
+  });
+  return;
+}
 
 function toggleDraw(shape: DrawShape) {
   if (drawTool.active && drawTool.shape === shape) return drawTool.stop();
@@ -919,6 +990,7 @@ const SHARE_EPS = 0.03;
  * Часть входит в отношение здания (у отдельного здания — в новое, исходный путь — контур). Один шаг истории.
  */
 function createDrawn(ring: [number, number][], z: number): string | undefined {
+  if (sketching) return createSketched(ring);
   if (!focus) return 'Нет здания.';
   const lngLat = (p: [number, number]) => overpassLayer.focusToLngLat(p[0], p[1])!;
   // Кандидаты на общие узлы — пути рядом с контуром (грубый отбор по габаритам в градусах)
@@ -961,28 +1033,16 @@ function createDrawn(ring: [number, number][], z: number): string | undefined {
   const neighbours = fresh.length ? insertIntoNeighbours(key, fresh, coord) : new Map<string, Feature3D['polygons']>();
   if (typeof neighbours === 'string') return neighbours;
   const fmt = (v: number) => String(Math.round(v * 100) / 100);
-  // У отдельного здания контур снаружи него — новое отдельное здание рядом, а не часть нового отношения
-  const soloOutline = isSolo(focus) ? entity(focus.members[0]) as Feature3D | undefined : undefined;
-  const c = centroid(ll);
-  const standalone = !!soloOutline?.polygons && !soloOutline.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
-  const tags: Record<string, string> = { [standalone ? 'building' : 'building:part']: 'yes', height: fmt(z) };
+  // Всё нарисованное в режиме здания — части этого здания (и снаружи контура: контур потом расширяется
+  // кнопкой «Обновить контур»); у отдельного здания — в новом отношении
+  const tags: Record<string, string> = { 'building:part': 'yes', height: fmt(z) };
   if (z > 0.01) tags.min_height = fmt(z);
-  const part: Feature3D = { key, type: 'way', id: wayId, version: 0, kind: standalone ? 'building' : 'part', tags,
+  const part: Feature3D = { key, type: 'way', id: wayId, version: 0, kind: 'part', tags,
     polygons: [{ outer: ids.map((id) => coord.get(id)!), inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
   const edits: Parameters<typeof session.editMany>[0] = [
     { key, create: part },
     ...[...neighbours].map(([k, polygons]) => ({ key: k, polygons })),
   ];
-  if (standalone && focus) {
-    session.editMany(edits);
-    // В сцену режима отдельного здания — рядом с ним
-    drill = focus = { ...focus, members: [...focus.members, key], roles: [...focus.roles, ''] };
-    overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
-    overpassLayer.setFocusHidden(focusHidden);
-    select(key);
-    setStatus(`Создано отдельное здание ${key} рядом. Высоту задайте «Вытянуть» (P).`);
-    return;
-  }
   const group = attachParts(edits, [wayId]);
   if (typeof group === 'string') return group;
   session.editMany(edits);
@@ -1074,32 +1134,25 @@ function pasteClipboard() {
   const edits: Parameters<typeof session.editMany>[0] = [];
   const wayIds: number[] = [];
   const keys: string[] = [];
-  // Отдельное здание: копии — такие же отдельные здания рядом (не части нового отношения: снаружи контура
-  // частью они быть не могут, а контур с частями стал бы плоским следом). В отношении — части здания
-  const solo = isSolo(focus);
+  // Копии — части этого здания (у отдельного здания — в новом отношении); за контуром — «Обновить контур»
   for (const c of clipboard.items) {
     const outer = c.polygons[0].outer.map((p) => [...p] as LonLat);
     const ids = outer.map(() => nextNewId--);
     const wayId = nextNewId--;
     const key = `way/${wayId}`;
     const tags = { ...c.tags };
-    // Копия отдельного здания, вставленная в отношение, — часть: building → building:part
-    if (!solo && !tags['building:part'] && tags.building) { tags['building:part'] = tags.building === 'no' ? 'yes' : tags.building; delete tags.building; }
+    // Копия отдельного здания — часть: building → building:part
+    if (!tags['building:part'] && tags.building) { tags['building:part'] = tags.building === 'no' ? 'yes' : tags.building; delete tags.building; }
     const part: Feature3D = { key, type: 'way', id: wayId, version: 0, kind: kindOf(tags) ?? 'part', tags,
       polygons: [{ outer, inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
     edits.push({ key, create: part });
     wayIds.push(wayId);
     keys.push(key);
   }
-  const group = solo ? undefined : attachParts(edits, wayIds);
+  const group = attachParts(edits, wayIds);
   if (typeof group === 'string') return setStatus(group, true);
   session.editMany(edits);
-  if (solo && focus) {
-    // Копии — в сцену режима отдельного здания рядом с ним (первым членом остаётся само здание)
-    drill = focus = { ...focus, members: [...focus.members, ...keys], roles: [...focus.roles, ...keys.map(() => '')] };
-    overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
-    overpassLayer.setFocusHidden(focusHidden);
-  }
+  if (group) enterFocus(group);
   selection = keys;
   selectedKey = keys.at(-1);
   paintSelection();
@@ -1266,6 +1319,97 @@ function insertIntoNeighbours(key: string, fresh: FreshNode[], coord: Map<number
   }
 
   return neighbours;
+}
+
+/** Допуск «часть внутри контура», м: общие стороны и узлы, погрешность координат. */
+const OUTLINE_EPS = 0.05;
+
+/** Контур отношения (путь) и части, выходящие за него хоть одной вершиной. */
+function partsOutsideOutline(g: BuildingGroup): { outline: Feature3D; parts: Feature3D[]; out: Feature3D[] } | undefined {
+  const oi = g.roles.indexOf('outline');
+  const outline = oi >= 0 ? entity(g.members[oi]) as Feature3D | undefined : undefined;
+  if (!outline?.polygons?.length || !outline.key.startsWith('way/') || !overpassLayer.focusToLocal([0, 0])) return;
+  const ring = outline.polygons[0].outer.map((c) => overpassLayer.focusToLocal(c)!);
+  const parts = g.members.filter((k, i) => g.roles[i] === 'part' && !session.isDeleted(k))
+    .map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons?.length);
+  const inside = (q: [number, number]) => pointInRing(q, ring)
+    || ring.some((a, i) => segDist2(q, a, ring[(i + 1) % ring.length]) < OUTLINE_EPS);
+  const out = parts.filter((f) => f.polygons.some((p) => p.outer.some((c) => !inside(overpassLayer.focusToLocal(c)!))));
+  return { outline, parts, out };
+}
+
+/** Новый контур: объединение контура и всех частей (метры сцены); строка — почему нельзя. */
+function unitedOutline(outline: Feature3D, parts: Feature3D[]): [number, number][] | string {
+  const toRing = (outer: LonLat[]) => {
+    const r = outer.map((c) => overpassLayer.focusToLocal(c)!);
+    return [[...r, r[0]]] as [number, number][][];
+  };
+  const polys = [outline, ...parts].flatMap((f) => f.polygons.map((p) => toRing(p.outer)));
+  const u = polygonClipping.union(polys[0], ...polys.slice(1));
+  if (u.length !== 1) return 'Части не соприкасаются с контуром: контур из нескольких кусков (мультиполигон) пока не поддерживается — соедините части.';
+  // Дворы внутри объединения — тоже под контуром (путь без дыр); лишние точки на прямых — убираем
+  const ring = u[0][0].slice(0, -1) as [number, number][];
+  const out: [number, number][] = [];
+  for (let i = 0; i < ring.length; i++) {
+    const a = out.length ? out[out.length - 1] : ring[ring.length - 1], b = ring[i], c = ring[(i + 1) % ring.length];
+    if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.01) continue;
+    if (segDist2(b, a, c) < 0.01) continue; // на прямой a–c
+    out.push(b);
+  }
+  return out.length >= 3 ? out : 'Не удалось построить контур.';
+}
+
+/**
+ * «Обновить контур»: контур отношения — объединение его и всех частей (новые вершины — узлы частей там, где
+ * совпадают, иначе новые узлы). Если у контура был свой объём, он переходит в новую часть по прежней форме,
+ * а на контуре остаются только теги здания (название, адрес…). Одним шагом истории.
+ */
+function fixOutline() {
+  if (!focus || isSolo(focus)) return;
+  const r = partsOutsideOutline(focus);
+  if (!r) return setStatus('Контур здания — не простой путь: обновить его пока нельзя.', true);
+  const ring = unitedOutline(r.outline, r.parts);
+  if (typeof ring === 'string') return setStatus(ring, true);
+  // Узлы: существующие узлы контура и частей в тех же точках, иначе новые
+  const known: { id: number; c: LonLat; p: [number, number] }[] = [];
+  for (const f of [r.outline, ...r.parts]) {
+    for (const p of f.polygons) (p.outerIds ?? []).forEach((id, i) => known.push({ id, c: p.outer[i], p: overpassLayer.focusToLocal(p.outer[i])! }));
+  }
+  const ids: number[] = [], coords: LonLat[] = [];
+  for (const q of ring) {
+    const k = known.find((n) => Math.hypot(n.p[0] - q[0], n.p[1] - q[1]) < SHARE_EPS);
+    if (k && !ids.includes(k.id)) { ids.push(k.id); coords.push(k.c); continue; }
+    ids.push(nextNewId--);
+    coords.push(overpassLayer.focusToLngLat(q[0], q[1])!);
+  }
+  const edits: Parameters<typeof session.editMany>[0] = [];
+  const g = entity(focus.key) as EditGroup | undefined;
+  if (!g) return setStatus('Отношение здания не найдено.', true);
+  const outlineTags = { ...r.outline.tags };
+  if (!isBareOutlineTags(outlineTags)) {
+    // Объём контура — новой частью прежней формы (на тех же узлах)
+    const id = nextNewId--;
+    const tags: Record<string, string> = { 'building:part': 'yes' };
+    for (const [k, v] of Object.entries(outlineTags)) if (PART_TAGS.test(k)) { tags[k] = v; delete outlineTags[k]; }
+    const part: Feature3D = { key: `way/${id}`, type: 'way', id, version: 0, kind: 'part', tags,
+      polygons: r.outline.polygons.map((p) => ({ ...p, outer: [...p.outer], outerIds: p.outerIds && [...p.outerIds] })), hasParts: false };
+    edits.push({ key: part.key, create: part });
+    edits.push({ key: g.key, members: [...g.relMembers, { type: 'way', ref: id, role: 'part' }] });
+  }
+  edits.push({ key: r.outline.key, polygons: [{ outer: coords, inners: [], outerIds: ids, innerIds: [] }], tags: outlineTags });
+  overpassLayer.setDrawPreview(undefined);
+  session.editMany(edits);
+  renderSelected();
+  setStatus(`Контур ${r.outline.key} обновлён: охватывает все части (${r.parts.length}). Отменить — Ctrl+Z.`);
+}
+
+/** Предупреждение в панели режима здания: части за контуром и кнопка «Обновить контур». */
+function outlineWarning(g: BuildingGroup): string {
+  if (isSolo(g)) return '';
+  const r = partsOutsideOutline(g);
+  if (!r?.out.length) return '';
+  return `<p class="warn">⚠ Частей за контуром здания: ${r.out.length}. Контур должен охватывать все части.
+    <button type="button" data-outline-fix title="Наведите — предпросмотр нового контура">Обновить контур</button></p>`;
 }
 
 /** Теги объёма, которые переходят от отдельного здания к его частям. */
@@ -1590,6 +1734,13 @@ document.addEventListener('keydown', (e) => {
     deleteSelected();
     return;
   }
+  // На карте R / L — новое здание (набросок)
+  if (!focus && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.code === 'KeyR' || e.code === 'KeyL')) {
+    e.preventDefault();
+    closeCtxMenu();
+    startSketch(e.code === 'KeyR' ? 'rect' : 'polygon');
+    return;
+  }
   // Шорткаты режима здания — по физической клавише (e.code), чтобы работали и в русской раскладке
   // Работают и посреди другого инструмента: запуск нового выключает текущий
   if (!focus || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -1619,6 +1770,17 @@ map.on('mousemove', (e) => {
   map.getCanvas().style.cursor = hit ? 'pointer' : '';
 });
 
+// Наведение на «Обновить контур» — предпросмотр нового контура
+infoEl.addEventListener('mouseover', (e) => {
+  if (!(e.target as HTMLElement).closest('[data-outline-fix]') || !focus) return;
+  const r = partsOutsideOutline(focus);
+  const ring = r && unitedOutline(r.outline, r.parts);
+  if (Array.isArray(ring)) overpassLayer.setDrawPreview(ring.map(([x, y]) => new THREE.Vector3(x, y, 0)), true);
+});
+infoEl.addEventListener('mouseout', (e) => {
+  if ((e.target as HTMLElement).closest('[data-outline-fix]')) overpassLayer.setDrawPreview(undefined);
+});
+
 infoEl.addEventListener('click', (e) => {
   const link = (e.target as HTMLElement).closest<HTMLElement>('a[data-select]');
   if (link) { e.preventDefault(); select(link.dataset.select); return; }
@@ -1626,6 +1788,7 @@ infoEl.addEventListener('click', (e) => {
   if (!btn) return;
   if (btn.dataset.merge !== undefined) return mergeIntoBuilding();
   if (btn.dataset.focusExit !== undefined) return closeFocus();
+  if (btn.dataset.outlineFix !== undefined) return fixOutline();
   if (btn.dataset.exclude !== undefined) return excludeFromGroup();
   if (btn.dataset.addParts !== undefined) return startAdding();
   if (btn.dataset.addConfirm !== undefined) return confirmAdding();
@@ -2263,6 +2426,7 @@ function describeFocus(g: BuildingGroup): string {
     ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
     <p class="hint"><a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>, членов: ${g.members.length}.
       Клик по части — выделить её, Shift — несколько. Двойной клик мимо здания — выход.</p>
+    ${outlineWarning(g)}
     ${focusExitButton('Esc')}`;
 }
 
@@ -2275,7 +2439,7 @@ function drillHint(key: string): string {
   if (!drill || !drill.members.includes(key)) return '';
   const name = drill.tags.name ?? outlineTags(drill)?.name;
   return `<p class="hint drill">Внутри группы <a href="${server().web}/${drill.key}" target="_blank" rel="noopener">${drill.key}</a>${
-    name ? ` «${esc(name)}»` : ''} — ${focus ? 'Esc снимет выделение, повторный Esc — выход из режима здания' : 'клик вне группы вернёт к ней'}.</p>`;
+    name ? ` «${esc(name)}»` : ''} — ${focus ? 'Esc снимет выделение, повторный Esc — выход из режима здания' : 'клик вне группы вернёт к ней'}.</p>${focus ? outlineWarning(drill) : ''}`;
 }
 
 /** Теги контура группы (роль outline) — название и адрес здания обычно на нём. */
@@ -2321,7 +2485,7 @@ function onSessionChange(keys: string[]) {
     if (g && (g.key === k || outline === k)) for (const m of g.members) affected.add(m);
   }
   // В режиме здания тайлы карты не видны — пересоберём их разом при выходе
-  if (focus) tilesStale = true; else overpass.refreshFeatures([...affected]);
+  if (focus) { tilesStale = true; for (const k of affected) staleKeys.add(k); } else overpass.refreshFeatures([...affected]);
   // Сцену режима здания обновляем напрямую: refreshFeatures доходит до неё только через тайлы, где объект
   // нарисован, а части здания могут лежать в тайле, который сейчас не показан (тогда правка «не применялась»)
   if (focus && !keys.includes(focus.key)) {
@@ -2336,7 +2500,7 @@ function onSessionChange(keys: string[]) {
   const deletedFlip = keys.some((k) => session.isDeleted(k) !== deletedKeys.has(k));
   for (const k of keys) if (session.isDeleted(k)) deletedKeys.add(k); else deletedKeys.delete(k);
   if (keys.some((k) => k.startsWith('way/-')) || deletedFlip) {
-    if (!focus) overpass.rerender();
+    if (!focus) overpass.rerenderFeatures(affected);
   }
   // Состав здания в режиме одного здания поменялся (исключение, undo/redo) — пересобрать сцену
   if (focus && keys.includes(focus.key)) {

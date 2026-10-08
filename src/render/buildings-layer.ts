@@ -220,6 +220,8 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   /** Группы, которые сейчас рисуются и выбираются. */
   private activeGroups(): MeshGroup[] {
+    // Набросок нового здания на карте: карта как есть плюс пустая сцена инструментов поверх
+    if (this.sketching) return [...this.groups].map(([, g]) => g);
     if (!this.focused) return [...this.groups].filter(([k]) => k !== FOCUS_GROUP).map(([, g]) => g);
     const g = this.groups.get(FOCUS_GROUP);
     return g ? [g] : [];
@@ -229,7 +231,26 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Режим одного здания: только эти объекты и плоскость земли с сеткой под ними, остальное не рисуется.
    * undefined — выйти. Пока режим включён, правки объектов обновляют и его копию (updateFeature).
    */
+  /** Набросок нового здания прямо на карте (сцена инструментов без здания, карта не прячется). */
+  private sketching = false;
+
+  /**
+   * Начать (center) или закончить (undefined) набросок: пустая сцена режима здания с началом в center и осями
+   * по сторонам света — в ней работают инструменты рисования (луч на землю, проекция), а карта видна вся.
+   */
+  setSketch(center: LonLat | undefined) {
+    this.setFocus(undefined);
+    this.focusLock = undefined;
+    if (!center) { this.map?.triggerRepaint(); return; }
+    const g = new MeshGroup(center);
+    g.footprint = 0;
+    this.focusAxes = { origin: [0, 0], x: [1, 0], y: [0, 1], size: [0, 0] };
+    this.install(FOCUS_GROUP, g);
+    this.focused = this.sketching = true;
+  }
+
   setFocus(features: Feature3D[] | undefined, flat: Iterable<string> = []) {
+    this.sketching = false;
     this.moveGuide = undefined;
     this.hiddenEdges?.geometry.dispose();
     this.hiddenEdges = undefined;
@@ -385,7 +406,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (px && d <= radius) near.push({ s: { kind: 'edge', key: e.key, p: onSeg.clone() }, d: d + SNAP_PRIORITY.edge * 6 - bonus(e.key), px });
     }
     // Узел сетки основания (земля, вдоль осей здания) под курсором
-    const grid = filter(GRID_SNAP_KEY) ? this.gridSnap(point) : undefined;
+    const grid = filter(GRID_SNAP_KEY) && !this.sketching ? this.gridSnap(point) : undefined; // в наброске сетки не видно
     if (grid) {
       v.set(grid.x, grid.y, 0, 1).applyMatrix4(m);
       if (v.w > 0) {
@@ -801,6 +822,33 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!g || !g.byKey.has(f.key)) return;
     this.replaceItems(g, [f]);
     return rendered(g.byKey.get(f.key)!);
+  }
+
+  /**
+   * Точечно поменять здания тайла без пересборки всего тайла: upsert — заменить или добавить, remove — убрать.
+   * Слитая геометрия пересобирается один раз (это быстро: треугольники остальных зданий уже посчитаны).
+   */
+  patchGroup(groupKey: string, upsert: Feature3D[], remove: string[]): RenderedFeature[] {
+    const g = this.groups.get(groupKey);
+    if (!g) return [];
+    for (const k of remove) {
+      const it = g.byKey.get(k);
+      if (!it) continue;
+      g.items.splice(g.items.indexOf(it), 1);
+      g.byKey.delete(k);
+    }
+    for (const f of upsert) {
+      const old = g.byKey.get(f.key);
+      if (!old) { this.addItem(g, f); continue; }
+      const item = timed('здание: треугольники', () => buildItem(g, f), () => describeFeature(f));
+      if (this.graphics.edges) item.edges = itemEdges(item);
+      g.items[g.items.indexOf(old)] = item;
+      g.byKey.set(f.key, item);
+    }
+    if (this.viewHidden.size) for (const it of g.items) if (this.viewHidden.has(it.feature.key)) g.hidden.add(it.feature.key); else g.hidden.delete(it.feature.key);
+    this.rebuildGeometry(g);
+    this.map?.triggerRepaint();
+    return upsert.map((f) => g.byKey.get(f.key)).filter((it): it is Item => !!it).map(rendered);
   }
 
   /**

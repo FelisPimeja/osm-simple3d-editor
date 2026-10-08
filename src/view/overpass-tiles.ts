@@ -153,6 +153,38 @@ export class OverpassTiles {
     for (const key of this.layer.groupKeys()) if (this.cache.get(key)?.state === 'ready') this.show(key);
   }
 
+  /**
+   * Перерисовать только тайлы с этими объектами: где они лежат в данных (прежнее место) и где их центр
+   * сейчас (с правками; созданные — только там). Быстрее полной пересборки всех видимых тайлов.
+   */
+  rerenderFeatures(keys: Iterable<string>) {
+    const want = new Set(keys);
+    const visible = new Set(this.layer.groupKeys());
+    const tiles = new Set<string>();
+    for (const [tile, e] of this.cache) {
+      if (e.state === 'ready' && visible.has(tile) && e.features.some((f) => want.has(f.key))) tiles.add(tile);
+    }
+    const current = [...this.allFeatures(), ...this.extras()].filter((f) => want.has(f.key) && f.polygons.length);
+    for (const f of current) {
+      const [x, y] = centroid(f.polygons[0].outer);
+      const [tx, ty] = lngLatToTile(x, y, OVERPASS_TILE_ZOOM);
+      tiles.add(`${OVERPASS_TILE_ZOOM}/${tx}/${ty}`);
+    }
+    // Точечно: в каждом тайле — заменить или добавить свои (по центру) затронутые объекты и убрать ушедшие
+    for (const t of tiles) {
+      if (!visible.has(t) || this.cache.get(t)?.state !== 'ready') continue;
+      const { features, hidden } = this.ownedFeatures(t);
+      this.hiddenOutlines.set(t, hidden);
+      const upsert = features.filter((f) => want.has(f.key));
+      const mine = new Set(upsert.map((f) => f.key));
+      for (const f of upsert) this.layer.setViewHidden(f.key, this.bareOutline(f));
+      const remove = [...want].filter((k) => !mine.has(k));
+      for (const r of this.layer.patchGroup(t, upsert, remove)) this.rendered.set(r.feature.key, r);
+    }
+    for (const k of want) if (!this.layer.hasFeature(k)) this.rendered.delete(k);
+    this.onChange();
+  }
+
   private readonly featureIndex = new WeakMap<Feature3D[], Map<string, Feature3D>>();
 
   /** Объект из загруженных данных, даже если ещё не нарисован (контур в соседнем тайле и т. п.). */

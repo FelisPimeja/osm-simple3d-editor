@@ -295,6 +295,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   /**
    * Ближайшая к точке экрана привязка режима одного здания в пределах radius px.
    * Вершины важнее середин рёбер, середины — центров: при близких расстояниях побеждает более важная.
+   * Привязки выделенного объекта важнее остальных, невидимые (заслонённые геометрией) — наименее важны.
    */
   /** Привязки включены (S в режиме здания). Выключены — инструменты двигают свободно. */
   snapsEnabled = true;
@@ -308,6 +309,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const canvas = this.map.getCanvas();
     const v = new THREE.Vector4();
     let best: { s: SnapPoint; d: number; px: [number, number] } | undefined;
+    const near: { s: SnapPoint; d: number; px: [number, number] }[] = [];
     for (const s of this.snaps) {
       if (!filter(s.key)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
@@ -315,14 +317,28 @@ export class BuildingsLayer implements CustomLayerInterface {
       const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
       const d = Math.hypot(px[0] - point[0], px[1] - point[1]);
       if (d > radius) continue;
-      // Штраф за менее важный тип — вершина в 6 px «ближе» середины ребра
-      const score = d + SNAP_PRIORITY[s.kind] * 6;
-      if (!best || score < best.d) best = { s, d: score, px };
+      // Штраф за менее важный тип — вершина в 6 px «ближе» середины ребра; выделенный объект — ещё на 8 px
+      near.push({ s, d: d + SNAP_PRIORITY[s.kind] * 6 - (this.selected.has(s.key) ? SNAP_SELECTED_BONUS_PX : 0), px });
+    }
+    // Видимость проверяем только у кандидатов в радиусе (луч на каждый — недёшево): заслонённые — в конец
+    for (const c of near.sort((a, b) => a.d - b.d)) {
+      if (best && c.d >= best.d) continue;
+      if (this.snapHidden(c.s.p, c.px)) c.d += SNAP_HIDDEN_PENALTY_PX;
+      if (!best || c.d < best.d) best = c;
     }
     if (!best) return;
     const { s, px } = best;
     const merc = new MercatorCoordinate(g.origin.x + s.p.x * g.metersToMerc, g.origin.y - s.p.y * g.metersToMerc, 0);
     return { kind: s.kind, key: s.key, local: s.p.clone(), lngLat: merc.toLngLat(), altitude: s.p.z, point: px };
+  }
+
+  /** Точка привязки заслонена геометрией сцены (между ней и камерой есть грань). */
+  private snapHidden(p: THREE.Vector3, px: [number, number]): boolean {
+    const ray = this.focusRay(px);
+    const hit = this.focusRayHits(px)[0];
+    if (!ray || !hit) return false;
+    const toSnap = ray.origin.distanceTo(p);
+    return ray.origin.distanceTo(hit.local) < toSnap - Math.max(0.05, toSnap * 0.002);
   }
 
   /** Луч из камеры через точку экрана — в метрах сцены режима одного здания. */
@@ -1149,6 +1165,10 @@ interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number] }
 const SNAP_RADIUS_PX = 12;
+/** Привязки выделенного объекта «ближе» на столько px. */
+const SNAP_SELECTED_BONUS_PX = 8;
+/** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
+const SNAP_HIDDEN_PENALTY_PX = 100;
 const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, center: 2 };
 
 /**

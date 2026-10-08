@@ -83,6 +83,8 @@ class MeshGroup {
   readonly byKey = new Map<string, Item>();
   mesh?: THREE.Mesh;
   edges?: THREE.LineSegments;
+  /** Скрытые (только для показа) объекты: не рисуются, не выбираются, без привязок. */
+  readonly hidden = new Set<string>();
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
   // Цвет «земли» — посередине между белым и 0x8a8478: контраст неба и земли вдвое меньше
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
@@ -339,7 +341,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const [dx, dy, dz] = offset ? [offset.x, offset.y, offset.z] : [0, 0, 0];
     for (const k of keys) {
       const it = g.byKey.get(k);
-      if (!it) continue;
+      if (!it || g.hidden.has(k)) continue;
       const base = it.positions, o = it.start * 3;
       for (let i = 0; i < base.length; i += 3) {
         pos[o + i] = base[i] + dx; pos[o + i + 1] = base[i + 1] + dy; pos[o + i + 2] = base[i + 2] + dz;
@@ -349,7 +351,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Рёбра перемещаемых — отдельным объектом, сдвигаемым целиком; остальные остаются на месте
     if (offset && !this.movingEdges && this.graphics.edges && g.mesh) {
       this.applyEdges(g, new Set(keys));
-      this.movingEdges = edgeLines(keys.map((k) => g.byKey.get(k)).filter((it): it is Item => !!it), EDGE_MATERIAL);
+      this.movingEdges = edgeLines(keys.filter((k) => !g.hidden.has(k)).map((k) => g.byKey.get(k)).filter((it): it is Item => !!it), EDGE_MATERIAL);
       g.scene.add(this.movingEdges);
     } else if (!offset && this.movingEdges) {
       this.movingEdges.parent?.remove(this.movingEdges);
@@ -362,10 +364,39 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  /** Скрыть объекты режима здания (глазик в списке частей) — только показ, на данные не влияет. */
+  setFocusHidden(keys: Iterable<string>) {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g) return;
+    g.hidden.clear();
+    for (const k of keys) g.hidden.add(k);
+    this.snaps = undefined;
+    this.rebuildGeometry(g);
+    this.updateHiddenEdges();
+    this.map?.triggerRepaint();
+  }
+
+  private hovered?: string;
+
+  /** Подсветка объема при наведении (как выделение). */
+  setHover(key: string | undefined) {
+    if (key === this.hovered) return;
+    const prev = this.hovered;
+    this.hovered = key;
+    for (const g of this.activeGroups()) {
+      for (const k of [prev, key]) {
+        const it = k ? g.byKey.get(k) : undefined;
+        if (it) this.paintItem(g, it);
+      }
+    }
+    this.updateHiddenEdges();
+    this.map?.triggerRepaint();
+  }
+
   private hiddenEdges?: THREE.LineSegments;
   private movingEdges?: THREE.LineSegments;
 
-  /** Пунктир закрытых другими объектами рёбер выделенного — только в режиме здания. */
+  /** Пунктир закрытых другими объектами рёбер выделенного и наведённого — только в режиме здания. */
   private updateHiddenEdges() {
     if (this.hiddenEdges) {
       this.hiddenEdges.parent?.remove(this.hiddenEdges);
@@ -374,7 +405,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     const g = this.groups.get(FOCUS_GROUP);
     if (!this.focused || !g) return;
-    const items = [...this.selected].map((k) => g.byKey.get(k)).filter((it): it is Item => !!it);
+    const items = [...new Set([...this.selected, ...(this.hovered ? [this.hovered] : [])])].filter((k) => !g.hidden.has(k)).map((k) => g.byKey.get(k)).filter((it): it is Item => !!it);
     if (!items.length) return;
     this.hiddenEdges = edgeLines(items, HIDDEN_EDGE_MATERIAL);
     this.hiddenEdges.computeLineDistances();
@@ -632,7 +663,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Сначала габариты зданий, треугольники — только у задетых
       let groupBest: { item: Item; dist: number; p: THREE.Vector3 } | undefined;
       for (const item of g.items) {
-        if (!ray.intersectsBox(item.box)) continue;
+        if (g.hidden.has(item.feature.key) || !ray.intersectsBox(item.box)) continue;
         const pos = item.positions;
         for (let i = 0; i < pos.length; i += 9) {
           a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
@@ -708,7 +739,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     let total = 0;
     for (const it of g.items) { it.start = total; total += it.positions.length / 3; }
     const positions = new Float32Array(total * 3);
-    for (const it of g.items) positions.set(it.positions, it.start * 3);
+    // Скрытые остаются нулями — вырожденные треугольники не видны
+    for (const it of g.items) if (!g.hidden.has(it.feature.key)) positions.set(it.positions, it.start * 3);
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(total * 3), 3));
@@ -727,7 +759,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private applyEdges(g: MeshGroup, exclude?: Set<string>) {
     g.disposeEdges();
     if (!this.graphics.edges || !g.mesh) return;
-    g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key)), EDGE_MATERIAL);
+    g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key)), EDGE_MATERIAL);
     g.scene.add(g.edges);
   }
 
@@ -756,7 +788,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const attr = g.mesh?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
     if (!attr) return;
     const colors = attr.array as Float32Array;
-    const selected = this.selected.has(it.feature.key);
+    const selected = this.selected.has(it.feature.key) || this.hovered === it.feature.key;
     const ao = this.graphics.groundAO;
     const fade = Math.max(0.5, Math.min(AO_HEIGHT, AO_FADE_SHARE * it.top));
     const depth = (1 - AO_MIN) * Math.min(1, it.top / AO_HEIGHT);
@@ -793,11 +825,19 @@ function edgeLines(items: Item[], material: THREE.LineBasicMaterial): THREE.Line
  * Рёбра здания: изломы круче EDGE_ANGLE и границы. Стык стен с крышей — всегда: у шпилей и крутых
  * пирамид угол между стеной и скатом меньше порога, и без этого граница стен пропадает.
  */
+/** Крыши с кривыми поверхностями (купол, луковица, бочка): их грани — аппроксимация, изломы не рисуем. */
+const CURVED_ROOFS = new Set(['dome', 'onion', 'round', 'cone', 'conical', 'spherical']);
+const PLANAR_ROOF_EDGE_ANGLE = 1;
+
 function itemEdges(it: Item): Float32Array {
   const all = edgeSegments(it.positions, EDGE_ANGLE);
   if (it.wallVertices * 3 >= it.positions.length) return all;
   // Отдельно стены: их верхний край — граница (одна грань), EdgesGeometry отдаёт её при любом угле
   const walls = edgeSegments(it.positions.subarray(0, it.wallVertices * 3), EDGE_ANGLE);
+  // Плоские скаты пологой крыши (hipped с roof:height 1 м) сходятся под малым углом — у всех крыш, кроме
+  // кривых (купол, луковица, бочка), берём все изломы; у кривых — нет, иначе прорисуется каждая грань аппроксимации
+  const roof = !CURVED_ROOFS.has(it.feature.tags['roof:shape'] ?? 'flat')
+    ? edgeSegments(it.positions.subarray(it.wallVertices * 3), PLANAR_ROOF_EDGE_ANGLE) : new Float32Array();
   const key = (a: Float32Array, i: number) => {
     const p = `${a[i].toFixed(2)},${a[i + 1].toFixed(2)},${a[i + 2].toFixed(2)}`;
     const q = `${a[i + 3].toFixed(2)},${a[i + 4].toFixed(2)},${a[i + 5].toFixed(2)}`;
@@ -806,10 +846,12 @@ function itemEdges(it: Item): Float32Array {
   const seen = new Set<string>();
   for (let i = 0; i < all.length; i += 6) seen.add(key(all, i));
   const extra: number[] = [];
-  for (let i = 0; i < walls.length; i += 6) {
-    if (seen.has(key(walls, i))) continue;
-    seen.add(key(walls, i));
-    for (let j = 0; j < 6; j++) extra.push(walls[i + j]);
+  for (const src of [walls, roof]) {
+    for (let i = 0; i < src.length; i += 6) {
+      if (seen.has(key(src, i))) continue;
+      seen.add(key(src, i));
+      for (let j = 0; j < 6; j++) extra.push(src[i + j]);
+    }
   }
   if (!extra.length) return all;
   const out = new Float32Array(all.length + extra.length);
@@ -852,7 +894,7 @@ function collectSnaps(g: MeshGroup): SnapPoint[] {
     out.push({ kind, key, p: new THREE.Vector3(x, y, z) });
   };
   for (const it of g.items) {
-    if (it.box.isEmpty()) continue;
+    if (it.box.isEmpty() || g.hidden.has(it.feature.key)) continue;
     const key = it.feature.key;
     const z0 = it.box.min.z;
     const z1 = Math.max(z0, Math.min(computeHeights(it.feature.tags).wallTop, it.box.max.z));

@@ -102,6 +102,11 @@ for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
   });
 }
 const editsPanel = document.getElementById('edits-panel')!;
+const outlinerPanel = document.getElementById('outliner-panel')!;
+const outlinerEl = document.getElementById('outliner')!;
+const outlinerCount = document.getElementById('outliner-count')!;
+/** Скрытые глазиком части в режиме здания — только показ, на данные не влияет. */
+const focusHidden = new Set<string>();
 const editsCount = document.getElementById('edits-count')!;
 /** Было ли в панели правок что показать при прошлой отрисовке: раскрываем/сворачиваем только на переходе. */
 let editsHadContent = false;
@@ -511,10 +516,12 @@ function enterFocus(g: BuildingGroup) {
     }
   }
   const fly = !focus;
+  if (focus?.key !== g.key) focusHidden.clear();
   drill = focus = g;
   focusToolbar.hidden = false;
   orbit.setEnabled(true);
   overpassLayer.setFocus(groupFeatures(g));
+  overpassLayer.setFocusHidden(focusHidden);
   // На следующем кадре: внутри обработки dblclick MapLibre после обработчиков останавливает камеру (stop)
   if (fly) requestAnimationFrame(flyToFocus);
   addingTo = undefined;
@@ -582,8 +589,11 @@ function flyToFocus() {
 function exitFocus() {
   if (!focus) return;
   focus = undefined;
+  focusHidden.clear();
+  overpassLayer.setHover(undefined);
   moveTool.stop();
   focusToolbar.hidden = true;
+  renderOutliner();
   updateSnap(undefined);
   orbit.setEnabled(gfx.orbitAtCursor);
   overpassLayer.setFocus(undefined);
@@ -870,7 +880,7 @@ function toggleSelection(key: string) {
 
 /** Добавить к выделению несколько объектов (рамкой). */
 function addToSelection(keys: string[]) {
-  const add = keys.filter((k) => !selection.includes(k) && entity(k));
+  const add = keys.filter((k) => !selection.includes(k) && !focusHidden.has(k) && entity(k));
   if (!add.length) return;
   clearTileHighlight();
   selection = [...selection, ...add];
@@ -942,6 +952,63 @@ let suppressClick = false;
 
 function paintSelection() {
   overpassLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
+  renderOutliner();
+}
+
+const ICON_EYE = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 8s2.6-4.5 7-4.5S15 8 15 8s-2.6 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="2"/></svg>';
+const ICON_EYE_OFF = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 8s2.6-4.5 7-4.5S15 8 15 8s-2.6 4.5-7 4.5S1 8 1 8z" opacity=".35"/><path d="M2.5 13.5l11-11"/></svg>';
+/** Контур — домик (здание целиком), часть — куб. */
+const ICON_OUTLINE = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 7.5L8 2.5l5.5 5V14h-11z"/><path d="M6.5 14v-4h3v4"/></svg>';
+const ICON_PART = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 1.8l5.5 3v6.4L8 14.2l-5.5-3V4.8z"/><path d="M2.5 4.8L8 7.8l5.5-3M8 7.8v6.4"/></svg>';
+
+/** Панель частей режима здания: все члены отношения, контур — первым. */
+function renderOutliner() {
+  outlinerPanel.hidden = !focus;
+  if (!focus) { outlinerEl.innerHTML = ''; return; }
+  const g = focus;
+  const rows = g.members.map((key, i) => ({ key, role: g.roles[i] }))
+    .sort((a, b) => Number(b.role === 'outline') - Number(a.role === 'outline'));
+  outlinerCount.textContent = `(${rows.length})`;
+  outlinerEl.innerHTML = rows.map(({ key, role }) => {
+    const f = entity(key);
+    const outline = role === 'outline';
+    const t = f?.tags ?? {};
+    const name = t.name ?? (outline ? 'Контур' : t['building:part'] && t['building:part'] !== 'yes' ? t['building:part'] : 'Часть');
+    const off = focusHidden.has(key);
+    const cls = [selection.includes(key) && 'selected', off && 'off', !f && 'missing'].filter(Boolean).join(' ');
+    const title = f ? key : `${key} — не загружен`;
+    return `<li class="${cls}" data-key="${esc(key)}" title="${esc(title)}">
+      <span class="ol-icon" title="${outline ? 'Контур (outline)' : 'Часть (part)'}">${outline ? ICON_OUTLINE : ICON_PART}</span>
+      <span class="ol-label">${esc(name)}<span class="ol-key">${esc(key)}</span></span>
+      <button type="button" class="ol-eye" data-eye title="${off ? 'Показать' : 'Скрыть'}">${off ? ICON_EYE_OFF : ICON_EYE}</button></li>`;
+  }).join('');
+}
+
+outlinerEl.addEventListener('click', (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
+  if (!li || !focus) return;
+  const key = li.dataset.key!;
+  if ((e.target as HTMLElement).closest('[data-eye]')) {
+    if (focusHidden.has(key)) focusHidden.delete(key); else { focusHidden.add(key); outlinerUnhover(); }
+    overpassLayer.setFocusHidden(focusHidden);
+    renderOutliner();
+    return;
+  }
+  if (!entity(key)) return;
+  if (e.shiftKey) toggleSelection(key); else select(key);
+});
+// Наведение на строку — подсветка части в сцене (как у списка выделенного); скрытые не подсвечиваем
+// Объём — бледно-голубым, как выделение, плюс пунктир закрытых рёбер
+outlinerEl.addEventListener('mouseover', (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
+  const key = li?.dataset.key;
+  if (key && !focusHidden.has(key)) {
+    overpassLayer.setHover(key);
+  } else outlinerUnhover();
+});
+outlinerEl.addEventListener('mouseleave', outlinerUnhover);
+function outlinerUnhover() {
+  overpassLayer.setHover(undefined);
 }
 
 /** Почему объект нельзя добавить в группу (undefined — можно). */
@@ -1215,7 +1282,7 @@ function onSessionChange(keys: string[]) {
   // Состав здания в режиме одного здания поменялся (исключение, undo/redo) — пересобрать сцену
   if (focus && keys.includes(focus.key)) {
     const g = groupOf(focus.key);
-    if (g) { drill = focus = g; overpassLayer.setFocus(groupFeatures(g)); } else closeFocus();
+    if (g) { drill = focus = g; overpassLayer.setFocus(groupFeatures(g)); overpassLayer.setFocusHidden(focusHidden); } else closeFocus();
   }
   if (selectedKey && keys.includes(selectedKey)) {
     const active = document.activeElement as HTMLElement | null;
@@ -1225,6 +1292,7 @@ function onSessionChange(keys: string[]) {
     if (focusTag) infoEl.querySelector<HTMLElement>(`[data-tag="${CSS.escape(focusTag)}"]`)?.focus();
   }
   renderChanges();
+  renderOutliner();
 }
 
 function renderChanges() {

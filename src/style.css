@@ -17,6 +17,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
   font-size: 20px; line-height: 1; cursor: pointer; color: #333; }
 .toolbar button:hover { background: #f3f4f6; }
 .toolbar button.active { background: #dbeafe; border-color: #93c5fd; }
+.toolbar-sep { height: 1px; margin: 2px 4px; background: #e5e7eb; }
 /* Ввод расстояния (как VCB в SketchUp) */
 .vcb { position: absolute; right: 346px; bottom: 36px; z-index: 3; display: flex; align-items: baseline; gap: 6px;
   padding: 6px 10px; background: rgba(255,255,255,.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.2); font-size: 13px; }

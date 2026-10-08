@@ -251,10 +251,6 @@ export class BuildingsLayer implements CustomLayerInterface {
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
     ground.position.z = -0.02;
-    const grid = new THREE.GridHelper(size, size / 10, GRID_COLOUR, GRID_COLOUR);
-    grid.rotation.x = Math.PI / 2; // GridHelper лежит в XZ, у нас земля — XY
-    grid.position.z = -0.01;
-    g.scene.add(ground, grid);
     const pts: Pt[] = features.flatMap((f) => f.polygons.flatMap((p) => p.outer.map(g.toLocal)));
     this.focusAxes = orientedFrame(pts);
     // Начало — снаружи угла bbox, чтобы обозначение не сливалось со стенами
@@ -262,7 +258,17 @@ export class BuildingsLayer implements CustomLayerInterface {
       const { origin: o, x, y } = this.focusAxes;
       this.focusAxes.origin = [o[0] - (x[0] + y[0]) * ORIGIN_OFFSET, o[1] - (x[1] + y[1]) * ORIGIN_OFFSET];
     }
-    if (this.focusAxes) g.scene.add(axesGizmo(this.focusAxes, Math.max(...this.focusAxes.size)));
+    // Сетка — вдоль осей здания, линии через начало координат (центр сетки в нём, шаг 10 м, размер кратен 20)
+    const [ox, oy] = this.focusAxes?.origin ?? [0, 0];
+    const gridSize = size + Math.ceil(Math.hypot(ox, oy) * 2 / 20) * 20;
+    const grid = new THREE.GridHelper(gridSize, gridSize / 10, GRID_COLOUR, GRID_COLOUR);
+    grid.rotation.x = Math.PI / 2; // GridHelper лежит в XZ, у нас земля — XY
+    const gridFrame = new THREE.Group();
+    gridFrame.position.set(ox, oy, -0.01);
+    if (this.focusAxes) gridFrame.rotation.z = Math.atan2(this.focusAxes.x[1], this.focusAxes.x[0]);
+    gridFrame.add(grid);
+    g.scene.add(ground, gridFrame);
+    if (this.focusAxes) g.scene.add(axesGizmo(this.focusAxes));
     this.install(FOCUS_GROUP, g);
     this.updateHiddenEdges();
   }
@@ -563,8 +569,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (guide && g && this.focusAxes) {
       const root = new THREE.Group();
       const frame = { ...this.focusAxes, origin: [guide.from.x, guide.from.y] as Pt };
-      // У точки захвата оси — ориентир направления, а не масштаб здания: в несколько раз короче осей здания
-      const gizmo = axesGizmo(frame, Math.max(2, Math.max(...this.focusAxes.size) * MOVE_AXES_SCALE), guide.locked);
+      const gizmo = axesGizmo(frame, guide.locked);
       gizmo.matrix.elements[14] = guide.from.z; // значок на высоте точки захвата
       root.add(gizmo);
       if (guide.to) {
@@ -1166,8 +1171,8 @@ interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number] }
 const SNAP_RADIUS_PX = 12;
-/** Длина осей у точки захвата инструментов — доля размера здания. */
-const MOVE_AXES_SCALE = 0.2;
+/** Длина стрелок осей (начало координат здания и точка захвата инструментов), м — одна сетка масштаба. */
+const AXES_LENGTH = 10;
 /** Привязки выделенного объекта «ближе» на столько px. */
 const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
@@ -1229,8 +1234,8 @@ const AXIS_COLOURS = [0xd43a3a, 0x3fa34d, 0x3a52b4]; // x, y, z — как в 3D
  * Обозначение начала координат: оси x/y/z стрелками в положительную сторону, отрицательные — тонкой линией.
  * Рисуется поверх геометрии (без проверки глубины), чтобы не терялось за стенами.
  */
-function axesGizmo(frame: LocalFrame, size: number, locked?: number): THREE.Object3D {
-  const len = Math.min(Math.max(size * 0.18, 2.5), 30);
+function axesGizmo(frame: LocalFrame, locked?: number): THREE.Object3D {
+  const len = AXES_LENGTH;
   const r = len * 0.012, head = len * 0.12;
   const root = new THREE.Group();
   // Базис: x, y — оси здания на земле, z — вверх

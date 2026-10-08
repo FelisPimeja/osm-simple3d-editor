@@ -1581,8 +1581,13 @@ ctxMenu.addEventListener('click', (e) => {
   focusAction(action);
 });
 
+const snapsBtn = document.querySelector<HTMLButtonElement>('[data-snaps]')!;
+snapsBtn.addEventListener('click', () => toggleSnaps());
+
 function toggleSnaps() {
   overpassLayer.snapsEnabled = !overpassLayer.snapsEnabled;
+  snapsBtn.classList.toggle('active', overpassLayer.snapsEnabled);
+  snapsBtn.title = overpassLayer.snapsEnabled ? 'Привязки включены (S)' : 'Привязки выключены (S)';
   setStatus(overpassLayer.snapsEnabled ? 'Привязки включены (S).' : 'Привязки выключены (S) — инструменты двигают свободно.');
   // Обновить маркер и текущее движение инструмента под курсором
   if (lastPointer) updateSnap(lastPointer);

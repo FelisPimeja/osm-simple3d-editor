@@ -1,3 +1,4 @@
+import { INHERITABLE, inheritedValue } from '../osm/inherit';
 import type { EditSession } from './session';
 
 type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour';
@@ -43,23 +44,15 @@ function isValid(type: FieldType, v: string): boolean {
 /** CSS-цвет (имя, hex, rgb()) → #rrggbb для <input type="color">. */
 function toHex(v: string | undefined): string {
   const ctx = document.createElement('canvas').getContext('2d');
-  if (!ctx || !v) return '#d9d0c9';
-  ctx.fillStyle = '#d9d0c9';
+  if (!ctx || !v) return '#ffffff';
+  ctx.fillStyle = '#ffffff';
   ctx.fillStyle = v.split(';')[0].trim();
-  return ctx.fillStyle.startsWith('#') ? ctx.fillStyle : '#d9d0c9';
+  return ctx.fillStyle.startsWith('#') ? ctx.fillStyle : '#ffffff';
 }
 
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
-/**
- * Теги, которые часть может унаследовать у здания, если у неё самой их нет. В Simple 3D правила наследования
- * нет — это соглашение рендереров для «общих» свойств (цвет, материал, форма крыши). Этажность и высоту
- * не наследуем: по вики на контуре они — максимум по частям, а не значение для каждой.
- */
-const INHERITABLE = new Set(['building:colour', 'roof:colour', 'roof:shape', 'building:material', 'roof:material']);
-/** Американское написание тоже встречается в данных. */
-const ALIASES: Record<string, string> = { 'building:colour': 'building:color', 'roof:colour': 'roof:color' };
-const inheritedValue = (tags: Record<string, string>, tag: string) => tags[tag] ?? (ALIASES[tag] ? tags[ALIASES[tag]] : undefined);
+const INHERITABLE_SET = new Set<string>(INHERITABLE);
 
 /** Откуда наследуются значения: контур (outline) и/или само отношение здания. */
 export interface InheritSource { label: string; tags: Record<string, string> }
@@ -72,14 +65,16 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   const f = session.get(key);
   if (!f) return '';
   const orig = session.originalTags(key) ?? {};
+  const inheritedAny: string[] = [];
   const rows = FIELDS.map((field) => {
     const value = f.tags[field.tag] ?? '';
     const changed = session.isChanged(key, field.tag);
     const was = changed ? `было: ${orig[field.tag] ?? '—'}` : '';
     // Своего значения нет — показываем унаследованное серым (placeholder) со значком и пояснением
-    const from = !value && INHERITABLE.has(field.tag) ? sources.find((src) => inheritedValue(src.tags, field.tag)) : undefined;
+    const from = !value && INHERITABLE_SET.has(field.tag) ? sources.find((src) => inheritedValue(src.tags, field.tag)) : undefined;
     const inherited = from ? inheritedValue(from.tags, field.tag) : undefined;
-    const hint = from ? `Не задано у объекта — унаследовано из ${from.label}: ${field.tag}=${inherited}. Введите значение, чтобы задать своё.` : '';
+    const hint = from ? `Не задано у объекта — унаследовано из ${from.label}: ${field.tag}=${inherited}. Модель рисуется с ним, но в OSM лучше задать значение на самой части.` : '';
+    if (from) inheritedAny.push(field.label.replace(/,.*$/, '').toLowerCase());
     const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || was || field.tag)}"`;
     let control: string;
     if (field.type === 'select') {
@@ -98,7 +93,16 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
   }).join('');
   const revert = session.isChanged(key) ? '<button type="button" data-revert>Вернуть как было</button>' : '';
-  return `<form class="tag-form" data-key="${esc(key)}" onsubmit="return false">${rows}${revert}</form>`;
+  // Наследование — соглашение рендереров, а не схемы: советуем задать свойства на самой части
+  const warn = inheritedAny.length
+    ? `<p class="warn inherit-warn">⚠ ${esc(inheritedAny.join(', '))} — взято у здания (серым в полях). Другие программы могут не наследовать: лучше задать на самой части.</p>`
+    : '';
+  // material на здании — устаревший вариант building:material (вики: Key:material): предлагаем замену
+  const legacy = f.tags.material !== undefined
+    ? `<p class="warn">⚠ material=${esc(f.tags.material)} — для зданий устарел, фасад описывает building:material${f.tags['building:material'] ? ' (уже задан — material можно удалить)' : ''}.
+        <button type="button" data-fix-material>${f.tags['building:material'] ? 'Удалить material' : 'Заменить на building:material'}</button></p>`
+    : '';
+  return `<form class="tag-form" data-key="${esc(key)}" onsubmit="return false">${legacy}${warn}${rows}${revert}</form>`;
 }
 
 /** Поле со значком «унаследовано» справа (только если есть пояснение). */
@@ -136,6 +140,15 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     if (el.dataset.tag && el.dataset.type) el.classList.toggle('invalid', !isValid(el.dataset.type as FieldType, el.value));
   });
   container.addEventListener('click', (e) => {
+    const fix = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-fix-material]');
+    const fixForm = fix?.closest<HTMLFormElement>('.tag-form');
+    const s = session();
+    if (fixForm && s) {
+      const key = fixForm.dataset.key!;
+      const t = s.get(key)?.tags;
+      if (t?.material !== undefined) s.setTags(key, { 'building:material': t['building:material'] ?? t.material, material: undefined });
+      return;
+    }
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-revert]');
     const form = btn?.closest<HTMLFormElement>('.tag-form');
     if (form) session()?.revert(form.dataset.key!);

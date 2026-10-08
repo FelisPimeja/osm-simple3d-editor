@@ -143,6 +143,21 @@ export class OverpassTiles {
     return this.rendered.get(key);
   }
 
+  private readonly featureIndex = new WeakMap<Feature3D[], Map<string, Feature3D>>();
+
+  /** Объект из загруженных данных, даже если ещё не нарисован (контур в соседнем тайле и т. п.). */
+  findFeature(key: string): Feature3D | undefined {
+    const r = this.rendered.get(key);
+    if (r) return r.feature;
+    for (const e of this.cache.values()) {
+      if (e.state !== 'ready') continue;
+      let idx = this.featureIndex.get(e.features);
+      if (!idx) this.featureIndex.set(e.features, idx = new Map(e.features.map((f) => [f.key, f])));
+      const f = idx.get(key);
+      if (f) return this.overlay(f);
+    }
+  }
+
   /** Объекты, нарисованные сейчас. */
   renderedFeatures(): RenderedFeature[] {
     return [...this.rendered.values()].filter((r) => this.layer.hasFeature(r.feature.key));

@@ -10,7 +10,8 @@ import { computeHeights } from './osm/heights';
 import { centroid, isBareOutlineTags, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type Polygon } from './osm/model';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
-import { BuildingsLayer, type GraphicsOptions, type RenderedFeature, type SnapHit } from './render/buildings-layer';
+import { inheritedTags } from './osm/inherit';
+import { BuildingsLayer, setInheritance, type GraphicsOptions, type RenderedFeature, type SnapHit } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
@@ -55,7 +56,7 @@ const userHidden = new Set<string>();
 
 interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; orbitAtCursor: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: false, monochrome: false, orbitAtCursor: false, hemisphere: false, groundAO: false, edges: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: false, monochrome: false, orbitAtCursor: false, hemisphere: false, groundAO: false, edges: false, noGlass: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try { return JSON.parse(localStorage.getItem(GFX_KEY) ?? '{}'); } catch { return {}; }
@@ -252,7 +253,7 @@ applyMonochrome();
 // Настройки графики: отдельные галки, чтобы сравнивать влияние на производительность
 for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
   const key = input.dataset.gfx as keyof GraphicsSettings;
-  input.checked = gfx[key];
+  input.checked = !!gfx[key];
   input.addEventListener('change', () => {
     gfx[key] = input.checked;
     saveGraphics();
@@ -1367,6 +1368,16 @@ function renderSelectedImpl() {
   infoEl.innerHTML = r ? (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + excludeButton() : '';
 }
 
+// Рендер: часть без своих цветов/формы крыши/материалов берёт их у контура, затем у отношения
+setInheritance((f) => {
+  const g = groupOf(f.key);
+  if (!g || g.key === f.key) return;
+  const outline = g.members.find((_, i) => g.roles[i] === 'outline');
+  if (outline === f.key) return;
+  const t = outlineTags(g);
+  return inheritedTags(f.tags, t ? [t, g.tags] : [g.tags]);
+});
+
 /** Откуда часть наследует теги в форме: контур здания, затем само отношение. Контур сам ни от кого не наследует. */
 function inheritSources(key: string): InheritSource[] {
   const g = groupOf(key);
@@ -1407,7 +1418,7 @@ function drillHint(key: string): string {
 function outlineTags(g: BuildingGroup): Record<string, string> | undefined {
   const key = g.members.find((_, i) => g.roles[i] === 'outline');
   if (!key) return;
-  return (session.get(key) ?? overpass.get(key)?.feature)?.tags;
+  return (session.get(key) ?? overpass.findFeature(key))?.tags;
 }
 
 function describeGroup(g: BuildingGroup): string {
@@ -1438,7 +1449,14 @@ function onSessionChange(keys: string[]) {
     rebuildGroupIndex();
     paintSelection();
   }
-  overpass.refreshFeatures(keys);
+  // Правка контура или отношения меняет унаследованное частями — перерисовать и их
+  const affected = new Set(keys);
+  for (const k of keys) {
+    const g = editGroups.get(k) ?? groupOf(k);
+    const outline = g?.members.find((_, i) => g.roles[i] === 'outline');
+    if (g && (g.key === k || outline === k)) for (const m of g.members) affected.add(m);
+  }
+  overpass.refreshFeatures([...affected]);
   // Состав здания в режиме одного здания поменялся (исключение, undo/redo) — пересобрать сцену
   if (focus && keys.includes(focus.key)) {
     const g = groupOf(focus.key);

@@ -6,8 +6,8 @@ import { buildTriangles, type Pt } from './building-geometry';
 import { timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
 
-const DEFAULT_WALL = '#d9d0c9';
-const DEFAULT_ROOF = '#a89c94';
+const DEFAULT_WALL = '#ffffff';
+const DEFAULT_ROOF = '#ffffff';
 /** Подсветка поверх всего (выбор контура) — яркий оранжевый, чтобы отличалась от выделения. */
 const OVERLAY_COLOUR = new THREE.Color('#ff6a00');
 const HIGHLIGHT = new THREE.Color('#97beff'); // #2f7cff, смешанный с белым пополам
@@ -22,6 +22,8 @@ export interface GraphicsOptions {
   groundAO: boolean;
   /** Контуры рёбер. */
   edges: boolean;
+  /** Не выделять стекло: стеклянные стены и крыши — как обычные. */
+  noGlass?: boolean;
 }
 
 /** Высота, на которой затемнение у земли сходит на нет, м (для зданий выше AO_HEIGHT). */
@@ -53,6 +55,8 @@ const FRAME_BUDGET_MS = 8;
 /** Здание внутри группы: треугольники в локальных метрах и всё, что нужно для раскраски и выбора. */
 interface Item {
   feature: Feature3D;
+  /** Теги для рисования: свои + унаследованные от контура/отношения. */
+  tags: Record<string, string>;
   roofApproximated: boolean;
   /** Ждёт скелет из воркера. */
   pending: boolean;
@@ -65,6 +69,11 @@ interface Item {
   box: THREE.Box3;
   /** Первая вершина в общей геометрии группы. */
   start: number;
+  /** Стеклянные стены/крыша (building:material / roof:material = glass) — рисуются отдельным прозрачным мешем. */
+  glassWalls: boolean;
+  glassRoof: boolean;
+  /** Первая вершина в стеклянной геометрии группы. */
+  glassStart: number;
   /** Рёбра здания (отрезки xyz) — считаются один раз, когда контуры включены. */
   edges?: Float32Array;
 }
@@ -117,9 +126,13 @@ class MeshGroup {
     return [(c.x - this.origin.x) / this.metersToMerc, -(c.y - this.origin.y) / this.metersToMerc];
   };
 
+  /** Стекло группы — прозрачное, поэтому отдельно от непрозрачной слитой геометрии. */
+  glass?: THREE.Mesh;
+
   disposeMesh() {
     this.disposeEdges();
     this.disposeStrokes();
+    if (this.glass) { this.glass.geometry.dispose(); this.scene.remove(this.glass); this.glass = undefined; }
     if (!this.mesh) return;
     this.mesh.geometry.dispose();
     this.scene.remove(this.mesh);
@@ -358,6 +371,17 @@ export class BuildingsLayer implements CustomLayerInterface {
       const base = it.positions, o = it.start * 3;
       for (let i = 0; i < base.length; i += 3) {
         pos[o + i] = base[i] + dx; pos[o + i + 1] = base[i + 1] + dy; pos[o + i + 2] = base[i + 2] + dz;
+      }
+      // Стекло — в своём буфере, в общем его диапазоны нулевые
+      const gattr = g.glass?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      let go = it.glassStart * 3;
+      for (const [a, b] of glassRanges(it)) {
+        pos.fill(0, o + a * 3, o + b * 3);
+        if (gattr && it.glassStart >= 0) {
+          const gp = gattr.array as Float32Array;
+          for (let i = a * 3; i < b * 3; i += 3, go += 3) { gp[go] = base[i] + dx; gp[go + 1] = base[i + 1] + dy; gp[go + 2] = base[i + 2] + dz; }
+          gattr.needsUpdate = true;
+        }
       }
     }
     attr.needsUpdate = true;
@@ -732,7 +756,11 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   setGraphics(o: GraphicsOptions) {
+    const glassChanged = glassEnabled === !!o.noGlass;
+    glassEnabled = !o.noGlass;
     this.graphics = { ...o };
+    // Стекло — отдельный меш: при переключении пересобираем слитую геометрию
+    if (glassChanged) for (const g of this.groups.values()) if (g.mesh) this.rebuildGeometry(g);
     for (const g of this.groups.values()) {
       g.applyLighting(o);
       this.paintGroup(g);
@@ -775,7 +803,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     const positions = new Float32Array(total * 3);
     // Скрытые остаются нулями — вырожденные треугольники не видны. Контуры под частями в просмотре — тоже:
     // их рисует обводка, а выбор кликом идёт по треугольникам здания (pickHit), так что выделить можно
-    for (const it of g.items) if (!g.hidden.has(it.feature.key) && !strokeOnly(g, it)) positions.set(it.positions, it.start * 3);
+    let glassTotal = 0;
+    for (const it of g.items) {
+      it.glassStart = -1;
+      if (g.hidden.has(it.feature.key) || strokeOnly(g, it)) continue;
+      positions.set(it.positions, it.start * 3);
+      // Стеклянные диапазоны — в отдельный буфер, в общем остаются нулями
+      it.glassStart = glassTotal;
+      for (const [a, b] of glassRanges(it)) { positions.fill(0, (it.start + a) * 3, (it.start + b) * 3); glassTotal += b - a; }
+    }
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(total * 3), 3));
@@ -783,6 +819,22 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.mesh = new THREE.Mesh(geom, MATERIAL);
     g.mesh.frustumCulled = false; // своя матрица проекции — штатный culling не годится
     g.scene.add(g.mesh);
+    if (glassTotal) {
+      const gp = new Float32Array(glassTotal * 3);
+      for (const it of g.items) {
+        if (g.hidden.has(it.feature.key) || strokeOnly(g, it)) continue;
+        let o = it.glassStart;
+        for (const [a, b] of glassRanges(it)) { gp.set(it.positions.subarray(a * 3, b * 3), o * 3); o += b - a; }
+      }
+      const gg = new THREE.BufferGeometry();
+      gg.setAttribute('position', new THREE.BufferAttribute(gp, 3));
+      gg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(glassTotal * 3), 3));
+      gg.computeVertexNormals();
+      g.glass = new THREE.Mesh(gg, GLASS_MATERIAL);
+      g.glass.frustumCulled = false;
+      g.glass.renderOrder = 1; // после непрозрачного
+      g.scene.add(g.glass);
+    }
     this.paintGroup(g);
     this.applyEdges(g);
     this.applyStrokes(g);
@@ -831,10 +883,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const it of g.items) this.writeColors(g, it);
     const attr = g.mesh?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
     if (attr) attr.needsUpdate = true;
+    const glass = g.glass?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (glass) glass.needsUpdate = true;
   }
 
   private paintItem(g: MeshGroup, it: Item) {
     this.writeColors(g, it);
+    const glassAttr = g.glass?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (glassAttr && glassRanges(it).length) glassAttr.needsUpdate = true;
     const attr = g.mesh?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
     if (!attr) return;
     // Диапазоны копятся до загрузки в GPU (three сам очищает их после неё):
@@ -869,6 +925,13 @@ export class BuildingsLayer implements CustomLayerInterface {
       colors[o + 1] = base.g * k;
       colors[o + 2] = base.b * k;
     }
+    // Стекло: свой цвет в обоих режимах (и без цветов), без затемнения у земли
+    const glassAttr = g.glass?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!glassAttr || it.glassStart < 0) return;
+    const gc = glassAttr.array as Float32Array;
+    const c = selected ? HIGHLIGHT : this.monochrome ? GLASS_MONO : GLASS;
+    let o = it.glassStart * 3;
+    for (const [a, b] of glassRanges(it)) for (let v = a; v < b; v++, o += 3) { gc[o] = c.r; gc[o + 1] = c.g; gc[o + 2] = c.b; }
   }
 }
 
@@ -900,7 +963,7 @@ function itemEdges(it: Item): Float32Array {
   const walls = edgeSegments(it.positions.subarray(0, it.wallVertices * 3), EDGE_ANGLE);
   // Плоские скаты пологой крыши (hipped с roof:height 1 м) сходятся под малым углом — у всех крыш, кроме
   // кривых (купол, луковица, бочка), берём все изломы; у кривых — нет, иначе прорисуется каждая грань аппроксимации
-  const roof = !CURVED_ROOFS.has(it.feature.tags['roof:shape'] ?? 'flat')
+  const roof = !CURVED_ROOFS.has(it.tags['roof:shape'] ?? 'flat')
     ? edgeSegments(it.positions.subarray(it.wallVertices * 3), PLANAR_ROOF_EDGE_ANGLE) : new Float32Array();
   const key = (a: Float32Array, i: number) => {
     const p = `${a[i].toFixed(2)},${a[i + 1].toFixed(2)},${a[i + 2].toFixed(2)}`;
@@ -1030,7 +1093,7 @@ function collectSnaps(g: MeshGroup): SnapPoint[] {
     if (it.box.isEmpty() || g.hidden.has(it.feature.key)) continue;
     const key = it.feature.key;
     const z0 = it.box.min.z;
-    const z1 = Math.max(z0, Math.min(computeHeights(it.feature.tags).wallTop, it.box.max.z));
+    const z1 = Math.max(z0, Math.min(computeHeights(it.tags).wallTop, it.box.max.z));
     const levels = z1 - z0 > 0.2 ? [z0, z1] : [z0]; // у плоских следов — один уровень
     for (const p of it.feature.polygons) {
       for (const ring of [p.outer, ...p.inners]) {
@@ -1137,6 +1200,26 @@ function describeFeature(f: Feature3D): string {
   return `${f.key}, roof:shape=${f.tags['roof:shape'] ?? 'flat'}, вершин ${vertices}, полигонов ${f.polygons.length}, дыр ${holes}`;
 }
 
+/** Стекло: голубовато-бирюзовое, полупрозрачное; без цветов — светлее. */
+const GLASS = new THREE.Color('#7fc4cc');
+const GLASS_MONO = new THREE.Color('#bfe3e6');
+const GLASS_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.45, depthWrite: false,
+  side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+
+const isGlass = (v: string | undefined) => !!v && v.split(';')[0].trim().toLowerCase() === 'glass';
+
+/** Выключатель стекла в настройках графики (одна сцена на страницу — достаточно модульного флага). */
+let glassEnabled = true;
+
+/** Диапазоны вершин здания, рисуемые стеклом: [от, до). */
+function glassRanges(it: Item): [number, number][] {
+  const n = it.positions.length / 3, out: [number, number][] = [];
+  if (!glassEnabled) return out;
+  if (it.glassWalls && it.wallVertices) out.push([0, it.wallVertices]);
+  if (it.glassRoof && n > it.wallVertices) out.push([it.wallVertices, n]);
+  return out;
+}
+
 /** Контур под частями (и голый контур в режиме здания): только обводка — заливку всё равно закрывают части. */
 function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
@@ -1148,25 +1231,33 @@ const STROKE_MATERIAL = new THREE.LineBasicMaterial({ vertexColors: true });
 /** Высота плоского следа на земле, м: чуть выше земли, чтобы не мерцать с подложкой. */
 const FOOTPRINT_HEIGHT = 0.1;
 
+/** Унаследованные частью теги (цвета, форма крыши, материалы контура/отношения) — задаёт main. */
+let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;
+export function setInheritance(fn: (f: Feature3D) => Record<string, string> | undefined) { inheritFor = fn; }
+
 function buildItem(g: MeshGroup, f: Feature3D): Item {
+  // Свои теги главнее унаследованных; в данных объекта ничего не меняется — только для рисования
+  const inherited = inheritFor(f);
+  const tags = inherited && Object.keys(inherited).length ? { ...inherited, ...f.tags } : f.tags;
   const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
-  let heights = computeHeights(f.tags);
+  let heights = computeHeights(tags);
   // Контур под частями и здания нулевой высоты — плоский след на земле: видно и можно выделить
   const flat = f.hasParts || g.flat.has(f.key);
   if (flat || heights.top - heights.min < FOOTPRINT_HEIGHT) {
     const min = flat ? 0 : heights.min;
     heights = { ...heights, min, wallTop: min + FOOTPRINT_HEIGHT, top: min + FOOTPRINT_HEIGHT, roofShape: 'flat', roofHeight: 0 };
   }
-  const tri = buildTriangles(polys, heights, f.tags);
+  const tri = buildTriangles(polys, heights, tags);
   const positions = new Float32Array(tri.walls.length + tri.roof.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);
-  const wall = f.tags['building:colour'] ?? f.tags.colour ?? DEFAULT_WALL;
-  const roof = f.tags['roof:colour'] ?? (f.tags['roof:shape'] && f.tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
+  const wall = tags['building:colour'] ?? tags.colour ?? DEFAULT_WALL;
+  const roof = tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
   const box = new THREE.Box3();
   if (positions.length) box.setFromArray(positions);
   return {
     feature: f,
+    tags,
     roofApproximated: tri.roofApproximated,
     pending: !!tri.pending,
     positions,
@@ -1176,6 +1267,10 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     top: heights.top,
     box,
     start: 0,
+    // material на здании — устаревший вариант building:material: только фасад
+    glassWalls: isGlass(tags['building:material'] ?? tags.material),
+    glassRoof: isGlass(tags['roof:material']),
+    glassStart: 0,
   };
 }
 

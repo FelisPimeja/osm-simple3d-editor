@@ -68,7 +68,9 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
   const relations: OsmRelation[] = [];
   for (const e of elements) {
     if (e.type === 'node') nodes.set(e.id, e);
-    else if (e.type === 'way') ways.set(e.id, e);
+    // Путь может прийти дважды: с тегами (out body) и ещё раз голым (out skel после «>» от отношений,
+    // членом которых он является) — голая копия не должна затирать теги, иначе части отношений пропадают
+    else if (e.type === 'way') { if (!ways.get(e.id)?.tags || e.tags) ways.set(e.id, e); }
     else relations.push(e);
   }
 

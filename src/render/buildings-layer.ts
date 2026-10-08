@@ -563,7 +563,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (guide && g && this.focusAxes) {
       const root = new THREE.Group();
       const frame = { ...this.focusAxes, origin: [guide.from.x, guide.from.y] as Pt };
-      const gizmo = axesGizmo(frame, Math.max(...this.focusAxes.size), guide.locked);
+      // У точки захвата оси — ориентир направления, а не масштаб здания: в несколько раз короче осей здания
+      const gizmo = axesGizmo(frame, Math.max(2, Math.max(...this.focusAxes.size) * MOVE_AXES_SCALE), guide.locked);
       gizmo.matrix.elements[14] = guide.from.z; // значок на высоте точки захвата
       root.add(gizmo);
       if (guide.to) {
@@ -1165,6 +1166,8 @@ interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number] }
 const SNAP_RADIUS_PX = 12;
+/** Длина осей у точки захвата инструментов — доля размера здания. */
+const MOVE_AXES_SCALE = 0.2;
 /** Привязки выделенного объекта «ближе» на столько px. */
 const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */

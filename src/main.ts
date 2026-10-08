@@ -644,9 +644,13 @@ function flyToFocus() {
   });
 }
 
+/** Тайлы карты устарели (правки в режиме здания) — перерисовать при выходе. */
+let tilesStale = false;
+
 function exitFocus() {
   if (!focus) return;
   focus = undefined;
+  if (tilesStale) { tilesStale = false; overpass.rerender(); }
   focusHidden.clear();
   session.dropViewActions();
   overpassLayer.setHover(undefined);
@@ -1932,7 +1936,8 @@ function onSessionChange(keys: string[]) {
     const outline = g?.members.find((_, i) => g.roles[i] === 'outline');
     if (g && (g.key === k || outline === k)) for (const m of g.members) affected.add(m);
   }
-  overpass.refreshFeatures([...affected]);
+  // В режиме здания тайлы карты не видны — пересоберём их разом при выходе
+  if (focus) tilesStale = true; else overpass.refreshFeatures([...affected]);
   // Сцену режима здания обновляем напрямую: refreshFeatures доходит до неё только через тайлы, где объект
   // нарисован, а части здания могут лежать в тайле, который сейчас не показан (тогда правка «не применялась»)
   if (focus && !keys.includes(focus.key)) {
@@ -1941,8 +1946,11 @@ function onSessionChange(keys: string[]) {
       if (f?.polygons) overpassLayer.previewFocusFeature(f);
     }
   }
-  // Созданный путь (рассечение) появился или исчез (отмена) — тайлы перерисовать
-  if (keys.some((k) => k.startsWith('way/-'))) overpass.rerender();
+  // Созданный путь (рассечение) появился или исчез (отмена) — тайлы перерисовать. Это полная пересборка всех
+  // видимых тайлов (сотни мс), а в режиме здания карта скрыта — откладываем до выхода из него
+  if (keys.some((k) => k.startsWith('way/-'))) {
+    if (!focus) overpass.rerender();
+  }
   // Состав здания в режиме одного здания поменялся (исключение, undo/redo) — пересобрать сцену
   if (focus && keys.includes(focus.key)) {
     const g = groupOf(focus.key);

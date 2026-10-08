@@ -45,7 +45,8 @@ HIDDEN_EDGE_MATERIAL.onBeforeCompile = (sh) => {
   sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  gl_Position.z -= 0.001 * gl_Position.w;');
 };
 /** Цвет берётся из вершин (стены/крыша, подсветка, затемнение) — один материал на всё. */
-const MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+// polygonOffset отодвигает грани от камеры: рёбра на плоскостях (основание части на крыше другой) не тонут в них
+const MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 /** Бюджет асинхронной сборки группы на кадр, мс. */
 const FRAME_BUDGET_MS = 8;
 
@@ -788,10 +789,39 @@ function edgeLines(items: Item[], material: THREE.LineBasicMaterial): THREE.Line
   return out;
 }
 
+/**
+ * Рёбра здания: изломы круче EDGE_ANGLE и границы. Стык стен с крышей — всегда: у шпилей и крутых
+ * пирамид угол между стеной и скатом меньше порога, и без этого граница стен пропадает.
+ */
 function itemEdges(it: Item): Float32Array {
+  const all = edgeSegments(it.positions, EDGE_ANGLE);
+  if (it.wallVertices * 3 >= it.positions.length) return all;
+  // Отдельно стены: их верхний край — граница (одна грань), EdgesGeometry отдаёт её при любом угле
+  const walls = edgeSegments(it.positions.subarray(0, it.wallVertices * 3), EDGE_ANGLE);
+  const key = (a: Float32Array, i: number) => {
+    const p = `${a[i].toFixed(2)},${a[i + 1].toFixed(2)},${a[i + 2].toFixed(2)}`;
+    const q = `${a[i + 3].toFixed(2)},${a[i + 4].toFixed(2)},${a[i + 5].toFixed(2)}`;
+    return p < q ? p + q : q + p;
+  };
+  const seen = new Set<string>();
+  for (let i = 0; i < all.length; i += 6) seen.add(key(all, i));
+  const extra: number[] = [];
+  for (let i = 0; i < walls.length; i += 6) {
+    if (seen.has(key(walls, i))) continue;
+    seen.add(key(walls, i));
+    for (let j = 0; j < 6; j++) extra.push(walls[i + j]);
+  }
+  if (!extra.length) return all;
+  const out = new Float32Array(all.length + extra.length);
+  out.set(all);
+  out.set(extra, all.length);
+  return out;
+}
+
+function edgeSegments(positions: Float32Array, angle: number): Float32Array {
   const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(it.positions, 3));
-  const edges = new THREE.EdgesGeometry(geom, EDGE_ANGLE);
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const edges = new THREE.EdgesGeometry(geom, angle);
   const out = edges.getAttribute('position').array as Float32Array;
   edges.dispose();
   geom.dispose();

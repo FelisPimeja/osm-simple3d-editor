@@ -86,5 +86,11 @@ out skel qt;`;
   // 429 — превышен лимит слотов, 504 — сервер перегружен: имеет смысл повторить позже
   if (res.status === 429 || res.status === 504) throw new OverpassBusyError(`${host}: ${res.status}`);
   if (!res.ok) throw new Error(`${host}: ${res.status} ${(await res.text()).slice(0, 200)}`);
-  return ((await res.json()) as { elements: OsmElement[] }).elements;
+  const json = (await res.json()) as { elements: OsmElement[]; remark?: string };
+  // При перегрузке Overpass отвечает 200 с частью данных и remark «runtime error: Query timed out…»
+  // (или out of memory) — такой ответ неполный, его нельзя кешировать: повторяем позже
+  if (json.remark && /runtime error|timed out|out of memory/i.test(json.remark)) {
+    throw new OverpassBusyError(`${host}: неполный ответ (${json.remark.slice(0, 120)})`);
+  }
+  return json.elements;
 }

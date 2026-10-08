@@ -1597,7 +1597,11 @@ window.addEventListener('mouseup', (e) => {
   const [x0, x1] = [Math.min(x, start.x), Math.max(x, start.x)];
   const [y0, y1] = [Math.min(y, start.y), Math.max(y, start.y)];
   const keys = new Set<string>();
-  const inBox = overpass.renderedFeatures().filter(({ feature: f }) => {
+  // В режиме здания тайлы не пересобираются до выхода (нет новых частей, старая геометрия) — берём само здание
+  const candidates = focus
+    ? groupFeatures(focus).filter((f) => f.polygons?.length && !focusHidden.has(f.key)).map((feature) => ({ feature }))
+    : overpass.renderedFeatures();
+  const inBox = candidates.filter(({ feature: f }) => {
     const p = map.project(centroid(f.polygons[0].outer));
     return p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
   });

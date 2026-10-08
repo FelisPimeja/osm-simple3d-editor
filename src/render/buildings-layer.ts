@@ -556,7 +556,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const it = k ? g.byKey.get(k) : undefined;
         if (it) this.paintItem(g, it);
       }
-      if (g.strokes) this.applyStrokes(g);
+      if (g.strokes || [prev, key].some((k) => k && g.byKey.has(k))) this.applyStrokes(g);
     }
     this.updateHiddenEdges();
     this.map?.triggerRepaint();
@@ -903,7 +903,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const item = k ? g.byKey.get(k) : undefined;
         if (item) this.paintItem(g, item);
       }
-      if (g.strokes) this.applyStrokes(g);
+      if (g.strokes || [...prev, ...this.selected].some((k) => g.byKey.has(k))) this.applyStrokes(g);
     }
     this.updateHiddenEdges();
     this.map?.triggerRepaint();
@@ -999,7 +999,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.disposeStrokes();
     const lines: number[] = [], colors: number[] = [];
     for (const it of g.items) {
-      if (!strokeOnly(g, it) || g.hidden.has(it.feature.key)) continue;
+      if (!(strokeOnly(g, it) || thinItem(it)) || g.hidden.has(it.feature.key)) continue;
       const c = this.selected.has(it.feature.key) || this.hovered === it.feature.key ? STROKE_SELECTED : STROKE_COLOUR;
       const z = it.box.isEmpty() ? g.footprint : it.box.max.z;
       for (const p of it.feature.polygons) {
@@ -1400,6 +1400,10 @@ function glassRanges(it: Item): [number, number][] {
 /** Контур под частями (и голый контур в режиме здания): только обводка — заливку всё равно закрывают части. */
 function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
+}
+/** Объект нулевой толщины (нарисованная часть до выдавливания): рёбер у него нет — обводим контур. */
+function thinItem(it: Item): boolean {
+  return !it.box.isEmpty() && it.box.max.z - it.box.min.z < 1e-3;
 }
 const STROKE_COLOUR = new THREE.Color(0x8a8a8a);
 const STROKE_SELECTED = new THREE.Color('#2f7cff');

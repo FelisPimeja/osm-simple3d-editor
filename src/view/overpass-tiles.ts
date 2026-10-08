@@ -143,6 +143,15 @@ export class OverpassTiles {
     return this.rendered.get(key);
   }
 
+  /** Объекты, которых ещё нет в данных (созданы в сессии: рассечение), — рисуются в тайле своего центра. */
+  private extras: () => Feature3D[] = () => [];
+  setExtras(fn: () => Feature3D[]) { this.extras = fn; }
+
+  /** Перерисовать нарисованные тайлы (появился или исчез созданный объект). */
+  rerender() {
+    for (const key of this.layer.groupKeys()) if (this.cache.get(key)?.state === 'ready') this.show(key);
+  }
+
   private readonly featureIndex = new WeakMap<Feature3D[], Map<string, Feature3D>>();
 
   /** Объект из загруженных данных, даже если ещё не нарисован (контур в соседнем тайле и т. п.). */
@@ -386,7 +395,17 @@ export class OverpassTiles {
    * Отправленные правки — сразу в данные тайлов (память и IndexedDB), без перезапроса Overpass:
    * иначе до фонового обновления тайла кеш показывал бы старые теги. fetchedAt не трогаем.
    */
-  async applySaved(saved: Map<string, { version: number; tags: Record<string, string>; polygons?: Polygon[] }>, savedGroups: BuildingGroup[] = []) {
+  async applySaved(saved: Map<string, { version: number; tags: Record<string, string>; polygons?: Polygon[] }>, savedGroups: BuildingGroup[] = [],
+    createdFeatures: Feature3D[] = []) {
+    // Созданные пути (рассечение) — в тайл, где их центр; ниже patch обновит и их
+    for (const f of createdFeatures) {
+      const [x, y] = centroid(f.polygons[0].outer);
+      const tile = [...this.cache].find(([k, e]) => {
+        const [w, s, e2, n] = tileBbox(k);
+        return e.state === 'ready' && x >= w && x < e2 && y > s && y <= n;
+      });
+      if (tile && tile[1].state === 'ready' && !tile[1].features.some((g) => g.key === f.key)) tile[1].features.push({ ...f, tags: { ...f.tags } });
+    }
     // Группы (новые или с другим составом) кладём целиком в тайлы, где лежит хоть один их член
     const groupFor = (t: { features: Feature3D[] }) => savedGroups.filter((g) => t.features.some((f) => g.members.includes(f.key)));
     const patchGroups = (t: { features: Feature3D[]; groups: BuildingGroup[] }) => {
@@ -471,7 +490,7 @@ export class OverpassTiles {
   private ownedFeatures(key: string): { features: Feature3D[]; hidden: string } {
     const own = this.cache.get(key);
     if (own?.state !== 'ready') return { features: [], hidden: '' };
-    const ownFeatures = own.features.map(this.overlay);
+    const ownFeatures = [...own.features.map(this.overlay), ...this.extras()];
     const union = new Map<string, Feature3D>();
     for (const f of ownFeatures) union.set(f.key, f); // свои объекты — первыми: их hasParts и пойдёт в рендер
     for (const n of neighbours(key)) {

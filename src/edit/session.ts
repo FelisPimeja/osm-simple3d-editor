@@ -25,6 +25,10 @@ export interface TagChange {
   membersBefore?: OsmMember[];
   /** Сдвинутые узлы, если менялась геометрия. */
   nodeMoves?: NodeMove[];
+  /** Новый список узлов пути (замкнутый, первый = последний), если он менялся или путь новый, и исходный. */
+  wayNodes?: { before: number[]; after: number[] };
+  /** Новые узлы (отрицательные id) в этом пути. */
+  newNodes?: { id: number; at: LonLat }[];
   /** Изменённые теги: значение undefined — тег удалён/отсутствует. */
   diff: { tag: string; from?: string; to?: string }[];
 }
@@ -43,7 +47,15 @@ type Step = Entry[] | ViewAction;
 const isView = (s: Step): s is ViewAction => !Array.isArray(s);
 
 /** Правка в составе одного шага: новые теги и/или геометрия. */
-export interface ObjectEdit { key: string; tags?: Tags; polygons?: Polygon[] }
+export interface ObjectEdit {
+  key: string;
+  tags?: Tags;
+  polygons?: Polygon[];
+  /** Новый состав членов отношения. */
+  members?: OsmMember[];
+  /** Новый объект (рассечение): создаётся в этом же шаге. */
+  create?: Tagged;
+}
 
 /**
  * Правки поверх данных: исходные теги, состав и геометрия, текущие и история шагов для undo/redo.
@@ -90,13 +102,22 @@ export class EditSession {
 
   /** Несколько правок тегов и геометрии одним шагом истории (перемещение группы объектов). */
   editMany(edits: ObjectEdit[]) {
-    const step: Step = [];
+    const step: Entry[] = [];
     for (const e of edits) {
+      if (e.create) {
+        const c = e.create;
+        this.features.set(c.key, c);
+        this.original.set(c.key, {});
+        this.created.add(c.key);
+        step.push({ key: c.key, before: null, after: { ...c.tags }, gAfter: c.polygons });
+        continue;
+      }
       const f = this.get(e.key);
       if (!f) continue;
       const tags = e.tags ?? f.tags;
       step.push({ key: e.key, before: { ...f.tags }, after: { ...tags },
-        ...(e.polygons ? { gBefore: f.polygons, gAfter: e.polygons } : {}) });
+        ...(e.polygons ? { gBefore: f.polygons, gAfter: e.polygons } : {}),
+        ...(e.members ? { mBefore: f.relMembers, mAfter: e.members } : {}) });
     }
     if (step.length) this.push(step);
   }
@@ -107,25 +128,30 @@ export class EditSession {
     return !!f?.relMembers && !!orig && !sameMembers(orig, f.relMembers);
   }
 
-  /** Узлы, сдвинутые относительно исходной геометрии. */
+  /** Узлы, сдвинутые относительно исходной геометрии (по id: список узлов мог измениться). */
   private nodeMoves(key: string): NodeMove[] {
     const f = this.features.get(key);
     const orig = this.originalGeometry.get(key);
     if (!f?.polygons || !orig || f.polygons === orig) return [];
-    const moves = new Map<number, NodeMove>();
-    const ring = (ids: number[] | undefined, a: LonLat[], b: LonLat[]) => {
-      if (!ids) return;
-      ids.forEach((id, i) => {
-        if (a[i] && b[i] && (a[i][0] !== b[i][0] || a[i][1] !== b[i][1])) moves.set(id, { id, from: a[i], to: b[i] });
-      });
-    };
-    orig.forEach((p, i) => {
-      const q = f.polygons![i];
-      if (!q) return;
-      ring(p.outerIds, p.outer, q.outer);
-      p.inners.forEach((h, j) => ring(p.innerIds?.[j], h, q.inners[j] ?? []));
-    });
-    return [...moves.values()];
+    const was = nodeCoords(orig), now = nodeCoords(f.polygons);
+    const moves: NodeMove[] = [];
+    for (const [id, to] of now) {
+      const from = was.get(id);
+      if (from && (from[0] !== to[0] || from[1] !== to[1])) moves.push({ id, from, to });
+    }
+    return moves;
+  }
+
+  /** Список узлов пути (замкнутый) — только у путей из одного кольца. */
+  private wayNodes(key: string): { before: number[]; after: number[] } | undefined {
+    const f = this.features.get(key);
+    if (!f?.polygons || !key.startsWith('way/')) return;
+    const ring = (ps: Polygon[] | undefined) => (ps?.length === 1 && ps[0].outerIds ? [...ps[0].outerIds, ps[0].outerIds[0]] : undefined);
+    const after = ring(f.polygons);
+    if (!after) return;
+    const before = this.created.has(key) ? [] : ring(this.originalGeometry.get(key));
+    if (!before || (before.length === after.length && before.every((id, i) => id === after[i]))) return;
+    return { before, after };
   }
 
   get(key: string): Tagged | undefined {
@@ -134,6 +160,11 @@ export class EditSession {
 
   private exists(key: string): boolean {
     return !this.created.has(key) || this.alive.has(key);
+  }
+
+  /** Созданные в сессии и существующие сейчас объекты. */
+  createdAlive(): Tagged[] {
+    return [...this.alive].map((k) => this.features.get(k)!).filter(Boolean);
   }
 
   isCreated(key: string): boolean {
@@ -234,7 +265,8 @@ export class EditSession {
       const created = this.created.has(key);
       const members = this.membersChanged(key);
       const moves = this.nodeMoves(key);
-      if (!created && !members && !moves.length && sameTags(before, f.tags)) continue;
+      const nodes = this.wayNodes(key);
+      if (!created && !members && !moves.length && !nodes && sameTags(before, f.tags)) continue;
       const tags = [...new Set([...Object.keys(before), ...Object.keys(f.tags)])].sort();
       const diff = tags.filter((t) => before[t] !== f.tags[t]).map((tag) => ({ tag, from: before[tag], to: f.tags[tag] }));
       if (members) {
@@ -242,9 +274,11 @@ export class EditSession {
         diff.push({ tag: '(члены)', from: String(orig.length), to: String(f.relMembers!.length) });
       }
       if (moves.length) diff.push({ tag: '(геометрия)', from: '', to: `сдвинуто узлов: ${moves.length}` });
+      const newNodes = nodes ? [...nodeCoords(f.polygons ?? [])].filter(([id]) => id < 0).map(([id, at]) => ({ id, at })) : [];
+      if (nodes && !created) diff.push({ tag: '(узлы)', from: String(nodes.before.length - 1), to: String(nodes.after.length - 1) });
       out.push({ key, feature: f, created, before, after: { ...f.tags }, diff,
         members: members ? f.relMembers : undefined, membersBefore: members ? this.originalMembers.get(key) : undefined,
-        nodeMoves: moves.length ? moves : undefined });
+        nodeMoves: moves.length ? moves : undefined, wayNodes: nodes, newNodes: newNodes.length ? newNodes : undefined });
     }
     return out;
   }
@@ -254,8 +288,27 @@ export class EditSession {
     const orig = this.original.get(key);
     if (!f || !orig) return false;
     if (this.created.has(key)) return true;
-    if (!tag && (this.membersChanged(key) || this.nodeMoves(key).length)) return true;
+    if (!tag && (this.membersChanged(key) || this.nodeMoves(key).length || this.wayNodes(key))) return true;
     return tag ? f.tags[tag] !== orig[tag] : !sameTags(f.tags, orig);
+  }
+
+  /**
+   * После загрузки: временные (отрицательные) id узлов и путей стали настоящими — заменяем их в геометрии
+   * и в членах отношений (до markSaved: иначе исходный состав отношения разойдётся с текущим).
+   */
+  remapIds(nodes: Map<number, number>, ways: Map<number, number>) {
+    if (!nodes.size && !ways.size) return;
+    const ids = (a?: number[]) => a?.map((id) => nodes.get(id) ?? id);
+    const polys = (ps: Polygon[]) => ps.map((p) => ({ ...p, outerIds: ids(p.outerIds), innerIds: p.innerIds?.map((r) => ids(r)!) }));
+    const members = (ms: OsmMember[]) => ms.map((m) => (m.type === 'way' && ways.has(m.ref) ? { ...m, ref: ways.get(m.ref)! } : m));
+    for (const [key, f] of this.features) {
+      if (f.polygons) f.polygons = polys(f.polygons);
+      if (f.relMembers) f.relMembers = members(f.relMembers);
+      const og = this.originalGeometry.get(key);
+      if (og) this.originalGeometry.set(key, polys(og));
+      const om = this.originalMembers.get(key);
+      if (om) this.originalMembers.set(key, members(om));
+    }
   }
 
   /**
@@ -316,6 +369,16 @@ export class EditSession {
     for (const t of Object.keys(f.tags)) delete f.tags[t];
     Object.assign(f.tags, tags);
   }
+}
+
+/** id узла → координаты по всем кольцам (без id — пропускаем). */
+function nodeCoords(polys: Polygon[]): Map<number, LonLat> {
+  const out = new Map<number, LonLat>();
+  for (const p of polys) {
+    p.outerIds?.forEach((id, i) => out.set(id, p.outer[i]));
+    p.inners.forEach((r, j) => p.innerIds?.[j]?.forEach((id, i) => out.set(id, r[i])));
+  }
+  return out;
 }
 
 function sameMembers(a: OsmMember[], b: OsmMember[]): boolean {

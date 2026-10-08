@@ -296,7 +296,11 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Ближайшая к точке экрана привязка режима одного здания в пределах radius px.
    * Вершины важнее середин рёбер, середины — центров: при близких расстояниях побеждает более важная.
    */
+  /** Привязки включены (S в режиме здания). Выключены — инструменты двигают свободно. */
+  snapsEnabled = true;
+
   snapAt(point: [number, number], filter: (key: string) => boolean = () => true, radius = SNAP_RADIUS_PX): SnapHit | undefined {
+    if (!this.snapsEnabled) return;
     const g = this.groups.get(FOCUS_GROUP);
     if (!this.focused || !g || !this.map || !this.lastMain) return;
     this.snaps ??= collectSnaps(g);
@@ -340,6 +344,66 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (v.w <= 0) return;
     const canvas = this.map.getCanvas();
     return [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
+  }
+
+  /**
+   * Все пересечения луча из точки экрана с объектами сцены режима здания, по удалённости. У объекта нет
+   * треугольников дна — нижнюю грань (плоскость низа внутри контура) добавляем как отдельное пересечение.
+   * wall — стена (почти вертикальный треугольник).
+   */
+  focusRayHits(point: [number, number], allowed: (key: string) => boolean = () => true): FocusHit[] {
+    const g = this.groups.get(FOCUS_GROUP);
+    const ray = this.focusRay(point);
+    if (!g || !ray) return [];
+    const out: FocusHit[] = [];
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), p = new THREE.Vector3(), n = new THREE.Vector3();
+    for (const it of g.items) {
+      const key = it.feature.key;
+      if (g.hidden.has(key) || strokeOnly(g, it) || !allowed(key) || !ray.intersectsBox(it.box)) continue;
+      const pos = it.positions;
+      for (let i = 0; i < pos.length; i += 9) {
+        a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
+        if (!ray.intersectTriangle(a, b, c, false, p)) continue;
+        n.subVectors(c, b).cross(a.clone().sub(b));
+        if (n.lengthSq() < 1e-10) continue;
+        n.normalize();
+        out.push({ key, t: p.distanceTo(ray.origin), local: p.clone(), face: Math.abs(n.z) < 0.3 ? 'wall' : 'roof' });
+      }
+      // Дно: плоскость низа, точка внутри контура
+      const z = it.box.min.z;
+      if (Math.abs(ray.direction.z) > 1e-6) {
+        const t = (z - ray.origin.z) / ray.direction.z;
+        if (t > 0) {
+          const q = ray.at(t, new THREE.Vector3());
+          const inside = it.feature.polygons.some((poly) => pointInLocalRing([q.x, q.y], poly.outer.map(g.toLocal))
+            && !poly.inners.some((r) => pointInLocalRing([q.x, q.y], r.map(g.toLocal))));
+          if (inside) out.push({ key, t, local: q, face: 'bottom' });
+        }
+      }
+    }
+    return out.sort((x, y) => x.t - y.t);
+  }
+
+  /** Контуры объекта сцены режима здания в метрах (для работы с рёбрами). */
+  focusPolygons(key: string): { outer: Pt[]; inners: Pt[][] }[] | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    const it = g?.byKey.get(key);
+    if (!g || !it) return;
+    return it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+  }
+
+  /** Габариты объекта в сцене режима здания (метры). */
+  focusItemBox(key: string): THREE.Box3 | undefined {
+    return this.groups.get(FOCUS_GROUP)?.byKey.get(key)?.box;
+  }
+
+  /** Временно перестроить объект сцены режима здания по другим тегам (превью инструмента «Вытянуть»). */
+  previewFocusFeature(f: Feature3D) {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g?.byKey.has(f.key)) return;
+    this.replaceItems(g, [f]);
+    this.snaps = undefined;
+    this.updateHiddenEdges();
   }
 
   /** Метры сцены режима → координаты. */
@@ -1068,6 +1132,18 @@ function edgeSegments(positions: Float32Array, angle: number): Float32Array {
 
 /** Габариты всей группы — чтобы не перебирать здания тайлов, мимо которых луч проходит. */
 const FOCUS_GROUP = '@focus';
+/** Пересечение луча с объектом сцены режима здания. */
+export interface FocusHit { key: string; t: number; local: THREE.Vector3; face: 'wall' | 'roof' | 'bottom' }
+
+function pointInLocalRing([x, y]: Pt, ring: Pt[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
 export type SnapKind = 'vertex' | 'midpoint' | 'center';
 interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */

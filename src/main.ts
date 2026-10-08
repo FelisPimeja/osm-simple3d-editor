@@ -15,6 +15,8 @@ import { BuildingsLayer, setInheritance, type GraphicsOptions, type RenderedFeat
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
+import { PushTool, type PushTarget } from './edit/push-tool';
+import { SplitTool, type CutPoint } from './edit/split-tool';
 import { suggestComment } from './edit/changeset-comment';
 import { EditSession, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
@@ -126,6 +128,7 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
   updateTileFilter();
   showOverpassStatus();
 }, (f) => (session.get(f.key) as Feature3D | undefined) ?? f);
+overpass.setExtras(() => session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length) as Feature3D[]);
 let selectedKey: string | undefined;
 /** Все выделенные объекты (Shift+клик добавляет); selectedKey — последний из них. */
 let selection: string[] = [];
@@ -466,6 +469,18 @@ function highlightKeys(key: string | undefined): string[] {
 
 map.on('click', (e) => {
   if (suppressClick) return;
+  if (splitTool.active) {
+    const p: [number, number] = [e.point.x, e.point.y];
+    if (!splitTool.click(p) && splitTool.state === 'pick') { splitTool.stop(); select(undefined); }
+    return;
+  }
+  if (pushTool.active) {
+    const p: [number, number] = [e.point.x, e.point.y];
+    // Мимо объектов при невыбранной грани — выключить инструмент
+    if (!pushTool.click(p, e.originalEvent.shiftKey) && pushTool.state === 'pick' && !overpassLayer.pickHit(e.point)) { pushTool.stop(); select(undefined); }
+    updateSnap(p);
+    return;
+  }
   if (moveTool.active) {
     // Перемещение не начато, клик мимо всех объектов — выключаем инструмент и снимаем выделение
     if (moveTool.state === 'pick' && !overpassLayer.snapAt([e.point.x, e.point.y], moveTool.pickFilter) && !overpassLayer.pickHit(e.point)) {
@@ -503,7 +518,7 @@ map.on('dblclick', (e) => {
   if (focus) {
     // Двойной клик мимо здания — назад к карте
     e.preventDefault();
-    if (moveTool.active) return;
+    if (toolActive()) return;
     if (!key) closeFocus();
     return;
   }
@@ -546,6 +561,7 @@ function enterFocus(g: BuildingGroup) {
   drill = focus = g;
   focusToolbar.hidden = false;
   orbit.setEnabled(true);
+  orbit.setUnderground(true);
   overpassLayer.setFocus(groupFeatures(g), bareOutlines(g));
   overpassLayer.setFocusHidden(focusHidden);
   // На следующем кадре: внутри обработки dblclick MapLibre после обработчиков останавливает камеру (stop)
@@ -619,9 +635,12 @@ function exitFocus() {
   session.dropViewActions();
   overpassLayer.setHover(undefined);
   moveTool.stop();
+  pushTool.stop();
+  splitTool.stop();
   focusToolbar.hidden = true;
   renderOutliner();
   updateSnap(undefined);
+  orbit.setUnderground(false);
   orbit.setEnabled(gfx.orbitAtCursor);
   overpassLayer.setFocus(undefined);
   const restore = (ls: typeof focusHiddenLayers) => {
@@ -666,6 +685,22 @@ let currentSnap: SnapHit | undefined;
 
 function updateSnap(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
+  if (point && pushTool.state === 'push') pushTool.move(point);
+  if (point && splitTool.state === 'cut') splitTool.move(point);
+  if (pushTool.active || splitTool.active) {
+    // Рассечение: подсвечиваем вершины и середины рёбер объектов (концы разреза)
+    currentSnap = pushTool.active ? (pushTool.state === 'push' ? pushTool.snap : undefined)
+      : point ? overpassLayer.snapAt(point) : undefined;
+    if (currentSnap?.kind === 'center') currentSnap = undefined;
+    snapEl.hidden = !currentSnap;
+    if (currentSnap) {
+      snapEl.className = `snap-marker ${currentSnap.kind}`;
+      snapEl.dataset.label = SNAP_LABELS[currentSnap.kind];
+      snapEl.style.left = `${currentSnap.point[0]}px`;
+      snapEl.style.top = `${currentSnap.point[1]}px`;
+    }
+    return;
+  }
   // Привязки — только при активном инструменте
   currentSnap = !focus || !point || !moveTool.active ? undefined
     : moveTool.state === 'move' ? moveTool.snap
@@ -677,7 +712,9 @@ function updateSnap(point: [number, number] | undefined) {
   snapEl.style.left = `${currentSnap.point[0]}px`;
   snapEl.style.top = `${currentSnap.point[1]}px`;
 }
-map.on('mousemove', (e) => updateSnap([e.point.x, e.point.y]));
+/** Последняя точка курсора над картой — чтобы пересчитать привязку после S без движения мыши. */
+let lastPointer: [number, number] | undefined;
+map.on('mousemove', (e) => { lastPointer = [e.point.x, e.point.y]; updateSnap(lastPointer); });
 map.on('movestart', () => { if (moveTool.state !== 'move') updateSnap(undefined); });
 map.getCanvasContainer().addEventListener('mouseleave', () => updateSnap(undefined));
 
@@ -693,6 +730,307 @@ const moveTool = new MoveTool(overpassLayer, map.getContainer(), commitMove, (hi
 
 moveBtn.addEventListener('click', () => (moveTool.active ? moveTool.stop() : startMove()));
 
+// Инструмент «Вытянуть»: верх/низ по вертикали (height / min_height) и стены по нормали (узлы контура)
+const pushBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="push"]')!;
+const pushTool = new PushTool(overpassLayer, map.getContainer(),
+  (key) => !!focus?.members.includes(key) && !focusHidden.has(key),
+  allowPushSide, clampPush, previewPush, commitPush,
+  (hint) => {
+    pushBtn.classList.toggle('active', pushTool.active);
+    if (hint) setStatus(hint); else showOverpassStatus();
+  });
+pushBtn.addEventListener('click', () => (pushTool.active ? pushTool.stop() : startPush()));
+
+function startPush() {
+  if (!focus) return;
+  moveTool.stop();
+  splitTool.stop();
+  pushTool.start();
+}
+
+// Инструмент «Рассечь»: прямой разрез верхней грани делит путь на два (больший сохраняет историю)
+const splitBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="split"]')!;
+const splitTool = new SplitTool(overpassLayer, splitReason, splitFeature, (hint, error) => {
+  splitBtn.classList.toggle('active', splitTool.active);
+  if (hint) setStatus(hint, error); else showOverpassStatus();
+});
+splitBtn.addEventListener('click', () => (splitTool.active ? splitTool.stop() : startSplit()));
+
+function startSplit() {
+  if (!focus) return;
+  moveTool.stop();
+  pushTool.stop();
+  splitTool.begin();
+}
+
+/** Какой-нибудь инструмент режима здания включён. */
+function toolActive(): boolean {
+  return moveTool.active || pushTool.active || splitTool.active;
+}
+
+/** Почему объект нельзя рассечь (undefined — можно). */
+function splitReason(key: string): string | undefined {
+  if (!focus?.members.includes(key) || focusHidden.has(key)) return 'Резать можно только части этого здания.';
+  const f = entity(key) as Feature3D | undefined;
+  if (!f?.polygons) return 'Объект не найден.';
+  if (!key.startsWith('way/')) return 'Пока режутся только простые контуры (линии), не мультиполигоны.';
+  if (f.polygons.length !== 1 || f.polygons[0].inners.length) return 'Пока режутся только контуры без дыр.';
+  const role = focus.roles[focus.members.indexOf(key)];
+  if (role === 'outline') return 'Контур здания (outline) не режем — только части.';
+  const shape = f.tags['roof:shape'];
+  const h = computeHeights(f.tags);
+  if (shape && shape !== 'flat' && h.top - h.min > 0.1) return `Резать можно плоский объект или с плоской крышей, здесь roof:shape=${shape}.`;
+  if (!nodeIds(f)) return 'В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.';
+  return;
+}
+
+/** Теги, которые не копируем во вторую половину отдельного здания: они бы задвоились. */
+const IDENTITY_TAGS = /^(name|official_name|alt_name|old_name|short_name|loc_name|addr:|wikidata|wikipedia|wikimedia_commons|ref|website|url|contact:|phone|email|opening_hours|operator|brand|image|description|note|fixme|start_date|heritage|tourism|amenity|shop|office)/;
+
+function copyTags(f: Feature3D): Record<string, string> {
+  if (f.kind === 'part') return { ...f.tags };
+  return Object.fromEntries(Object.entries(f.tags).filter(([k]) => !IDENTITY_TAGS.test(k)));
+}
+
+/** Отрезки пересекаются во внутренних точках (касание концами не считается). */
+function segCross(a: [number, number], b: [number, number], c: [number, number], d: [number, number]): boolean {
+  const o = (p: [number, number], q: [number, number], r: [number, number]) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const d1 = o(c, d, a), d2 = o(c, d, b), d3 = o(a, b, c), d4 = o(a, b, d);
+  return ((d1 > 1e-9 && d2 < -1e-9) || (d1 < -1e-9 && d2 > 1e-9)) && ((d3 > 1e-9 && d4 < -1e-9) || (d3 < -1e-9 && d4 > 1e-9));
+}
+
+function ringArea(r: [number, number][]): number {
+  let s = 0;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) s += (r[j][0] - r[i][0]) * (r[j][1] + r[i][1]);
+  return Math.abs(s / 2);
+}
+
+function inLocalRing([x, y]: [number, number], ring: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Рассечь путь отрезком a–b (метры сцены режима здания). Новые узлы на рёбрах вставляются и в соседние пути
+ * с тем же отрезком (без Т-стыков). Больший кусок остаётся исходным путём, меньший — новый путь с копией тегов,
+ * добавляется в отношение здания с ролью part. Всё одним шагом истории. Возвращает текст ошибки или undefined.
+ */
+function splitFeature(key: string, a: CutPoint, b: CutPoint): string | undefined {
+  const f = entity(key) as Feature3D | undefined;
+  const g = focus && (entity(focus.key) as EditGroup | undefined);
+  if (!f || !g) return 'Объект не найден.';
+  const poly = f.polygons[0];
+  const ids = poly.outerIds!;
+  const local = poly.outer.map((c) => overpassLayer.focusToLocal(c)!);
+  const n = local.length;
+  if (a.vertex !== undefined && b.vertex !== undefined && a.vertex === b.vertex) return 'Начало и конец разреза совпадают.';
+  if (a.edge === b.edge && a.vertex === undefined && b.vertex === undefined) return 'Начало и конец разреза — на одном ребре.';
+  // Отрезок внутри контура: середина внутри, и он не пересекает стороны
+  const mid: [number, number] = [(a.p[0] + b.p[0]) / 2, (a.p[1] + b.p[1]) / 2];
+  if (!inLocalRing(mid, local)) return 'Разрез проходит снаружи контура.';
+  for (let i = 0; i < n; i++) if (segCross(a.p, b.p, local[i], local[(i + 1) % n])) return 'Разрез пересекает стороны контура.';
+
+  // Кольцо с новыми узлами: вставляем с конца, чтобы номера сторон не съезжали
+  type V = { p: [number, number]; id: number };
+  const ring: V[] = local.map((p, i) => ({ p, id: ids[i] }));
+  const fresh: { id: number; p: [number, number]; u: number; v: number }[] = [];
+  const cuts = [a, b].map((c) => ({ c, id: c.vertex !== undefined ? ids[c.vertex] : nextNewId-- }));
+  for (const { c, id } of [...cuts].sort((x, y) => y.c.edge - x.c.edge)) {
+    if (c.vertex !== undefined) continue;
+    ring.splice(c.edge + 1, 0, { p: c.p, id });
+    fresh.push({ id, p: c.p, u: ids[c.edge], v: ids[(c.edge + 1) % n] });
+  }
+  const ia = ring.findIndex((v) => v.id === cuts[0].id), ib = ring.findIndex((v) => v.id === cuts[1].id);
+  const walk = (from: number, to: number) => {
+    const out: V[] = [];
+    for (let i = from; ; i = (i + 1) % ring.length) { out.push(ring[i]); if (i === to) break; }
+    return out;
+  };
+  const r1 = walk(ia, ib), r2 = walk(ib, ia);
+  if (r1.length < 3 || r2.length < 3) return 'Разрез идёт по стороне контура — делить нечего.';
+  const [keep, part] = ringArea(r1.map((v) => v.p)) >= ringArea(r2.map((v) => v.p)) ? [r1, r2] : [r2, r1];
+  const lngLat = (p: [number, number]) => overpassLayer.focusToLngLat(p[0], p[1])!;
+  const coord = new Map<number, LonLat>(ids.map((id, i) => [id, poly.outer[i]]));
+  for (const x of fresh) coord.set(x.id, lngLat(x.p));
+  const toPoly = (vs: V[]) => ({ outer: vs.map((v) => coord.get(v.id)!), inners: [], outerIds: vs.map((v) => v.id), innerIds: [] });
+
+  const wayId = nextNewId--;
+  const created: Feature3D = { key: `way/${wayId}`, type: 'way', id: wayId, version: 0, kind: f.kind, tags: copyTags(f), polygons: [toPoly(part)], hasParts: false };
+
+  // Соседи с тем же отрезком u–v: вставить новый узел и в них
+  const neighbours = new Map<string, Feature3D['polygons']>();
+  for (const x of fresh) {
+    for (const o of overpass.allFeatures()) {
+      if (o.key === key) continue;
+      const cur = neighbours.get(o.key) ?? (session.has(o.key) ? (session.get(o.key) as Feature3D | undefined)?.polygons : o.polygons);
+      if (!cur) continue;
+      let changed = false;
+      const insert = (r: LonLat[], rid: number[] | undefined): [LonLat[], number[] | undefined] => {
+        if (!rid) return [r, rid];
+        for (let i = 0; i < rid.length; i++) {
+          const j = (i + 1) % rid.length;
+          if ((rid[i] === x.u && rid[j] === x.v) || (rid[i] === x.v && rid[j] === x.u)) {
+            changed = true;
+            return [[...r.slice(0, i + 1), coord.get(x.id)!, ...r.slice(i + 1)], [...rid.slice(0, i + 1), x.id, ...rid.slice(i + 1)]];
+          }
+        }
+        return [r, rid];
+      };
+      const next = cur.map((p) => {
+        const [outer, outerIds] = insert(p.outer, p.outerIds);
+        const inn = p.inners.map((r, k) => insert(r, p.innerIds?.[k]));
+        return { ...p, outer, outerIds, inners: inn.map((x2) => x2[0]), innerIds: p.innerIds ? inn.map((x2) => x2[1]!) : p.innerIds };
+      });
+      if (!changed) continue;
+      // Узлы мультиполигона живут в его путях-членах, которых у нас нет отдельно — такое ребро не трогаем
+      if (!o.key.startsWith('way/')) return `Ребро общее с мультиполигоном ${o.key} — резать через него пока нельзя.`;
+      entity(o.key);
+      neighbours.set(o.key, next);
+    }
+  }
+
+  const members = [...g.relMembers, { type: 'way' as const, ref: wayId, role: 'part' }];
+  session.editMany([
+    { key, polygons: [toPoly(keep)] },
+    { key: created.key, create: created },
+    ...[...neighbours].map(([k, polygons]) => ({ key: k, polygons })),
+    { key: g.key, members },
+  ]);
+  select(created.key);
+  setStatus(`Рассечено: ${key} и новая часть ${created.key}${neighbours.size ? `, узлы добавлены в соседей: ${neighbours.size}` : ''}.`);
+  return;
+}
+
+/** Минимальная толщина объекта при вытягивании, м. */
+const MIN_THICKNESS = 0.5;
+
+/** Узлы стены (два узла стороны контура); undefined — в кеше нет id узлов. */
+function sideNodes(f: Feature3D, edge: NonNullable<PushTarget['edge']>): [number, number] | undefined {
+  adoptNodeIds(f);
+  const p = f.polygons[edge.poly];
+  const ids = edge.ring ? p?.innerIds?.[edge.ring - 1] : p?.outerIds;
+  if (!ids?.length) return;
+  return [ids[edge.i], ids[(edge.i + 1) % ids.length]];
+}
+
+/** Стену можно тянуть, если её узлы не принадлежат другим объектам; иначе попап со связанными, как у перемещения. */
+function allowPushSide(t: PushTarget): boolean {
+  const f = entity(t.key) as Feature3D | undefined;
+  const nodes = f && t.edge ? sideNodes(f, t.edge) : undefined;
+  if (!nodes) { setStatus('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true); return false; }
+  const linked = new Map<string, number>();
+  for (const o of overpass.allFeatures()) {
+    if (o.key === t.key) continue;
+    const shared = (nodeIds(o) ?? []).filter((id) => nodes.includes(id)).length;
+    if (shared) linked.set(o.key, shared);
+  }
+  if (!linked.size) return true;
+  const list = [...linked].map(([k, n]) => `<li><a href="${server().web}/${k}" target="_blank" rel="noopener">${k}</a> — общих узлов: ${n}</li>`).join('');
+  showPopup(`<h3>Нельзя вытянуть стену</h3>
+    <p>Узлы этой стены принадлежат и другим объектам — при сдвиге они бы деформировались:</p><ul>${list}</ul>
+    <p class="hint">Верх и низ при этом тянуть можно.</p>`);
+  overpassLayer.setOverlay([...linked.keys()]);
+  return false;
+}
+
+/**
+ * Контур с вытянутой стеной: сторона сдвигается на d по нормали, её концы скользят по соседним сторонам
+ * (соседние стены сохраняют направление, как в SketchUp); при параллельных соседях — просто по нормали.
+ */
+function pushSidePolygons(f: Feature3D, edge: NonNullable<PushTarget['edge']>, d: number): Feature3D['polygons'] {
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  return f.polygons.map((p, pi) => {
+    if (pi !== edge.poly) return p;
+    const shift = (ring: LonLat[]): LonLat[] => {
+      const pts = ring.map(local), n = pts.length;
+      const i = edge.i, j = (i + 1) % n;
+      const [nx, ny] = [edge.n.x * d, edge.n.y * d];
+      const a2: [number, number] = [pts[i][0] + nx, pts[i][1] + ny], b2: [number, number] = [pts[j][0] + nx, pts[j][1] + ny];
+      // Новый конец — пересечение сдвинутой стороны с прямой соседней стороны
+      const slide = (moved: [number, number], other: [number, number], self: [number, number]): [number, number] => {
+        const ex = b2[0] - a2[0], ey = b2[1] - a2[1], sx = self[0] - other[0], sy = self[1] - other[1];
+        const den = ex * sy - ey * sx;
+        if (Math.abs(den) < 1e-9 * Math.hypot(ex, ey) * Math.hypot(sx, sy) || Math.hypot(sx, sy) < 1e-6) return moved;
+        const t = ((other[0] - a2[0]) * sy - (other[1] - a2[1]) * sx) / den;
+        return [a2[0] + t * ex, a2[1] + t * ey];
+      };
+      const out = pts.slice();
+      out[i] = slide(a2, pts[(i - 1 + n) % n], pts[i]);
+      out[j] = slide(b2, pts[(j + 1) % n], pts[j]);
+      return ring.map((c, k) => (k === i || k === j ? overpassLayer.focusToLngLat(out[k][0], out[k][1])! : c));
+    };
+    return edge.ring
+      ? { ...p, inners: p.inners.map((r, ri) => (ri === edge.ring - 1 ? shift(r) : r)) }
+      : { ...p, outer: shift(p.outer) };
+  });
+}
+
+function clampPush(t: PushTarget, dz: number): number {
+  const f = entity(t.key) as Feature3D | undefined;
+  if (!f) return 0;
+  if (t.face === 'side') return dz;
+  const h = computeHeights(f.tags);
+  // Верх не ниже низа + крыша + запас; низ — не ниже земли и не выше верха стен минус запас
+  return t.face === 'top'
+    ? Math.max(dz, h.min + h.roofHeight + MIN_THICKNESS - h.top)
+    : Math.min(Math.max(dz, -h.min), h.wallTop - MIN_THICKNESS - h.min);
+}
+
+function previewPush(t: PushTarget, dz: number | undefined) {
+  const f = entity(t.key) as Feature3D | undefined;
+  if (!f) return;
+  if (dz === undefined) return overpassLayer.previewFocusFeature(f);
+  overpassLayer.previewFocusFeature(t.face === 'side'
+    ? { ...f, polygons: pushSidePolygons(f, t.edge!, dz) }
+    : { ...f, tags: pushTags(f.tags, t.face, dz) });
+}
+
+function commitPush(t: PushTarget, dz: number) {
+  const f = entity(t.key) as Feature3D | undefined;
+  if (!f) return;
+  if (t.face === 'side') session.editMany([{ key: t.key, polygons: pushSidePolygons(f, t.edge!, dz) }]);
+  else session.setTags(t.key, diffTags(f.tags, pushTags(f.tags, t.face, dz)));
+  setStatus(`${{ top: 'Верх', bottom: 'Низ', side: 'Стена' }[t.face]} ${t.key} сдвинут${t.face === 'side' ? 'а' : ''} на ${dz >= 0 ? '+' : ''}${dz.toFixed(2)} м.`);
+}
+
+/** Значения для setTags: новые и удалённые (undefined) теги. */
+function diffTags(before: Record<string, string>, after: Record<string, string>): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const k of new Set([...Object.keys(before), ...Object.keys(after)])) if (before[k] !== after[k]) out[k] = after[k];
+  return out;
+}
+
+/**
+ * Сдвинуть верх или низ на dz, сохраняя способ разметки: у объекта на этажах при сдвиге, кратном этажу,
+ * меняем этажи; иначе пишем метры (height / min_height).
+ */
+function pushTags(tags: Record<string, string>, face: PushTarget['face'], dz: number): Record<string, string> {
+  const h = computeHeights(tags);
+  const out = { ...tags };
+  const fmt = (v: number) => String(Math.round(v * 100) / 100);
+  const k = dz / 3, whole = Math.abs(k - Math.round(k)) < 1e-6;
+  if (face === 'top') {
+    if (!tags.height && tags['building:levels'] && whole) out['building:levels'] = String(Number(tags['building:levels']) + Math.round(k));
+    else out.height = fmt(h.top + dz);
+    return out;
+  }
+  if (!tags.min_height && (tags['building:min_level'] || (!tags.height && tags['building:levels'])) && whole) {
+    const minLevel = Number(tags['building:min_level'] ?? 0) + Math.round(k);
+    if (minLevel) out['building:min_level'] = String(minLevel); else delete out['building:min_level'];
+    return out;
+  }
+  const min = h.min + dz;
+  if (min > 1e-4) out.min_height = fmt(min); else delete out.min_height;
+  delete out['building:min_level']; // низ теперь задан метрами
+  // Верх задан этажами — фиксируем его метрами, иначе он поедет вместе с этажами низа
+  if (!tags.height) out.height = fmt(h.top);
+  return out;
+}
+
 /** Попап посреди карты; пустой html — закрыть. */
 function showPopup(html: string) {
   popupEl.innerHTML = html ? `<div class="popup-card">${html}<p><button type="button" data-popup-close>Понятно</button></p></div>` : '';
@@ -702,8 +1040,27 @@ popupEl.addEventListener('click', (e) => {
   if ((e.target as HTMLElement).closest('[data-popup-close]') || e.target === popupEl) showPopup('');
 });
 
+/**
+ * Объект сессии мог быть взят из старого кеша без id узлов, и перезагрузка тайлов его не обновит: сессия держит
+ * свою копию. Берём id из свежих данных тайлов, если там тот же контур (то же число вершин в кольцах).
+ */
+function adoptNodeIds(f: Feature3D) {
+  if (f.polygons.every((p) => p.outerIds && (!p.inners.length || p.innerIds))) return;
+  const fresh = overpass.findFeature(f.key);
+  if (!fresh || fresh === f || fresh.polygons.length !== f.polygons.length) return;
+  f.polygons.forEach((p, i) => {
+    const q = fresh.polygons[i];
+    if (q.outerIds?.length === p.outer.length && p.inners.length === q.inners.length
+      && p.inners.every((r, j) => q.innerIds?.[j]?.length === r.length)) {
+      p.outerIds = q.outerIds;
+      p.innerIds = q.innerIds;
+    }
+  });
+}
+
 /** Узлы объекта; undefined — в данных нет id узлов (старый кеш). */
 function nodeIds(f: Feature3D): number[] | undefined {
+  adoptNodeIds(f);
   const ids: number[] = [];
   for (const p of f.polygons) {
     if (!p.outerIds || (p.inners.length && !p.innerIds)) return;
@@ -741,6 +1098,8 @@ function startMove() {
     overpassLayer.setOverlay([...linked.keys()]);
     return;
   }
+  pushTool.stop();
+  splitTool.stop();
   moveTool.start(keys);
 }
 
@@ -786,16 +1145,25 @@ function shiftHeights(tags: Record<string, string>, dz: number): Record<string, 
 document.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement).closest('input, select, textarea')) return;
   if (e.key === 'Escape' && popupEl.childElementCount) { showPopup(''); e.stopImmediatePropagation(); return; }
-  if (moveTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+  if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+  // S — привязки вкл/выкл, в том числе посреди перемещения или вытягивания
+  if (focus && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    closeCtxMenu();
+    toggleSnaps();
+    return;
+  }
   // Шорткаты режима здания — по физической клавише (e.code), чтобы работали и в русской раскладке
-  if (!focus || moveTool.active || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!focus || toolActive() || e.ctrlKey || e.metaKey || e.altKey) return;
   const action = e.code === 'KeyM' && !e.shiftKey ? 'move'
+    : e.code === 'KeyP' && !e.shiftKey ? 'push'
+    : e.code === 'KeyK' && !e.shiftKey ? 'split'
     : e.code === 'KeyH' ? (e.shiftKey ? 'show-all' : 'hide')
     : e.code === 'KeyR' && !e.shiftKey ? 'exclude' : undefined;
   if (!action) return;
   e.preventDefault();
   closeCtxMenu();
-  if (action === 'move') startMove(); else focusAction(action);
+  if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'split') startSplit(); else focusAction(action);
 }, { capture: true });
 document.addEventListener('keyup', (e) => { if (moveTool.key(e)) e.preventDefault(); });
 
@@ -932,7 +1300,7 @@ map.getCanvasContainer().appendChild(boxEl);
 let boxStart: maplibregl.Point | undefined;
 
 map.getCanvasContainer().addEventListener('mousedown', (e) => {
-  if (!e.shiftKey || e.button !== 0 || moveTool.active) return;
+  if (!e.shiftKey || e.button !== 0 || toolActive()) return;
   const r = map.getCanvas().getBoundingClientRect();
   boxStart = new maplibregl.Point(e.clientX - r.left, e.clientY - r.top);
   map.dragPan.disable();
@@ -1066,7 +1434,7 @@ window.addEventListener('pointerup', (e) => {
   if (e.button !== 2 || !rightDown) return;
   const moved = Math.hypot(e.clientX - rightDown[0], e.clientY - rightDown[1]) > 4;
   rightDown = undefined;
-  if (!focus || moved || moveTool.state === 'move') return;
+  if (!focus || moved || moveTool.state === 'move' || pushTool.state === 'push') return;
   const rect = map.getCanvas().getBoundingClientRect();
   const key = overpassLayer.pickHit([e.clientX - rect.left, e.clientY - rect.top])?.key;
   // Мимо здания — меню режима: показать всё и выход
@@ -1083,18 +1451,19 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty') {
   if (!focus) return;
   const inScene = where !== 'list';
   const kbd = (k: string) => `<kbd>${k}</kbd>`;
+  const snaps = `<li class="ctx-sep"></li><li><button type="button" data-ctx="snaps">${overpassLayer.snapsEnabled ? 'Выключить привязки' : 'Включить привязки'}${kbd('S')}</button></li>`;
   const exit = inScene ? `<li class="ctx-sep"></li><li><button type="button" data-ctx="exit">Выйти из режима редактирования${kbd('Esc')}</button></li>` : '';
   const keys = selection.filter((k) => focus!.members.includes(k));
   const anyShown = keys.some((k) => !focusHidden.has(k)), anyHidden = keys.some((k) => focusHidden.has(k));
   const n = keys.length > 1 ? ` (${keys.length})` : '';
   ctxMenu.innerHTML = where === 'empty' ? `
-    <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>${exit}` : `
+    <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>${snaps}${exit}` : `
     <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>Скрыть объекты${n}${kbd('H')}</button></li>
     <li><button type="button" data-ctx="isolate"${keys.length && focus.members.some((k) => !keys.includes(k) && !focusHidden.has(k)) ? '' : ' disabled'}>Изолировать${n}</button></li>
     ${inScene
       ? `<li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё скрытое${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>`
       : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>Показать объекты${n}</button></li>`}
-    <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>Исключить из модели${n}${kbd('R')}</button></li>${exit}`;
+    <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>Исключить из модели${n}${kbd('R')}</button></li>${snaps}${exit}`;
   ctxMenu.hidden = false;
   // Не выходим за край окна
   const { width, height } = ctxMenu.getBoundingClientRect();
@@ -1109,12 +1478,20 @@ ctxMenu.addEventListener('click', (e) => {
   focusAction(action);
 });
 
+function toggleSnaps() {
+  overpassLayer.snapsEnabled = !overpassLayer.snapsEnabled;
+  setStatus(overpassLayer.snapsEnabled ? 'Привязки включены (S).' : 'Привязки выключены (S) — инструменты двигают свободно.');
+  // Обновить маркер и текущее движение инструмента под курсором
+  if (lastPointer) updateSnap(lastPointer);
+}
+
 /** Действие над выделенными частями (меню и шорткаты): hide, show, show-all, isolate, exclude, exit. */
 function focusAction(action: string) {
   if (!focus) return;
   const keys = selection.filter((k) => focus!.members.includes(k));
   if (action === 'exclude') { if (keys.length) excludeFromGroup(); return; }
   if (action === 'exit') return closeFocus();
+  if (action === 'snaps') return toggleSnaps();
   // Изолировать — скрыть все части, кроме выделенных (выделенные при этом показать)
   if (action === 'isolate') {
     if (keys.length) changeFocusHidden(new Set(focus.members.filter((k) => !keys.includes(k))));
@@ -1457,6 +1834,16 @@ function onSessionChange(keys: string[]) {
     if (g && (g.key === k || outline === k)) for (const m of g.members) affected.add(m);
   }
   overpass.refreshFeatures([...affected]);
+  // Сцену режима здания обновляем напрямую: refreshFeatures доходит до неё только через тайлы, где объект
+  // нарисован, а части здания могут лежать в тайле, который сейчас не показан (тогда правка «не применялась»)
+  if (focus && !keys.includes(focus.key)) {
+    for (const k of affected) {
+      const f = focus.members.includes(k) ? session.get(k) as Feature3D | undefined : undefined;
+      if (f?.polygons) overpassLayer.previewFocusFeature(f);
+    }
+  }
+  // Созданный путь (рассечение) появился или исчез (отмена) — тайлы перерисовать
+  if (keys.some((k) => k.startsWith('way/-'))) overpass.rerender();
   // Состав здания в режиме одного здания поменялся (исключение, undo/redo) — пересобрать сцену
   if (focus && keys.includes(focus.key)) {
     const g = groupOf(focus.key);
@@ -1599,19 +1986,32 @@ async function doUpload() {
   if (uploading) return;
   const changes = session.changes();
   const s = server();
-  if (s.id === 'prod' && !confirm(`Отправить ${changes.length} изменений в боевую базу OpenStreetMap?`)) return;
   uploading = true;
   renderChanges();
   try {
     const edits = changes.map((c) => {
       const g = editGroups.get(c.key);
-      const created = c.created && g
-        ? { type: 'relation' as const, id: g.id, version: 0, tags: c.after, members: g.relMembers }
-        : undefined;
+      const created = !c.created ? undefined
+        : g ? { type: 'relation' as const, id: g.id, version: 0, tags: c.after, members: g.relMembers }
+        : { type: 'way' as const, id: Number(c.key.split('/')[1]), version: 0, tags: c.after, nodes: c.wayNodes?.after ?? [] };
       return { key: c.key, before: c.before, after: c.after, created, members: c.members, membersBefore: c.membersBefore,
-        nodeMoves: c.nodeMoves, version: c.feature.version, polygons: c.feature.polygons };
+        nodeMoves: c.nodeMoves, wayNodes: c.wayNodes, newNodes: c.newNodes, version: c.feature.version, polygons: c.feature.polygons };
     });
     const res = await uploadEdits(edits, uploadComment.trim(), (t) => setStatus(t));
+    // Временные id узлов и путей → настоящие: в геометрии, членах отношений и в отправленных полигонах
+    const nodeIdMap = new Map<number, number>(), wayIdMap = new Map<number, number>();
+    for (const [from, to] of res.newKeys) {
+      const [type, a] = from.split('/'), b = Number(to.split('/')[1]);
+      if (type === 'node') nodeIdMap.set(Number(a), b);
+      if (type === 'way') wayIdMap.set(Number(a), b);
+    }
+    session.remapIds(nodeIdMap, wayIdMap);
+    for (const g of editGroups.values()) {
+      const rel = g.relMembers.filter((m) => m.type !== 'node');
+      g.members = rel.map((m) => `${m.type}/${m.ref}`);
+      g.roles = rel.map((m) => m.role);
+    }
+    for (const e of edits) if (session.has(e.key)) e.polygons = (session.get(e.key) as Feature3D | undefined)?.polygons ?? e.polygons;
     const saved = new Map<string, { version: number; tags: Record<string, string>; newKey?: string; polygons?: Polygon[] }>();
     for (const e of edits) {
       // Сдвинуты только узлы — путь не отправлялся, версия прежняя
@@ -1629,11 +2029,19 @@ async function doUpload() {
       saved.set(e.key, { version, tags, newKey, polygons: e.polygons });
     }
     session.markSaved(saved);
+    // Созданные пути получили настоящие id — им место в данных тайлов
+    const createdWays: Feature3D[] = [];
+    for (const [k, v] of saved) {
+      if (!v.newKey?.startsWith('way/')) continue;
+      const f = session.get(v.newKey) as Feature3D | undefined;
+      if (f) { f.id = Number(v.newKey.split('/')[1]); createdWays.push(f); }
+      void k;
+    }
     rebuildGroupIndex();
     // Сразу в кеш тайлов текущего источника — не ждать, пока Overpass догонит
     const savedGroups = [...saved].map(([k, v]) => editGroups.get(v.newKey ?? k)).filter((g): g is EditGroup => !!g)
       .map((g) => ({ key: g.key, type: g.type, id: g.id, version: g.version, tags: { ...g.tags }, members: [...g.members], roles: [...g.roles] }));
-    void overpass.applySaved(new Map([...saved].map(([k, v]) => [v.newKey ?? k, v])), savedGroups);
+    void overpass.applySaved(new Map([...saved].map(([k, v]) => [v.newKey ?? k, v])), savedGroups, createdWays);
     uploadComment = '';
     const link = `<a href="${s.web}/changeset/${res.changeset}" target="_blank" rel="noopener">changeset ${res.changeset}</a>`;
     uploading = false;
@@ -1745,7 +2153,7 @@ onSkeletons(() => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape' || !focus || moveTool.active || popupEl.childElementCount || (e.target as HTMLElement).closest('input, select, textarea')) return;
+  if (e.key !== 'Escape' || !focus || toolActive() || popupEl.childElementCount || (e.target as HTMLElement).closest('input, select, textarea')) return;
   // Esc: сначала снять выделение части, затем выйти из режима здания
   if (selection.length) select(undefined);
   else closeFocus();

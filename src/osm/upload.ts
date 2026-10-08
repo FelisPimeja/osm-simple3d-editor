@@ -11,13 +11,17 @@ export interface TagEdit {
   before: Tags;
   /** Теги, которые надо записать. */
   after: Tags;
-  /** Новое отношение (отрицательный id) — уходит в <create>. */
-  created?: OsmRelation;
+  /** Новое отношение или путь (отрицательный id) — уходит в <create>. */
+  created?: OsmRelation | OsmWay;
   /** Новый состав членов отношения и исходный (если менялся). */
   members?: OsmMember[];
   membersBefore?: OsmMember[];
   /** Сдвинутые узлы: from — координаты, с которых начиналась правка. */
   nodeMoves?: { id: number; from: [number, number]; to: [number, number] }[];
+  /** Список узлов пути менялся (рассечение): before — как было у нас, after — что записать. */
+  wayNodes?: { before: number[]; after: number[] };
+  /** Новые узлы (отрицательные id) — уходят в <create> раньше путей. */
+  newNodes?: { id: number; at: [number, number] }[];
 }
 
 export interface UploadResult {
@@ -142,9 +146,21 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
     payload.push({ element: { ...n, lon: m.to[0], lat: m.to[1] }, tags: n.tags ?? {} });
     geometrySaved.add(m.key);
   }
+  // Новые узлы — первыми в <create>: на них ссылаются пути того же changeset
+  const created = new Set<number>();
+  for (const e of edits) {
+    for (const n of e.newNodes ?? []) {
+      if (created.has(n.id)) continue;
+      created.add(n.id);
+      payload.push({ element: { type: 'node', id: n.id, version: 0, lon: n.at[0], lat: n.at[1] }, tags: {}, created: true });
+    }
+  }
   for (const edit of edits) {
     if (edit.created) {
-      payload.push({ element: { ...edit.created, members: edit.members ?? edit.created.members }, tags: edit.after, created: true });
+      const element = edit.created.type === 'way'
+        ? { ...edit.created, nodes: edit.wayNodes?.after ?? edit.created.nodes }
+        : { ...edit.created, members: edit.members ?? edit.created.members };
+      payload.push({ element, tags: edit.after, created: true });
       written.set(edit.key, edit.after);
       continue;
     }
@@ -152,9 +168,16 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
     if (!f) { conflicts.push({ key: edit.key, tags: ['объект удалён на сервере'] }); continue; }
     const r = rebase(edit, f);
     if ('conflict' in r) { conflicts.push({ key: edit.key, tags: r.conflict }); continue; }
+    // Список узлов пути: на сервере он должен быть таким, с какого начиналась правка
+    let element: OsmWay | OsmRelation = f;
+    if (edit.wayNodes && f.type === 'way') {
+      const same = f.nodes.length === edit.wayNodes.before.length && f.nodes.every((id, i) => id === edit.wayNodes!.before[i]);
+      if (!same) { conflicts.push({ key: edit.key, tags: ['список узлов изменён на сервере'] }); continue; }
+      element = { ...f, nodes: edit.wayNodes.after };
+    }
     // Сдвинуты только узлы — сам путь не трогаем
-    if (sameTags(r.tags, f.tags ?? {}) && !edit.members) continue;
-    const element = edit.members && f.type === 'relation' ? { ...f, members: mergeMembers(f.members, edit.membersBefore ?? [], edit.members) } : f;
+    if (sameTags(r.tags, f.tags ?? {}) && !edit.members && !edit.wayNodes) continue;
+    if (edit.members && f.type === 'relation') element = { ...f, members: mergeMembers(f.members, edit.membersBefore ?? [], edit.members) };
     payload.push({ element, tags: r.tags });
     written.set(edit.key, r.tags);
     if (!sameTags(r.tags, edit.after)) rebased.add(edit.key);

@@ -43,10 +43,23 @@ export class CursorOrbit {
     canvas.addEventListener('contextmenu', (e) => { if (this.enabled) e.preventDefault(); });
   }
 
+  /** Наклон за горизонт — камера уходит под землю (режим здания: добраться до нижних граней). */
+  private underground = false;
+
+  setUnderground(on: boolean) {
+    this.underground = on;
+    // Взгляд снизу вверх (наклон > 90°): центр карты должен быть выше камеры, а не на земле
+    this.map.setCenterClampedToGround(!on);
+    if (!on && this.map.getPitch() > 85) this.map.setPitch(85);
+    if (!on) this.map.setCenterElevation(0);
+    this.setEnabled(this.enabled);
+  }
+
   setEnabled(on: boolean) {
     this.enabled = on;
-    // Для свободного облёта нужен наклон почти до горизонта (по умолчанию в MapLibre 60°)
-    this.map.setMaxPitch(on ? 85 : 60);
+    // Для свободного облёта нужен наклон почти до горизонта (по умолчанию в MapLibre 60°);
+    // в режиме здания — и под землю (MapLibre допускает до 180°, выше 90° — экспериментально)
+    this.map.setMaxPitch(on && this.underground ? 175 : on ? 85 : 60);
     if (on) this.map.dragRotate.disable();
     else this.map.dragRotate.enable();
   }
@@ -126,8 +139,22 @@ export class CursorOrbit {
     const oy2 = -ox * Math.sin(db) + oy * Math.cos(db);
 
     const altitude = pivot.altitude + oz;
-    if (altitude < 1) return; // под землю не уходим
+    // Ниже уровня земли MapLibre камеру не пускает; в режиме здания — до самой земли, чтобы заглянуть под объект
+    if (altitude < (this.underground ? 0.3 : 1)) return;
     const camLngLat = new MercatorCoordinate(p.x + ox2 * s, p.y - oy2 * s, 0).toLngLat();
+    // Под объектом (наклон > 90°) центр «по взгляду на землю» уходит в бесконечность — тогда центр ставим в pivot
+    // на его высоте: камера смотрит на точку вращения, MapLibre сам вычисляет наклон и зум
+    if (this.underground && newPitch > 80) {
+      // Точка на оси взгляда на расстоянии до pivot: экран не прыгает, а центр остаётся конечным
+      const nb = ((bearing + dBearing) * Math.PI) / 180, np = (newPitch * Math.PI) / 180;
+      const dist = Math.max(5, Math.hypot(ox2, oy2, oz));
+      const tx = Math.sin(nb) * Math.sin(np) * dist, ty = Math.cos(nb) * Math.sin(np) * dist;
+      const tz = altitude - Math.cos(np) * dist;
+      // ox2/oy2 — камера относительно pivot, t* — шаг от камеры вдоль взгляда
+      const to = new MercatorCoordinate(p.x + (ox2 + tx) * s, p.y - (oy2 + ty) * s, 0).toLngLat();
+      map.jumpTo(map.calculateCameraOptionsFromTo(camLngLat, altitude, to, Math.max(0, tz)));
+      return;
+    }
     map.jumpTo(map.calculateCameraOptionsFromCameraLngLatAltRotation(camLngLat, altitude, bearing + dBearing, newPitch));
   }
 }

@@ -141,6 +141,16 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .colour-field { display: flex; gap: 4px; }
 .colour-field input[type="color"] { width: 32px; height: 26px; padding: 0; border: 1px solid #ccc; border-radius: 4px; flex: none; }
 .tag-form [data-revert] { justify-self: start; margin-top: 4px; }
+.inherit-field { position: relative; display: block; flex: 1; min-width: 0; }
+.inherit-field input { width: 100%; box-sizing: border-box; padding-right: 24px; }
+.inherit-field input::placeholder { color: #9ca3af; }
+.inherit-badge { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: #9ca3af; pointer-events: none; }
+.inherit-badge svg { width: 14px; height: 14px; display: block; }
+.colour-field input[type="color"].inherited { opacity: .55; }
+.inherit-field select { width: 100%; box-sizing: border-box; }
+.inherit-field select.inherited { color: #9ca3af; }
+.inherit-field select.inherited option { color: #222; }
+.inherit-field:has(select) .inherit-badge { right: 22px; }
 .all-tags summary { cursor: pointer; font-size: 12px; color: #555; margin: 4px 0; }
 /* Панель правок: строки как в списке частей, отмена/повтор — значками в заголовке */
 .head-tools { display: flex; gap: 2px; }

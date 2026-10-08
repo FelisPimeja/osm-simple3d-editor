@@ -51,8 +51,24 @@ function toHex(v: string | undefined): string {
 
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
-/** HTML формы тегов для объекта. */
-export function renderTagForm(key: string, session: EditSession): string {
+/**
+ * Теги, которые часть может унаследовать у здания, если у неё самой их нет. В Simple 3D правила наследования
+ * нет — это соглашение рендереров для «общих» свойств (цвет, материал, форма крыши). Этажность и высоту
+ * не наследуем: по вики на контуре они — максимум по частям, а не значение для каждой.
+ */
+const INHERITABLE = new Set(['building:colour', 'roof:colour', 'roof:shape', 'building:material', 'roof:material']);
+/** Американское написание тоже встречается в данных. */
+const ALIASES: Record<string, string> = { 'building:colour': 'building:color', 'roof:colour': 'roof:color' };
+const inheritedValue = (tags: Record<string, string>, tag: string) => tags[tag] ?? (ALIASES[tag] ? tags[ALIASES[tag]] : undefined);
+
+/** Откуда наследуются значения: контур (outline) и/или само отношение здания. */
+export interface InheritSource { label: string; tags: Record<string, string> }
+
+/** Значок «унаследовано» — стрелка вниз из рамки. */
+const ICON_INHERIT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h10"/><path d="M8 5v8.5M5 10.5l3 3 3-3"/></svg>';
+
+/** HTML формы тегов для объекта. sources — откуда показывать унаследованные значения (по порядку). */
+export function renderTagForm(key: string, session: EditSession, sources: InheritSource[] = []): string {
   const f = session.get(key);
   if (!f) return '';
   const orig = session.originalTags(key) ?? {};
@@ -60,24 +76,35 @@ export function renderTagForm(key: string, session: EditSession): string {
     const value = f.tags[field.tag] ?? '';
     const changed = session.isChanged(key, field.tag);
     const was = changed ? `было: ${orig[field.tag] ?? '—'}` : '';
-    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(was || field.tag)}"`;
+    // Своего значения нет — показываем унаследованное серым (placeholder) со значком и пояснением
+    const from = !value && INHERITABLE.has(field.tag) ? sources.find((src) => inheritedValue(src.tags, field.tag)) : undefined;
+    const inherited = from ? inheritedValue(from.tags, field.tag) : undefined;
+    const hint = from ? `Не задано у объекта — унаследовано из ${from.label}: ${field.tag}=${inherited}. Введите значение, чтобы задать своё.` : '';
+    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || was || field.tag)}"`;
     let control: string;
     if (field.type === 'select') {
       // Нестандартное значение из данных тоже показываем, чтобы не потерять его
       const options = [...new Set([...(value && !field.options!.includes(value) ? [value] : []), ...field.options!])];
-      control = `<select ${common}><option value="">—</option>${options
+      // Унаследованное — серым в пустом варианте
+      control = withBadge(`<select ${common}${inherited ? ' class="inherited"' : ''}><option value="">${esc(inherited ?? '—')}</option>${options
         .map((o) => `<option value="${esc(o)}"${o === value ? ' selected' : ''}>${esc(o)}</option>`)
-        .join('')}</select>`;
+        .join('')}</select>`, hint);
     } else if (field.type === 'colour') {
-      control = `<span class="colour-field"><input type="color" value="${toHex(value)}" data-picker-for="${esc(field.tag)}" />
-        <input type="text" ${common} value="${esc(value)}" placeholder="#rrggbb или имя" /></span>`;
+      control = `<span class="colour-field"><input type="color" value="${toHex(value || inherited)}" data-picker-for="${esc(field.tag)}"${inherited ? ' class="inherited"' : ''} />
+        ${withBadge(`<input type="text" ${common} value="${esc(value)}" placeholder="${esc(inherited ?? '#rrggbb или имя')}" />`, hint)}</span>`;
     } else {
-      control = `<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common} value="${esc(value)}" placeholder="${esc(field.placeholder ?? '')}" />`;
+      control = withBadge(`<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common} value="${esc(value)}" placeholder="${esc(inherited ?? field.placeholder ?? '')}" />`, hint);
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
   }).join('');
   const revert = session.isChanged(key) ? '<button type="button" data-revert>Вернуть как было</button>' : '';
   return `<form class="tag-form" data-key="${esc(key)}" onsubmit="return false">${rows}${revert}</form>`;
+}
+
+/** Поле со значком «унаследовано» справа (только если есть пояснение). */
+function withBadge(input: string, hint: string): string {
+  if (!hint) return input;
+  return `<span class="inherit-field" title="${esc(hint)}">${input}<span class="inherit-badge">${ICON_INHERIT}</span></span>`;
 }
 
 /** Обработчики формы (делегирование на контейнер; вешается один раз). */

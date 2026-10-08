@@ -18,7 +18,7 @@ import { suggestComment } from './edit/changeset-comment';
 import { EditSession, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
-import { bindTagForms, renderTagForm } from './edit/tag-form';
+import { bindTagForms, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
@@ -465,7 +465,18 @@ function highlightKeys(key: string | undefined): string[] {
 
 map.on('click', (e) => {
   if (suppressClick) return;
-  if (moveTool.active) { moveTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
+  if (moveTool.active) {
+    // Перемещение не начато, клик мимо всех объектов — выключаем инструмент и снимаем выделение
+    if (moveTool.state === 'pick' && !overpassLayer.snapAt([e.point.x, e.point.y], moveTool.pickFilter) && !overpassLayer.pickHit(e.point)) {
+      moveTool.stop();
+      select(undefined);
+      updateSnap(undefined);
+      return;
+    }
+    moveTool.click([e.point.x, e.point.y]);
+    updateSnap([e.point.x, e.point.y]);
+    return;
+  }
   const key = overpassLayer.pick(e.point);
   if (addingTo) {
     if (e.originalEvent.shiftKey) { if (key) toggleAddPending(key); return; }
@@ -527,6 +538,7 @@ function enterFocus(g: BuildingGroup) {
   const fly = !focus;
   if (focus?.key !== g.key) {
     // Голые контуры (без высоты, всё здание — части) по умолчанию выключены, включаются глазиком
+    session.dropViewActions(); // шаги скрытия — о прежнем здании
     focusHidden.clear();
     for (const k of bareOutlines(g)) focusHidden.add(k);
   }
@@ -603,6 +615,7 @@ function exitFocus() {
   if (!focus) return;
   focus = undefined;
   focusHidden.clear();
+  session.dropViewActions();
   overpassLayer.setHover(undefined);
   moveTool.stop();
   focusToolbar.hidden = true;
@@ -1011,9 +1024,9 @@ outlinerEl.addEventListener('click', (e) => {
   if (!li || !focus) return;
   const key = li.dataset.key!;
   if ((e.target as HTMLElement).closest('[data-eye]')) {
-    if (focusHidden.has(key)) focusHidden.delete(key); else { focusHidden.add(key); outlinerUnhover(); }
-    overpassLayer.setFocusHidden(focusHidden);
-    renderOutliner();
+    const next = new Set(focusHidden);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    changeFocusHidden(next);
     return;
   }
   if (!entity(key)) return;
@@ -1076,6 +1089,7 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty') {
   ctxMenu.innerHTML = where === 'empty' ? `
     <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>${exit}` : `
     <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>Скрыть объекты${n}${kbd('H')}</button></li>
+    <li><button type="button" data-ctx="isolate"${keys.length && focus.members.some((k) => !keys.includes(k) && !focusHidden.has(k)) ? '' : ' disabled'}>Изолировать${n}</button></li>
     ${inScene
       ? `<li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё скрытое${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>`
       : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>Показать объекты${n}</button></li>`}
@@ -1094,15 +1108,36 @@ ctxMenu.addEventListener('click', (e) => {
   focusAction(action);
 });
 
-/** Действие над выделенными частями (меню и шорткаты): hide, show, show-all, exclude, exit. */
+/** Действие над выделенными частями (меню и шорткаты): hide, show, show-all, isolate, exclude, exit. */
 function focusAction(action: string) {
   if (!focus) return;
   const keys = selection.filter((k) => focus!.members.includes(k));
   if (action === 'exclude') { if (keys.length) excludeFromGroup(); return; }
   if (action === 'exit') return closeFocus();
-  if (action === 'show-all') focusHidden.clear();
-  else for (const k of keys) if (action === 'hide') focusHidden.add(k); else focusHidden.delete(k);
-  if (action === 'hide') outlinerUnhover();
+  // Изолировать — скрыть все части, кроме выделенных (выделенные при этом показать)
+  if (action === 'isolate') {
+    if (keys.length) changeFocusHidden(new Set(focus.members.filter((k) => !keys.includes(k))));
+    return;
+  }
+  const next = new Set(action === 'show-all' ? [] : focusHidden);
+  if (action !== 'show-all') for (const k of keys) if (action === 'hide') next.add(k); else next.delete(k);
+  changeFocusHidden(next);
+}
+
+/** Скрытие/показ частей шагом общей истории: Cmd+Z / Cmd+Shift+Z отменяют и повторяют его вместе с правками. */
+function changeFocusHidden(next: Set<string>) {
+  const prev = new Set(focusHidden);
+  if (prev.size === next.size && [...next].every((k) => prev.has(k))) return;
+  applyFocusHidden(next);
+  session.pushView({ undo: () => applyFocusHidden(prev), redo: () => applyFocusHidden(next) });
+}
+
+function applyFocusHidden(keys: Set<string>) {
+  if (!focus) return;
+  const hiding = [...keys].some((k) => !focusHidden.has(k));
+  focusHidden.clear();
+  for (const k of keys) focusHidden.add(k);
+  if (hiding) outlinerUnhover();
   overpassLayer.setFocusHidden(focusHidden);
   renderOutliner();
 }
@@ -1322,7 +1357,7 @@ function renderSelected() {
 function renderSelectedImpl() {
   if (addingTo) return renderAdding();
   if (selection.length > 1) return renderMulti();
-  const form = selectedKey ? renderTagForm(selectedKey, session) : undefined;
+  const form = selectedKey ? renderTagForm(selectedKey, session, inheritSources(selectedKey)) : undefined;
   const g = selectedKey ? editGroups.get(selectedKey) : undefined;
   // Отношение type=building — только контейнер: высоты, крыша и прочее живут на контуре и частях
   if (g) { infoEl.innerHTML = describeGroup(g); return; }
@@ -1330,6 +1365,19 @@ function renderSelectedImpl() {
   if (!r && focus && !selection.length) { infoEl.innerHTML = describeFocus(focus); return; }
   // В режиме здания подсказка о группе не нужна (выход — Esc и панель частей); «Исключить» — под свойствами
   infoEl.innerHTML = r ? (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + excludeButton() : '';
+}
+
+/** Откуда часть наследует теги в форме: контур здания, затем само отношение. Контур сам ни от кого не наследует. */
+function inheritSources(key: string): InheritSource[] {
+  const g = groupOf(key);
+  if (!g || g.key === key) return [];
+  const outline = g.members.find((_, i) => g.roles[i] === 'outline');
+  if (outline === key) return [];
+  const out: InheritSource[] = [];
+  const t = outlineTags(g);
+  if (t) out.push({ label: `контура ${outline}`, tags: t });
+  out.push({ label: `отношения ${g.key}`, tags: g.tags });
+  return out;
 }
 
 /** Панель режима одного здания, пока ничего не выделено. */
@@ -1418,9 +1466,10 @@ function renderChanges() {
   renderAccount();
   const changes = session.changes();
   // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
-  const show = changes.length > 0 || session.canUndo() || session.canRedo();
+  // Шаги скрытия частей — тоже в истории, но панель ради них не раскрываем
+  const show = changes.length > 0 || session.hasDataHistory();
   changesEl.hidden = !show;
-  editsHistory.hidden = !show;
+  editsHistory.hidden = !session.canUndo() && !session.canRedo();
   undoBtn.disabled = !session.canUndo();
   redoBtn.disabled = !session.canRedo();
   editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : '· не выполнен вход';

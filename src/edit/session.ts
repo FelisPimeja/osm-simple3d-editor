@@ -36,8 +36,11 @@ interface Entry {
   mBefore?: OsmMember[]; mAfter?: OsmMember[];
   gBefore?: Polygon[]; gAfter?: Polygon[];
 }
-/** Шаг истории — одна или несколько правок, отменяемых вместе. */
-type Step = Entry[];
+/** Действие интерфейса в общей истории (скрытие частей и т. п.): данные не меняет, но отменяется так же. */
+export interface ViewAction { undo(): void; redo(): void }
+/** Шаг истории — одна или несколько правок, отменяемых вместе, или действие интерфейса. */
+type Step = Entry[] | ViewAction;
+const isView = (s: Step): s is ViewAction => !Array.isArray(s);
 
 /** Правка в составе одного шага: новые теги и/или геометрия. */
 export interface ObjectEdit { key: string; tags?: Tags; polygons?: Polygon[] }
@@ -179,10 +182,31 @@ export class EditSession {
       ...(moved ? { gBefore: f.polygons, gAfter: geometry } : {}) }]);
   }
 
+  /** Действие интерфейса в историю (уже выполнено): Cmd+Z его отменит. */
+  pushView(action: ViewAction) {
+    this.undoStack.push(action);
+    this.redoStack = [];
+    this.onChange([]);
+  }
+
+  /** Убрать из истории действия интерфейса (например, при выходе из режима здания — они о его сцене). */
+  dropViewActions() {
+    const before = this.undoStack.length + this.redoStack.length;
+    this.undoStack = this.undoStack.filter((s) => !isView(s));
+    this.redoStack = this.redoStack.filter((s) => !isView(s));
+    if (this.undoStack.length + this.redoStack.length !== before) this.onChange([]);
+  }
+
+  /** Есть ли в истории правки данных (а не только действия интерфейса). */
+  hasDataHistory(): boolean {
+    return [...this.undoStack, ...this.redoStack].some((s) => !isView(s));
+  }
+
   undo(): string | undefined {
     const step = this.undoStack.pop();
     if (!step) return;
     this.redoStack.push(step);
+    if (isView(step)) { step.undo(); this.onChange([]); return; }
     for (const e of [...step].reverse()) this.apply(e.key, e.before, e.mBefore, e.gBefore);
     this.notify(step);
     return step[0].key;
@@ -192,6 +216,7 @@ export class EditSession {
     const step = this.redoStack.pop();
     if (!step) return;
     this.undoStack.push(step);
+    if (isView(step)) { step.redo(); this.onChange([]); return; }
     for (const e of step) this.apply(e.key, e.after, e.mAfter, e.gAfter);
     this.notify(step);
     return step[0].key;
@@ -265,14 +290,14 @@ export class EditSession {
     this.onChange([...saved].map(([k, s]) => s.newKey ?? k));
   }
 
-  private push(step: Step) {
+  private push(step: Entry[]) {
     this.undoStack.push(step);
     this.redoStack = [];
     for (const e of step) this.apply(e.key, e.after, e.mAfter, e.gAfter);
     this.notify(step);
   }
 
-  private notify(step: Step) {
+  private notify(step: Entry[]) {
     this.onChange([...new Set(step.map((e) => e.key))]);
   }
 

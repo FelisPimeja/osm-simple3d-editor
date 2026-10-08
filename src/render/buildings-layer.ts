@@ -477,6 +477,13 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Габариты объекта в сцене режима здания (метры). */
+  /** Габариты всего здания режима здания (метры сцены). */
+  focusBox(): THREE.Box3 | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    const box = g && groupBox(g);
+    return box && !box.isEmpty() ? box : undefined;
+  }
+
   focusItemBox(key: string): THREE.Box3 | undefined {
     return this.groups.get(FOCUS_GROUP)?.byKey.get(key)?.box;
   }

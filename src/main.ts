@@ -7,6 +7,7 @@ import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
+import { ViewCube } from './view/view-cube';
 import { centroid, isBareOutlineTags, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type Polygon } from './osm/model';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
@@ -84,7 +85,34 @@ const map = new maplibregl.Map({
   bearing: -20,
   hash: true,
 });
+// View cube (только в режиме здания, слева от кнопок масштаба): вид с грани, ребра или угла куба по осям здания
+const viewCube = new ViewCube({
+  frame: () => {
+    const box = focus ? overpassLayer.focusBox() : undefined;
+    if (!box) return;
+    const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
+    const a = overpassLayer.focusAxes;
+    return { center: [c.x, c.y, c.z], half: Math.max(s.x, s.y, s.z) / 2, x: a?.x ?? [1, 0], y: a?.y ?? [0, 1] };
+  },
+  center: () => (focus ? overpassLayer.focusFrame()?.center : undefined),
+});
+map.addControl(viewCube, 'top-right');
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
+// В режиме здания вместо компаса — кнопка куба вида (показать / скрыть), выбор запоминается
+const cubeBtn = document.createElement('button');
+cubeBtn.type = 'button';
+cubeBtn.className = 'maplibregl-ctrl-cube';
+cubeBtn.title = 'Куб вида';
+cubeBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M10 2.5 16.5 6v8L10 17.5 3.5 14V6z"/><path d="M3.5 6 10 9.5 16.5 6M10 9.5v8"/></svg>';
+document.querySelector('.maplibregl-ctrl-compass')?.after(cubeBtn);
+try { viewCube.shown = localStorage.getItem('view-cube') !== 'off'; } catch { /* по умолчанию показан */ }
+cubeBtn.classList.toggle('active', viewCube.shown);
+cubeBtn.addEventListener('click', () => {
+  viewCube.shown = !viewCube.shown;
+  cubeBtn.classList.toggle('active', viewCube.shown);
+  try { localStorage.setItem('view-cube', viewCube.shown ? 'on' : 'off'); } catch { /* только до перезагрузки */ }
+  viewCube.update();
+});
 
 const infoEl = document.getElementById('info')!;
 

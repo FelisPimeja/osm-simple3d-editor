@@ -219,3 +219,30 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .outline-cand input { margin: 2px 0 0; flex: none; }
 #info [data-hover-key]:hover { background: #fff3e6; }
 #info .group-name { font-size: 15px; margin-bottom: 2px; }
+
+/* View cube — в ряд слева от кнопок масштаба */
+.maplibregl-ctrl-top-right { display: flex; align-items: flex-start; top: 12px; }
+.maplibregl-ctrl-top-right .maplibregl-ctrl { margin-top: 0; }
+/* Куб выше группы кнопок (88 px) — центр по ней */
+.maplibregl-ctrl-top-right .view-cube { margin-top: -12px; }
+.view-cube { width: 112px; height: 112px; background: none; box-shadow: none !important; user-select: none; }
+.view-cube[hidden] { display: none; }
+.view-cube svg { display: block; overflow: visible; }
+.vc-ring { fill: none; stroke: rgba(160,170,185,.6); stroke-width: 10; stroke-linejoin: round; cursor: grab; }
+.vc-dir { font: 600 10px system-ui, sans-serif; fill: #374151; text-anchor: middle; dominant-baseline: central; cursor: pointer;
+  paint-order: stroke; stroke: rgba(255,255,255,.8); stroke-width: 2px; }
+.vc-dir:hover { fill: #2f7cff; }
+.vc-cell { fill: #f3f4f6; cursor: pointer; }
+.vc-top .vc-cell { fill: #fff; }
+.vc-cell:hover { fill: #bcd3ff; }
+.vc-cell.off { cursor: default; }
+.vc-cell.off:hover { fill: #f3f4f6; }
+.vc-outline { fill: none; stroke: #9ca3af; stroke-width: 1; stroke-linejoin: round; pointer-events: none; }
+.vc-label { font: 600 13px system-ui, sans-serif; fill: #4b5563; text-anchor: middle; dominant-baseline: central;
+  text-transform: uppercase; pointer-events: none; }
+/* Кнопка куба вида — вместо компаса в режиме здания */
+.maplibregl-ctrl-group button.maplibregl-ctrl-cube { display: none; color: #333; }
+.maplibregl-ctrl-cube svg { width: 20px; height: 20px; margin: auto; display: block; }
+.maplibregl-ctrl-cube.active { color: #2f7cff; }
+.vc-mode .maplibregl-ctrl-group button.maplibregl-ctrl-cube { display: block; }
+.vc-mode .maplibregl-ctrl-group button.maplibregl-ctrl-compass { display: none; }

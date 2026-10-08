@@ -310,6 +310,8 @@ export class BuildingsLayer implements CustomLayerInterface {
    */
   /** Привязки включены (S в режиме здания). Выключены — инструменты двигают свободно. */
   snapsEnabled = true;
+  /** Alt зажат — привязки временно выключены. */
+  snapsSuspended = false;
 
   /**
    * opts.from — последняя точка инструмента: от неё ищем основание перпендикуляра на ребре.
@@ -317,15 +319,15 @@ export class BuildingsLayer implements CustomLayerInterface {
    */
   snapAt(point: [number, number], filter: (key: string) => boolean = () => true, radius = SNAP_RADIUS_PX,
     opts: { from?: THREE.Vector3; noEdge?: boolean } = {}): SnapHit | undefined {
-    if (!this.snapsEnabled) return;
+    if (!this.snapsEnabled || this.snapsSuspended) return;
     const g = this.groups.get(FOCUS_GROUP);
     if (!this.focused || !g || !this.map || !this.lastMain) return;
     this.snaps ??= collectSnaps(g);
     const m = this.lastMain.clone().multiply(g.model);
     const canvas = this.map.getCanvas();
     const v = new THREE.Vector4();
-    let best: { s: SnapPoint; d: number; px: [number, number] } | undefined;
-    const near: { s: SnapPoint; d: number; px: [number, number] }[] = [];
+    let best: { s: SnapPoint; d: number; px: [number, number]; along?: THREE.Vector3 } | undefined;
+    const near: { s: SnapPoint; d: number; px: [number, number]; along?: THREE.Vector3 }[] = [];
     for (const s of this.snaps.points) {
       if (!filter(s.key)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
@@ -338,7 +340,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     // Рёбра: ближайшая к лучу курсора точка ребра и основание перпендикуляра из opts.from
     const ray = this.focusRay(point);
-    const onSeg = new THREE.Vector3(), foot = new THREE.Vector3(), ab = new THREE.Vector3();
+    const onSeg = new THREE.Vector3(), foot = new THREE.Vector3(), ab = new THREE.Vector3(), ext0 = new THREE.Vector3(), ext1 = new THREE.Vector3();
     const toPx = (p: THREE.Vector3): [number, number] | undefined => {
       v.set(p.x, p.y, p.z, 1).applyMatrix4(m);
       return v.w > 0 ? [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight] : undefined;
@@ -359,6 +361,24 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
       }
       if (opts.noEdge) continue;
+      // Продолжение ребра за его концы (до EXTENSION_M): точка на прямой ребра вне самого ребра
+      ab.subVectors(e.b, e.a);
+      const len = ab.length();
+      if (len > 0.05) {
+        const k = EXTENSION_M / len;
+        ext0.copy(e.a).addScaledVector(ab, -k);
+        ext1.copy(e.b).addScaledVector(ab, k);
+        ray.distanceSqToSegment(ext0, ext1, undefined, onSeg);
+        const t = foot.subVectors(onSeg, e.a).dot(ab) / (len * len);
+        if (t < -0.02 || t > 1.02) {
+          const px = toPx(onSeg);
+          const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
+          if (px && d <= Math.min(radius, EXTENSION_RADIUS_PX)) {
+            near.push({ s: { kind: 'extension', key: e.key, p: onSeg.clone() }, d: d + SNAP_PRIORITY.extension * 6 - bonus(e.key), px,
+              along: (t < 0 ? e.a : e.b).clone() });
+          }
+        }
+      }
       ray.distanceSqToSegment(e.a, e.b, undefined, onSeg);
       const px = toPx(onSeg);
       const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
@@ -381,9 +401,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (!best || c.d < best.d) best = c;
     }
     if (!best) return;
-    const { s, px } = best;
+    const { s, px, along } = best;
     const merc = new MercatorCoordinate(g.origin.x + s.p.x * g.metersToMerc, g.origin.y - s.p.y * g.metersToMerc, 0);
-    return { kind: s.kind, key: s.key, local: s.p.clone(), lngLat: merc.toLngLat(), altitude: s.p.z, point: px };
+    return { kind: s.kind, key: s.key, local: s.p.clone(), lngLat: merc.toLngLat(), altitude: s.p.z, point: px, along };
   }
 
   /** Ближайший к лучу через точку экрана узел сетки на земле (z = 0). */
@@ -620,6 +640,27 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.hiddenEdges.computeLineDistances();
     this.hiddenEdges.renderOrder = 999; // после зданий: глубина уже записана
     g.scene.add(this.hiddenEdges);
+  }
+
+  private snapLine?: THREE.Line;
+
+  /** Пунктир продолжения ребра: от конца ребра до точки привязки. undefined — убрать. */
+  setSnapLine(line: [THREE.Vector3, THREE.Vector3] | undefined) {
+    if (this.snapLine) {
+      this.snapLine.parent?.remove(this.snapLine);
+      this.snapLine.geometry.dispose();
+      (this.snapLine.material as THREE.Material).dispose();
+      this.snapLine = undefined;
+    }
+    const g = this.groups.get(FOCUS_GROUP);
+    if (line && g) {
+      this.snapLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(line),
+        new THREE.LineDashedMaterial({ color: 0x7c3aed, dashSize: 0.4, gapSize: 0.25, depthTest: false, depthWrite: false, transparent: true }));
+      this.snapLine.computeLineDistances();
+      this.snapLine.renderOrder = 1000;
+      g.scene.add(this.snapLine);
+    }
+    this.map?.triggerRepaint();
   }
 
   private moveGuide?: THREE.Object3D;
@@ -1274,13 +1315,14 @@ function pointInLocalRing([x, y]: Pt, ring: Pt[]): boolean {
   return inside;
 }
 
-export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'grid' | 'perpendicular' | 'edge';
+export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'grid' | 'perpendicular' | 'edge' | 'extension';
 /** Ключ привязки к узлу сетки основания: фильтр snapAt пропускает его, если инструменту нужна и сетка. */
 export const GRID_SNAP_KEY = '@grid';
 interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3 }
 interface SnapEdge { key: string; a: THREE.Vector3; b: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
-export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number] }
+/** along — у продолжения ребра: конец ребра, от которого идёт продолжение (для пунктира). */
+export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number]; along?: THREE.Vector3 }
 const SNAP_RADIUS_PX = 12;
 /** Длина стрелок осей в начале координат здания, м — одна клетка сетки. */
 const AXES_LENGTH = 10;
@@ -1291,7 +1333,11 @@ const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
 const SNAP_HIDDEN_PENALTY_PX = 100;
 /** Точка на ребре — последней: курсор у ребра почти всегда, она не должна перебивать вершины и середины. */
-const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, grid: 2, center: 2, edge: 3 };
+const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, grid: 2, center: 2, extension: 4, edge: 3 };
+/** Как далеко за конец ребра тянется его продолжение, м. */
+const EXTENSION_M = 30;
+/** Продолжение ловит курсор ближе обычного (px): иначе срабатывает почти везде вокруг здания. */
+const EXTENSION_RADIUS_PX = 6;
 /** Шаг сетки основания режима здания, м. */
 const GRID_STEP = 10;
 

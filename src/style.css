@@ -137,6 +137,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .snap-marker.edge { background: #ea580c; border-radius: 50%; width: 8px; height: 8px; margin: -5px 0 0 -5px; }
 .snap-marker.perpendicular { background: #db2777; border: 0; box-shadow: none; width: 12px; height: 12px; margin: -6px 0 0 -6px;
   clip-path: polygon(0 0, 22% 0, 22% 78%, 100% 78%, 100% 100%, 0 100%); }
+.snap-marker.extension { background: #7c3aed; border-radius: 50%; width: 8px; height: 8px; margin: -5px 0 0 -5px; }
 .snap-marker.grid { background: #6b7280; border-radius: 1px; outline: 1px solid #6b7280; outline-offset: 2px; }
 .snap-marker::after {
   content: attr(data-label); position: absolute; left: 14px; top: -4px; white-space: nowrap;
@@ -246,3 +247,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .maplibregl-ctrl-cube.active { color: #2f7cff; }
 .vc-mode .maplibregl-ctrl-group button.maplibregl-ctrl-cube { display: block; }
 .vc-mode .maplibregl-ctrl-group button.maplibregl-ctrl-compass { display: none; }
+/* Подписи длин сторон при рисовании */
+.draw-dims { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.draw-dim { position: absolute; transform: translate(-50%, -50%); padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+  font: 11px ui-monospace, monospace; color: #fff; background: rgba(0,0,0,.6); }
+.draw-dim.current { background: #2f7cff; font-weight: 600; }

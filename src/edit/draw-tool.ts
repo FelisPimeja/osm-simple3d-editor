@@ -19,7 +19,7 @@ const MIN_AREA = 0.5;
 /**
  * Инструменты «Прямоугольник» (R) и «Полигон» (L): плоский контур на земле или на плоской крыше части.
  * Плоскость — по первому клику (привязка или грань крыши под курсором, иначе земля). Точки — с привязкой
- * к вершинам и серединам, без привязки направление рядом с осью здания выравнивается по ней.
+ * к вершинам и серединам, без привязки направление рядом с осью здания выравнивается по ней; Shift держит эту ось.
  * Число + Enter — длина текущей стороны (у прямоугольника по двум углам и от центра — «ширина;глубина»).
  * Полигон замыкается кликом в первую точку или Enter, Backspace убирает последнюю точку. Tab — способ
  * построения прямоугольника. Esc — отмена. Что делать с готовым контуром — решает commit снаружи.
@@ -33,8 +33,15 @@ export class DrawTool {
   private z = 0;
   private cursor?: Pt;
   private axis?: 0 | 1;
+  /** Ось, зафиксированная Shift (пока зажат): точки только по ней от последней. */
+  private locked?: 0 | 1;
+  private lastPoint?: [number, number];
   private typed = '';
   private readonly vcb: HTMLDivElement;
+  /** Подписи длин сторон контура (HTML поверх карты). */
+  private readonly dims: HTMLDivElement;
+  /** Стороны для подписей: точки контура, замкнут ли он, какая сторона — текущая (тянется курсором). */
+  private dimRing?: { pts: Pt[]; closed: boolean; current?: number };
 
   constructor(
     private readonly layer: BuildingsLayer,
@@ -47,6 +54,9 @@ export class DrawTool {
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
     container.appendChild(this.vcb);
+    this.dims = document.createElement('div');
+    this.dims.className = 'draw-dims';
+    container.appendChild(this.dims);
   }
 
   get active() { return this.state !== 'off'; }
@@ -78,12 +88,22 @@ export class DrawTool {
 
   move(point: [number, number]) {
     if (this.state !== 'draw') return;
+    this.lastPoint = point;
     this.cursor = this.pointAt(point);
     this.preview();
   }
 
   key(e: KeyboardEvent): boolean {
-    if (!this.active || e.type !== 'keydown') return false;
+    if (!this.active) return false;
+    // Shift — держать текущую ось (как при перемещении): пока зажат, точка идёт только вдоль неё
+    if (e.key === 'Shift') {
+      if (e.type === 'keyup') this.locked = undefined;
+      else if (!e.repeat && this.pts.length && this.axis !== undefined) this.locked = this.axis;
+      else return true;
+      if (this.lastPoint) this.move(this.lastPoint);
+      return true;
+    }
+    if (e.type !== 'keydown') return false;
     if (e.key === 'Escape') {
       if (this.pts.length) { this.reset(); this.hint(); } else this.stop();
       return true;
@@ -127,6 +147,15 @@ export class DrawTool {
       const hit = this.layer.focusRayHits(point)[0];
       this.z = hit?.face === 'roof' && this.flatAt(hit.key, hit.local.z) ? hit.local.z : 0;
       return this.planePoint(point);
+    }
+    if (this.locked !== undefined) {
+      // Ось зафиксирована: точка привязки или курсора — проекцией на ось от последней точки
+      const q = this.snap ? [this.snap.local.x, this.snap.local.y] as Pt : this.planePoint(point);
+      if (!q) return;
+      const ax = this.locked ? this.layer.focusAxes?.y ?? [0, 1] : this.layer.focusAxes?.x ?? [1, 0];
+      const t = (q[0] - last[0]) * ax[0] + (q[1] - last[1]) * ax[1];
+      this.axis = this.locked;
+      return [last[0] + ax[0] * t, last[1] + ax[1] * t];
     }
     if (this.snap) return [this.snap.local.x, this.snap.local.y];
     const q = this.planePoint(point);
@@ -245,11 +274,31 @@ export class DrawTool {
     this.hint();
   }
 
+  /** Подписи длин сторон у их середин на экране (и после движения камеры). */
+  relabel() {
+    const r = this.dimRing;
+    if (!r || this.state !== 'draw') { this.dims.innerHTML = ''; return; }
+    const n = r.closed ? r.pts.length : r.pts.length - 1;
+    let html = '';
+    for (let i = 0; i < n; i++) {
+      const a = r.pts[i], b = r.pts[(i + 1) % r.pts.length];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (len < 0.05) continue;
+      const px = this.layer.focusProject(new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, this.z));
+      if (!px) continue;
+      html += `<span class="draw-dim${i === r.current ? ' current' : ''}" style="left:${px[0].toFixed(1)}px;top:${px[1].toFixed(1)}px">${len.toFixed(2)} м</span>`;
+    }
+    this.dims.innerHTML = html;
+  }
+
   private reset() {
+    this.dimRing = undefined;
+    this.dims.innerHTML = '';
     this.pts = [];
     this.cursor = undefined;
     this.snap = undefined;
     this.typed = '';
+    this.locked = undefined;
     this.layer.setDrawPreview(undefined);
     this.layer.setMoveGuide(undefined);
     this.vcb.hidden = true;
@@ -260,9 +309,14 @@ export class DrawTool {
     const pts = this.cursor ? [...this.pts, this.cursor] : this.pts;
     const ring = this.shape === 'rect' ? this.rectRing(pts) : pts;
     this.layer.setDrawPreview(ring?.map(v), this.shape === 'rect');
+    // Размеры: у прямоугольника — ширина и глубина (две соседние стороны), у полигона — все стороны и тянущаяся
+    this.dimRing = !ring || ring.length < 2 ? undefined
+      : this.shape === 'rect' ? { pts: ring.length > 2 ? ring.slice(0, 3) : ring, closed: false }
+      : { pts: ring, closed: false, current: this.cursor && this.pts.length ? ring.length - 2 : undefined };
+    this.relabel();
     // Ось, по которой выровнено текущее ребро, — цветом оси
     const last = this.pts[this.pts.length - 1];
-    if (last && this.cursor && this.axis !== undefined) this.layer.setMoveGuide({ from: v(last), to: v(this.cursor), axis: this.axis });
+    if (last && this.cursor && this.axis !== undefined) this.layer.setMoveGuide({ from: v(last), to: v(this.cursor), axis: this.axis, locked: this.locked });
     else this.layer.setMoveGuide(undefined);
     this.updateVcb();
   }
@@ -279,7 +333,7 @@ export class DrawTool {
       value = this.rectMode === 'three' ? side(1).toFixed(2) : `${side(0).toFixed(2)}; ${side(1).toFixed(2)}`;
     } else value = Math.hypot(this.cursor[0] - last[0], this.cursor[1] - last[1]).toFixed(2);
     this.vcb.innerHTML = `<span class="vcb-label">${label}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || value}</span> м
-      <span class="vcb-axis">${this.snap ? 'привязка' : this.axis === 0 ? 'по оси X' : this.axis === 1 ? 'по оси Y' : ''}</span>`;
+      <span class="vcb-axis">${this.snap ? 'привязка' : this.axis === 0 ? 'по оси X' : this.axis === 1 ? 'по оси Y' : ''}${this.locked !== undefined ? ' (Shift)' : ''}</span>`;
   }
 
   private hint() {

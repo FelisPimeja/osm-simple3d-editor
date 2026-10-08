@@ -34,6 +34,8 @@ export class MoveTool {
   private typed = '';
   private lastPoint?: [number, number];
   private readonly vcb: HTMLDivElement;
+  /** Разовое перемещение (вставка): сразу тянем от заданной точки, после клика — выход; Esc — отмена всего. */
+  private oneShot?: { done: () => void; cancel: () => void };
 
   constructor(
     private readonly layer: BuildingsLayer,
@@ -55,8 +57,28 @@ export class MoveTool {
     this.onState('Кликните по точке на выбранном объекте — от неё пойдёт перемещение. Esc — выйти из инструмента.');
   }
 
+  /** Сразу тянуть keys от точки from (без выбора точки захвата); done — после применения, cancel — Esc/выход. */
+  drag(keys: string[], from: THREE.Vector3, hint: string, done: () => void, cancel: () => void) {
+    this.stop();
+    this.keys = new Set(keys);
+    this.from.copy(from);
+    this.offset.set(0, 0, 0);
+    this.axis = this.locked = undefined;
+    this.typed = '';
+    this.state = 'move';
+    this.oneShot = { done, cancel };
+    this.layer.setMoveGuide({ from: this.from });
+    this.updateVcb();
+    this.onState(hint);
+    this.refresh();
+  }
+
   stop() {
+    // Выход посреди разового перемещения (другой инструмент, пробел) — как отмена
+    const once = this.oneShot;
+    this.oneShot = undefined;
     this.cancelMove();
+    if (once) { this.state = 'off'; this.keys = new Set(); this.onState(''); once.cancel(); return; }
     this.state = 'off';
     this.keys = new Set();
     this.onState('');
@@ -120,6 +142,7 @@ export class MoveTool {
   key(e: KeyboardEvent): boolean {
     if (!this.active) return false;
     if (e.key === 'Escape') {
+      if (this.oneShot) { this.stop(); return true; }
       if (this.state === 'move') { this.cancelMove(); this.state = 'pick'; this.start([...this.keys]); }
       else this.stop();
       return true;
@@ -168,6 +191,16 @@ export class MoveTool {
   private apply(offset: THREE.Vector3) {
     const keys = [...this.keys];
     this.cancelMove();
+    if (this.oneShot) {
+      const once = this.oneShot;
+      this.oneShot = undefined;
+      this.state = 'off';
+      this.keys = new Set();
+      if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone());
+      this.onState('');
+      once.done();
+      return;
+    }
     this.state = 'pick';
     if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone());
     this.start(keys);

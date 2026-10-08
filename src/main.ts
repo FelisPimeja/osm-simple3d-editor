@@ -8,7 +8,7 @@ import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
-import { centroid, isBareOutlineTags, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type Polygon } from './osm/model';
+import { centroid, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type Polygon } from './osm/model';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
 import { inheritedTags } from './osm/inherit';
@@ -500,6 +500,7 @@ function highlightKeys(key: string | undefined): string[] {
 
 map.on('click', (e) => {
   if (suppressClick) return;
+  if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (splitTool.active) {
     const p: [number, number] = [e.point.x, e.point.y];
@@ -582,9 +583,21 @@ function bareOutlines(g: BuildingGroup): string[] {
   return g.members.filter((k, i) => {
     if (g.roles[i] !== 'outline') return false;
     const t = entity(k)?.tags;
-    // Контур нового отношения целиком покрыт частями (рассекли отдельное здание) — плоским следом
-    return !!t && (isBareOutlineTags(t) || (g.id < 0 && g.roles.includes('part')));
+    // Контур нового отношения, покрытый частями (рассекли отдельное здание), — плоским следом; часть
+    // поменьше (надстройка, пристройка) — нет: объём по-прежнему задаёт контур
+    return !!t && (isBareOutlineTags(t) || (g.id < 0 && outlineCovered(g, k)));
   });
+}
+
+/** Части группы покрывают контур key (то же правило, что на карте: ≥ 50% площади, внутри объёма контура). */
+function outlineCovered(g: BuildingGroup, key: string): boolean {
+  const feats = groupFeatures(g);
+  const outline = feats.find((f) => f.key === key);
+  if (!outline) return false;
+  const probe: Feature3D = { ...outline, kind: 'building', hasParts: false };
+  const parts = feats.filter((f, i) => f.key !== key && g.roles[g.members.indexOf(f.key)] === 'part' && i >= 0).map((f) => ({ ...f, kind: 'part' as const }));
+  markOutlinesWithParts([...parts, probe], [probe]);
+  return probe.hasParts;
 }
 
 function enterFocus(g: BuildingGroup) {
@@ -699,10 +712,11 @@ function deleteSelected() {
     const g = entity(focus.key) as EditGroup | undefined;
     if (g) edits.push({ key: g.key, members: g.relMembers.filter((m) => !keys.includes(`${m.type}/${m.ref}`)) });
   }
-  const solo = isSolo(focus);
+  // Удалили само отдельное здание (а не вставленную рядом копию) — выходим на карту
+  const solo = isSolo(focus) && keys.includes(focus!.members[0]);
   select(undefined);
   session.editMany(edits);
-  if (solo) leaveDrill(); // удалили само здание — выходим на карту
+  if (solo) leaveDrill();
   setStatus(`Удалено объектов: ${keys.length}. Отменить — Ctrl+Z.`);
 }
 
@@ -762,16 +776,31 @@ const snapEl = document.createElement('div');
 snapEl.className = 'snap-marker';
 snapEl.hidden = true;
 map.getContainer().appendChild(snapEl);
-const SNAP_LABELS = { vertex: 'Вершина', midpoint: 'Середина', center: 'Центр', grid: 'Сетка', perpendicular: 'Перпендикуляр', edge: 'На ребре' } as const;
+const SNAP_LABELS = { vertex: 'Вершина', midpoint: 'Середина', center: 'Центр', grid: 'Сетка', perpendicular: 'Перпендикуляр', edge: 'На ребре', extension: 'Продолжение' } as const;
 /** Текущая привязка под курсором — для будущих инструментов геометрии. */
 let currentSnap: SnapHit | undefined;
 
 function updateSnap(point: [number, number] | undefined) {
+  updateSnapMarker(point);
+  overpassLayer.setSnapLine(currentSnap?.along && [currentSnap.along, currentSnap.local]);
+}
+
+// Alt — привязки временно выключены (пока зажат)
+for (const type of ['keydown', 'keyup'] as const) {
+  window.addEventListener(type, (e) => {
+    if (e.key !== 'Alt' || overpassLayer.snapsSuspended === (type === 'keydown')) return;
+    overpassLayer.snapsSuspended = type === 'keydown';
+    if (lastPointer) updateSnap(lastPointer);
+  });
+}
+window.addEventListener('blur', () => { overpassLayer.snapsSuspended = false; });
+
+function updateSnapMarker(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
   if (point && pushTool.state === 'push') pushTool.move(point);
   if (point && splitTool.state === 'cut') splitTool.move(point);
   if (point && drawTool.active) drawTool.move(point);
-  if (pushTool.active || splitTool.active || drawTool.active) {
+  if (pushTool.active || splitTool.active || drawTool.active || copyPick) {
     // Рассечение: подсвечиваем вершины и середины рёбер объектов (концы разреза)
     currentSnap = pushTool.active ? (pushTool.state === 'push' ? pushTool.snap : undefined)
       : drawTool.active ? (point ? drawTool.snap : undefined)
@@ -853,12 +882,13 @@ function startSplit() {
 
 /** Какой-нибудь инструмент режима здания включён. */
 function toolActive(): boolean {
-  return moveTool.active || pushTool.active || splitTool.active || drawTool.active;
+  return moveTool.active || pushTool.active || splitTool.active || drawTool.active || !!copyPick;
 }
 
 // Инструменты «Прямоугольник» (R) и «Полигон» (L): новая часть здания — плоский контур нулевой толщины
 const rectBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="rect"]')!;
 const polyBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="polygon"]')!;
+map.on('move', () => { if (drawTool.active) drawTool.relabel(); });
 const drawTool = new DrawTool(overpassLayer, map.getContainer(), createDrawn, (hint, error) => {
   rectBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'rect');
   polyBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'polygon');
@@ -931,35 +961,156 @@ function createDrawn(ring: [number, number][], z: number): string | undefined {
   const neighbours = fresh.length ? insertIntoNeighbours(key, fresh, coord) : new Map<string, Feature3D['polygons']>();
   if (typeof neighbours === 'string') return neighbours;
   const fmt = (v: number) => String(Math.round(v * 100) / 100);
-  const tags: Record<string, string> = { 'building:part': 'yes', height: fmt(z) };
+  // У отдельного здания контур снаружи него — новое отдельное здание рядом, а не часть нового отношения
+  const soloOutline = isSolo(focus) ? entity(focus.members[0]) as Feature3D | undefined : undefined;
+  const c = centroid(ll);
+  const standalone = !!soloOutline?.polygons && !soloOutline.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
+  const tags: Record<string, string> = { [standalone ? 'building' : 'building:part']: 'yes', height: fmt(z) };
   if (z > 0.01) tags.min_height = fmt(z);
-  const part: Feature3D = { key, type: 'way', id: wayId, version: 0, kind: 'part', tags,
+  const part: Feature3D = { key, type: 'way', id: wayId, version: 0, kind: standalone ? 'building' : 'part', tags,
     polygons: [{ outer: ids.map((id) => coord.get(id)!), inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
   const edits: Parameters<typeof session.editMany>[0] = [
     { key, create: part },
     ...[...neighbours].map(([k, polygons]) => ({ key: k, polygons })),
   ];
-  let group: EditGroup | undefined;
-  if (isSolo(focus)) {
-    // Отдельное здание — новое отношение: исходный путь — контур, нарисованное — часть
-    const relId = nextNewId--;
-    const [type, ref] = focus.members[0].split('/');
-    const relMembers = [{ type: type as 'way' | 'relation', ref: Number(ref), role: 'outline' }, { type: 'way' as const, ref: wayId, role: 'part' }];
-    group = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, tags: { type: 'building' },
-      members: relMembers.map((m) => `${m.type}/${m.ref}`), roles: relMembers.map((m) => m.role), relMembers };
-    editGroups.set(group.key, group);
-    edits.push({ key: group.key, create: group });
-  } else {
-    const g = entity(focus.key) as EditGroup | undefined;
-    if (!g) return 'Отношение здания не найдено.';
-    edits.push({ key: g.key, members: [...g.relMembers, { type: 'way', ref: wayId, role: 'part' }] });
+  if (standalone && focus) {
+    session.editMany(edits);
+    // В сцену режима отдельного здания — рядом с ним
+    drill = focus = { ...focus, members: [...focus.members, key], roles: [...focus.roles, ''] };
+    overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
+    overpassLayer.setFocusHidden(focusHidden);
+    select(key);
+    setStatus(`Создано отдельное здание ${key} рядом. Высоту задайте «Вытянуть» (P).`);
+    return;
   }
+  const group = attachParts(edits, [wayId]);
+  if (typeof group === 'string') return group;
   session.editMany(edits);
   if (group) enterFocus(group);
   select(key);
   const shared = ids.filter((id) => id > 0).length;
   setStatus(`Создана часть ${key}${shared || fresh.length ? ` (общих узлов: ${shared}, новых на сторонах соседей: ${fresh.length})` : ''}. Высоту задайте «Вытянуть» (P).`);
   return;
+}
+
+/**
+ * Добавить новые пути частями здания режима: в его отношение, а у отдельного здания — в новое отношение
+ * (исходный путь — контур). Правки дописываются в edits; созданное отношение возвращается (в него потом входим).
+ */
+function attachParts(edits: Parameters<typeof session.editMany>[0], wayIds: number[]): EditGroup | undefined | string {
+  if (!focus) return 'Нет здания.';
+  const parts = wayIds.map((ref) => ({ type: 'way' as const, ref, role: 'part' }));
+  if (isSolo(focus)) {
+    const relId = nextNewId--;
+    const [type, ref] = focus.members[0].split('/');
+    const relMembers = [{ type: type as 'way' | 'relation', ref: Number(ref), role: 'outline' }, ...parts];
+    const group: EditGroup = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, tags: { type: 'building' },
+      members: relMembers.map((m) => `${m.type}/${m.ref}`), roles: relMembers.map((m) => m.role), relMembers };
+    editGroups.set(group.key, group);
+    edits.push({ key: group.key, create: group });
+    return group;
+  }
+  const g = entity(focus.key) as EditGroup | undefined;
+  if (!g) return 'Отношение здания не найдено.';
+  edits.push({ key: g.key, members: [...g.relMembers, ...parts] });
+  return;
+}
+
+/** Буфер копирования: части (теги и контуры) и базовая точка (lng/lat и высота) — вставляются новыми путями. */
+let clipboard: { items: { tags: Record<string, string>; polygons: Feature3D['polygons'] }[]; base: { lngLat: LonLat; z: number } } | undefined;
+/** Ctrl+C: части скопированы, ждём клика по базовой точке. */
+let copyPick: { items: NonNullable<typeof clipboard>['items'] } | undefined;
+
+/** Ctrl+C в режиме здания: выделенные части (простые пути; контур здания — нет), затем клик — базовая точка. */
+function copySelected() {
+  if (!focus) return;
+  const keys = selection.filter((k) => focus!.members.includes(k));
+  const items: NonNullable<typeof clipboard>['items'] = [];
+  let skipped = 0;
+  for (const k of keys) {
+    const f = entity(k) as Feature3D | undefined;
+    const role = focus.roles[focus.members.indexOf(k)];
+    if (!f?.polygons || !k.startsWith('way/') || role === 'outline' || f.polygons.length !== 1 || f.polygons[0].inners.length) { skipped++; continue; }
+    items.push({ tags: { ...f.tags }, polygons: f.polygons.map((p) => ({ outer: p.outer.map((c) => [...c] as LonLat), inners: [] })) });
+  }
+  if (!items.length) return setStatus(keys.length ? 'Копируются только части-пути (не контур здания и не мультиполигоны).' : 'Выберите части здания, затем Ctrl+C.', true);
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop();
+  copyPick = { items };
+  setStatus(`Копирование (${items.length}${skipped ? `, пропущено ${skipped} — контур или мультиполигон` : ''}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.`);
+  if (lastPointer) updateSnap(lastPointer);
+}
+
+/** Клик в режиме выбора базовой точки: привязка, иначе поверхность под курсором, иначе земля. */
+function pickCopyBase(point: [number, number]) {
+  if (!copyPick) return;
+  const s = overpassLayer.snapAt(point);
+  let p = s?.local ?? overpassLayer.focusRayHits(point)[0]?.local;
+  if (!p) {
+    const ray = overpassLayer.focusRay(point);
+    if (ray && Math.abs(ray.direction.z) > 1e-6 && -ray.origin.z / ray.direction.z > 0) p = ray.at(-ray.origin.z / ray.direction.z, new THREE.Vector3());
+  }
+  if (!p) return setStatus('Кликните по точке здания или земли.', true);
+  const ll = overpassLayer.focusToLngLat(p.x, p.y);
+  if (!ll) return;
+  clipboard = { items: copyPick.items, base: { lngLat: ll, z: p.z } };
+  copyPick = undefined;
+  updateSnap(undefined);
+  setStatus(`Скопировано частей: ${clipboard.items.length}. Ctrl+V — вставить (копия поедет за курсором).`);
+}
+
+function cancelCopyPick() {
+  if (!copyPick) return;
+  copyPick = undefined;
+  updateSnap(undefined);
+  setStatus('Копирование отменено.');
+}
+
+/**
+ * Ctrl+V в режиме здания: копии частей новыми путями (свои узлы, без общих с соседями) в отношение здания,
+ * сразу привязаны к курсору за базовую точку; клик — место базовой точки. Esc — вставка отменяется целиком.
+ */
+function pasteClipboard() {
+  if (!focus || !clipboard) return setStatus('Буфер пуст: выберите части, Ctrl+C и клик по базовой точке.', true);
+  const edits: Parameters<typeof session.editMany>[0] = [];
+  const wayIds: number[] = [];
+  const keys: string[] = [];
+  // Отдельное здание: копии — такие же отдельные здания рядом (не части нового отношения: снаружи контура
+  // частью они быть не могут, а контур с частями стал бы плоским следом). В отношении — части здания
+  const solo = isSolo(focus);
+  for (const c of clipboard.items) {
+    const outer = c.polygons[0].outer.map((p) => [...p] as LonLat);
+    const ids = outer.map(() => nextNewId--);
+    const wayId = nextNewId--;
+    const key = `way/${wayId}`;
+    const tags = { ...c.tags };
+    // Копия отдельного здания, вставленная в отношение, — часть: building → building:part
+    if (!solo && !tags['building:part'] && tags.building) { tags['building:part'] = tags.building === 'no' ? 'yes' : tags.building; delete tags.building; }
+    const part: Feature3D = { key, type: 'way', id: wayId, version: 0, kind: kindOf(tags) ?? 'part', tags,
+      polygons: [{ outer, inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
+    edits.push({ key, create: part });
+    wayIds.push(wayId);
+    keys.push(key);
+  }
+  const group = solo ? undefined : attachParts(edits, wayIds);
+  if (typeof group === 'string') return setStatus(group, true);
+  session.editMany(edits);
+  if (solo && focus) {
+    // Копии — в сцену режима отдельного здания рядом с ним (первым членом остаётся само здание)
+    drill = focus = { ...focus, members: [...focus.members, ...keys], roles: [...focus.roles, ...keys.map(() => '')] };
+    overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
+    overpassLayer.setFocusHidden(focusHidden);
+  }
+  selection = keys;
+  selectedKey = keys.at(-1);
+  paintSelection();
+  renderSelected();
+  const b = overpassLayer.focusToLocal(clipboard.base.lngLat);
+  if (!b) return;
+  pushTool.stop(); splitTool.stop(); drawTool.stop();
+  moveTool.drag(keys, new THREE.Vector3(b[0], b[1], clipboard.base.z),
+    `Вставка (${keys.length}): кликните, куда поставить базовую точку. Shift/стрелки — ось, число + Enter — сдвиг. Esc — отмена вставки.`,
+    () => setStatus(`Вставлено частей: ${keys.length}.`),
+    () => { selectAfterHistory(session.undo()); setStatus('Вставка отменена.'); });
 }
 
 function segDist2([px, py]: [number, number], [ax, ay]: [number, number], [bx, by]: [number, number]): number {
@@ -970,6 +1121,7 @@ function segDist2([px, py]: [number, number], [ax, ay]: [number, number], [bx, b
 
 /** Почему объект нельзя рассечь (undefined — можно). */
 function splitReason(key: string): string | undefined {
+  if (isSolo(focus) && key !== focus!.members[0]) return 'Копию режьте отдельно: выйдите и откройте её двойным кликом.';
   if (!focus?.members.includes(key) || focusHidden.has(key)) return 'Резать можно только части этого здания.';
   const f = entity(key) as Feature3D | undefined;
   if (!f?.polygons) return 'Объект не найден.';
@@ -1410,15 +1562,24 @@ document.addEventListener('keydown', (e) => {
     pushTool.stop();
     splitTool.stop();
     drawTool.stop();
+    cancelCopyPick();
     updateSnap(undefined);
     return;
   }
+  if (e.key === 'Escape' && copyPick) { e.preventDefault(); e.stopImmediatePropagation(); cancelCopyPick(); return; }
   if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e) || drawTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   // S — привязки вкл/выкл, в том числе посреди перемещения или вытягивания
   if (focus && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     closeCtxMenu();
     toggleSnaps();
+    return;
+  }
+  // Ctrl/Cmd+C, Ctrl/Cmd+V — копировать и вставить части здания (по физической клавише — и в русской раскладке)
+  if (focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === 'KeyV' || (e.code === 'KeyC' && selection.length)) && !toolActive()) {
+    e.preventDefault();
+    closeCtxMenu();
+    if (e.code === 'KeyC') copySelected(); else pasteClipboard();
     return;
   }
   // Del / Backspace — удалить выделенное (на карте — отдельные здания, в режиме здания — части)
@@ -1441,10 +1602,11 @@ document.addEventListener('keydown', (e) => {
   if (!action) return;
   e.preventDefault();
   closeCtxMenu();
+  cancelCopyPick();
   if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'split') startSplit();
   else if (action === 'rect' || action === 'polygon') startDraw(action); else focusAction(action);
 }, { capture: true });
-document.addEventListener('keyup', (e) => { if (moveTool.key(e)) e.preventDefault(); });
+document.addEventListener('keyup', (e) => { if (moveTool.key(e) || drawTool.key(e)) e.preventDefault(); });
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
 function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
@@ -2187,6 +2349,15 @@ function onSessionChange(keys: string[]) {
     // Повтор рассечения: отдельное здание снова в отношении
     const g = groupOf(focus!.members[0]);
     if (g) enterFocus(g);
+    else {
+      // Отменили вставку копий рядом с отдельным зданием — убрать их из сцены
+      const gone = focus!.members.slice(1).filter((k) => keys.includes(k) && !session.get(k));
+      if (gone.length) {
+        drill = focus = { ...focus!, members: focus!.members.filter((k) => !gone.includes(k)), roles: focus!.roles.filter((_, i) => !gone.includes(focus!.members[i])) };
+        overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
+        overpassLayer.setFocusHidden(focusHidden);
+      }
+    }
   }
   if (selectedKey && keys.includes(selectedKey)) {
     const active = document.activeElement as HTMLElement | null;

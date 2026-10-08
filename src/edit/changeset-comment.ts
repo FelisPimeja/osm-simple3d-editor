@@ -18,6 +18,8 @@ interface BuildingEdits {
   attributes: boolean;
   /** Сдвинуты узлы частей. */
   moved: boolean;
+  /** Удалены объекты (части или отдельные здания). */
+  deleted?: boolean;
 }
 
 /**
@@ -37,6 +39,7 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
 
   // Отношения, созданные в этом пакете (новое здание из частей или из рассечённого отдельного здания)
   const created = new Set(changes.filter((c) => c.created && ctx.isGroup(c.key)).map((c) => c.key));
+  const removedFromGroups = new Set(changes.flatMap((c) => (c.membersBefore ?? []).map((m) => `${m.type}/${m.ref}`)));
   for (const c of changes) {
     if (ctx.isGroup(c.key)) {
       // Состав отношения: сколько членов добавлено и убрано
@@ -50,6 +53,8 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
       continue;
     }
     const e = edits(ctx.groupOf(c.key));
+    // Удалённая часть уже учтена как изменение состава её отношения
+    if (c.deleted) { if (!removedFromGroups.has(c.key)) e.deleted = true; continue; }
     if (c.diff.some((d) => !d.tag.startsWith('('))) e.attributes = true;
     if (c.nodeMoves?.length) e.moved = true;
   }
@@ -71,7 +76,7 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
   const all: BuildingEdits = { added: 0, removed: 0, attributes: false, moved: false };
   for (const e of buildings.values()) {
     all.added += e.added; all.removed += e.removed;
-    all.attributes ||= e.attributes; all.moved ||= e.moved;
+    all.attributes ||= e.attributes; all.moved ||= e.moved; all.deleted ||= e.deleted;
   }
   const allNew = [...buildings.keys()].every((k) => created.has(k));
   const head = (list: string) => `${allNew ? 'Новые отношения зданий' : 'Правки в отношения зданий'}${list}:`;
@@ -96,6 +101,7 @@ function points(e: BuildingEdits, what: string): string[] {
   if (e.added && !e.removed) out.push('* добавлены новые части');
   else if (e.removed) out.push('* изменён состав частей');
   if (e.attributes) out.push(`* изменены параметры отдельных ${what}`);
+  if (e.deleted) out.push(`* удалены отдельные ${what === 'частей' ? 'части' : 'здания'}`);
   if (e.moved) out.push(`* перемещены отдельные ${what === 'частей' ? 'части' : 'здания'}`);
   return out;
 }

@@ -130,6 +130,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .snap-marker.midpoint { background: #0891b2; border: 0; box-shadow: none; width: 14px; height: 12px; margin: -8px 0 0 -7px;
   clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 .snap-marker.center { background: #9333ea; border-radius: 50%; }
+.snap-marker.grid { background: #6b7280; border-radius: 1px; outline: 1px solid #6b7280; outline-offset: 2px; }
 .snap-marker::after {
   content: attr(data-label); position: absolute; left: 14px; top: -4px; white-space: nowrap;
   font: 11px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.65); padding: 1px 5px; border-radius: 3px;

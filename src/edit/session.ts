@@ -20,6 +20,8 @@ export interface TagChange {
   after: Tags;
   /** Новый объект (ещё нет в OSM). */
   created: boolean;
+  /** Объект удалён (уходит в <delete>). */
+  deleted?: boolean;
   /** Новый список членов отношения, если он менялся, и исходный. */
   members?: OsmMember[];
   membersBefore?: OsmMember[];
@@ -55,6 +57,8 @@ export interface ObjectEdit {
   members?: OsmMember[];
   /** Новый объект (рассечение): создаётся в этом же шаге. */
   create?: Tagged;
+  /** Удалить объект (созданный в сессии — просто отменить его создание). */
+  delete?: boolean;
 }
 
 /**
@@ -71,6 +75,8 @@ export class EditSession {
   /** Созданные в сессии объекты и те из них, что сейчас существуют (создание можно отменить). */
   private readonly created = new Set<string>();
   private readonly alive = new Set<string>();
+  /** Удалённые объекты из данных (созданные при удалении просто перестают существовать). */
+  private readonly deleted = new Set<string>();
 
   constructor(features: Tagged[], private readonly onChange: (keys: string[]) => void) {
     for (const f of features) this.track(f);
@@ -115,6 +121,10 @@ export class EditSession {
       }
       const f = this.get(e.key);
       if (!f) continue;
+      if (e.delete) {
+        step.push({ key: e.key, before: { ...f.tags }, after: null, ...(e.polygons ? { gBefore: f.polygons, gAfter: e.polygons } : {}) });
+        continue;
+      }
       const tags = e.tags ?? f.tags;
       step.push({ key: e.key, before: { ...f.tags }, after: { ...tags },
         ...(e.polygons ? { gBefore: f.polygons, gAfter: e.polygons } : {}),
@@ -160,7 +170,12 @@ export class EditSession {
   }
 
   private exists(key: string): boolean {
-    return !this.created.has(key) || this.alive.has(key);
+    return !this.deleted.has(key) && (!this.created.has(key) || this.alive.has(key));
+  }
+
+  /** Объект из данных удалён в сессии. */
+  isDeleted(key: string): boolean {
+    return this.deleted.has(key);
   }
 
   /** Созданные в сессии и существующие сейчас объекты. */
@@ -261,6 +276,12 @@ export class EditSession {
   changes(): TagChange[] {
     const out: TagChange[] = [];
     for (const [key, f] of this.features) {
+      if (this.deleted.has(key)) {
+        const before = this.original.get(key)!;
+        out.push({ key, feature: f, created: false, deleted: true, before, after: {},
+          diff: [{ tag: '(объект)', from: 'есть', to: 'удалён' }] });
+        continue;
+      }
       if (!this.exists(key)) continue;
       const before = this.original.get(key)!;
       const created = this.created.has(key);
@@ -288,7 +309,8 @@ export class EditSession {
     const f = this.get(key);
     const orig = this.original.get(key);
     if (!f || !orig) return false;
-    if (this.created.has(key)) return true;
+    // Новый объект изменён целиком; по отдельным тегам «было» нет — не помечаем
+    if (this.created.has(key)) return !tag;
     if (!tag && (this.membersChanged(key) || this.nodeMoves(key).length || this.wayNodes(key))) return true;
     return tag ? f.tags[tag] !== orig[tag] : !sameTags(f.tags, orig);
   }
@@ -316,7 +338,15 @@ export class EditSession {
    * После загрузки в OSM: записанное становится исходным, версии — новыми.
    * История очищается — отменять уже отправленное нельзя.
    */
-  markSaved(saved: Map<string, { version: number; tags: Tags; newKey?: string }>) {
+  markSaved(saved: Map<string, { version: number; tags: Tags; newKey?: string }>, deleted: string[] = []) {
+    // Удалённые на сервере — больше не отслеживаем
+    for (const key of deleted) {
+      this.deleted.delete(key);
+      this.features.delete(key);
+      this.original.delete(key);
+      this.originalMembers.delete(key);
+      this.originalGeometry.delete(key);
+    }
     for (const [oldKey, { version, tags, newKey }] of saved) {
       const f = this.features.get(oldKey);
       if (!f) continue;
@@ -341,7 +371,7 @@ export class EditSession {
     }
     this.undoStack = [];
     this.redoStack = [];
-    this.onChange([...saved].map(([k, s]) => s.newKey ?? k));
+    this.onChange([...[...saved].map(([k, s]) => s.newKey ?? k), ...deleted]);
   }
 
   private push(step: Entry[]) {
@@ -362,8 +392,8 @@ export class EditSession {
     if (this.created.has(key)) {
       if (tags) this.alive.add(key);
       else { this.alive.delete(key); return; }
-    }
-    if (!tags) return;
+    } else if (tags) this.deleted.delete(key);
+    else { this.deleted.add(key); return; }
     // Меняем объект тегов на месте — на него ссылаются рендер и панель.
     // Копия: tags может быть тем же объектом, что f.tags (при создании), — иначе очистка сотрёт и источник
     tags = { ...tags };

@@ -94,6 +94,8 @@ class MeshGroup {
   edges?: THREE.LineSegments;
   /** Скрытые (только для показа) объекты: не рисуются, не выбираются, без привязок. */
   readonly hidden = new Set<string>();
+  /** Толщина плоского следа, м: на карте — чуть выше подложки, в режиме здания подложки нет — ноль. */
+  footprint = FOOTPRINT_HEIGHT;
   /** Рисовать плоским следом независимо от высоты (голый контур в режиме здания). */
   readonly flat = new Set<string>();
   /** Обводки контуров под частями (в просмотре вместо заливки). */
@@ -234,34 +236,37 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.movingEdges?.geometry.dispose();
     this.movingEdges = undefined;
     this.removeGroup(FOCUS_GROUP);
-    this.focusAxes = undefined;
     this.snaps = undefined;
     this.focused = !!features;
-    if (!features?.length) { this.map?.triggerRepaint(); return; }
+    if (!features?.length) { this.focusAxes = undefined; this.focusLock = undefined; this.map?.triggerRepaint(); return; }
     const box = new THREE.Box2();
     for (const f of features) for (const p of f.polygons) for (const [lng, lat] of p.outer) box.expandByPoint(new THREE.Vector2(lng, lat));
-    const c = box.getCenter(new THREE.Vector2());
+    // Начало сцены, оси и сетка фиксируются при входе в режим и не меняются от правок до выхода
+    const lock = this.focusLock;
+    const c = lock ? new THREE.Vector2(...lock.center) : box.getCenter(new THREE.Vector2());
     const g = new MeshGroup([c.x, c.y]);
+    g.footprint = 0; // объекты нулевой высоты — точно на своём уровне: к ним привязываются следующие
     for (const k of flat) g.flat.add(k);
     for (const f of features) if (shouldRender(f)) this.addItem(g, f);
     // Земля: квадрат с запасом вокруг здания, сетка 10 м
     const [x0, y0] = g.toLocal([box.min.x, box.min.y]), [x1, y1] = g.toLocal([box.max.x, box.max.y]);
-    const size = Math.ceil((Math.max(x1 - x0, y1 - y0) * 3 + 60) / 20) * 20;
+    const size = lock?.size ?? Math.ceil((Math.max(x1 - x0, y1 - y0) * 3 + 60) / 20) * 20;
     // Земля без заливки — видна только сетка; меш остаётся для попадания курсором
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
     ground.position.z = -0.02;
     const pts: Pt[] = features.flatMap((f) => f.polygons.flatMap((p) => p.outer.map(g.toLocal)));
-    this.focusAxes = orientedFrame(pts);
+    this.focusAxes = lock ? lock.axes && { ...lock.axes } : orientedFrame(pts);
     // Начало — снаружи угла bbox, чтобы обозначение не сливалось со стенами
-    if (this.focusAxes) {
+    if (this.focusAxes && !lock) {
       const { origin: o, x, y } = this.focusAxes;
       this.focusAxes.origin = [o[0] - (x[0] + y[0]) * ORIGIN_OFFSET, o[1] - (x[1] + y[1]) * ORIGIN_OFFSET];
     }
+    if (!lock) this.focusLock = { center: [c.x, c.y], size, axes: this.focusAxes && { ...this.focusAxes } };
     // Сетка — вдоль осей здания, линии через начало координат (центр сетки в нём, шаг 10 м, размер кратен 20)
     const [ox, oy] = this.focusAxes?.origin ?? [0, 0];
     const gridSize = size + Math.ceil(Math.hypot(ox, oy) * 2 / 20) * 20;
-    const grid = new THREE.GridHelper(gridSize, gridSize / 10, GRID_COLOUR, GRID_COLOUR);
+    const grid = new THREE.GridHelper(gridSize, gridSize / GRID_STEP, GRID_COLOUR, GRID_COLOUR);
     grid.rotation.x = Math.PI / 2; // GridHelper лежит в XZ, у нас земля — XY
     const gridFrame = new THREE.Group();
     gridFrame.position.set(ox, oy, -0.01);
@@ -326,6 +331,16 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Штраф за менее важный тип — вершина в 6 px «ближе» середины ребра; выделенный объект — ещё на 8 px
       near.push({ s, d: d + SNAP_PRIORITY[s.kind] * 6 - (this.selected.has(s.key) ? SNAP_SELECTED_BONUS_PX : 0), px });
     }
+    // Узел сетки основания (земля, вдоль осей здания) под курсором
+    const grid = filter(GRID_SNAP_KEY) ? this.gridSnap(point) : undefined;
+    if (grid) {
+      v.set(grid.x, grid.y, 0, 1).applyMatrix4(m);
+      if (v.w > 0) {
+        const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
+        const d = Math.hypot(px[0] - point[0], px[1] - point[1]);
+        if (d <= radius) near.push({ s: { kind: 'grid', key: GRID_SNAP_KEY, p: grid }, d: d + SNAP_PRIORITY.grid * 6, px });
+      }
+    }
     // Видимость проверяем только у кандидатов в радиусе (луч на каждый — недёшево): заслонённые — в конец
     for (const c of near.sort((a, b) => a.d - b.d)) {
       if (best && c.d >= best.d) continue;
@@ -336,6 +351,20 @@ export class BuildingsLayer implements CustomLayerInterface {
     const { s, px } = best;
     const merc = new MercatorCoordinate(g.origin.x + s.p.x * g.metersToMerc, g.origin.y - s.p.y * g.metersToMerc, 0);
     return { kind: s.kind, key: s.key, local: s.p.clone(), lngLat: merc.toLngLat(), altitude: s.p.z, point: px };
+  }
+
+  /** Ближайший к лучу через точку экрана узел сетки на земле (z = 0). */
+  private gridSnap(point: [number, number]): THREE.Vector3 | undefined {
+    const ray = this.focusRay(point);
+    if (!ray || Math.abs(ray.direction.z) < 1e-6) return;
+    const t = -ray.origin.z / ray.direction.z;
+    if (t <= 0) return;
+    const q = ray.at(t, new THREE.Vector3());
+    const f = this.focusAxes;
+    const o: Pt = f?.origin ?? [0, 0], x: Pt = f?.x ?? [1, 0], y: Pt = f?.y ?? [0, 1];
+    const dx = q.x - o[0], dy = q.y - o[1];
+    const u = Math.round((dx * x[0] + dy * x[1]) / GRID_STEP) * GRID_STEP, w = Math.round((dx * y[0] + dy * y[1]) / GRID_STEP) * GRID_STEP;
+    return new THREE.Vector3(o[0] + x[0] * u + y[0] * w, o[1] + x[1] * u + y[1] * w, 0);
   }
 
   /** Точка привязки заслонена геометрией сцены (между ней и камерой есть грань). */
@@ -569,7 +598,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (guide && g && this.focusAxes) {
       const root = new THREE.Group();
       const frame = { ...this.focusAxes, origin: [guide.from.x, guide.from.y] as Pt };
-      const gizmo = axesGizmo(frame, guide.locked);
+      const gizmo = axesGizmo(frame, guide.locked, TOOL_AXES_LENGTH);
       gizmo.matrix.elements[14] = guide.from.z; // значок на высоте точки захвата
       root.add(gizmo);
       if (guide.to) {
@@ -584,6 +613,45 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
       g.scene.add(root);
       this.moveGuide = root;
+    }
+    this.map?.triggerRepaint();
+  }
+
+  private drawPreview?: THREE.Group;
+  /** Начало сцены, размер земли и оси режима здания — с момента входа до выхода. */
+  private focusLock?: { center: [number, number]; size: number; axes?: LocalFrame };
+
+  /**
+   * Контур в процессе рисования (метры сцены режима здания): сплошные стороны, пунктиром — замыкающая
+   * (если closed) и полупрозрачная заливка, когда точек ≥ 3. Поверх геометрии.
+   */
+  setDrawPreview(points: THREE.Vector3[] | undefined, closed = false) {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (this.drawPreview) {
+      this.drawPreview.parent?.remove(this.drawPreview);
+      this.drawPreview.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.Line) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
+      this.drawPreview = undefined;
+    }
+    if (points && points.length >= 2 && g) {
+      const root = new THREE.Group();
+      const overlay = { depthTest: false, depthWrite: false, transparent: true };
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x1d4ed8, ...overlay }));
+      line.renderOrder = 1003;
+      root.add(line);
+      if (points.length >= 3) {
+        const close = new THREE.Line(new THREE.BufferGeometry().setFromPoints([points[points.length - 1], points[0]]),
+          closed ? new THREE.LineBasicMaterial({ color: 0x1d4ed8, ...overlay })
+            : new THREE.LineDashedMaterial({ color: 0x1d4ed8, dashSize: 0.4, gapSize: 0.3, ...overlay }));
+        close.computeLineDistances();
+        close.renderOrder = 1003;
+        const shape = new THREE.Shape(points.map((p) => new THREE.Vector2(p.x, p.y)));
+        const fill = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color: 0x3b82f6, opacity: 0.25, side: THREE.DoubleSide, ...overlay }));
+        fill.position.z = points[0].z;
+        fill.renderOrder = 1002;
+        root.add(close, fill);
+      }
+      g.scene.add(root);
+      this.drawPreview = root;
     }
     this.map?.triggerRepaint();
   }
@@ -933,7 +1001,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const it of g.items) {
       if (!strokeOnly(g, it) || g.hidden.has(it.feature.key)) continue;
       const c = this.selected.has(it.feature.key) || this.hovered === it.feature.key ? STROKE_SELECTED : STROKE_COLOUR;
-      const z = it.box.isEmpty() ? FOOTPRINT_HEIGHT : it.box.max.z;
+      const z = it.box.isEmpty() ? g.footprint : it.box.max.z;
       for (const p of it.feature.polygons) {
         for (const ring of [p.outer, ...p.inners]) {
           const pts = ring.map(g.toLocal);
@@ -1166,18 +1234,24 @@ function pointInLocalRing([x, y]: Pt, ring: Pt[]): boolean {
   return inside;
 }
 
-export type SnapKind = 'vertex' | 'midpoint' | 'center';
+export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'grid';
+/** Ключ привязки к узлу сетки основания: фильтр snapAt пропускает его, если инструменту нужна и сетка. */
+export const GRID_SNAP_KEY = '@grid';
 interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number] }
 const SNAP_RADIUS_PX = 12;
-/** Длина стрелок осей (начало координат здания и точка захвата инструментов), м — одна сетка масштаба. */
+/** Длина стрелок осей в начале координат здания, м — одна клетка сетки. */
 const AXES_LENGTH = 10;
+/** Длина стрелок осей у точки захвата инструментов, м. */
+const TOOL_AXES_LENGTH = 2;
 /** Привязки выделенного объекта «ближе» на столько px. */
 const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
 const SNAP_HIDDEN_PENALTY_PX = 100;
-const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, center: 2 };
+const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, grid: 2, center: 2 };
+/** Шаг сетки основания режима здания, м. */
+const GRID_STEP = 10;
 
 /**
  * Точки привязки здания: вершины контуров внизу и на верху стен, вершины крыши выше стен, середины рёбер (нижних, верхних
@@ -1234,8 +1308,7 @@ const AXIS_COLOURS = [0xd43a3a, 0x3fa34d, 0x3a52b4]; // x, y, z — как в 3D
  * Обозначение начала координат: оси x/y/z стрелками в положительную сторону, отрицательные — тонкой линией.
  * Рисуется поверх геометрии (без проверки глубины), чтобы не терялось за стенами.
  */
-function axesGizmo(frame: LocalFrame, locked?: number): THREE.Object3D {
-  const len = AXES_LENGTH;
+function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH): THREE.Object3D {
   const r = len * 0.012, head = len * 0.12;
   const root = new THREE.Group();
   // Базис: x, y — оси здания на земле, z — вверх
@@ -1349,7 +1422,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   const flat = f.hasParts || g.flat.has(f.key);
   if (flat || heights.top - heights.min < FOOTPRINT_HEIGHT) {
     const min = flat ? 0 : heights.min;
-    heights = { ...heights, min, wallTop: min + FOOTPRINT_HEIGHT, top: min + FOOTPRINT_HEIGHT, roofShape: 'flat', roofHeight: 0 };
+    heights = { ...heights, min, wallTop: min + g.footprint, top: min + g.footprint, roofShape: 'flat', roofHeight: 0 };
   }
   const tri = buildTriangles(polys, heights, tags);
   const positions = new Float32Array(tri.walls.length + tri.roof.length);

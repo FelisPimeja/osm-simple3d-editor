@@ -119,6 +119,7 @@ export class OverpassTiles {
       for (const f of e.features) {
         if (!keys.includes(f.key)) continue;
         const cur = this.overlay(f);
+        if (!cur.polygons.length) continue; // удалён — уберёт перерисовка тайла
         this.layer.setViewHidden(f.key, this.bareOutline(cur));
         const r = this.layer.updateFeature(tile, cur);
         if (r) this.rendered.set(f.key, r);
@@ -132,7 +133,7 @@ export class OverpassTiles {
     for (const e of this.cache.values()) {
       if (e.state === 'ready') for (const f of e.features) if (!out.has(f.key)) out.set(f.key, this.overlay(f));
     }
-    return [...out.values()];
+    return [...out.values()].filter((f) => f.polygons.length);
   }
 
   get enabled(): boolean {
@@ -396,7 +397,8 @@ export class OverpassTiles {
    * иначе до фонового обновления тайла кеш показывал бы старые теги. fetchedAt не трогаем.
    */
   async applySaved(saved: Map<string, { version: number; tags: Record<string, string>; polygons?: Polygon[] }>, savedGroups: BuildingGroup[] = [],
-    createdFeatures: Feature3D[] = []) {
+    createdFeatures: Feature3D[] = [], deleted: string[] = []) {
+    const gone = new Set(deleted);
     // Созданные пути (рассечение) — в тайл, где их центр; ниже patch обновит и их
     for (const f of createdFeatures) {
       const [x, y] = centroid(f.polygons[0].outer);
@@ -418,11 +420,12 @@ export class OverpassTiles {
       return out;
     };
     const touched = (t: { features: Feature3D[]; groups: BuildingGroup[] }) =>
-      t.features.some((f) => saved.has(f.key)) || t.groups.some((g) => saved.has(g.key)) || groupFor(t).length > 0;
+      t.features.some((f) => saved.has(f.key) || gone.has(f.key)) || t.groups.some((g) => saved.has(g.key)) || groupFor(t).length > 0;
     const patch = (features: Feature3D[]): Feature3D[] => {
-      if (!features.some((f) => saved.has(f.key))) return features;
+      if (!features.some((f) => saved.has(f.key) || gone.has(f.key))) return features;
       const out: Feature3D[] = [];
       for (const f of features) {
+        if (gone.has(f.key)) continue; // удалён в OSM
         const s = saved.get(f.key);
         if (!s) { out.push(f); continue; }
         const kind = kindOf(s.tags);
@@ -497,12 +500,13 @@ export class OverpassTiles {
   private ownedFeatures(key: string): { features: Feature3D[]; hidden: string } {
     const own = this.cache.get(key);
     if (own?.state !== 'ready') return { features: [], hidden: '' };
-    const ownFeatures = [...own.features.map(this.overlay), ...this.extras()];
+    // Удалённые в сессии (overlay отдаёт их без геометрии) — не рисуем
+    const ownFeatures = [...own.features.map(this.overlay), ...this.extras()].filter((f) => f.polygons.length);
     const union = new Map<string, Feature3D>();
     for (const f of ownFeatures) union.set(f.key, f); // свои объекты — первыми: их hasParts и пойдёт в рендер
     for (const n of neighbours(key)) {
       const e = this.cache.get(n);
-      if (e?.state === 'ready') for (const f of e.features) if (!union.has(f.key)) union.set(f.key, this.overlay(f));
+      if (e?.state === 'ready') for (const f of e.features) if (!union.has(f.key)) { const o = this.overlay(f); if (o.polygons.length) union.set(f.key, o); }
     }
     // Пересчитываем только свои здания — части берём из всех девяти тайлов
     timed('overpass: части у контуров', () => markOutlinesWithParts([...union.values()], ownFeatures), () => `${key}, ${union.size} объектов`);

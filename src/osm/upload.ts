@@ -22,6 +22,8 @@ export interface TagEdit {
   wayNodes?: { before: number[]; after: number[] };
   /** Новые узлы (отрицательные id) — уходят в <create> раньше путей. */
   newNodes?: { id: number; at: [number, number] }[];
+  /** Удалить объект (путь — вместе с его узлами без тегов, которые больше никому не нужны). */
+  deleted?: boolean;
 }
 
 export interface UploadResult {
@@ -36,6 +38,8 @@ export interface UploadResult {
   rebased: Set<string>;
   /** Объекты, у которых записана геометрия (узлы), даже если сам путь не менялся. */
   geometrySaved: Set<string>;
+  /** Удалённые объекты. */
+  deleted: Set<string>;
 }
 
 /** Конфликт, который нельзя разрешить автоматически: кто-то изменил те же теги. */
@@ -60,7 +64,7 @@ const tagsXml = (tags: Tags) =>
   Object.entries(tags).map(([k, v]) => `<tag k="${xmlEsc(k)}" v="${xmlEsc(v)}"/>`).join('');
 
 /** osmChange: новые элементы — в <create>, изменённые — в <modify>. */
-export function buildOsmChange(edits: { element: OsmWay | OsmRelation | (OsmNode & { version: number }); tags: Tags; created?: boolean }[], changeset: number): string {
+export function buildOsmChange(edits: { element: OsmWay | OsmRelation | (OsmNode & { version: number }); tags: Tags; created?: boolean; deleted?: boolean }[], changeset: number): string {
   const xml = ({ element: e, tags, created }: (typeof edits)[number]) => {
     const attrs = `id="${e.id}"${created ? '' : ` version="${e.version}"`} changeset="${changeset}"`;
     if (e.type === 'node') return `<node ${attrs} lat="${e.lat.toFixed(7)}" lon="${e.lon.toFixed(7)}">${tagsXml(tags)}</node>`;
@@ -73,9 +77,13 @@ export function buildOsmChange(edits: { element: OsmWay | OsmRelation | (OsmNode
   // Новые: узлы, затем пути, затем отношения — на них ссылаются следующие
   const rank = { node: 0, way: 1, relation: 2 } as const;
   const create = edits.filter((e) => e.created).sort((x, y) => rank[x.element.type] - rank[y.element.type]).map(xml).join('');
-  const modify = edits.filter((e) => !e.created).map(xml).join('');
+  const modify = edits.filter((e) => !e.created && !e.deleted).map(xml).join('');
+  // Удаление: сначала отношения, затем пути, затем узлы. if-unused — то, что ещё кем-то используется
+  // (узел в чужом пути, путь в чужом отношении), сервер молча оставляет, а не отклоняет весь пакет
+  const del = edits.filter((e) => e.deleted).sort((x, y) => rank[y.element.type] - rank[x.element.type])
+    .map(({ element: e }) => `<${e.type} id="${e.id}" version="${e.version}" changeset="${changeset}"/>`).join('');
   return `<osmChange version="0.6" generator="${GENERATOR}">${create ? `<create>${create}</create>` : ''}${
-    modify ? `<modify>${modify}</modify>` : ''}</osmChange>`;
+    modify ? `<modify>${modify}</modify>` : ''}${del ? `<delete if-unused="true">${del}</delete>` : ''}</osmChange>`;
 }
 
 async function call(method: string, path: string, body?: string, accept = 'text/plain'): Promise<string> {
@@ -157,7 +165,22 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
       payload.push({ element: { type: 'node', id: n.id, version: 0, lon: n.at[0], lat: n.at[1] }, tags: {}, created: true });
     }
   }
+  // Узлы удаляемых путей: без тегов и не нужные нашим же новым и изменённым путям
+  const deletedWays = edits.filter((e) => e.deleted && e.key.startsWith('way/')).map((e) => fresh.get(e.key)).filter((w): w is OsmWay => w?.type === 'way');
+  const keepNodes = new Set(edits.filter((e) => !e.deleted).flatMap((e) => e.wayNodes?.after ?? []));
+  const dropIds = [...new Set(deletedWays.flatMap((w) => w.nodes))].filter((id) => !keepNodes.has(id));
+  const dropNodes = dropIds.length ? await fetchNodes(dropIds) : new Map();
+  const deleted = new Set<string>();
   for (const edit of edits) {
+    if (edit.deleted) {
+      const f = fresh.get(edit.key);
+      if (!f) continue; // уже удалён на сервере
+      const r = rebase({ ...edit, after: edit.before }, f);
+      if ('conflict' in r || !sameTags(f.tags ?? {}, edit.before)) { conflicts.push({ key: edit.key, tags: ['объект изменён на сервере после загрузки'] }); continue; }
+      payload.push({ element: f, tags: {}, deleted: true });
+      deleted.add(edit.key);
+      continue;
+    }
     if (edit.created) {
       const element = edit.created.type === 'way'
         ? { ...edit.created, nodes: edit.wayNodes?.after ?? edit.created.nodes }
@@ -184,6 +207,7 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
     written.set(edit.key, r.tags);
     if (!sameTags(r.tags, edit.after)) rebased.add(edit.key);
   }
+  for (const n of dropNodes.values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
   if (conflicts.length) throw new ConflictError(conflicts);
 
   onStatus('Открываем changeset…');
@@ -196,7 +220,7 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
   try {
     onStatus(`Загружаем ${payload.length} объектов в changeset ${changeset}…`);
     const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
-    return { changeset, ...diff, written, rebased, geometrySaved };
+    return { changeset, ...diff, written, rebased, geometrySaved, deleted };
   } finally {
     // Закрываем и при ошибке, чтобы не висел пустой changeset
     try { await call('PUT', `/changeset/${changeset}/close`); } catch { /* закроется сам через час */ }

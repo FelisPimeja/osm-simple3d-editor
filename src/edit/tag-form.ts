@@ -54,6 +54,12 @@ const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => `&#${c.cha
 
 const INHERITABLE_SET = new Set<string>(INHERITABLE);
 
+/** Поля только для некоторых форм крыши (рендер их учитывает только там). */
+const SHAPE_ONLY: Record<string, string[]> = {
+  'roof:direction': ['skillion', 'saltbox'],
+  'roof:orientation': ['gabled', 'hipped', 'half-hipped', 'gambrel', 'round', 'saltbox'],
+};
+
 /** Откуда наследуются значения: контур (outline) и/или само отношение здания. */
 export interface InheritSource { label: string; tags: Record<string, string> }
 
@@ -66,7 +72,13 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   if (!f) return '';
   const orig = session.originalTags(key) ?? {};
   const inheritedAny: string[] = [];
-  const rows = FIELDS.map((field) => {
+  // Форма крыши — своя или унаследованная: от неё зависит, нужны ли направление ската и конёк
+  const shape = f.tags['roof:shape'] ?? sources.map((s) => s.tags['roof:shape']).find((v) => v !== undefined);
+  const rows = FIELDS.filter((field) => {
+    const only = SHAPE_ONLY[field.tag];
+    // Уже заданное значение показываем всегда — чтобы его было видно и можно было удалить
+    return !only || f.tags[field.tag] !== undefined || (!!shape && only.includes(shape));
+  }).map((field) => {
     const value = f.tags[field.tag] ?? '';
     const changed = session.isChanged(key, field.tag);
     const was = changed ? `было: ${orig[field.tag] ?? '—'}` : '';
@@ -92,7 +104,8 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
   }).join('');
-  const revert = session.isChanged(key) ? '<button type="button" data-revert>Вернуть как было</button>' : '';
+  // У нового объекта «как было» — нет (отменить создание — undo)
+  const revert = session.isChanged(key) && !session.isCreated(key) ? '<button type="button" data-revert>Вернуть как было</button>' : '';
   // Наследование — соглашение рендереров, а не схемы: советуем задать свойства на самой части
   const warn = inheritedAny.length
     ? `<p class="warn inherit-warn">⚠ ${esc(inheritedAny.join(', '))} — взято у здания (серым в полях). Другие программы могут не наследовать: лучше задать на самой части.</p>`

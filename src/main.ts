@@ -1369,6 +1369,17 @@ function shiftHeights(tags: Record<string, string>, dz: number): Record<string, 
 document.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement).closest('input, select, textarea')) return;
   if (e.key === 'Escape' && popupEl.childElementCount) { showPopup(''); e.stopImmediatePropagation(); return; }
+  // Пробел — выключить инструмент (незавершённое действие отменяется), обратно к выделению
+  if (e.code === 'Space' && toolActive() && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    moveTool.stop();
+    pushTool.stop();
+    splitTool.stop();
+    drawTool.stop();
+    updateSnap(undefined);
+    return;
+  }
   if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e) || drawTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   // S — привязки вкл/выкл, в том числе посреди перемещения или вытягивания
   if (focus && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {

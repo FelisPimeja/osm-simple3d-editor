@@ -7,7 +7,7 @@ import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights } from './osm/heights';
-import { centroid, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type Polygon } from './osm/model';
+import { centroid, isBareOutlineTags, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type Polygon } from './osm/model';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
 import { BuildingsLayer, type GraphicsOptions, type RenderedFeature, type SnapHit } from './render/buildings-layer';
@@ -506,6 +506,14 @@ function groupFeatures(g: BuildingGroup): Feature3D[] {
   return g.members.map((k) => (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature).filter((f): f is Feature3D => !!f);
 }
 
+/** Контуры отношения без своей высоты — в режиме здания рисуются плоским полигоном. */
+function bareOutlines(g: BuildingGroup): string[] {
+  return g.members.filter((k, i) => {
+    const t = g.roles[i] === 'outline' ? entity(k)?.tags : undefined;
+    return !!t && isBareOutlineTags(t);
+  });
+}
+
 function enterFocus(g: BuildingGroup) {
   if (!focus) {
     focusHiddenLayers = [];
@@ -517,11 +525,15 @@ function enterFocus(g: BuildingGroup) {
     }
   }
   const fly = !focus;
-  if (focus?.key !== g.key) focusHidden.clear();
+  if (focus?.key !== g.key) {
+    // Голые контуры (без высоты, всё здание — части) по умолчанию выключены, включаются глазиком
+    focusHidden.clear();
+    for (const k of bareOutlines(g)) focusHidden.add(k);
+  }
   drill = focus = g;
   focusToolbar.hidden = false;
   orbit.setEnabled(true);
-  overpassLayer.setFocus(groupFeatures(g));
+  overpassLayer.setFocus(groupFeatures(g), bareOutlines(g));
   overpassLayer.setFocusHidden(focusHidden);
   // На следующем кадре: внутри обработки dblclick MapLibre после обработчиков останавливает камеру (stop)
   if (fly) requestAnimationFrame(flyToFocus);
@@ -761,7 +773,15 @@ document.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement).closest('input, select, textarea')) return;
   if (e.key === 'Escape' && popupEl.childElementCount) { showPopup(''); e.stopImmediatePropagation(); return; }
   if (moveTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
-  if (focus && !moveTool.active && (e.key === 'm' || e.key === 'M' || e.key === 'ь' || e.key === 'Ь') && !e.ctrlKey && !e.metaKey) startMove();
+  // Шорткаты режима здания — по физической клавише (e.code), чтобы работали и в русской раскладке
+  if (!focus || moveTool.active || e.ctrlKey || e.metaKey || e.altKey) return;
+  const action = e.code === 'KeyM' && !e.shiftKey ? 'move'
+    : e.code === 'KeyH' ? (e.shiftKey ? 'show-all' : 'hide')
+    : e.code === 'KeyR' && !e.shiftKey ? 'exclude' : undefined;
+  if (!action) return;
+  e.preventDefault();
+  closeCtxMenu();
+  if (action === 'move') startMove(); else focusAction(action);
 }, { capture: true });
 document.addEventListener('keyup', (e) => { if (moveTool.key(e)) e.preventDefault(); });
 
@@ -1048,17 +1068,18 @@ window.addEventListener('pointerup', (e) => {
 function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty') {
   if (!focus) return;
   const inScene = where !== 'list';
-  const exit = inScene ? `<li class="ctx-sep"></li><li><button type="button" data-ctx="exit">Выйти из режима редактирования</button></li>` : '';
+  const kbd = (k: string) => `<kbd>${k}</kbd>`;
+  const exit = inScene ? `<li class="ctx-sep"></li><li><button type="button" data-ctx="exit">Выйти из режима редактирования${kbd('Esc')}</button></li>` : '';
   const keys = selection.filter((k) => focus!.members.includes(k));
   const anyShown = keys.some((k) => !focusHidden.has(k)), anyHidden = keys.some((k) => focusHidden.has(k));
   const n = keys.length > 1 ? ` (${keys.length})` : '';
   ctxMenu.innerHTML = where === 'empty' ? `
-    <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё${focusHidden.size ? ` (${focusHidden.size})` : ''}</button></li>${exit}` : `
-    <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>Скрыть объекты${n}</button></li>
+    <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>${exit}` : `
+    <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>Скрыть объекты${n}${kbd('H')}</button></li>
     ${inScene
-      ? `<li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё скрытое${focusHidden.size ? ` (${focusHidden.size})` : ''}</button></li>`
+      ? `<li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё скрытое${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>`
       : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>Показать объекты${n}</button></li>`}
-    <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>Исключить из модели${n}</button></li>${exit}`;
+    <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>Исключить из модели${n}${kbd('R')}</button></li>${exit}`;
   ctxMenu.hidden = false;
   // Не выходим за край окна
   const { width, height } = ctxMenu.getBoundingClientRect();
@@ -1070,15 +1091,21 @@ ctxMenu.addEventListener('click', (e) => {
   const action = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ctx]:not(:disabled)')?.dataset.ctx;
   if (!action || !focus) return;
   closeCtxMenu();
+  focusAction(action);
+});
+
+/** Действие над выделенными частями (меню и шорткаты): hide, show, show-all, exclude, exit. */
+function focusAction(action: string) {
+  if (!focus) return;
   const keys = selection.filter((k) => focus!.members.includes(k));
-  if (action === 'exclude') return excludeFromGroup();
+  if (action === 'exclude') { if (keys.length) excludeFromGroup(); return; }
   if (action === 'exit') return closeFocus();
   if (action === 'show-all') focusHidden.clear();
   else for (const k of keys) if (action === 'hide') focusHidden.add(k); else focusHidden.delete(k);
   if (action === 'hide') outlinerUnhover();
   overpassLayer.setFocusHidden(focusHidden);
   renderOutliner();
-});
+}
 document.addEventListener('pointerdown', (e) => { if (!ctxMenu.contains(e.target as Node)) closeCtxMenu(); }, true);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !ctxMenu.hidden) { closeCtxMenu(); e.stopPropagation(); } }, true);
 window.addEventListener('blur', closeCtxMenu);
@@ -1367,7 +1394,7 @@ function onSessionChange(keys: string[]) {
   // Состав здания в режиме одного здания поменялся (исключение, undo/redo) — пересобрать сцену
   if (focus && keys.includes(focus.key)) {
     const g = groupOf(focus.key);
-    if (g) { drill = focus = g; overpassLayer.setFocus(groupFeatures(g)); overpassLayer.setFocusHidden(focusHidden); } else closeFocus();
+    if (g) { drill = focus = g; overpassLayer.setFocus(groupFeatures(g), bareOutlines(g)); overpassLayer.setFocusHidden(focusHidden); } else closeFocus();
   }
   if (selectedKey && keys.includes(selectedKey)) {
     const active = document.activeElement as HTMLElement | null;
@@ -1441,6 +1468,8 @@ function renderAccount() {
 
 /** Предложенный комментарий: показывается серым в пустом поле, Tab вставляет его для правки. */
 let suggestedComment = '';
+/** Предложение, вставленное по Tab и ещё не правленное, — устаревает вместе с правками. */
+let insertedSuggestion: string | undefined;
 
 function commentSuggestion(): string {
   const groupKey = (key: string) => editGroups.get(key)?.key ?? groupOf(key)?.key;
@@ -1455,10 +1484,20 @@ function commentSuggestion(): string {
 }
 
 function renderUpload(count: number): string {
-  if (!count) return '';
+  if (!count) {
+    if (insertedSuggestion !== undefined && uploadComment === insertedSuggestion) uploadComment = '';
+    insertedSuggestion = undefined;
+    return '';
+  }
   const s = server();
   const canUpload = osmUser && uploadComment.trim() && !uploading;
   suggestedComment = commentSuggestion();
+  // Правки изменились (отмена, другое здание) — вставленный без изменений текст больше не подходит:
+  // убираем его, новое предложение снова показывается серым и требует подтверждения
+  if (insertedSuggestion !== undefined && uploadComment === insertedSuggestion && uploadComment !== suggestedComment) {
+    uploadComment = '';
+    insertedSuggestion = undefined;
+  }
   const rows = Math.min(8, Math.max(1, (uploadComment || suggestedComment).split('\n').length));
   return `
     <div class="upload">
@@ -1581,7 +1620,7 @@ changesEl.addEventListener('keydown', (e) => {
   const t = e.target as HTMLTextAreaElement;
   if (e.key !== 'Tab' || e.shiftKey || !t.matches('[data-comment]') || t.value || !suggestedComment) return;
   e.preventDefault();
-  t.value = suggestedComment;
+  t.value = insertedSuggestion = suggestedComment;
   t.rows = Math.min(8, suggestedComment.split('\n').length);
   t.dispatchEvent(new Event('input', { bubbles: true }));
 });

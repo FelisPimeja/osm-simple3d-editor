@@ -85,6 +85,10 @@ class MeshGroup {
   edges?: THREE.LineSegments;
   /** Скрытые (только для показа) объекты: не рисуются, не выбираются, без привязок. */
   readonly hidden = new Set<string>();
+  /** Рисовать плоским следом независимо от высоты (голый контур в режиме здания). */
+  readonly flat = new Set<string>();
+  /** Обводки контуров под частями (в просмотре вместо заливки). */
+  strokes?: THREE.LineSegments;
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
   // Цвет «земли» — посередине между белым и 0x8a8478: контраст неба и земли вдвое меньше
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
@@ -115,10 +119,18 @@ class MeshGroup {
 
   disposeMesh() {
     this.disposeEdges();
+    this.disposeStrokes();
     if (!this.mesh) return;
     this.mesh.geometry.dispose();
     this.scene.remove(this.mesh);
     this.mesh = undefined;
+  }
+
+  disposeStrokes() {
+    if (!this.strokes) return;
+    this.strokes.geometry.dispose();
+    this.scene.remove(this.strokes);
+    this.strokes = undefined;
   }
 
   disposeEdges() {
@@ -202,7 +214,7 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Режим одного здания: только эти объекты и плоскость земли с сеткой под ними, остальное не рисуется.
    * undefined — выйти. Пока режим включён, правки объектов обновляют и его копию (updateFeature).
    */
-  setFocus(features: Feature3D[] | undefined) {
+  setFocus(features: Feature3D[] | undefined, flat: Iterable<string> = []) {
     this.moveGuide = undefined;
     this.hiddenEdges?.geometry.dispose();
     this.hiddenEdges = undefined;
@@ -217,6 +229,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const f of features) for (const p of f.polygons) for (const [lng, lat] of p.outer) box.expandByPoint(new THREE.Vector2(lng, lat));
     const c = box.getCenter(new THREE.Vector2());
     const g = new MeshGroup([c.x, c.y]);
+    for (const k of flat) g.flat.add(k);
     for (const f of features) if (shouldRender(f)) this.addItem(g, f);
     // Земля: квадрат с запасом вокруг здания, сетка 10 м
     const [x0, y0] = g.toLocal([box.min.x, box.min.y]), [x1, y1] = g.toLocal([box.max.x, box.max.y]);
@@ -364,6 +377,22 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  /** Не рисуемые в режиме просмотра объекты (голые контуры отношений) — копятся по мере загрузки тайлов. */
+  private readonly viewHidden = new Set<string>();
+
+  hideInView(keys: string[]) {
+    for (const k of keys) this.viewHidden.add(k);
+  }
+
+  /** После правки тегов объект мог перестать (или начать) быть голым контуром; геометрию пересоберёт updateFeature. */
+  setViewHidden(key: string, hidden: boolean) {
+    if (hidden) this.viewHidden.add(key); else this.viewHidden.delete(key);
+    for (const [k, g] of this.groups) {
+      if (k === FOCUS_GROUP || !g.byKey.has(key)) continue;
+      if (hidden) g.hidden.add(key); else g.hidden.delete(key);
+    }
+  }
+
   /** Скрыть объекты режима здания (глазик в списке частей) — только показ, на данные не влияет. */
   setFocusHidden(keys: Iterable<string>) {
     const g = this.groups.get(FOCUS_GROUP);
@@ -388,6 +417,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const it = k ? g.byKey.get(k) : undefined;
         if (it) this.paintItem(g, it);
       }
+      if (g.strokes) this.applyStrokes(g);
     }
     this.updateHiddenEdges();
     this.map?.triggerRepaint();
@@ -405,7 +435,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     const g = this.groups.get(FOCUS_GROUP);
     if (!this.focused || !g) return;
-    const items = [...new Set([...this.selected, ...(this.hovered ? [this.hovered] : [])])].filter((k) => !g.hidden.has(k)).map((k) => g.byKey.get(k)).filter((it): it is Item => !!it);
+    const items = [...new Set([...this.selected, ...(this.hovered ? [this.hovered] : [])])].filter((k) => !g.hidden.has(k)).map((k) => g.byKey.get(k)).filter((it): it is Item => !!it && !strokeOnly(g, it));
     if (!items.length) return;
     this.hiddenEdges = edgeLines(items, HIDDEN_EDGE_MATERIAL);
     this.hiddenEdges.computeLineDistances();
@@ -497,6 +527,7 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   private install(key: string, g: MeshGroup) {
     this.removeGroup(key);
+    if (key !== FOCUS_GROUP) for (const it of g.items) if (this.viewHidden.has(it.feature.key)) g.hidden.add(it.feature.key);
     g.applyLighting(this.graphics);
     timed(`${this.id}: слияние геометрии`, () => this.rebuildGeometry(g), () => `${key}, ${g.items.length} зданий`);
     this.groups.set(key, g);
@@ -694,6 +725,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const item = k ? g.byKey.get(k) : undefined;
         if (item) this.paintItem(g, item);
       }
+      if (g.strokes) this.applyStrokes(g);
     }
     this.updateHiddenEdges();
     this.map?.triggerRepaint();
@@ -741,8 +773,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     let total = 0;
     for (const it of g.items) { it.start = total; total += it.positions.length / 3; }
     const positions = new Float32Array(total * 3);
-    // Скрытые остаются нулями — вырожденные треугольники не видны
-    for (const it of g.items) if (!g.hidden.has(it.feature.key)) positions.set(it.positions, it.start * 3);
+    // Скрытые остаются нулями — вырожденные треугольники не видны. Контуры под частями в просмотре — тоже:
+    // их рисует обводка, а выбор кликом идёт по треугольникам здания (pickHit), так что выделить можно
+    for (const it of g.items) if (!g.hidden.has(it.feature.key) && !strokeOnly(g, it)) positions.set(it.positions, it.start * 3);
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(total * 3), 3));
@@ -752,6 +785,35 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.scene.add(g.mesh);
     this.paintGroup(g);
     this.applyEdges(g);
+    this.applyStrokes(g);
+  }
+
+  /** Обводка контуров под частями: серая, у выделенного — цветом выделения. */
+  private applyStrokes(g: MeshGroup) {
+    g.disposeStrokes();
+    const lines: number[] = [], colors: number[] = [];
+    for (const it of g.items) {
+      if (!strokeOnly(g, it) || g.hidden.has(it.feature.key)) continue;
+      const c = this.selected.has(it.feature.key) || this.hovered === it.feature.key ? STROKE_SELECTED : STROKE_COLOUR;
+      const z = it.box.isEmpty() ? FOOTPRINT_HEIGHT : it.box.max.z;
+      for (const p of it.feature.polygons) {
+        for (const ring of [p.outer, ...p.inners]) {
+          const pts = ring.map(g.toLocal);
+          for (let i = 0; i < pts.length; i++) {
+            const a = pts[i], b = pts[(i + 1) % pts.length];
+            lines.push(a[0], a[1], z, b[0], b[1], z);
+            colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+          }
+        }
+      }
+    }
+    if (!lines.length) return;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+    geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    g.strokes = new THREE.LineSegments(geom, STROKE_MATERIAL);
+    g.strokes.frustumCulled = false;
+    g.scene.add(g.strokes);
   }
 
   /**
@@ -761,7 +823,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private applyEdges(g: MeshGroup, exclude?: Set<string>) {
     g.disposeEdges();
     if (!this.graphics.edges || !g.mesh) return;
-    g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key)), EDGE_MATERIAL);
+    g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it)), EDGE_MATERIAL);
     g.scene.add(g.edges);
   }
 
@@ -1075,6 +1137,14 @@ function describeFeature(f: Feature3D): string {
   return `${f.key}, roof:shape=${f.tags['roof:shape'] ?? 'flat'}, вершин ${vertices}, полигонов ${f.polygons.length}, дыр ${holes}`;
 }
 
+/** Контур под частями (и голый контур в режиме здания): только обводка — заливку всё равно закрывают части. */
+function strokeOnly(g: MeshGroup, it: Item): boolean {
+  return it.feature.hasParts || g.flat.has(it.feature.key);
+}
+const STROKE_COLOUR = new THREE.Color(0x8a8a8a);
+const STROKE_SELECTED = new THREE.Color('#2f7cff');
+const STROKE_MATERIAL = new THREE.LineBasicMaterial({ vertexColors: true });
+
 /** Высота плоского следа на земле, м: чуть выше земли, чтобы не мерцать с подложкой. */
 const FOOTPRINT_HEIGHT = 0.1;
 
@@ -1082,8 +1152,9 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
   let heights = computeHeights(f.tags);
   // Контур под частями и здания нулевой высоты — плоский след на земле: видно и можно выделить
-  if (f.hasParts || heights.top - heights.min < FOOTPRINT_HEIGHT) {
-    const min = f.hasParts ? 0 : heights.min;
+  const flat = f.hasParts || g.flat.has(f.key);
+  if (flat || heights.top - heights.min < FOOTPRINT_HEIGHT) {
+    const min = flat ? 0 : heights.min;
     heights = { ...heights, min, wallTop: min + FOOTPRINT_HEIGHT, top: min + FOOTPRINT_HEIGHT, roofShape: 'flat', roofHeight: 0 };
   }
   const tri = buildTriangles(polys, heights, f.tags);

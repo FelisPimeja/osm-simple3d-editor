@@ -49,6 +49,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
   font: inherit; text-align: left; cursor: pointer; }
 .ctx-menu button:hover:not(:disabled) { background: #dbe7ff; }
 .ctx-menu button:disabled { color: #aaa; cursor: default; }
+.ctx-menu button { display: flex; align-items: center; gap: 16px; }
+.ctx-menu kbd { margin-left: auto; font: inherit; font-size: 11px; color: #888; }
 #outliner-panel { flex-shrink: 1; max-height: 30%; }
 #outliner-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
 /* Дерево частей в режиме здания (как Outliner в SketchUp): глазик, значок, название */

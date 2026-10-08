@@ -47,6 +47,15 @@ export function incompleteBuildingRelations(elements: OsmElement[]): number[] {
     .map((r) => r.id);
 }
 
+/**
+ * Контур без своей высоты и не часть: если это outline отношения type=building, здание целиком нарисовано
+ * частями — в просмотре такой контур не рисуем, в режиме здания он выключен по умолчанию и плоский.
+ */
+export function isBareOutlineTags(tags: Record<string, string>): boolean {
+  const part = tags['building:part'];
+  return tags.height === undefined && tags['building:levels'] === undefined && (part === undefined || part === 'no');
+}
+
 export function kindOf(tags?: Record<string, string>): Feature3D['kind'] | undefined {
   if (!tags) return;
   if (tags['building:part'] && tags['building:part'] !== 'no') return 'part';

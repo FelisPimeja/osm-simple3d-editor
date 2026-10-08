@@ -1,6 +1,6 @@
 import type { Map as MlMap } from 'maplibre-gl';
 import { fetchArea, type Bbox } from '../osm/api';
-import { centroid, incompleteBuildingRelations, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type Polygon } from '../osm/model';
+import { centroid, incompleteBuildingRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type Polygon } from '../osm/model';
 import { fetchBuildings, OverpassBusyError, OverpassPool } from '../osm/overpass';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
@@ -118,7 +118,9 @@ export class OverpassTiles {
       if (e?.state !== 'ready') continue;
       for (const f of e.features) {
         if (!keys.includes(f.key)) continue;
-        const r = this.layer.updateFeature(tile, this.overlay(f));
+        const cur = this.overlay(f);
+        this.layer.setViewHidden(f.key, this.bareOutline(cur));
+        const r = this.layer.updateFeature(tile, cur);
         if (r) this.rendered.set(f.key, r);
       }
     }
@@ -472,9 +474,21 @@ export class OverpassTiles {
     return { features, hidden };
   }
 
+  /**
+   * Контур (outline) отношения type=building без своей высоты и не являющийся частью: в режиме просмотра
+   * его плоский след не нужен — здание целиком нарисовано частями.
+   */
+  private bareOutline(f: Feature3D): boolean {
+    if (!isBareOutlineTags(f.tags)) return false;
+    const g = this.groups.get(this.memberGroup.get(f.key) ?? '');
+    return !!g && g.roles[g.members.indexOf(f.key)] === 'outline';
+  }
+
   private show(key: string) {
     const { features, hidden } = timed('overpass: отбор зданий тайла', () => this.ownedFeatures(key), () => key);
     this.hiddenOutlines.set(key, hidden);
+    // Голые контуры отношений: в данных и выборе остаются, но не рисуются
+    this.layer.hideInView(features.filter((f) => this.bareOutline(f)).map((f) => f.key));
     const [w, s, e, n] = tileBbox(key);
     void this.layer.setGroupAsync(key, features, [(w + e) / 2, (s + n) / 2]).then((rendered) => {
       if (!rendered) return; // сборку отменили — тайл ушёл из вида или пересобирается заново

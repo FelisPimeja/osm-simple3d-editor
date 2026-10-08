@@ -629,9 +629,10 @@ let currentSnap: SnapHit | undefined;
 
 function updateSnap(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
-  currentSnap = !focus || !point ? undefined
+  // Привязки — только при активном инструменте
+  currentSnap = !focus || !point || !moveTool.active ? undefined
     : moveTool.state === 'move' ? moveTool.snap
-    : overpassLayer.snapAt(point, moveTool.state === 'pick' ? moveTool.pickFilter : undefined);
+    : overpassLayer.snapAt(point, moveTool.pickFilter);
   snapEl.hidden = !currentSnap;
   if (!currentSnap) return;
   snapEl.className = `snap-marker ${currentSnap.kind}`;

@@ -33,6 +33,17 @@ const AO_MIN = 0.55;
 /** Порог угла между гранями для контуров, градусы: швы триангуляции на плоских гранях не рисуем. */
 const EDGE_ANGLE = 25;
 const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: 0.55 });
+/**
+ * Скрытые рёбра выделенного в режиме здания: пунктир рисуется только там, где ребро закрыто
+ * (глубина больше записанной). Линии чуть подвинуты к камере — видимые рёбра не мерцают пунктиром.
+ */
+const HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
+  color: 0xd2401e, dashSize: 0.6, gapSize: 0.4, transparent: true, opacity: 0.9,
+  depthFunc: THREE.GreaterDepth, depthWrite: false,
+});
+HIDDEN_EDGE_MATERIAL.onBeforeCompile = (sh) => {
+  sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  gl_Position.z -= 0.001 * gl_Position.w;');
+};
 /** Цвет берётся из вершин (стены/крыша, подсветка, затемнение) — один материал на всё. */
 const MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
 /** Бюджет асинхронной сборки группы на кадр, мс. */
@@ -190,6 +201,10 @@ export class BuildingsLayer implements CustomLayerInterface {
    */
   setFocus(features: Feature3D[] | undefined) {
     this.moveGuide = undefined;
+    this.hiddenEdges?.geometry.dispose();
+    this.hiddenEdges = undefined;
+    this.movingEdges?.geometry.dispose();
+    this.movingEdges = undefined;
     this.removeGroup(FOCUS_GROUP);
     this.focusAxes = undefined;
     this.snaps = undefined;
@@ -203,7 +218,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Земля: квадрат с запасом вокруг здания, сетка 10 м
     const [x0, y0] = g.toLocal([box.min.x, box.min.y]), [x1, y1] = g.toLocal([box.max.x, box.max.y]);
     const size = Math.ceil((Math.max(x1 - x0, y1 - y0) * 3 + 60) / 20) * 20;
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ color: GROUND_COLOUR }));
+    // Земля без заливки — видна только сетка; меш остаётся для попадания курсором
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
     ground.position.z = -0.02;
     const grid = new THREE.GridHelper(size, size / 10, GRID_COLOUR, GRID_COLOUR);
     grid.rotation.x = Math.PI / 2; // GridHelper лежит в XZ, у нас земля — XY
@@ -218,6 +235,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     if (this.focusAxes) g.scene.add(axesGizmo(this.focusAxes, Math.max(...this.focusAxes.size)));
     this.install(FOCUS_GROUP, g);
+    this.updateHiddenEdges();
   }
 
   /**
@@ -327,8 +345,40 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
     }
     attr.needsUpdate = true;
-    if (g.edges) g.edges.visible = !offset; // рёбра не двигаем — прячем на время
+    // Рёбра перемещаемых — отдельным объектом, сдвигаемым целиком; остальные остаются на месте
+    if (offset && !this.movingEdges && this.graphics.edges && g.mesh) {
+      this.applyEdges(g, new Set(keys));
+      this.movingEdges = edgeLines(keys.map((k) => g.byKey.get(k)).filter((it): it is Item => !!it), EDGE_MATERIAL);
+      g.scene.add(this.movingEdges);
+    } else if (!offset && this.movingEdges) {
+      this.movingEdges.parent?.remove(this.movingEdges);
+      this.movingEdges.geometry.dispose();
+      this.movingEdges = undefined;
+      this.applyEdges(g);
+    }
+    this.movingEdges?.position.set(dx, dy, dz);
+    if (this.hiddenEdges) this.hiddenEdges.position.set(dx, dy, dz);
     this.map?.triggerRepaint();
+  }
+
+  private hiddenEdges?: THREE.LineSegments;
+  private movingEdges?: THREE.LineSegments;
+
+  /** Пунктир закрытых другими объектами рёбер выделенного — только в режиме здания. */
+  private updateHiddenEdges() {
+    if (this.hiddenEdges) {
+      this.hiddenEdges.parent?.remove(this.hiddenEdges);
+      this.hiddenEdges.geometry.dispose();
+      this.hiddenEdges = undefined;
+    }
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!this.focused || !g) return;
+    const items = [...this.selected].map((k) => g.byKey.get(k)).filter((it): it is Item => !!it);
+    if (!items.length) return;
+    this.hiddenEdges = edgeLines(items, HIDDEN_EDGE_MATERIAL);
+    this.hiddenEdges.computeLineDistances();
+    this.hiddenEdges.renderOrder = 999; // после зданий: глубина уже записана
+    g.scene.add(this.hiddenEdges);
   }
 
   private moveGuide?: THREE.Object3D;
@@ -425,7 +475,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   updateFeature(groupKey: string, f: Feature3D): RenderedFeature | undefined {
     const g = this.groups.get(groupKey);
     const focus = this.groups.get(FOCUS_GROUP);
-    if (focus?.byKey.has(f.key)) { this.replaceItems(focus, [f]); this.snaps = undefined; }
+    if (focus?.byKey.has(f.key)) { this.replaceItems(focus, [f]); this.snaps = undefined; this.updateHiddenEdges(); }
     if (!g || !g.byKey.has(f.key)) return;
     this.replaceItems(g, [f]);
     return rendered(g.byKey.get(f.key)!);
@@ -611,6 +661,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (item) this.paintItem(g, item);
       }
     }
+    this.updateHiddenEdges();
     this.map?.triggerRepaint();
   }
 
@@ -672,21 +723,10 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Контуры рёбер: считаются по зданиям и кешируются на них (EdgesGeometry на весь тайл — ~150 мс,
    * а тайл пересобирается при каждой порции крыш), при слиянии только склеиваются.
    */
-  private applyEdges(g: MeshGroup) {
+  private applyEdges(g: MeshGroup, exclude?: Set<string>) {
     g.disposeEdges();
     if (!this.graphics.edges || !g.mesh) return;
-    let total = 0;
-    for (const it of g.items) {
-      it.edges ??= itemEdges(it);
-      total += it.edges.length;
-    }
-    const lines = new Float32Array(total);
-    let o = 0;
-    for (const it of g.items) { lines.set(it.edges!, o); o += it.edges!.length; }
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(lines, 3));
-    g.edges = new THREE.LineSegments(geom, EDGE_MATERIAL);
-    g.edges.frustumCulled = false;
+    g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key)), EDGE_MATERIAL);
     g.scene.add(g.edges);
   }
 
@@ -735,6 +775,19 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 }
 
+/** Рёбра нескольких объектов одним LineSegments. */
+function edgeLines(items: Item[], material: THREE.LineBasicMaterial): THREE.LineSegments {
+  for (const it of items) it.edges ??= itemEdges(it);
+  const lines = new Float32Array(items.reduce((n, it) => n + it.edges!.length, 0));
+  let o = 0;
+  for (const it of items) { lines.set(it.edges!, o); o += it.edges!.length; }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(lines, 3));
+  const out = new THREE.LineSegments(geom, material);
+  out.frustumCulled = false;
+  return out;
+}
+
 function itemEdges(it: Item): Float32Array {
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(it.positions, 3));
@@ -755,7 +808,7 @@ const SNAP_RADIUS_PX = 12;
 const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, center: 2 };
 
 /**
- * Точки привязки здания: вершины контуров внизу и на верху стен, середины рёбер (нижних, верхних
+ * Точки привязки здания: вершины контуров внизу и на верху стен, вершины крыши выше стен, середины рёбер (нижних, верхних
  * и вертикальных) и центры габаритов объектов. Крыши пока не учитываются, кроме конька в центре.
  */
 function collectSnaps(g: MeshGroup): SnapPoint[] {
@@ -786,6 +839,11 @@ function collectSnaps(g: MeshGroup): SnapPoint[] {
           if (levels.length > 1) add('midpoint', key, ax, ay, (z0 + z1) / 2); // вертикальное ребро
         }
       }
+    }
+    // Вершины, которых нет в контуре: сгенерированная крыша (конёк, вершина пирамиды и т. п.)
+    const pos = it.positions;
+    for (let i = it.wallVertices * 3; i < pos.length; i += 3) {
+      if (pos[i + 2] > z1 + 0.05) add('vertex', key, pos[i], pos[i + 1], pos[i + 2]);
     }
     const c = it.box.getCenter(new THREE.Vector3());
     add('center', key, c.x, c.y, c.z);
@@ -844,7 +902,6 @@ function axesGizmo(frame: LocalFrame, size: number, locked?: number): THREE.Obje
   });
   return root;
 }
-const GROUND_COLOUR = 0xe8e6e1;
 const GRID_COLOUR = 0xc9c6bf;
 
 function groupBox(g: MeshGroup): THREE.Box3 {
@@ -914,7 +971,7 @@ const unknownColours = new Set<string>();
 
 /**
  * Цвет из тега; в OSM бывает несколько через ';' — берём первый. Вершинные цвета — в линейном пространстве.
- * Опечатки в тегах (lightgre, rgey) — частое дело: проверяем через CSS.supports, чтобы three.js
+ * Опечатки в тегах (lightgre, rgey) — частое дело: исправляем их (normalizeColour), чтобы three.js
  * не писал предупреждение в консоль на каждое здание, и сообщаем о каждом значении один раз.
  */
 function parseColour(colour: string): THREE.Color {
@@ -922,13 +979,69 @@ function parseColour(colour: string): THREE.Color {
   let color = colourCache.get(value);
   if (!color) {
     color = new THREE.Color(DEFAULT_WALL);
-    const valid = typeof CSS === 'undefined' ? /^#[0-9a-f]{3,8}$/i.test(value) : CSS.supports('color', value);
-    if (valid) color.setStyle(value);
-    else if (!unknownColours.has(value)) {
+    const fixed = normalizeColour(value);
+    if (fixed) {
+      color.setStyle(fixed);
+      if (fixed !== value && !unknownColours.has(value)) {
+        unknownColours.add(value);
+        console.debug(`Цвет в теге «${value}» понят как «${fixed}»`);
+      }
+    } else if (!unknownColours.has(value)) {
       unknownColours.add(value);
       console.debug(`Неизвестный цвет в теге: «${value}» — рисуем цветом по умолчанию`);
     }
     colourCache.set(value, color);
   }
   return color;
+}
+
+function isCssColour(value: string): boolean {
+  return typeof CSS === 'undefined' ? /^#[0-9a-f]{3,8}$/i.test(value) : CSS.supports('color', value);
+}
+
+/**
+ * Привести значение тега к цвету CSS: как есть; hex без '#'; без регистра, пробелов и знаков
+ * (light grey, orange'pink → lightgrey, orangepink); составное «a-b» — первый известный цвет;
+ * опечатки — ближайшее имя CSS (lihgtgrey, peachpuf), обрубки — по началу имени (pin → pink).
+ */
+function normalizeColour(value: string): string | undefined {
+  if (isCssColour(value)) return value;
+  if (/^[0-9a-f]{6}$|^[0-9a-f]{3}$/i.test(value)) return `#${value}`;
+  const lower = value.toLowerCase();
+  const joined = lower.replace(/[^a-z]/g, '');
+  if (!joined) return;
+  if (joined in THREE.Color.NAMES) return joined;
+  for (const part of lower.split(/[^a-z]+/)) if (part.length > 2 && part in THREE.Color.NAMES) return part;
+  return closestColourName(joined);
+}
+
+function closestColourName(word: string): string | undefined {
+  const names = Object.keys(THREE.Color.NAMES);
+  if (word.length >= 3) {
+    const prefixed = names.filter((n) => n.startsWith(word)).sort((a, b) => a.length - b.length)[0];
+    if (prefixed) return prefixed;
+  }
+  // Допуск: 1 правка для коротких слов, 2 — для длинных
+  const limit = word.length <= 5 ? 1 : 2;
+  let best: string | undefined, bestDist = limit + 1;
+  for (const n of names) {
+    if (Math.abs(n.length - word.length) > limit) continue;
+    const d = editDistance(word, n);
+    if (d < bestDist) { bestDist = d; best = n; }
+  }
+  return best;
+}
+
+/** Расстояние Дамерау–Левенштейна (перестановка соседних букв — одна правка). */
+function editDistance(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
 }

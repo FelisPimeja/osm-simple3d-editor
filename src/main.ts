@@ -116,6 +116,7 @@ const editsCount = document.getElementById('edits-count')!;
 let editsHadContent = false;
 const statusEl = document.getElementById('status')!;
 const opIndicator = document.getElementById('op-indicator')!;
+opIndicator.querySelector('.retry')!.addEventListener('click', () => overpass.retryFailed());
 const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
 
 /**
@@ -310,6 +311,7 @@ function refreshOverpassImpl() {
 
 function showOverpassStatus() {
   updateOverpassIndicator();
+  updateDraftStyle();
   if (uploading) return;
   const src = overpass.sourceLabel;
   if (!overpass.enabled) return setStatus(`Здания из тайлов. С z ≥ ${OVERPASS_MIN_ZOOM} — из ${src}.`);
@@ -1221,7 +1223,14 @@ function updateOverpassIndicator() {
   const state = !overpass.enabled ? 'off' : loading ? 'loading' : waiting ? 'waiting' : 'ready';
   opIndicator.dataset.state = state;
   opIndicator.hidden = state === 'off';
-  opIndicator.querySelector('.label')!.textContent = `Overpass ${ready}/${total}`;
+  const src = overpass.sourceLabel;
+  opIndicator.querySelector('.label')!.textContent = {
+    off: '',
+    loading: `Черновик из тайлов — загружаю точную геометрию (${src} ${ready}/${total})…`,
+    waiting: `Не удалось получить часть данных (${src} ${ready}/${total})`,
+    ready: `${src} ${ready}/${total}`,
+  }[state];
+  opIndicator.querySelector<HTMLButtonElement>('.retry')!.hidden = state !== 'waiting';
   const servers = overpass.pool.endpoints
     .map((e) => `${e.host}: ${e.active} в работе, ок ${e.ok}, ошибок ${e.failed}${e.coolUntil > Date.now() ? ', остывает' : ''}`)
     .join('\n');
@@ -1231,6 +1240,32 @@ function updateOverpassIndicator() {
     waiting: `Ждут повтора: ${waiting} (лимит или ошибка Overpass, подробности в консоли)`,
     ready: 'Все видимые тайлы загружены',
   }[state] + (state === 'off' ? '' : `\n${describeFreshness()}\n\n${servers}`);
+}
+
+/**
+ * Черновик: пока для тайла нет данных Overpass/API, здание из векторных тайлов — лишь набросок.
+ * Рисуем его полупрозрачным серо-голубым «призраком»; пока идёт загрузка — прозрачность «дышит».
+ */
+const DRAFT_FILL = '#9fb3c8';
+let draftTimer: number | undefined;
+function updateDraftStyle() {
+  if (!map.getLayer(BUILDINGS_LAYER)) return;
+  const { loading } = overpass.status();
+  const draft = overpass.enabled && overpass.mode === 'full';
+  for (const id of TILE_LAYERS) {
+    map.setPaintProperty(id, 'fill-extrusion-color', draft ? DRAFT_FILL : TILE_FILL);
+    if (!draft || !loading) map.setPaintProperty(id, 'fill-extrusion-opacity', draft ? 0.45 : 0.9);
+  }
+  if (draft && loading && draftTimer === undefined) {
+    const t0 = performance.now();
+    draftTimer = window.setInterval(() => {
+      const o = 0.4 + 0.15 * Math.sin(((performance.now() - t0) / 1500) * 2 * Math.PI);
+      for (const id of TILE_LAYERS) map.setPaintProperty(id, 'fill-extrusion-opacity', o);
+    }, 100);
+  } else if (!(draft && loading) && draftTimer !== undefined) {
+    clearInterval(draftTimer);
+    draftTimer = undefined;
+  }
 }
 
 /** Откуда и когда получены видимые тайлы — чтобы было видно, что на экране старые или неполные данные. */

@@ -103,6 +103,9 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 #op-indicator[data-state="ready"] .dot { background: #16a34a; }
 #op-indicator[data-state="loading"] .dot { background: #2563eb; animation: op-pulse 1s ease-in-out infinite; }
 #op-indicator[data-state="waiting"] .dot { background: #f59e0b; }
+#op-indicator[data-state="waiting"] { background: #fff7ed; color: #9a3412; }
+#op-indicator .retry { border: 1px solid #f59e0b; background: #fff; color: #9a3412; border-radius: 10px; padding: 1px 8px; font: inherit; cursor: pointer; }
+#op-indicator .retry[hidden] { display: none; }
 @keyframes op-pulse { 50% { opacity: .25; } }
 .toggle { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; cursor: pointer; user-select: none; }
 .gfx { margin-bottom: 8px; border: 1px solid #e5e7eb; border-radius: 6px; padding: 4px 8px; }

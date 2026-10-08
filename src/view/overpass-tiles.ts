@@ -451,6 +451,13 @@ export class OverpassTiles {
     }
   }
 
+  /** Повторить сейчас тайлы, упавшие с ошибкой (не дожидаясь паузы перед повтором). */
+  retryFailed() {
+    for (const e of this.cache.values()) if (e.state === 'error') e.retryAt = 0;
+    this.update();
+    this.onChange();
+  }
+
   /** Отладка: перезапросить видимые тайлы из Overpass (старые данные остаются на экране до прихода новых). */
   reloadVisible(): number {
     let n = 0;

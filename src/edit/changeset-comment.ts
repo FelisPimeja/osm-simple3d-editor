@@ -52,15 +52,40 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
     if (c.nodeMoves?.length) e.moved = true;
   }
 
-  const blocks: string[] = [];
-  for (const [key, e] of buildings) {
-    const name = ctx.buildingName(key);
-    blocks.push([`Правки в отношение здания${name ? ` «${name}»` : ''}:`, ...points(e, 'частей')].join('\n'));
-  }
   const loosePoints = points(loose, 'зданий');
+  const names = [...buildings.keys()].map((k) => ctx.buildingName(k));
+
+  // 1. Подробно: по блоку на здание с пунктами
+  const blocks: string[] = [];
+  [...buildings.values()].forEach((e, i) => {
+    blocks.push([`Правки в отношение здания${names[i] ? ` «${names[i]}»` : ''}:`, ...points(e, 'частей')].join('\n'));
+  });
   if (loosePoints.length) blocks.push(['Правки отдельных зданий:', ...loosePoints].join('\n'));
-  return blocks.join('\n\n');
+  const full = blocks.join('\n\n');
+  if (full.length <= MAX_LENGTH) return full;
+
+  // 2. Короче: общие пункты по всем зданиям и список названий
+  const all: BuildingEdits = { added: 0, removed: 0, attributes: false, moved: false };
+  for (const e of buildings.values()) {
+    all.added += e.added; all.removed += e.removed;
+    all.attributes ||= e.attributes; all.moved ||= e.moved;
+  }
+  const head = (list: string) => `Правки в отношения зданий${list}:`;
+  const named = names.filter((n): n is string => !!n).map((n) => `«${n}»`);
+  const tail = [...(buildings.size ? points(all, 'частей') : []), ...(loosePoints.length ? ['* правки отдельных зданий'] : [])];
+  const lines = (list: string) => (buildings.size ? [head(list), ...tail] : ['Правки отдельных зданий:', ...loosePoints]).join('\n');
+  // Названий — сколько влезет, остальные — «и ещё N»
+  for (let n = named.length; n >= 0; n--) {
+    const rest = buildings.size - n;
+    const list = n ? ` ${named.slice(0, n).join(', ')}${rest ? ` и ещё ${rest}` : ''}` : buildings.size > 1 ? ` (${buildings.size})` : '';
+    const text = lines(list);
+    if (text.length <= MAX_LENGTH) return text;
+  }
+  return lines('').slice(0, MAX_LENGTH - 1) + '…';
 }
+
+/** Ограничение длины комментария (в OSM — 255 символов, оставляем запас). */
+const MAX_LENGTH = 250;
 
 function points(e: BuildingEdits, what: string): string[] {
   const out: string[] = [];

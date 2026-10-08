@@ -44,6 +44,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .ctx-menu { position: fixed; z-index: 20; min-width: 180px; padding: 4px; margin: 0; list-style: none; background: #fff;
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 13px; }
 .ctx-menu[hidden] { display: none; }
+.ctx-menu .ctx-sep { height: 1px; margin: 4px 6px; background: #e5e7eb; }
 .ctx-menu button { display: block; width: 100%; padding: 5px 10px; border: 0; border-radius: 4px; background: transparent;
   font: inherit; text-align: left; cursor: pointer; }
 .ctx-menu button:hover:not(:disabled) { background: #dbe7ff; }

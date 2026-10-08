@@ -1012,7 +1012,7 @@ outlinerEl.addEventListener('contextmenu', (e) => {
   const key = li.dataset.key!;
   if (!entity(key)) return;
   if (!selection.includes(key)) select(key);
-  openCtxMenu(e.clientX, e.clientY);
+  openCtxMenu(e.clientX, e.clientY, 'list');
 });
 
 // То же меню в сцене: правый клик по части здания (не по выделенной — сначала выделяет её).
@@ -1033,23 +1033,30 @@ window.addEventListener('pointerup', (e) => {
   if (!focus || moved || moveTool.state === 'move') return;
   const rect = map.getCanvas().getBoundingClientRect();
   const key = overpassLayer.pickHit([e.clientX - rect.left, e.clientY - rect.top])?.key;
-  if (!key || !focus.members.includes(key)) return;
+  // Мимо здания — меню режима: показать всё и выход
+  if (!key || !focus.members.includes(key)) return openCtxMenu(e.clientX, e.clientY, 'empty');
   if (!selection.includes(key)) select(key);
-  openCtxMenu(e.clientX, e.clientY, true);
+  openCtxMenu(e.clientX, e.clientY, 'scene');
 }, { capture: true });
 
-/** inScene — меню из сцены: скрытые там не выбрать, поэтому вместо «Показать» — «Показать всё скрытое». */
-function openCtxMenu(x: number, y: number, inScene = false) {
+/**
+ * Меню частей. В сцене скрытые не выбрать — вместо «Показать» там «Показать всё скрытое»;
+ * 'empty' — клик мимо здания: только «Показать всё» и выход.
+ */
+function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty') {
   if (!focus) return;
+  const inScene = where !== 'list';
+  const exit = inScene ? `<li class="ctx-sep"></li><li><button type="button" data-ctx="exit">Выйти из режима редактирования</button></li>` : '';
   const keys = selection.filter((k) => focus!.members.includes(k));
   const anyShown = keys.some((k) => !focusHidden.has(k)), anyHidden = keys.some((k) => focusHidden.has(k));
   const n = keys.length > 1 ? ` (${keys.length})` : '';
-  ctxMenu.innerHTML = `
+  ctxMenu.innerHTML = where === 'empty' ? `
+    <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё${focusHidden.size ? ` (${focusHidden.size})` : ''}</button></li>${exit}` : `
     <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>Скрыть объекты${n}</button></li>
     ${inScene
       ? `<li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё скрытое${focusHidden.size ? ` (${focusHidden.size})` : ''}</button></li>`
       : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>Показать объекты${n}</button></li>`}
-    <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>Исключить из модели${n}</button></li>`;
+    <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>Исключить из модели${n}</button></li>${exit}`;
   ctxMenu.hidden = false;
   // Не выходим за край окна
   const { width, height } = ctxMenu.getBoundingClientRect();
@@ -1063,6 +1070,7 @@ ctxMenu.addEventListener('click', (e) => {
   closeCtxMenu();
   const keys = selection.filter((k) => focus!.members.includes(k));
   if (action === 'exclude') return excludeFromGroup();
+  if (action === 'exit') return closeFocus();
   if (action === 'show-all') focusHidden.clear();
   else for (const k of keys) if (action === 'hide') focusHidden.add(k); else focusHidden.delete(k);
   if (action === 'hide') outlinerUnhover();

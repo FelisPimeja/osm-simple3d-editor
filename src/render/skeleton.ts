@@ -98,6 +98,36 @@ function startWorker() {
   };
 }
 
+const size = (j: Job) => j.rings.reduce((n, r) => n + r.length, 0);
+
+/**
+ * Контуры, на которых CGAL не уложился в таймаут, — помним между перезагрузками: иначе при каждом
+ * открытии страницы ждём их заново (и перезапускаем воркер с инициализацией WASM).
+ */
+const FAILED_KEY = 'osm3d.skeleton.timeouts';
+const FAILED_MAX = 500;
+const failed: string[] = (() => {
+  try { return JSON.parse(localStorage.getItem(FAILED_KEY) ?? '[]') as string[]; } catch { return []; }
+})();
+const failedSet = new Set(failed);
+/** Ключ контура длинный (тысячи символов) — храним хеш. */
+function hashKey(key: string): string {
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < key.length; i++) {
+    const c = key.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 16777619);
+    h2 = Math.imul(h2 ^ c, 2246822507);
+  }
+  return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36);
+}
+function rememberTimeout(key: string) {
+  key = hashKey(key);
+  failedSet.add(key);
+  failed.push(key);
+  if (failed.length > FAILED_MAX) failed.splice(0, failed.length - FAILED_MAX);
+  try { localStorage.setItem(FAILED_KEY, JSON.stringify(failed)); } catch { /* не критично */ }
+}
+
 function finish(job: Job, s: Skeleton | null) {
   clearTimeout(timer);
   current = undefined;
@@ -110,13 +140,18 @@ function finish(job: Job, s: Skeleton | null) {
 function pumpWorker() {
   if (current || !queue.length) return;
   if (!worker) startWorker();
-  current = queue.shift()!;
+  // Сначала простые контуры: тяжёлый (сотни вершин, может упереться в таймаут) не держит очередь —
+  // иначе мелкие крыши за ним ждут секундами
+  let best = 0;
+  for (let i = 1; i < queue.length; i++) if (size(queue[i]) < size(queue[best])) best = i;
+  current = queue.splice(best, 1)[0];
   const job = current;
   timer = setTimeout(() => {
     // Завис на этом контуре: убиваем воркер (WASM не прервать иначе), контур оставляем плоским
     console.warn(`straight skeleton: контур не посчитан за ${TIMEOUT_MS} мс (${job.rings[0].length - 1} вершин) — крыша будет плоской`);
     worker?.terminate();
     worker = undefined;
+    rememberTimeout(job.key);
     finish(job, null);
   }, TIMEOUT_MS);
   worker!.postMessage({ id: job.id, rings: job.rings });
@@ -151,6 +186,7 @@ export function skeletonOf(outer: Pt[], inners: Pt[][]): Skeleton | null | 'pend
     remember(key, s);
     return s;
   }
+  if (failedSet.has(hashKey(key))) { remember(key, null); return null; }
   if (!queued.has(key)) {
     queued.add(key);
     queue.push({ id: nextId++, key, rings });

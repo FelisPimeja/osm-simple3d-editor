@@ -843,22 +843,91 @@ function itemEdges(it: Item): Float32Array {
     const q = `${a[i + 3].toFixed(2)},${a[i + 4].toFixed(2)},${a[i + 5].toFixed(2)}`;
     return p < q ? p + q : q + p;
   };
+  // Стык стены с крышей и изломы скатов — только где грани не в одной плоскости: у вальмы и полувальмы
+  // на неправильном контуре скат бывает вертикальным и продолжает стену — там ребра нет
+  const creases = new Set<string>();
+  const sharp = edgeSegments(it.positions, PLANAR_ROOF_EDGE_ANGLE);
+  for (let i = 0; i < sharp.length; i += 6) creases.add(key(sharp, i));
   const seen = new Set<string>();
   for (let i = 0; i < all.length; i += 6) seen.add(key(all, i));
   const extra: number[] = [];
   for (const src of [walls, roof]) {
     for (let i = 0; i < src.length; i += 6) {
-      if (seen.has(key(src, i))) continue;
+      if (seen.has(key(src, i)) || !creases.has(key(src, i))) continue;
       seen.add(key(src, i));
       for (let j = 0; j < 6; j++) extra.push(src[i + j]);
     }
   }
-  if (!extra.length) return all;
   const out = new Float32Array(all.length + extra.length);
   out.set(all);
   out.set(extra, all.length);
-  return out;
+  return dropFlatSeams(out, it.positions);
 }
+
+/**
+ * Убрать отрезки внутри плоскости: фронтон и стена под ним, вертикальный скат вальмы и стена — одна плоскость,
+ * но их вершины не совпадают (Т-стык), и EdgesGeometry считает стык краем. Отрезок отбрасываем, если все
+ * треугольники, на сторонах которых он лежит, параллельны (и их больше одного). Заодно — нулевые отрезки.
+ */
+function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Array {
+  const tris = positions.length / 9;
+  const P = positions;
+  const vkey = (arr: ArrayLike<number>, o: number) => `${arr[o].toFixed(2)},${arr[o + 1].toFixed(2)},${arr[o + 2].toFixed(2)}`;
+  const ekey = (k1: string, k2: string) => (k1 < k2 ? k1 + '|' + k2 : k2 + '|' + k1);
+  // Сколько треугольников делят сторону точно (по вершинам): у настоящего излома — два, такие не проверяем
+  const shared = new Map<string, number>();
+  const normals = new Float32Array(tris * 3);
+  // Вырожденные треугольники (у фронтонов над карнизом — нулевой высоты) не в счёт: нормаль у них случайная
+  const degenerate = new Uint8Array(tris);
+  for (let t = 0; t < tris; t++) {
+    const o = t * 9;
+    const ux = P[o + 3] - P[o], uy = P[o + 4] - P[o + 1], uz = P[o + 5] - P[o + 2];
+    const vx = P[o + 6] - P[o], vy = P[o + 7] - P[o + 1], vz = P[o + 8] - P[o + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const l = Math.hypot(nx, ny, nz);
+    // Относительный порог: «щепки» с высотой в миллиметры (подъём фронтона на 1 мм) — тоже вырожденные
+    if (l < 1e-3 * Math.max(ux * ux + uy * uy + uz * uz, vx * vx + vy * vy + vz * vz)) { degenerate[t] = 1; continue; }
+    normals[t * 3] = nx / l; normals[t * 3 + 1] = ny / l; normals[t * 3 + 2] = nz / l;
+    for (let k = 0; k < 3; k++) {
+      const key = ekey(vkey(P, o + k * 3), vkey(P, o + ((k + 1) % 3) * 3));
+      shared.set(key, (shared.get(key) ?? 0) + 1);
+    }
+  }
+  const EPS = 0.02;
+  const keep: number[] = [];
+  for (let i = 0; i < segs.length; i += 6) {
+    const px = segs[i], py = segs[i + 1], pz = segs[i + 2];
+    let dx = segs[i + 3] - px, dy = segs[i + 4] - py, dz = segs[i + 5] - pz;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < EPS) continue;
+    if ((shared.get(ekey(vkey(segs, i), vkey(segs, i + 3))) ?? 0) >= 2) { for (let j = 0; j < 6; j++) keep.push(segs[i + j]); continue; }
+    dx /= len; dy /= len; dz /= len;
+    // Расстояние точки до прямой отрезка и её положение вдоль него
+    const off = (o: number) => {
+      const ex = P[o] - px, ey = P[o + 1] - py, ez = P[o + 2] - pz;
+      return Math.hypot(ey * dz - ez * dy, ez * dx - ex * dz, ex * dy - ey * dx);
+    };
+    const along = (o: number) => (P[o] - px) * dx + (P[o + 1] - py) * dy + (P[o + 2] - pz) * dz;
+    const tm = len / 2;
+    let first = -1, flat = true, count = 0;
+    for (let t = 0; t < tris && flat; t++) {
+      if (degenerate[t]) continue;
+      for (let k = 0; k < 3; k++) {
+        const oa = t * 9 + k * 3, ob = t * 9 + ((k + 1) % 3) * 3;
+        if (off(oa) > EPS || off(ob) > EPS) continue;
+        const ta = along(oa), tb = along(ob);
+        if (tm < Math.min(ta, tb) - EPS || tm > Math.max(ta, tb) + EPS) continue;
+        count++;
+        if (first < 0) first = t;
+        else if (Math.abs(normals[t * 3] * normals[first * 3] + normals[t * 3 + 1] * normals[first * 3 + 1] + normals[t * 3 + 2] * normals[first * 3 + 2]) < FLAT_COS) flat = false;
+        break;
+      }
+    }
+    if (!(flat && count > 1)) for (let j = 0; j < 6; j++) keep.push(segs[i + j]);
+  }
+  return new Float32Array(keep);
+}
+const FLAT_COS = Math.cos(THREE.MathUtils.degToRad(1));
 
 function edgeSegments(positions: Float32Array, angle: number): Float32Array {
   const geom = new THREE.BufferGeometry();

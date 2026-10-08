@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import { LEVEL_HEIGHT } from '../osm/heights';
+
+export type PushUnits = 'm' | 'levels';
+const UNITS_STORAGE = 'push-units';
 
 export type PushFace = 'top' | 'bottom' | 'side';
 
@@ -23,7 +27,9 @@ const EDGE_EPS = 0.15;
  *    по нижней грани — низ (min_height). Shift — задняя грань под курсором: дно или дальняя стена;
  * 2. движение курсора — верх/низ едут по вертикали, стена — по своей нормали; привязка к точке
  *    другого объекта выравнивает грань по ней;
- * 3. второй клик — применить; число + Enter — сдвиг в метрах (минус — внутрь/вниз). Esc — отмена.
+ * 3. второй клик — применить; число + Enter — сдвиг в метрах или этажах (минус — внутрь/вниз). Esc — отмена.
+ * Единицы (метры / этажи) — в панели, видной всё время работы инструмента; Tab — переключить. В этажах верх
+ * и низ ходят шагом в этаж, стены — всегда в метрах.
  * Пересчёт тегов и геометрии, проверка общих узлов и ограничения — снаружи (allowSide, clamp, preview, commit).
  */
 export class PushTool {
@@ -33,6 +39,7 @@ export class PushTool {
   private dz = 0;
   private typed = '';
   private readonly vcb: HTMLDivElement;
+  units: PushUnits = loadUnits();
 
   constructor(
     private readonly layer: BuildingsLayer,
@@ -51,18 +58,45 @@ export class PushTool {
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
     container.appendChild(this.vcb);
+    // Клики по панели — не карте (иначе выбор единиц ещё и тянул бы грань)
+    for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
+    this.vcb.addEventListener('click', (e) => {
+      const u = (e.target as HTMLElement).closest<HTMLElement>('[data-units]')?.dataset.units as PushUnits | undefined;
+      if (u) this.setUnits(u);
+    });
+  }
+
+  setUnits(u: PushUnits) {
+    this.units = u;
+    try { localStorage.setItem(UNITS_STORAGE, u); } catch { /* без хранилища — до перезагрузки */ }
+    this.typed = '';
+    if (this.state === 'push' && this.target && this.target.face !== 'side') this.dz = this.clamp(this.target, this.step(this.dz));
+    if (this.state === 'push' && this.target) { this.preview(this.target, this.dz); this.guide(); }
+    this.updateVcb();
+  }
+
+  /** Сдвиг с учётом единиц: в этажах верх и низ — целыми этажами. */
+  private step(d: number): number {
+    return this.units === 'levels' && this.target?.face !== 'side' ? Math.round(d / LEVEL_HEIGHT) * LEVEL_HEIGHT : d;
+  }
+
+  /** Единицы ввода и показа у текущей грани (стены — только метры). */
+  private get levelsNow(): boolean {
+    return this.units === 'levels' && this.target?.face !== 'side';
   }
 
   get active() { return this.state !== 'off'; }
 
   start() {
     this.state = 'pick';
+    this.updateVcb();
     this.onState('Клик по крыше — тянем верх, по стене — стену; Shift+клик — задняя грань (дно или дальняя стена). Esc — выйти.');
   }
 
   stop() {
     this.cancel();
     this.state = 'off';
+    this.vcb.hidden = true;
     this.onState('');
   }
 
@@ -123,7 +157,7 @@ export class PushTool {
       this.updateVcb();
       this.onState(t.face === 'side'
         ? 'Тянем стену: ведите курсор наружу или внутрь. Клик — применить, число + Enter — в метрах, Esc — отмена.'
-        : `Тянем ${t.face === 'top' ? 'верх' : 'низ'}: ведите курсор вверх или вниз. Клик — применить, число + Enter — в метрах, Esc — отмена.`);
+        : `Тянем ${t.face === 'top' ? 'верх' : 'низ'}: ведите курсор вверх или вниз. Клик — применить, число + Enter — в ${this.units === 'levels' ? 'этажах' : 'метрах'}, Tab — единицы, Esc — отмена.`);
       return true;
     }
     if (this.state === 'push') { this.apply(this.dz); return true; }
@@ -143,7 +177,7 @@ export class PushTool {
       if (!ray) return;
       d = closestOnLine(ray, t.from, dir);
     }
-    this.dz = this.clamp(t, d);
+    this.dz = this.clamp(t, this.step(d));
     this.preview(t, this.dz);
     this.guide();
     this.updateVcb();
@@ -152,6 +186,7 @@ export class PushTool {
   /** true — клавиша обработана инструментом. */
   key(e: KeyboardEvent): boolean {
     if (!this.active || e.type !== 'keydown') return false;
+    if (e.key === 'Tab') { this.setUnits(this.units === 'm' ? 'levels' : 'm'); return true; }
     if (e.key === 'Escape') {
       if (this.state === 'push') { this.cancel(); this.start(); } else this.stop();
       return true;
@@ -160,7 +195,7 @@ export class PushTool {
     if (/^[\d.,-]$/.test(e.key)) { this.typed += e.key === ',' ? '.' : e.key; this.updateVcb(); return true; }
     if (e.key === 'Backspace') { this.typed = this.typed.slice(0, -1); this.updateVcb(); return true; }
     if (e.key === 'Enter') {
-      const v = Number(this.typed);
+      const v = Number(this.typed) * (this.levelsNow ? LEVEL_HEIGHT : 1);
       if (!this.typed || !Number.isFinite(v) || !this.target) return true;
       // Без знака — в ту сторону, куда тянули курсором
       const dz = this.typed.startsWith('-') ? v : this.dz < 0 ? -v : v;
@@ -185,7 +220,7 @@ export class PushTool {
     this.snap = undefined;
     this.typed = '';
     this.dz = 0;
-    this.vcb.hidden = true;
+    this.updateVcb();
   }
 
   /** Направляющая: вертикаль (цветом оси z) или нормаль стены. */
@@ -197,12 +232,20 @@ export class PushTool {
     this.layer.setMoveGuide(t.edge ? { from: t.from, to } : { from: t.from, to, axis: 2, locked: 2 });
   }
 
+  /** Панель видна всё время работы инструмента: до захвата грани — только выбор единиц. */
   private updateVcb() {
-    if (this.state !== 'push' || !this.target) { this.vcb.hidden = true; return; }
+    if (!this.active) { this.vcb.hidden = true; return; }
     this.vcb.hidden = false;
-    const value = this.typed || (this.dz >= 0 ? '+' : '') + this.dz.toFixed(2);
-    this.vcb.innerHTML = `<span class="vcb-label">${{ top: 'Верх', bottom: 'Низ', side: 'Стена' }[this.target.face]}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> м
-      <span class="vcb-axis">${this.snap ? 'до точки' : this.target.face === 'side' ? 'по нормали' : 'по вертикали'}</span>`;
+    const t = this.state === 'push' ? this.target : undefined;
+    const levels = this.levelsNow;
+    const shown = levels ? Math.round(this.dz / LEVEL_HEIGHT) : this.dz;
+    const value = this.typed || (shown >= 0 ? '+' : '') + (levels ? String(shown) : shown.toFixed(2));
+    const units = `<span class="vcb-units" title="Единицы сдвига верха и низа (Tab)">${(['m', 'levels'] as const)
+      .map((u) => `<button type="button" data-units="${u}"${u === this.units ? ' class="active"' : ''}>${u === 'm' ? 'м' : 'этажи'}</button>`).join('')}</span>`;
+    this.vcb.innerHTML = t
+      ? `<span class="vcb-label">${{ top: 'Верх', bottom: 'Низ', side: 'Стена' }[t.face]}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${levels ? 'эт.' : 'м'}
+      <span class="vcb-axis">${this.snap ? 'до точки' : t.face === 'side' ? 'по нормали' : 'по вертикали'}</span>${units}`
+      : `<span class="vcb-label">Сдвиг</span>${units}`;
   }
 }
 
@@ -228,4 +271,8 @@ function inRing([x, y]: [number, number], ring: [number, number][]): boolean {
     if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
   }
   return inside;
+}
+
+function loadUnits(): PushUnits {
+  try { return localStorage.getItem(UNITS_STORAGE) === 'levels' ? 'levels' : 'm'; } catch { return 'm'; }
 }

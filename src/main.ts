@@ -6,7 +6,7 @@ import { fetchMap, type Bbox, type OsmMember } from './osm/api';
 import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
-import { computeHeights } from './osm/heights';
+import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { centroid, isBareOutlineTags, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type Polygon } from './osm/model';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
@@ -1217,7 +1217,8 @@ function commitPush(t: PushTarget, dz: number) {
   if (!f) return;
   if (t.face === 'side') session.editMany([{ key: t.key, polygons: pushSidePolygons(f, t.edge!, dz) }]);
   else session.setTags(t.key, diffTags(f.tags, pushTags(f.tags, t.face, dz)));
-  setStatus(`${{ top: 'Верх', bottom: 'Низ', side: 'Стена' }[t.face]} ${t.key} сдвинут${t.face === 'side' ? 'а' : ''} на ${dz >= 0 ? '+' : ''}${dz.toFixed(2)} м.`);
+  const levels = t.face !== 'side' && pushTool.units === 'levels' ? ` (${dz >= 0 ? '+' : ''}${Math.round(dz / LEVEL_HEIGHT)} эт.)` : '';
+  setStatus(`${{ top: 'Верх', bottom: 'Низ', side: 'Стена' }[t.face]} ${t.key} сдвинут${t.face === 'side' ? 'а' : ''} на ${dz >= 0 ? '+' : ''}${dz.toFixed(2)} м${levels}.`);
 }
 
 /** Значения для setTags: новые и удалённые (undefined) теги. */
@@ -1236,14 +1237,18 @@ function pushTags(tags: Record<string, string>, face: PushTarget['face'], dz: nu
   const out = { ...tags };
   const fmt = (v: number) => String(Math.round(v * 100) / 100);
   const k = dz / 3, whole = Math.abs(k - Math.round(k)) < 1e-6;
+  // Сдвиг на целые этажи: этажи меняем, а если заданы и метры — их тоже, чтобы не разошлись
   if (face === 'top') {
-    if (!tags.height && tags['building:levels'] && whole) out['building:levels'] = String(Number(tags['building:levels']) + Math.round(k));
-    else out.height = fmt(h.top + dz);
+    if (tags['building:levels'] && whole) {
+      out['building:levels'] = String(Number(tags['building:levels']) + Math.round(k));
+      if (tags.height) out.height = fmt(h.top + dz);
+    } else out.height = fmt(h.top + dz);
     return out;
   }
-  if (!tags.min_height && (tags['building:min_level'] || (!tags.height && tags['building:levels'])) && whole) {
+  if (whole && (tags['building:min_level'] || (!tags.height && !tags.min_height && tags['building:levels']))) {
     const minLevel = Number(tags['building:min_level'] ?? 0) + Math.round(k);
     if (minLevel) out['building:min_level'] = String(minLevel); else delete out['building:min_level'];
+    if (tags.min_height) { const min = h.min + dz; if (min > 1e-4) out.min_height = fmt(min); else delete out.min_height; }
     return out;
   }
   const min = h.min + dz;

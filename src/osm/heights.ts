@@ -1,4 +1,4 @@
-const LEVEL_HEIGHT = 3;
+export const LEVEL_HEIGHT = 3;
 const DEFAULT_ROOF_HEIGHT = 3;
 /** Высота стен без height и building:levels — один этаж (официального значения в Simple 3D нет). */
 const DEFAULT_WALL_HEIGHT = 3.5;

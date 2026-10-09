@@ -312,3 +312,9 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .combo-lead.inherited { opacity: .45; }
 .roof-icon path { fill: currentColor; stroke: currentColor; stroke-width: .7; stroke-linejoin: round; }
 .roof-icon path.c { stroke-width: .2; stroke-opacity: .35; }
+
+/* Число углов правильного многоугольника — над строкой размеров */
+.draw-opts { position: absolute; right: 346px; bottom: 76px; z-index: 3; padding: 6px 10px; background: #fff; border: 1px solid #d1d5db; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.12); font-size: 13px; }
+.draw-opts[hidden] { display: none; }
+.draw-opts label { display: flex; align-items: center; gap: 8px; color: #444; }
+.draw-opts input { width: 56px; padding: 3px 5px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }

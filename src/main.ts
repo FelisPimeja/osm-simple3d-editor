@@ -24,7 +24,7 @@ import { MeasureTool } from './edit/measure-tool';
 import { OffsetTool } from './edit/offset-tool';
 import { setToolCursor, type ToolCursor } from './view/cursors';
 import { PAINT_TAGS, PaintTool } from './edit/paint-tool';
-import { DrawTool, RECT_LABELS, RECT_MODES, type DrawShape, type RectMode } from './edit/draw-tool';
+import { CIRCLE_LABELS, CIRCLE_MODES, DrawTool, RECT_LABELS, RECT_MODES, type CircleMode, type DrawShape, type RectMode } from './edit/draw-tool';
 import { suggestComment } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
@@ -1134,6 +1134,9 @@ function toolActive(): boolean {
 // Инструменты «Прямоугольник» (R) и «Полигон» (L): новая часть здания — плоский контур нулевой толщины
 const rectBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="rect"]')!;
 const polyBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="polygon"]')!;
+// «Круг» (C) и «Правильный многоугольник» (N): центр и точка на окружности; число углов — в поле у инструмента
+const circleBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="circle"]')!;
+const ngonBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="ngon"]')!;
 map.on('move', () => { if (drawTool.active) drawTool.relabel(); });
 const drawTool = new DrawTool(overpassLayer, map.getContainer(), createDrawn, (hint, error) => {
   // Инструмент выключили посреди наброска (Esc, пробел) — набросок тоже
@@ -1142,11 +1145,17 @@ const drawTool = new DrawTool(overpassLayer, map.getContainer(), createDrawn, (h
   rectBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'rect');
   syncRectIcons();
   polyBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'polygon');
+  circleBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'circle');
+  ngonBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'ngon');
+  try { localStorage.setItem('ngon-sides', String(drawTool.sides)); } catch { /* нет хранилища */ }
   syncCursor();
   if (hint) setStatus(hint, error); else showOverpassStatus();
 });
 rectBtn.addEventListener('click', () => toggleDraw('rect'));
 polyBtn.addEventListener('click', () => toggleDraw('polygon'));
+circleBtn.addEventListener('click', () => toggleDraw('circle'));
+ngonBtn.addEventListener('click', () => toggleDraw('ngon'));
+try { const n = Number(localStorage.getItem('ngon-sides')); if (n) drawTool.sides = n; } catch { /* нет хранилища */ }
 
 // Новое здание прямо с карты: «Прямоугольник» и «Полигон» рисуют контур на земле поверх карты (набросок),
 // готовый контур — отдельное здание building=yes нулевой высоты; сразу открывается в режиме здания с «Вытянуть»
@@ -1156,6 +1165,10 @@ const mapPolyBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="poly
 let sketching = false;
 mapRectBtn.addEventListener('click', () => toggleSketch('rect'));
 mapPolyBtn.addEventListener('click', () => toggleSketch('polygon'));
+const mapCircleBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="circle"]')!;
+const mapNgonBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="ngon"]')!;
+mapCircleBtn.addEventListener('click', () => toggleSketch('circle'));
+mapNgonBtn.addEventListener('click', () => toggleSketch('ngon'));
 
 // Способ построения прямоугольника — всплывашка у кнопки (стрелка в углу): выбранный способ встаёт на кнопку
 const RECT_ICONS: Record<RectMode, string> = {
@@ -1204,6 +1217,48 @@ for (const [btn, start] of [[rectBtn, () => startDraw('rect')], [mapRectBtn, () 
 document.addEventListener('pointerdown', (e) => { if (rectFlyout && !(e.target as HTMLElement).closest('.tool-flyout, [data-flyout]')) closeRectFlyout(); });
 syncRectIcons();
 
+// Способ построения круга — так же: всплывашка у кнопки, Tab — следующий способ
+const CIRCLE_ICONS: Record<CircleMode, string> = {
+  center: '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="1.2" fill="currentColor"/>',
+  corner: '<circle cx="10.5" cy="9.5" r="6"/><path d="M3 2.5v14.5h14.5" stroke-width="1.3"/>',
+  three: '<circle cx="10" cy="10" r="7"/><circle cx="4" cy="6.4" r="1.4" fill="currentColor"/><circle cx="16" cy="6.4" r="1.4" fill="currentColor"/><circle cx="10" cy="17" r="1.4" fill="currentColor"/>',
+};
+const circleSvg = (m: CircleMode) => `<svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">${CIRCLE_ICONS[m]}</svg>`;
+try { const m = localStorage.getItem('circle-mode') as CircleMode | null; if (m && CIRCLE_MODES.includes(m)) drawTool.circleMode = m; } catch { /* нет хранилища */ }
+function syncCircleIcons() {
+  for (const [btn, what] of [[circleBtn, 'новая часть'], [mapCircleBtn, 'новое здание']] as const) {
+    btn.innerHTML = `${circleSvg(drawTool.circleMode)}<span class="flyout-arrow" data-flyout title="Способ построения"></span>`;
+    btn.title = `Круг ${CIRCLE_LABELS[drawTool.circleMode]}: ${what} (C; Tab или стрелка в углу — способ построения)`;
+  }
+  try { localStorage.setItem('circle-mode', drawTool.circleMode); } catch { /* нет хранилища */ }
+}
+drawTool.onModeChange = syncCircleIcons;
+for (const [btn, start] of [[circleBtn, () => startDraw('circle')], [mapCircleBtn, () => startSketch('circle')]] as const) {
+  btn.addEventListener('click', (e) => {
+    if (!(e.target as HTMLElement).closest('[data-flyout]')) { closeRectFlyout(); return; }
+    e.stopImmediatePropagation();
+    if (rectFlyout && rectFlyout.previousElementSibling === btn) { closeRectFlyout(); return; }
+    closeRectFlyout();
+    const fly = document.createElement('div');
+    fly.className = 'tool-flyout';
+    fly.innerHTML = CIRCLE_MODES.map((m) => `<button type="button" data-mode="${m}" class="${m === drawTool.circleMode ? 'active' : ''}" title="Круг ${CIRCLE_LABELS[m]}">${circleSvg(m)}<span>${CIRCLE_LABELS[m]}</span></button>`).join('');
+    fly.addEventListener('click', (ev) => {
+      const m = (ev.target as HTMLElement).closest<HTMLElement>('[data-mode]')?.dataset.mode as CircleMode | undefined;
+      if (!m) return;
+      ev.stopPropagation();
+      closeRectFlyout();
+      drawTool.setCircleMode(m);
+      syncCircleIcons();
+      if (!(drawTool.active && drawTool.shape === 'circle')) start();
+    });
+    btn.after(fly);
+    const r = btn.getBoundingClientRect(), pr = btn.offsetParent!.getBoundingClientRect();
+    fly.style.top = `${r.top - pr.top}px`;
+    rectFlyout = fly;
+  }, true);
+}
+syncCircleIcons();
+
 function toggleSketch(shape: DrawShape) {
   if (sketching && drawTool.shape === shape) return drawTool.stop();
   startSketch(shape);
@@ -1234,6 +1289,8 @@ function syncMapTools() {
   renderHelp();
   mapRectBtn.classList.toggle('active', sketching && drawTool.shape === 'rect');
   mapPolyBtn.classList.toggle('active', sketching && drawTool.shape === 'polygon');
+  mapCircleBtn.classList.toggle('active', sketching && drawTool.shape === 'circle');
+  mapNgonBtn.classList.toggle('active', sketching && drawTool.shape === 'ngon');
 }
 
 /** Готовый контур наброска — новое отдельное здание; открыть его в режиме здания и включить «Вытянуть». */
@@ -2247,11 +2304,12 @@ document.addEventListener('keydown', (e) => {
     deleteSelected();
     return;
   }
-  // На карте R / L — новое здание (набросок)
-  if (!focus && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.code === 'KeyR' || e.code === 'KeyL')) {
+  // На карте R / L / C / N — новое здание (набросок)
+  const sketchKeys: Record<string, DrawShape> = { KeyR: 'rect', KeyL: 'polygon', KeyC: 'circle', KeyN: 'ngon' };
+  if (!focus && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && sketchKeys[e.code]) {
     e.preventDefault();
     closeCtxMenu();
-    startSketch(e.code === 'KeyR' ? 'rect' : 'polygon');
+    startSketch(sketchKeys[e.code]);
     return;
   }
   // Шорткаты режима здания — по физической клавише (e.code), чтобы работали и в русской раскладке
@@ -2265,14 +2323,16 @@ document.addEventListener('keydown', (e) => {
     : e.code === 'KeyO' && !e.shiftKey ? 'offset'
     : e.code === 'KeyH' ? (e.shiftKey ? 'show-all' : 'hide')
     : e.code === 'KeyR' && !e.shiftKey ? 'rect'
-    : e.code === 'KeyL' && !e.shiftKey ? 'polygon' : undefined;
+    : e.code === 'KeyL' && !e.shiftKey ? 'polygon'
+    : e.code === 'KeyC' && !e.shiftKey ? 'circle'
+    : e.code === 'KeyN' && !e.shiftKey ? 'ngon' : undefined;
   if (!action) return;
   e.preventDefault();
   closeCtxMenu();
   cancelCopyPick();
   if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'split') startSplit();
   else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
-  else if (action === 'rect' || action === 'polygon') startDraw(action); else focusAction(action);
+  else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);
 }, { capture: true });
 document.addEventListener('keyup', (e) => { if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e)) e.preventDefault(); });
 
@@ -2765,13 +2825,13 @@ const HELP: Record<string, HelpTopic> = {
   map: { title: 'Карта', desc: 'Просмотр зданий из OSM в 3D. Выделенное здание можно править в панели «Свойства» или открыть в режиме здания.', items: [
     'Клик — выделить здание, Shift+клик — добавить к выделению, Alt+клик — следующий объект под курсором.',
     'Двойной клик по зданию — режим здания (правка частей).',
-    'R — новое здание прямоугольником, L — полигоном. Delete — удалить, Ctrl+Z — отменить.',
+    'R — новое здание прямоугольником, L — полигоном, C — кругом, N — правильным многоугольником. Delete — удалить, Ctrl+Z — отменить.',
     'Перетаскивание правой кнопкой — поворот и наклон карты.',
   ] },
   focus: { title: 'Режим здания', desc: 'Одно здание отдельно от карты: его части, контур и правка геометрии инструментами слева.', items: [
     'Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.',
     'Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.',
-    'M — переместить, P — вытянуть, K — рассечь, R / L — новая часть, O — отступ, T — рулетка, B — заливка.',
+    'M — переместить, P — вытянуть, K — рассечь, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.',
     'Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, Shift+H — показать все.',
     'Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.',
     'Esc — снять выделение, ещё раз — назад к карте; двойной клик мимо здания — тоже к карте.',
@@ -2803,6 +2863,17 @@ const HELP: Record<string, HelpTopic> = {
     'Клики — вершины на земле или на плоской крыше; клик в первую вершину или Enter — замкнуть.',
     'Число + Enter — длина текущей стороны, Backspace — убрать последнюю точку.',
     'Shift — держать ось здания (на привязке «продолжение» — линию ребра). Esc — отмена.',
+  ] },
+  circle: { title: 'Круг (C)', desc: 'Рисует новую часть — плоский круглый контур; на карте — новое отдельное здание. Пока рисуете, круг гладкий, в данные он попадает многоугольником (вершин — по размеру: стороны отходят от окружности не больше чем на 10 см).', items: [
+    'Способ построения — во всплывашке у кнопки или Tab: по центру и радиусу; по двум касательным под 90° (клик — вершина прямого угла, касательные по осям здания, размер — курсором); по трём точкам (три клика — точки, через которые проходит окружность).',
+    'По центру: клик — центр на земле или на плоской крыше, второй клик — точка на окружности.',
+    'Число + Enter — радиус в метрах. Работают привязки к вершинам и рёбрам.',
+    'Esc — отмена.',
+  ] },
+  ngon: { title: 'Правильный многоугольник (N)', desc: 'Рисует новую часть — плоский правильный многоугольник; на карте — новое отдельное здание.', items: [
+    'Число углов — в поле «Углов» внизу (3–64), запоминается.',
+    'Клик — центр, второй клик — вершина (задаёт радиус и поворот).',
+    'Число + Enter — радиус в метрах. Esc — отмена.',
   ] },
   offset: { title: 'Отступ (O)', desc: 'Строит новый плоский контур, параллельный контуру плоской крыши или низа части, — например, для парапета, надстройки или козырька.', items: [
     'Наведите на плоскую крышу (Shift — на низ части): контур отступает наружу или внутрь по стороне курсора.',

@@ -3,18 +3,34 @@ import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 
 type Pt = [number, number];
 
-export type DrawShape = 'polygon' | 'rect';
+export type DrawShape = 'polygon' | 'rect' | 'circle' | 'ngon';
+/** Фигуры «центр + точка на окружности». */
+const ROUND: DrawShape[] = ['circle', 'ngon'];
 /** Способ построения прямоугольника: по двум углам вдоль осей здания, по трём точкам (повёрнутый), от центра. */
 export type RectMode = 'corners' | 'three' | 'center';
 
 export const RECT_MODES: RectMode[] = ['corners', 'three', 'center'];
 export const RECT_LABELS: Record<RectMode, string> = { corners: 'по двум углам', three: 'по трём точкам', center: 'от центра' };
+/** Способ построения круга: центр и радиус; вписанный в прямой угол (касательные по осям здания); по трём точкам окружности. */
+export type CircleMode = 'center' | 'corner' | 'three';
+export const CIRCLE_MODES: CircleMode[] = ['center', 'corner', 'three'];
+export const CIRCLE_LABELS: Record<CircleMode, string> = { center: 'по центру и радиусу', corner: 'по двум касательным под 90°', three: 'по трём точкам' };
 /** Направление ребра ближе этого угла к оси здания — выравниваем по оси, градусы. */
 const AXIS_LOCK_DEG = 3;
 /** Клик ближе стольких px к первой точке замыкает полигон. */
 const CLOSE_PX = 10;
 /** Минимальная площадь контура, м². */
 const MIN_AREA = 0.5;
+/** Круг при показе — гладкий (столько сторон), в данных — по допуску хорды. */
+const CIRCLE_PREVIEW = 72;
+/** Наибольшее отклонение сторон круга от окружности, м. */
+const CIRCLE_TOLERANCE = 0.1;
+/** Число вершин круга в данных: по допуску, в разумных пределах. */
+export function circleSegments(r: number): number {
+  const n = Math.ceil(Math.PI / Math.acos(Math.max(-1, 1 - CIRCLE_TOLERANCE / Math.max(r, 1e-6))));
+  return Math.max(12, Math.min(64, n));
+}
+export const NGON_MIN = 3, NGON_MAX = 64;
 
 /**
  * Инструменты «Прямоугольник» (R) и «Полигон» (L): плоский контур на земле или на плоской крыше части.
@@ -27,6 +43,9 @@ const MIN_AREA = 0.5;
 export class DrawTool {
   shape: DrawShape = 'polygon';
   rectMode: RectMode = 'corners';
+  /** Число углов правильного многоугольника. */
+  sides = 6;
+  circleMode: CircleMode = 'center';
   state: 'off' | 'draw' = 'off';
   snap?: SnapHit;
   private pts: Pt[] = [];
@@ -40,10 +59,15 @@ export class DrawTool {
   private lastPoint?: [number, number];
   private typed = '';
   private readonly vcb: HTMLDivElement;
+  /** Форма числа углов (у правильного многоугольника). */
+  private readonly opts: HTMLDivElement;
   /** Подписи длин сторон контура (HTML поверх карты). */
   private readonly dims: HTMLDivElement;
   /** Стороны для подписей: точки контура, замкнут ли он, какая сторона — текущая (тянется курсором). */
   private dimRing?: { pts: Pt[]; closed: boolean; current?: number };
+
+  /** Способ построения сменили с клавиатуры (Tab) — обновить кнопку. */
+  onModeChange?: () => void;
 
   constructor(
     private readonly layer: BuildingsLayer,
@@ -56,6 +80,19 @@ export class DrawTool {
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
     container.appendChild(this.vcb);
+    this.opts = document.createElement('div');
+    this.opts.className = 'draw-opts';
+    this.opts.hidden = true;
+    this.opts.innerHTML = `<label>Углов <input type="number" min="${NGON_MIN}" max="${NGON_MAX}" step="1" /></label>`;
+    const input = this.opts.querySelector('input')!;
+    input.addEventListener('input', () => {
+      const n = Math.round(Number(input.value));
+      if (n >= NGON_MIN && n <= NGON_MAX) this.setSides(n);
+    });
+    input.addEventListener('change', () => { input.value = String(this.sides); });
+    // Enter / Esc в поле — назад к рисованию
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); input.blur(); } });
+    container.appendChild(this.opts);
     this.dims = document.createElement('div');
     this.dims.className = 'draw-dims';
     container.appendChild(this.dims);
@@ -67,7 +104,26 @@ export class DrawTool {
     this.reset();
     this.shape = shape;
     this.state = 'draw';
+    this.opts.hidden = shape !== 'ngon';
+    this.opts.querySelector('input')!.value = String(this.sides);
     this.hint();
+  }
+
+  /** Сменить способ построения круга (начатое построение сбрасывается). */
+  setCircleMode(mode: CircleMode) {
+    this.circleMode = mode;
+    if (this.state !== 'draw' || this.shape !== 'circle') return;
+    this.reset();
+    if (this.lastPoint) this.move(this.lastPoint);
+    this.hint();
+  }
+
+  /** Число углов многоугольника (и перерисовать набросок). */
+  setSides(n: number) {
+    this.sides = Math.max(NGON_MIN, Math.min(NGON_MAX, Math.round(n)));
+    const input = this.opts.querySelector('input')!;
+    if (document.activeElement !== input) input.value = String(this.sides);
+    if (this.state === 'draw' && this.shape === 'ngon') { if (this.lastPoint) this.move(this.lastPoint); else this.preview(); this.hint(); }
   }
 
   /** Сменить способ построения прямоугольника; первая точка остаётся (угол, начало стороны или центр). */
@@ -82,6 +138,7 @@ export class DrawTool {
 
   stop() {
     this.reset();
+    this.opts.hidden = true;
     this.state = 'off';
     this.onState('');
   }
@@ -124,6 +181,11 @@ export class DrawTool {
     }
     if (e.key === 'Tab' && this.shape === 'rect') {
       this.setRectMode(RECT_MODES[(RECT_MODES.indexOf(this.rectMode) + 1) % RECT_MODES.length]);
+      return true;
+    }
+    if (e.key === 'Tab' && this.shape === 'circle') {
+      this.setCircleMode(CIRCLE_MODES[(CIRCLE_MODES.indexOf(this.circleMode) + 1) % CIRCLE_MODES.length]);
+      this.onModeChange?.();
       return true;
     }
     // «;» — по физической клавише (в русской раскладке там «ж»)
@@ -233,12 +295,56 @@ export class DrawTool {
     const last = this.pts[this.pts.length - 1];
     if (last && Math.hypot(q[0] - last[0], q[1] - last[1]) < 0.01) return;
     this.pts.push(q);
+    if (this.shape === 'circle' && this.circleMode === 'three') {
+      if (this.pts.length < 3) { this.hint(); this.preview(); return; }
+      const c = this.circleOf(this.pts);
+      if (!c) { this.pts.pop(); this.onState('Три точки на одной прямой — окружность через них не проходит.', true); this.preview(); return; }
+      this.finish(circleRing(c.c, c.r, circleSegments(c.r)));
+      return;
+    }
+    if (ROUND.includes(this.shape) && this.pts.length === 2) {
+      const c = this.shape === 'circle' ? this.circleOf(this.pts) : undefined;
+      this.finish((c ? circleRing(c.c, c.r, circleSegments(c.r)) : this.roundRing(this.pts[0], this.pts[1], true)) ?? []);
+      return;
+    }
     if (this.shape === 'rect') {
       const need = this.rectMode === 'three' ? 3 : 2;
       if (this.pts.length === need) { this.finish(this.rectRing(this.pts)!); return; }
     }
     this.hint();
     this.preview();
+  }
+
+  /**
+   * Круг или правильный многоугольник: центр c, точка e на окружности (у многоугольника — вершина).
+   * Круг при показе гладкий, в данных (final) — с числом вершин по допуску хорды.
+   */
+  private roundRing(c: Pt, e: Pt, final = false): Pt[] | undefined {
+    const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
+    if (r < 1e-3) return;
+    const n = this.shape === 'ngon' ? this.sides : final ? circleSegments(r) : CIRCLE_PREVIEW;
+    const a0 = Math.atan2(e[1] - c[1], e[0] - c[0]);
+    return Array.from({ length: n }, (_, i) => {
+      const a = a0 + (2 * Math.PI * i) / n;
+      return [c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)] as Pt;
+    });
+  }
+
+  /** Круг по двум точкам: центр и точка окружности, или вершина прямого угла и курсор (круг вписан в угол). */
+  private circleOf(p: Pt[]): { c: Pt; r: number } | undefined {
+    if (this.circleMode === 'three') return p.length >= 3 ? circumcircle(p[0], p[1], p[2]) : undefined;
+    if (p.length < 2) return;
+    const [a, b] = p;
+    if (this.circleMode !== 'corner') { const r = Math.hypot(b[0] - a[0], b[1] - a[1]); return r > 1e-3 ? { c: a, r } : undefined; }
+    // Касательные — оси здания через вершину угла; диаметр — больший катет до курсора, в его четверть
+    const f = this.layer.focusAxes;
+    const ax: Pt = f?.x ?? [1, 0], ay: Pt = f?.y ?? [0, 1];
+    const d: Pt = [b[0] - a[0], b[1] - a[1]];
+    const u = d[0] * ax[0] + d[1] * ax[1], v = d[0] * ay[0] + d[1] * ay[1];
+    const r = Math.max(Math.abs(u), Math.abs(v)) / 2;
+    if (r < 1e-3) return;
+    const su = Math.sign(u) || 1, sv = Math.sign(v) || 1;
+    return { c: [a[0] + (ax[0] * su + ay[0] * sv) * r, a[1] + (ax[1] * su + ay[1] * sv) * r], r };
   }
 
   /** Прямоугольник по введённым точкам (последняя может быть курсором). */
@@ -274,6 +380,24 @@ export class DrawTool {
     const cur = this.cursor ?? last;
     const dir: Pt = [cur[0] - last[0], cur[1] - last[1]];
     const len = Math.hypot(dir[0], dir[1]);
+    if (this.shape === 'circle' && this.circleMode === 'corner') {
+      // Радиус: круг в четверти угла, где курсор
+      const f = this.layer.focusAxes;
+      const ax: Pt = f?.x ?? [1, 0], ay: Pt = f?.y ?? [0, 1];
+      const su = Math.sign(dir[0] * ax[0] + dir[1] * ax[1]) || 1, sv = Math.sign(dir[0] * ay[0] + dir[1] * ay[1]) || 1;
+      if (!(nums[0] > 0)) { this.onState('Радиус должен быть больше нуля.', true); return; }
+      const k = 2 * nums[0];
+      this.add([last[0] + (ax[0] * su + ay[0] * sv) * k, last[1] + (ax[1] * su + ay[1] * sv) * k]);
+      return;
+    }
+    if (ROUND.includes(this.shape)) {
+      // Радиус — в сторону курсора (без направления — по оси x здания)
+      const ax = this.layer.focusAxes?.x ?? [1, 0];
+      const u: Pt = len > 1e-6 ? [dir[0] / len, dir[1] / len] : [ax[0], ax[1]];
+      if (!(nums[0] > 0)) { this.onState('Радиус должен быть больше нуля.', true); return; }
+      this.add([last[0] + u[0] * nums[0], last[1] + u[1] * nums[0]]);
+      return;
+    }
     if (this.shape === 'rect' && this.rectMode !== 'three' || this.shape === 'rect' && this.pts.length === 2) {
       const f = this.layer.focusAxes;
       if (this.rectMode === 'three') {
@@ -298,7 +422,7 @@ export class DrawTool {
 
   private finish(ring: Pt[]) {
     const err = validRing(ring);
-    if (err) { this.onState(err, true); if (this.shape === 'rect') { this.pts.pop(); this.preview(); } return; }
+    if (err) { this.onState(err, true); if (this.shape === 'rect' || ROUND.includes(this.shape)) { this.pts.pop(); this.preview(); } return; }
     const fail = this.commit(ring, this.z);
     if (fail) { this.onState(fail, true); return; }
     this.reset();
@@ -339,10 +463,16 @@ export class DrawTool {
   private preview() {
     const v = (p: Pt) => new THREE.Vector3(p[0], p[1], this.z);
     const pts = this.cursor ? [...this.pts, this.cursor] : this.pts;
-    const ring = this.shape === 'rect' ? this.rectRing(pts) : pts;
-    this.layer.setDrawPreview(ring?.map(v), this.shape === 'rect');
+    const round = ROUND.includes(this.shape);
+    const circ = this.shape === 'circle' ? this.circleOf(pts) : undefined;
+    const ring = this.shape === 'rect' ? this.rectRing(pts) : circ ? circleRing(circ.c, circ.r, CIRCLE_PREVIEW)
+      : this.shape === 'circle' && this.circleMode === 'three' ? pts // до трёх точек — ломаная через них
+      : round ? (pts.length === 2 ? this.roundRing(pts[0], pts[1]) : undefined) : pts;
+    this.layer.setDrawPreview(ring?.map(v), this.shape === 'rect' || round);
     // Размеры: у прямоугольника — ширина и глубина (две соседние стороны), у полигона — все стороны и тянущаяся
-    this.dimRing = !ring || ring.length < 2 ? undefined
+    this.dimRing = circ ? { pts: [circ.c, [circ.c[0] + circ.r * (this.layer.focusAxes?.x[0] ?? 1), circ.c[1] + circ.r * (this.layer.focusAxes?.x[1] ?? 0)]], closed: false }
+      : round ? (pts.length === 2 ? { pts: [pts[0], pts[1]], closed: false } : undefined)
+      : !ring || ring.length < 2 ? undefined
       : this.shape === 'rect' ? { pts: ring.length > 2 ? ring.slice(0, 3) : ring, closed: false }
       : { pts: ring, closed: false, current: this.cursor && this.pts.length ? ring.length - 2 : undefined };
     this.relabel();
@@ -358,7 +488,11 @@ export class DrawTool {
     if (!last || !this.cursor) { this.vcb.hidden = true; return; }
     this.vcb.hidden = false;
     let label = 'Длина', value: string;
-    if (this.shape === 'rect' && !(this.rectMode === 'three' && this.pts.length === 1)) {
+    if (ROUND.includes(this.shape)) {
+      label = 'Радиус';
+      const c = this.shape === 'circle' ? this.circleOf([...this.pts, this.cursor]) : undefined;
+      value = (c ? c.r : Math.hypot(this.cursor[0] - last[0], this.cursor[1] - last[1])).toFixed(2);
+    } else if (this.shape === 'rect' && !(this.rectMode === 'three' && this.pts.length === 1)) {
       const r = this.rectRing([...this.pts, this.cursor]);
       const side = (i: number) => r && r.length === 4 ? Math.hypot(r[i + 1][0] - r[i][0], r[i + 1][1] - r[i][1]) : 0;
       label = this.rectMode === 'three' ? 'Ширина' : 'Размер';
@@ -369,6 +503,23 @@ export class DrawTool {
   }
 
   private hint() {
+    if (this.shape === 'circle' && this.circleMode === 'three') {
+      this.onState(`Круг по трём точкам (Tab — сменить способ): точка ${this.pts.length + 1} из 3 на окружности. Backspace — убрать точку, Esc — ${this.pts.length ? 'отмена' : 'выйти'}.`);
+      return;
+    }
+    if (this.shape === 'circle' && this.circleMode === 'corner') {
+      this.onState(this.pts.length
+        ? 'Круг в прямом угле: размер — курсором в нужную четверть (число + Enter — радиус). Esc — отмена.'
+        : 'Круг по двум касательным под 90° (Tab — сменить способ): кликните вершину угла (касательные идут по осям здания). Esc — выйти.');
+      return;
+    }
+    if (ROUND.includes(this.shape)) {
+      const what = this.shape === 'circle' ? 'Круг (Tab — сменить способ)' : `Многоугольник, углов: ${this.sides} (поле «Углов»)`;
+      this.onState(this.pts.length
+        ? `${what}: ${this.shape === 'circle' ? 'точка на окружности' : 'вершина'} (число + Enter — радиус). Esc — отмена.`
+        : `${what}: кликните центр на земле или на плоской крыше. Esc — выйти.`);
+      return;
+    }
     if (this.shape === 'polygon') {
       this.onState(this.pts.length
         ? 'Следующая точка; клик в первую точку или Enter — замкнуть, число + Enter — длина стороны, Backspace — убрать точку, Esc — отмена.'
@@ -383,6 +534,26 @@ export class DrawTool {
         : ['первый угол', 'противоположный угол (число;число + Enter — ширина;глубина)'][this.pts.length];
     this.onState(`${mode}: ${step}. Esc — ${this.pts.length ? 'отмена' : 'выйти'}.`);
   }
+}
+
+/** Круг: n точек окружности (центр c, радиус r). */
+function circleRing(c: Pt, r: number, n: number): Pt[] {
+  return Array.from({ length: n }, (_, i) => {
+    const a = (2 * Math.PI * i) / n;
+    return [c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)] as Pt;
+  });
+}
+
+
+/** Окружность через три точки (undefined — точки на одной прямой). */
+export function circumcircle(a: Pt, b: Pt, c: Pt): { c: Pt; r: number } | undefined {
+  const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+  const scale = Math.max(Math.hypot(b[0] - a[0], b[1] - a[1]), Math.hypot(c[0] - a[0], c[1] - a[1]));
+  if (Math.abs(d) < 1e-6 * scale * scale) return;
+  const s = (p: Pt) => p[0] * p[0] + p[1] * p[1];
+  const x = (s(a) * (b[1] - c[1]) + s(b) * (c[1] - a[1]) + s(c) * (a[1] - b[1])) / d;
+  const y = (s(a) * (c[0] - b[0]) + s(b) * (a[0] - c[0]) + s(c) * (b[0] - a[0])) / d;
+  return { c: [x, y], r: Math.hypot(a[0] - x, a[1] - y) };
 }
 
 /** Контур годится для части: ≥ 3 точек, без самопересечений и не слишком мал. */

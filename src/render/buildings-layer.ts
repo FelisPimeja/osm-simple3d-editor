@@ -49,6 +49,13 @@ HIDDEN_EDGE_MATERIAL.onBeforeCompile = (sh) => {
 /** Цвет берётся из вершин (стены/крыша, подсветка, затемнение) — один материал на всё. */
 // polygonOffset отодвигает грани от камеры: рёбра на плоскостях (основание части на крыше другой) не тонут в них
 const MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+/**
+ * Плоские контуры нулевой толщины (новая часть на крыше, отступ) лежат в плоскости чужой грани — с общим
+ * материалом они мерцают полосами. Им — смещение к камере: всегда поверх своей плоскости, глубина та же.
+ */
+const THIN_MATERIAL = MATERIAL.clone();
+THIN_MATERIAL.polygonOffsetFactor = -1;
+THIN_MATERIAL.polygonOffsetUnits = -4;
 /** Бюджет асинхронной сборки группы на кадр, мс. */
 const FRAME_BUDGET_MS = 8;
 
@@ -1168,7 +1175,17 @@ export class BuildingsLayer implements CustomLayerInterface {
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(total * 3), 3));
     geom.computeVertexNormals(); // без индексов — нормаль на треугольник
-    g.mesh = new THREE.Mesh(geom, MATERIAL);
+    // Плоские контуры — своей группой отрисовки (подряд идущие — одним диапазоном)
+    let run: { start: number; thin: boolean } | undefined;
+    for (const it of g.items) {
+      const thin = thinItem(it), n = it.positions.length / 3;
+      if (!n) continue;
+      if (run && run.thin === thin) continue;
+      if (run) geom.addGroup(run.start, it.start - run.start, run.thin ? 1 : 0);
+      run = { start: it.start, thin };
+    }
+    if (run) geom.addGroup(run.start, total - run.start, run.thin ? 1 : 0);
+    g.mesh = new THREE.Mesh(geom, [MATERIAL, THIN_MATERIAL]);
     g.mesh.frustumCulled = false; // своя матрица проекции — штатный culling не годится
     g.scene.add(g.mesh);
     if (glassTotal) {

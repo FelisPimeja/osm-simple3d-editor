@@ -37,10 +37,82 @@ export interface BuildingGroup {
   roles: string[];
 }
 
+/** Виды indoor-объектов (Simple Indoor Tagging), которые рисуем поэтажно. */
+export type IndoorKind = 'room' | 'area' | 'corridor' | 'level' | 'wall' | 'column' | 'poi';
+const INDOOR_KINDS = new Set<string>(['room', 'area', 'corridor', 'level', 'wall', 'column']); // poi — отдельно
+
+/** Помещение, коридор, площадка или этаж целиком (indoor=*), с номерами этажей, на которых он есть. */
+export interface IndoorFeature {
+  key: string;
+  tags: Record<string, string>;
+  kind: IndoorKind;
+  polygons: Polygon[];
+  /** Точечный объект (kind=poi): дверь, лифт, туалет, магазин… — узел или точка на поверхности помещения. */
+  point?: LonLat;
+  /** Стена-линия (indoor=wall на незамкнутом или замкнутом пути): outer — ломаная, не кольцо. */
+  line?: boolean;
+  /** Номера этажей из level (+ repeat_on); без level — [0]. */
+  levels: number[];
+}
+
+/**
+ * Разбирает значение level / repeat_on: '1', '-1', '0.5', '0;1', '1-3' (целые внутри диапазона),
+ * '-2--1'. Нераспознанное пропускается.
+ */
+export function parseLevels(v?: string): number[] {
+  const out = new Set<number>();
+  for (const raw of (v ?? '').split(';')) {
+    const s = raw.trim();
+    const range = s.match(/^(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)$/);
+    if (range) {
+      let [a, b] = [Number(range[1]), Number(range[2])];
+      if (a > b) [a, b] = [b, a];
+      out.add(a);
+      for (let l = Math.ceil(a); l <= b && l - a < 200; l++) out.add(l);
+      out.add(b);
+      continue;
+    }
+    const n = Number(s);
+    if (s && Number.isFinite(n)) out.add(n);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+/** Теги, по которым узел с level — значок на плане этажа (как в indoorequal). */
+const POI_KEYS = ['door', 'entrance', 'amenity', 'shop', 'office', 'tourism', 'emergency', 'vending', 'leisure', 'craft', 'healthcare'];
+
+/** Узел или помещение — точечный объект плана этажа. */
+export function isIndoorPoi(tags?: Record<string, string>): boolean {
+  if (!tags) return false;
+  if (tags.indoor === 'door' || tags.highway === 'elevator' || tags.elevator === 'yes' || tags.stairs === 'yes' || tags.highway === 'steps') return true;
+  return POI_KEYS.some((k) => tags[k] !== undefined && tags[k] !== 'no');
+}
+
+function indoorKind(tags?: Record<string, string>): IndoorKind | undefined {
+  const k = tags?.indoor;
+  if (k === 'yes') return 'area'; // общее «внутреннее пространство» — как площадка
+  return k && INDOOR_KINDS.has(k) ? k as IndoorKind : undefined;
+}
+
 export interface ParseResult {
   features: Feature3D[];
   groups: BuildingGroup[];
+  /** Indoor-объекты (помещения и т. п.) — для поэтажных планов. */
+  indoor: IndoorFeature[];
   skipped: { key: string; reason: string }[];
+}
+
+/**
+ * id indoor-мультиполигонов (помещения, коридоры у границы тайла), у которых в выборке не хватает путей;
+ * не больше limit — план этажа необязателен, лишние запросы ради него не нужны.
+ */
+export function incompleteIndoorRelations(elements: OsmElement[], limit = 100): number[] {
+  const ways = new Set(elements.filter((e) => e.type === 'way').map((e) => e.id));
+  return elements
+    .filter((e): e is OsmRelation => e.type === 'relation' && e.tags?.type === 'multipolygon' && !kindOf(e.tags) && !!indoorKind(e.tags))
+    .filter((r) => r.members.some((m) => m.type === 'way' && !ways.has(m.ref)))
+    .map((r) => r.id)
+    .slice(0, limit);
 }
 
 /** id мультиполигонов-зданий, у которых в выборке не хватает путей. */
@@ -81,6 +153,24 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
 
   const features: Feature3D[] = [];
   const groups: BuildingGroup[] = [];
+  const indoor: IndoorFeature[] = [];
+  const addIndoor = (key: string, tags: Record<string, string>, kind: IndoorKind, polygons: Polygon[], line = false) => {
+    const levels = parseLevels(tags.level);
+    for (const l of parseLevels(tags.repeat_on)) if (!levels.includes(l)) levels.push(l);
+    indoor.push({ key, tags, kind, polygons, ...(line ? { line } : {}), levels: levels.length ? levels.sort((a, b) => a - b) : [0] });
+    // Помещение-магазин, кафе, туалет… — ещё и значок в его середине
+    if (kind !== 'poi' && !line && polygons.length && isIndoorPoi(tags)) {
+      const point = pointOnSurface(polygons[0]);
+      indoor.push({ key: `${key}#poi`, tags, kind: 'poi', polygons: [], point, levels: indoor[indoor.length - 1].levels });
+    }
+  };
+  // Точечные объекты этажей: узлы с level
+  for (const n of nodes.values()) {
+    if (n.tags?.level === undefined || !isIndoorPoi(n.tags)) continue;
+    const levels = parseLevels(n.tags.level);
+    for (const l of parseLevels(n.tags.repeat_on)) if (!levels.includes(l)) levels.push(l);
+    if (levels.length) indoor.push({ key: `node/${n.id}`, tags: n.tags, kind: 'poi', polygons: [], point: [n.lon, n.lat], levels });
+  }
   const skipped: ParseResult['skipped'] = [];
   const toCoords = (ring: number[]): LonLat[] | null => {
     const out: LonLat[] = [];
@@ -94,6 +184,15 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
 
   for (const w of ways.values()) {
     const kind = kindOf(w.tags);
+    const ik = kind ? undefined : indoorKind(w.tags);
+    if (ik === 'wall') {
+      // Стена — ломаная (у замкнутой последняя точка повторяет первую — оставляем, чтобы стена замкнулась)
+      const pts = w.nodes.map((id) => nodes.get(id)).filter((n): n is OsmNode => !!n).map((n): LonLat => [n.lon, n.lat]);
+      if (pts.length >= 2) addIndoor(`way/${w.id}`, w.tags!, ik, [{ outer: pts, inners: [] }], true);
+    } else if (ik && w.nodes[0] === w.nodes[w.nodes.length - 1]) {
+      const outer = toCoords(w.nodes);
+      if (outer) addIndoor(`way/${w.id}`, w.tags!, ik, [{ outer, inners: [] }]);
+    }
     if (!kind) continue;
     const key = `way/${w.id}`;
     if (w.nodes[0] !== w.nodes[w.nodes.length - 1]) { skipped.push({ key, reason: 'незамкнутый путь' }); continue; }
@@ -112,7 +211,8 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
       continue;
     }
     const kind = kindOf(r.tags);
-    if (!kind || r.tags?.type !== 'multipolygon') continue;
+    const ik = kind ? undefined : indoorKind(r.tags);
+    if ((!kind && !ik) || r.tags?.type !== 'multipolygon') continue;
     const key = `relation/${r.id}`;
     const segs = { outer: [] as number[][], inner: [] as number[][] };
     const memberWays: MemberWay[] = [];
@@ -139,12 +239,13 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
       const p = polygons.find((p) => pointInRing(inner[0], p.outer));
       if (p) { p.inners.push(inner); p.innerIds!.push(ring.slice(0, -1)); }
     }
+    if (ik) { if (polygons.length) addIndoor(key, r.tags!, ik, polygons); continue; }
     if (!polygons.length) { skipped.push({ key, reason: 'нет узлов' }); continue; }
-    features.push({ key, type: 'relation', id: r.id, version: r.version, tags: r.tags!, kind, polygons, hasParts: false, ways: memberWays });
+    features.push({ key, type: 'relation', id: r.id, version: r.version, tags: r.tags!, kind: kind!, polygons, hasParts: false, ways: memberWays });
   }
 
   markOutlinesWithParts(features);
-  return { features, groups, skipped };
+  return { features, groups, indoor, skipped };
 }
 
 /** Склеивает пути в замкнутые кольца по общим концевым узлам. null — если кольцо не замыкается. */

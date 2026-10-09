@@ -1,6 +1,6 @@
 import type { Map as MlMap } from 'maplibre-gl';
 import { ApiError, completeRelations, fetchMapSplit, type Bbox, type OsmElement } from '../osm/api';
-import { centroid, incompleteBuildingRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type MemberWay, type Polygon } from '../osm/model';
+import { centroid, incompleteBuildingRelations, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type IndoorFeature, type MemberWay, type Polygon } from '../osm/model';
 import { RequestPool } from '../osm/request-pool';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
@@ -23,7 +23,7 @@ type Entry =
   | { state: 'lookup' } // ищем в IndexedDB
   | { state: 'queued' } // в IndexedDB нет, ждёт свободного слота запроса к API
   | { state: 'loading'; abort: AbortController }
-  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number; via?: TileVia; refreshing?: AbortController; refreshAfter?: number; partial?: boolean }
+  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; indoor: IndoorFeature[]; fetchedAt: number; via?: TileVia; refreshing?: AbortController; refreshAfter?: number; partial?: boolean }
   | { state: 'error'; retryAt: number; attempts: number };
 
 /**
@@ -126,6 +126,19 @@ export class OverpassTiles {
       }
       if (batch.length) for (const r of this.layer.updateFeatures(tile, batch)) this.rendered.set(r.feature.key, r);
     }
+  }
+
+  /** Indoor-объекты загруженных тайлов (без повторов), хотя бы одной вершиной внутри bbox [w, s, e, n]. */
+  indoorIn([w, s, e, n]: Bbox): IndoorFeature[] {
+    const out = new Map<string, IndoorFeature>();
+    for (const t of this.cache.values()) {
+      if (t.state !== 'ready') continue;
+      for (const f of t.indoor ?? []) {
+        if (out.has(f.key)) continue;
+        if (f.polygons.some((p) => p.outer.some(([x, y]) => x >= w && x <= e && y >= s && y <= n))) out.set(f.key, f);
+      }
+    }
+    return [...out.values()];
   }
 
   /** Все объекты загруженных тайлов (без повторов, с правками) — например, для поиска контура под частями. */
@@ -374,13 +387,16 @@ export class OverpassTiles {
         this.tileReady(key);
         this.onChange();
       }
-      const elements = await completeRelations([...seen.values()], incompleteBuildingRelations, ep.url, abort.signal);
-      const { features, groups } = timed('тайлы: разбор ответа API', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
+      let elements = await completeRelations([...seen.values()], incompleteBuildingRelations, ep.url, abort.signal);
+      // Помещения и коридоры на границе тайла (план этажа): без них не страшно — ошибка догрузки не роняет тайл
+      try { elements = await completeRelations(elements, incompleteIndoorRelations, ep.url, abort.signal); }
+      catch (err) { if (abort.signal.aborted) throw err; console.warn('[tiles] indoor: догрузка не удалась', err); }
+      const { features, groups, indoor } = timed('тайлы: разбор ответа API', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const fetchedAt = Date.now();
-      this.cache.set(key, { state: 'ready', features, groups, fetchedAt, via });
+      this.cache.set(key, { state: 'ready', features, groups, indoor, fetchedAt, via });
       this.reloading.delete(key);
       this.reloadFailed.delete(key);
-      void this.store.put(key, { features, groups, fetchedAt, via });
+      void this.store.put(key, { features, groups, indoor, fetchedAt, via });
       this.stored.add(key);
       this.evict();
       this.tileReady(key);
@@ -517,7 +533,11 @@ export class OverpassTiles {
   }
 
   /** Тайл получил данные: показать его и, если надо, перестроить соседей (их контуры могли «увидеть» части). */
+  /** Растёт с каждым пришедшим тайлом — для кешей поверх данных тайлов (indoor здания). */
+  revision = 0;
+
   private tileReady(key: string) {
+    this.revision++;
     const e = this.cache.get(key);
     if (e?.state === 'ready') this.indexGroups(e.groups);
     if (this.wanted.includes(key)) this.show(key);

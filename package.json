@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mapbox/maki": "^8.2.0",
+    "@rapideditor/temaki": "^5.13.0",
     "maplibre-gl": "^6.12.0",
     "polygon-clipping": "^0.15.7",
     "straight-skeleton": "^3.0.0",

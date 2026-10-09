@@ -61,7 +61,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
   box-shadow: 0 2px 8px rgba(0,0,0,.2);
 }
 #info-panel:has(#info:empty) { display: none; }
-#outliner-panel[hidden], #help-panel[hidden] { display: none; }
+#outliner-panel[hidden], #help-panel[hidden], #levels-panel[hidden] { display: none; }
 /* Контекстное меню списка частей */
 .ctx-menu { position: fixed; z-index: 20; min-width: 180px; padding: 4px; margin: 0; list-style: none; background: #fff;
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 13px; }
@@ -74,6 +74,15 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .ctx-menu button { display: flex; align-items: center; gap: 16px; }
 .ctx-menu kbd { margin-left: auto; font: inherit; font-size: 11px; color: #888; }
 #outliner-panel { flex-shrink: 1; max-height: 30%; }
+#levels-panel { flex-shrink: 1; max-height: 25%; }
+#levels-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
+.levels li { justify-content: space-between; }
+.levels .lv-name { display: flex; align-items: center; gap: 6px; }
+.levels .lv-plan { flex: none; width: 16px; height: 16px; color: #2563eb; }
+.levels .lv-plan svg { width: 16px; height: 16px; display: block; }
+.levels .lv-meta { color: #888; font-size: 11px; white-space: nowrap; }
+.levels .lv-empty { color: #888; cursor: default; }
+.levels .lv-empty:hover { background: transparent; }
 #outliner-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
 /* Дерево частей в режиме здания (как Outliner в SketchUp): глазик, значок, название */
 .outliner { list-style: none; margin: 0; padding: 0; font-size: 13px; }
@@ -319,3 +328,10 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .draw-opts label { display: flex; align-items: center; gap: 8px; color: #444; }
 .draw-opts input { width: 56px; padding: 3px 5px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
 .snap-marker.shape { background: #db2777; border-radius: 50%; box-shadow: 0 0 0 3px rgba(219,39,119,.25); }
+
+/* Значки точечных объектов плана этажа (входы, лифты, туалеты, магазины) — как в indoorequal */
+.indoor-pois { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.indoor-poi { cursor: pointer; position: absolute; left: 0; top: 0; width: 20px; height: 20px; margin: -10px 0 0 -10px; padding: 3px; box-sizing: border-box;
+  background: #fff; border: 1px solid #9ca3af; border-radius: 50%; color: #374151; pointer-events: auto; }
+.indoor-poi[hidden] { display: none; }
+.indoor-poi svg { width: 100%; height: 100%; display: block; fill: currentColor; }

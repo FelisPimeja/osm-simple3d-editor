@@ -1,20 +1,22 @@
-import type { BuildingGroup, Feature3D } from '../osm/model';
+import type { BuildingGroup, Feature3D, IndoorFeature } from '../osm/model';
 
 const STORE = 'overpass-tiles';
 /** Версия формата записи: при изменении Feature3D старые записи игнорируются. */
 // 5 — части отношений терялись при разборе (голая копия пути затирала теги): старые тайлы перезапрашиваем
-const FORMAT = 5;
+// 6 — добавлены indoor-объекты (поэтажные планы); записи формата 5 читаются без них и обновляются в фоне
+// 7 — догрузка indoor-мультиполигонов на границе тайла; записи 6 показываются и обновляются в фоне
+const FORMAT = 7;
 /** Роль члена, которая неизвестна (кеш старого формата): при отправке сверяемся с сервером только по type/ref. */
 export const UNKNOWN_ROLE = '?';
 /** Сколько тайлов хранить; при превышении удаляются самые старые. */
 const MAX_TILES = 300;
 
-interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[]; groups: BuildingGroup[]; via?: TileVia }
+interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[]; groups: BuildingGroup[]; indoor?: IndoorFeature[]; via?: TileVia }
 
 /** Откуда пришли данные тайла: OSM API (overpass — старые записи кеша, когда данные брались из Overpass). */
 export type TileVia = 'overpass' | 'api';
 
-export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number; via?: TileVia }
+export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; indoor: IndoorFeature[]; fetchedAt: number; via?: TileVia }
 
 /**
  * Постоянный кеш тайлов (данные OSM API) в IndexedDB.
@@ -48,17 +50,19 @@ export class TileStore {
 
   async get(key: string): Promise<StoredTile | undefined> {
     const rec = await this.request<TileRecord | undefined>('readonly', (s) => s.get(key));
-    if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, fetchedAt: rec.fetchedAt, via: rec.via };
+    if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], fetchedAt: rec.fetchedAt, via: rec.via };
+    if (rec?.format === 6) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], fetchedAt: 0, via: rec.via };
+    if (rec?.format === 5) return { features: rec.features, groups: rec.groups, indoor: [], fetchedAt: 0, via: rec.via };
     // Формат 3 — группы без ролей: читаем (роли неизвестны) и считаем тайл устаревшим, чтобы он обновился в фоне
     if (rec?.format === 3) {
       const groups = rec.groups.map((g) => ({ ...g, roles: g.roles ?? g.members.map(() => UNKNOWN_ROLE) }));
-      return { features: rec.features, groups, fetchedAt: 0 };
+      return { features: rec.features, groups, indoor: [], fetchedAt: 0 };
     }
     return undefined;
   }
 
-  async put(key: string, { features, groups, fetchedAt, via }: StoredTile) {
-    const rec: TileRecord = { key, format: FORMAT, fetchedAt, features, groups, via };
+  async put(key: string, { features, groups, indoor, fetchedAt, via }: StoredTile) {
+    const rec: TileRecord = { key, format: FORMAT, fetchedAt, features, groups, indoor, via };
     const ok = await this.request('readwrite', (s) => s.put(rec));
     if (ok === undefined) {
       // Скорее всего, квота: освобождаем половину и пробуем ещё раз

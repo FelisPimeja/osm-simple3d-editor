@@ -1116,6 +1116,7 @@ function syncCursor() {
     : drawTool.active ? drawTool.shape : measureTool.active ? 'measure' : offsetTool.active ? 'offset'
     : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : undefined;
   setToolCursor(map.getCanvasContainer(), tool);
+  renderHelp();
 }
 for (const type of ['keydown', 'keyup'] as const) {
   window.addEventListener(type, (e) => {
@@ -1230,6 +1231,7 @@ function endSketch() {
 
 function syncMapTools() {
   mapToolbar.hidden = !!focus;
+  renderHelp();
   mapRectBtn.classList.toggle('active', sketching && drawTool.shape === 'rect');
   mapPolyBtn.classList.toggle('active', sketching && drawTool.shape === 'polygon');
 }
@@ -2630,6 +2632,97 @@ ctxMenu.addEventListener('click', (e) => {
   focusAction(action);
 });
 
+// Панель «Помощь»: краткая подсказка по включённому инструменту; кнопка «?» показывает и скрывает её
+const helpPanel = document.getElementById('help-panel')!;
+const helpEl = document.getElementById('help')!;
+const helpTool = document.getElementById('help-tool')!;
+const helpBtns = document.querySelectorAll<HTMLButtonElement>('[data-help]');
+type HelpTopic = { title: string; desc: string; items: string[] };
+const HELP: Record<string, HelpTopic> = {
+  map: { title: 'Карта', desc: 'Просмотр зданий из OSM в 3D. Выделенное здание можно править в панели «Свойства» или открыть в режиме здания.', items: [
+    'Клик — выделить здание, Shift+клик — добавить к выделению, Alt+клик — следующий объект под курсором.',
+    'Двойной клик по зданию — режим здания (правка частей).',
+    'R — новое здание прямоугольником, L — полигоном. Delete — удалить, Ctrl+Z — отменить.',
+    'Перетаскивание правой кнопкой — поворот и наклон карты.',
+  ] },
+  focus: { title: 'Режим здания', desc: 'Одно здание отдельно от карты: его части, контур и правка геометрии инструментами слева.', items: [
+    'Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.',
+    'Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.',
+    'M — переместить, P — вытянуть, K — рассечь, R / L — новая часть, O — отступ, T — рулетка, B — заливка.',
+    'Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, Shift+H — показать все.',
+    'Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.',
+    'Esc — снять выделение, ещё раз — назад к карте; двойной клик мимо здания — тоже к карте.',
+  ] },
+  move: { title: 'Переместить (M)', desc: 'Сдвигает выделенные части по горизонтали или вертикали, как Move в SketchUp. Общие с соседями углы заменяются новыми узлами, чтобы не было нахлёстов.', items: [
+    'Клик по точке выделенной части — точка захвата, второй клик — применить; выделенные части едут вместе.',
+    'Вдоль оси здания движение прилипает к ней; Shift держит ось, стрелки фиксируют ось (→ x, ← y, ↑ z, ↓ — снять).',
+    'Число + Enter — сдвиг в метрах. Привязка к точкам других объектов.',
+    'Esc — отмена.',
+  ] },
+  push: { title: 'Вытянуть (P)', desc: 'Меняет высоту верха (height) или низа (min_height) части либо сдвигает одну стену, как Push/Pull в SketchUp.', items: [
+    'Клик по крыше — тянуть верх, по низу — низ, по стене — эту стену наружу или внутрь; второй клик — применить.',
+    'Shift — задняя грань под курсором: дно или дальняя стена.',
+    'Число + Enter — сдвиг (минус — внутрь или вниз); Tab — метры или этажи.',
+    'Привязка к точке другого объекта выравнивает грань по ней. Esc — отмена.',
+  ] },
+  split: { title: 'Рассечь (K)', desc: 'Прямым разрезом делит верхнюю грань части на две части с теми же тегами.', items: [
+    'Клик по ребру верхней грани — начало разреза, клик по другому ребру той же грани — конец.',
+    'Разрез идёт прямо и целиком внутри контура; часть делится на две.',
+    'Esc — отмена.',
+  ] },
+  rect: { title: 'Прямоугольник (R)', desc: 'Рисует новую часть — плоский прямоугольный контур; потом её можно вытянуть (P). На карте — новое отдельное здание.', items: [
+    'Клики — точки прямоугольника на земле или на плоской крыше (по первому клику).',
+    'Способ построения — во всплывашке у кнопки или Tab (первая точка сохраняется).',
+    'Число + Enter — длина стороны или «ширина;глубина». Shift — держать ось здания.',
+    'Esc — отмена.',
+  ] },
+  polygon: { title: 'Полигон (L)', desc: 'Рисует новую часть произвольной формы — плоский контур; потом её можно вытянуть (P). На карте — новое отдельное здание.', items: [
+    'Клики — вершины на земле или на плоской крыше; клик в первую вершину или Enter — замкнуть.',
+    'Число + Enter — длина текущей стороны, Backspace — убрать последнюю точку.',
+    'Shift — держать ось здания (на привязке «продолжение» — линию ребра). Esc — отмена.',
+  ] },
+  offset: { title: 'Отступ (O)', desc: 'Строит новый плоский контур, параллельный контуру плоской крыши или низа части, — например, для парапета, надстройки или козырька.', items: [
+    'Наведите на плоскую крышу (Shift — на низ части): контур отступает наружу или внутрь по стороне курсора.',
+    'Клик — новый плоский контур на высоте грани; число + Enter — отступ в метрах (минус — внутрь).',
+    'Новая часть берёт этажи или метры, как у исходной. Esc — отмена, повторный Esc — выйти.',
+  ] },
+  measure: { title: 'Рулетка (T)', desc: 'Измеряет расстояние между двумя точками; данные не меняет.', items: [
+    'Клик — первая точка, второй клик — вторая: расстояние, по горизонтали и по высоте.',
+    'Работают привязки; Shift — держать ось здания (x, y или вертикаль).',
+    'Esc — сбросить замер, повторный Esc — выйти.',
+  ] },
+  pick: { title: 'Заливка (B): взять образец', desc: 'Переносит цвет и материал с одной поверхности на другие. Сначала возьмите образец.', items: [
+    'Ctrl/Cmd/Alt+клик по крыше или стене — взять цвет и материал.',
+    'Крыша — roof:colour и roof:material, стена — building:colour и building:material.',
+  ] },
+  paint: { title: 'Заливка (B)', desc: 'Переносит цвет и материал с одной поверхности на другие. Образец взят — назначайте его поверхностям.', items: [
+    'Клик по крыше или стене — назначить взятые цвет и материал этой поверхности.',
+    'Ctrl/Cmd/Alt+клик — взять новый образец. Esc — выключить.',
+  ] },
+};
+let helpShown = false;
+try { helpShown = localStorage.getItem('help-panel') === 'on'; } catch { /* по умолчанию скрыта */ }
+let helpTopic = '';
+function renderHelp() {
+  helpPanel.hidden = !helpShown;
+  for (const b of helpBtns) b.classList.toggle('active', helpShown);
+  if (!helpShown) return;
+  const key = moveTool.active ? 'move' : pushTool.active ? 'push' : splitTool.active ? 'split'
+    : drawTool.active ? drawTool.shape : measureTool.active ? 'measure' : offsetTool.active ? 'offset'
+    : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : focus ? 'focus' : 'map';
+  if (key === helpTopic) return;
+  helpTopic = key;
+  const t = HELP[key];
+  helpTool.textContent = `— ${t.title}`;
+  helpEl.innerHTML = `<p>${t.desc}</p><ul>${t.items.map((i) => `<li>${i}</li>`).join('')}</ul>`;
+}
+for (const b of helpBtns) b.addEventListener('click', () => {
+  helpShown = !helpShown;
+  try { localStorage.setItem('help-panel', helpShown ? 'on' : 'off'); } catch { /* только до перезагрузки */ }
+  helpTopic = '';
+  renderHelp();
+});
+
 const snapsBtn = document.querySelector<HTMLButtonElement>('[data-snaps]')!;
 snapsBtn.addEventListener('click', () => toggleSnaps());
 
@@ -3497,3 +3590,4 @@ const tagTable = (tags: Record<string, unknown>) =>
 if (import.meta.env.DEV) Object.assign(window, { map, overpassLayer, overpass, orbit, select, enterFocus, getSession: () => session });
 
 void openEditLink();
+renderHelp();

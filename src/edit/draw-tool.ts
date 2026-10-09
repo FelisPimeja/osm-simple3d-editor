@@ -7,8 +7,8 @@ export type DrawShape = 'polygon' | 'rect';
 /** Способ построения прямоугольника: по двум углам вдоль осей здания, по трём точкам (повёрнутый), от центра. */
 export type RectMode = 'corners' | 'three' | 'center';
 
-const RECT_MODES: RectMode[] = ['corners', 'three', 'center'];
-const RECT_LABELS: Record<RectMode, string> = { corners: 'по двум углам', three: 'по трём точкам', center: 'от центра' };
+export const RECT_MODES: RectMode[] = ['corners', 'three', 'center'];
+export const RECT_LABELS: Record<RectMode, string> = { corners: 'по двум углам', three: 'по трём точкам', center: 'от центра' };
 /** Направление ребра ближе этого угла к оси здания — выравниваем по оси, градусы. */
 const AXIS_LOCK_DEG = 3;
 /** Клик ближе стольких px к первой точке замыкает полигон. */
@@ -68,6 +68,16 @@ export class DrawTool {
     this.hint();
   }
 
+  /** Сменить способ построения прямоугольника; первая точка остаётся (угол, начало стороны или центр). */
+  setRectMode(mode: RectMode) {
+    this.rectMode = mode;
+    if (this.state !== 'draw' || this.shape !== 'rect') return;
+    this.pts = this.pts.slice(0, 1);
+    this.typed = '';
+    if (this.lastPoint) this.move(this.lastPoint); else this.preview();
+    this.hint();
+  }
+
   stop() {
     this.reset();
     this.state = 'off';
@@ -109,9 +119,7 @@ export class DrawTool {
       return true;
     }
     if (e.key === 'Tab' && this.shape === 'rect') {
-      this.rectMode = RECT_MODES[(RECT_MODES.indexOf(this.rectMode) + 1) % RECT_MODES.length];
-      this.reset();
-      this.hint();
+      this.setRectMode(RECT_MODES[(RECT_MODES.indexOf(this.rectMode) + 1) % RECT_MODES.length]);
       return true;
     }
     // «;» — по физической клавише (в русской раскладке там «ж»)

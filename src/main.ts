@@ -19,7 +19,7 @@ import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
 import { SplitTool, type CutPoint } from './edit/split-tool';
-import { DrawTool, type DrawShape } from './edit/draw-tool';
+import { DrawTool, RECT_LABELS, RECT_MODES, type DrawShape, type RectMode } from './edit/draw-tool';
 import { suggestComment } from './edit/changeset-comment';
 import { EditSession, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
@@ -924,6 +924,7 @@ const drawTool = new DrawTool(overpassLayer, map.getContainer(), createDrawn, (h
   if (!drawTool.active && sketching) endSketch();
   else syncMapTools();
   rectBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'rect');
+  syncRectIcons();
   polyBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'polygon');
   if (hint) setStatus(hint, error); else showOverpassStatus();
 });
@@ -938,6 +939,53 @@ const mapPolyBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="poly
 let sketching = false;
 mapRectBtn.addEventListener('click', () => toggleSketch('rect'));
 mapPolyBtn.addEventListener('click', () => toggleSketch('polygon'));
+
+// Способ построения прямоугольника — всплывашка у кнопки (стрелка в углу): выбранный способ встаёт на кнопку
+const RECT_ICONS: Record<RectMode, string> = {
+  corners: '<path d="M3.5 6h13v8h-13z"/><circle cx="3.5" cy="6" r="1.3" fill="currentColor"/><circle cx="16.5" cy="14" r="1.3" fill="currentColor"/>',
+  three: '<path d="M3.5 6h13v8h-13z"/><circle cx="3.5" cy="14" r="1.3" fill="currentColor"/><circle cx="16.5" cy="14" r="1.3" fill="currentColor"/><circle cx="16.5" cy="6" r="1.3" fill="currentColor"/>',
+  center: '<path d="M3.5 6h13v8h-13z"/><circle cx="10" cy="10" r="1.3" fill="currentColor"/><circle cx="16.5" cy="14" r="1.3" fill="currentColor"/>',
+};
+const rectSvg = (m: RectMode) => `<svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">${RECT_ICONS[m]}</svg>`;
+try { const m = localStorage.getItem('rect-mode') as RectMode | null; if (m && RECT_MODES.includes(m)) drawTool.rectMode = m; } catch { /* нет хранилища */ }
+let rectFlyout: HTMLElement | undefined;
+function closeRectFlyout() { rectFlyout?.remove(); rectFlyout = undefined; }
+function syncRectIcons() {
+  for (const [btn, what] of [[rectBtn, 'новая часть'], [mapRectBtn, 'новое здание']] as const) {
+    btn.innerHTML = `${rectSvg(drawTool.rectMode)}<span class="flyout-arrow" data-flyout title="Способ построения"></span>`;
+    btn.title = `Прямоугольник ${RECT_LABELS[drawTool.rectMode]}: ${what} (R; Tab или стрелка в углу — способ построения)`;
+  }
+  try { localStorage.setItem('rect-mode', drawTool.rectMode); } catch { /* нет хранилища */ }
+}
+function openRectFlyout(btn: HTMLButtonElement, start: () => void) {
+  closeRectFlyout();
+  const fly = document.createElement('div');
+  fly.className = 'tool-flyout';
+  fly.innerHTML = RECT_MODES.map((m) => `<button type="button" data-mode="${m}" class="${m === drawTool.rectMode ? 'active' : ''}" title="Прямоугольник ${RECT_LABELS[m]}">${rectSvg(m)}<span>${RECT_LABELS[m]}</span></button>`).join('');
+  fly.addEventListener('click', (e) => {
+    const m = (e.target as HTMLElement).closest<HTMLElement>('[data-mode]')?.dataset.mode as RectMode | undefined;
+    if (!m) return;
+    e.stopPropagation();
+    closeRectFlyout();
+    drawTool.setRectMode(m);
+    syncRectIcons();
+    if (!(drawTool.active && drawTool.shape === 'rect')) start();
+  });
+  btn.after(fly);
+  const r = btn.getBoundingClientRect(), pr = btn.offsetParent!.getBoundingClientRect();
+  fly.style.top = `${r.top - pr.top}px`;
+  rectFlyout = fly;
+}
+for (const [btn, start] of [[rectBtn, () => startDraw('rect')], [mapRectBtn, () => startSketch('rect')]] as const) {
+  // Стрелка — до обработчика кнопки (capture), чтобы клик по ней не включал инструмент
+  btn.addEventListener('click', (e) => {
+    if (!(e.target as HTMLElement).closest('[data-flyout]')) { closeRectFlyout(); return; }
+    e.stopImmediatePropagation();
+    if (rectFlyout && rectFlyout.previousElementSibling === btn) closeRectFlyout(); else openRectFlyout(btn, start);
+  }, true);
+}
+document.addEventListener('pointerdown', (e) => { if (rectFlyout && !(e.target as HTMLElement).closest('.tool-flyout, [data-flyout]')) closeRectFlyout(); });
+syncRectIcons();
 
 function toggleSketch(shape: DrawShape) {
   if (sketching && drawTool.shape === shape) return drawTool.stop();

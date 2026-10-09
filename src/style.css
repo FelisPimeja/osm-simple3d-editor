@@ -17,6 +17,16 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
   font-size: 20px; line-height: 1; cursor: pointer; color: #333; }
 .toolbar button:hover { background: #f3f4f6; }
 .toolbar button.active { background: #dbeafe; border-color: #93c5fd; }
+.toolbar { position: relative; }
+.toolbar button { position: relative; }
+/* Стрелка в углу кнопки — у инструмента есть варианты */
+.flyout-arrow { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; cursor: pointer; }
+.flyout-arrow::after { content: ''; position: absolute; right: 2px; bottom: 2px; border: 3.5px solid transparent;
+  border-right-color: #6b7280; border-bottom-color: #6b7280; }
+.flyout-arrow:hover::after { border-right-color: #111; border-bottom-color: #111; }
+.tool-flyout { position: absolute; left: calc(100% + 6px); display: flex; flex-direction: column; gap: 2px; padding: 4px;
+  background: rgba(255,255,255,.98); border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.2); z-index: 5; }
+.tool-flyout button { width: auto; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 7px; font-size: 13px; white-space: nowrap; }
 .toolbar-sep { height: 1px; margin: 2px 4px; background: #e5e7eb; }
 /* Ввод расстояния (как VCB в SketchUp) */
 .vcb { position: absolute; right: 346px; bottom: 36px; z-index: 3; display: flex; align-items: baseline; gap: 6px;

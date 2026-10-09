@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights } from '../osm/heights';
 import type { Feature3D, LonLat } from '../osm/model';
-import { buildTriangles, type Pt } from './building-geometry';
+import { bottomTriangles, buildTriangles, type Pt } from './building-geometry';
 import { timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
 
@@ -522,7 +522,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         n.subVectors(c, b).cross(a.clone().sub(b));
         if (n.lengthSq() < 1e-10) continue;
         n.normalize();
-        out.push({ key, t: p.distanceTo(ray.origin), local: p.clone(), face: Math.abs(n.z) < 0.3 ? 'wall' : 'roof' });
+        // Горизонтальный треугольник на высоте низа объекта с объёмом — его дно, а не крыша
+        const bottom = Math.abs(n.z) >= 0.3 && Math.abs(p.z - it.box.min.z) < 1e-3 && it.box.max.z - it.box.min.z >= FOOTPRINT_HEIGHT;
+        out.push({ key, t: p.distanceTo(ray.origin), local: p.clone(), face: Math.abs(n.z) < 0.3 ? 'wall' : bottom ? 'bottom' : 'roof' });
       }
       // Дно: плоскость низа, точка внутри контура
       const z = it.box.min.z;
@@ -536,7 +538,10 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
       }
     }
-    return out.sort((x, y) => x.t - y.t);
+    // Совпадающие грани (плоский контур на крыше соседа, отступ) — первым выделенный объект, затем плоский:
+    // иначе инструмент берёт соседа, хотя выделен и виден новый контур
+    const rank = (h: FocusHit) => (this.selected.has(h.key) ? 0 : thinItem(g.byKey.get(h.key)!) ? 1 : 2);
+    return out.sort((x, y) => (Math.abs(x.t - y.t) < TIE_DEPTH ? rank(x) - rank(y) || x.t - y.t : x.t - y.t));
   }
 
   /** Контуры объекта сцены режима здания в метрах (для работы с рёбрами). */
@@ -1624,6 +1629,8 @@ const STROKE_MATERIAL = new THREE.LineBasicMaterial({ vertexColors: true });
 
 /** Высота плоского следа на земле, м: чуть выше земли, чтобы не мерцать с подложкой. */
 const FOOTPRINT_HEIGHT = 0.1;
+/** Пересечения ближе этого друг к другу по лучу — одна поверхность (совпадающие грани разных объектов), м. */
+const TIE_DEPTH = 0.02;
 
 /** Унаследованные частью теги (цвета, форма крыши, материалы контура/отношения) — задаёт main. */
 let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;
@@ -1642,6 +1649,8 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     heights = { ...heights, min, wallTop: min + g.footprint, top: min + g.footprint, roofShape: 'flat', roofHeight: 0 };
   }
   const tri = buildTriangles(polys, heights, tags);
+  // Дно — у объектов с объёмом над землёй (видно снизу); на земле его не видно — треугольники не тратим. Цвет — как у стен
+  if (!flat && heights.min > 0.01 && heights.top - heights.min >= FOOTPRINT_HEIGHT) tri.walls.push(...bottomTriangles(polys, heights.min));
   const positions = new Float32Array(tri.walls.length + tri.roof.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);

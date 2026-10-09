@@ -107,6 +107,13 @@ function addFlat(out: number[], p: LocalPolygon, z: number) {
   }
 }
 
+/** Дно (плоский низ) объекта — треугольники на высоте z. */
+export function bottomTriangles(polygons: LocalPolygon[], z: number): number[] {
+  const out: number[] = [];
+  for (const p of polygons) addFlat(out, p, z);
+  return out;
+}
+
 function areaCentroid(ring: Pt[]): Pt | undefined {
   let a = 0, x = 0, y = 0;
   for (let i = 0; i < ring.length; i++) {

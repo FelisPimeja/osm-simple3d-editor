@@ -21,6 +21,7 @@ import { PushTool, type PushTarget } from './edit/push-tool';
 import { SplitTool, type CutPoint } from './edit/split-tool';
 import { insertInLine, insertInRing, restructureRing, type Insert, type RingWay } from './edit/topology';
 import { MeasureTool } from './edit/measure-tool';
+import { OffsetTool } from './edit/offset-tool';
 import { setToolCursor, type ToolCursor } from './view/cursors';
 import { PAINT_TAGS, PaintTool } from './edit/paint-tool';
 import { DrawTool, RECT_LABELS, RECT_MODES, type DrawShape, type RectMode } from './edit/draw-tool';
@@ -513,6 +514,7 @@ map.on('click', (e) => {
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (measureTool.active) { measureTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
+  if (offsetTool.active) { offsetTool.click([e.point.x, e.point.y], e.originalEvent.shiftKey); return; }
   if (paintTool.active) {
     // Образец уже взят на нажатии (Ctrl/Cmd/Alt) — этот клик его же
     if (performance.now() - paintPickedAt > 600) paintTool.click([e.point.x, e.point.y], false);
@@ -520,7 +522,7 @@ map.on('click', (e) => {
   }
   if (splitTool.active) {
     const p: [number, number] = [e.point.x, e.point.y];
-    if (!splitTool.click(p) && splitTool.state === 'pick') { splitTool.stop(); measureTool.stop(); paintTool.stop(); select(undefined); }
+    if (!splitTool.click(p) && splitTool.state === 'pick') { splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); select(undefined); }
     return;
   }
   if (pushTool.active) {
@@ -778,7 +780,7 @@ function exitFocus() {
   overpassLayer.setHover(undefined);
   moveTool.stop();
   pushTool.stop();
-  splitTool.stop(); measureTool.stop(); paintTool.stop();
+  splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   focusToolbar.hidden = true;
   syncMapTools();
@@ -848,6 +850,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
   if (point && splitTool.state === 'cut') splitTool.move(point);
   if (point && drawTool.active) drawTool.move(point);
   if (point && measureTool.active) measureTool.move(point);
+  if (point && offsetTool.active) offsetTool.move(point);
   if (pushTool.active || splitTool.active || drawTool.active || measureTool.active || copyPick) {
     // Рассечение: подсвечиваем вершины и середины рёбер объектов (концы разреза)
     currentSnap = pushTool.active ? (pushTool.state === 'push' ? pushTool.snap : undefined)
@@ -910,7 +913,7 @@ pushBtn.addEventListener('click', () => (pushTool.active ? pushTool.stop() : sta
 function startPush() {
   if (!focus) return;
   moveTool.stop();
-  splitTool.stop(); measureTool.stop(); paintTool.stop();
+  splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   pushTool.start();
 }
@@ -931,6 +934,7 @@ function startSplit() {
   drawTool.stop();
   measureTool.stop();
   paintTool.stop();
+  offsetTool.stop();
   splitTool.begin();
 }
 
@@ -945,7 +949,7 @@ measureBtn.addEventListener('click', () => (measureTool.active ? measureTool.sto
 
 function startMeasure() {
   if (!focus) return;
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop();
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop(); offsetTool.stop();
   measureTool.start();
 }
 
@@ -975,8 +979,61 @@ paintBtn.addEventListener('click', () => (paintTool.active ? paintTool.stop() : 
 
 function startPaint() {
   if (!focus) return;
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop();
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); offsetTool.stop();
   paintTool.start();
+}
+
+// Инструмент «Отступ» (O): от контура плоской крыши или низа (Shift) — новый плоский контур наружу или внутрь
+const offsetBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="offset"]')!;
+const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
+  (point, back) => {
+    const hits = overpassLayer.focusRayHits(point, (k) => !!focus?.members.includes(k) && !focusHidden.has(k));
+    if (!hits.length) return;
+    const key = hits[0].key;
+    const box = overpassLayer.focusItemBox(key);
+    const polys = overpassLayer.focusPolygons(key);
+    const f = entity(key) as Feature3D | undefined;
+    if (!box || !polys?.length || !f) return;
+    let face: 'top' | 'bottom' = 'bottom';
+    if (!back) {
+      const h = hits[0];
+      const shape = f.tags['roof:shape'];
+      // Только плоская крыша: верх у скатов не плоский — откладывать не от чего
+      if (h.face === 'wall' || (shape && shape !== 'flat') || Math.abs(h.local.z - box.max.z) > 0.05) {
+        return 'Отступ — от плоской крыши (или Shift+клик — от низа).';
+      }
+      face = 'top';
+    }
+    const at: [number, number] = [hits[0].local.x, hits[0].local.y];
+    const poly = polys.find((p) => pointInRing(at, p.outer)) ?? polys[0];
+    return { key, face, z: face === 'top' ? box.max.z : box.min.z, ring: poly.outer };
+  },
+  (t, ring) => {
+    const tags = entity(t.key)?.tags ?? {};
+    const fmt = (v: number) => String(Math.round(v * 100) / 100);
+    const out: Record<string, string> = { 'building:part': 'yes' };
+    // Как у исходной части: только этажи — новый контур тоже этажами, иначе метрами
+    if (tags.height === undefined && tags.min_height === undefined && tags['building:levels'] !== undefined) {
+      const level = t.face === 'top' ? Number(tags['building:levels']) : Number(tags['building:min_level'] ?? 0);
+      out['building:levels'] = String(level);
+      if (level > 0) out['building:min_level'] = String(level);
+    } else {
+      out.height = fmt(t.z);
+      if (t.z > 0.01) out.min_height = fmt(t.z);
+    }
+    return createDrawn(ring, t.z, out);
+  },
+  (hint, error) => {
+    offsetBtn.classList.toggle('active', offsetTool.active);
+    syncCursor();
+    if (hint) setStatus(hint, error); else showOverpassStatus();
+  });
+offsetBtn.addEventListener('click', () => (offsetTool.active ? offsetTool.stop() : startOffset()));
+
+function startOffset() {
+  if (!focus) return;
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); paintTool.stop();
+  offsetTool.start();
 }
 
 // Образец — Ctrl/Cmd/Alt+клик. На macOS Ctrl+клик — это правый клик (click не приходит), поэтому берём на нажатии
@@ -992,7 +1049,7 @@ map.getContainer().addEventListener('pointerdown', (e) => {
 let pickModifier = false;
 function syncCursor() {
   const tool: ToolCursor | undefined = moveTool.active ? 'move' : pushTool.active ? 'push' : splitTool.active ? 'split'
-    : drawTool.active ? drawTool.shape : measureTool.active ? 'measure'
+    : drawTool.active ? drawTool.shape : measureTool.active ? 'measure' : offsetTool.active ? 'offset'
     : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : undefined;
   setToolCursor(map.getCanvasContainer(), tool);
 }
@@ -1006,7 +1063,7 @@ window.addEventListener('blur', () => { pickModifier = false; syncCursor(); });
 
 /** Какой-нибудь инструмент режима здания включён. */
 function toolActive(): boolean {
-  return moveTool.active || pushTool.active || splitTool.active || drawTool.active || measureTool.active || paintTool.active || !!copyPick;
+  return moveTool.active || pushTool.active || splitTool.active || drawTool.active || measureTool.active || paintTool.active || offsetTool.active || !!copyPick;
 }
 
 // Инструменты «Прямоугольник» (R) и «Полигон» (L): новая часть здания — плоский контур нулевой толщины
@@ -1145,7 +1202,7 @@ function startDraw(shape: DrawShape) {
   if (!focus) return;
   moveTool.stop();
   pushTool.stop();
-  splitTool.stop(); measureTool.stop(); paintTool.stop();
+  splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.begin(shape);
 }
 
@@ -1157,7 +1214,8 @@ const SHARE_EPS = 0.03;
  * Точки на вершинах других путей берут их узлы, точки на сторонах — новые узлы, вставленные и в эти пути.
  * Часть входит в отношение здания (у отдельного здания — в новое, исходный путь — контур). Один шаг истории.
  */
-function createDrawn(ring: [number, number][], z: number): string | undefined {
+/** tags — теги новой части (по умолчанию — плоская часть на высоте z в метрах). */
+function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<string, string>): string | undefined {
   if (sketching) return createSketched(ring);
   if (!focus) return 'Нет здания.';
   const lngLat = (p: [number, number]) => overpassLayer.focusToLngLat(p[0], p[1])!;
@@ -1203,8 +1261,8 @@ function createDrawn(ring: [number, number][], z: number): string | undefined {
   const fmt = (v: number) => String(Math.round(v * 100) / 100);
   // Всё нарисованное в режиме здания — части этого здания (и снаружи контура: контур потом расширяется
   // кнопкой «Обновить контур»); у отдельного здания — в новом отношении
-  const tags: Record<string, string> = { 'building:part': 'yes', height: fmt(z) };
-  if (z > 0.01) tags.min_height = fmt(z);
+  const tags: Record<string, string> = tagsFor ?? { 'building:part': 'yes', height: fmt(z) };
+  if (!tagsFor && z > 0.01) tags.min_height = fmt(z);
   const part: Feature3D = { key, type: 'way', id: wayId, version: 0, kind: 'part', tags,
     polygons: [{ outer: ids.map((id) => coord.get(id)!), inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
   const edits: Parameters<typeof session.editMany>[0] = [
@@ -1262,7 +1320,7 @@ function copySelected() {
     items.push({ tags: { ...f.tags }, polygons: f.polygons.map((p) => ({ outer: p.outer.map((c) => [...c] as LonLat), inners: [] })) });
   }
   if (!items.length) return setStatus(keys.length ? 'Копируются только части-пути (не контур здания и не мультиполигоны).' : 'Выберите части здания, затем Ctrl+C.', true);
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); drawTool.stop();
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   copyPick = { items };
   setStatus(`Копирование (${items.length}${skipped ? `, пропущено ${skipped} — контур или мультиполигон` : ''}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.`);
   if (lastPointer) updateSnap(lastPointer);
@@ -1327,7 +1385,7 @@ function pasteClipboard() {
   renderSelected();
   const b = overpassLayer.focusToLocal(clipboard.base.lngLat);
   if (!b) return;
-  pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); drawTool.stop();
+  pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   moveTool.drag(keys, new THREE.Vector3(b[0], b[1], clipboard.base.z),
     `Вставка (${keys.length}): кликните, куда поставить базовую точку. Shift/стрелки — ось, число + Enter — сдвиг. Esc — отмена вставки.`,
     () => setStatus(`Вставлено частей: ${keys.length}.`),
@@ -2006,7 +2064,7 @@ function startMove() {
     return setStatus('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
   }
   pushTool.stop();
-  splitTool.stop(); measureTool.stop(); paintTool.stop();
+  splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   moveTool.start(keys);
 }
@@ -2084,14 +2142,14 @@ document.addEventListener('keydown', (e) => {
     e.stopImmediatePropagation();
     moveTool.stop();
     pushTool.stop();
-    splitTool.stop(); measureTool.stop(); paintTool.stop();
+    splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop();
     drawTool.stop();
     cancelCopyPick();
     updateSnap(undefined);
     return;
   }
   if (e.key === 'Escape' && copyPick) { e.preventDefault(); e.stopImmediatePropagation(); cancelCopyPick(); return; }
-  if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || paintTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+  if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || paintTool.key(e) || offsetTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   // S — привязки вкл/выкл, в том числе посреди перемещения или вытягивания
   if (focus && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
@@ -2138,6 +2196,7 @@ document.addEventListener('keydown', (e) => {
     : e.code === 'KeyK' && !e.shiftKey ? 'split'
     : e.code === 'KeyT' && !e.shiftKey ? 'measure'
     : e.code === 'KeyB' && !e.shiftKey ? 'paint'
+    : e.code === 'KeyO' && !e.shiftKey ? 'offset'
     : e.code === 'KeyH' ? (e.shiftKey ? 'show-all' : 'hide')
     : e.code === 'KeyR' && !e.shiftKey ? 'rect'
     : e.code === 'KeyL' && !e.shiftKey ? 'polygon' : undefined;
@@ -2146,7 +2205,7 @@ document.addEventListener('keydown', (e) => {
   closeCtxMenu();
   cancelCopyPick();
   if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'split') startSplit();
-  else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint();
+  else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon') startDraw(action); else focusAction(action);
 }, { capture: true });
 document.addEventListener('keyup', (e) => { if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e)) e.preventDefault(); });

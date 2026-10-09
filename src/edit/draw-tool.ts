@@ -386,7 +386,7 @@ export class DrawTool {
 }
 
 /** Контур годится для части: ≥ 3 точек, без самопересечений и не слишком мал. */
-function validRing(ring: Pt[]): string | undefined {
+export function validRing(ring: Pt[]): string | undefined {
   if (ring.length < 3) return 'Нужно хотя бы три точки.';
   let s = 0;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) s += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);

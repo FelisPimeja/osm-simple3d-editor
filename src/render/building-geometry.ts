@@ -33,7 +33,10 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   const single = polygons.length === 1 && polygons[0].inners.length === 0 ? polygons[0] : undefined;
   const quadRoof = single && single.outer.length === 4 && SUPPORTED_QUAD.has(shape) && shape !== 'gabled';
   // Двускатная и сводчатая на почти прямоугольных контурах — вдоль оси описанного прямоугольника (учитывает roof:orientation)
-  const axis = single && AXIS_SHAPES.has(shape) ? rectAxis(single.outer) : undefined;
+  // roof:orientation=across скелет не умеет (у него конёк всегда вдоль) — для неё допускаем контуры кривее:
+  // изогнутая полоса (арка, крыло вдоль дуги) заполняет описанный прямоугольник заметно хуже 85%
+  const across = tags['roof:orientation'] === 'across';
+  const axis = single && AXIS_SHAPES.has(shape) ? rectAxis(single.outer, across ? RECT_FILL_ACROSS : RECT_FILL) : undefined;
   // Скатные крыши на остальных контурах (в т.ч. с дырами и из нескольких полигонов) — по straight skeleton
   const skeletons = !quadRoof && !axis && SKELETON_SHAPES.has(shape) ? polygons.map((p) => skeletonOf(dropCollinear(p.outer), p.inners.map(dropCollinear))) : undefined;
   const pending = !!skeletons?.some((sk) => sk === 'pending');
@@ -275,8 +278,13 @@ interface RectAxis { dir: Pt; center: Pt; length: number; width: number }
 
 /** Доля площади описанного прямоугольника, начиная с которой контур считаем «почти прямоугольным». */
 const RECT_FILL = 0.85;
+/**
+ * То же для roof:orientation=across: иначе контур уходит в скелет и конёк ложится вдоль. Изогнутые узкие
+ * полосы (рёбра арок, way/1245604260) заполняют описанный прямоугольник меньше чем на 60%.
+ */
+const RECT_FILL_ACROSS = 0.4;
 
-function rectAxis(ring: Pt[]): RectAxis | undefined {
+function rectAxis(ring: Pt[], fill = RECT_FILL): RectAxis | undefined {
   let best: RectAxis & { area: number } | undefined;
   for (let i = 0; i < ring.length; i++) {
     const a = ring[i], b = ring[(i + 1) % ring.length];
@@ -300,7 +308,7 @@ function rectAxis(ring: Pt[]): RectAxis | undefined {
   if (!best) return;
   let area = 0;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) area += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
-  return Math.abs(area / 2) >= RECT_FILL * best.area ? best : undefined;
+  return Math.abs(area / 2) >= fill * best.area ? best : undefined;
 }
 
 /**

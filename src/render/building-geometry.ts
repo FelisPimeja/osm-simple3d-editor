@@ -614,3 +614,52 @@ function longestEdgeNormal(ring: Pt[]): number {
   }
   return deg;
 }
+
+/** Допуск распознавания фигур: углы прямоугольника, °; разброс радиусов и сторон — доля среднего. */
+const SHAPE_ANGLE_DEG = 2, SHAPE_REGULAR = 0.02, SHAPE_CIRCLE = 0.04;
+
+/**
+ * Распознать фигуру контура (кольцо без повтора первой точки): прямоугольник (квадрат), правильный
+ * многоугольник или окружность (много вершин на одинаковом расстоянии от центра — так в OSM рисуют круглые
+ * здания, баки, башни). Центр и подпись для привязки; иначе undefined.
+ */
+export function shapeOf(ring: Pt[]): { c: Pt; label: string; r?: number } | undefined {
+  // Точки на прямой (лишние узлы на сторонах) не считаем вершинами
+  const pts = ring.filter((p, i) => {
+    const a = ring[(i - 1 + ring.length) % ring.length], b = ring[(i + 1) % ring.length];
+    const cr = (p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0]);
+    return Math.abs(cr) > 1e-3 * Math.hypot(b[0] - a[0], b[1] - a[1]);
+  });
+  const n = pts.length;
+  if (n < 4) return;
+  const side = (i: number) => Math.hypot(pts[(i + 1) % n][0] - pts[i][0], pts[(i + 1) % n][1] - pts[i][1]);
+  if (n === 4) {
+    const cos = Math.cos((90 - SHAPE_ANGLE_DEG) * Math.PI / 180);
+    for (let i = 0; i < 4; i++) {
+      const a = pts[(i + 3) % 4], o = pts[i], b = pts[(i + 1) % 4];
+      const u = [a[0] - o[0], a[1] - o[1]], v = [b[0] - o[0], b[1] - o[1]];
+      if (Math.abs(u[0] * v[0] + u[1] * v[1]) / (Math.hypot(u[0], u[1]) * Math.hypot(v[0], v[1])) > cos) return;
+    }
+    const c: Pt = [(pts[0][0] + pts[2][0]) / 2, (pts[0][1] + pts[2][1]) / 2];
+    return { c, label: Math.abs(side(0) - side(1)) < SHAPE_REGULAR * (side(0) + side(1)) ? 'Центр квадрата' : 'Центр прямоугольника' };
+  }
+  // Центр — центроид площади; радиусы и стороны — разброс относительно среднего
+  let A = 0, cx = 0, cy = 0;
+  for (let i = 0; i < n; i++) {
+    const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % n];
+    const k = x0 * y1 - x1 * y0;
+    A += k; cx += (x0 + x1) * k; cy += (y0 + y1) * k;
+  }
+  if (Math.abs(A) < 1e-6) return;
+  const c: Pt = [cx / (3 * A), cy / (3 * A)];
+  const radii = pts.map((p) => Math.hypot(p[0] - c[0], p[1] - c[1]));
+  const r = radii.reduce((s, x) => s + x, 0) / n;
+  const spread = (xs: number[], m: number) => Math.max(...xs.map((x) => Math.abs(x - m))) / m;
+  const sides = pts.map((_, i) => side(i));
+  const sMean = sides.reduce((s, x) => s + x, 0) / n;
+  if (spread(radii, r) < SHAPE_REGULAR && spread(sides, sMean) < SHAPE_REGULAR * 2) {
+    return { c, r, label: n >= 12 ? `Центр окружности (r ${r.toFixed(2)} м)` : `Центр ${n}-угольника` };
+  }
+  if (n >= 8 && spread(radii, r) < SHAPE_CIRCLE) return { c, r, label: `Центр окружности (r ${r.toFixed(2)} м)` };
+  return;
+}

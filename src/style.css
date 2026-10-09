@@ -318,3 +318,4 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .draw-opts[hidden] { display: none; }
 .draw-opts label { display: flex; align-items: center; gap: 8px; color: #444; }
 .draw-opts input { width: 56px; padding: 3px 5px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
+.snap-marker.shape { background: #db2777; border-radius: 50%; box-shadow: 0 0 0 3px rgba(219,39,119,.25); }

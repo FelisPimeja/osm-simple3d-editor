@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights } from '../osm/heights';
 import type { Feature3D, LonLat } from '../osm/model';
-import { bottomTriangles, buildTriangles, type Pt } from './building-geometry';
+import { bottomTriangles, buildTriangles, shapeOf, type Pt } from './building-geometry';
 import { timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
 
@@ -461,7 +461,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!best) return;
     const { s, px, along } = best;
     const merc = new MercatorCoordinate(g.origin.x + s.p.x * g.metersToMerc, g.origin.y - s.p.y * g.metersToMerc, 0);
-    return { kind: s.kind, key: s.key, local: s.p.clone(), lngLat: merc.toLngLat(), altitude: s.p.z, point: px, along };
+    return { kind: s.kind, key: s.key, local: s.p.clone(), lngLat: merc.toLngLat(), altitude: s.p.z, point: px, along, label: s.label };
   }
 
   /** Ближайший к лучу через точку экрана узел сетки на земле (z = 0). */
@@ -598,18 +598,33 @@ export class BuildingsLayer implements CustomLayerInterface {
    * offset undefined — вернуть на место.
    */
   setMovePreview(keys: string[], offset: THREE.Vector3 | undefined) {
+    this.setTransformPreview(keys, offset && new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z));
+  }
+
+  /** Предпросмотр поворота keys на angle (радианы, против часовой) вокруг вертикали через pivot; undefined — сбросить. */
+  setRotatePreview(keys: string[], pivot: THREE.Vector3 | undefined, angle: number) {
+    this.setTransformPreview(keys, pivot && new THREE.Matrix4().makeTranslation(pivot.x, pivot.y, 0)
+      .multiply(new THREE.Matrix4().makeRotationZ(angle)).multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, 0)));
+  }
+
+  /** Предпросмотр преобразования m у объектов keys (перемещение, поворот); undefined — вернуть как было. */
+  private setTransformPreview(keys: string[], m: THREE.Matrix4 | undefined) {
     const g = this.groups.get(FOCUS_GROUP);
     const attr = g?.mesh?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
     if (!g || !attr) return;
     const pos = attr.array as Float32Array;
-    const [dx, dy, dz] = offset ? [offset.x, offset.y, offset.z] : [0, 0, 0];
+    const e = (m ?? new THREE.Matrix4()).elements;
+    const tx = (b: Float32Array, i: number, out: Float32Array, o: number) => {
+      const x = b[i], y = b[i + 1], z = b[i + 2];
+      out[o] = e[0] * x + e[4] * y + e[8] * z + e[12];
+      out[o + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+      out[o + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+    };
     for (const k of keys) {
       const it = g.byKey.get(k);
       if (!it || g.hidden.has(k)) continue;
       const base = it.positions, o = it.start * 3;
-      for (let i = 0; i < base.length; i += 3) {
-        pos[o + i] = base[i] + dx; pos[o + i + 1] = base[i + 1] + dy; pos[o + i + 2] = base[i + 2] + dz;
-      }
+      for (let i = 0; i < base.length; i += 3) tx(base, i, pos, o + i);
       // Стекло — в своём буфере, в общем его диапазоны нулевые
       const gattr = g.glass?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
       let go = it.glassStart * 3;
@@ -617,25 +632,29 @@ export class BuildingsLayer implements CustomLayerInterface {
         pos.fill(0, o + a * 3, o + b * 3);
         if (gattr && it.glassStart >= 0) {
           const gp = gattr.array as Float32Array;
-          for (let i = a * 3; i < b * 3; i += 3, go += 3) { gp[go] = base[i] + dx; gp[go + 1] = base[i + 1] + dy; gp[go + 2] = base[i + 2] + dz; }
+          for (let i = a * 3; i < b * 3; i += 3, go += 3) tx(base, i, gp, go);
           gattr.needsUpdate = true;
         }
       }
     }
     attr.needsUpdate = true;
-    // Рёбра перемещаемых — отдельным объектом, сдвигаемым целиком; остальные остаются на месте
-    if (offset && !this.movingEdges && this.graphics.edges && g.mesh) {
+    // Рёбра преобразуемых — отдельным объектом с той же матрицей; остальные остаются на месте
+    if (m && !this.movingEdges && this.graphics.edges && g.mesh) {
       this.applyEdges(g, new Set(keys));
       this.movingEdges = edgeLines(keys.filter((k) => !g.hidden.has(k)).map((k) => g.byKey.get(k)).filter((it): it is Item => !!it), EDGE_MATERIAL);
       g.scene.add(this.movingEdges);
-    } else if (!offset && this.movingEdges) {
+    } else if (!m && this.movingEdges) {
       this.movingEdges.parent?.remove(this.movingEdges);
       this.movingEdges.geometry.dispose();
       this.movingEdges = undefined;
       this.applyEdges(g);
     }
-    this.movingEdges?.position.set(dx, dy, dz);
-    if (this.hiddenEdges) this.hiddenEdges.position.set(dx, dy, dz);
+    for (const obj of [this.movingEdges, this.hiddenEdges]) {
+      if (!obj) continue;
+      obj.matrixAutoUpdate = false;
+      obj.matrix.copy(m ?? new THREE.Matrix4());
+      obj.matrixWorldNeedsUpdate = true;
+    }
     this.map?.triggerRepaint();
   }
 
@@ -769,7 +788,8 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Контур в процессе рисования (метры сцены режима здания): сплошные стороны, пунктиром — замыкающая
    * (если closed) и полупрозрачная заливка, когда точек ≥ 3. Поверх геометрии.
    */
-  setDrawPreview(points: THREE.Vector3[] | undefined, closed = false) {
+  /** Набросок контура; open — просто ломаная (без замыкания и заливки: стороны угла поворота). */
+  setDrawPreview(points: THREE.Vector3[] | undefined, closed = false, open = false) {
     const g = this.groups.get(FOCUS_GROUP);
     if (this.drawPreview) {
       this.drawPreview.parent?.remove(this.drawPreview);
@@ -782,7 +802,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x1d4ed8, ...overlay }));
       line.renderOrder = 1003;
       root.add(line);
-      if (points.length >= 3) {
+      if (points.length >= 3 && !open) {
         const close = new THREE.Line(new THREE.BufferGeometry().setFromPoints([points[points.length - 1], points[0]]),
           closed ? new THREE.LineBasicMaterial({ color: 0x1d4ed8, ...overlay })
             : new THREE.LineDashedMaterial({ color: 0x1d4ed8, dashSize: 0.4, gapSize: 0.3, ...overlay }));
@@ -1449,14 +1469,14 @@ function pointInLocalRing([x, y]: Pt, ring: Pt[]): boolean {
   return inside;
 }
 
-export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'grid' | 'perpendicular' | 'edge' | 'extension';
+export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'shape' | 'grid' | 'perpendicular' | 'edge' | 'extension';
 /** Ключ привязки к узлу сетки основания: фильтр snapAt пропускает его, если инструменту нужна и сетка. */
 export const GRID_SNAP_KEY = '@grid';
-interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3 }
+interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3; label?: string }
 interface SnapEdge { key: string; a: THREE.Vector3; b: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 /** along — у продолжения ребра: конец ребра, от которого идёт продолжение (для пунктира). */
-export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number]; along?: THREE.Vector3 }
+export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number]; along?: THREE.Vector3; label?: string }
 const SNAP_RADIUS_PX = 12;
 /** Длина стрелок осей в начале координат здания, м — одна клетка сетки. */
 const AXES_LENGTH = 10;
@@ -1467,7 +1487,7 @@ const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
 const SNAP_HIDDEN_PENALTY_PX = 100;
 /** Точка на ребре — последней: курсор у ребра почти всегда, она не должна перебивать вершины и середины. */
-const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, grid: 2, center: 2, extension: 4, edge: 3 };
+const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, shape: 1, grid: 2, center: 2, extension: 4, edge: 3 };
 /** Как далеко за конец ребра тянется его продолжение, м. */
 const EXTENSION_M = 30;
 /** Продолжение ловит курсор ближе обычного (px): иначе срабатывает почти везде вокруг здания. */
@@ -1497,12 +1517,12 @@ function collectSnaps(g: MeshGroup): { points: SnapPoint[]; edges: SnapEdge[] } 
     seen.add(id);
     edges.push({ key, a: new THREE.Vector3(ax, ay, az), b: new THREE.Vector3(bx, by, bz) });
   };
-  const add = (kind: SnapKind, key: string, x: number, y: number, z: number) => {
+  const add = (kind: SnapKind, key: string, x: number, y: number, z: number, label?: string) => {
     // Общие вершины соседних частей — одна точка
     const id = `${kind}:${x.toFixed(2)}:${y.toFixed(2)}:${z.toFixed(2)}`;
     if (seen.has(id)) return;
     seen.add(id);
-    out.push({ kind, key, p: new THREE.Vector3(x, y, z) });
+    out.push({ kind, key, p: new THREE.Vector3(x, y, z), label });
   };
   for (const it of g.items) {
     if (it.box.isEmpty() || g.hidden.has(it.feature.key)) continue;
@@ -1523,6 +1543,9 @@ function collectSnaps(g: MeshGroup): { points: SnapPoint[]; edges: SnapEdge[] } 
           if (levels.length > 1) { add('midpoint', key, ax, ay, (z0 + z1) / 2); addEdge(key, ax, ay, z0, ax, ay, z1); } // вертикальное ребро
         }
       }
+      // Центр фигуры: прямоугольник, правильный многоугольник, окружность — внизу и вверху стен
+      const shape = shapeOf(p.outer.map(g.toLocal));
+      if (shape) for (const z of levels) add('shape', key, shape.c[0], shape.c[1], z, shape.label);
     }
     // Вершины, которых нет в контуре: сгенерированная крыша (конёк, вершина пирамиды и т. п.)
     const pos = it.positions;

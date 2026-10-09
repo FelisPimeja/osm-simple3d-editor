@@ -10,6 +10,7 @@ import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
 import { centroid, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type MemberWay, type Polygon } from './osm/model';
+import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
 import { inheritedTags, inheritedValue } from './osm/inherit';
@@ -518,6 +519,7 @@ map.on('click', (e) => {
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (measureTool.active) { measureTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
+  if (rotateTool.active) { rotateTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (offsetTool.active) { offsetTool.click([e.point.x, e.point.y], e.originalEvent.shiftKey); return; }
   if (paintTool.active) {
     // Образец уже взят на нажатии (Ctrl/Cmd/Alt) — этот клик его же
@@ -526,7 +528,7 @@ map.on('click', (e) => {
   }
   if (splitTool.active) {
     const p: [number, number] = [e.point.x, e.point.y];
-    if (!splitTool.click(p) && splitTool.state === 'pick') { splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); select(undefined); }
+    if (!splitTool.click(p) && splitTool.state === 'pick') { splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); select(undefined); }
     return;
   }
   if (pushTool.active) {
@@ -844,7 +846,7 @@ function exitFocus() {
   overpassLayer.setHover(undefined);
   moveTool.stop();
   pushTool.stop();
-  splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop();
+  splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   focusToolbar.hidden = true;
   syncMapTools();
@@ -889,7 +891,7 @@ const snapEl = document.createElement('div');
 snapEl.className = 'snap-marker';
 snapEl.hidden = true;
 map.getContainer().appendChild(snapEl);
-const SNAP_LABELS = { vertex: 'Вершина', midpoint: 'Середина', center: 'Центр', grid: 'Сетка', perpendicular: 'Перпендикуляр', edge: 'На ребре', extension: 'Продолжение' } as const;
+const SNAP_LABELS = { vertex: 'Вершина', midpoint: 'Середина', center: 'Центр', shape: 'Центр фигуры', grid: 'Сетка', perpendicular: 'Перпендикуляр', edge: 'На ребре', extension: 'Продолжение' } as const;
 /** Текущая привязка под курсором — для будущих инструментов геометрии. */
 let currentSnap: SnapHit | undefined;
 
@@ -914,19 +916,21 @@ function updateSnapMarker(point: [number, number] | undefined) {
   if (point && splitTool.state === 'cut') splitTool.move(point);
   if (point && drawTool.active) drawTool.move(point);
   if (point && measureTool.active) measureTool.move(point);
+  if (point && rotateTool.active) rotateTool.move(point);
   if (point && offsetTool.active) offsetTool.move(point);
-  if (pushTool.active || splitTool.active || drawTool.active || measureTool.active || copyPick) {
+  if (pushTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || copyPick) {
     // Рассечение: подсвечиваем вершины и середины рёбер объектов (концы разреза)
     currentSnap = pushTool.active ? (pushTool.state === 'push' ? pushTool.snap : undefined)
       : drawTool.active ? (point ? drawTool.snap : undefined)
       : measureTool.active ? (point ? measureTool.snap : undefined)
+      : rotateTool.active ? (point ? rotateTool.snap : undefined)
       : splitTool.state === 'cut' ? (point ? splitTool.snap : undefined)
       : point ? overpassLayer.snapAt(point) : undefined;
     if (currentSnap?.kind === 'center') currentSnap = undefined;
     snapEl.hidden = !currentSnap;
     if (currentSnap) {
       snapEl.className = `snap-marker ${currentSnap.kind}`;
-      snapEl.dataset.label = SNAP_LABELS[currentSnap.kind];
+      snapEl.dataset.label = currentSnap.label ?? SNAP_LABELS[currentSnap.kind];
       snapEl.style.left = `${currentSnap.point[0]}px`;
       snapEl.style.top = `${currentSnap.point[1]}px`;
     }
@@ -939,7 +943,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
   snapEl.hidden = !currentSnap;
   if (!currentSnap) return;
   snapEl.className = `snap-marker ${currentSnap.kind}`;
-  snapEl.dataset.label = SNAP_LABELS[currentSnap.kind];
+  snapEl.dataset.label = currentSnap.label ?? SNAP_LABELS[currentSnap.kind];
   snapEl.style.left = `${currentSnap.point[0]}px`;
   snapEl.style.top = `${currentSnap.point[1]}px`;
 }
@@ -962,6 +966,27 @@ const moveTool = new MoveTool(overpassLayer, map.getContainer(), commitMove, (hi
 
 moveBtn.addEventListener('click', () => (moveTool.active ? moveTool.stop() : startMove()));
 
+// Инструмент «Повернуть» (Q): вокруг вертикальной оси на угол (курсором с прилипанием к 15° или числом)
+const rotateBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="rotate"]')!;
+const rotateTool = new RotateTool(overpassLayer, map.getContainer(), commitRotate, (hint) => {
+  rotateBtn.classList.toggle('active', rotateTool.active);
+  syncCursor();
+  if (hint) setStatus(hint); else showOverpassStatus();
+});
+rotateBtn.addEventListener('click', () => (rotateTool.active ? rotateTool.stop() : startRotate()));
+
+function startRotate() {
+  if (!focus) return;
+  const keys = selection.filter((k) => focus!.members.includes(k));
+  if (!keys.length) return setStatus('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Повернуть».', true);
+  const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
+  if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
+    return setStatus('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
+  }
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  rotateTool.start(keys);
+}
+
 // Инструмент «Вытянуть»: верх/низ по вертикали (height / min_height) и стены по нормали (узлы контура)
 const pushBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="push"]')!;
 const pushTool = new PushTool(overpassLayer, map.getContainer(),
@@ -977,7 +1002,7 @@ pushBtn.addEventListener('click', () => (pushTool.active ? pushTool.stop() : sta
 function startPush() {
   if (!focus) return;
   moveTool.stop();
-  splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop();
+  splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   pushTool.start();
 }
@@ -996,7 +1021,7 @@ function startSplit() {
   moveTool.stop();
   pushTool.stop();
   drawTool.stop();
-  measureTool.stop();
+  measureTool.stop(); rotateTool.stop();
   paintTool.stop();
   offsetTool.stop();
   splitTool.begin();
@@ -1013,7 +1038,7 @@ measureBtn.addEventListener('click', () => (measureTool.active ? measureTool.sto
 
 function startMeasure() {
   if (!focus) return;
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop(); offsetTool.stop();
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop(); offsetTool.stop(); rotateTool.stop();
   measureTool.start();
 }
 
@@ -1043,7 +1068,7 @@ paintBtn.addEventListener('click', () => (paintTool.active ? paintTool.stop() : 
 
 function startPaint() {
   if (!focus) return;
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); offsetTool.stop();
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); rotateTool.stop(); offsetTool.stop();
   paintTool.start();
 }
 
@@ -1096,7 +1121,7 @@ offsetBtn.addEventListener('click', () => (offsetTool.active ? offsetTool.stop()
 
 function startOffset() {
   if (!focus) return;
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); paintTool.stop();
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop();
   offsetTool.start();
 }
 
@@ -1112,7 +1137,7 @@ map.getContainer().addEventListener('pointerdown', (e) => {
 /** Курсор над картой — по включённому инструменту; у заливки — пипетка, пока нет образца или зажат Ctrl/Cmd/Alt. */
 let pickModifier = false;
 function syncCursor() {
-  const tool: ToolCursor | undefined = moveTool.active ? 'move' : pushTool.active ? 'push' : splitTool.active ? 'split'
+  const tool: ToolCursor | undefined = moveTool.active ? 'move' : rotateTool.active ? 'rotate' : pushTool.active ? 'push' : splitTool.active ? 'split'
     : drawTool.active ? drawTool.shape : measureTool.active ? 'measure' : offsetTool.active ? 'offset'
     : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : undefined;
   setToolCursor(map.getCanvasContainer(), tool);
@@ -1128,7 +1153,7 @@ window.addEventListener('blur', () => { pickModifier = false; syncCursor(); });
 
 /** Какой-нибудь инструмент режима здания включён. */
 function toolActive(): boolean {
-  return moveTool.active || pushTool.active || splitTool.active || drawTool.active || measureTool.active || paintTool.active || offsetTool.active || !!copyPick;
+  return moveTool.active || pushTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || paintTool.active || offsetTool.active || !!copyPick;
 }
 
 // Инструменты «Прямоугольник» (R) и «Полигон» (L): новая часть здания — плоский контур нулевой толщины
@@ -1325,7 +1350,7 @@ function startDraw(shape: DrawShape) {
   if (!focus) return;
   moveTool.stop();
   pushTool.stop();
-  splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop();
+  splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.begin(shape);
 }
 
@@ -1443,7 +1468,7 @@ function copySelected() {
     items.push({ tags: { ...f.tags }, polygons: f.polygons.map((p) => ({ outer: p.outer.map((c) => [...c] as LonLat), inners: [] })) });
   }
   if (!items.length) return setStatus(keys.length ? 'Копируются только части-пути (не контур здания и не мультиполигоны).' : 'Выберите части здания, затем Ctrl+C.', true);
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   copyPick = { items };
   setStatus(`Копирование (${items.length}${skipped ? `, пропущено ${skipped} — контур или мультиполигон` : ''}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.`);
   if (lastPointer) updateSnap(lastPointer);
@@ -1508,7 +1533,7 @@ function pasteClipboard() {
   renderSelected();
   const b = overpassLayer.focusToLocal(clipboard.base.lngLat);
   if (!b) return;
-  pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   moveTool.drag(keys, new THREE.Vector3(b[0], b[1], clipboard.base.z),
     `Вставка (${keys.length}): кликните, куда поставить базовую точку. Shift/стрелки — ось, число + Enter — сдвиг. Esc — отмена вставки.`,
     () => setStatus(`Вставлено частей: ${keys.length}.`),
@@ -2187,7 +2212,7 @@ function startMove() {
     return setStatus('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
   }
   pushTool.stop();
-  splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop();
+  splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   moveTool.start(keys);
 }
@@ -2207,24 +2232,7 @@ function commitMove(keys: string[], offset: THREE.Vector3) {
   if (!moved) {
     session.editMany(features.map((f) => ({ key: f.key, tags: tags(f) })));
   } else {
-    // Узлы, общие с объектами вне перемещаемых, остаются соседям — у нас на их месте новые
-    const shared = nodesOutside(new Set(keys));
-    const fresh = new Map<number, LonLat>(), swap = new Map<number, number>();
-    const id = (n: number, c: LonLat) => {
-      if (!shared.has(n)) return n;
-      const k = swap.get(n) ?? swap.set(n, nextNewId--).get(n)!;
-      fresh.set(k, c);
-      return k;
-    };
-    const items = features.map((f) => ({
-      f,
-      rewrites: f.polygons.flatMap((p, poly) => [p.outer, ...p.inners].map((ring, r) => {
-        const ids = r ? p.innerIds![r - 1] : p.outerIds!;
-        const coords = ring.map(shift);
-        return { poly, ring: r, ids: ids.map((n, k) => id(n, coords[k])), coords };
-      })),
-    }));
-    const edits = topologyEdits(items, [], fresh);
+    const edits = transformEdits(keys, features, shift);
     if (typeof edits === 'string') return setStatus(edits, true);
     for (const f of features) {
       const t = tags(f);
@@ -2234,6 +2242,60 @@ function commitMove(keys: string[], offset: THREE.Vector3) {
     session.editMany(edits);
   }
   setStatus(`Перемещено объектов: ${features.length} на ${offset.length().toFixed(2)} м.`);
+}
+
+/**
+ * Правки «сдвинуть все узлы объектов через fn» (перемещение, поворот). Узлы, общие с объектами вне keys,
+ * остаются соседям — у нас на их месте новые (без нахлёстов).
+ */
+function transformEdits(keys: string[], features: Feature3D[], fn: (c: LonLat) => LonLat) {
+  const shared = nodesOutside(new Set(keys));
+  const fresh = new Map<number, LonLat>(), swap = new Map<number, number>();
+  const id = (n: number, c: LonLat) => {
+    if (!shared.has(n)) return n;
+    const k = swap.get(n) ?? swap.set(n, nextNewId--).get(n)!;
+    fresh.set(k, c);
+    return k;
+  };
+  const items = features.map((f) => ({
+    f,
+    rewrites: f.polygons.flatMap((p, poly) => [p.outer, ...p.inners].map((ring, r) => {
+      const ids = r ? p.innerIds![r - 1] : p.outerIds!;
+      const coords = ring.map(fn);
+      return { poly, ring: r, ids: ids.map((n, k) => id(n, coords[k])), coords };
+    })),
+  }));
+  return topologyEdits(items, [], fresh);
+}
+
+const CARDINAL_DEG: Record<string, number> = {
+  N: 0, NNE: 22.5, NE: 45, ENE: 67.5, E: 90, ESE: 112.5, SE: 135, SSE: 157.5,
+  S: 180, SSW: 202.5, SW: 225, WSW: 247.5, W: 270, WNW: 292.5, NW: 315, NNW: 337.5,
+};
+
+/** Повернуть объекты keys на angle (радианы, против часовой) вокруг вертикали через pivot; roof:direction — вместе с ними. */
+function commitRotate(keys: string[], pivot: THREE.Vector3, angle: number) {
+  const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  const turn = (c: LonLat): LonLat => {
+    const [x, y] = overpassLayer.focusToLocal(c)!;
+    const dx = x - pivot.x, dy = y - pivot.y;
+    return overpassLayer.focusToLngLat(pivot.x + dx * cos - dy * sin, pivot.y + dx * sin + dy * cos)!;
+  };
+  const edits = transformEdits(keys, features, turn);
+  if (typeof edits === 'string') return setStatus(edits, true);
+  const deg = (angle * 180) / Math.PI;
+  for (const f of features) {
+    // Азимут ската считается по часовой от севера — поворот против часовой его уменьшает
+    const dir = f.tags['roof:direction'];
+    if (dir === undefined) continue;
+    const d = CARDINAL_DEG[dir.trim().toUpperCase()] ?? Number(dir);
+    if (!Number.isFinite(d)) continue;
+    const e = edits.find((x) => x.key === f.key);
+    if (e) e.tags = { ...(e.tags ?? f.tags), 'roof:direction': String(Math.round((((d - deg) % 360) + 360) % 360 * 10) / 10) };
+  }
+  session.editMany(edits);
+  setStatus(`Повёрнуто объектов: ${features.length} на ${deg.toFixed(1)}°. Отменить — Ctrl+Z.`);
 }
 
 /** Поднять или опустить объект на dz метров, сохранив способ разметки (этажи — если сдвиг кратен этажу). */
@@ -2265,14 +2327,14 @@ document.addEventListener('keydown', (e) => {
     e.stopImmediatePropagation();
     moveTool.stop();
     pushTool.stop();
-    splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop();
+    splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
     drawTool.stop();
     cancelCopyPick();
     updateSnap(undefined);
     return;
   }
   if (e.key === 'Escape' && copyPick) { e.preventDefault(); e.stopImmediatePropagation(); cancelCopyPick(); return; }
-  if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || paintTool.key(e) || offsetTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+  if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e) || paintTool.key(e) || offsetTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   // S — привязки вкл/выкл, в том числе посреди перемещения или вытягивания
   if (focus && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
@@ -2321,6 +2383,7 @@ document.addEventListener('keydown', (e) => {
     : e.code === 'KeyT' && !e.shiftKey ? 'measure'
     : e.code === 'KeyB' && !e.shiftKey ? 'paint'
     : e.code === 'KeyO' && !e.shiftKey ? 'offset'
+    : e.code === 'KeyQ' && !e.shiftKey ? 'rotate'
     : e.code === 'KeyH' ? (e.shiftKey ? 'show-all' : 'hide')
     : e.code === 'KeyR' && !e.shiftKey ? 'rect'
     : e.code === 'KeyL' && !e.shiftKey ? 'polygon'
@@ -2331,10 +2394,11 @@ document.addEventListener('keydown', (e) => {
   closeCtxMenu();
   cancelCopyPick();
   if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'split') startSplit();
+  else if (action === 'rotate') startRotate();
   else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);
 }, { capture: true });
-document.addEventListener('keyup', (e) => { if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e)) e.preventDefault(); });
+document.addEventListener('keyup', (e) => { if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e)) e.preventDefault(); });
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
 function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
@@ -2831,7 +2895,7 @@ const HELP: Record<string, HelpTopic> = {
   focus: { title: 'Режим здания', desc: 'Одно здание отдельно от карты: его части, контур и правка геометрии инструментами слева.', items: [
     'Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.',
     'Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.',
-    'M — переместить, P — вытянуть, K — рассечь, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.',
+    'M — переместить, Q — повернуть, P — вытянуть, K — рассечь, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.',
     'Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, Shift+H — показать все.',
     'Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.',
     'Esc — снять выделение, ещё раз — назад к карте; двойной клик мимо здания — тоже к карте.',
@@ -2841,6 +2905,11 @@ const HELP: Record<string, HelpTopic> = {
     'Вдоль оси здания движение прилипает к ней; Shift держит ось, стрелки фиксируют ось (→ x, ← y, ↑ z, ↓ — снять).',
     'Число + Enter — сдвиг в метрах. Привязка к точкам других объектов.',
     'Esc — отмена.',
+  ] },
+  rotate: { title: 'Повернуть (Q)', desc: 'Поворачивает выделенные части вокруг вертикальной оси. Общие с соседями углы заменяются новыми узлами; направление ската (roof:direction) поворачивается вместе с частью.', items: [
+    'Клик — ось поворота (с привязкой к вершине, центру, сетке), второй клик — опорное направление.',
+    'Ведите курсор: у кратных 15° угол прилипает, Shift — только шагом 15°, привязка к точке — направление точно на неё.',
+    'Клик — применить; число + Enter — угол в градусах (против часовой, минус — по часовой). Esc — отмена.',
   ] },
   push: { title: 'Вытянуть (P)', desc: 'Меняет высоту верха (height) или низа (min_height) части либо сдвигает одну стену, как Push/Pull в SketchUp.', items: [
     'Клик по крыше — тянуть верх, по низу — низ, по стене — эту стену наружу или внутрь; второй клик — применить.',
@@ -2901,7 +2970,7 @@ function renderHelp() {
   helpPanel.hidden = !helpShown;
   for (const b of helpBtns) b.classList.toggle('active', helpShown);
   if (!helpShown) return;
-  const key = moveTool.active ? 'move' : pushTool.active ? 'push' : splitTool.active ? 'split'
+  const key = moveTool.active ? 'move' : rotateTool.active ? 'rotate' : pushTool.active ? 'push' : splitTool.active ? 'split'
     : drawTool.active ? drawTool.shape : measureTool.active ? 'measure' : offsetTool.active ? 'offset'
     : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : focus ? 'focus' : 'map';
   if (key === helpTopic) return;
@@ -2923,7 +2992,7 @@ snapsBtn.addEventListener('click', () => toggleSnaps());
 // Типы привязок — галками во всплывашке у кнопки привязок (стрелка в углу); выбор запоминается
 const SNAP_KINDS: [SnapKind, string][] = [
   ['vertex', 'Вершины'], ['midpoint', 'Середины рёбер'], ['center', 'Центры'], ['edge', 'На ребре'],
-  ['perpendicular', 'Перпендикуляр'], ['extension', 'Продолжение ребра'], ['grid', 'Узлы сетки'],
+  ['perpendicular', 'Перпендикуляр'], ['extension', 'Продолжение ребра'], ['grid', 'Узлы сетки'], ['shape', 'Центр фигуры'],
 ];
 try { for (const k of JSON.parse(localStorage.getItem('snaps-off') ?? '[]') as SnapKind[]) overpassLayer.snapKindsOff.add(k); } catch { /* нет хранилища */ }
 snapsBtn.insertAdjacentHTML('beforeend', '<span class="flyout-arrow" data-flyout title="Типы привязок"></span>');

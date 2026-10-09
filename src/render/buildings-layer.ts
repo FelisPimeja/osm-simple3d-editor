@@ -27,6 +27,8 @@ export interface GraphicsOptions {
   edges: boolean;
   /** Не выделять стекло: стеклянные стены и крыши — как обычные. */
   noGlass?: boolean;
+  /** Здания без высоты и этажей поднимать на высоту по умолчанию (иначе — плоский след). */
+  defaultHeight?: boolean;
 }
 
 /** Высота, на которой затемнение у земли сходит на нет, м (для зданий выше AO_HEIGHT). */
@@ -551,7 +553,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Совпадающие грани (плоский контур на крыше соседа, отступ) — первым выделенный объект, затем плоский:
     // иначе инструмент берёт соседа, хотя выделен и виден новый контур
     const rank = (h: FocusHit) => (this.selected.has(h.key) ? 0 : thinItem(g.byKey.get(h.key)!) ? 1 : 2);
-    return out.sort((x, y) => (Math.abs(x.t - y.t) < TIE_DEPTH ? rank(x) - rank(y) || x.t - y.t : x.t - y.t));
+    // У плоского контура верх и низ совпадают — первым верх (тянуть вверх), низ — вторым (Shift: задняя грань)
+    const faceRank = (h: FocusHit) => (h.face === 'roof' ? 0 : h.face === 'wall' ? 1 : 2);
+    return out.sort((x, y) => (Math.abs(x.t - y.t) < TIE_DEPTH
+      ? rank(x) - rank(y) || (x.key === y.key ? faceRank(x) - faceRank(y) : 0) || x.t - y.t : x.t - y.t));
   }
 
   /** Контуры объекта сцены режима здания в метрах (для работы с рёбрами). */
@@ -754,7 +759,8 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Направляющие инструмента перемещения: значок осей в точке захвата и линия до текущей точки
    * (цветом оси, если движение по оси). undefined — убрать.
    */
-  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2 } | undefined) {
+  /** Значок осей в точке захвата и пунктир к курсору; axes — свои оси вместо осей здания (например, по ребру). */
+  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2; axes?: { x: Pt; y: Pt } } | undefined) {
     const g = this.groups.get(FOCUS_GROUP);
     if (this.moveGuide) {
       this.moveGuide.parent?.remove(this.moveGuide);
@@ -763,7 +769,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     if (guide && g && this.focusAxes) {
       const root = new THREE.Group();
-      const frame = { ...this.focusAxes, origin: [guide.from.x, guide.from.y] as Pt };
+      const frame = { ...this.focusAxes, ...(guide.axes ?? {}), origin: [guide.from.x, guide.from.y] as Pt };
       const gizmo = axesGizmo(frame, guide.locked, TOOL_AXES_LENGTH);
       gizmo.matrix.elements[14] = guide.from.z; // значок на высоте точки захвата
       root.add(gizmo);
@@ -1165,6 +1171,12 @@ export class BuildingsLayer implements CustomLayerInterface {
   setGraphics(o: GraphicsOptions) {
     const glassChanged = glassEnabled === !!o.noGlass;
     glassEnabled = !o.noGlass;
+    // Высота по умолчанию: пересобрать здания без высоты и этажей (только их — порциями по кадрам)
+    const raise = o.defaultHeight !== false;
+    if (raise !== raiseDefault) {
+      raiseDefault = raise;
+      void this.rebuildWhere((f) => computeHeights(f.tags).source === 'default');
+    }
     this.graphics = { ...o };
     // Стекло — отдельный меш: при переключении пересобираем слитую геометрию
     if (glassChanged) for (const g of this.groups.values()) if (g.mesh) this.rebuildGeometry(g);
@@ -1705,6 +1717,9 @@ const MIN_THICKNESS = 0.01;
 /** Пересечения ближе этого друг к другу по лучу — одна поверхность (совпадающие грани разных объектов), м. */
 const TIE_DEPTH = 0.02;
 
+/** Поднимать здания без высоты и этажей на высоту по умолчанию (настройка «Поднимать здания с дефолтной высотой»). */
+let raiseDefault = true;
+
 /** Унаследованные частью теги (цвета, форма крыши, материалы контура/отношения) — задаёт main. */
 let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;
 export function setInheritance(fn: (f: Feature3D) => Record<string, string> | undefined) { inheritFor = fn; }
@@ -1715,9 +1730,11 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   const tags = inherited && Object.keys(inherited).length ? { ...inherited, ...f.tags } : f.tags;
   const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
   let heights = computeHeights(tags);
-  // Контур под частями и здания нулевой высоты — плоский след на земле: видно и можно выделить
+  // Контур под частями и здания нулевой высоты — плоский след на земле: видно и можно выделить;
+  // без высоты и этажей — тоже, если высоту по умолчанию выключили в настройках
   const flat = f.hasParts || g.flat.has(f.key);
-  if (flat || heights.top - heights.min < MIN_THICKNESS) {
+  const unraised = !raiseDefault && heights.source === 'default';
+  if (flat || unraised || heights.top - heights.min < MIN_THICKNESS) {
     const min = flat ? 0 : heights.min;
     heights = { ...heights, min, wallTop: min + g.footprint, top: min + g.footprint, roofShape: 'flat', roofHeight: 0 };
   }

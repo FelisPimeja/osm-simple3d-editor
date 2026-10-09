@@ -67,7 +67,7 @@ const userHidden = new Set<string>();
 
 interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; orbitAtCursor: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, orbitAtCursor: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, orbitAtCursor: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try { return JSON.parse(localStorage.getItem(GFX_KEY) ?? '{}'); } catch { return {}; }
@@ -2471,7 +2471,7 @@ document.addEventListener('keydown', (e) => {
   else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);
 }, { capture: true });
-document.addEventListener('keyup', (e) => { offsetTool.key(e); if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e)) e.preventDefault(); });
+document.addEventListener('keyup', (e) => { offsetTool.key(e); splitTool.key(e); if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e)) e.preventDefault(); });
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
 function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {

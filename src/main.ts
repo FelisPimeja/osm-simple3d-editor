@@ -108,7 +108,8 @@ const cubeBtn = document.createElement('button');
 cubeBtn.type = 'button';
 cubeBtn.className = 'maplibregl-ctrl-cube';
 cubeBtn.title = 'Куб вида';
-cubeBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M10 2.5 16.5 6v8L10 17.5 3.5 14V6z"/><path d="M3.5 6 10 9.5 16.5 6M10 9.5v8"/></svg>';
+// Куб на кольце компаса (как сам view cube) — чтобы не путать со значком части здания
+cubeBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><ellipse cx="10" cy="13.2" rx="8" ry="3.6" stroke-width="1.6" opacity=".55"/><path d="M10 2.2 14.6 4.7v5.4L10 12.6 5.4 10.1V4.7z" fill="#fff"/><path d="M5.4 4.7 10 7.2l4.6-2.5M10 7.2v5.4"/></svg>';
 document.querySelector('.maplibregl-ctrl-compass')?.after(cubeBtn);
 try { viewCube.shown = localStorage.getItem('view-cube') !== 'off'; } catch { /* по умолчанию показан */ }
 cubeBtn.classList.toggle('active', viewCube.shown);

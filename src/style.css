@@ -252,9 +252,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .vc-dir:hover { fill: #2f7cff; }
 .vc-cell { fill: #f3f4f6; cursor: pointer; }
 .vc-top .vc-cell { fill: #fff; }
-.vc-cell:hover { fill: #bcd3ff; }
+.vc-cell.hover, .vc-top .vc-cell.hover { fill: #bcd3ff; }
 .vc-cell.off { cursor: default; }
-.vc-cell.off:hover { fill: #f3f4f6; }
 .vc-outline { fill: none; stroke: #9ca3af; stroke-width: 1; stroke-linejoin: round; pointer-events: none; }
 .vc-label { font: 600 13px system-ui, sans-serif; fill: #4b5563; text-anchor: middle; dominant-baseline: central;
   text-transform: uppercase; pointer-events: none; }
@@ -289,3 +288,27 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .outliner:has(.ol-group) li:not(.ol-group):not(.ol-child) { padding-left: 26px; }
 .outliner li.off .ol-toggle { opacity: .4; }
 .ol-key.bare { margin-left: 0; color: #555; font-size: 12px; }
+
+/* Одинаковая стрелка у списков: select и поле со списком (Часть здания) */
+.tag-row select { appearance: none; -webkit-appearance: none; padding-right: 22px; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23555' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 7px center / 10px 6px; }
+.tag-row.changed select { background-color: #fffbeb; }
+.combo-field { position: relative; display: block; }
+.combo-field input[type="text"] { padding-right: 22px; }
+#info .combo-btn, .combo-btn { position: absolute; top: 1px; right: 1px; bottom: 1px; width: 22px; padding: 0; border: 0; border-radius: 0 3px 3px 0; cursor: pointer; background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23555' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 7px center / 10px 6px; }
+.combo-list { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 2px); max-height: 240px; overflow: auto; margin: 0; padding: 3px 0; list-style: none; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,.15); }
+.combo-list[hidden] { display: none; }
+.combo-list li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 8px; cursor: pointer; }
+.combo-list li b { font-weight: normal; }
+.combo-list li span { color: #888; font-size: 12px; }
+.combo-list li:hover, .combo-list li.active { background: #dbe7ff; }
+.combo-list li.nomatch { display: none; }
+.combo-list li.current { background: #eef3ff; }
+.combo-icon { flex: none; display: inline-grid; place-items: center; width: 22px; height: 19px; color: #444; font-style: normal; }
+.combo-icon svg { width: 22px; height: 19px; display: block; }
+.combo-list li { align-items: center; justify-content: flex-start; }
+.combo-list li b { flex: 1; }
+.combo-field.with-icons input[type="text"] { padding-left: 32px; }
+.combo-lead { position: absolute; left: 5px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.combo-lead.inherited { opacity: .45; }
+.roof-icon path { fill: currentColor; stroke: currentColor; stroke-width: .7; stroke-linejoin: round; }
+.roof-icon path.c { stroke-width: .2; stroke-opacity: .35; }

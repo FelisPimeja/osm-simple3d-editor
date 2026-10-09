@@ -50,11 +50,10 @@ export async function fetchRelationFull(id: number, api = server().api, signal?:
   return ((await res.json()) as { elements: OsmElement[] }).elements;
 }
 
-/** /map + догрузка мультиполигонов, у которых часть членов вне bbox. */
-export async function fetchArea(
-  bbox: Bbox, isIncomplete: (elements: OsmElement[]) => number[], api = server().api, signal?: AbortSignal,
+/** Догрузить мультиполигоны, у которых часть членов вне запрошенной области (elements дополняется на месте). */
+export async function completeRelations(
+  elements: OsmElement[], isIncomplete: (elements: OsmElement[]) => number[], api = server().api, signal?: AbortSignal,
 ): Promise<OsmElement[]> {
-  const elements = await fetchMapSplit(bbox, api, signal);
   const missing = isIncomplete(elements);
   // Неполный результат (часть зданий без геометрии) не должен выглядеть как полный — иначе он попадёт в кеш
   if (missing.length > 200) throw new Error(`слишком много неполных мультиполигонов (${missing.length})`);

@@ -1,5 +1,5 @@
 import type { Map as MlMap } from 'maplibre-gl';
-import { ApiError, fetchArea, type Bbox } from '../osm/api';
+import { ApiError, completeRelations, fetchMapSplit, type Bbox, type OsmElement } from '../osm/api';
 import { centroid, incompleteBuildingRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type MemberWay, type Polygon } from '../osm/model';
 import { RequestPool } from '../osm/request-pool';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
@@ -23,7 +23,7 @@ type Entry =
   | { state: 'lookup' } // ищем в IndexedDB
   | { state: 'queued' } // в IndexedDB нет, ждёт свободного слота запроса к API
   | { state: 'loading'; abort: AbortController }
-  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number; via?: TileVia; refreshing?: AbortController; refreshAfter?: number }
+  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number; via?: TileVia; refreshing?: AbortController; refreshAfter?: number; partial?: boolean }
   | { state: 'error'; retryAt: number; attempts: number };
 
 /**
@@ -229,10 +229,11 @@ export class OverpassTiles {
   status(): { ready: number; total: number; loading: number; waiting: number } {
     const count = (state: Entry['state']) => this.wanted.filter((k) => this.cache.get(k)?.state === state && !this.reloading.has(k)).length;
     const reloading = this.wanted.filter((k) => this.reloading.has(k)).length;
+    const partial = this.wanted.filter((k) => { const e = this.cache.get(k); return e?.state === 'ready' && e.partial && !this.reloading.has(k); }).length;
     const failed = this.wanted.filter((k) => this.reloadFailed.has(k) && !this.reloading.has(k)).length;
     return {
-      ready: count('ready') - failed, total: this.wanted.length,
-      loading: count('loading') + count('lookup') + count('queued') + reloading, waiting: count('error') + failed,
+      ready: count('ready') - partial - failed, total: this.wanted.length,
+      loading: count('loading') + partial + count('lookup') + count('queued') + reloading, waiting: count('error') + failed,
     };
   }
 
@@ -353,8 +354,27 @@ export class OverpassTiles {
     let result: 'ok' | 'busy' | 'error' | 'aborted' = 'ok';
     try {
       if (!this.source) throw new Error('источник данных не задан');
-      const elements = await fetchArea(tileBbox(key), incompleteBuildingRelations, ep.url, abort.signal);
       const via: TileVia = 'api';
+      // Тайл — четвертями, первой та, что ближе к центру экрана: на плотном тайле (десятки МБ ответа) первые
+      // здания видны через пару секунд, а не после скачивания всего. Запросы идут по очереди в том же слоте
+      // пула — правило «не больше двух потоков» не нарушается. Обновление устаревшего — без промежуточных показов
+      const [w, s, e, n] = tileBbox(key);
+      const mx = (w + e) / 2, my = (s + n) / 2;
+      const c = this.map.getCenter();
+      const quads = ([[w, s, mx, my], [mx, s, e, my], [w, my, mx, n], [mx, my, e, n]] as Bbox[])
+        .map((q) => ({ q, d: Math.hypot((q[0] + q[2]) / 2 - c.lng, (q[1] + q[3]) / 2 - c.lat) }))
+        .sort((a, b) => a.d - b.d).map((x) => x.q);
+      const seen = new Map<string, OsmElement>();
+      for (let i = 0; i < quads.length; i++) {
+        for (const el of await fetchMapSplit(quads[i], ep.url, abort.signal)) seen.set(`${el.type}/${el.id}`, el);
+        if (refreshing || i === quads.length - 1) continue;
+        // Промежуточный показ: без догрузки мультиполигонов на границе и без записи в кеш
+        const part = timed('тайлы: разбор четверти', () => parseBuildings([...seen.values()]), (r) => `${key}, ${r.features.length} зданий`);
+        this.cache.set(key, { state: 'ready', ...part, fetchedAt: 0, via, partial: true, refreshing: abort });
+        this.tileReady(key);
+        this.onChange();
+      }
+      const elements = await completeRelations([...seen.values()], incompleteBuildingRelations, ep.url, abort.signal);
       const { features, groups } = timed('тайлы: разбор ответа API', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const fetchedAt = Date.now();
       this.cache.set(key, { state: 'ready', features, groups, fetchedAt, via });
@@ -368,6 +388,9 @@ export class OverpassTiles {
       if (abort.signal.aborted) {
         result = 'aborted';
         if (refreshing) refreshing.refreshing = undefined;
+        // Недогруженный тайл (показаны не все четверти) не должен остаться «готовым» — загрузится заново
+        const cur = this.cache.get(key);
+        if (cur?.state === 'ready' && cur.partial) this.cache.delete(key);
         return;
       }
       // Перегрузка или лимит сервера — повторим позже, сервер «остынет»
@@ -454,7 +477,7 @@ export class OverpassTiles {
       e.groups = patchGroups(e);
       e.features = patch(e.features);
       this.indexGroups(e.groups);
-      void this.store.put(key, e);
+      if (!e.partial) void this.store.put(key, e);
       if (this.layer.groupKeys().includes(key)) this.show(key);
     }
     for (const key of this.stored) {

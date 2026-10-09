@@ -51,6 +51,9 @@ export class ViewCube implements maplibregl.IControl {
     el.className = 'maplibregl-ctrl view-cube';
     el.hidden = true;
     el.addEventListener('click', (e) => this.click(e));
+    // Ребро и угол — это 2 и 3 ячейки на соседних гранях с одним направлением (data-v): подсвечиваем все
+    el.addEventListener('mouseover', (e) => this.hover((e.target as Element).closest<SVGElement>('.vc-cell')?.dataset.v));
+    el.addEventListener('mouseleave', () => this.hover(undefined));
     el.addEventListener('mousedown', (e) => { if ((e.target as Element).closest('.vc-ring')) this.dragRing(e); });
     map.on('move', this.sync);
     return el;
@@ -135,6 +138,14 @@ export class ViewCube implements maplibregl.IControl {
       svg += '</g>';
     }
     this.el.innerHTML = `<svg viewBox="0 0 ${BOX} ${BOX}" width="${BOX}" height="${BOX}">${svg}</svg>`;
+    if (this.hovered) this.hover(this.hovered);
+  }
+
+  private hovered?: string;
+
+  private hover(v: string | undefined) {
+    this.hovered = v;
+    for (const c of this.el.querySelectorAll<SVGElement>('.vc-cell')) c.classList.toggle('hover', !!v && c.dataset.v === v);
   }
 
   private click(e: MouseEvent) {

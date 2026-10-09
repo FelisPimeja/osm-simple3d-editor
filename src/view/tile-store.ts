@@ -11,20 +11,20 @@ const MAX_TILES = 300;
 
 interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[]; groups: BuildingGroup[]; via?: TileVia }
 
-/** Откуда пришли данные тайла: Overpass или OSM API (резервная загрузка или тестовый сервер). */
+/** Откуда пришли данные тайла: OSM API (overpass — старые записи кеша, когда данные брались из Overpass). */
 export type TileVia = 'overpass' | 'api';
 
 export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number; via?: TileVia }
 
 /**
- * Постоянный кеш тайлов Overpass в IndexedDB.
+ * Постоянный кеш тайлов (данные OSM API) в IndexedDB.
  * Любая ошибка (приватный режим, квота, заблокированное хранилище) не ломает работу —
  * просто считаем, что кеша нет.
  */
 export class TileStore {
   private db?: Promise<IDBDatabase | undefined>;
 
-  /** dbName — своя база на каждый источник данных (боевой Overpass, API тестового сервера). */
+  /** dbName — своя база на каждый сервер (боевой, тестовый). */
   constructor(private readonly dbName = 'osm-simple3d') {}
 
   private open(): Promise<IDBDatabase | undefined> {

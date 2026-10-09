@@ -158,7 +158,7 @@ class MeshGroup {
 
 /**
  * Custom layer MapLibre, рисующий здания OSM через three.js.
- * Здания разбиты на группы (область редактирования, тайлы Overpass), у каждой свой origin —
+ * Здания разбиты на группы (область редактирования, тайлы данных API), у каждой свой origin —
  * так координаты остаются маленькими и точными для float32.
  */
 export class BuildingsLayer implements CustomLayerInterface {

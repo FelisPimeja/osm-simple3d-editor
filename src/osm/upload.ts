@@ -138,7 +138,7 @@ function parseDiffResult(xml: string): Pick<UploadResult, 'versions' | 'newKeys'
 
 /**
  * Загрузка правок одним changeset. Сначала читаем текущие версии с сервера и переносим правки на них:
- * данные для показа (Overpass) без версий и могут отставать. Если те же теги успел изменить
+ * данные для показа (кеш тайлов) и могут отставать. Если те же теги успел изменить
  * кто-то ещё — ConflictError, ничего не отправляется.
  */
 export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (s: string) => void = () => {}): Promise<UploadResult> {

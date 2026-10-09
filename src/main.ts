@@ -38,7 +38,7 @@ const MERGED_LAYER = 'simple3d-merged-exploded';
 const MERGED_HIGHLIGHT_LAYER = 'simple3d-merged-highlight';
 const TILE_LAYERS = [BUILDINGS_LAYER, REMAINDERS_LAYER, MERGED_LAYER];
 const HIGHLIGHT_LAYER = 'simple3d-highlight';
-// Начиная с этого зума здания тайлов z14 подменяются данными Overpass
+// Начиная с этого зума здания тайлов z14 подменяются данными OSM API
 const OVERPASS_MIN_ZOOM = 15;
 /** Ниже OVERPASS_MIN_ZOOM — только тайлы, уже лежащие в кеше (без запросов к Overpass). */
 const CACHED_MIN_ZOOM = 10;
@@ -51,7 +51,7 @@ const MAX_API_AREA = 0.0004;
 // Склеенные фичи (id с суффиксом 0) рисуем отдельным слоем, разрезанными на полигоны
 const BASE_FILTER: ExpressionSpecification = ['all', ['!=', ['get', 'hide_3d'], true], ['!=', ['%', ['id'], 10], 0]];
 
-// Здания из тайлов — условные (без крыш и частей), рисуем белыми, чтобы отличать от данных Overpass/API.
+// Здания из тайлов — условные (без крыш и частей), рисуем белыми, чтобы отличать от данных OSM API.
 // Цвет из тайла (colour, с разбором 'a;b') — см. тег openfreemap-tiles.
 const TILE_FILL = '#ffffff';
 
@@ -65,7 +65,7 @@ const userHidden = new Set<string>();
 
 interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; orbitAtCursor: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: false, monochrome: false, orbitAtCursor: false, hemisphere: false, groundAO: false, edges: false, noGlass: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, orbitAtCursor: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try { return JSON.parse(localStorage.getItem(GFX_KEY) ?? '{}'); } catch { return {}; }
@@ -305,7 +305,7 @@ function applyGraphics() {
 }
 applyGraphics();
 
-// Постоянный кеш тайлов Overpass (IndexedDB)
+// Постоянный кеш тайлов OSM API (IndexedDB)
 const cacheInfo = document.getElementById('cache-info')!;
 async function showCacheInfo() {
   cacheInfo.textContent = `Кэш тайлов: ${await overpass.store.count()}`;
@@ -427,7 +427,7 @@ let lastFilterSig = '';
 function updateTileFilter() {
   const notIn = (ids: number[]): ExpressionSpecification => ['!', ['in', ['id'], ['literal', ids]]];
   const hiddenIds = [...userHidden].map(Number).filter(Number.isFinite);
-  // Тайлы, здания которых уже нарисованы из Overpass
+  // Тайлы, здания которых уже нарисованы из данных API
   const overpassTiles = overpass.displayed();
   const byTile = overpassTiles.length ? timed('тайлы: id по клеткам', () => tileFeatureIdsByTile(map, 'openmaptiles', 'building')) : new Map<string, number[]>();
   const overpassIds = overpassTiles.flatMap((k) => byTile.get(k) ?? []);
@@ -790,7 +790,7 @@ function exitFocus() {
     for (const { id, visibility } of ls) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility as 'visible' | 'none');
   };
   // Здания из векторных тайлов — только после того, как тайлы догрузятся и фильтр скроет то, что уже есть
-  // из Overpass; иначе на миг мелькает их грубая геометрия
+  // из API; иначе на миг мелькает их грубая геометрия
   const tileLayers = pendingTileLayers = focusHiddenLayers.filter((l) => TILE_LAYERS.includes(l.id));
   restore(focusHiddenLayers.filter((l) => !TILE_LAYERS.includes(l.id)));
   focusHiddenLayers = [];
@@ -2205,7 +2205,7 @@ function clearTileHighlight() {
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], '']);
 }
 
-/** Минимальный индикатор Overpass в углу карты: точка цвета состояния + счётчик тайлов. */
+/** Минимальный индикатор загрузки данных в углу карты: точка цвета состояния + счётчик тайлов. */
 function updateOverpassIndicator() {
   const { ready, total, loading, waiting } = overpass.status();
   const state = !overpass.enabled ? 'off' : loading ? 'loading' : waiting ? 'waiting' : 'ready';
@@ -2224,14 +2224,14 @@ function updateOverpassIndicator() {
     .join('\n');
   opIndicator.title = {
     off: '',
-    loading: `Загружается тайлов: ${loading}${overpass.viaApi.size ? ` (из OSM API вместо Overpass: ${overpass.viaApi.size})` : ''}`,
-    waiting: `Ждут повтора: ${waiting} (лимит или ошибка Overpass, подробности в консоли)`,
+    loading: `Загружается тайлов: ${loading}`,
+    waiting: `Ждут повтора: ${waiting} (лимит или ошибка OSM API, подробности в консоли)`,
     ready: 'Все видимые тайлы загружены',
   }[state] + (state === 'off' ? '' : `\n${describeFreshness()}\n\n${servers}`);
 }
 
 /**
- * Черновик: пока для тайла нет данных Overpass/API, здание из векторных тайлов — лишь набросок.
+ * Черновик: пока для тайла нет данных API, здание из векторных тайлов — лишь набросок.
  * Рисуем его полупрозрачным серо-голубым «призраком»; пока идёт загрузка — прозрачность «дышит».
  */
 const DRAFT_FILL = '#9fb3c8';
@@ -2259,7 +2259,7 @@ function updateDraftStyle() {
 /** Откуда и когда получены видимые тайлы — чтобы было видно, что на экране старые или неполные данные. */
 function describeFreshness(): string {
   const f = overpass.freshness();
-  const parts = [f.overpass && `из Overpass: ${f.overpass}`, f.api && `из OSM API: ${f.api}`, f.unknown && `источник неизвестен: ${f.unknown}`].filter(Boolean);
+  const parts = [f.overpass && `из Overpass (старый кеш): ${f.overpass}`, f.api && `из OSM API: ${f.api}`, f.unknown && `источник неизвестен: ${f.unknown}`].filter(Boolean);
   if (!parts.length) return '';
   const age = f.oldest ? ` · самый старый загружен ${formatAge(Date.now() - f.oldest)} назад` : '';
   return `Тайлы ${parts.join(', ')}${age}`;
@@ -3157,7 +3157,7 @@ async function doUpload() {
       void k;
     }
     rebuildGroupIndex();
-    // Сразу в кеш тайлов текущего источника — не ждать, пока Overpass догонит
+    // Сразу в кеш тайлов текущего источника — не ждать фонового обновления тайла
     const savedGroups = [...saved].map(([k, v]) => editGroups.get(v.newKey ?? k)).filter((g): g is EditGroup => !!g)
       .map((g) => ({ key: g.key, type: g.type, id: g.id, version: g.version, tags: { ...g.tags }, members: [...g.members], roles: [...g.roles] }));
     void overpass.applySaved(withMemberWays(new Map([...saved].map(([k, v]) => [v.newKey ?? k, v]))), savedGroups, createdWays, [...res.deleted]);
@@ -3255,10 +3255,10 @@ serverSelect.addEventListener('change', () => {
   void refreshUser();
 });
 
-/** Источник тайлов для текущего сервера: боевой — Overpass, тестовый — его /map API (свой кеш). */
+/** Источник тайлов для текущего сервера: его /map API (свой кеш; у боевого — прежняя база кеша). */
 function tileSource(): TileSource {
   const s = server();
-  return s.id === 'prod' ? { kind: 'overpass', fallbackApi: s.api } : { kind: 'api', api: s.api, db: `osm-simple3d-${s.id}` };
+  return { api: s.api, db: s.id === 'prod' ? 'osm-simple3d' : `osm-simple3d-${s.id}` };
 }
 void refreshUser();
 

@@ -1,7 +1,7 @@
 import type { Map as MlMap } from 'maplibre-gl';
-import { fetchArea, type Bbox } from '../osm/api';
+import { ApiError, fetchArea, type Bbox } from '../osm/api';
 import { centroid, incompleteBuildingRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type MemberWay, type Polygon } from '../osm/model';
-import { fetchBuildings, OverpassBusyError, OverpassPool } from '../osm/overpass';
+import { RequestPool } from '../osm/request-pool';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
 import { TileStore, type TileVia } from './tile-store';
@@ -21,32 +21,32 @@ const RELOAD_ATTEMPTS = 3;
 
 type Entry =
   | { state: 'lookup' } // ищем в IndexedDB
-  | { state: 'queued' } // в IndexedDB нет, ждёт свободного инстанса Overpass
+  | { state: 'queued' } // в IndexedDB нет, ждёт свободного слота запроса к API
   | { state: 'loading'; abort: AbortController }
   | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; fetchedAt: number; via?: TileVia; refreshing?: AbortController; refreshAfter?: number }
   | { state: 'error'; retryAt: number; attempts: number };
 
 /**
- * full — видимые тайлы грузятся (память → IndexedDB → Overpass);
- * cached — только то, что уже есть в кеше, без запросов к Overpass (мелкие зумы);
+ * full — видимые тайлы грузятся (память → IndexedDB → OSM API);
+ * cached — только то, что уже есть в кеше, без запросов к API (мелкие зумы);
  * off — слой выключен.
  */
 export type OverpassMode = 'full' | 'cached' | 'off';
 
-/** Откуда брать данные тайлов: публичный Overpass (боевая база) или /map API конкретного сервера (тестовый). */
-export type TileSource = { kind: 'overpass'; fallbackApi?: string } | { kind: 'api'; api: string; db: string };
+/** Откуда брать данные тайлов: /map OSM API сервера, куда идёт запись; у каждого сервера свой кеш. */
+export interface TileSource { api: string; db: string }
 
 /**
- * Подменяет тайловые здания данными Overpass по сетке тайлов z14.
- * Источники по порядку: память (LRU) → IndexedDB → Overpass. Устаревшие тайлы показываются сразу,
+ * Подменяет тайловые здания данными OSM API по сетке тайлов z14.
+ * Источники по порядку: память (LRU) → IndexedDB → OSM API (/map). Устаревшие тайлы показываются сразу,
  * а в фоне перезапрашиваются. Меши есть только у видимых тайлов.
  */
 export class OverpassTiles {
   private readonly cache = new Map<string, Entry>(); // порядок вставки = LRU
   private wanted: string[] = [];
-  pool = new OverpassPool();
+  pool = new RequestPool([]);
   store = new TileStore();
-  private source: TileSource = { kind: 'overpass' };
+  private source?: TileSource;
   private pumpTimer?: ReturnType<typeof setTimeout>;
   /** Нарисованные здания по ключу OSM — для панели по клику. */
   private readonly rendered = new Map<string, RenderedFeature>();
@@ -61,8 +61,6 @@ export class OverpassTiles {
   private readonly reloading = new Map<string, number>(); // ключ → число неудачных попыток
   /** Перезапрос не удался после всех попыток — в индикаторе это «ждут повтора». */
   private readonly reloadFailed = new Set<string>();
-  /** Тайлы, которые сейчас грузятся из OSM API вместо Overpass. */
-  readonly viaApi = new Set<string>();
   mode: OverpassMode = 'off';
 
   /**
@@ -101,14 +99,14 @@ export class OverpassTiles {
     this.reloading.clear();
     this.reloadFailed.clear();
     this.stored = new Set();
-    this.pool = source.kind === 'api' ? new OverpassPool([source.api]) : new OverpassPool();
-    this.store = source.kind === 'api' ? new TileStore(source.db) : new TileStore();
+    this.pool = new RequestPool([source.api]);
+    this.store = new TileStore(source.db);
     this.loadStoredKeys();
     this.update();
   }
 
   get sourceLabel(): string {
-    return this.source.kind === 'api' ? 'OSM API' : 'Overpass';
+    return 'OSM API';
   }
 
   /** Перерисовать объекты (после правки тегов): берётся версия из overlay. */
@@ -342,7 +340,7 @@ export class OverpassTiles {
     this.pumpTimer = setTimeout(() => this.update(), ms + 50);
   }
 
-  private async load(key: string, attempts: number, ep: ReturnType<OverpassPool['acquire']> & object) {
+  private async load(key: string, attempts: number, ep: ReturnType<RequestPool['acquire']> & object) {
     const abort = new AbortController();
     const prev = this.cache.get(key);
     // Обновление устаревшего тайла: старые данные остаются на экране, пока не придут новые
@@ -350,33 +348,11 @@ export class OverpassTiles {
     if (refreshing) refreshing.refreshing = abort;
     else this.cache.set(key, { state: 'loading', abort });
     let result: 'ok' | 'busy' | 'error' | 'aborted' = 'ok';
-    // Ошибка Overpass, после которой тайл взяли из API: инстанс всё равно надо «наказать»
-    let overpassFailed: 'busy' | 'error' | undefined;
     try {
-      const source = this.source;
-      let elements;
-      let via: TileVia = source.kind === 'api' ? 'api' : 'overpass';
-      if (source.kind === 'api') {
-        elements = await fetchArea(tileBbox(key), incompleteBuildingRelations, source.api, abort.signal);
-      } else {
-        try {
-          elements = await fetchBuildings(ep.url, tileBbox(key), abort.signal);
-        } catch (err) {
-          // Overpass не отдал тайл — берём из OSM API (дольше и тяжелее, но работает при сбоях Overpass)
-          if (abort.signal.aborted || !source.fallbackApi) throw err;
-          overpassFailed = err instanceof OverpassBusyError ? 'busy' : 'error';
-          console.warn(`Overpass ${key}: ${(err as Error).message} — грузим из OSM API`);
-          this.viaApi.add(key);
-          this.onChange();
-          try {
-            elements = await fetchArea(tileBbox(key), incompleteBuildingRelations, source.fallbackApi, abort.signal);
-            via = 'api';
-          } finally {
-            this.viaApi.delete(key);
-          }
-        }
-      }
-      const { features, groups } = timed('overpass: разбор ответа', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
+      if (!this.source) throw new Error('источник данных не задан');
+      const elements = await fetchArea(tileBbox(key), incompleteBuildingRelations, ep.url, abort.signal);
+      const via: TileVia = 'api';
+      const { features, groups } = timed('тайлы: разбор ответа API', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const fetchedAt = Date.now();
       this.cache.set(key, { state: 'ready', features, groups, fetchedAt, via });
       this.reloading.delete(key);
@@ -391,9 +367,10 @@ export class OverpassTiles {
         if (refreshing) refreshing.refreshing = undefined;
         return;
       }
-      const busy = err instanceof OverpassBusyError;
+      // Перегрузка или лимит сервера — повторим позже, сервер «остынет»
+      const busy = err instanceof ApiError && [429, 503, 509].includes(err.status);
       result = busy ? 'busy' : 'error';
-      console.warn(`Overpass ${key}${refreshing ? ' (обновление)' : ''}:`, (err as Error).message);
+      console.warn(`OSM API ${key}${refreshing ? ' (обновление)' : ''}:`, (err as Error).message);
       if (refreshing) {
         refreshing.refreshing = undefined;
         const tries = this.reloading.get(key);
@@ -418,7 +395,7 @@ export class OverpassTiles {
       this.schedulePump(delay);
     } finally {
       if (result === 'aborted') this.reloading.delete(key);
-      this.pool.release(ep, result === 'ok' ? overpassFailed ?? 'ok' : result);
+      this.pool.release(ep, result);
       this.pump();
       this.onChange();
     }

@@ -59,9 +59,9 @@ export async function fetchArea(
   // Неполный результат (часть зданий без геометрии) не должен выглядеть как полный — иначе он попадёт в кеш
   if (missing.length > 200) throw new Error(`слишком много неполных мультиполигонов (${missing.length})`);
   const extra: OsmElement[] = [];
-  // Небольшими пачками, чтобы не заваливать API параллельными запросами
-  for (let i = 0; i < missing.length; i += 6) {
-    const batch = await Promise.allSettled(missing.slice(i, i + 6).map((id) => fetchRelationFull(id, api, signal)));
+  // По одному: тайлы и так грузятся в два потока, а правила OSMF — не больше двух потоков скачивания
+  for (let i = 0; i < missing.length; i++) {
+    const batch = await Promise.allSettled([fetchRelationFull(missing[i], api, signal)]);
     for (const r of batch) {
       if (r.status === 'rejected') throw new Error(`не догрузилось отношение: ${(r.reason as Error).message}`);
       extra.push(...r.value);

@@ -28,13 +28,31 @@ const FIELDS: Field[] = [
 
 const CARDINALS = new Set(['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']);
 
+const NUMERIC = new Set<FieldType>(['length', 'int', 'direction']);
+/** Формула для числовых полей: =+1, =-2, =*3, =/8 — применяется к значению каждого объекта. */
+const FORMULA = /^=\s*([+\-*/])\s*(\d+(?:[.,]\d+)?)$/;
+
+/** Значение тега после формулы (undefined — у объекта нет числового значения, не трогаем). */
+function applyFormula(type: FieldType, input: string, current: string | undefined): string | undefined {
+  const m = FORMULA.exec(input.trim());
+  if (!m) return input;
+  const cur = parseFloat(current ?? '');
+  if (!Number.isFinite(cur)) return;
+  const n = Number(m[2].replace(',', '.'));
+  let v = m[1] === '+' ? cur + n : m[1] === '-' ? cur - n : m[1] === '*' ? cur * n : n ? cur / n : cur;
+  if (type === 'direction') v = ((v % 360) + 360) % 360;
+  v = type === 'int' ? Math.round(v) : Math.round(v * 100) / 100;
+  return String(v);
+}
+
 /** Пустое значение валидно (означает удаление тега). */
 function isValid(type: FieldType, v: string): boolean {
   v = v.trim();
   if (!v) return true;
+  if (NUMERIC.has(type) && FORMULA.test(v)) return true;
   switch (type) {
-    case 'length': return /^\d+(\.\d+)?( ?m)?$/.test(v);
-    case 'int': return /^\d+$/.test(v);
+    case 'length': return /^-?\d+(\.\d+)?( ?m)?$/.test(v);
+    case 'int': return /^-?\d+$/.test(v);
     case 'direction': return CARDINALS.has(v.toUpperCase()) || (/^\d+(\.\d+)?$/.test(v) && Number(v) <= 360);
     case 'colour': return CSS.supports('color', v.split(';')[0].trim());
     default: return true;
@@ -118,6 +136,42 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   return `<form class="tag-form" data-key="${esc(key)}" onsubmit="return false">${legacy}${warn}${rows}${revert}</form>`;
 }
 
+/** Форма тегов для нескольких объектов: общее значение или «разные» серым; правка — сразу для всех. */
+export function renderMultiTagForm(keys: string[], session: EditSession): string {
+  const feats = keys.map((k) => session.get(k)).filter((f): f is NonNullable<typeof f> => !!f);
+  if (!feats.length) return '';
+  const values = (tag: string) => [...new Set(feats.map((f) => f.tags[tag] ?? ''))];
+  const shapes = values('roof:shape');
+  const rows = FIELDS.filter((field) => {
+    const only = SHAPE_ONLY[field.tag];
+    return !only || values(field.tag).some(Boolean) || shapes.some((v) => only.includes(v));
+  }).map((field) => {
+    const vs = values(field.tag);
+    const mixed = vs.length > 1;
+    const value = mixed ? '' : vs[0];
+    const changed = feats.some((f) => session.isChanged(f.key, field.tag));
+    const shown = mixed ? `разные: ${vs.map((v) => v || '—').slice(0, 6).join(', ')}${vs.length > 6 ? '…' : ''}` : '';
+    const tip = mixed ? `${shown}${NUMERIC.has(field.type) ? '. Число — всем одно значение; =+1, =-2, =*2, =/8 — к значению каждого' : ''}` : field.tag;
+    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(tip)}"`;
+    const cls = mixed ? ' class="mixed"' : '';
+    let control: string;
+    if (field.type === 'select') {
+      const extra = vs.filter((v) => v && !field.options!.includes(v));
+      const options = [...new Set([...extra, ...field.options!])];
+      control = `<select ${common}${cls}><option value="">${mixed ? 'разные' : '—'}</option>${options
+        .map((o) => `<option value="${esc(o)}"${o === value ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    } else if (field.type === 'colour') {
+      control = `<span class="colour-field"><input type="color" value="${toHex(value || vs.find(Boolean))}" data-picker-for="${esc(field.tag)}"${cls} />
+        <input type="text" ${common}${cls} value="${esc(value)}" placeholder="${mixed ? 'разные' : '#rrggbb или имя'}" /></span>`;
+    } else {
+      control = `<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${cls} value="${esc(value)}" placeholder="${esc(mixed ? 'разные' : field.placeholder ?? '')}" />`;
+    }
+    return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
+  }).join('');
+  return `<form class="tag-form" data-keys="${esc(feats.map((f) => f.key).join(' '))}" onsubmit="return false">
+    <p class="hint">Общие свойства ${feats.length} объектов. Для чисел формула: =+1, =-2, =*2, =/8 — к значению каждого.</p>${rows}</form>`;
+}
+
 /** Поле со значком «унаследовано» справа (только если есть пояснение). */
 function withBadge(input: string, hint: string): string {
   if (!hint) return input;
@@ -134,7 +188,21 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     if (!tag || !type) return;
     const ok = isValid(type as FieldType, input.value);
     input.classList.toggle('invalid', !ok);
-    if (ok) s.setTags(form.dataset.key!, { [tag]: input.value });
+    if (!ok) return;
+    const keys = form.dataset.keys ? form.dataset.keys.split(' ') : [form.dataset.key!];
+    const edits = keys.flatMap((key) => {
+      const f = s.get(key);
+      if (!f) return [];
+      const v = applyFormula(type as FieldType, input.value, f.tags[tag]);
+      if (v === undefined) return [];
+      const tags = { ...f.tags };
+      if (v.trim()) tags[tag] = v.trim(); else delete tags[tag];
+      return tags[tag] === f.tags[tag] ? [] : [{ key, tags }];
+    });
+    if (edits.length === 1 && keys.length === 1) s.setTags(edits[0].key, { [tag]: edits[0].tags[tag] });
+    else if (edits.length) s.editMany(edits);
+    // Формула применена — поле покажет новое значение после перерисовки; если ничего не поменялось — очистить
+    if (!edits.length && FORMULA.test(input.value.trim())) input.value = '';
   };
 
   container.addEventListener('change', (e) => {

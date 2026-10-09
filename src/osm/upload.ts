@@ -167,6 +167,14 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
   }
   // Узлы удаляемых путей: без тегов и не нужные нашим же новым и изменённым путям
   const deletedWays = edits.filter((e) => e.deleted && e.key.startsWith('way/')).map((e) => fresh.get(e.key)).filter((w): w is OsmWay => w?.type === 'way');
+  // Удаляемый мультиполигон — вместе с его путями без тегов (занятые в других отношениях сервер оставит: if-unused)
+  const editKeys = new Set(edits.map((e) => e.key));
+  const memberKeys = [...new Set(edits.filter((e) => e.deleted && e.key.startsWith('relation/')).map((e) => fresh.get(e.key))
+    .flatMap((r) => r?.type === 'relation' && r.tags?.type === 'multipolygon' ? r.members.filter((m) => m.type === 'way').map((m) => `way/${m.ref}`) : [])
+    .filter((k) => !editKeys.has(k)))];
+  const memberWays = memberKeys.length ? [...(await fetchElements(memberKeys)).values()]
+    .filter((w): w is OsmWay => w.type === 'way' && !Object.keys(w.tags ?? {}).length) : [];
+  deletedWays.push(...memberWays);
   const keepNodes = new Set(edits.filter((e) => !e.deleted).flatMap((e) => e.wayNodes?.after ?? []));
   const dropIds = [...new Set(deletedWays.flatMap((w) => w.nodes))].filter((id) => !keepNodes.has(id));
   const dropNodes = dropIds.length ? await fetchNodes(dropIds) : new Map();
@@ -207,6 +215,7 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
     written.set(edit.key, r.tags);
     if (!sameTags(r.tags, edit.after)) rebased.add(edit.key);
   }
+  for (const w of memberWays) payload.push({ element: w, tags: {}, deleted: true });
   for (const n of dropNodes.values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
   if (conflicts.length) throw new ConflictError(conflicts);
 

@@ -24,7 +24,7 @@ import { suggestComment } from './edit/changeset-comment';
 import { EditSession, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
-import { bindTagForms, renderTagForm, type InheritSource } from './edit/tag-form';
+import { bindTagForms, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
@@ -476,7 +476,8 @@ function entity(key: string): Tagged | undefined {
     rebuildGroupIndex();
     return copy;
   }
-  const f = overpass.get(key)?.feature;
+  // Не нарисованный в тайлах (часть здания из соседнего тайла) — из загруженных данных
+  const f = overpass.get(key)?.feature ?? overpass.findFeature(key);
   return f ? session.track({ ...f, tags: { ...f.tags } }) : undefined;
 }
 
@@ -527,7 +528,7 @@ map.on('click', (e) => {
     updateSnap([e.point.x, e.point.y]);
     return;
   }
-  const key = overpassLayer.pick(e.point);
+  const key = e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point);
   if (addingTo) {
     if (e.originalEvent.shiftKey) { if (key) toggleAddPending(key); return; }
     stopAdding(); // обычный клик — выходим из режима добавления
@@ -545,6 +546,23 @@ map.on('click', (e) => {
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], f?.layer.id === MERGED_LAYER ? f.properties.key : '']);
   if (f) resolveTileFeature(f);
 });
+
+/** Alt+клик: повторные клики в ту же точку по очереди выбирают объекты под курсором, от ближнего к дальнему. */
+let altCycle: { x: number; y: number; keys: string[]; i: number } | undefined;
+function cyclePick(p: { x: number; y: number }): string | undefined {
+  const same = altCycle && Math.hypot(p.x - altCycle.x, p.y - altCycle.y) < 5;
+  // Вне группы клик выделяет всё здание — перебираем разные результаты, а не части одного здания
+  // (resolveClick не годится — он выходит из группы)
+  const keys = overpassLayer.pickAll([p.x, p.y]).filter((k) => !focus || focus.members.includes(k));
+  if (!keys.length) { altCycle = undefined; return; }
+  const resolved = (k: string) => focus || drill?.members.includes(k) ? k : groupOf(k)?.key ?? k;
+  const uniq: string[] = [];
+  for (const k of keys) if (!uniq.some((u) => resolved(u) === resolved(k))) uniq.push(k);
+  const i = same && altCycle!.keys.join() === uniq.join() ? (altCycle!.i + 1) % uniq.length : 0;
+  altCycle = { x: p.x, y: p.y, keys: uniq, i };
+  setStatus(`Alt+клик: объект ${i + 1} из ${uniq.length} под курсором.`);
+  return uniq[i];
+}
 
 // Двойной клик по группе — режим одного здания (вместо приближения карты); ничего не выделяется
 map.on('dblclick', (e) => {
@@ -568,6 +586,12 @@ const SOLO = 'solo:';
 const isSolo = (g: BuildingGroup | undefined) => !!g?.key.startsWith(SOLO);
 
 /** Отдельное здание (путь или мультиполигон с building=*) — как группа из одного объекта; отношения нет. */
+/** Объект входит в здание режима здания (с запасом на случай, если focus отстал от состава отношения). */
+function inFocus(k: string): boolean {
+  if (!focus) return false;
+  return focus.members.includes(k) || !!groupOf(focus.key)?.members.includes(k) || !!groupOf(focus.members[0])?.members.includes(k);
+}
+
 function soloGroup(key: string): BuildingGroup | undefined {
   const f = entity(key) as Feature3D | undefined;
   if (!f?.polygons?.length || 'relMembers' in f) return;
@@ -700,9 +724,10 @@ const deletedKeys = new Set<string>();
 function deleteSelected() {
   const keys = [...selection];
   const why = (k: string): string | undefined => {
-    if (!k.startsWith('way/')) return `${k}: удалять пока можно только пути (не отношения и мультиполигоны).`;
+    // Мультиполигон удаляется вместе со своими путями без тегов (при отправке)
+    if (!k.startsWith('way/') && entity(k)?.tags.type !== 'multipolygon') return `${k}: удалять можно только пути и мультиполигоны.`;
     if (focus && !isSolo(focus)) {
-      if (!focus.members.includes(k)) return `${k} не входит в это здание.`;
+      if (!inFocus(k)) return `${k} не входит в это здание.`;
       if (focus.roles[focus.members.indexOf(k)] === 'outline') return 'Контур здания (outline) удалить нельзя — только части.';
     } else if (!focus && groupOf(k)) return `${k} входит в здание type=building — удалите его в режиме здания (двойной клик).`;
     return;
@@ -1719,8 +1744,17 @@ document.addEventListener('keydown', (e) => {
     toggleSnaps();
     return;
   }
+  // G — сетка основания вкл/выкл
+  if (focus && e.code === 'KeyG' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    closeCtxMenu();
+    toggleGrid();
+    return;
+  }
   // Ctrl/Cmd+C, Ctrl/Cmd+V — копировать и вставить части здания (по физической клавише — и в русской раскладке)
-  if (focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === 'KeyV' || (e.code === 'KeyC' && selection.length)) && !toolActive()) {
+  // Выделен текст на странице (строка состояния, панель) — Ctrl+C копирует его, как обычно
+  const textSelected = !!window.getSelection()?.toString();
+  if (focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === 'KeyV' || (e.code === 'KeyC' && selection.length && !textSelected)) && !toolActive()) {
     e.preventDefault();
     closeCtxMenu();
     if (e.code === 'KeyC') copySelected(); else pasteClipboard();
@@ -2123,6 +2157,15 @@ ctxMenu.addEventListener('click', (e) => {
 const snapsBtn = document.querySelector<HTMLButtonElement>('[data-snaps]')!;
 snapsBtn.addEventListener('click', () => toggleSnaps());
 
+function toggleGrid() {
+  const on = !overpassLayer.gridVisible;
+  overpassLayer.setGridVisible(on);
+  try { localStorage.setItem('grid', on ? '1' : '0'); } catch { /* без хранилища — только на сеанс */ }
+  setStatus(on ? 'Сетка 10 м включена (G).' : 'Сетка выключена (G) — привязки к ней тоже.');
+  if (lastPointer) updateSnap(lastPointer);
+}
+try { if (localStorage.getItem('grid') === '0') overpassLayer.setGridVisible(false); } catch { /* нет хранилища */ }
+
 function toggleSnaps() {
   overpassLayer.snapsEnabled = !overpassLayer.snapsEnabled;
   snapsBtn.classList.toggle('active', overpassLayer.snapsEnabled);
@@ -2135,7 +2178,7 @@ function toggleSnaps() {
 /** Действие над выделенными частями (меню и шорткаты): hide, show, show-all, isolate, exclude, exit. */
 function focusAction(action: string) {
   if (!focus) return;
-  const keys = selection.filter((k) => focus!.members.includes(k));
+  const keys = selection.filter(inFocus);
   if (action === 'exclude') { if (keys.length) excludeFromGroup(); return; }
   if (action === 'delete') { if (keys.length) deleteSelected(); return; }
   if (action === 'exit') return closeFocus();
@@ -2366,6 +2409,7 @@ function renderMulti() {
   infoEl.innerHTML = `
     <h2>Выделено: ${selection.length}</h2>
     <ul class="change-list">${list}</ul>
+    ${renderMultiTagForm(selection.filter((k) => session.get(k)?.tags.type !== 'building'), session)}
     ${drill ? excludeButton() : `<p><button type="button" data-merge ${'reason' in plan ? 'disabled' : ''}>Объединить в здание</button></p>`}
     ${drill ? '' : 'reason' in plan ? `<p class="hint">${esc(plan.reason)}</p>` : `<p class="hint">Будет создано отношение type=building: контур ${
       esc(plan.members[0].key)} и частей ${plan.members.filter((m) => m.role === 'part').length}.</p>`}
@@ -2523,7 +2567,7 @@ function onSessionChange(keys: string[]) {
       }
     }
   }
-  if (selectedKey && keys.includes(selectedKey)) {
+  if ((selectedKey && keys.includes(selectedKey)) || (selection.length > 1 && selection.some((k) => keys.includes(k)))) {
     const active = document.activeElement as HTMLElement | null;
     const focusTag = active?.closest('.tag-form') ? active.dataset.tag : undefined;
     renderSelected();
@@ -2836,8 +2880,9 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
-  // В полях ввода оставляем родной undo браузера
-  if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+  // В поле с несохранённым вводом — родной undo браузера; поле без правок (фокус вернулся после применения) — undo редактора
+  const field = (e.target as HTMLElement).closest<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
+  if (field && field.type !== 'color' && field.value !== field.defaultValue) return;
   e.preventDefault();
   const key = e.shiftKey ? session.redo() : session.undo();
   if (key) selectAfterHistory(key);
@@ -2848,6 +2893,8 @@ document.addEventListener('keydown', (e) => {
  * (нарисованная или отрезанная часть) или само отношение не должны выводить на карту.
  */
 function selectAfterHistory(key: string | undefined) {
+  // Правка нескольких выделенных объектов — выделение не трогаем
+  if (key && selection.length > 1 && selection.includes(key)) { renderSelected(); return; }
   if (focus && (!key || !focus.members.includes(key))) { select(undefined); return; }
   select(key);
 }
@@ -2923,4 +2970,4 @@ function esc(s: unknown): string { return String(s).replace(/[&<>"]/g, (c) => `&
 const tagTable = (tags: Record<string, unknown>) =>
   `<table>${Object.entries(tags).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
 
-if (import.meta.env.DEV) Object.assign(window, { map, overpassLayer, overpass, orbit, select, getSession: () => session });
+if (import.meta.env.DEV) Object.assign(window, { map, overpassLayer, overpass, orbit, select, enterFocus, getSession: () => session });

@@ -252,3 +252,6 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .draw-dim { position: absolute; transform: translate(-50%, -50%); padding: 1px 5px; border-radius: 3px; white-space: nowrap;
   font: 11px ui-monospace, monospace; color: #fff; background: rgba(0,0,0,.6); }
 .draw-dim.current { background: #2f7cff; font-weight: 600; }
+.tag-row .mixed, .tag-row input.mixed::placeholder { color: #9ca3af; font-style: italic; }
+.tag-row select.mixed option { color: #111; font-style: normal; }
+.colour-field input[type="color"].mixed { opacity: .45; }

@@ -293,6 +293,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     gridFrame.position.set(ox, oy, -0.01);
     if (this.focusAxes) gridFrame.rotation.z = Math.atan2(this.focusAxes.x[1], this.focusAxes.x[0]);
     gridFrame.add(grid);
+    gridFrame.visible = this.gridVisible;
+    this.gridFrame = gridFrame;
     g.scene.add(ground, gridFrame);
     if (this.focusAxes) g.scene.add(axesGizmo(this.focusAxes));
     this.install(FOCUS_GROUP, g);
@@ -331,6 +333,15 @@ export class BuildingsLayer implements CustomLayerInterface {
    */
   /** Привязки включены (S в режиме здания). Выключены — инструменты двигают свободно. */
   snapsEnabled = true;
+  /** Сетка 10 м под зданием в режиме здания (G); выключенная — и без привязки к ней. */
+  gridVisible = true;
+  private gridFrame?: THREE.Object3D;
+
+  setGridVisible(on: boolean) {
+    this.gridVisible = on;
+    if (this.gridFrame) this.gridFrame.visible = on;
+    this.map?.triggerRepaint();
+  }
   /** Alt зажат — привязки временно выключены. */
   snapsSuspended = false;
 
@@ -406,7 +417,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (px && d <= radius) near.push({ s: { kind: 'edge', key: e.key, p: onSeg.clone() }, d: d + SNAP_PRIORITY.edge * 6 - bonus(e.key), px });
     }
     // Узел сетки основания (земля, вдоль осей здания) под курсором
-    const grid = filter(GRID_SNAP_KEY) && !this.sketching ? this.gridSnap(point) : undefined; // в наброске сетки не видно
+    const grid = filter(GRID_SNAP_KEY) && !this.sketching && this.gridVisible ? this.gridSnap(point) : undefined; // в наброске сетки не видно
     if (grid) {
       v.set(grid.x, grid.y, 0, 1).applyMatrix4(m);
       if (v.w > 0) {
@@ -983,6 +994,37 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Ближайшее здание под точкой экрана и 3D-точка попадания (lng/lat + высота в метрах). */
   pickHit(point: PointLike): { key: string; lngLat: LngLat; altitude: number; local: THREE.Vector3 } | undefined {
     return timed(`${this.id}: выбор под курсором`, () => this.pickHitImpl(point));
+  }
+
+  /** Все объекты под курсором — от ближнего к дальнему (Alt+клик перебирает их). */
+  pickAll(point: PointLike): string[] {
+    if (!this.visible || !this.map) return [];
+    const [px, py] = Array.isArray(point) ? point : [point.x, point.y];
+    const canvas = this.map.getCanvas();
+    const x = (px / canvas.clientWidth) * 2 - 1;
+    const y = 1 - (py / canvas.clientHeight) * 2;
+    const depth = new Map<string, number>();
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), hitPoint = new THREE.Vector3();
+    for (const g of this.activeGroups()) {
+      const m = g.camera.projectionMatrix;
+      const inv = m.clone().invert();
+      const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv);
+      const far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+      const ray = new THREE.Ray(near, far.sub(near).normalize());
+      if (!ray.intersectsBox(groupBox(g))) continue;
+      for (const item of g.items) {
+        const key = item.feature.key;
+        if (g.hidden.has(key) || !ray.intersectsBox(item.box)) continue;
+        const pos = item.positions;
+        for (let i = 0; i < pos.length; i += 9) {
+          a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
+          if (!ray.intersectTriangle(a, b, c, false, hitPoint)) continue;
+          const d = hitPoint.applyMatrix4(m).z;
+          if (!(d >= (depth.get(key) ?? Infinity))) depth.set(key, d);
+        }
+      }
+    }
+    return [...depth.entries()].sort((p, q) => p[1] - q[1]).map(([k]) => k);
   }
 
   private pickHitImpl(point: PointLike): { key: string; lngLat: LngLat; altitude: number; local: THREE.Vector3 } | undefined {

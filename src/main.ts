@@ -78,6 +78,9 @@ function saveGraphics() {
 // В сборке воркер MapLibre лежит в maplibre/ рядом со страницей (см. vite.config.ts); в dev — штатно из node_modules
 if (import.meta.env.PROD) maplibregl.setWorkerUrl(new URL('maplibre/maplibre-gl-worker.mjs', document.baseURI).href);
 
+/** Хэш карты из адреса до создания карты: в режиме здания наклон бывает больше, чем MapLibre примет вне его. */
+const startHash = location.hash.slice(1).split('/').map(Number);
+
 const map = new maplibregl.Map({
   container: 'map',
   // MSAA задаётся только при создании контекста — переключение требует перезагрузки
@@ -90,6 +93,7 @@ const map = new maplibregl.Map({
   pitch: 60,
   bearing: -20,
   hash: true,
+  maxPitch: 175, // хэш из ссылки на здание (наклон до 175°) не должен отбрасываться; потом ограничит orbit
 });
 // View cube (только в режиме здания, слева от кнопок масштаба): вид с грани, ребра или угла куба по осям здания
 const viewCube = new ViewCube({
@@ -611,7 +615,8 @@ async function openEditLink() {
   const m = new URLSearchParams(location.search).get('edit')?.match(/^([wr])(\d+)$/);
   if (!m) return;
   const type = m[1] === 'w' ? 'way' : 'relation', key = `${type}/${m[2]}`;
-  if (!location.hash) {
+  const linked = startHash.length >= 3 && startHash.every(Number.isFinite);
+  if (!linked) {
     try {
       const res = await fetch(`${server().api}/${type}/${m[2]}/full.json`);
       if (!res.ok) throw new Error(`OSM API ${res.status}`);
@@ -626,12 +631,29 @@ async function openEditLink() {
   }
   const deadline = Date.now() + 60_000;
   const tryEnter = () => {
-    if (focus) return map.off('idle', tryEnter);
+    if (focus) return clearInterval(timer);
+    if (!map.getLayer(overpassLayer.id)) return; // стиль и слой зданий ещё не готовы
+    // Карту не показываем вовсе: пустая сцена режима здания, пока здание не пришло
+    if (!focusHiddenLayers.length) { hideMapLayers(); overpassLayer.setFocus([]); }
     const g = type === 'relation' ? (groupOf(key)?.key === key ? groupOf(key) : soloGroup(key)) : groupOf(key) ?? soloGroup(key);
-    if (g) { map.off('idle', tryEnter); enterFocus(g); }
-    else if (Date.now() > deadline) { map.off('idle', tryEnter); setEditParam(undefined); setStatus(`${key}: здание не найдено в загруженных данных.`, true); }
+    // Отношение может прийти с соседним тайлом раньше своих частей — ждём, пока появится хоть одна
+    if (g && groupFeatures(g).length) {
+      clearInterval(timer);
+      enterFocus(g, !linked);
+      // Ракурс ссылки: наклон вне режима здания урезан, в режиме здания он снова допустим
+      if (linked) map.jumpTo({ center: [startHash[2], startHash[1]], zoom: startHash[0], bearing: startHash[3] || 0, pitch: Math.min(startHash[4] || 0, map.getMaxPitch()) });
+    }
+    else if (Date.now() > deadline) {
+      clearInterval(timer);
+      setEditParam(undefined);
+      overpassLayer.setFocus(undefined);
+      for (const { id, visibility } of focusHiddenLayers) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility as 'visible' | 'none');
+      focusHiddenLayers = [];
+      setStatus(`${key}: здание не найдено в загруженных данных.`, true);
+    }
   };
-  map.on('idle', tryEnter);
+  // Не ждём, пока догрузится вся карта (idle): входим, как только здание пришло с первым тайлом
+  const timer = setInterval(tryEnter, 100);
 }
 
 /** Префикс ключа «группы» отдельного здания (без отношения type=building) в режиме здания. */
@@ -678,20 +700,23 @@ function outlineCovered(g: BuildingGroup, key: string): boolean {
   return probe.hasParts;
 }
 
-function enterFocus(g: BuildingGroup) {
+/** Скрыть слои карты на время режима здания (запоминая, как было); уже скрыты (ссылка на здание) — не трогать. */
+function hideMapLayers() {
+  if (focusHiddenLayers.length) return;
+  for (const l of map.getStyle().layers) {
+    if (l.id === overpassLayer.id || l.type === 'background') continue;
+    const pending = pendingTileLayers.find((p) => p.id === l.id);
+    focusHiddenLayers.push(pending ?? { id: l.id, visibility: (map.getLayoutProperty(l.id, 'visibility') as string | undefined) ?? 'visible' });
+    map.setLayoutProperty(l.id, 'visibility', 'none');
+  }
+}
+
+function enterFocus(g: BuildingGroup, flyIn = true) {
   // Вход в здание посреди наброска на карте (двойной клик при включённом R / L): набросок закрыть сейчас —
   // иначе его закрытие позже (пробел, Esc) снимет сцену режима здания вместе с собой
   if (sketching) drawTool.stop();
-  if (!focus) {
-    focusHiddenLayers = [];
-    for (const l of map.getStyle().layers) {
-      if (l.id === overpassLayer.id || l.type === 'background') continue;
-      const pending = pendingTileLayers.find((p) => p.id === l.id);
-      focusHiddenLayers.push(pending ?? { id: l.id, visibility: (map.getLayoutProperty(l.id, 'visibility') as string | undefined) ?? 'visible' });
-      map.setLayoutProperty(l.id, 'visibility', 'none');
-    }
-  }
-  const fly = !focus;
+  if (!focus) hideMapLayers();
+  const fly = !focus && flyIn;
   if (focus?.key !== g.key) {
     // Голые контуры (без высоты, всё здание — части) по умолчанию выключены, включаются глазиком
     session.dropViewActions(); // шаги скрытия — о прежнем здании

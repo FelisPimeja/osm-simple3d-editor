@@ -53,6 +53,11 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   // Неподдерживаемая крыша: стены до самого верха и плоская крыша
   const wallTop = supported ? h.wallTop : h.top;
 
+  // building:part=steps (вне Simple 3D, но в ходу): односкатная крыша ступенями
+  if (supported && shape === 'skillion' && single && tags['building:part'] === 'steps') {
+    addSteps(walls, roof, single, h, tags['roof:direction'], stepCount(tags, h.roofHeight));
+    return { walls, roof, roofApproximated: false };
+  }
   if (supported && shape === 'skillion') {
     addSkillion(walls, roof, polygons[0], h, tags['roof:direction']);
     return { walls, roof, roofApproximated: false };
@@ -535,13 +540,7 @@ const CARDINAL: Record<string, number> = {
  * Без направления скат идёт перпендикулярно самой длинной стороне контура.
  */
 function addSkillion(walls: number[], roof: number[], p: LocalPolygon, h: Heights, direction?: string) {
-  let deg = direction === undefined ? NaN : CARDINAL[direction.toUpperCase()] ?? Number(direction);
-  if (!Number.isFinite(deg)) deg = longestEdgeNormal(p.outer);
-  const rad = (deg * Math.PI) / 180;
-  const dir: Pt = [Math.sin(rad), Math.cos(rad)]; // x — восток, y — север
-  const proj = (q: Pt) => q[0] * dir[0] + q[1] * dir[1];
-  const ps = p.outer.map(proj);
-  const lo = Math.min(...ps), span = Math.max(...ps) - lo || 1;
+  const { proj, lo, span } = slope(p.outer, direction);
   // Дальше по направлению ската — ниже
   const topAt = (q: Pt) => h.wallTop + h.roofHeight * (1 - (proj(q) - lo) / span);
 
@@ -556,6 +555,54 @@ function addSkillion(walls: number[], roof: number[], p: LocalPolygon, h: Height
   const all = [contour, ...holes].flat();
   const v = (i: number): V3 => [all[i].x, all[i].y, topAt([all[i].x, all[i].y])];
   for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(contour, holes)) tri(roof, v(a), v(b), v(c));
+}
+
+/** Направление ската (roof:direction, иначе от самой длинной стороны): проекция на него и её размах по контуру. */
+function slope(ring: Pt[], direction?: string) {
+  let deg = direction === undefined ? NaN : CARDINAL[direction.toUpperCase()] ?? Number(direction);
+  if (!Number.isFinite(deg)) deg = longestEdgeNormal(ring);
+  const rad = (deg * Math.PI) / 180;
+  const dir: Pt = [Math.sin(rad), Math.cos(rad)]; // x — восток, y — север
+  const proj = (q: Pt) => q[0] * dir[0] + q[1] * dir[1];
+  const ps = ring.map(proj);
+  const lo = Math.min(...ps);
+  return { proj, lo, span: Math.max(...ps) - lo || 1 };
+}
+
+/** Высота ступени по умолчанию, м. */
+const STEP_HEIGHT = 0.15;
+
+/** Число ступеней: step_count, иначе по step:height (по умолчанию 15 см). */
+function stepCount(tags: Record<string, string>, rise: number): number {
+  const n = parseInt(tags['step_count'] ?? '', 10);
+  const sh = parseFloat(tags['step:height'] ?? '');
+  const count = n > 0 ? n : Math.round(rise / (sh > 0 ? sh : STEP_HEIGHT));
+  return Math.max(1, Math.min(count, 500));
+}
+
+/**
+ * Ступени (building:part=steps): скат односкатной крыши, разбитый на count ровных проступей. Первая (выше всех) —
+ * у верхнего края ската, последняя — высотой в одну ступень над wallTop; между ними вертикальные подступенки.
+ * Дыры в контуре не поддерживаются (стены по ним — до верха ступени над ними не строим).
+ */
+function addSteps(walls: number[], roof: number[], p: LocalPolygon, h: Heights, direction: string | undefined, count: number) {
+  const { proj, lo, span } = slope(p.outer, direction);
+  const poly: V3[] = p.outer.map((q) => [q[0], q[1], ((proj(q) - lo) / span) * count]);
+  const zOf = (i: number) => (i >= count ? h.min : h.wallTop + (h.roofHeight * (count - i)) / count);
+  const near = (t: number, l: number) => Math.abs(t - l) < 1e-6;
+  for (let i = 0; i < count; i++) {
+    const band = clipT(clipT(poly, i, 1), i + 1, -1);
+    if (band.length < 3) continue;
+    const z = zOf(i);
+    for (const [a, b, c] of triangulate3(band.map((v) => [v[0], v[1], 0] as V3))) tri(roof, [a[0], a[1], z], [b[0], b[1], z], [c[0], c[1], z]);
+    for (let j = 0; j < band.length; j++) {
+      const a = band[j], b = band[(j + 1) % band.length];
+      if (near(a[2], i) && near(b[2], i)) continue; // верхний край — подступенок предыдущей ступени
+      // Нижний край — подступенок до следующей ступени (у последней — до низа); остальное — стена контура
+      const z0 = near(a[2], i + 1) && near(b[2], i + 1) ? zOf(i + 1) : h.min;
+      if (z > z0) quad(walls, [a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z], [a[0], a[1], z]);
+    }
+  }
 }
 
 function longestEdgeNormal(ring: Pt[]): number {

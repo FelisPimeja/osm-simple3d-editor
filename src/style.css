@@ -279,3 +279,13 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .help li { margin: 0 0 6px; line-height: 1.4; }
 .help li:last-child { margin-bottom: 0; }
 .help p { margin: 0 0 8px; line-height: 1.4; }
+
+/* Группы частей одного вида в панели частей */
+.ol-toggle { flex: none; width: 16px; height: 20px; padding: 0; border: 0; background: transparent; cursor: pointer; color: #666; display: grid; place-items: center; }
+.ol-toggle svg { width: 14px; height: 14px; display: block; transform: rotate(90deg); transition: transform .12s; }
+.ol-group.collapsed .ol-toggle svg { transform: none; }
+.outliner li.ol-group .ol-label { font-weight: 600; }
+.outliner li.ol-child { padding-left: 44px; }
+.outliner:has(.ol-group) li:not(.ol-group):not(.ol-child) { padding-left: 26px; }
+.outliner li.off .ol-toggle { opacity: .4; }
+.ol-key.bare { margin-left: 0; color: #555; font-size: 12px; }

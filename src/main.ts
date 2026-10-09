@@ -2518,28 +2518,151 @@ const ICON_EYE_OFF = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
 const ICON_OUTLINE = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 7.5L8 2.5l5.5 5V14h-11z"/><path d="M6.5 14v-4h3v4"/></svg>';
 const ICON_PART = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 1.8l5.5 3v6.4L8 14.2l-5.5-3V4.8z"/><path d="M2.5 4.8L8 7.8l5.5-3M8 7.8v6.4"/></svg>';
 
+/** Иконки видов частей (building:part=*), 16×16, контуром. */
+const svg16 = (d: string) => `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">${d}</svg>`;
+const PART_ICONS = {
+  roof: svg16('<path d="M1.5 9.5L8 3.5l6.5 6M1.5 9.5v2.5L8 6l6.5 6V9.5"/>'),
+  steps: svg16('<path d="M2 14h12V3h-3v3.5H8V10H5v4"/>'),
+  balcony: svg16('<path d="M2 3v11M2 9h12"/><path d="M5 9v4M8 9v4M11 9v4M14 9v4M2 13h12"/>'),
+  deck: svg16('<path d="M1.5 9.5h13l-2 2h-9z"/><path d="M4 11.5V14M12 11.5V14"/>'),
+  column: svg16('<path d="M4.5 2.5h7M4.5 13.5h7M6 2.5v11M10 2.5v11"/>'),
+  tower: svg16('<path d="M5.5 14V5h5v9M4.5 14h7"/><path d="M5.5 5L8 1.5 10.5 5"/><path d="M7 8h2"/>'),
+  elevator: svg16('<rect x="3.5" y="1.5" width="9" height="13" rx="1"/><path d="M6 6l2-2 2 2M6 10l2 2 2-2"/>'),
+  porch: svg16('<path d="M1.5 6L8 2.5 14.5 6z"/><path d="M3.5 6v8M12.5 6v8M2 14h12"/>'),
+  canopy: svg16('<path d="M1.5 5.5h13l-1.5 2.5H3z"/><path d="M4 8v6M12 8v6"/>'),
+  mast: svg16('<path d="M8 2v12M5 14h6M5 5.5l3-3.5 3 3.5M6 9h4"/>'),
+  dome: svg16('<path d="M2.5 11.5a5.5 5.5 0 0 1 11 0z"/><path d="M8 6V2.5M2 14h12"/>'),
+  chimney: svg16('<path d="M6 14V3.5h4V14M5 3.5h6"/><path d="M7 2c.5-.6 1.5-.6 2 0"/>'),
+  base: svg16('<path d="M1.5 10.5h13v3.5h-13z"/><path d="M4 10.5V7h8v3.5"/>'),
+  wall: svg16('<path d="M2 3.5h12v9H2zM2 8h12M6 3.5V8M10 8v4.5"/>'),
+  bridge: svg16('<path d="M1.5 6.5h13M1.5 10.5h13M1.5 6.5v4M14.5 6.5v4"/><path d="M5 8.5h6M9.5 7l1.5 1.5L9.5 10"/>'),
+  construction: svg16('<path d="M8 1.8l5.5 3v6.4L8 14.2l-5.5-3V4.8z" stroke-dasharray="2 1.5"/>'),
+};
+/**
+ * Виды частей по самым частым значениям building:part (taginfo): подпись и иконка. Значения-типы зданий
+ * (apartments, house, retail…) — обычная «Часть» со значением в подписи.
+ */
+const PART_KINDS: Record<string, [string, keyof typeof PART_ICONS]> = {
+  roof: ['Крыша', 'roof'], 'roof section': ['Крыша', 'roof'],
+  steps: ['Ступени', 'steps'], stairs: ['Лестница', 'steps'], staircase: ['Лестница', 'steps'], stairway: ['Лестница', 'steps'], grandstand: ['Трибуна', 'steps'],
+  balcony: ['Балкон', 'balcony'], loggia: ['Лоджия', 'balcony'],
+  deck: ['Настил', 'deck'], terrace: ['Терраса', 'deck'], patio: ['Патио', 'deck'],
+  column: ['Колонна', 'column'], pillar: ['Столб', 'column'], buttress: ['Контрфорс', 'column'],
+  tower: ['Башня', 'tower'], bell_tower: ['Колокольня', 'tower'],
+  elevator: ['Лифт', 'elevator'], verticalpassage: ['Лифт', 'elevator'],
+  porch: ['Крыльцо', 'porch'], veranda: ['Веранда', 'porch'], portico: ['Портик', 'porch'], entrance: ['Вход', 'porch'],
+  canopy: ['Навес', 'canopy'], carport: ['Навес для машин', 'canopy'],
+  mast: ['Мачта', 'mast'], antenna: ['Антенна', 'mast'],
+  dome: ['Купол', 'dome'], cupola: ['Купол', 'dome'],
+  chimney: ['Труба', 'chimney'],
+  base: ['Основание', 'base'], stylobate: ['Стилобат', 'base'], foundation: ['Фундамент', 'base'], basement: ['Подвал', 'base'],
+  wall: ['Стена', 'wall'],
+  corridor: ['Переход', 'bridge'], bridge: ['Переход', 'bridge'], passageway: ['Переход', 'bridge'],
+  construction: ['Строится', 'construction'],
+};
+
 /** Панель частей режима здания: все члены отношения, контур — первым. */
+/** Свёрнутые группы частей одного вида (по подписи вида); запоминаются. */
+const collapsedKinds = new Set<string>();
+try { for (const k of JSON.parse(localStorage.getItem('outliner-collapsed') ?? '[]') as string[]) collapsedKinds.add(k); } catch { /* нет хранилища */ }
+const ICON_CHEVRON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>';
+
+/** Вид части для панели: подпись и иконка (контур — отдельно). */
+function partKind(t: Record<string, string>, outline: boolean): { label: string; icon: string; title: string } {
+  if (outline) return { label: 'Контур', icon: ICON_OUTLINE, title: 'Контур (outline)' };
+  const value = t['building:part'];
+  const kind = PART_KINDS[value?.toLowerCase() ?? ''];
+  const label = kind?.[0] ?? (value && value !== 'yes' ? `Часть: ${value}` : 'Часть');
+  return { label, icon: kind ? PART_ICONS[kind[1]] : ICON_PART, title: `${label} (building:part=${value ?? '—'})` };
+}
+
+/** Члены группы панели по data-group (для клика по группе). */
+let outlinerGroups = new Map<string, string[]>();
+
+/**
+ * Панель частей режима здания: контур — первым, затем части; две и больше частей одного вида собираются
+ * в группу (сворачивается стрелкой, клик выделяет все её части, глазик скрывает или показывает их все).
+ */
 function renderOutliner() {
   outlinerPanel.hidden = !focus;
   if (!focus) { outlinerEl.innerHTML = ''; return; }
   const g = focus;
-  const rows = g.members.map((key, i) => ({ key, role: g.roles[i] }))
-    .sort((a, b) => Number(b.role === 'outline') - Number(a.role === 'outline'));
-  outlinerCount.textContent = `(${rows.length})`;
-  outlinerEl.innerHTML = rows.map(({ key, role }) => {
+  const rows = g.members.map((key, i) => {
     const f = entity(key);
-    const outline = role === 'outline';
-    const t = f?.tags ?? {};
-    const name = t.name ?? (outline ? 'Контур' : t['building:part'] && t['building:part'] !== 'yes' ? t['building:part'] : 'Часть');
-    const off = focusHidden.has(key);
-    const cls = [selection.includes(key) && 'selected', off && 'off', !f && 'missing'].filter(Boolean).join(' ');
-    const title = f ? key : `${key} — не загружен`;
-    return `<li class="${cls}" data-key="${esc(key)}" title="${esc(title)}">
-      <span class="ol-icon" title="${outline ? 'Контур (outline)' : 'Часть (part)'}">${outline ? ICON_OUTLINE : ICON_PART}</span>
-      <span class="ol-label">${esc(name)}<span class="ol-key">${esc(key)}</span></span>
+    const outline = g.roles[i] === 'outline';
+    return { key, f, outline, kind: partKind(f?.tags ?? {}, outline) };
+  });
+  // Порядок: контур, крыши, прочие виды (как встретились), обычные части (building:part=yes) — в конце
+  const rank = (r: (typeof rows)[number]) => (r.outline ? 0 : r.kind.label === 'Крыша' ? 1 : r.kind.label === 'Часть' ? 3 : 2);
+  rows.sort((a, b) => rank(a) - rank(b));
+  outlinerCount.textContent = `(${rows.length})`;
+  const row = (r: (typeof rows)[number], child: boolean) => {
+    const off = focusHidden.has(r.key);
+    const cls = [child && 'ol-child', selection.includes(r.key) && 'selected', off && 'off', !r.f && 'missing'].filter(Boolean).join(' ');
+    const title = r.f ? r.key : `${r.key} — не загружен`;
+    return `<li class="${cls}" data-key="${esc(r.key)}" title="${esc(title)}">
+      <span class="ol-icon" title="${esc(r.kind.title)}">${r.kind.icon}</span>
+      <span class="ol-label">${child && !r.f?.tags.name ? `<span class="ol-key bare">${esc(r.key)}</span>` : `${esc(r.f?.tags.name ?? r.kind.label)}<span class="ol-key">${esc(r.key)}</span>`}</span>
       <button type="button" class="ol-eye" data-eye title="${off ? 'Показать' : 'Скрыть'}">${off ? ICON_EYE_OFF : ICON_EYE}</button></li>`;
-  }).join('');
+  };
+  // Группы — по подписи вида, в порядке первого появления
+  const byKind = new Map<string, typeof rows>();
+  for (const r of rows) if (!r.outline) (byKind.get(r.kind.label) ?? byKind.set(r.kind.label, []).get(r.kind.label)!).push(r);
+  outlinerGroups = new Map();
+  const html: string[] = [];
+  const done = new Set<string>();
+  for (const r of rows) {
+    const list = r.outline ? undefined : byKind.get(r.kind.label)!;
+    if (!list || list.length < 2) { html.push(row(r, false)); continue; }
+    if (done.has(r.kind.label)) continue;
+    done.add(r.kind.label);
+    const keys = list.map((x) => x.key);
+    outlinerGroups.set(r.kind.label, keys);
+    const collapsed = collapsedKinds.has(r.kind.label);
+    const allOff = keys.every((k) => focusHidden.has(k));
+    const live = keys.filter((k) => entity(k) && !focusHidden.has(k));
+    const sel = live.length > 0 && live.every((k) => selection.includes(k));
+    const cls = ['ol-group', collapsed && 'collapsed', sel && 'selected', allOff && 'off'].filter(Boolean).join(' ');
+    html.push(`<li class="${cls}" data-group="${esc(r.kind.label)}" title="Выделить все: ${esc(r.kind.label)}">
+      <button type="button" class="ol-toggle" data-toggle title="${collapsed ? 'Развернуть' : 'Свернуть'}">${ICON_CHEVRON}</button>
+      <span class="ol-icon" title="${esc(r.kind.title)}">${r.kind.icon}</span>
+      <span class="ol-label">${esc(r.kind.label)}<span class="ol-key">${keys.length}</span></span>
+      <button type="button" class="ol-eye" data-eye title="${allOff ? 'Показать все' : 'Скрыть все'}">${allOff ? ICON_EYE_OFF : ICON_EYE}</button></li>`);
+    if (!collapsed) for (const x of list) html.push(row(x, true));
+  }
+  outlinerEl.innerHTML = html.join('');
 }
+
+// Группа видов: стрелка — свернуть, глазик — скрыть/показать все, клик — выделить все (Shift — добавить или снять)
+outlinerEl.addEventListener('click', (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-group]');
+  if (!li || !focus) return;
+  e.stopImmediatePropagation();
+  const label = li.dataset.group!;
+  const keys = outlinerGroups.get(label) ?? [];
+  if ((e.target as HTMLElement).closest('[data-toggle]')) {
+    if (collapsedKinds.has(label)) collapsedKinds.delete(label); else collapsedKinds.add(label);
+    try { localStorage.setItem('outliner-collapsed', JSON.stringify([...collapsedKinds])); } catch { /* только до перезагрузки */ }
+    renderOutliner();
+    return;
+  }
+  if ((e.target as HTMLElement).closest('[data-eye]')) {
+    const next = new Set(focusHidden);
+    const show = keys.every((k) => next.has(k));
+    for (const k of keys) if (show) next.delete(k); else next.add(k);
+    changeFocusHidden(next);
+    return;
+  }
+  const live = keys.filter((k) => entity(k) && !focusHidden.has(k));
+  if (!e.shiftKey) { select(undefined); addToSelection(live); return; }
+  if (live.length && live.every((k) => selection.includes(k))) {
+    // Вся группа уже выделена — Shift+клик снимает её
+    selection = selection.filter((k) => !live.includes(k));
+    selectedKey = selection.at(-1);
+    paintSelection();
+    renderSelected();
+  } else addToSelection(live);
+}, { capture: true });
 
 outlinerEl.addEventListener('click', (e) => {
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');

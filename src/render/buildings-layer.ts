@@ -1649,8 +1649,11 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     heights = { ...heights, min, wallTop: min + g.footprint, top: min + g.footprint, roofShape: 'flat', roofHeight: 0 };
   }
   const tri = buildTriangles(polys, heights, tags);
+  // building:part=roof принято рисовать одной крышей: без фасада, фронтонов и дна (навесы, крыши над пустотой)
+  const roofOnly = !flat && tags['building:part'] === 'roof' && tri.roof.length > 0;
+  if (roofOnly) tri.walls = [];
   // Дно — у объектов с объёмом над землёй (видно снизу); на земле его не видно — треугольники не тратим. Цвет — как у стен
-  if (!flat && heights.min > 0.01 && heights.top - heights.min >= FOOTPRINT_HEIGHT) tri.walls.push(...bottomTriangles(polys, heights.min));
+  else if (!flat && heights.min > 0.01 && heights.top - heights.min >= FOOTPRINT_HEIGHT) tri.walls.push(...bottomTriangles(polys, heights.min));
   const positions = new Float32Array(tri.walls.length + tri.roof.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);

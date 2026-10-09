@@ -27,6 +27,13 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .tool-flyout { position: absolute; left: calc(100% + 6px); display: flex; flex-direction: column; gap: 2px; padding: 4px;
   background: rgba(255,255,255,.98); border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.2); z-index: 5; }
 .tool-flyout button { width: auto; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 7px; font-size: 13px; white-space: nowrap; }
+.flyout-check { display: flex; align-items: center; gap: 8px; padding: 5px 10px 5px 6px; font-size: 13px; white-space: nowrap; cursor: pointer; border-radius: 6px; }
+.flyout-check:hover { background: #f3f4f6; }
+.flyout-check.disabled { color: #9ca3af; }
+.flyout-check kbd { margin-left: auto; padding-left: 12px; color: #9ca3af; font: 11px system-ui; }
+.tool-flyout .flyout-all { height: 30px; justify-content: flex-start; padding: 0 10px; font-size: 13px; }
+.tool-flyout .flyout-all:disabled { color: #9ca3af; cursor: default; background: transparent; }
+.flyout-sep { height: 1px; margin: 2px 4px; background: #e5e7eb; }
 .toolbar-sep { height: 1px; margin: 2px 4px; background: #e5e7eb; }
 /* Ввод расстояния (как VCB в SketchUp) */
 .vcb { position: absolute; right: 346px; bottom: 36px; z-index: 3; display: flex; align-items: baseline; gap: 6px;

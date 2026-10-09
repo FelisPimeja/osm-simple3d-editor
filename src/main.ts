@@ -13,7 +13,7 @@ import { centroid, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildi
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
 import { inheritedTags } from './osm/inherit';
-import { BuildingsLayer, setInheritance, type GraphicsOptions, type RenderedFeature, type SnapHit } from './render/buildings-layer';
+import { BuildingsLayer, setInheritance, type GraphicsOptions, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
@@ -626,6 +626,9 @@ function outlineCovered(g: BuildingGroup, key: string): boolean {
 }
 
 function enterFocus(g: BuildingGroup) {
+  // Вход в здание посреди наброска на карте (двойной клик при включённом R / L): набросок закрыть сейчас —
+  // иначе его закрытие позже (пробел, Esc) снимет сцену режима здания вместе с собой
+  if (sketching) drawTool.stop();
   if (!focus) {
     focusHiddenLayers = [];
     for (const l of map.getStyle().layers) {
@@ -2205,6 +2208,51 @@ ctxMenu.addEventListener('click', (e) => {
 const snapsBtn = document.querySelector<HTMLButtonElement>('[data-snaps]')!;
 snapsBtn.addEventListener('click', () => toggleSnaps());
 
+// Типы привязок — галками во всплывашке у кнопки привязок (стрелка в углу); выбор запоминается
+const SNAP_KINDS: [SnapKind, string][] = [
+  ['vertex', 'Вершины'], ['midpoint', 'Середины рёбер'], ['center', 'Центры'], ['edge', 'На ребре'],
+  ['perpendicular', 'Перпендикуляр'], ['extension', 'Продолжение ребра'], ['grid', 'Узлы сетки'],
+];
+try { for (const k of JSON.parse(localStorage.getItem('snaps-off') ?? '[]') as SnapKind[]) overpassLayer.snapKindsOff.add(k); } catch { /* нет хранилища */ }
+snapsBtn.insertAdjacentHTML('beforeend', '<span class="flyout-arrow" data-flyout title="Типы привязок"></span>');
+let snapsFlyout: HTMLElement | undefined;
+function closeSnapsFlyout() { snapsFlyout?.remove(); snapsFlyout = undefined; }
+function renderSnapsFlyout() {
+  if (!snapsFlyout) return;
+  const off = overpassLayer.snapKindsOff;
+  // «Все привязки» — включить все типы; доступен, только если какой-то выключен
+  snapsFlyout.innerHTML = `<button type="button" class="flyout-all" data-snap-all${off.size ? '' : ' disabled'}>Включить все привязки</button>
+    <div class="flyout-sep"></div>
+    ${SNAP_KINDS.map(([k, label]) => `<label class="flyout-check${overpassLayer.snapsEnabled ? '' : ' disabled'}"><input type="checkbox" data-snap-kind="${k}"${off.has(k) ? '' : ' checked'}${overpassLayer.snapsEnabled ? '' : ' disabled'}> ${label}</label>`).join('')}`;
+}
+snapsBtn.addEventListener('click', (e) => {
+  if (!(e.target as HTMLElement).closest('[data-flyout]')) return;
+  e.stopImmediatePropagation();
+  if (snapsFlyout) return closeSnapsFlyout();
+  snapsFlyout = document.createElement('div');
+  snapsFlyout.className = 'tool-flyout snaps-flyout';
+  snapsBtn.after(snapsFlyout);
+  snapsFlyout.style.top = `${snapsBtn.offsetTop}px`;
+  renderSnapsFlyout();
+  snapsFlyout.addEventListener('click', (ev) => {
+    if (!(ev.target as HTMLElement).closest('[data-snap-all]')) return;
+    overpassLayer.snapKindsOff.clear();
+    try { localStorage.removeItem('snaps-off'); } catch { /* нет хранилища */ }
+    renderSnapsFlyout();
+    if (lastPointer) updateSnap(lastPointer);
+  });
+  snapsFlyout.addEventListener('change', (ev) => {
+    const el = ev.target as HTMLInputElement;
+    const k = el.dataset.snapKind as SnapKind | undefined;
+    if (!k) return;
+    if (el.checked) overpassLayer.snapKindsOff.delete(k); else overpassLayer.snapKindsOff.add(k);
+    try { localStorage.setItem('snaps-off', JSON.stringify([...overpassLayer.snapKindsOff])); } catch { /* нет хранилища */ }
+    renderSnapsFlyout();
+    if (lastPointer) updateSnap(lastPointer);
+  });
+}, true);
+document.addEventListener('pointerdown', (e) => { if (snapsFlyout && !(e.target as HTMLElement).closest('.snaps-flyout, [data-snaps]')) closeSnapsFlyout(); });
+
 function toggleGrid() {
   const on = !overpassLayer.gridVisible;
   overpassLayer.setGridVisible(on);
@@ -2218,6 +2266,7 @@ function toggleSnaps() {
   overpassLayer.snapsEnabled = !overpassLayer.snapsEnabled;
   snapsBtn.classList.toggle('active', overpassLayer.snapsEnabled);
   snapsBtn.title = overpassLayer.snapsEnabled ? 'Привязки включены (S)' : 'Привязки выключены (S)';
+  renderSnapsFlyout();
   setStatus(overpassLayer.snapsEnabled ? 'Привязки включены (S).' : 'Привязки выключены (S) — инструменты двигают свободно.');
   // Обновить маркер и текущее движение инструмента под курсором
   if (lastPointer) updateSnap(lastPointer);

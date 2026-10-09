@@ -333,6 +333,10 @@ export class BuildingsLayer implements CustomLayerInterface {
    */
   /** Привязки включены (S в режиме здания). Выключены — инструменты двигают свободно. */
   snapsEnabled = true;
+  /** Ребро под курсором и с какого момента (для взвода продолжения). */
+  private edgeHover?: { id: string; since: number };
+  /** Рёбра со взведённой привязкой к продолжению → до какого момента. */
+  private armedEdges = new Map<string, number>();
   /** Сетка 10 м под зданием в режиме здания (G); выключенная — и без привязки к ней. */
   gridVisible = true;
   private gridFrame?: THREE.Object3D;
@@ -342,6 +346,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (this.gridFrame) this.gridFrame.visible = on;
     this.map?.triggerRepaint();
   }
+  /** Выключенные типы привязок (всплывашка у кнопки привязок). */
+  snapKindsOff = new Set<SnapKind>();
   /** Alt зажат — привязки временно выключены. */
   snapsSuspended = false;
 
@@ -360,8 +366,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     const v = new THREE.Vector4();
     let best: { s: SnapPoint; d: number; px: [number, number]; along?: THREE.Vector3 } | undefined;
     const near: { s: SnapPoint; d: number; px: [number, number]; along?: THREE.Vector3 }[] = [];
+    const off = this.snapKindsOff;
     for (const s of this.snaps.points) {
-      if (!filter(s.key)) continue;
+      if (off.has(s.kind) || !filter(s.key)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;
       const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
@@ -378,9 +385,15 @@ export class BuildingsLayer implements CustomLayerInterface {
       return v.w > 0 ? [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight] : undefined;
     };
     const bonus = (key: string) => (this.selected.has(key) ? SNAP_SELECTED_BONUS_PX : 0);
+    // Продолжение ребра «взводится» задержкой курсора над ребром (EXTENSION_ARM_MS) и гаснет через EXTENSION_TTL_MS
+    const now = performance.now();
+    const edgeId = (e: { a: THREE.Vector3; b: THREE.Vector3 }) => `${e.a.x.toFixed(2)},${e.a.y.toFixed(2)},${e.a.z.toFixed(2)};${e.b.x.toFixed(2)},${e.b.y.toFixed(2)},${e.b.z.toFixed(2)}`;
+    if (this.edgeHover && now - this.edgeHover.since >= EXTENSION_ARM_MS) this.armedEdges.set(this.edgeHover.id, now + EXTENSION_TTL_MS);
+    for (const [id, until] of this.armedEdges) if (until < now) this.armedEdges.delete(id);
+    let hovered: { id: string; d: number } | undefined;
     if (ray) for (const e of this.snaps.edges) {
       if (!filter(e.key)) continue;
-      if (opts.from) {
+      if (opts.from && !off.has('perpendicular')) {
         ab.subVectors(e.b, e.a);
         const l2 = ab.lengthSq();
         const t = l2 ? foot.subVectors(opts.from, e.a).dot(ab) / l2 : -1;
@@ -396,7 +409,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Продолжение ребра за его концы (до EXTENSION_M): точка на прямой ребра вне самого ребра
       ab.subVectors(e.b, e.a);
       const len = ab.length();
-      if (len > 0.05) {
+      const id = edgeId(e);
+      const armed = this.armedEdges.has(id);
+      if (armed && len > 0.05 && !off.has('extension')) {
         const k = EXTENSION_M / len;
         ext0.copy(e.a).addScaledVector(ab, -k);
         ext1.copy(e.b).addScaledVector(ab, k);
@@ -408,16 +423,20 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (px && d <= Math.min(radius, EXTENSION_RADIUS_PX)) {
             near.push({ s: { kind: 'extension', key: e.key, p: onSeg.clone() }, d: d + SNAP_PRIORITY.extension * 6 - bonus(e.key), px,
               along: (t < 0 ? e.a : e.b).clone() });
+            this.armedEdges.set(id, now + EXTENSION_TTL_MS); // пока пользуемся — не гаснет
           }
         }
       }
       ray.distanceSqToSegment(e.a, e.b, undefined, onSeg);
       const px = toPx(onSeg);
       const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
-      if (px && d <= radius) near.push({ s: { kind: 'edge', key: e.key, p: onSeg.clone() }, d: d + SNAP_PRIORITY.edge * 6 - bonus(e.key), px });
+      if (px && d <= radius && !off.has('edge')) near.push({ s: { kind: 'edge', key: e.key, p: onSeg.clone() }, d: d + SNAP_PRIORITY.edge * 6 - bonus(e.key), px });
+      if (px && d <= EXTENSION_HOVER_PX && (!hovered || d < hovered.d)) hovered = { id, d };
     }
+    if (!hovered) this.edgeHover = undefined;
+    else if (this.edgeHover?.id !== hovered.id) this.edgeHover = { id: hovered.id, since: now };
     // Узел сетки основания (земля, вдоль осей здания) под курсором
-    const grid = filter(GRID_SNAP_KEY) && !this.sketching && this.gridVisible ? this.gridSnap(point) : undefined; // в наброске сетки не видно
+    const grid = !off.has('grid') && filter(GRID_SNAP_KEY) && !this.sketching && this.gridVisible ? this.gridSnap(point) : undefined; // в наброске сетки не видно
     if (grid) {
       v.set(grid.x, grid.y, 0, 1).applyMatrix4(m);
       if (v.w > 0) {
@@ -1428,6 +1447,12 @@ const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpen
 const EXTENSION_M = 30;
 /** Продолжение ловит курсор ближе обычного (px): иначе срабатывает почти везде вокруг здания. */
 const EXTENSION_RADIUS_PX = 6;
+/** Сколько держать курсор над ребром, чтобы включить привязку к его продолжению, мс. */
+const EXTENSION_ARM_MS = 1000;
+/** Через сколько после последнего использования привязка к продолжению ребра гаснет, мс. */
+const EXTENSION_TTL_MS = 4000;
+/** Курсор «над ребром» — ближе этого к нему на экране, px. */
+const EXTENSION_HOVER_PX = 6;
 /** Шаг сетки основания режима здания, м. */
 const GRID_STEP = 10;
 

@@ -35,6 +35,8 @@ export class DrawTool {
   private axis?: 0 | 1;
   /** Ось, зафиксированная Shift (пока зажат): точки только по ней от последней. */
   private locked?: 0 | 1;
+  /** Shift на привязке «Продолжение»: точка идёт только по прямой этого ребра. */
+  private lineLock?: SnapHit;
   private lastPoint?: [number, number];
   private typed = '';
   private readonly vcb: HTMLDivElement;
@@ -107,7 +109,9 @@ export class DrawTool {
     if (!this.active) return false;
     // Shift — держать текущую ось (как при перемещении): пока зажат, точка идёт только вдоль неё
     if (e.key === 'Shift') {
-      if (e.type === 'keyup') this.locked = undefined;
+      if (e.type === 'keyup') { this.locked = undefined; this.lineLock = undefined; }
+      // У привязки «Продолжение» Shift держит прямую этого ребра
+      else if (!e.repeat && this.snap?.kind === 'extension' && this.snap.along) this.lineLock = { ...this.snap, local: this.snap.local.clone() };
       else if (!e.repeat && this.pts.length && this.axis !== undefined) this.locked = this.axis;
       else return true;
       if (this.lastPoint) this.move(this.lastPoint);
@@ -145,6 +149,7 @@ export class DrawTool {
 
   /** Точка на плоскости рисования под курсором: привязка, иначе луч на плоскость (с выравниванием по оси). */
   private pointAt(point: [number, number]): Pt | undefined {
+    if (this.lineLock) return this.onLine(point, this.lineLock);
     const last = this.pts[this.pts.length - 1];
     this.snap = this.layer.snapAt(point, undefined, undefined, { from: last && new THREE.Vector3(last[0], last[1], this.z) });
     if (this.snap?.kind === 'center') this.snap = undefined;
@@ -169,6 +174,24 @@ export class DrawTool {
     const q = this.planePoint(point);
     if (!q) return;
     return this.lockAxis(this.pts[this.pts.length - 1], q);
+  }
+
+  /** Точка на зафиксированной прямой продолжения ребра: проекция привязки или курсора (на плоскости прямой). */
+  private onLine(point: [number, number], lock: SnapHit): Pt | undefined {
+    const a = lock.along!;
+    const d = new THREE.Vector2(lock.local.x - a.x, lock.local.y - a.y);
+    if (d.lengthSq() < 1e-8) return;
+    d.normalize();
+    this.z = lock.local.z;
+    const s = this.layer.snapAt(point, undefined, undefined, {});
+    const q = s && s.kind !== 'center' ? [s.local.x, s.local.y] as Pt : this.planePoint(point);
+    if (!q) return;
+    const t = (q[0] - a.x) * d.x + (q[1] - a.y) * d.y;
+    const p = new THREE.Vector3(a.x + d.x * t, a.y + d.y * t, this.z);
+    this.axis = undefined;
+    // Маркер и пунктир — как у привязки «Продолжение», в новой точке
+    this.snap = { ...lock, local: p, point: this.layer.focusProject(p) ?? lock.point };
+    return [p.x, p.y];
   }
 
   /** Крыша объекта плоская на этой высоте (рисовать на скатах нельзя). */
@@ -307,6 +330,7 @@ export class DrawTool {
     this.snap = undefined;
     this.typed = '';
     this.locked = undefined;
+    this.lineLock = undefined;
     this.layer.setDrawPreview(undefined);
     this.layer.setMoveGuide(undefined);
     this.vcb.hidden = true;

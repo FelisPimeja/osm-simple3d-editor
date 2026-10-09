@@ -99,3 +99,10 @@ export async function fetchElements(keys: string[], api = server().api): Promise
   }
   return out;
 }
+
+/** Отношения, в которые входит путь (текущие версии). */
+export async function fetchWayRelations(id: number, api = server().api): Promise<OsmRelation[]> {
+  const res = await fetch(`${api}/way/${id}/relations.json`);
+  if (!res.ok) throw new Error(`OSM API ${res.status}: ${(await res.text()) || res.statusText}`);
+  return ((await res.json()) as { elements: OsmRelation[] }).elements;
+}

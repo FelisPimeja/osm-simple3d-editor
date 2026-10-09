@@ -9,7 +9,7 @@ import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
-import { centroid, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type Polygon } from './osm/model';
+import { centroid, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
 import { inheritedTags } from './osm/inherit';
@@ -19,9 +19,10 @@ import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
 import { SplitTool, type CutPoint } from './edit/split-tool';
+import { insertInLine, insertInRing, restructureRing, type Insert, type RingWay } from './edit/topology';
 import { DrawTool, RECT_LABELS, RECT_MODES, type DrawShape, type RectMode } from './edit/draw-tool';
 import { suggestComment } from './edit/changeset-comment';
-import { EditSession, type Tagged, type TagChange } from './edit/session';
+import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { bindTagForms, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
@@ -478,7 +479,10 @@ function entity(key: string): Tagged | undefined {
   }
   // Не нарисованный в тайлах (часть здания из соседнего тайла) — из загруженных данных
   const f = overpass.get(key)?.feature ?? overpass.findFeature(key);
-  return f ? session.track({ ...f, tags: { ...f.tags } }) : undefined;
+  if (!f) return;
+  // У мультиполигона — состав (пути-члены): правка топологии меняет его
+  const relMembers = f.ways?.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }));
+  return session.track({ ...f, tags: { ...f.tags }, ...(relMembers ? { relMembers } : {}) });
 }
 
 /** Что выделить по клику: вне группы — группу целиком; внутри группы — часть; клик мимо группы — выход к ней. */
@@ -594,7 +598,7 @@ function inFocus(k: string): boolean {
 
 function soloGroup(key: string): BuildingGroup | undefined {
   const f = entity(key) as Feature3D | undefined;
-  if (!f?.polygons?.length || 'relMembers' in f) return;
+  if (!f?.polygons?.length || editGroups.has(key) || f.tags.type === 'building') return;
   return { key: SOLO + key, type: 'relation', id: 0, version: 0, tags: {}, members: [key], roles: [''] };
 }
 
@@ -1540,24 +1544,203 @@ function sideNodes(f: Feature3D, edge: NonNullable<PushTarget['edge']>): [number
   return [ids[edge.i], ids[(edge.i + 1) % ids.length]];
 }
 
-/** Стену можно тянуть, если её узлы не принадлежат другим объектам; иначе попап со связанными, как у перемещения. */
+/** Стену можно тянуть всегда: общие с соседями узлы и пути при применении разводятся (topologyEdits). */
 function allowPushSide(t: PushTarget): boolean {
   const f = entity(t.key) as Feature3D | undefined;
   const nodes = f && t.edge ? sideNodes(f, t.edge) : undefined;
-  if (!nodes) { setStatus('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true); return false; }
-  const linked = new Map<string, number>();
-  for (const o of overpass.allFeatures()) {
-    if (o.key === t.key) continue;
-    const shared = (nodeIds(o) ?? []).filter((id) => nodes.includes(id)).length;
-    if (shared) linked.set(o.key, shared);
+  if (!nodes || (f!.type === 'relation' && !relWays(f!))) {
+    setStatus('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
+    return false;
   }
-  if (!linked.size) return true;
-  const list = [...linked].map(([k, n]) => `<li><a href="${server().web}/${k}" target="_blank" rel="noopener">${k}</a> — общих узлов: ${n}</li>`).join('');
-  showPopup(`<h3>Нельзя вытянуть стену</h3>
-    <p>Узлы этой стены принадлежат и другим объектам — при сдвиге они бы деформировались:</p><ul>${list}</ul>
-    <p class="hint">Верх и низ при этом тянуть можно.</p>`);
-  overpassLayer.setOverlay([...linked.keys()]);
-  return false;
+  return true;
+}
+
+// ── Правка контуров без нахлёстов ──
+// Общий узел нельзя сдвинуть (деформируется сосед), поэтому вместо него ставится новый. Новый угол на общей
+// стороне вставляется во все пути с этой стороной; пути мультиполигона, которые лишь частью остаются в его
+// новом кольце, режутся (свои куски — себе, остальное — соседям), новые стороны — новыми путями.
+
+/** Новое кольцо объекта: узлы по порядку (новые — отрицательные id) и их координаты. */
+interface RingRewrite { poly: number; ring: number; ids: number[]; coords: LonLat[] }
+
+/** Объекты с геометрией как сейчас (правки сессии поверх данных) и созданные в сессии. */
+function liveFeatures(): Feature3D[] {
+  const out = overpass.allFeatures();
+  const have = new Set(out.map((f) => f.key));
+  for (const c of session.createdAlive()) if (c.polygons?.length && !have.has(c.key)) out.push(c as Feature3D);
+  return out;
+}
+
+/** Пути-члены мультиполигона (id и роль) — из сессии или из данных; undefined — в кеше их нет. */
+function relWays(f: Feature3D): { id: number; role: string }[] | undefined {
+  const rel = session.get(f.key)?.relMembers;
+  if (rel) return rel.filter((m) => m.type === 'way').map((m) => ({ id: m.ref, role: m.role }));
+  return (f.ways ?? overpass.findFeature(f.key)?.ways)?.map((w) => ({ id: w.id, role: w.role }));
+}
+
+/** Узлы всех объектов, кроме skip. */
+function nodesOutside(skip: Set<string>): Set<number> {
+  const out = new Set<number>();
+  for (const g of liveFeatures()) if (!skip.has(g.key)) for (const id of nodeIds(g) ?? []) out.add(id);
+  return out;
+}
+
+/**
+ * Правки (одним шагом истории) для новых колец объектов items и вставки новых узлов в общие стороны.
+ * Строка — почему нельзя.
+ */
+function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inserts: Insert[], newCoords: Map<number, LonLat>): ObjectEdit[] | string {
+  const live = liveFeatures();
+  const coords = new Map<number, LonLat>();
+  const ways = new Map<number, { nodes: number[]; tags: Record<string, string> }>();
+  for (const g of live) {
+    for (const p of g.polygons) {
+      p.outerIds?.forEach((id, i) => coords.set(id, p.outer[i]));
+      p.inners.forEach((r, j) => p.innerIds?.[j]?.forEach((id, i) => coords.set(id, r[i])));
+    }
+    for (const w of g.ways ?? []) if (!ways.has(w.id)) ways.set(w.id, { nodes: w.nodes, tags: w.tags ?? {} });
+  }
+  for (const t of session.lineEntities()) ways.set(Number(t.key.split('/')[1]), { nodes: t.line!.ids, tags: t.tags });
+  const at = (id: number) => newCoords.get(id) ?? coords.get(id)!;
+  const mine = new Set(items.map((i) => i.f.key));
+  const edits = new Map<string, ObjectEdit>();
+  const edit = (key: string) => edits.get(key) ?? edits.set(key, { key }).get(key)!;
+  /** Новые списки узлов путей-членов (существующих и созданных). */
+  const lines = new Map<number, number[]>();
+  const created = new Map<number, { tags?: Record<string, string>; splitFrom?: number }>();
+  const lineOf = (id: number) => lines.get(id) ?? ways.get(id)?.nodes;
+  const ringIns = (ids: number[] | undefined, ring: LonLat[]) => (ids ? insertInRing(ids, ring, inserts, at) : undefined);
+  const withInserts = (p: Polygon): Polygon => {
+    if (!inserts.length) return p;
+    const o = ringIns(p.outerIds, p.outer);
+    const inn = p.inners.map((r, j) => ringIns(p.innerIds?.[j], r));
+    if (!o && !inn.some(Boolean)) return p;
+    return { ...p, outer: o?.coords ?? p.outer, outerIds: o?.ids ?? p.outerIds,
+      inners: p.inners.map((r, j) => inn[j]?.coords ?? r), innerIds: p.innerIds?.map((r, j) => inn[j]?.ids ?? r) };
+  };
+
+  // Новые узлы на общих сторонах — в контуры соседей и во все пути-члены с этой стороной
+  if (inserts.length) {
+    for (const g of live) {
+      if (mine.has(g.key)) continue;
+      const ps = g.polygons.map(withInserts);
+      if (ps.some((p, i) => p !== g.polygons[i])) edit(g.key).polygons = ps;
+    }
+    for (const [id, w] of ways) { const n = insertInLine(w.nodes, inserts); if (n) lines.set(id, n); }
+  }
+
+  const pieces = new Map<number, number[]>();
+  for (const { f, rewrites } of items) {
+    edit(f.key).polygons = f.polygons.map((p, pi) => {
+      const q = withInserts(p);
+      const outer = rewrites.find((r) => r.poly === pi && r.ring === 0);
+      return {
+        ...q,
+        ...(outer ? { outer: outer.coords, outerIds: outer.ids } : {}),
+        inners: q.inners.map((r, j) => rewrites.find((w) => w.poly === pi && w.ring === j + 1)?.coords ?? r),
+        innerIds: q.innerIds?.map((r, j) => rewrites.find((w) => w.poly === pi && w.ring === j + 1)?.ids ?? r),
+      };
+    });
+    if (f.type !== 'relation') continue;
+    const rw = relWays(f);
+    if (!rw) return `${f.key}: в кеше нет путей-членов — перезагрузите видимые тайлы.`;
+    let members: OsmMember[] = session.get(f.key)?.relMembers ?? rw.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }));
+    for (const r of rewrites) {
+      const p = f.polygons[r.poly];
+      const old = r.ring ? p.innerIds?.[r.ring - 1] : p.outerIds;
+      if (!old) return `${f.key}: в кеше нет id узлов.`;
+      const allowed = new Set([...old, ...r.ids]);
+      const role = r.ring ? 'inner' : 'outer';
+      const ringWays: RingWay[] = [];
+      for (const m of members) {
+        if (m.type !== 'way' || (m.role === 'inner') !== (role === 'inner')) continue;
+        const nodes = lineOf(m.ref);
+        if (!nodes) return `${f.key}: нет данных пути way/${m.ref} — перезагрузите видимые тайлы.`;
+        if (nodes.every((id) => allowed.has(id))) ringWays.push({ id: m.ref, role: m.role, nodes, tags: ways.get(m.ref)?.tags });
+      }
+      const res = restructureRing(ringWays, r.ids, role, () => nextNewId--);
+      for (const [id, nodes] of res.lines) lines.set(id, nodes);
+      for (const c of res.created) { lines.set(c.id, c.nodes); created.set(c.id, { tags: c.tags, splitFrom: c.splitFrom }); }
+      for (const [orig, ids] of res.pieces) pieces.set(orig, [...(pieces.get(orig) ?? []), ...ids]);
+      const ringIds = new Set(ringWays.map((w) => w.id));
+      const keep = new Set(res.members.map((m) => m.id));
+      members = [
+        ...members.filter((m) => m.type !== 'way' || !ringIds.has(m.ref) || keep.has(m.ref)),
+        ...res.members.filter((m) => !ringIds.has(m.id)).map((m) => ({ type: 'way' as const, ref: m.id, role: m.role })),
+      ];
+    }
+    edit(f.key).members = members;
+  }
+
+  // Загруженные соседи с разрезанными путями: куски — рядом с исходным, с той же ролью
+  if (pieces.size) {
+    for (const g of live) {
+      if (g.type !== 'relation' || mine.has(g.key)) continue;
+      const rw = relWays(g);
+      if (!rw?.some((w) => pieces.has(w.id))) continue;
+      const cur: OsmMember[] = session.get(g.key)?.relMembers ?? rw.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }));
+      edit(g.key).members = cur.flatMap((m) => (m.type === 'way' && pieces.has(m.ref)
+        ? [m, ...pieces.get(m.ref)!.map((ref) => ({ type: 'way' as const, ref, role: m.role }))] : [m]));
+    }
+  }
+
+  // Объекты — в сессию (до editMany), пути-члены — отдельными объектами без геометрии здания
+  for (const key of edits.keys()) {
+    const e = entity(key);
+    if (!e) return `${key}: нет в данных.`;
+    // У мультиполигона в сессии должен быть состав, иначе его правку не с чем сравнить
+    if (edits.get(key)!.members && !e.relMembers) return `${key}: нет состава отношения.`;
+  }
+  const out = [...edits.values()];
+  for (const [id, nodes] of lines) {
+    const key = `way/${id}`;
+    const line = { ids: nodes, coords: nodes.map(at) };
+    const c = created.get(id);
+    if (c) { out.push({ key, create: { key, version: 0, tags: { ...(c.tags ?? {}) }, line, splitFrom: c.splitFrom } }); continue; }
+    const known = session.get(key);
+    if (known && !known.line) return `${key} — сам по себе здание или часть, его не разрезать.`;
+    if (!known) {
+      const w = ways.get(id)!;
+      session.track({ key, version: 0, tags: { ...w.tags }, line: { ids: w.nodes, coords: w.nodes.map(at) } });
+    }
+    out.push({ key, line });
+  }
+  return out;
+}
+
+/** Правки вытягивания стены: свободные углы двигаются, общие — заменяются новыми узлами (см. topologyEdits). */
+function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: number): ObjectEdit[] | string {
+  const moved = pushSidePolygons(f, edge, dz);
+  const p = f.polygons[edge.poly], q = moved[edge.poly];
+  const ids = edge.ring ? p.innerIds?.[edge.ring - 1] : p.outerIds;
+  if (!ids) return 'В кеше нет id узлов этого объекта.';
+  const was = edge.ring ? p.inners[edge.ring - 1] : p.outer;
+  const now = edge.ring ? q.inners[edge.ring - 1] : q.outer;
+  const n = ids.length, i = edge.i, j = (i + 1) % n;
+  const shared = nodesOutside(new Set([f.key]));
+  const outIds: number[] = [], outC: LonLat[] = [], inserts: Insert[] = [], fresh = new Map<number, LonLat>();
+  const put = (id: number, c: LonLat) => { outIds.push(id); outC.push(c); };
+  const add = (c: LonLat) => { const id = nextNewId--; fresh.set(id, c); put(id, c); return id; };
+  /** Положение c на прямой a→b: t (0 — a, 1 — b) и отступ от прямой, м. */
+  const along = (a: LonLat, b: LonLat, c: LonLat) => {
+    const [ax, ay] = overpassLayer.focusToLocal(a)!, [bx, by] = overpassLayer.focusToLocal(b)!, [cx, cy] = overpassLayer.focusToLocal(c)!;
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1;
+    const t = ((cx - ax) * dx + (cy - ay) * dy) / l2;
+    return { t, off: Math.abs((cx - ax) * dy - (cy - ay) * dx) / Math.sqrt(l2) };
+  };
+  for (let k = 0; k < n; k++) {
+    if (k !== i && k !== j) { put(ids[k], now[k]); continue; }
+    if (!shared.has(ids[k])) { put(ids[k], now[k]); continue; } // свободный угол — просто сдвинуть
+    // Соседняя сторона: у начала стены — предыдущая, у конца — следующая
+    const nb = k === i ? (i - 1 + n) % n : (j + 1) % n;
+    const { t, off } = along(was[nb], was[k], now[k]);
+    if (off < 1e-3 && t > 1e-6 && t < 1 - 1e-6) {
+      // Внутрь: новый угол на соседней стороне — вставить его во все пути с этой стороной
+      inserts.push({ id: add(now[k]), u: ids[nb], v: ids[k] });
+    } else if (k === i) { put(ids[k], was[k]); add(now[k]); } // наружу: старый угол остаётся, новый — следом
+    else { add(now[k]); put(ids[k], was[k]); }
+  }
+  return topologyEdits([{ f, rewrites: [{ poly: edge.poly, ring: edge.ring, ids: outIds, coords: outC }] }], inserts, fresh);
 }
 
 /**
@@ -1615,7 +1798,11 @@ function previewPush(t: PushTarget, dz: number | undefined) {
 function commitPush(t: PushTarget, dz: number) {
   const f = entity(t.key) as Feature3D | undefined;
   if (!f) return;
-  if (t.face === 'side') session.editMany([{ key: t.key, polygons: pushSidePolygons(f, t.edge!, dz) }]);
+  if (t.face === 'side') {
+    const edits = pushSideEdits(f, t.edge!, dz);
+    if (typeof edits === 'string') return setStatus(edits, true);
+    session.editMany(edits);
+  }
   else session.setTags(t.key, diffTags(f.tags, pushTags(f.tags, t.face, dz)));
   const levels = t.face !== 'side' && pushTool.units === 'levels' ? ` (${dz >= 0 ? '+' : ''}${Math.round(dz / LEVEL_HEIGHT)} эт.)` : '';
   setStatus(`${{ top: 'Верх', bottom: 'Низ', side: 'Стена' }[t.face]} ${t.key} сдвинут${t.face === 'side' ? 'а' : ''} на ${dz >= 0 ? '+' : ''}${dz.toFixed(2)} м${levels}.`);
@@ -1686,6 +1873,30 @@ function adoptNodeIds(f: Feature3D) {
   });
 }
 
+/**
+ * Для кеша тайлов после отправки: у мультиполигонов — актуальные пути-члены (их состав и узлы могли
+ * поменяться при разрезании), в том числе у соседей, которых сами не отправляли.
+ */
+function withMemberWays<T extends { version: number; tags: Record<string, string>; polygons?: Polygon[] }>(saved: Map<string, T>): Map<string, T & { ways?: MemberWay[] }> {
+  const out = new Map<string, T & { ways?: MemberWay[] }>(saved);
+  const lines = new Map(session.lineEntities().map((t) => [Number(t.key.split('/')[1]), t] as const));
+  if (!lines.size) return out;
+  for (const f of liveFeatures()) {
+    if (f.type !== 'relation') continue;
+    const rw = relWays(f);
+    if (!rw?.some((w) => lines.has(w.id)) && !out.has(f.key)) continue;
+    const base = new Map((f.ways ?? overpass.findFeature(f.key)?.ways ?? []).map((w) => [w.id, w] as const));
+    const ways = rw?.map((w) => {
+      const l = lines.get(w.id);
+      return { id: w.id, role: w.role, nodes: l?.line!.ids ?? base.get(w.id)?.nodes ?? [], ...(l ? (Object.keys(l.tags).length ? { tags: l.tags } : {}) : base.get(w.id)?.tags ? { tags: base.get(w.id)!.tags } : {}) };
+    });
+    if (!ways || ways.some((w) => !w.nodes.length)) continue;
+    const prev = out.get(f.key);
+    out.set(f.key, { ...(prev ?? { version: f.version, tags: f.tags, polygons: f.polygons }), ways } as T & { ways?: MemberWay[] });
+  }
+  return out;
+}
+
 /** Узлы объекта; undefined — в данных нет id узлов (старый кеш). */
 function nodeIds(f: Feature3D): number[] | undefined {
   adoptNodeIds(f);
@@ -1697,34 +1908,14 @@ function nodeIds(f: Feature3D): number[] | undefined {
   return ids;
 }
 
-/** Проверить выделение и включить перемещение: объекты не должны делить узлы ни с кем, кроме друг друга. */
+/** Проверить выделение и включить перемещение (общие с соседями узлы и пути разведутся при применении). */
 function startMove() {
   if (!focus) return;
   const keys = selection.filter((k) => focus!.members.includes(k));
   if (!keys.length) return setStatus('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Переместить».', true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
-  const own = new Set<number>();
-  for (const f of features) {
-    const ids = nodeIds(f);
-    if (!ids) return setStatus('В кеше нет id узлов этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
-    ids.forEach((id) => own.add(id));
-  }
-  const chosen = new Set(keys);
-  const linked = new Map<string, number>();
-  for (const f of overpass.allFeatures()) {
-    if (chosen.has(f.key)) continue;
-    const shared = (nodeIds(f) ?? []).filter((id) => own.has(id)).length;
-    if (shared) linked.set(f.key, shared);
-  }
-  if (linked.size) {
-    const list = [...linked].map(([k, n]) => `<li><a href="${server().web}/${k}" target="_blank" rel="noopener">${k}</a> — общих узлов: ${n}${
-      focus!.members.includes(k) ? '' : ' (вне этого здания)'}</li>`).join('');
-    showPopup(`<h3>Нельзя переместить</h3>
-      <p>${keys.length > 1 ? 'Выбранные объекты делят' : 'Объект делит'} узлы с другими объектами — при сдвиге они бы деформировались:</p>
-      <ul>${list}</ul>
-      <p class="hint">Перемещать можно объекты без общих узлов или связанные только между собой — выберите их вместе (Shift).</p>`);
-    overpassLayer.setOverlay([...linked.keys()]);
-    return;
+  if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
+    return setStatus('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
   }
   pushTool.stop();
   splitTool.stop();
@@ -1743,11 +1934,36 @@ function commitMove(keys: string[], offset: THREE.Vector3) {
     return overpassLayer.focusToLngLat(x + offset.x, y + offset.y)!;
   };
   const moved = Math.hypot(offset.x, offset.y) > 1e-4;
-  session.editMany(features.map((f) => ({
-    key: f.key,
-    polygons: moved ? f.polygons.map((p) => ({ ...p, outer: p.outer.map(shift), inners: p.inners.map((r) => r.map(shift)) })) : undefined,
-    tags: Math.abs(dz) > 1e-4 ? shiftHeights(f.tags, dz) : undefined,
-  })));
+  const tags = (f: Feature3D) => (Math.abs(dz) > 1e-4 ? shiftHeights(f.tags, dz) : undefined);
+  if (!moved) {
+    session.editMany(features.map((f) => ({ key: f.key, tags: tags(f) })));
+  } else {
+    // Узлы, общие с объектами вне перемещаемых, остаются соседям — у нас на их месте новые
+    const shared = nodesOutside(new Set(keys));
+    const fresh = new Map<number, LonLat>(), swap = new Map<number, number>();
+    const id = (n: number, c: LonLat) => {
+      if (!shared.has(n)) return n;
+      const k = swap.get(n) ?? swap.set(n, nextNewId--).get(n)!;
+      fresh.set(k, c);
+      return k;
+    };
+    const items = features.map((f) => ({
+      f,
+      rewrites: f.polygons.flatMap((p, poly) => [p.outer, ...p.inners].map((ring, r) => {
+        const ids = r ? p.innerIds![r - 1] : p.outerIds!;
+        const coords = ring.map(shift);
+        return { poly, ring: r, ids: ids.map((n, k) => id(n, coords[k])), coords };
+      })),
+    }));
+    const edits = topologyEdits(items, [], fresh);
+    if (typeof edits === 'string') return setStatus(edits, true);
+    for (const f of features) {
+      const t = tags(f);
+      const e = edits.find((x) => x.key === f.key);
+      if (t && e) e.tags = t;
+    }
+    session.editMany(edits);
+  }
   setStatus(`Перемещено объектов: ${features.length} на ${offset.length().toFixed(2)} м.`);
 }
 
@@ -2684,7 +2900,8 @@ const ICON_REVERT = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" 
 
 function renderChanges() {
   renderAccount();
-  const changes = session.changes();
+  // Пути-члены мультиполигонов (разрезание при правке контуров) — служебные: отправляются, но в списке не видны
+  const changes = session.changes().filter((c) => !c.feature.line);
   // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
   // Шаги скрытия частей — тоже в истории, но панель ради них не раскрываем
   const show = changes.length > 0 || session.hasDataHistory();
@@ -2743,7 +2960,7 @@ let insertedSuggestion: string | undefined;
 
 function commentSuggestion(): string {
   const groupKey = (key: string) => editGroups.get(key)?.key ?? groupOf(key)?.key;
-  return suggestComment(session.changes(), {
+  return suggestComment(session.changes().filter((c) => !c.feature.line), {
     groupOf: (key) => { const g = groupKey(key); return g && g !== key ? g : undefined; },
     isGroup: (key) => editGroups.has(key),
     buildingName: (key) => {
@@ -2811,7 +3028,8 @@ async function doUpload() {
         : g ? { type: 'relation' as const, id: g.id, version: 0, tags: c.after, members: g.relMembers }
         : { type: 'way' as const, id: Number(c.key.split('/')[1]), version: 0, tags: c.after, nodes: c.wayNodes?.after ?? [] };
       return { key: c.key, before: c.before, after: c.after, created, members: c.members, membersBefore: c.membersBefore,
-        nodeMoves: c.nodeMoves, wayNodes: c.wayNodes, newNodes: c.newNodes, deleted: c.deleted, version: c.feature.version, polygons: c.feature.polygons };
+        nodeMoves: c.nodeMoves, wayNodes: c.wayNodes, newNodes: c.newNodes, deleted: c.deleted, version: c.feature.version, polygons: c.feature.polygons,
+        splitFrom: c.feature.splitFrom };
     });
     const res = await uploadEdits(edits, uploadComment.trim(), (t) => setStatus(t));
     // Временные id узлов и путей → настоящие: в геометрии, членах отношений и в отправленных полигонах
@@ -2844,20 +3062,20 @@ async function doUpload() {
       }
       saved.set(e.key, { version, tags, newKey, polygons: e.polygons });
     }
-    session.markSaved(saved, [...res.deleted]);
+    session.markSaved(saved, [...res.deleted, ...res.dropped]);
     // Созданные пути получили настоящие id — им место в данных тайлов
     const createdWays: Feature3D[] = [];
     for (const [k, v] of saved) {
       if (!v.newKey?.startsWith('way/')) continue;
       const f = session.get(v.newKey) as Feature3D | undefined;
-      if (f) { f.id = Number(v.newKey.split('/')[1]); createdWays.push(f); }
+      if (f?.polygons) { f.id = Number(v.newKey.split('/')[1]); createdWays.push(f); }
       void k;
     }
     rebuildGroupIndex();
     // Сразу в кеш тайлов текущего источника — не ждать, пока Overpass догонит
     const savedGroups = [...saved].map(([k, v]) => editGroups.get(v.newKey ?? k)).filter((g): g is EditGroup => !!g)
       .map((g) => ({ key: g.key, type: g.type, id: g.id, version: g.version, tags: { ...g.tags }, members: [...g.members], roles: [...g.roles] }));
-    void overpass.applySaved(new Map([...saved].map(([k, v]) => [v.newKey ?? k, v])), savedGroups, createdWays, [...res.deleted]);
+    void overpass.applySaved(withMemberWays(new Map([...saved].map(([k, v]) => [v.newKey ?? k, v]))), savedGroups, createdWays, [...res.deleted]);
     uploadComment = '';
     const link = `<a href="${s.web}/changeset/${res.changeset}" target="_blank" rel="noopener">changeset ${res.changeset}</a>`;
     uploading = false;

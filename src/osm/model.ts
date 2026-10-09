@@ -17,7 +17,12 @@ export interface Feature3D {
   polygons: Polygon[];
   /** Контур здания, у которого есть building:part — сам не рендерится. */
   hasParts: boolean;
+  /** У мультиполигона — его пути-члены (для правки топологии); в старом кеше нет. */
+  ways?: MemberWay[];
 }
+
+/** Путь-член мультиполигона: id, роль, узлы (как в OSM, у замкнутого первый = последний) и теги. */
+export interface MemberWay { id: number; role: string; nodes: number[]; tags?: Record<string, string> }
 
 /** Отношение type=building: здание, собранное из контура и частей. Своей геометрии нет. */
 export interface BuildingGroup {
@@ -110,12 +115,14 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     if (!kind || r.tags?.type !== 'multipolygon') continue;
     const key = `relation/${r.id}`;
     const segs = { outer: [] as number[][], inner: [] as number[][] };
+    const memberWays: MemberWay[] = [];
     let incomplete = false;
     for (const m of r.members) {
       if (m.type !== 'way') continue;
       const w = ways.get(m.ref);
       if (!w) { incomplete = true; break; }
       (m.role === 'inner' ? segs.inner : segs.outer).push(w.nodes);
+      memberWays.push({ id: w.id, role: m.role, nodes: w.nodes, ...(w.tags ? { tags: w.tags } : {}) });
     }
     const outerRings = incomplete ? null : joinRings(segs.outer);
     const innerRings = incomplete ? null : joinRings(segs.inner);
@@ -133,7 +140,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
       if (p) { p.inners.push(inner); p.innerIds!.push(ring.slice(0, -1)); }
     }
     if (!polygons.length) { skipped.push({ key, reason: 'нет узлов' }); continue; }
-    features.push({ key, type: 'relation', id: r.id, version: r.version, tags: r.tags!, kind, polygons, hasParts: false });
+    features.push({ key, type: 'relation', id: r.id, version: r.version, tags: r.tags!, kind, polygons, hasParts: false, ways: memberWays });
   }
 
   markOutlinesWithParts(features);

@@ -1,4 +1,4 @@
-import { fetchElements, fetchNodes, type OsmMember, type OsmNode, type OsmRelation, type OsmWay } from './api';
+import { fetchElements, fetchNodes, fetchWayRelations, type OsmMember, type OsmNode, type OsmRelation, type OsmWay } from './api';
 import { getToken } from './auth';
 import { server } from './servers';
 
@@ -24,6 +24,8 @@ export interface TagEdit {
   newNodes?: { id: number; at: [number, number] }[];
   /** Удалить объект (путь — вместе с его узлами без тегов, которые больше никому не нужны). */
   deleted?: boolean;
+  /** Новый путь — кусок разрезанного пути с этим id: встаёт рядом с ним во все отношения, где тот был. */
+  splitFrom?: number;
 }
 
 export interface UploadResult {
@@ -40,6 +42,8 @@ export interface UploadResult {
   geometrySaved: Set<string>;
   /** Удалённые объекты. */
   deleted: Set<string>;
+  /** Созданные в сессии объекты, которые не понадобились (куски путей, которые никому не нужны), — не отправлены. */
+  dropped: Set<string>;
 }
 
 /** Конфликт, который нельзя разрешить автоматически: кто-то изменил те же теги. */
@@ -149,7 +153,11 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
   const moves = edits.flatMap((e) => (e.nodeMoves ?? []).map((m) => ({ ...m, key: e.key })));
   const nodes = moves.length ? await fetchNodes([...new Set(moves.map((m) => m.id))]) : new Map();
   const near = (a: number, b: number) => Math.abs(a - b) < 1e-7;
+  const movedIds = new Set<number>();
   for (const m of moves) {
+    // Один узел может быть сдвинут в нескольких объектах (перемещали вместе)
+    if (movedIds.has(m.id)) continue;
+    movedIds.add(m.id);
     const n = nodes.get(m.id);
     if (!n) { conflicts.push({ key: m.key, tags: [`узел ${m.id} удалён на сервере`] }); continue; }
     if (!near(n.lon, m.from[0]) || !near(n.lat, m.from[1])) { conflicts.push({ key: m.key, tags: [`узел ${m.id} уже сдвинут`] }); continue; }
@@ -218,6 +226,7 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
   for (const w of memberWays) payload.push({ element: w, tags: {}, deleted: true });
   for (const n of dropNodes.values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
   if (conflicts.length) throw new ConflictError(conflicts);
+  const dropped = await settleTopology(edits, payload, fresh, onStatus);
 
   onStatus('Открываем changeset…');
   const changesetXml = `<osm><changeset>${tagsXml({
@@ -229,11 +238,81 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
   try {
     onStatus(`Загружаем ${payload.length} объектов в changeset ${changeset}…`);
     const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
-    return { changeset, ...diff, written, rebased, geometrySaved, deleted };
+    return { changeset, ...diff, written, rebased, geometrySaved, deleted, dropped };
   } finally {
     // Закрываем и при ошибке, чтобы не висел пустой changeset
     try { await call('PUT', `/changeset/${changeset}/close`); } catch { /* закроется сам через час */ }
   }
+}
+
+type Payload = Parameters<typeof buildOsmChange>[0];
+
+/**
+ * Топология после разрезания путей (правка контуров без нахлёстов):
+ * 1. куски разрезанного пути — во все отношения исходного на сервере, которых нет среди наших правок;
+ * 2. куски, которые не вошли ни в одно отношение, не создаём;
+ * 3. пути, убранные из наших отношений, и узлы ненужных кусков — удалить, если без тегов и больше
+ *    никому не нужны (if-unused: занятые сервер оставит);
+ * 4. новые узлы, на которые не ссылается ни один путь, не создаём.
+ */
+async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<string, OsmWay | OsmRelation>, onStatus: (s: string) => void): Promise<Set<string>> {
+  const dropped = new Set<string>();
+  const editKeys = new Set(edits.map((e) => e.key));
+  const splits = new Map<number, number[]>();
+  for (const e of edits) {
+    if (e.created?.type === 'way' && e.splitFrom !== undefined) splits.set(e.splitFrom, [...(splits.get(e.splitFrom) ?? []), e.created.id]);
+  }
+  if (splits.size) onStatus('Проверяем отношения разрезанных путей…');
+  const patched = new Map<number, OsmRelation>();
+  for (const [orig, ids] of splits) {
+    for (const r of await fetchWayRelations(orig)) {
+      if (editKeys.has(`relation/${r.id}`)) continue; // наша правка состава уже их содержит
+      const base = patched.get(r.id) ?? r;
+      patched.set(r.id, { ...base, members: base.members.flatMap((m) => (m.type === 'way' && m.ref === orig
+        ? [m, ...ids.map((ref) => ({ type: 'way' as const, ref, role: m.role }))] : [m])) });
+    }
+  }
+  for (const r of patched.values()) payload.push({ element: r, tags: r.tags ?? {} });
+
+  const wayRefs = new Set<number>();
+  for (const p of payload) if (p.element.type === 'relation' && !p.deleted) for (const m of p.element.members) if (m.type === 'way') wayRefs.add(m.ref);
+  const dropNodes = new Set<number>();
+  for (let i = payload.length - 1; i >= 0; i--) {
+    const p = payload[i];
+    if (!p.created || p.element.type !== 'way') continue;
+    const e = edits.find((x) => x.created?.id === p.element.id && x.created.type === 'way');
+    if (e?.splitFrom === undefined || wayRefs.has(p.element.id)) continue;
+    payload.splice(i, 1);
+    dropped.add(e.key);
+    for (const n of p.element.nodes) if (n > 0) dropNodes.add(n);
+  }
+
+  // Пути, убранные из наших отношений
+  const removed = new Set<string>();
+  for (const e of edits) {
+    if (!e.members || !e.membersBefore || e.created || e.deleted) continue;
+    const now = new Set(e.members.filter((m) => m.type === 'way').map((m) => m.ref));
+    for (const m of e.membersBefore) if (m.type === 'way' && !now.has(m.ref) && !wayRefs.has(m.ref) && !editKeys.has(`way/${m.ref}`)) removed.add(`way/${m.ref}`);
+  }
+  const removedWays = removed.size ? [...(await fetchElements([...removed])).values()]
+    .filter((w): w is OsmWay => w.type === 'way' && !Object.keys(w.tags ?? {}).length) : [];
+  for (const w of removedWays) {
+    if (fresh.has(`way/${w.id}`) && payload.some((p) => p.element.type === 'way' && p.element.id === w.id)) continue;
+    payload.push({ element: w, tags: {}, deleted: true });
+    for (const n of w.nodes) dropNodes.add(n);
+  }
+
+  // Узлы: новые без ссылок не создаём, старые без ссылок и тегов — удаляем (if-unused)
+  const used = new Set<number>();
+  for (const p of payload) if (p.element.type === 'way' && !p.deleted) for (const n of p.element.nodes) used.add(n);
+  for (let i = payload.length - 1; i >= 0; i--) {
+    const p = payload[i];
+    if (p.created && p.element.type === 'node' && !used.has(p.element.id)) payload.splice(i, 1);
+  }
+  const already = new Set(payload.filter((p) => p.deleted && p.element.type === 'node').map((p) => p.element.id));
+  const ids = [...dropNodes].filter((n) => !used.has(n) && !already.has(n));
+  if (ids.length) for (const n of (await fetchNodes(ids)).values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
+  return dropped;
 }
 
 /**

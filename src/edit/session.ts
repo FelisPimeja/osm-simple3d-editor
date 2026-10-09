@@ -7,7 +7,16 @@ export type Tags = Record<string, string>;
  * Объект с тегами: здание/часть (Feature3D, у него ещё и геометрия) или отношение type=building (у него члены).
  * Геометрия не меняется на месте: при правке объекту присваиваются новые полигоны.
  */
-export interface Tagged { key: string; version: number; tags: Tags; relMembers?: OsmMember[]; polygons?: Polygon[] }
+export interface Tagged {
+  key: string; version: number; tags: Tags; relMembers?: OsmMember[]; polygons?: Polygon[];
+  /** Путь-член мультиполигона (без своей геометрии здания): узлы по порядку и их координаты. */
+  line?: Line;
+  /** Путь отрезан от этого пути (при отправке его добавляют рядом с ним во все отношения, где был исходный). */
+  splitFrom?: number;
+}
+
+/** Узлы пути (у замкнутого первый = последний) и их координаты. */
+export interface Line { ids: number[]; coords: LonLat[] }
 
 /** Сдвинутый узел: откуда (как было в данных) и куда. */
 export interface NodeMove { id: number; from: LonLat; to: LonLat }
@@ -41,6 +50,7 @@ interface Entry {
   before: Tags | null; after: Tags | null;
   mBefore?: OsmMember[]; mAfter?: OsmMember[];
   gBefore?: Polygon[]; gAfter?: Polygon[];
+  lBefore?: Line; lAfter?: Line;
 }
 /** Действие интерфейса в общей истории (скрытие частей и т. п.): данные не меняет, но отменяется так же. */
 export interface ViewAction { undo(): void; redo(): void }
@@ -55,6 +65,8 @@ export interface ObjectEdit {
   polygons?: Polygon[];
   /** Новый состав членов отношения. */
   members?: OsmMember[];
+  /** Новые узлы пути-члена. */
+  line?: Line;
   /** Новый объект (рассечение): создаётся в этом же шаге. */
   create?: Tagged;
   /** Удалить объект (созданный в сессии — просто отменить его создание). */
@@ -70,6 +82,7 @@ export class EditSession {
   private readonly original = new Map<string, Tags>();
   private readonly originalMembers = new Map<string, OsmMember[]>();
   private readonly originalGeometry = new Map<string, Polygon[]>();
+  private readonly originalLine = new Map<string, Line>();
   private undoStack: Step[] = [];
   private redoStack: Step[] = [];
   /** Созданные в сессии объекты и те из них, что сейчас существуют (создание можно отменить). */
@@ -90,6 +103,7 @@ export class EditSession {
     this.original.set(entity.key, { ...entity.tags });
     if (entity.relMembers) this.originalMembers.set(entity.key, entity.relMembers.map((m) => ({ ...m })));
     if (entity.polygons) this.originalGeometry.set(entity.key, entity.polygons);
+    if (entity.line) this.originalLine.set(entity.key, entity.line);
     return entity;
   }
 
@@ -116,7 +130,7 @@ export class EditSession {
         this.original.set(c.key, {});
         if (c.relMembers) this.originalMembers.set(c.key, []);
         this.created.add(c.key);
-        step.push({ key: c.key, before: null, after: { ...c.tags }, gAfter: c.polygons });
+        step.push({ key: c.key, before: null, after: { ...c.tags }, gAfter: c.polygons, lAfter: c.line });
         continue;
       }
       const f = this.get(e.key);
@@ -128,6 +142,7 @@ export class EditSession {
       const tags = e.tags ?? f.tags;
       step.push({ key: e.key, before: { ...f.tags }, after: { ...tags },
         ...(e.polygons ? { gBefore: f.polygons, gAfter: e.polygons } : {}),
+        ...(e.line ? { lBefore: f.line, lAfter: e.line } : {}),
         ...(e.members ? { mBefore: f.relMembers, mAfter: e.members } : {}) });
     }
     if (step.length) this.push(step);
@@ -156,6 +171,12 @@ export class EditSession {
   /** Список узлов пути (замкнутый) — только у путей из одного кольца. */
   private wayNodes(key: string): { before: number[]; after: number[] } | undefined {
     const f = this.features.get(key);
+    if (f?.line) {
+      const after = f.line.ids;
+      const before = this.created.has(key) ? [] : this.originalLine.get(key)?.ids;
+      if (!before || (before.length === after.length && before.every((id, i) => id === after[i]))) return;
+      return { before, after };
+    }
     if (!f?.polygons || !key.startsWith('way/')) return;
     const ring = (ps: Polygon[] | undefined) => (ps?.length === 1 && ps[0].outerIds ? [...ps[0].outerIds, ps[0].outerIds[0]] : undefined);
     const after = ring(f.polygons);
@@ -176,6 +197,11 @@ export class EditSession {
   /** Объект из данных удалён в сессии. */
   isDeleted(key: string): boolean {
     return this.deleted.has(key);
+  }
+
+  /** Отслеживаемые пути-члены мультиполигонов (существующие сейчас). */
+  lineEntities(): Tagged[] {
+    return [...this.features.values()].filter((f) => f.line && this.exists(f.key));
   }
 
   /** Созданные в сессии и существующие сейчас объекты. */
@@ -254,7 +280,7 @@ export class EditSession {
     if (!step) return;
     this.redoStack.push(step);
     if (isView(step)) { step.undo(); this.onChange([]); return; }
-    for (const e of [...step].reverse()) this.apply(e.key, e.before, e.mBefore, e.gBefore);
+    for (const e of [...step].reverse()) this.apply(e.key, e.before, e.mBefore, e.gBefore, e.lBefore);
     this.notify(step);
     return step[0].key;
   }
@@ -264,7 +290,7 @@ export class EditSession {
     if (!step) return;
     this.undoStack.push(step);
     if (isView(step)) { step.redo(); this.onChange([]); return; }
-    for (const e of step) this.apply(e.key, e.after, e.mAfter, e.gAfter);
+    for (const e of step) this.apply(e.key, e.after, e.mAfter, e.gAfter, e.lAfter);
     this.notify(step);
     return step[0].key;
   }
@@ -296,7 +322,8 @@ export class EditSession {
         diff.push({ tag: '(члены)', from: String(orig.length), to: String(f.relMembers!.length) });
       }
       if (moves.length) diff.push({ tag: '(геометрия)', from: '', to: `сдвинуто узлов: ${moves.length}` });
-      const newNodes = nodes ? [...nodeCoords(f.polygons ?? [])].filter(([id]) => id < 0).map(([id, at]) => ({ id, at })) : [];
+      const coords = f.line ? new Map(f.line.ids.map((id, i) => [id, f.line!.coords[i]] as const)) : nodeCoords(f.polygons ?? []);
+      const newNodes = nodes ? [...coords].filter(([id]) => id < 0).map(([id, at]) => ({ id, at })) : [];
       if (nodes && !created) diff.push({ tag: '(узлы)', from: String(nodes.before.length - 1), to: String(nodes.after.length - 1) });
       out.push({ key, feature: f, created, before, after: { ...f.tags }, diff,
         members: members ? f.relMembers : undefined, membersBefore: members ? this.originalMembers.get(key) : undefined,
@@ -324,7 +351,12 @@ export class EditSession {
     const ids = (a?: number[]) => a?.map((id) => nodes.get(id) ?? id);
     const polys = (ps: Polygon[]) => ps.map((p) => ({ ...p, outerIds: ids(p.outerIds), innerIds: p.innerIds?.map((r) => ids(r)!) }));
     const members = (ms: OsmMember[]) => ms.map((m) => (m.type === 'way' && ways.has(m.ref) ? { ...m, ref: ways.get(m.ref)! } : m));
+    const line = (l: Line) => ({ ids: ids(l.ids)!, coords: l.coords });
     for (const [key, f] of this.features) {
+      if (f.line) f.line = line(f.line);
+      const ol = this.originalLine.get(key);
+      if (ol) this.originalLine.set(key, line(ol));
+      if (f.splitFrom !== undefined && ways.has(f.splitFrom)) f.splitFrom = ways.get(f.splitFrom);
       if (f.polygons) f.polygons = polys(f.polygons);
       if (f.relMembers) f.relMembers = members(f.relMembers);
       const og = this.originalGeometry.get(key);
@@ -346,6 +378,7 @@ export class EditSession {
       this.original.delete(key);
       this.originalMembers.delete(key);
       this.originalGeometry.delete(key);
+      this.originalLine.delete(key);
     }
     for (const [oldKey, { version, tags, newKey }] of saved) {
       const f = this.features.get(oldKey);
@@ -358,6 +391,7 @@ export class EditSession {
         this.original.delete(oldKey);
         this.originalMembers.delete(oldKey);
         this.originalGeometry.delete(oldKey);
+        this.originalLine.delete(oldKey);
         this.created.delete(oldKey);
         this.alive.delete(oldKey);
         this.features.set(key, f);
@@ -366,6 +400,8 @@ export class EditSession {
       this.original.set(key, { ...tags });
       if (f.relMembers) this.originalMembers.set(key, f.relMembers.map((m) => ({ ...m })));
       if (f.polygons) this.originalGeometry.set(key, f.polygons);
+      if (f.line) this.originalLine.set(key, f.line);
+      f.splitFrom = undefined;
       for (const t of Object.keys(f.tags)) delete f.tags[t];
       Object.assign(f.tags, tags);
     }
@@ -377,7 +413,7 @@ export class EditSession {
   private push(step: Entry[]) {
     this.undoStack.push(step);
     this.redoStack = [];
-    for (const e of step) this.apply(e.key, e.after, e.mAfter, e.gAfter);
+    for (const e of step) this.apply(e.key, e.after, e.mAfter, e.gAfter, e.lAfter);
     this.notify(step);
   }
 
@@ -385,10 +421,11 @@ export class EditSession {
     this.onChange([...new Set(step.map((e) => e.key))]);
   }
 
-  private apply(key: string, tags: Tags | null, members?: OsmMember[], polygons?: Polygon[]) {
+  private apply(key: string, tags: Tags | null, members?: OsmMember[], polygons?: Polygon[], line?: Line) {
     const f = this.features.get(key)!;
     if (members) f.relMembers = members;
     if (polygons) f.polygons = polygons;
+    if (line) f.line = line;
     if (this.created.has(key)) {
       if (tags) this.alive.add(key);
       else { this.alive.delete(key); return; }

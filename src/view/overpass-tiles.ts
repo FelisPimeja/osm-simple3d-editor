@@ -1,6 +1,6 @@
 import type { Map as MlMap } from 'maplibre-gl';
 import { fetchArea, type Bbox } from '../osm/api';
-import { centroid, incompleteBuildingRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type Polygon } from '../osm/model';
+import { centroid, incompleteBuildingRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type MemberWay, type Polygon } from '../osm/model';
 import { fetchBuildings, OverpassBusyError, OverpassPool } from '../osm/overpass';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
@@ -428,7 +428,7 @@ export class OverpassTiles {
    * Отправленные правки — сразу в данные тайлов (память и IndexedDB), без перезапроса Overpass:
    * иначе до фонового обновления тайла кеш показывал бы старые теги. fetchedAt не трогаем.
    */
-  async applySaved(saved: Map<string, { version: number; tags: Record<string, string>; polygons?: Polygon[] }>, savedGroups: BuildingGroup[] = [],
+  async applySaved(saved: Map<string, { version: number; tags: Record<string, string>; polygons?: Polygon[]; ways?: MemberWay[] }>, savedGroups: BuildingGroup[] = [],
     createdFeatures: Feature3D[] = [], deleted: string[] = []) {
     const gone = new Set(deleted);
     // Созданные пути (рассечение) — в тайл, где их центр; ниже patch обновит и их
@@ -461,7 +461,7 @@ export class OverpassTiles {
         const s = saved.get(f.key);
         if (!s) { out.push(f); continue; }
         const kind = kindOf(s.tags);
-        if (kind) out.push({ ...f, kind, version: s.version, tags: s.tags, polygons: s.polygons ?? f.polygons, hasParts: false });
+        if (kind) out.push({ ...f, kind, version: s.version, tags: s.tags, polygons: s.polygons ?? f.polygons, hasParts: false, ...(s.ways ? { ways: s.ways } : {}) });
       }
       markOutlinesWithParts(out);
       return out;

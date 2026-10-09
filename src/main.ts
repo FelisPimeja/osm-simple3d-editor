@@ -22,7 +22,7 @@ import { PushTool, type PushTarget } from './edit/push-tool';
 import { SplitTool, type CutPoint } from './edit/split-tool';
 import { insertInLine, insertInRing, restructureRing, type Insert, type RingWay } from './edit/topology';
 import { MeasureTool } from './edit/measure-tool';
-import { OffsetTool } from './edit/offset-tool';
+import { OffsetTool, type OffsetTarget } from './edit/offset-tool';
 import { setToolCursor, type ToolCursor } from './view/cursors';
 import { PAINT_TAGS, PaintTool } from './edit/paint-tool';
 import { CIRCLE_LABELS, CIRCLE_MODES, DrawTool, RECT_LABELS, RECT_MODES, type CircleMode, type DrawShape, type RectMode } from './edit/draw-tool';
@@ -1076,7 +1076,14 @@ function startPaint() {
 const offsetBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="offset"]')!;
 const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
   (point, back) => {
-    const hits = overpassLayer.focusRayHits(point, (k) => !!focus?.members.includes(k) && !focusHidden.has(k));
+    const member = (k: string) => !!focus?.members.includes(k) && !focusHidden.has(k);
+    // Ребро (вершина, середина) верхнего или нижнего контура плоской грани — сразу эта грань
+    const snap = overpassLayer.snapAt(point, member);
+    if (snap && (snap.kind === 'edge' || snap.kind === 'vertex' || snap.kind === 'midpoint')) {
+      const t = faceTarget(snap.key, [snap.local.x, snap.local.y], snap.local.z);
+      if (t) return t;
+    }
+    const hits = overpassLayer.focusRayHits(point, member);
     if (!hits.length) return;
     const key = hits[0].key;
     const box = overpassLayer.focusItemBox(key);
@@ -1093,11 +1100,10 @@ const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
       }
       face = 'top';
     }
-    const at: [number, number] = [hits[0].local.x, hits[0].local.y];
-    const poly = polys.find((p) => pointInRing(at, p.outer)) ?? polys[0];
-    return { key, face, z: face === 'top' ? box.max.z : box.min.z, ring: poly.outer };
+    const poly = nearestPoly(polys, [hits[0].local.x, hits[0].local.y]);
+    return { key, face, z: face === 'top' ? box.max.z : box.min.z, ring: poly.outer, inners: poly.inners };
   },
-  (t, ring) => {
+  (t, shape) => {
     const tags = entity(t.key)?.tags ?? {};
     const fmt = (v: number) => String(Math.round(v * 100) / 100);
     const out: Record<string, string> = { 'building:part': 'yes' };
@@ -1110,7 +1116,7 @@ const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
       out.height = fmt(t.z);
       if (t.z > 0.01) out.min_height = fmt(t.z);
     }
-    return createDrawn(ring, t.z, out);
+    return shape.length === 1 && shape[0].length === 1 ? createDrawn(shape[0][0], t.z, out) : createDrawnMultipolygon(shape, t.z, out);
   },
   (hint, error) => {
     offsetBtn.classList.toggle('active', offsetTool.active);
@@ -1118,6 +1124,73 @@ const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
     if (hint) setStatus(hint, error); else showOverpassStatus();
   });
 offsetBtn.addEventListener('click', () => (offsetTool.active ? offsetTool.stop() : startOffset()));
+
+/**
+ * Новая часть с дырами — мультиполигон: пути колец без тегов (outer / inner) и отношение type=multipolygon
+ * с тегами части. Узлы — новые (у контура отступа общих с соседями нет).
+ */
+function createDrawnMultipolygon(shape: [number, number][][][], z: number, tags: Record<string, string>): string | undefined {
+  if (!focus) return 'Нет здания.';
+  const ring = (pts: [number, number][]) => {
+    const coords = pts.map((p) => overpassLayer.focusToLngLat(p[0], p[1])!);
+    return { ids: coords.map(() => nextNewId--), coords };
+  };
+  const relId = nextNewId--;
+  const key = `relation/${relId}`;
+  const edits: Parameters<typeof session.editMany>[0] = [];
+  const ways: MemberWay[] = [];
+  const polygons: Polygon[] = [];
+  const inners = shape.reduce((n, p) => n + p.length - 1, 0);
+  for (const poly of shape) {
+    const [o, ...ins] = poly.map(ring);
+    polygons.push({ outer: o.coords, inners: ins.map((x) => x.coords), outerIds: o.ids, innerIds: ins.map((x) => x.ids) });
+    for (const [r, role] of [[o, 'outer'], ...ins.map((x) => [x, 'inner'] as const)] as const) {
+      const id = nextNewId--;
+      const line = { ids: [...r.ids, r.ids[0]], coords: [...r.coords, r.coords[0]] };
+      edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line } });
+      ways.push({ id, role, nodes: line.ids });
+    }
+  }
+  const part: Feature3D = { key, type: 'relation', id: relId, version: 0, kind: 'part', tags: { type: 'multipolygon', ...tags },
+    polygons, hasParts: false, ways };
+  edits.push({ key, create: { ...part, relMembers: ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } as Feature3D });
+  const group = attachParts(edits, [{ type: 'relation', ref: relId }]);
+  if (typeof group === 'string') return group;
+  session.editMany(edits);
+  if (group) enterFocus(group);
+  select(key);
+  setStatus(`Создана часть ${key} (мультиполигон: частей ${shape.length}, внутренних колец ${inners}). Высоту задайте «Вытянуть» (P).`);
+  return;
+}
+
+/** Внешний контур полигона, внутри которого точка (или ближайший к ней — точка на ребре). */
+function nearestPoly<P extends { outer: [number, number][]; inners: [number, number][][] }>(polys: P[], at: [number, number]): P {
+  const inside = polys.find((p) => pointInRing(at, p.outer));
+  if (inside) return inside;
+  let best = polys[0], bd = Infinity;
+  for (const p of polys) for (const ring of [p.outer, ...p.inners]) for (let i = 0; i < ring.length; i++) {
+    const a = ring[i], b = ring[(i + 1) % ring.length];
+    const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((at[0] - a[0]) * dx + (at[1] - a[1]) * dy) / l2));
+    const d = Math.hypot(at[0] - a[0] - dx * t, at[1] - a[1] - dy * t);
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+
+/** Грань объекта key по точке на её ребре: верх плоской крыши или низ (по высоте z). */
+function faceTarget(key: string, at: [number, number], z: number): OffsetTarget | undefined {
+  const box = overpassLayer.focusItemBox(key);
+  const polys = overpassLayer.focusPolygons(key);
+  const f = entity(key) as Feature3D | undefined;
+  if (!box || !polys?.length || !f) return;
+  const shape = f.tags['roof:shape'];
+  const top = Math.abs(z - box.max.z) < 0.05 && (!shape || shape === 'flat');
+  const bottom = Math.abs(z - box.min.z) < 0.05;
+  if (!top && !bottom) return;
+  const poly = nearestPoly(polys, at);
+  return { key, face: top ? 'top' : 'bottom', z: top ? box.max.z : box.min.z, ring: poly.outer, inners: poly.inners };
+}
 
 function startOffset() {
   if (!focus) return;
@@ -1431,9 +1504,9 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
  * Добавить новые пути частями здания режима: в его отношение, а у отдельного здания — в новое отношение
  * (исходный путь — контур). Правки дописываются в edits; созданное отношение возвращается (в него потом входим).
  */
-function attachParts(edits: Parameters<typeof session.editMany>[0], wayIds: number[]): EditGroup | undefined | string {
+function attachParts(edits: Parameters<typeof session.editMany>[0], wayIds: (number | { type: 'way' | 'relation'; ref: number })[]): EditGroup | undefined | string {
   if (!focus) return 'Нет здания.';
-  const parts = wayIds.map((ref) => ({ type: 'way' as const, ref, role: 'part' }));
+  const parts = wayIds.map((m) => (typeof m === 'number' ? { type: 'way' as const, ref: m, role: 'part' } : { ...m, role: 'part' }));
   if (isSolo(focus)) {
     const relId = nextNewId--;
     const [type, ref] = focus.members[0].split('/');
@@ -2398,7 +2471,7 @@ document.addEventListener('keydown', (e) => {
   else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);
 }, { capture: true });
-document.addEventListener('keyup', (e) => { if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e)) e.preventDefault(); });
+document.addEventListener('keyup', (e) => { offsetTool.key(e); if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e)) e.preventDefault(); });
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
 function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
@@ -3595,6 +3668,7 @@ async function doUpload() {
       const g = editGroups.get(c.key);
       const created = !c.created ? undefined
         : g ? { type: 'relation' as const, id: g.id, version: 0, tags: c.after, members: g.relMembers }
+        : c.key.startsWith('relation/') ? { type: 'relation' as const, id: Number(c.key.split('/')[1]), version: 0, tags: c.after, members: c.feature.relMembers ?? [] }
         : { type: 'way' as const, id: Number(c.key.split('/')[1]), version: 0, tags: c.after, nodes: c.wayNodes?.after ?? [] };
       return { key: c.key, before: c.before, after: c.after, created, members: c.members, membersBefore: c.membersBefore,
         nodeMoves: c.nodeMoves, wayNodes: c.wayNodes, newNodes: c.newNodes, deleted: c.deleted, version: c.feature.version, polygons: c.feature.polygons,

@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights } from '../osm/heights';
 import type { Feature3D, LonLat } from '../osm/model';
@@ -788,6 +791,31 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Контур в процессе рисования (метры сцены режима здания): сплошные стороны, пунктиром — замыкающая
    * (если closed) и полупрозрачная заливка, когда точек ≥ 3. Поверх геометрии.
    */
+  private outline: Line2[] = [];
+  /** Жирная обводка замкнутых контуров поверх всего — например, грань, от которой пойдёт отступ (с дворами). */
+  setOutline(rings: THREE.Vector3[][] | undefined, widthPx = 3) {
+    const g = this.groups.get(FOCUS_GROUP);
+    for (const l of this.outline) { l.parent?.remove(l); l.geometry.dispose(); l.material.dispose(); }
+    this.outline = [];
+    if (rings && g && this.map) {
+      const canvas = this.map.getCanvas();
+      const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+      for (const points of rings) {
+        if (points.length < 2) continue;
+        const geo = new LineGeometry();
+        geo.setPositions([...points, points[0]].flatMap((p) => [p.x, p.y, p.z]));
+        const mat = new LineMaterial({ color: 0x2563eb, linewidth: widthPx * dpr, depthTest: false, depthWrite: false, transparent: true });
+        mat.resolution.set(canvas.width, canvas.height);
+        const line = new Line2(geo, mat);
+        line.renderOrder = 1004;
+        line.frustumCulled = false;
+        g.scene.add(line);
+        this.outline.push(line);
+      }
+    }
+    this.map?.triggerRepaint();
+  }
+
   /** Набросок контура; open — просто ломаная (без замыкания и заливки: стороны угла поворота). */
   setDrawPreview(points: THREE.Vector3[] | undefined, closed = false, open = false) {
     const g = this.groups.get(FOCUS_GROUP);

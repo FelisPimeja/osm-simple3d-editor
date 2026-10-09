@@ -111,17 +111,20 @@ export class OverpassTiles {
 
   /** Перерисовать объекты (после правки тегов): берётся версия из overlay. */
   refreshFeatures(keys: string[]) {
+    const want = new Set(keys);
     for (const tile of this.layer.groupKeys()) {
       const e = this.cache.get(tile);
       if (e?.state !== 'ready') continue;
+      // Пачкой на тайл: геометрия тайла пересобирается один раз (при сотнях частей здания — не сотни раз)
+      const batch: Feature3D[] = [];
       for (const f of e.features) {
-        if (!keys.includes(f.key)) continue;
+        if (!want.has(f.key)) continue;
         const cur = this.overlay(f);
         if (!cur.polygons.length) continue; // удалён — уберёт перерисовка тайла
         this.layer.setViewHidden(f.key, this.bareOutline(cur));
-        const r = this.layer.updateFeature(tile, cur);
-        if (r) this.rendered.set(f.key, r);
+        batch.push(cur);
       }
+      if (batch.length) for (const r of this.layer.updateFeatures(tile, batch)) this.rendered.set(r.feature.key, r);
     }
   }
 

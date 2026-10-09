@@ -3048,8 +3048,12 @@ function mergePlan(keys: string[]): MergePlan {
   if (!outlines.size) {
     const centres = parts.flatMap((p) => p.polygons.map(pointOnSurface));
     const partKeys = new Set(parts.map((p) => p.key));
+    // Рамка центров — чтобы не проверять точки сотен частей в каждом здании тайлов
+    let w = Infinity, so = Infinity, e = -Infinity, n = -Infinity;
+    for (const [x, y] of centres) { w = Math.min(w, x); e = Math.max(e, x); so = Math.min(so, y); n = Math.max(n, y); }
     for (const f of overpass.allFeatures()) {
       if (partKeys.has(f.key) || !isBuilding(f)) continue;
+      if (!f.polygons.some((p) => p.outer.some(([x]) => x >= w) && p.outer.some(([x]) => x <= e) && p.outer.some(([, y]) => y >= so) && p.outer.some(([, y]) => y <= n))) continue;
       const inside = (c: LonLat) => f.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
       if (centres.some(inside)) outlines.add(f);
     }

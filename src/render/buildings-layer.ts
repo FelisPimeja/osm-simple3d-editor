@@ -523,7 +523,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (n.lengthSq() < 1e-10) continue;
         n.normalize();
         // Горизонтальный треугольник на высоте низа объекта с объёмом — его дно, а не крыша
-        const bottom = Math.abs(n.z) >= 0.3 && Math.abs(p.z - it.box.min.z) < 1e-3 && it.box.max.z - it.box.min.z >= FOOTPRINT_HEIGHT;
+        const bottom = Math.abs(n.z) >= 0.3 && Math.abs(p.z - it.box.min.z) < 1e-3 && it.box.max.z - it.box.min.z >= MIN_THICKNESS;
         out.push({ key, t: p.distanceTo(ray.origin), local: p.clone(), face: Math.abs(n.z) < 0.3 ? 'wall' : bottom ? 'bottom' : 'roof' });
       }
       // Дно: плоскость низа, точка внутри контура
@@ -850,13 +850,16 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Пересобирает одно здание группы (после правки тегов). Выделение сохраняется. */
-  updateFeature(groupKey: string, f: Feature3D): RenderedFeature | undefined {
+  /** Заменить здания тайла (и сцены режима здания) новыми данными: слитая геометрия пересобирается один раз. */
+  updateFeatures(groupKey: string, fs: Feature3D[]): RenderedFeature[] {
     const g = this.groups.get(groupKey);
     const focus = this.groups.get(FOCUS_GROUP);
-    if (focus?.byKey.has(f.key)) { this.replaceItems(focus, [f]); this.snaps = undefined; this.updateHiddenEdges(); }
-    if (!g || !g.byKey.has(f.key)) return;
-    this.replaceItems(g, [f]);
-    return rendered(g.byKey.get(f.key)!);
+    const inFocus = focus ? fs.filter((f) => focus.byKey.has(f.key)) : [];
+    if (inFocus.length) { this.replaceItems(focus!, inFocus); this.snaps = undefined; this.updateHiddenEdges(); }
+    const own = g ? fs.filter((f) => g.byKey.has(f.key)) : [];
+    if (!own.length) return [];
+    this.replaceItems(g!, own);
+    return own.map((f) => rendered(g!.byKey.get(f.key)!));
   }
 
   /**
@@ -1629,6 +1632,8 @@ const STROKE_MATERIAL = new THREE.LineBasicMaterial({ vertexColors: true });
 
 /** Высота плоского следа на земле, м: чуть выше земли, чтобы не мерцать с подложкой. */
 const FOOTPRINT_HEIGHT = 0.1;
+/** Тоньше этого объект считаем нулевой высоты (плоский след); тонкие плиты (8 см, relation/17247078) — объёмом. */
+const MIN_THICKNESS = 0.01;
 /** Пересечения ближе этого друг к другу по лучу — одна поверхность (совпадающие грани разных объектов), м. */
 const TIE_DEPTH = 0.02;
 
@@ -1644,7 +1649,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   let heights = computeHeights(tags);
   // Контур под частями и здания нулевой высоты — плоский след на земле: видно и можно выделить
   const flat = f.hasParts || g.flat.has(f.key);
-  if (flat || heights.top - heights.min < FOOTPRINT_HEIGHT) {
+  if (flat || heights.top - heights.min < MIN_THICKNESS) {
     const min = flat ? 0 : heights.min;
     heights = { ...heights, min, wallTop: min + g.footprint, top: min + g.footprint, roofShape: 'flat', roofHeight: 0 };
   }
@@ -1653,7 +1658,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   const roofOnly = !flat && tags['building:part'] === 'roof' && tri.roof.length > 0;
   if (roofOnly) tri.walls = [];
   // Дно — у объектов с объёмом над землёй (видно снизу); на земле его не видно — треугольники не тратим. Цвет — как у стен
-  else if (!flat && heights.min > 0.01 && heights.top - heights.min >= FOOTPRINT_HEIGHT) tri.walls.push(...bottomTriangles(polys, heights.min));
+  else if (!flat && heights.min > 0.01 && heights.top - heights.min >= MIN_THICKNESS) tri.walls.push(...bottomTriangles(polys, heights.min));
   const positions = new Float32Array(tri.walls.length + tri.roof.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);

@@ -12,7 +12,7 @@ import { ViewCube } from './view/view-cube';
 import { centroid, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
-import { inheritedTags } from './osm/inherit';
+import { inheritedTags, inheritedValue } from './osm/inherit';
 import { BuildingsLayer, setInheritance, type GraphicsOptions, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
@@ -20,6 +20,9 @@ import { CursorOrbit } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
 import { SplitTool, type CutPoint } from './edit/split-tool';
 import { insertInLine, insertInRing, restructureRing, type Insert, type RingWay } from './edit/topology';
+import { MeasureTool } from './edit/measure-tool';
+import { setToolCursor, type ToolCursor } from './view/cursors';
+import { PAINT_TAGS, PaintTool } from './edit/paint-tool';
 import { DrawTool, RECT_LABELS, RECT_MODES, type DrawShape, type RectMode } from './edit/draw-tool';
 import { suggestComment } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
@@ -508,9 +511,15 @@ map.on('click', (e) => {
   if (suppressClick) return;
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
+  if (measureTool.active) { measureTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
+  if (paintTool.active) {
+    // Образец уже взят на нажатии (Ctrl/Cmd/Alt) — этот клик его же
+    if (performance.now() - paintPickedAt > 600) paintTool.click([e.point.x, e.point.y], false);
+    return;
+  }
   if (splitTool.active) {
     const p: [number, number] = [e.point.x, e.point.y];
-    if (!splitTool.click(p) && splitTool.state === 'pick') { splitTool.stop(); select(undefined); }
+    if (!splitTool.click(p) && splitTool.state === 'pick') { splitTool.stop(); measureTool.stop(); paintTool.stop(); select(undefined); }
     return;
   }
   if (pushTool.active) {
@@ -768,7 +777,7 @@ function exitFocus() {
   overpassLayer.setHover(undefined);
   moveTool.stop();
   pushTool.stop();
-  splitTool.stop();
+  splitTool.stop(); measureTool.stop(); paintTool.stop();
   drawTool.stop();
   focusToolbar.hidden = true;
   syncMapTools();
@@ -837,10 +846,12 @@ function updateSnapMarker(point: [number, number] | undefined) {
   if (point && pushTool.state === 'push') pushTool.move(point);
   if (point && splitTool.state === 'cut') splitTool.move(point);
   if (point && drawTool.active) drawTool.move(point);
-  if (pushTool.active || splitTool.active || drawTool.active || copyPick) {
+  if (point && measureTool.active) measureTool.move(point);
+  if (pushTool.active || splitTool.active || drawTool.active || measureTool.active || copyPick) {
     // Рассечение: подсвечиваем вершины и середины рёбер объектов (концы разреза)
     currentSnap = pushTool.active ? (pushTool.state === 'push' ? pushTool.snap : undefined)
       : drawTool.active ? (point ? drawTool.snap : undefined)
+      : measureTool.active ? (point ? measureTool.snap : undefined)
       : splitTool.state === 'cut' ? (point ? splitTool.snap : undefined)
       : point ? overpassLayer.snapAt(point) : undefined;
     if (currentSnap?.kind === 'center') currentSnap = undefined;
@@ -876,6 +887,7 @@ const moveBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="move"
 const popupEl = document.getElementById('popup')!;
 const moveTool = new MoveTool(overpassLayer, map.getContainer(), commitMove, (hint) => {
   moveBtn.classList.toggle('active', moveTool.active);
+  syncCursor();
   if (hint) setStatus(hint);
   else showOverpassStatus();
 });
@@ -889,6 +901,7 @@ const pushTool = new PushTool(overpassLayer, map.getContainer(),
   allowPushSide, clampPush, previewPush, commitPush,
   (hint) => {
     pushBtn.classList.toggle('active', pushTool.active);
+    syncCursor();
     if (hint) setStatus(hint); else showOverpassStatus();
   });
 pushBtn.addEventListener('click', () => (pushTool.active ? pushTool.stop() : startPush()));
@@ -896,7 +909,7 @@ pushBtn.addEventListener('click', () => (pushTool.active ? pushTool.stop() : sta
 function startPush() {
   if (!focus) return;
   moveTool.stop();
-  splitTool.stop();
+  splitTool.stop(); measureTool.stop(); paintTool.stop();
   drawTool.stop();
   pushTool.start();
 }
@@ -905,6 +918,7 @@ function startPush() {
 const splitBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="split"]')!;
 const splitTool = new SplitTool(overpassLayer, splitReason, splitFeature, (hint, error) => {
   splitBtn.classList.toggle('active', splitTool.active);
+  syncCursor();
   if (hint) setStatus(hint, error); else showOverpassStatus();
 });
 splitBtn.addEventListener('click', () => (splitTool.active ? splitTool.stop() : startSplit()));
@@ -914,12 +928,84 @@ function startSplit() {
   moveTool.stop();
   pushTool.stop();
   drawTool.stop();
+  measureTool.stop();
+  paintTool.stop();
   splitTool.begin();
 }
 
+// Инструмент «Рулетка» (T): расстояние между двумя точками
+const measureBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="measure"]')!;
+const measureTool = new MeasureTool(overpassLayer, map.getContainer(), (hint) => {
+  measureBtn.classList.toggle('active', measureTool.active);
+  syncCursor();
+  if (hint) setStatus(hint); else showOverpassStatus();
+});
+measureBtn.addEventListener('click', () => (measureTool.active ? measureTool.stop() : startMeasure()));
+
+function startMeasure() {
+  if (!focus) return;
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop();
+  measureTool.start();
+}
+
+// Инструмент «Заливка» (B): Ctrl+клик — взять цвет и материал поверхности, клик — назначить
+const paintBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="paint"]')!;
+const paintTool = new PaintTool(overpassLayer,
+  (key) => !!focus?.members.includes(key) && !focusHidden.has(key),
+  (key, face) => {
+    const t = PAINT_TAGS[face];
+    const own = entity(key)?.tags ?? {};
+    // Своего нет — то, с чем объект нарисован (унаследованное от контура или отношения)
+    const inh = (tag: string) => own[tag] ?? inheritSources(key).map((s) => inheritedValue(s.tags, tag)).find((v) => v !== undefined);
+    return { from: face, colour: inh(t.colour), material: inh(t.material) };
+  },
+  (key, face, sample) => {
+    const t = PAINT_TAGS[face];
+    if (!entity(key)) return;
+    session.setTags(key, { [t.colour]: sample.colour, [t.material]: sample.material });
+    setStatus(`${face === 'roof' ? 'Крыша' : 'Фасад'} ${key}: цвет ${sample.colour ?? '—'}, материал ${sample.material ?? '—'}. Отменить — Ctrl+Z.`);
+  },
+  (hint, error) => {
+    paintBtn.classList.toggle('active', paintTool.active);
+    syncCursor();
+    if (hint) setStatus(hint, error); else showOverpassStatus();
+  });
+paintBtn.addEventListener('click', () => (paintTool.active ? paintTool.stop() : startPaint()));
+
+function startPaint() {
+  if (!focus) return;
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop();
+  paintTool.start();
+}
+
+// Образец — Ctrl/Cmd/Alt+клик. На macOS Ctrl+клик — это правый клик (click не приходит), поэтому берём на нажатии
+let paintPickedAt = 0;
+map.getContainer().addEventListener('pointerdown', (e) => {
+  if (!paintTool.active || e.button !== 0 || !(e.ctrlKey || e.metaKey || e.altKey)) return;
+  const rect = map.getCanvas().getBoundingClientRect();
+  paintTool.click([e.clientX - rect.left, e.clientY - rect.top], true);
+  paintPickedAt = performance.now();
+}, { capture: true });
+
+/** Курсор над картой — по включённому инструменту; у заливки — пипетка, пока нет образца или зажат Ctrl/Cmd/Alt. */
+let pickModifier = false;
+function syncCursor() {
+  const tool: ToolCursor | undefined = moveTool.active ? 'move' : pushTool.active ? 'push' : splitTool.active ? 'split'
+    : drawTool.active ? drawTool.shape : measureTool.active ? 'measure'
+    : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : undefined;
+  setToolCursor(map.getCanvasContainer(), tool);
+}
+for (const type of ['keydown', 'keyup'] as const) {
+  window.addEventListener(type, (e) => {
+    const on = e.ctrlKey || e.metaKey || e.altKey;
+    if (on !== pickModifier) { pickModifier = on; syncCursor(); }
+  });
+}
+window.addEventListener('blur', () => { pickModifier = false; syncCursor(); });
+
 /** Какой-нибудь инструмент режима здания включён. */
 function toolActive(): boolean {
-  return moveTool.active || pushTool.active || splitTool.active || drawTool.active || !!copyPick;
+  return moveTool.active || pushTool.active || splitTool.active || drawTool.active || measureTool.active || paintTool.active || !!copyPick;
 }
 
 // Инструменты «Прямоугольник» (R) и «Полигон» (L): новая часть здания — плоский контур нулевой толщины
@@ -933,6 +1019,7 @@ const drawTool = new DrawTool(overpassLayer, map.getContainer(), createDrawn, (h
   rectBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'rect');
   syncRectIcons();
   polyBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'polygon');
+  syncCursor();
   if (hint) setStatus(hint, error); else showOverpassStatus();
 });
 rectBtn.addEventListener('click', () => toggleDraw('rect'));
@@ -1057,7 +1144,7 @@ function startDraw(shape: DrawShape) {
   if (!focus) return;
   moveTool.stop();
   pushTool.stop();
-  splitTool.stop();
+  splitTool.stop(); measureTool.stop(); paintTool.stop();
   drawTool.begin(shape);
 }
 
@@ -1174,7 +1261,7 @@ function copySelected() {
     items.push({ tags: { ...f.tags }, polygons: f.polygons.map((p) => ({ outer: p.outer.map((c) => [...c] as LonLat), inners: [] })) });
   }
   if (!items.length) return setStatus(keys.length ? 'Копируются только части-пути (не контур здания и не мультиполигоны).' : 'Выберите части здания, затем Ctrl+C.', true);
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop();
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); drawTool.stop();
   copyPick = { items };
   setStatus(`Копирование (${items.length}${skipped ? `, пропущено ${skipped} — контур или мультиполигон` : ''}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.`);
   if (lastPointer) updateSnap(lastPointer);
@@ -1239,7 +1326,7 @@ function pasteClipboard() {
   renderSelected();
   const b = overpassLayer.focusToLocal(clipboard.base.lngLat);
   if (!b) return;
-  pushTool.stop(); splitTool.stop(); drawTool.stop();
+  pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); drawTool.stop();
   moveTool.drag(keys, new THREE.Vector3(b[0], b[1], clipboard.base.z),
     `Вставка (${keys.length}): кликните, куда поставить базовую точку. Shift/стрелки — ось, число + Enter — сдвиг. Esc — отмена вставки.`,
     () => setStatus(`Вставлено частей: ${keys.length}.`),
@@ -1918,7 +2005,7 @@ function startMove() {
     return setStatus('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
   }
   pushTool.stop();
-  splitTool.stop();
+  splitTool.stop(); measureTool.stop(); paintTool.stop();
   drawTool.stop();
   moveTool.start(keys);
 }
@@ -1996,14 +2083,14 @@ document.addEventListener('keydown', (e) => {
     e.stopImmediatePropagation();
     moveTool.stop();
     pushTool.stop();
-    splitTool.stop();
+    splitTool.stop(); measureTool.stop(); paintTool.stop();
     drawTool.stop();
     cancelCopyPick();
     updateSnap(undefined);
     return;
   }
   if (e.key === 'Escape' && copyPick) { e.preventDefault(); e.stopImmediatePropagation(); cancelCopyPick(); return; }
-  if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e) || drawTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+  if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || paintTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   // S — привязки вкл/выкл, в том числе посреди перемещения или вытягивания
   if (focus && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
@@ -2048,6 +2135,8 @@ document.addEventListener('keydown', (e) => {
   const action = e.code === 'KeyM' && !e.shiftKey ? 'move'
     : e.code === 'KeyP' && !e.shiftKey ? 'push'
     : e.code === 'KeyK' && !e.shiftKey ? 'split'
+    : e.code === 'KeyT' && !e.shiftKey ? 'measure'
+    : e.code === 'KeyB' && !e.shiftKey ? 'paint'
     : e.code === 'KeyH' ? (e.shiftKey ? 'show-all' : 'hide')
     : e.code === 'KeyR' && !e.shiftKey ? 'rect'
     : e.code === 'KeyL' && !e.shiftKey ? 'polygon' : undefined;
@@ -2056,20 +2145,16 @@ document.addEventListener('keydown', (e) => {
   closeCtxMenu();
   cancelCopyPick();
   if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'split') startSplit();
+  else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint();
   else if (action === 'rect' || action === 'polygon') startDraw(action); else focusAction(action);
 }, { capture: true });
-document.addEventListener('keyup', (e) => { if (moveTool.key(e) || drawTool.key(e)) e.preventDefault(); });
+document.addEventListener('keyup', (e) => { if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e)) e.preventDefault(); });
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
 function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
   const layers = TILE_LAYERS.filter((id) => map.getLayer(id));
   return layers.length ? map.queryRenderedFeatures(point, { layers }) : [];
 }
-
-map.on('mousemove', (e) => {
-  const hit = !!overpassLayer.pick(e.point) || queryTileLayers(e.point).length > 0;
-  map.getCanvas().style.cursor = hit ? 'pointer' : '';
-});
 
 // Наведение на «Обновить контур» — предпросмотр нового контура
 infoEl.addEventListener('mouseover', (e) => {

@@ -3,7 +3,7 @@ import * as maplibregl from 'maplibre-gl';
 import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJSONFeature } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
-import { fetchMap, type Bbox, type OsmMember } from './osm/api';
+import { fetchMap, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
@@ -597,6 +597,43 @@ map.on('dblclick', (e) => {
   enterFocus(g);
 });
 
+/** Здание режима здания в адресе: ?edit=w123 / ?edit=r456 (хэш карты не трогаем, в историю не пишем). */
+function setEditParam(key: string | undefined) {
+  const m = key?.match(/^(way|relation)\/(\d+)$/); // новые (отрицательные id) — не в адрес
+  const url = new URL(location.href);
+  if (m) url.searchParams.set('edit', m[1][0] + m[2]);
+  else url.searchParams.delete('edit');
+  if (url.href !== location.href) history.replaceState(history.state, '', url);
+}
+
+/** Открыть здание из ссылки ?edit=: без хэша — подлёт к объекту, вход — когда он появится в данных тайлов. */
+async function openEditLink() {
+  const m = new URLSearchParams(location.search).get('edit')?.match(/^([wr])(\d+)$/);
+  if (!m) return;
+  const type = m[1] === 'w' ? 'way' : 'relation', key = `${type}/${m[2]}`;
+  if (!location.hash) {
+    try {
+      const res = await fetch(`${server().api}/${type}/${m[2]}/full.json`);
+      if (!res.ok) throw new Error(`OSM API ${res.status}`);
+      const nodes = ((await res.json()) as { elements: OsmElement[] }).elements.filter((e): e is OsmNode => e.type === 'node');
+      if (!nodes.length) throw new Error('нет узлов');
+      const lon = nodes.map((n) => n.lon), lat = nodes.map((n) => n.lat);
+      map.fitBounds([[Math.min(...lon), Math.min(...lat)], [Math.max(...lon), Math.max(...lat)]], { padding: 80, maxZoom: 18, pitch: map.getPitch(), bearing: map.getBearing(), duration: 0 });
+    } catch (err) {
+      setEditParam(undefined);
+      return setStatus(`Ссылка на ${key}: объект не загрузился (${(err as Error).message}).`, true);
+    }
+  }
+  const deadline = Date.now() + 60_000;
+  const tryEnter = () => {
+    if (focus) return map.off('idle', tryEnter);
+    const g = type === 'relation' ? (groupOf(key)?.key === key ? groupOf(key) : soloGroup(key)) : groupOf(key) ?? soloGroup(key);
+    if (g) { map.off('idle', tryEnter); enterFocus(g); }
+    else if (Date.now() > deadline) { map.off('idle', tryEnter); setEditParam(undefined); setStatus(`${key}: здание не найдено в загруженных данных.`, true); }
+  };
+  map.on('idle', tryEnter);
+}
+
 /** Префикс ключа «группы» отдельного здания (без отношения type=building) в режиме здания. */
 const SOLO = 'solo:';
 const isSolo = (g: BuildingGroup | undefined) => !!g?.key.startsWith(SOLO);
@@ -677,6 +714,7 @@ function enterFocus(g: BuildingGroup) {
   clearTileHighlight();
   paintSelection();
   renderSelected();
+  setEditParam(isSolo(g) ? g.members[0] : g.key);
 }
 
 /** Доля экрана, которую занимает здание после подлёта. */
@@ -774,6 +812,7 @@ const staleKeys = new Set<string>();
 function exitFocus() {
   if (!focus) return;
   focus = undefined;
+  setEditParam(undefined);
   if (tilesStale) { tilesStale = false; overpass.rerenderFeatures(staleKeys); staleKeys.clear(); }
   focusHidden.clear();
   session.dropViewActions();
@@ -3431,3 +3470,5 @@ const tagTable = (tags: Record<string, unknown>) =>
   `<table>${Object.entries(tags).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
 
 if (import.meta.env.DEV) Object.assign(window, { map, overpassLayer, overpass, orbit, select, enterFocus, getSession: () => session });
+
+void openEditLink();

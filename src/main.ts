@@ -54,7 +54,13 @@ const OUTLINE_REMAINDERS = false;
 const MAX_API_AREA = 0.0004;
 
 // Склеенные фичи (id с суффиксом 0) рисуем отдельным слоем, разрезанными на полигоны
-const BASE_FILTER: ExpressionSpecification = ['all', ['!=', ['get', 'hide_3d'], true], ['!=', ['%', ['id'], 10], 0]];
+/** id тайлов в кодировке OpenFreeMap (у OGF — imposm/OpenMapTiles: без склеенных фич, тип — 0/1). */
+const OFM_IDS = server().tileIds !== 'openmaptiles';
+// Без Referer — до первых запросов карты (спрайт OGF с чужого сайта отдаётся с 403)
+if (server().noReferrer) document.head.append(Object.assign(document.createElement('meta'), { name: 'referrer', content: 'no-referrer' }));
+const BASE_FILTER: ExpressionSpecification = OFM_IDS
+  ? ['all', ['!=', ['get', 'hide_3d'], true], ['!=', ['%', ['id'], 10], 0]]
+  : ['!=', ['get', 'hide_3d'], true];
 
 // Здания из тайлов — условные (без крыш и частей), рисуем белыми, чтобы отличать от данных OSM API.
 // Цвет из тайла (colour, с разбором 'a;b') — см. тег openfreemap-tiles.
@@ -374,7 +380,7 @@ function showOverpassStatus() {
 // Пересчитываем контуры с частями, когда догрузились новые тайлы
 let tilesChanged = false;
 let lastMergedSig = '';
-const isMergedId = (id: number) => id % 10 === 0;
+const isMergedId = (id: number) => OFM_IDS && id % 10 === 0;
 map.on('sourcedata', (e) => {
   if (e.sourceId === 'openmaptiles' && e.isSourceLoaded) tilesChanged = true;
 });
@@ -421,7 +427,7 @@ function explodeMerged(features: TileBuildingFeature[]): GeoJSON.Feature<GeoJSON
   const visible = features.filter((f) => !f.properties.hide_3d);
   const out = new Map<string, GeoJSON.Feature<GeoJSON.Polygon>>();
   for (const f of visible) {
-    if (f.id % 10 !== 0) continue;
+    if (!isMergedId(f.id)) continue;
     for (const poly of f.polys) {
       const ring = poly[0];
       const cx = ring.reduce((s, p) => s + p[0], 0) / ring.length;
@@ -4346,8 +4352,8 @@ interface OhmTime { year: number; from: number; to: number; step: number; speed:
 const ohm: OhmTime = (() => {
   const d: OhmTime = { year: thisYear, from: thisYear - 200, to: thisYear, step: 10, speed: 1000 };
   try { Object.assign(d, JSON.parse(localStorage.getItem(DATE_KEY) ?? '{}')); } catch { /* по умолчанию */ }
-  const y = Number(new URLSearchParams(location.search).get('date'));
-  if (Number.isFinite(y) && y !== 0) d.year = Math.round(y);
+  const q = new URLSearchParams(location.search).get('date');
+  if (q !== null && q.trim() !== '' && Number.isFinite(Number(q))) d.year = Math.round(Number(q));
   if (d.year < d.from) d.from = d.year;
   if (d.year > d.to) d.to = d.year;
   return d;
@@ -4391,7 +4397,8 @@ function applyDate() {
 }
 
 function setYear(y: number) {
-  if (!Number.isFinite(y) || y === 0) return showDateControls();
+  // Год 0 допустим: даты OSM — ISO 8601, там 0 = 1 г. до н. э., -1 = 2 г. до н. э.
+  if (!Number.isFinite(y)) return showDateControls();
   y = Math.round(y);
   // Год за границами шкалы — шкала расширяется до него
   ohm.from = Math.min(ohm.from, y);
@@ -4552,7 +4559,7 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: s
 /** Planetiler: id = osmId * 10 + (1 — node, 2 — way, 3 — relation); 0 — фича, склеенная из нескольких зданий. */
 function decodeTileId(id: unknown): string {
   if (typeof id !== 'number') return '—';
-  const type = ({ 1: 'node', 2: 'way', 3: 'relation' } as Record<number, string>)[id % 10];
+  const type = (OFM_IDS ? { 1: 'node', 2: 'way', 3: 'relation' } : { 0: 'way', 1: 'relation' } as Record<number, string>)[id % 10];
   return type ? osmLink(type, Math.floor(id / 10)) : 'склеенная фича (несколько зданий) — уточняем через API…';
 }
 

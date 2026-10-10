@@ -23,6 +23,13 @@ export interface OsmServer {
   style: string | StyleSpecification;
   /** Здания из векторных тайлов в схеме OpenMapTiles (источник openmaptiles). */
   tileBuildings: boolean;
+  /**
+   * Кодировка id фич тайлов: openfreemap — id·10 + тип (1 узел, 2 линия, 3 отношение; 0 — склеенные здания);
+   * openmaptiles (imposm, как у OGF) — id·10 + 0 у линий, + 1 у отношений, склеенных нет.
+   */
+  tileIds?: 'openfreemap' | 'openmaptiles';
+  /** Не отправлять Referer: сервер подложки режет картинки (спрайт) с чужих сайтов (OGF). */
+  noReferrer?: boolean;
 }
 
 export const SERVERS: Record<ServerId, OsmServer> = {
@@ -56,6 +63,8 @@ export const SERVERS: Record<ServerId, OsmServer> = {
     // Векторный стиль OGF в схеме OpenMapTiles (источник тоже openmaptiles) — тайловые здания как у OSM
     style: 'https://ogfvector.infinatio.us/styles/OGFBright/style.json',
     tileBuildings: true,
+    tileIds: 'openmaptiles',
+    noReferrer: true,
   },
   ohm: {
     id: 'ohm',

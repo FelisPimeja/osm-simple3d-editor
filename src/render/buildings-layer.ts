@@ -2211,8 +2211,12 @@ const S3D_TAGS = ['height', 'min_height', 'building:levels', 'building:min_level
  * Simple 3D — тоже нет: иначе парковки и переходы под площадями торчат над землёй дефолтной коробкой.
  */
 function shouldRender(f: Feature3D): boolean {
-  if (f.tags.location === 'underground' && !S3D_TAGS.some((t) => f.tags[t] !== undefined)) return false;
-  return true;
+  return !isHiddenUnderground(f);
+}
+
+/** Подземное здание, которое не рисуем объёмом (на карте — пунктирный контур на поверхности). */
+export function isHiddenUnderground(f: Feature3D): boolean {
+  return f.tags.location === 'underground' && !S3D_TAGS.some((t) => f.tags[t] !== undefined);
 }
 
 /** Для лога медленных зданий: ключ, форма крыши, число вершин и полигонов. */

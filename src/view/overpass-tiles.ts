@@ -172,6 +172,8 @@ export class OverpassTiles {
     this.visible = fn;
     for (const key of this.layer.groupKeys()) this.show(key);
   }
+  /** Проходит ли объект фильтр по дате. */
+  isVisible(f: Feature3D): boolean { return this.visible(f); }
 
   /** Перерисовать нарисованные тайлы (появился или исчез созданный объект). */
   rerender() {

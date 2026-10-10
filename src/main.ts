@@ -18,7 +18,7 @@ import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
 import { inheritedTags, inheritedValue } from './osm/inherit';
-import { BuildingsLayer, setInheritance, setLevelGrid, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, isHiddenUnderground, setInheritance, setLevelGrid, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
@@ -273,6 +273,15 @@ map.on('load', () => {
   });
 
   map.addLayer(overpassLayer);
+  // Подземные здания без объёма — пунктирный контур на поверхности (поверх объёмов не прячется: рисуется после)
+  map.addSource('underground-outlines', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: UNDERGROUND_LAYER,
+    type: 'line',
+    source: 'underground-outlines',
+    minzoom: 15,
+    paint: { 'line-color': '#5a5f66', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.85 },
+  });
   overpass.setSource(tileSource());
   applyDate();
   refreshOverpass();
@@ -618,12 +627,22 @@ map.on('dblclick', (e) => {
     if (!key) closeFocus();
     return;
   }
-  if (!key) return;
-  const g = groupOf(key) ?? soloGroup(key);
+  const k = key ?? undergroundAt(e.point, e.lngLat);
+  if (!k) return;
+  const g = groupOf(k) ?? soloGroup(k);
   if (!g) return;
   e.preventDefault();
   enterFocus(g);
 });
+
+/** Подземное здание под курсором: на пунктирном контуре (±6 px) или внутри него. */
+function undergroundAt(pt: maplibregl.Point, ll: maplibregl.LngLat): string | undefined {
+  if (!map.getLayer(UNDERGROUND_LAYER)) return;
+  const r = 6;
+  const hit = map.queryRenderedFeatures([[pt.x - r, pt.y - r], [pt.x + r, pt.y + r]], { layers: [UNDERGROUND_LAYER] })[0];
+  if (hit) return hit.properties?.key as string;
+  return hiddenUnderground().find((f) => f.polygons.some((p) => pointInRing([ll.lng, ll.lat], p.outer)))?.key;
+}
 
 /** Здание режима здания в адресе: ?edit=w123 / ?edit=r456 (хэш карты не трогаем, в историю не пишем). */
 function setEditParam(key: string | undefined) {
@@ -3029,6 +3048,27 @@ const BADGE_MIN_ZOOM = 16;
 const BADGE_MIN_POLYGONS = 3;
 const INDOOR_PLAN_KINDS = new Set(['room', 'area', 'corridor', 'level']);
 
+const UNDERGROUND_LAYER = 'underground-outlines';
+
+/** Подземные здания (не рисуются объёмом) из загруженных данных с учётом фильтра даты. */
+function hiddenUnderground(): Feature3D[] {
+  return overpass.allFeatures().filter((f) => isHiddenUnderground(f) && overpass.isVisible(f));
+}
+
+let undergroundSig = '';
+/** Пунктирные контуры подземных зданий на карте. */
+function updateUndergroundOutlines(feats: Feature3D[]) {
+  const src = map.getSource('underground-outlines') as maplibregl.GeoJSONSource | undefined;
+  if (!src) return;
+  const sig = feats.map((f) => f.key).join(',');
+  if (sig === undergroundSig) return;
+  undergroundSig = sig;
+  src.setData({ type: 'FeatureCollection', features: feats.flatMap((f) => f.polygons.map((p) => ({
+    type: 'Feature' as const, properties: { key: f.key },
+    geometry: { type: 'MultiLineString' as const, coordinates: [p.outer, ...p.inners].map((r) => [...r, r[0]]) },
+  }))) });
+}
+
 const indoorBadges = new IndoorBadges(map, overpassLayer, ICON_PLAN, (key) => {
   const g = groupOf(key) ?? soloGroup(key);
   if (g) enterFocus(g);
@@ -3043,6 +3083,8 @@ function scheduleIndoorBadges() {
 
 /** Здания в видимой области, у которых есть indoor-полигоны (помещения, коридоры…), — значок над верхом. */
 function updateIndoorBadges() {
+  const underground = hiddenUnderground();
+  updateUndergroundOutlines(underground);
   if (focus || map.getZoom() < BADGE_MIN_ZOOM) return indoorBadges.set([]);
   const b = map.getBounds();
   const bbox: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
@@ -3051,7 +3093,7 @@ function updateIndoorBadges() {
   // Сетка рамок зданий (~50 м) — чтобы не перебирать все здания для каждого помещения
   const CELL = 0.0005;
   const grid = new Map<string, { f: Feature3D; box: Bbox }[]>();
-  for (const { feature: f } of overpass.renderedFeatures()) {
+  for (const f of [...overpass.renderedFeatures().map((r) => r.feature), ...underground]) {
     if (!f.polygons.length) continue;
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
     for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
@@ -3080,7 +3122,7 @@ function updateIndoorBadges() {
     let w = Infinity, s = Infinity, e = -Infinity, nn = -Infinity, top = 0;
     for (const f of feats) {
       for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); nn = Math.max(nn, y); }
-      if (!f.hasParts) top = Math.max(top, computeHeights(f.tags).top);
+      if (!f.hasParts && !isHiddenUnderground(f)) top = Math.max(top, computeHeights(f.tags).top);
     }
     if (!Number.isFinite(w)) continue;
     const name = (g && (g.tags.name ?? outlineTags(g)?.name)) ?? feats[0]?.tags.name;

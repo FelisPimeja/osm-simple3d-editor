@@ -78,7 +78,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 #levels-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
 .levels li { justify-content: space-between; }
 .levels .lv-name { display: flex; align-items: center; gap: 6px; }
-.levels .lv-plan { flex: none; width: 16px; height: 16px; color: #2563eb; }
+.levels .lv-plan { flex: none; width: 16px; height: 16px; color: #1f2937; }
+.levels li.selected .lv-plan { color: #2563eb; }
 .levels .lv-plan svg { width: 16px; height: 16px; display: block; }
 .levels .lv-meta { color: #888; font-size: 11px; white-space: nowrap; }
 .levels .lv-empty { color: #888; cursor: default; }
@@ -343,3 +344,5 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .indoor-badge:hover { border-color: #2563eb; color: #2563eb; }
 .indoor-badge[hidden] { display: none; }
 .indoor-badge svg { width: 100%; height: 100%; display: block; }
+.levels .lv-source { display: block; color: #888; font-size: 11px; line-height: 1.5; cursor: default; border-top: 1px solid #eee; margin-top: 4px; padding-top: 6px; }
+.levels .lv-source:hover { background: transparent; }

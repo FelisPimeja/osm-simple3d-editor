@@ -5,13 +5,14 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
+import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
-import { centroid, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
+import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
@@ -2827,7 +2828,8 @@ function partKind(t: Record<string, string>, outline: boolean): { label: string;
 }
 
 /** Этаж здания режима: номер level (0 — первый этаж) и высоты пола и потолка, м. */
-interface Level { n: number; floor: number; ceil: number }
+/** Этаж панели; src — объект, по тегам которого он посчитан (нет — из indoor-данных). */
+interface Level { n: number; floor: number; ceil: number; src?: string }
 
 const levelsPanel = document.getElementById('levels-panel')!;
 const levelsEl = document.getElementById('levels')!;
@@ -2859,12 +2861,12 @@ function focusLevels(g: BuildingGroup): Level[] {
     const rank = (f.kind === 'part' ? 2000 : 0) + (h.source === 'height' ? 1000 : 0) + levels;
     const add = (n: number, floor: number) => {
       const cur = byN.get(n);
-      if (!cur || rank > cur.rank) byN.set(n, { n, floor, ceil: floor + step, rank });
+      if (!cur || rank > cur.rank) byN.set(n, { n, floor, ceil: floor + step, rank, src: f.key });
     };
     for (let n = Math.floor(minLevel); n < Math.ceil(levels); n++) add(n, h.min + (n - minLevel) * step);
     for (let n = -under; n < 0; n++) add(n, n * step);
   }
-  return [...byN.values()].map(({ n, floor, ceil }) => ({ n, floor, ceil })).sort((a, b) => b.n - a.n);
+  return [...byN.values()].map(({ n, floor, ceil, src }) => ({ n, floor, ceil, src })).sort((a, b) => b.n - a.n);
 }
 
 /**
@@ -2936,6 +2938,20 @@ function withIndoorLevels(levels: Level[], indoor: IndoorFeature[]): Level[] {
     out.push({ n, floor, ceil: floor + step });
   }
   return out.sort((x, y) => y.n - x.n);
+}
+
+/** Пояснение внизу панели: какие этажи посчитаны по тегам какого объекта (ссылка выделяет его), какие — из indoor. */
+function levelSources(levels: Level[]): string {
+  const runs: { src?: string; from: number; to: number }[] = [];
+  for (const l of [...levels].sort((a, b) => a.n - b.n)) {
+    const last = runs[runs.length - 1];
+    if (last && last.src === l.src && l.n === last.to + 1) last.to = l.n;
+    else runs.push({ src: l.src, from: l.n, to: l.n });
+  }
+  const range = (r: { from: number; to: number }) => (r.from === r.to ? `${r.from}` : `${r.from}…${r.to}`);
+  const lines = runs.map((r) => `${r.from === r.to ? 'Этаж' : 'Этажи'} ${range(r)} — `
+    + (r.src ? `по тегам <a href="#" data-select="${esc(r.src)}">${esc(r.src)}</a>` : 'из indoor-данных'));
+  return `<li class="lv-source">${lines.join('<br>')}</li>`;
 }
 
 /** Значок «есть план этажа». */
@@ -3121,9 +3137,9 @@ function renderLevelsImpl() {
   const planned = plannedLevels(focus, levels, indoor);
   levelsEl.innerHTML = levels.length
     ? `<li class="${currentLevel === undefined ? 'selected' : ''}" data-level=""><span class="lv-name"><span class="lv-plan"></span>Всё здание</span></li>` + levels.map((l) =>
-      `<li class="${l.n === currentLevel ? 'selected' : ''}" data-level="${l.n}" title="level=${l.n}${planned.has(l.n) ? ' · есть поэтажный план' : ''}">`
+      `<li class="${l.n === currentLevel ? 'selected' : ''}" data-level="${l.n}" title="level=${l.n} · ${l.src ? `по тегам ${l.src}` : 'из indoor-данных'}${planned.has(l.n) ? ' · есть поэтажный план' : ''}">`
       + `<span class="lv-name"><span class="lv-plan">${planned.has(l.n) ? ICON_PLAN : ''}</span>${LEVEL_NAME(l.n)}</span>`
-      + `<span class="lv-meta">${l.floor.toFixed(1)}–${l.ceil.toFixed(1)} м</span></li>`).join('')
+      + `<span class="lv-meta">${l.floor.toFixed(1)}–${l.ceil.toFixed(1)} м</span></li>`).join('') + levelSources(levels)
     : '<li class="lv-empty">Нет этажности (building:levels) и indoor-данных</li>';
   const level = levels.find((l) => l.n === currentLevel);
   const onLevel = level ? indoor.filter((f) => f.levels.includes(level.n)) : [];
@@ -3131,17 +3147,98 @@ function renderLevelsImpl() {
   shownIndoor = onLevel;
   if (selectedIndoor && !onLevel.some((f) => f.key === selectedIndoor!.key)) selectIndoor(undefined);
   indoorPois.set(onLevel.filter((f) => f.kind === 'poi'), level?.floor ?? 0);
-  const items: IndoorItem[] = level ? onLevel.filter((f) => f.kind !== 'poi')
-    .map((f) => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: level.floor })) : [];
-  // Двери этажа — проёмы в стенах
-  const doors = onLevel.filter((f) => f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!);
-  const sig = level ? `${level.n}|${level.ceil}|${items.map((i) => i.key).join(',')}|${doors.length}` : '';
+  const planOf = (l: Level) => {
+    const fs = indoor.filter((f) => f.levels.includes(l.n));
+    return {
+      cut: l.ceil,
+      // Объект на нескольких этажах (эскалатор, лестница, зал в два света) — рисуем на его нижнем этаже,
+      // выше он — пустота (стены-линии — на всех: они и выше стоят)
+      items: fs.filter((f) => f.kind !== 'poi' && (f.line || floorLevels(f).includes(l.n)))
+        .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor })),
+      // Двери этажа — проёмы в стенах
+      doors: fs.filter((f) => f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!),
+    };
+  };
+  const plan = level && planOf(level);
+  // Второй свет: пустоты в перекрытии и этажи под ними
+  const voids = level ? levelVoids(focus, levels, indoor, level.n) : [];
+  // Пустоты здания посчитались или поменялись (пришли indoor-данные) — перекрытия стеклянных частей пересобрать
+  const allVoids = buildingVoids(focus, levels, indoor);
+  const vsig = `${focus.key}|${indoor.length}|${[...allVoids].map(([n, l]) => `${n}:${l.length}`).join(',')}`;
+  if (vsig !== glassVoidsSig) {
+    glassVoidsSig = vsig;
+    const members = new Set(focus.members);
+    // Стекло бывает унаследованным от контура — пересобираем все части здания (редко: только когда пустоты меняются)
+    void overpassLayer.rebuildWhere((f) => members.has(f.key));
+  }
+  const through = [...new Set(voids.flatMap((v) => v.through))];
+  const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.length}|${voids.length}` : '';
   if (sig === levelSignature) return;
   levelSignature = sig;
-  overpassLayer.setLevel(level && { cut: level.ceil, items, doors });
+  overpassLayer.setLevel(plan && {
+    ...plan, floor: level!.floor,
+    voids: voids.map((v) => v.polygon).flat(),
+    // Пустота прорезает пол этажа и полы промежуточных этажей (у самого нижнего — пол атриума)
+    voidCuts: voids.map((v) => ({
+      polygon: v.polygon,
+      zs: [level!.floor, ...v.through.slice(0, -1).map((n) => levels.find((l) => l.n === n)?.floor).filter((z): z is number => z !== undefined)],
+    })),
+    below: through.map((n) => levels.find((l) => l.n === n)).filter((l): l is Level => !!l).map(planOf),
+  });
+}
+
+/** Пустоты (второй свет) этажа n здания: lon/lat; кеш — по зданию, данным и этажу. */
+/** Чем последний раз пересобраны перекрытия стеклянных частей здания режима. */
+let glassVoidsSig = '';
+type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[] }[]> & { mapped?: Map<number, LonLat[][][]> };
+/** Пустоты (второй свет) всех этажей здания, lon/lat; кеш — по зданию и данным. */
+const voidsCache = new Map<string, { sig: string; map: LevelVoids }>();
+function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
+  const sig = `${overpass.revision}|${indoor.length}|${levels.map((l) => `${l.n}:${l.floor}:${l.ceil}`).join(',')}|${g.members.length}`;
+  const hit = voidsCache.get(g.key);
+  if (hit?.sig === sig) return hit.map;
+  const map: LevelVoids = timed('этажи: второй свет', () => {
+    const out: LevelVoids = new Map();
+    const feats = groupFeatures(g);
+    let w = Infinity, s = Infinity, e = -Infinity, nn = -Infinity;
+    for (const f of feats) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); nn = Math.max(nn, y); }
+    if (!Number.isFinite(w) || !indoor.length) return out;
+    // Плоская система в метрах вокруг здания
+    const cx = (w + e) / 2, cy = (s + nn) / 2, kx = Math.cos(cy * Math.PI / 180) * 111320, ky = 111320;
+    const loc = ([x, y]: LonLat): [number, number] => [(x - cx) * kx, (y - cy) * ky];
+    const geo = ([x, y]: [number, number]): LonLat => [x / kx + cx, y / ky + cy];
+    const poly = (p: Polygon) => [p.outer.map(loc), ...p.inners.map((r) => r.map(loc))];
+    const hasParts = feats.some((f) => f.kind === 'part');
+    // Части внутри здания, забытые в отношении (relation/17852191 вне relation/17852202), — тоже контур этажа
+    const members = new Set(g.members);
+    const outlines = feats.filter((f) => f.kind === 'building');
+    const strays = hasParts ? overpass.allFeatures().filter((f) => f.kind === 'part' && !members.has(f.key) && f.polygons.length
+      && f.polygons[0].outer.every(([x, y]) => x >= w && x <= e && y >= s && y <= nn)
+      && outlines.some((o) => o.polygons.some((q) => pointInRing(pointOnSurface(f.polygons[0]), q.outer)))) : [];
+    const parts = [...feats.filter((f) => !hasParts || f.kind === 'part'), ...strays]
+      .map((f) => { const h = computeHeights(f.tags); return { polygons: f.polygons.map(poly), min: h.min, wallTop: h.wallTop }; });
+    const plans = buildPlans(levels, parts, indoor.filter((f) => f.kind !== 'poi').map((f) => ({ kind: f.kind, levels: f.levels, floors: floorLevels(f), line: f.line, polygons: f.polygons.map(poly) })));
+    // Размеченное по этажам (lon/lat) — перекрытия стеклянных частей кладём только там
+    out.mapped = new Map([...plans].map(([n, p]) => [n, p.mapped.map((poly) => poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number]))))]));
+    for (const l of levels) {
+      const list = findVoids(l.n, plans).map((v) => ({ polygon: v.polygon.map((p) => p.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))), through: v.through }));
+      if (list.length) out.set(l.n, list);
+    }
+    return out;
+  }, (r) => `${[...r.values()].flat().length} пустот`);
+  voidsCache.set(g.key, { sig, map });
+  while (voidsCache.size > 20) voidsCache.delete(voidsCache.keys().next().value!);
+  return map;
+}
+
+/** Пустоты этажа n здания. */
+function levelVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[], n: number) {
+  return buildingVoids(g, levels, indoor).get(n) ?? [];
 }
 
 levelsEl.addEventListener('click', (e) => {
+  const link = (e.target as HTMLElement).closest<HTMLElement>('[data-select]');
+  if (link) { e.preventDefault(); select(link.dataset.select); return; }
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-level]');
   if (!li) return;
   const n = li.dataset.level === '' ? undefined : Number(li.dataset.level);
@@ -3782,12 +3879,21 @@ setInheritance((f) => {
   return inheritedTags(f.tags, t ? [t, g.tags] : [g.tags]);
 });
 
-// Перекрытия стеклянных частей — на высотах полов из той же раскладки, что у панели «Этажи»
+// Перекрытия стеклянных частей — на высотах полов из той же раскладки, что у панели «Этажи»; с пустотами второго света
 setLevelGrid((f) => {
   const g = groupOf(f.key);
   if (!g || g.key === f.key) return;
-  const levels = focusLevels(g);
-  return levels.length ? [...new Set([...levels.map((l) => l.floor), ...levels.map((l) => l.ceil)])] : undefined;
+  const indoor = buildingIndoor(g);
+  const levels = withIndoorLevels(focusLevels(g), indoor);
+  if (!levels.length) return;
+  const voids = buildingVoids(g, levels, indoor);
+  const zs = [...new Set([...levels.map((l) => l.floor), ...levels.map((l) => l.ceil)])];
+  return zs.map((z) => {
+    const at = levels.filter((l) => Math.abs(l.floor - z) < 0.01);
+    // Есть разметка этажа — плита только под ней (над атриумом, галереями вокруг пустоты плиты нет)
+    const mask = at.flatMap((l) => voids.mapped?.get(l.n) ?? []);
+    return { z, holes: at.flatMap((l) => voids.get(l.n) ?? []).flatMap((v) => v.polygon), mask: mask.length ? mask : undefined };
+  });
 });
 
 /** Откуда часть наследует теги в форме: контур здания, затем само отношение. Контур сам ни от кого не наследует. */
@@ -4247,6 +4353,21 @@ window.addEventListener('beforeunload', (e) => {
   if (session.changes().length) e.preventDefault();
 });
 
+/** Ниже этого этаж по высоте и этажности объекта — этажность явно не про этот объём, м. */
+const MIN_LEVEL_HEIGHT = 1.5;
+
+/** Этажность не помещается в высоту объекта: этаж получается ниже MIN_LEVEL_HEIGHT. */
+function lowLevels(t: Record<string, string>): string | false {
+  const levels = Number(t['building:levels']), min = Number(t['building:min_level']) || 0;
+  if (t['building:levels'] === undefined || !Number.isFinite(levels) || levels <= min) return false;
+  const h = computeHeights(t);
+  if (h.source !== 'height') return false;
+  const step = (h.wallTop - h.min) / (levels - min);
+  if (step >= MIN_LEVEL_HEIGHT) return false;
+  return `building:levels=${esc(t['building:levels'])} при высоте стен ${fmt(h.wallTop - h.min)} м — этаж выходит ${fmt(step)} м. `
+    + 'Этажность, похоже, не про этот объём (скопирована с контура?), а этажи в панели «Этажи» берутся из неё.';
+}
+
 /** Предупреждение об этажности части выше контура (для части) или частей выше него (для контура). */
 function levelsAboveOutline(f: Feature3D): string | false {
   const g = groupOf(f.key);
@@ -4274,6 +4395,7 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: s
     f.tags.height && f.tags['building:levels'] && Math.abs(h.top - Number(f.tags['building:levels']) * 3) > h.top * 0.5 &&
       'height и building:levels заметно расходятся.',
     levelsAboveOutline(f),
+    lowLevels(f.tags),
     levelsBelowMin(f.tags) && `building:levels (${esc(f.tags['building:levels'])}) не больше building:min_level (${esc(f.tags['building:min_level'])}) — `
       + 'building:levels считает этажи от земли, включая пропущенные снизу: у части с одним этажом над 15-м — min_level=15, levels=16. Этажи части не показываются.',
   ].filter(Boolean);

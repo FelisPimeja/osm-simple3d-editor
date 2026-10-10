@@ -42,6 +42,18 @@ export type IndoorKind = 'room' | 'area' | 'corridor' | 'level' | 'wall' | 'colu
 const INDOOR_KINDS = new Set<string>(['room', 'area', 'corridor', 'level', 'wall', 'column']); // poi — отдельно
 
 /** Помещение, коридор, площадка или этаж целиком (indoor=*), с номерами этажей, на которых он есть. */
+/**
+ * Этажи, на которых у объекта пол. Объект на нескольких этажах в level (эскалатор, лестница, зал в два света:
+ * level=-1;0 или 1-3) — вертикальное пространство: пол только на нижнем, выше — пустота. repeat_on — то же
+ * помещение на каждом этаже: пол на каждом.
+ */
+export function floorLevels(f: IndoorFeature): number[] {
+  const own = parseLevels(f.tags.level);
+  const out = new Set(parseLevels(f.tags.repeat_on));
+  out.add(own.length ? Math.min(...own) : f.levels[0] ?? 0);
+  return [...out];
+}
+
 export interface IndoorFeature {
   key: string;
   tags: Record<string, string>;

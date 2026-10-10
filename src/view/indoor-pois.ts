@@ -72,6 +72,11 @@ export class IndoorPois {
       const f = el && this.byEl.get(el);
       if (f) { e.stopPropagation(); onPick(f); }
     });
+    // Колесо над значком — карте: значки лежат вне слоя, где MapLibre слушает колесо, и зум над ними не работал
+    this.root.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      map.getCanvas().dispatchEvent(new WheelEvent('wheel', e));
+    }, { passive: false });
     map.getContainer().appendChild(this.root);
     map.on('render', () => this.place());
   }

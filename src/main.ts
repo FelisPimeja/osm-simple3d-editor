@@ -4,6 +4,7 @@ import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJS
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
+import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { completeRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
@@ -172,6 +173,7 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
   updateTileFilter();
   showOverpassStatus();
   if (focus) renderLevels(); // пришли indoor-объекты здания
+  scheduleIndoorBadges();
 }, (f) => (session.isDeleted(f.key) ? { ...f, polygons: [] } : (session.get(f.key) as Feature3D | undefined) ?? f));
 overpass.setExtras(() => session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length) as Feature3D[]);
 let selectedKey: string | undefined;
@@ -267,7 +269,7 @@ map.on('load', () => {
   refreshOverpass();
 });
 
-map.on('moveend', () => refreshOverpass());
+map.on('moveend', () => { refreshOverpass(); scheduleIndoorBadges(); });
 
 // Все здания белым — тайловые и так белые, переключаем только слои с данными OSM
 monoToggle.checked = gfx.monochrome;
@@ -2938,6 +2940,71 @@ function withIndoorLevels(levels: Level[], indoor: IndoorFeature[]): Level[] {
 
 /** Значок «есть план этажа». */
 const ICON_PLAN = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 2h12v12H2z"/><path d="M2 8h5v6M7 2v3M10 8h4M10 8v3"/></svg>';
+/** Значки «есть поэтажный план» над зданиями — с этого зума и при стольких indoor-полигонах в здании. */
+const BADGE_MIN_ZOOM = 16;
+const BADGE_MIN_POLYGONS = 3;
+const INDOOR_PLAN_KINDS = new Set(['room', 'area', 'corridor', 'level']);
+
+const indoorBadges = new IndoorBadges(map, overpassLayer, ICON_PLAN, (key) => {
+  const g = groupOf(key) ?? soloGroup(key);
+  if (g) enterFocus(g);
+});
+
+let badgeTimer: ReturnType<typeof setTimeout> | undefined;
+/** Пересчитать значки чуть позже: тайлы приходят пачками, движение карты — частое. */
+function scheduleIndoorBadges() {
+  clearTimeout(badgeTimer);
+  badgeTimer = setTimeout(() => timed('значки планов', updateIndoorBadges), 150);
+}
+
+/** Здания в видимой области, у которых есть indoor-полигоны (помещения, коридоры…), — значок над верхом. */
+function updateIndoorBadges() {
+  if (focus || map.getZoom() < BADGE_MIN_ZOOM) return indoorBadges.set([]);
+  const b = map.getBounds();
+  const bbox: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+  const indoor = overpass.indoorIn(bbox).filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length);
+  if (!indoor.length) return indoorBadges.set([]);
+  // Сетка рамок зданий (~50 м) — чтобы не перебирать все здания для каждого помещения
+  const CELL = 0.0005;
+  const grid = new Map<string, { f: Feature3D; box: Bbox }[]>();
+  for (const { feature: f } of overpass.renderedFeatures()) {
+    if (!f.polygons.length) continue;
+    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+    for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
+    if (e < bbox[0] || w > bbox[2] || n < bbox[1] || s > bbox[3]) continue;
+    for (let i = Math.floor(w / CELL); i <= Math.floor(e / CELL); i++) {
+      for (let j = Math.floor(s / CELL); j <= Math.floor(n / CELL); j++) {
+        const k = `${i},${j}`;
+        (grid.get(k) ?? grid.set(k, []).get(k)!).push({ f, box: [w, s, e, n] });
+      }
+    }
+  }
+  const count = new Map<string, number>();
+  for (const f of indoor) {
+    const p = pointOnSurface(f.polygons[0]);
+    const hit = grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`)?.find(({ f: b, box }) =>
+      p[0] >= box[0] && p[0] <= box[2] && p[1] >= box[1] && p[1] <= box[3] && b.polygons.some((q) => pointInRing(p, q.outer)));
+    if (!hit) continue;
+    const key = groupOf(hit.f.key)?.key ?? hit.f.key;
+    count.set(key, (count.get(key) ?? 0) + 1);
+  }
+  const badges: IndoorBadge[] = [];
+  for (const [key, n] of count) {
+    if (n < BADGE_MIN_POLYGONS) continue;
+    const g = groupOf(key);
+    const feats = g ? groupFeatures(g) : [overpass.findFeature(key)].filter((f): f is Feature3D => !!f);
+    let w = Infinity, s = Infinity, e = -Infinity, nn = -Infinity, top = 0;
+    for (const f of feats) {
+      for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); nn = Math.max(nn, y); }
+      if (!f.hasParts) top = Math.max(top, computeHeights(f.tags).top);
+    }
+    if (!Number.isFinite(w)) continue;
+    const name = (g && (g.tags.name ?? outlineTags(g)?.name)) ?? feats[0]?.tags.name;
+    badges.push({ key, at: [(w + e) / 2, (s + nn) / 2], top, title: `${name ? `${name} — ` : ''}есть поэтажный план (${n} помещений). Клик — открыть здание` });
+  }
+  indoorBadges.set(badges);
+}
+
 /** Доля площади этажа, покрытая indoor-полигонами, начиная с которой у этажа есть план. */
 const PLAN_COVERAGE = 0.3;
 
@@ -3022,7 +3089,8 @@ function selectIndoor(f: IndoorFeature | undefined) {
 const LEVEL_NAME = (n: number) => (n < 0 ? `Подземный ${-n}` : `${n + 1} этаж`);
 
 /** Панель этажей режима здания: список по этажности и indoor-данным, клик — срез здания выше этажа. */
-function renderLevels() { timed('этажи: панель', renderLevelsImpl); }
+function renderLevels() {
+  scheduleIndoorBadges(); timed('этажи: панель', renderLevelsImpl); }
 
 function renderLevelsImpl() {
   levelsPanel.hidden = !focus;

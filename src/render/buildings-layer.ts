@@ -877,6 +877,19 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
   }
 
+  /** Проектор точек lon/lat + высота над землёй (м) в пиксели экрана по матрице последнего кадра. */
+  geoProjector(): ((lngLat: LonLat, altitude: number) => [number, number] | undefined) | undefined {
+    if (!this.map || !this.lastMain) return;
+    const m = this.lastMain;
+    const canvas = this.map.getCanvas();
+    const w = canvas.clientWidth, h = canvas.clientHeight, v = new THREE.Vector4();
+    return ([lng, lat], altitude) => {
+      const c = MercatorCoordinate.fromLngLat({ lng, lat }, altitude);
+      v.set(c.x, c.y, c.z, 1).applyMatrix4(m);
+      return v.w <= 0 ? undefined : [(v.x / v.w + 1) / 2 * w, (1 - v.y / v.w) / 2 * h];
+    };
+  }
+
   focusProject(p: THREE.Vector3): [number, number] | undefined {
     const g = this.groups.get(FOCUS_GROUP);
     if (!g || !this.map || !this.lastMain) return;

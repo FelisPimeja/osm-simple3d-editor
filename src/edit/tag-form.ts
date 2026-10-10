@@ -29,6 +29,9 @@ const ROOF_SHAPE_LABELS: Record<string, string> = {
   flat: 'Плоская', gabled: 'Двускатная', hipped: 'Вальмовая', pyramidal: 'Шатровая', skillion: 'Односкатная',
   dome: 'Купол', onion: 'Луковица', round: 'Сводчатая', gambrel: 'Ломаная двускатная', mansard: 'Мансардная',
   'half-hipped': 'Полувальмовая', saltbox: 'Несимметричная двускатная',
+  side_hipped: 'Двускатная с вальмой с одной стороны', 'side_half-hipped': 'Двускатная с полувальмой с одной стороны',
+  'hipped-and-gabled': 'Голландская (вальмовая с фронтоном)', bellcast_gable: 'Двускатная с отгибом у карниза',
+  crosspitched: 'Крестовая', sawtooth: 'Шедовая (пилообразная)', butterfly: 'Бабочка (обратная двускатная)', cone: 'Коническая',
 };
 const ROOF_SHAPES = Object.keys(ROOF_SHAPE_LABELS);
 
@@ -114,8 +117,9 @@ const INHERITABLE_SET = new Set<string>(INHERITABLE);
 
 /** Поля только для некоторых форм крыши (рендер их учитывает только там). */
 const SHAPE_ONLY: Record<string, string[]> = {
-  'roof:direction': ['skillion', 'saltbox'],
-  'roof:orientation': ['gabled', 'hipped', 'half-hipped', 'gambrel', 'round', 'saltbox'],
+  'roof:direction': ['skillion', 'saltbox', 'side_hipped', 'side_half-hipped'],
+  'roof:orientation': ['gabled', 'hipped', 'half-hipped', 'gambrel', 'round', 'saltbox', 'bellcast_gable', 'side_hipped',
+    'side_half-hipped', 'hipped-and-gabled', 'crosspitched', 'sawtooth', 'butterfly'],
 };
 
 /** Откуда наследуются значения: контур (outline) и/или само отношение здания. */

@@ -622,6 +622,20 @@ function setEditParam(key: string | undefined) {
   if (url.href !== location.href) history.replaceState(history.state, '', url);
 }
 
+/** Этаж режима здания в адресе: &level=N (вместе с ?edit=); undefined — убрать. */
+function setLevelParam(n: number | undefined) {
+  const url = new URL(location.href);
+  if (n !== undefined && url.searchParams.has('edit')) url.searchParams.set('level', String(n));
+  else url.searchParams.delete('level');
+  if (url.href !== location.href) history.replaceState(history.state, '', url);
+}
+
+/** Этаж из ссылки: включается, когда здание открылось и этаж появился в панели (indoor-данные догружаются). */
+let linkLevel: number | undefined = (() => {
+  const v = new URLSearchParams(location.search).get('level');
+  return v !== null && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined;
+})();
+
 /** Открыть здание из ссылки ?edit=: без хэша — подлёт к объекту, вход — когда он появится в данных тайлов. */
 async function openEditLink() {
   const m = new URLSearchParams(location.search).get('edit')?.match(/^([wr])(\d+)$/);
@@ -1864,9 +1878,35 @@ function fixOutline() {
 function outlineWarning(g: BuildingGroup): string {
   if (isSolo(g)) return '';
   const r = partsOutsideOutline(g);
-  if (!r?.out.length) return '';
-  return `<p class="warn">⚠ Частей за контуром здания: ${r.out.length}. Контур должен охватывать все части.
-    <button type="button" data-outline-fix title="Наведите — предпросмотр нового контура">Обновить контур</button></p>`;
+  const above = partsAboveOutline(g);
+  return (r?.out.length ? `<p class="warn">⚠ Частей за контуром здания: ${r.out.length}. Контур должен охватывать все части.
+    <button type="button" data-outline-fix title="Наведите — предпросмотр нового контура">Обновить контур</button></p>` : '')
+    + (above ? `<p class="warn">⚠ ${aboveOutlineText(above)}</p>` : '');
+}
+
+/**
+ * Части с building:levels больше, чем у контура: по конвенции на контуре — максимальная этажность здания.
+ * undefined — всё в порядке (или у контура этажность не указана).
+ */
+function partsAboveOutline(g: BuildingGroup): { outline: number; max: number; keys: string[] } | undefined {
+  const outline = Number(outlineTags(g)?.['building:levels']);
+  if (!Number.isFinite(outline)) return;
+  const outlineKey = g.members.find((_, i) => g.roles[i] === 'outline');
+  const keys: string[] = [];
+  let max = outline;
+  for (const f of groupFeatures(g)) {
+    if (f.key === outlineKey) continue;
+    const n = Number(f.tags['building:levels']);
+    if (Number.isFinite(n) && n > outline) { keys.push(f.key); max = Math.max(max, n); }
+  }
+  return keys.length ? { outline, max, keys } : undefined;
+}
+
+function aboveOutlineText(a: { outline: number; max: number; keys: string[] }): string {
+  const list = a.keys.slice(0, 5).map((k) => `<a href="${server().web}/${k}" target="_blank" rel="noopener">${k}</a>`).join(', ')
+    + (a.keys.length > 5 ? ` и ещё ${a.keys.length - 5}` : '');
+  return `У контура building:levels=${a.outline}, а у частей больше (до ${a.max}): ${list}. `
+    + 'На контуре принято указывать максимальную этажность здания.';
 }
 
 /** Теги объёма, которые переходят от отдельного здания к его частям. */
@@ -2992,15 +3032,23 @@ function renderLevelsImpl() {
     shownLevel = undefined;
     shownIndoor = [];
     selectedIndoor = undefined;
+    if (levelsFocusKey !== undefined) { linkLevel = undefined; setLevelParam(undefined); } // вышли из режима здания
     currentLevel = levelsFocusKey = undefined;
     levelSignature = '';
     return;
   }
-  if (levelsFocusKey !== focus.key) { levelsFocusKey = focus.key; currentLevel = undefined; }
+  if (levelsFocusKey !== focus.key) {
+    if (levelsFocusKey !== undefined) linkLevel = undefined; // этаж из ссылки — только для первого здания
+    levelsFocusKey = focus.key;
+    currentLevel = undefined;
+  }
   loadFocusIndoor(focus);
   const indoor = buildingIndoor(focus);
   const levels = withIndoorLevels(focusLevels(focus), indoor);
+  if (linkLevel !== undefined && levels.some((l) => l.n === linkLevel)) { currentLevel = linkLevel; linkLevel = undefined; }
   if (currentLevel !== undefined && !levels.some((l) => l.n === currentLevel)) currentLevel = undefined;
+  // Пока этаж из ссылки не появился в панели — он остаётся в адресе
+  setLevelParam(currentLevel ?? linkLevel);
   levelsCount.textContent = levels.length ? `(${levels.length})` : '';
   const planned = plannedLevels(focus, levels, indoor);
   levelsEl.innerHTML = levels.length
@@ -3030,6 +3078,7 @@ levelsEl.addEventListener('click', (e) => {
   if (!li) return;
   const n = li.dataset.level === '' ? undefined : Number(li.dataset.level);
   currentLevel = n;
+  linkLevel = undefined;
   renderLevels();
 });
 
@@ -4130,6 +4179,19 @@ window.addEventListener('beforeunload', (e) => {
   if (session.changes().length) e.preventDefault();
 });
 
+/** Предупреждение об этажности части выше контура (для части) или частей выше него (для контура). */
+function levelsAboveOutline(f: Feature3D): string | false {
+  const g = groupOf(f.key);
+  if (!g || g.key === f.key) return false;
+  const above = partsAboveOutline(g);
+  if (!above) return false;
+  const outlineKey = g.members.find((_, i) => g.roles[i] === 'outline');
+  if (f.key === outlineKey) return aboveOutlineText(above);
+  if (!above.keys.includes(f.key)) return false;
+  return `building:levels (${esc(f.tags['building:levels'])}) больше, чем у контура здания (${above.outline}): `
+    + 'на контуре принято указывать максимальную этажность — поправьте контур или часть.';
+}
+
 /** building:levels не больше building:min_level — ошибка: levels считается от земли, вместе с пропущенными снизу. */
 function levelsBelowMin(t: Record<string, string>): boolean {
   const levels = Number(t['building:levels']), min = Number(t['building:min_level']);
@@ -4143,6 +4205,7 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: s
     h.source === 'default' && 'Нет height и building:levels — высота взята по умолчанию.',
     f.tags.height && f.tags['building:levels'] && Math.abs(h.top - Number(f.tags['building:levels']) * 3) > h.top * 0.5 &&
       'height и building:levels заметно расходятся.',
+    levelsAboveOutline(f),
     levelsBelowMin(f.tags) && `building:levels (${esc(f.tags['building:levels'])}) не больше building:min_level (${esc(f.tags['building:min_level'])}) — `
       + 'building:levels считает этажи от земли, включая пропущенные снизу: у части с одним этажом над 15-м — min_level=15, levels=16. Этажи части не показываются.',
   ].filter(Boolean);

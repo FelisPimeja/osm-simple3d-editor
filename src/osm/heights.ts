@@ -27,8 +27,23 @@ function parseNum(v?: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/**
+ * Синонимы и устаревшие значения roof:shape (wiki Key:roof:shape, «Values with problems») → основное значение.
+ * many (несколько форм) честно моделируется частями — сами рисуем плоской.
+ */
+const ROOF_SYNONYMS: Record<string, string> = {
+  pitched: 'gabled', lean_to: 'skillion', monopitch: 'skillion', shed: 'skillion', sloped: 'skillion',
+  gabled_height_moved: 'saltbox', many: 'flat', mixed: 'flat', mix: 'flat', multi: 'flat',
+};
+
+/** Значение roof:shape, приведённое к основному (регистр, синонимы); без тега — flat. */
+export function roofShapeOf(tags: Record<string, string>): string {
+  const v = (tags['roof:shape'] ?? 'flat').trim().toLowerCase();
+  return ROOF_SYNONYMS[v] ?? v;
+}
+
 export function computeHeights(tags: Record<string, string>): Heights {
-  const roofShape = tags['roof:shape'] ?? 'flat';
+  const roofShape = roofShapeOf(tags);
   const levels = parseNum(tags['building:levels']);
   const minLevel = parseNum(tags['building:min_level']);
   const roofLevels = parseNum(tags['roof:levels']);

@@ -8,6 +8,8 @@ export interface CommentContext {
   isGroup(key: string): boolean;
   /** Название здания: name отношения или его контура (outline). */
   buildingName(groupKey: string): string | undefined;
+  /** Исправлены ли в объекте проблемы, найденные проверкой (были в исходных тегах, а теперь нет). */
+  fixedIssues?(key: string): boolean;
 }
 
 /** Что произошло со зданием — по этим признакам выбираются пункты комментария. */
@@ -20,6 +22,8 @@ interface BuildingEdits {
   moved: boolean;
   /** Удалены объекты (части или отдельные здания). */
   deleted?: boolean;
+  /** Исправлены ошибки, найденные проверкой. */
+  fixed?: boolean;
 }
 
 /**
@@ -57,6 +61,7 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
     if (c.deleted) { if (!removedFromGroups.has(c.key)) e.deleted = true; continue; }
     if (c.diff.some((d) => !d.tag.startsWith('('))) e.attributes = true;
     if (c.nodeMoves?.length) e.moved = true;
+    if (!c.created && ctx.fixedIssues?.(c.key)) e.fixed = true;
   }
 
   const loosePoints = points(loose, 'зданий');
@@ -65,8 +70,9 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
   // 1. Подробно: по блоку на здание с пунктами
   const blocks: string[] = [];
   [...buildings].forEach(([key, e], i) => {
-    const title = created.has(key) ? 'Новое отношение здания' : 'Правки в отношение здания';
-    blocks.push([`${title}${names[i] ? ` «${names[i]}»` : ''}:`, ...points(e, 'частей')].join('\n'));
+    const title = created.has(key) ? `Новое отношение здания${names[i] ? ` «${names[i]}»` : ''}`
+      : names[i] ? `«${names[i]}»` : 'Правки в отношение здания';
+    blocks.push([`${title}:`, ...points(e, 'частей')].join('\n'));
   });
   if (loosePoints.length) blocks.push(['Правки отдельных зданий:', ...loosePoints].join('\n'));
   const full = blocks.join('\n\n');
@@ -76,7 +82,7 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
   const all: BuildingEdits = { added: 0, removed: 0, attributes: false, moved: false };
   for (const e of buildings.values()) {
     all.added += e.added; all.removed += e.removed;
-    all.attributes ||= e.attributes; all.moved ||= e.moved; all.deleted ||= e.deleted;
+    all.attributes ||= e.attributes; all.moved ||= e.moved; all.deleted ||= e.deleted; all.fixed ||= e.fixed;
   }
   const allNew = [...buildings.keys()].every((k) => created.has(k));
   const head = (list: string) => `${allNew ? 'Новые отношения зданий' : 'Правки в отношения зданий'}${list}:`;
@@ -103,5 +109,6 @@ function points(e: BuildingEdits, what: string): string[] {
   if (e.attributes) out.push(`* изменены параметры отдельных ${what}`);
   if (e.deleted) out.push(`* удалены отдельные ${what === 'частей' ? 'части' : 'здания'}`);
   if (e.moved) out.push(`* перемещены отдельные ${what === 'частей' ? 'части' : 'здания'}`);
+  if (e.fixed) out.push('* исправление ошибок');
   return out;
 }

@@ -19,6 +19,14 @@ export interface Issue {
   text: string;
   /** Второй объект (пересечение объёмов). */
   other?: string;
+  /** Однозначное исправление: новые значения тегов объекта key (undefined — удалить тег). */
+  fix?: Fix;
+}
+
+export interface Fix {
+  /** Что сделает кнопка — для подсказки. */
+  label: string;
+  tags: Record<string, string | undefined>;
 }
 
 /** Высота этажа, ниже и выше которой этажность и высота противоречат друг другу, м. */
@@ -77,22 +85,32 @@ function lengthHint(v: string): string {
 /** Проблемы тегов одного объекта. */
 export function validateTags(key: string, t: Record<string, string>): Issue[] {
   const out: Issue[] = [];
-  const add = (level: IssueLevel, code: string, text: string) => out.push({ key, level, code, text });
+  const add = (level: IssueLevel, code: string, text: string, fix?: Fix) => out.push({ key, level, code, text, ...(fix ? { fix } : {}) });
+  const set = (tags: Record<string, string | undefined>): Fix => ({
+    label: Object.entries(tags).map(([k, v]) => (v === undefined ? `удалить ${k}` : `${k}=${v}`)).join(', '), tags,
+  });
   for (const [wrong, right] of Object.entries(WRONG_KEYS)) {
     if (t[wrong] === undefined) continue;
     // roof=* бывает и самостоятельным тегом (roof=yes у навесов) — только когда roof:shape не задан
     if (wrong === 'roof' && (t['roof:shape'] !== undefined || /^(yes|no)$/.test(t.roof))) continue;
-    add('warning', 'key', `${wrong}=${t[wrong]} — ошибочный ключ, правильно ${right}${t[right] !== undefined ? ` (уже задан: ${t[right]})` : ''}.`);
+    add('warning', 'key', `${wrong}=${t[wrong]} — ошибочный ключ, правильно ${right}${t[right] !== undefined ? ` (уже задан: ${t[right]})` : ''}.`,
+      t[right] === undefined ? { label: `переименовать в ${right}`, tags: { [wrong]: undefined, [right]: t[wrong] } } : undefined);
   }
-  if (t.building === 'part') add('warning', 'key', 'building=part — ошибка: части размечают building:part=yes.');
+  if (t.building === 'part') add('warning', 'key', 'building=part — ошибка: части размечают building:part=yes.',
+    t['building:part'] === undefined ? set({ building: undefined, 'building:part': 'yes' }) : undefined);
   if (t['building:part'] !== undefined && /^\d+$/.test(t['building:part'])) add('warning', 'key', `building:part=${t['building:part']} — число вместо вида части (yes, roof, column…).`);
   for (const k of LENGTH_TAGS) {
     const v = t[k];
     if (v === undefined) continue;
     const n = parseLength(v);
-    if (n === undefined) add('error', 'number', `${k}=${v} — не число: ${lengthHint(v)}.`);
+    if (n === undefined) {
+      // Запятая вместо точки — заменить, если после этого число разбирается
+      const dot = /^\s*-?\d+,\d+/.test(v) && !/[;]/.test(v) ? v.replace(',', '.').trim() : undefined;
+      add('error', 'number', `${k}=${v} — не число: ${lengthHint(v)}.`, dot && parseLength(dot) !== undefined ? set({ [k]: dot }) : undefined);
+    }
     else if (n < 0) add('error', 'number', `${k}=${v} — отрицательное значение.`);
-    else if (/^\s*\d+(\.\d+)?(m|ft)$/.test(v)) add('warning', 'number', `${k}=${v} — единицу пишут через пробел («${v.replace(/(m|ft)$/, ' $1')}») или вовсе без «m».`);
+    else if (/^\s*\d+(\.\d+)?(m|ft)$/.test(v)) add('warning', 'number', `${k}=${v} — единицу пишут через пробел («${v.replace(/(m|ft)$/, ' $1')}») или вовсе без «m».`,
+      set({ [k]: v.trim().replace(/\s*m$/, '').replace(/\s*ft$/, ' ft') }));
     else if (k === 'height' && n === 0) add('warning', 'number', 'height=0 — у здания нулевая высота.');
   }
   for (const k of COUNT_TAGS) {
@@ -103,7 +121,7 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
     } else if (n < 0) add('error', 'number', `${k}=${t[k]} — отрицательное значение (подземные этажи — building:levels:underground).`);
     else if (!Number.isInteger(n)) add('error', 'number', `${k}=${t[k]} — этажи считают целыми; дробную высоту задают через ${k === 'building:min_level' ? 'min_height' : k === 'roof:levels' ? 'roof:height' : 'height'}.`);
   }
-  if (t['building:min_level'] !== undefined && Number(t['building:min_level']) === 0) add('warning', 'levels', 'building:min_level=0 — лишний тег: часть и так начинается с земли.');
+  if (t['building:min_level'] !== undefined && Number(t['building:min_level']) === 0) add('warning', 'levels', 'building:min_level=0 — лишний тег: часть и так начинается с земли.', set({ 'building:min_level': undefined }));
   if (t['building:min_level'] !== undefined && t['building:levels'] === undefined) add('warning', 'levels', 'building:min_level без building:levels — число этажей части не определено.');
   if (Number(t['building:levels']) === 0 && !(Number(t['building:levels:underground']) > 0)) add('warning', 'levels', 'building:levels=0 — у здания нет надземных этажей (подземное — с building:levels:underground).');
   const height = parseLength(t.height), min = parseLength(t.min_height), roof = parseLength(t['roof:height']);
@@ -130,22 +148,27 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
     if (/^\d+(\.\d+)?$/.test(shape)) add('warning', 'roof', `roof:shape=${raw} — число вместо формы; число этажей в крыше — roof:levels.`);
     else if (ROOF_UNCLEAR[shape]) add('warning', 'roof', `roof:shape=${raw} — ${ROOF_UNCLEAR[shape]}.`);
     else if (!KNOWN_ROOFS.has(main)) add('warning', 'roof', `roof:shape=${raw} — неизвестная форма крыши (рисуется плоской).`);
-    else if (shape !== main && !ROOF_DOCUMENTED.has(shape)) add('warning', 'roof', `roof:shape=${raw} — значение с проблемами, основное — ${main}.`);
-    else if (raw !== shape) add('warning', 'roof', `roof:shape=${raw} — значения пишут строчными: ${shape}.`);
+    else if (shape !== main && !ROOF_DOCUMENTED.has(shape)) add('warning', 'roof', `roof:shape=${raw} — значение с проблемами, основное — ${main}.`, set({ 'roof:shape': main }));
+    else if (raw !== shape) add('warning', 'roof', `roof:shape=${raw} — значения пишут строчными: ${shape}.`, set({ 'roof:shape': shape }));
   }
   if (t['roof:levels'] !== undefined && Number(t['roof:levels']) > 0 && t['roof:shape'] !== undefined && roofShapeOf(t) === 'flat') {
     add('warning', 'roof', `roof:levels=${t['roof:levels']} при roof:shape=flat — в плоской крыше нет этажей.`);
   }
   const orient = t['roof:orientation'];
   if (orient !== undefined && orient !== 'along' && orient !== 'across') {
-    const hint = orient.toLowerCase() === 'accross' ? 'правильно across' : COMPASS_WORDS[orient.toLowerCase()] ? `сторону света пишут в roof:direction=${COMPASS_WORDS[orient.toLowerCase()]}` : 'допустимо along или across';
-    add('warning', 'roof', `roof:orientation=${orient} — ${hint}.`);
+    const o = orient.trim().toLowerCase(), word = COMPASS_WORDS[o];
+    const hint = o === 'accross' ? 'правильно across' : word ? `сторону света пишут в roof:direction=${word}` : 'допустимо along или across';
+    const fix = o === 'accross' || o === 'across' || o === 'along' ? set({ 'roof:orientation': o.replace('accross', 'across') })
+      : word && t['roof:direction'] === undefined ? set({ 'roof:orientation': undefined, 'roof:direction': word }) : undefined;
+    add('warning', 'roof', `roof:orientation=${orient} — ${hint}.`, fix);
   }
   const dir = t['roof:direction'];
   if (dir !== undefined) {
     const deg = Number(dir);
-    if (dir === 'along' || dir === 'across') add('warning', 'roof', `roof:direction=${dir} — это значение roof:orientation.`);
-    else if (COMPASS_WORDS[dir.toLowerCase()]) add('warning', 'roof', `roof:direction=${dir} — пишут буквой: ${COMPASS_WORDS[dir.toLowerCase()]}.`);
+    if (dir === 'along' || dir === 'across') add('warning', 'roof', `roof:direction=${dir} — это значение roof:orientation.`,
+      orient === undefined ? set({ 'roof:direction': undefined, 'roof:orientation': dir }) : undefined);
+    else if (COMPASS_WORDS[dir.toLowerCase()]) add('warning', 'roof', `roof:direction=${dir} — пишут буквой: ${COMPASS_WORDS[dir.toLowerCase()]}.`, set({ 'roof:direction': COMPASS_WORDS[dir.toLowerCase()] }));
+    else if (COMPASS.test(dir.toUpperCase()) && !COMPASS.test(dir)) add('warning', 'roof', `roof:direction=${dir} — стороны света пишут заглавными: ${dir.toUpperCase()}.`, set({ 'roof:direction': dir.toUpperCase() }));
     else if (!COMPASS.test(dir) && !(dir.trim() !== '' && Number.isFinite(deg) && deg >= 0 && deg <= 360)) add('warning', 'roof', `roof:direction=${dir} — ожидаются градусы 0–360 или N, NE, SSW…`);
   }
   if (orient !== undefined && dir !== undefined) add('warning', 'roof', 'Заданы и roof:orientation, и roof:direction — это альтернативы, оставьте одно.');
@@ -158,7 +181,7 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
     const v = t[k];
     if (v === undefined) continue;
     if (v.startsWith('#') && !/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) add('warning', 'colour', `${k}=${v} — неверный hex-цвет (нужно #RGB или #RRGGBB).`);
-    else if (/^gray$/i.test(v)) add('warning', 'colour', `${k}=${v} — в OSM британское написание: grey.`);
+    else if (/^gray$/i.test(v)) add('warning', 'colour', `${k}=${v} — в OSM британское написание: grey.`, set({ [k]: 'grey' }));
   }
   return out;
 }
@@ -249,8 +272,8 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
     else if (outlines.length > 1) out.push({ key: g.key, level: 'error', code: 'relation', text: `В отношении здания ${outlines.length} контура (роль outline) — должен быть один.` });
     for (const f of features) {
       const r = role.get(f.key);
-      if (r === 'outline' && f.tags.building === undefined) out.push({ key: f.key, level: 'warning', code: 'relation', text: 'Контур здания (роль outline) без тега building.' });
-      if (r === 'part' && f.tags['building:part'] === undefined) out.push({ key: f.key, level: 'warning', code: 'relation', text: 'Часть здания (роль part) без тега building:part.' });
+      if (r === 'outline' && f.tags.building === undefined) out.push({ key: f.key, level: 'warning', code: 'relation', text: 'Контур здания (роль outline) без тега building.', fix: { label: 'building=yes', tags: { building: 'yes' } } });
+      if (r === 'part' && f.tags['building:part'] === undefined) out.push({ key: f.key, level: 'warning', code: 'relation', text: 'Часть здания (роль part) без тега building:part.', fix: { label: 'building:part=yes', tags: { 'building:part': 'yes' } } });
       if (r !== undefined && !['outline', 'part', 'ridge', 'edge'].includes(r)) out.push({ key: f.key, level: 'warning', code: 'relation', text: `Роль «${r || 'пусто'}» в отношении здания — ожидаются outline или part.` });
     }
   }

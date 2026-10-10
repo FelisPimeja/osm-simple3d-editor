@@ -163,6 +163,7 @@ const issuesPanel = document.getElementById('issues-panel')!;
 const issuesEl = document.getElementById('issues')!;
 const issuesCount = document.getElementById('issues-count')!;
 const issuesAll = document.getElementById('issues-all') as HTMLInputElement;
+const issuesFixAll = document.getElementById('issues-fix-all') as HTMLButtonElement;
 try { issuesAll.checked = localStorage.getItem('osm3d.issues-all') === '1'; } catch { /* без хранилища — выключено */ }
 const outlinerEl = document.getElementById('outliner')!;
 const outlinerCount = document.getElementById('outliner-count')!;
@@ -3390,6 +3391,8 @@ let outlinerGroups = new Map<string, string[]>();
  */
 /** Проблемы здания режима здания — пересчитываются вместе со списком частей. */
 let focusIssues: Issue[] = [];
+/** Проблемы в порядке списка панели (кнопки «Исправить» ссылаются по номеру). */
+let shownIssues: Issue[] = [];
 
 /** Последние проверки по зданиям: пересчёт, только когда сменились объекты (правка даёт новый объект). */
 const issueCache = new Map<string, { feats: Feature3D[]; roles: string; issues: Issue[] }>();
@@ -3421,10 +3424,14 @@ function renderIssues() {
   if (issuesPanel.hidden) { issuesEl.innerHTML = ''; return; }
   const errors = focusIssues.filter((i) => i.level === 'error').length;
   issuesCount.textContent = `(${errors ? `ошибок ${errors}, ` : ''}предупреждений ${focusIssues.length - errors})`.replace(', предупреждений 0', '');
-  const sorted = [...focusIssues].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
-  issuesEl.innerHTML = sorted.map((i) => `<li class="${i.level}${selection.includes(i.key) ? ' selected' : ''}" data-key="${esc(i.key)}"${i.other ? ` data-other="${esc(i.other)}"` : ''}>
+  shownIssues = [...focusIssues].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
+  issuesEl.innerHTML = shownIssues.map((i, n) => `<li class="${i.level}${selection.includes(i.key) ? ' selected' : ''}" data-key="${esc(i.key)}"${i.other ? ` data-other="${esc(i.other)}"` : ''}>
     <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span>
-    <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span></li>`).join('');
+    <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span>
+    ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="Исправить: ${esc(i.fix.label)}">Исправить</button>` : ''}</li>`).join('');
+  const fixable = shownIssues.filter((i) => i.fix).length;
+  issuesFixAll.hidden = !fixable;
+  issuesFixAll.textContent = `Применить все исправления (${fixable})`;
 }
 
 /** «Подсветить все»: рёбра объёмов с проблемами (ошибка важнее предупреждения). */
@@ -3439,7 +3446,25 @@ issuesAll.addEventListener('change', () => {
   highlightIssues();
 });
 
+/** Применить исправления одним шагом истории; исправления одного объекта накладываются по очереди. */
+function applyFixes(list: Issue[]) {
+  const tags = new Map<string, Record<string, string>>();
+  for (const i of list) {
+    const f = entity(i.key);
+    if (!i.fix || !f) continue;
+    const t = tags.get(i.key) ?? tags.set(i.key, { ...f.tags }).get(i.key)!;
+    for (const [k, v] of Object.entries(i.fix.tags)) if (v === undefined) delete t[k]; else t[k] = v;
+  }
+  if (!tags.size) return;
+  session.editMany([...tags].map(([key, t]) => ({ key, tags: t })));
+  setStatus(list.length > 1 ? `Применено исправлений: ${list.length} (объектов: ${tags.size}).` : `Исправлено: ${list[0].fix!.label}.`);
+}
+
+issuesFixAll.addEventListener('click', () => applyFixes(shownIssues.filter((i) => i.fix)));
+
 issuesEl.addEventListener('click', (e) => {
+  const fix = (e.target as HTMLElement).closest<HTMLElement>('.issue-fix');
+  if (fix) { applyFixes([shownIssues[Number(fix.dataset.i)]]); return; }
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
   if (!li || !entity(li.dataset.key!)) return;
   select(li.dataset.key);
@@ -4321,6 +4346,14 @@ function commentSuggestion(): string {
     buildingName: (key) => {
       const g = editGroups.get(key) ?? groupOf(key);
       return g ? g.tags.name ?? outlineTags(g)?.name : undefined;
+    },
+    fixedIssues: (key) => {
+      const before = session.originalTags(key), f = entity(key);
+      if (!before || !f) return false;
+      // Проблема — вид проверки и тег, о котором она (значение может меняться: 4m → 4)
+      const sig = (i: Issue) => `${i.code} ${i.text.split(/[=\s]/)[0]}`;
+      const now = new Set(validateTags(key, f.tags).map(sig));
+      return validateTags(key, before).some((i) => !now.has(sig(i)));
     },
   });
 }

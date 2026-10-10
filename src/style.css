@@ -443,3 +443,9 @@ body.mobile #issues-panel { display: none !important; }
 .issues-all { display: flex; align-items: baseline; gap: 6px; font-size: 13px; margin: 0 0 6px; cursor: pointer; }
 .issue-list li.error .issue-icon, .issue-mark.error { color: #dc2626; }
 .issue-list li.warning .issue-icon, .issue-mark.warning { color: #d97706; }
+
+.issue-fix { flex: none; align-self: center; margin-left: auto; padding: 1px 6px; font-size: 11px; border: 1px solid #c8ccd2; border-radius: 4px; background: #fff; cursor: pointer; }
+.issue-fix:hover { background: #e8f0ff; border-color: #6b8fd6; }
+.issues-fix-all { width: 100%; padding: 4px 8px; font-size: 13px; border: 1px solid #6b8fd6; border-radius: 4px; background: #eef3ff; cursor: pointer; }
+.issues-fix-all:hover { background: #dbe7ff; }
+.issues-fix-all[hidden] { display: none; }

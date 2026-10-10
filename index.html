@@ -10,12 +10,27 @@
   <div id="map"></div>
   <div id="popup"></div>
   <div id="mobile-card" hidden></div>
+  <div id="date-panel" hidden>
+    <div class="dp-row">
+      <button type="button" class="dp-btn" data-back title="Шаг назад">⏮</button>
+      <button type="button" class="dp-btn dp-play" data-play title="Воспроизвести"></button>
+      <button type="button" class="dp-btn" data-fwd title="Шаг вперёд">⏭</button>
+      <input id="date-year" class="dp-year" type="number" step="1" title="Текущий год: показываются объекты, существовавшие в нём (start_date … end_date). До н. э. — со знаком минус" />
+      <label class="dp-opt" title="Шаг воспроизведения">шаг <select id="date-step"><option value="1">1 год</option><option value="5">5 лет</option><option value="10">10 лет</option><option value="25">25 лет</option><option value="50">50 лет</option><option value="100">100 лет</option></select></label>
+      <label class="dp-opt" title="Скорость воспроизведения: пауза между шагами">каждые <select id="date-speed"><option value="500">0,5 с</option><option value="1000">1 с</option><option value="2000">2 с</option><option value="4000">4 с</option></select></label>
+    </div>
+    <div class="dp-row">
+      <input id="date-from" class="dp-bound" type="number" step="1" title="Начало шкалы" />
+      <input id="date-slider" class="dp-slider" type="range" step="1" aria-label="Текущий год" />
+      <input id="date-to" class="dp-bound" type="number" step="1" title="Конец шкалы" />
+    </div>
+  </div>
   <div id="op-indicator" hidden><span class="dot"></span><span class="label"></span><button type="button" class="retry" hidden>Повторить</button></div>
   <div id="left-col" class="col">
   <aside id="panel" class="panel">
     <header class="panel-head"><h1>OSM Simple 3D</h1><button type="button" class="collapse-btn" title="Свернуть" aria-expanded="true"></button></header>
     <div class="panel-body">
-    <label class="server-line">Сервер OSM <select id="server-select" title="Откуда загружать данные для редактирования и куда отправлять"></select></label>
+    <label class="server-line">Сервер <select id="server-select" title="Откуда загружать данные для редактирования и куда отправлять"></select></label>
     <label class="toggle"><input id="mono-toggle" type="checkbox" /> Убрать цвета</label>
     <label class="toggle" title="Правая или средняя кнопка мыши, либо Ctrl + левая"><input id="orbit-toggle" type="checkbox" /> Вращение вокруг точки под курсором</label>
     <details id="gfx" class="gfx">

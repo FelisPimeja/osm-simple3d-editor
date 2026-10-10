@@ -162,6 +162,13 @@ export class OverpassTiles {
   private extras: () => Feature3D[] = () => [];
   setExtras(fn: () => Feature3D[]) { this.extras = fn; }
 
+  /** Какие объекты рисовать (фильтр по дате OHM); смена — перерисовка показанных тайлов. */
+  private visible: (f: Feature3D) => boolean = () => true;
+  setFeatureFilter(fn: (f: Feature3D) => boolean) {
+    this.visible = fn;
+    for (const key of this.layer.groupKeys()) this.show(key);
+  }
+
   /** Перерисовать нарисованные тайлы (появился или исчез созданный объект). */
   rerender() {
     for (const key of this.layer.groupKeys()) if (this.cache.get(key)?.state === 'ready') this.show(key);
@@ -409,8 +416,9 @@ export class OverpassTiles {
         if (cur?.state === 'ready' && cur.partial) this.cache.delete(key);
         return;
       }
-      // Перегрузка или лимит сервера — повторим позже, сервер «остынет»
-      const busy = err instanceof ApiError && [429, 503, 509].includes(err.status);
+      // Перегрузка или лимит сервера — повторим позже, сервер «остынет». Сетевая ошибка (TypeError) — тоже:
+      // отказ по лимиту без CORS-заголовков (так отвечает OpenGeofiction) браузер отдаёт именно так
+      const busy = (err instanceof ApiError && [429, 503, 509].includes(err.status)) || err instanceof TypeError;
       result = busy ? 'busy' : 'error';
       console.warn(`OSM API ${key}${refreshing ? ' (обновление)' : ''}:`, (err as Error).message);
       if (refreshing) {
@@ -556,12 +564,12 @@ export class OverpassTiles {
     const own = this.cache.get(key);
     if (own?.state !== 'ready') return { features: [], hidden: '' };
     // Удалённые в сессии (overlay отдаёт их без геометрии) — не рисуем
-    const ownFeatures = [...own.features.map(this.overlay), ...this.extras()].filter((f) => f.polygons.length);
+    const ownFeatures = [...own.features.map(this.overlay), ...this.extras()].filter((f) => f.polygons.length && this.visible(f));
     const union = new Map<string, Feature3D>();
     for (const f of ownFeatures) union.set(f.key, f); // свои объекты — первыми: их hasParts и пойдёт в рендер
     for (const n of neighbours(key)) {
       const e = this.cache.get(n);
-      if (e?.state === 'ready') for (const f of e.features) if (!union.has(f.key)) { const o = this.overlay(f); if (o.polygons.length) union.set(f.key, o); }
+      if (e?.state === 'ready') for (const f of e.features) if (!union.has(f.key)) { const o = this.overlay(f); if (o.polygons.length && this.visible(o)) union.set(f.key, o); }
     }
     // Пересчитываем только свои здания — части берём из всех девяти тайлов
     timed('overpass: части у контуров', () => markOutlinesWithParts([...union.values()], ownFeatures), () => `${key}, ${union.size} объектов`);

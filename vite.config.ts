@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 import { defineConfig, type Plugin } from 'vite';
 
 /**
@@ -25,9 +26,11 @@ function maplibreWorker(): Plugin {
 // base: './' — чтобы сборка работала из подпапки на GitHub Pages.
 // maplibre-gl исключён из pre-bundling: иначе ломается загрузка его web worker.
 // oauth.html — страница возврата из OAuth (redirect_uri), отдельная точка входа сборки.
+// HTTPS=1 (npm run dev:https) — dev-сервер по https с самоподписанным сертификатом: OpenGeofiction
+// принимает только https-адреса возврата OAuth (https://localhost:5173/oauth.html).
 export default defineConfig({
   base: './',
   optimizeDeps: { exclude: ['maplibre-gl'] },
   build: { rollupOptions: { input: { main: 'index.html', oauth: 'oauth.html' } } },
-  plugins: [maplibreWorker()],
+  plugins: [maplibreWorker(), ...(process.env.HTTPS ? [basicSsl()] : [])],
 });

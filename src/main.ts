@@ -9,6 +9,7 @@ import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, server, setServer, type ServerId } from './osm/servers';
+import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
@@ -36,7 +37,6 @@ import { timed } from './perf';
 import { bindTagForms, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 
-const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const BUILDINGS_LAYER = 'simple3d-buildings';
 const REMAINDERS_LAYER = 'simple3d-outline-remainders';
 const MERGED_LAYER = 'simple3d-merged-exploded';
@@ -89,7 +89,7 @@ const map = new maplibregl.Map({
   container: 'map',
   // MSAA задаётся только при создании контекста — переключение требует перезагрузки
   canvasContextAttributes: { antialias: gfx.antialias },
-  style: STYLE_URL,
+  style: server().style, // подложка — своя у каждого сервера; смена сервера с другой подложкой перезагружает страницу
   // Shift+клик — множественное выделение; зум рамкой с Shift перехватывал бы клик
   boxZoom: false,
   center: [37.6205, 55.7535],
@@ -216,7 +216,8 @@ map.on('load', () => {
     'fill-extrusion-opacity': 0.9,
   };
 
-  map.addLayer({
+  // Здания из тайлов OpenFreeMap — только для серверов OSM; у OGF и OHM здания лишь из данных API
+  if (server().tileBuildings) map.addLayer({
     id: BUILDINGS_LAYER,
     type: 'fill-extrusion',
     source: 'openmaptiles',
@@ -255,7 +256,7 @@ map.on('load', () => {
     paint: { ...extrusion, 'fill-extrusion-color': '#ff7a00' },
   });
 
-  map.addLayer({
+  if (server().tileBuildings) map.addLayer({
     id: HIGHLIGHT_LAYER,
     type: 'fill-extrusion',
     source: 'openmaptiles',
@@ -267,6 +268,7 @@ map.on('load', () => {
 
   map.addLayer(overpassLayer);
   overpass.setSource(tileSource());
+  applyDate();
   refreshOverpass();
 });
 
@@ -438,6 +440,7 @@ function explodeMerged(features: TileBuildingFeature[]): GeoJSON.Feature<GeoJSON
 let lastFilterSig = '';
 
 function updateTileFilter() {
+  if (!map.getLayer(BUILDINGS_LAYER)) return; // сервер без тайловых зданий
   const notIn = (ids: number[]): ExpressionSpecification => ['!', ['in', ['id'], ['literal', ids]]];
   const hiddenIds = [...userHidden].map(Number).filter(Number.isFinite);
   // Тайлы, здания которых уже нарисованы из данных API
@@ -577,7 +580,7 @@ map.on('click', (e) => {
   if (select(resolveClick(key))) return;
   const f = queryTileLayers(e.point)[0];
   infoEl.innerHTML = f ? describeTile(f) : '';
-  map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], f?.layer.id === MERGED_LAYER ? -1 : f?.id ?? -1]);
+  if (map.getLayer(HIGHLIGHT_LAYER)) map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], f?.layer.id === MERGED_LAYER ? -1 : f?.id ?? -1]);
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], f?.layer.id === MERGED_LAYER ? f.properties.key : '']);
   if (f) resolveTileFeature(f);
 });
@@ -678,6 +681,7 @@ async function openEditLink() {
       overpassLayer.setFocus(undefined);
       for (const { id, visibility } of focusHiddenLayers) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility as 'visible' | 'none');
       focusHiddenLayers = [];
+      setFocusBackground(false);
       setStatus(`${key}: здание не найдено в загруженных данных.`, true);
     }
   };
@@ -730,8 +734,27 @@ function outlineCovered(g: BuildingGroup, key: string): boolean {
 }
 
 /** Скрыть слои карты на время режима здания (запоминая, как было); уже скрыты (ссылка на здание) — не трогать. */
+/** Фон сцены режима здания: у OHM фон стиля — цвет воды (суша — отдельным слоем), берём нейтральный. */
+const FOCUS_BACKGROUND = '#f8f4f0';
+let savedBackgrounds: { id: string; color: unknown }[] = [];
+
+function setFocusBackground(on: boolean) {
+  if (on && !savedBackgrounds.length) {
+    for (const l of map.getStyle().layers) {
+      if (l.type !== 'background') continue;
+      savedBackgrounds.push({ id: l.id, color: map.getPaintProperty(l.id, 'background-color') });
+      map.setPaintProperty(l.id, 'background-color', FOCUS_BACKGROUND);
+    }
+  }
+  if (!on) {
+    for (const { id, color } of savedBackgrounds) if (map.getLayer(id)) map.setPaintProperty(id, 'background-color', color as string);
+    savedBackgrounds = [];
+  }
+}
+
 function hideMapLayers() {
   if (focusHiddenLayers.length) return;
+  setFocusBackground(true);
   for (const l of map.getStyle().layers) {
     if (l.id === overpassLayer.id || l.type === 'background') continue;
     const pending = pendingTileLayers.find((p) => p.id === l.id);
@@ -890,6 +913,7 @@ function exitFocus() {
   const tileLayers = pendingTileLayers = focusHiddenLayers.filter((l) => TILE_LAYERS.includes(l.id));
   restore(focusHiddenLayers.filter((l) => !TILE_LAYERS.includes(l.id)));
   focusHiddenLayers = [];
+  setFocusBackground(false);
   map.once('idle', () => {
     if (focus || pendingTileLayers !== tileLayers) return; // успели снова войти в режим здания — вернёт следующий выход
     pendingTileLayers = [];
@@ -2577,7 +2601,7 @@ function clearSelection() {
 }
 
 function clearTileHighlight() {
-  map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], -1]);
+  if (map.getLayer(HIGHLIGHT_LAYER)) map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], -1]);
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], '']);
 }
 
@@ -4085,7 +4109,7 @@ function renderAccount() {
   accountEl.innerHTML = osmUser
     ? `<a href="${s.web}/user/${encodeURIComponent(osmUser.name)}" target="_blank" rel="noopener">${esc(osmUser.name)}</a> ·
        <button type="button" class="link-btn" data-logout ${uploading ? 'disabled' : ''}>выйти</button>`
-    : `<button type="button" class="login-btn" data-login ${uploading ? 'disabled' : ''}>Войти в OSM</button>`;
+    : `<button type="button" class="login-btn" data-login ${uploading ? 'disabled' : ''}>Войти в ${server().short}</button>`;
 }
 
 /** Предложенный комментарий: показывается серым в пустом поле, Tab вставляет его для правки. */
@@ -4125,9 +4149,9 @@ function renderUpload(count: number): string {
     <div class="upload">
       <label class="upload-label" for="upload-comment">Комментарий к пакету правок</label>
       <textarea id="upload-comment" data-comment rows="${rows}" placeholder="${esc(suggestedComment)}" ${uploading ? 'disabled' : ''}>${esc(uploadComment)}</textarea>
-      <button type="button" class="upload-btn" data-upload ${canUpload ? '' : 'disabled'}>${uploading ? 'Отправка…' : `Сохранить в OSM (${count})`}</button>
-      <div class="upload-meta"><span>${osmUser ? commentHint() : 'для отправки войдите в OSM'}</span>
-        <span class="server-tag${s.id === 'prod' ? ' prod' : ''}" title="${esc(s.label)}">${s.id === 'prod' ? 'боевой сервер' : 'тестовый сервер'}</span></div>
+      <button type="button" class="upload-btn" data-upload ${canUpload ? '' : 'disabled'}>${uploading ? 'Отправка…' : `Сохранить в ${s.short} (${count})`}</button>
+      <div class="upload-meta"><span>${osmUser ? commentHint() : `для отправки войдите в ${s.short}`}</span>
+        <span class="server-tag${s.id === 'dev' ? '' : ' prod'}" title="${esc(s.label)}">${s.id === 'dev' ? 'тестовый сервер' : s.id === 'prod' ? 'боевой сервер' : s.short}</span></div>
     </div>`;
 }
 
@@ -4295,7 +4319,10 @@ serverSelect.addEventListener('change', () => {
     serverSelect.value = server().id;
     return;
   }
+  const style = server().style;
   setServer(serverSelect.value as ServerId);
+  // Другая подложка (и наличие тайловых зданий) — проще начать заново: стиль задаётся при создании карты
+  if (server().style !== style) return void location.reload();
   // Данные — с выбранного сервера: правки прежнего к нему не относятся
   session = new EditSession([], onSessionChange);
   editGroups = new Map();
@@ -4304,6 +4331,121 @@ serverSelect.addEventListener('change', () => {
   if (map.getLayer(overpassLayer.id)) overpass.setSource(tileSource()); // до загрузки стиля — в обработчике load
   renderChanges();
   void refreshUser();
+});
+
+/**
+ * Фильтр по дате для OpenHistoricalMap (панель внизу, по образцу openhistoricalmap.org, компактнее):
+ * границы шкалы (с … по), текущий год ползунком и воспроизведение — год шагает на «шаг» раз в «скорость».
+ * Показываются объекты, существовавшие в текущем году. В адресе — &date=1850 (как на сайте OHM);
+ * границы шкалы, шаг и скорость — в localStorage. Фильтруются и подложка (start_decdate/end_decdate тайлов),
+ * и здания из API (start_date/end_date).
+ */
+const DATE_KEY = 'osm3d.ohm-time';
+const thisYear = new Date().getFullYear();
+interface OhmTime { year: number; from: number; to: number; step: number; speed: number }
+const ohm: OhmTime = (() => {
+  const d: OhmTime = { year: thisYear, from: thisYear - 200, to: thisYear, step: 10, speed: 1000 };
+  try { Object.assign(d, JSON.parse(localStorage.getItem(DATE_KEY) ?? '{}')); } catch { /* по умолчанию */ }
+  const y = Number(new URLSearchParams(location.search).get('date'));
+  if (Number.isFinite(y) && y !== 0) d.year = Math.round(y);
+  if (d.year < d.from) d.from = d.year;
+  if (d.year > d.to) d.to = d.year;
+  return d;
+})();
+
+const datePanel = document.getElementById('date-panel')!;
+const dateYear = document.getElementById('date-year') as HTMLInputElement;
+const dateSlider = document.getElementById('date-slider') as HTMLInputElement;
+const dateFrom = document.getElementById('date-from') as HTMLInputElement;
+const dateTo = document.getElementById('date-to') as HTMLInputElement;
+const dateStep = document.getElementById('date-step') as HTMLSelectElement;
+const dateSpeed = document.getElementById('date-speed') as HTMLSelectElement;
+const datePlay = datePanel.querySelector<HTMLButtonElement>('[data-play]')!;
+let playTimer: ReturnType<typeof setInterval> | undefined;
+
+function saveOhm() { try { localStorage.setItem(DATE_KEY, JSON.stringify(ohm)); } catch { /* не критично */ } }
+
+/** Поля панели по состоянию (без перерисовки карты). */
+function showDateControls(year = ohm.year) {
+  dateYear.value = String(year);
+  dateSlider.min = dateFrom.value = String(ohm.from);
+  dateSlider.max = dateTo.value = String(ohm.to);
+  dateSlider.value = String(year);
+  dateStep.value = String(ohm.step);
+  dateSpeed.value = String(ohm.speed);
+  datePlay.classList.toggle('playing', !!playTimer);
+  datePlay.title = playTimer ? 'Пауза' : 'Воспроизвести';
+}
+
+function applyDate() {
+  const on = server().id === 'ohm';
+  datePanel.hidden = !on;
+  if (!on) stopPlay();
+  showDateControls();
+  const url = new URL(location.href);
+  if (on) url.searchParams.set('date', String(ohm.year)); else url.searchParams.delete('date');
+  if (url.href !== location.href) history.replaceState(history.state, '', url);
+  const span = on ? yearsSpan(ohm.year, ohm.year) : undefined;
+  if (map.getSource('ohm')) applyBasemapDate(map, 'ohm', span);
+  overpass.setFeatureFilter(span === undefined ? () => true : (f) => existsIn(f.tags, span));
+}
+
+function setYear(y: number) {
+  if (!Number.isFinite(y) || y === 0) return showDateControls();
+  y = Math.round(y);
+  // Год за границами шкалы — шкала расширяется до него
+  ohm.from = Math.min(ohm.from, y);
+  ohm.to = Math.max(ohm.to, y);
+  if (y === ohm.year) return showDateControls();
+  ohm.year = y;
+  saveOhm();
+  applyDate();
+}
+
+function setBounds(from: number, to: number) {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return showDateControls();
+  ohm.from = Math.round(from);
+  ohm.to = Math.round(to);
+  saveOhm();
+  setYear(Math.min(ohm.to, Math.max(ohm.from, ohm.year)));
+  showDateControls();
+}
+
+function stopPlay() {
+  if (playTimer) clearInterval(playTimer);
+  playTimer = undefined;
+  showDateControls();
+}
+
+/** Воспроизведение: с конца шкалы — с начала; на конце — стоп. */
+function startPlay() {
+  if (ohm.year >= ohm.to) setYear(ohm.from);
+  playTimer = setInterval(() => {
+    const next = Math.min(ohm.to, ohm.year + ohm.step);
+    setYear(next);
+    if (next >= ohm.to) stopPlay();
+  }, ohm.speed);
+  showDateControls();
+}
+
+datePanel.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
+  if (!b) return;
+  if (b.dataset.play !== undefined) return playTimer ? stopPlay() : startPlay();
+  if (b.dataset.back !== undefined) setYear(Math.max(ohm.from, ohm.year - ohm.step));
+  if (b.dataset.fwd !== undefined) setYear(Math.min(ohm.to, ohm.year + ohm.step));
+});
+// Ползунок: при движении — только подпись, перерисовка по отпусканию (тайлы перестраиваются не мгновенно)
+dateSlider.addEventListener('input', () => { dateYear.value = dateSlider.value; });
+dateSlider.addEventListener('change', () => setYear(Number(dateSlider.value)));
+dateYear.addEventListener('change', () => setYear(Number(dateYear.value)));
+dateFrom.addEventListener('change', () => setBounds(Number(dateFrom.value), ohm.to));
+dateTo.addEventListener('change', () => setBounds(ohm.from, Number(dateTo.value)));
+dateStep.addEventListener('change', () => { ohm.step = Number(dateStep.value); saveOhm(); });
+dateSpeed.addEventListener('change', () => {
+  ohm.speed = Number(dateSpeed.value);
+  saveOhm();
+  if (playTimer) { stopPlay(); startPlay(); }
 });
 
 /** Источник тайлов для текущего сервера: его /map API (свой кеш; у боевого — прежняя база кеша). */
@@ -4436,7 +4578,7 @@ async function resolveTileFeature(f: MapGeoJSONFeature) {
   const out = (html: string) => { if (seq === resolveSeq) document.getElementById('resolved')!.innerHTML = html; };
   if ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) > MAX_API_AREA) return out('Фича слишком большая для запроса к API.');
   try {
-    const { features } = parseBuildings(await fetchMap(bbox, SERVERS.prod.api)); // id тайлов — боевые
+    const { features } = parseBuildings(await fetchMap(bbox, server().id === 'dev' ? SERVERS.prod.api : server().api)); // у тестового сервера тайлы боевые
     const h = f.properties.render_height ?? Infinity, min = f.properties.render_min_height ?? 0;
     const matches = features.filter((o) => {
       if (o.hasParts) return false;
@@ -4453,7 +4595,7 @@ async function resolveTileFeature(f: MapGeoJSONFeature) {
   }
 }
 
-const osmLink = (type: string, id: number) => `<a href="https://www.openstreetmap.org/${type}/${id}" target="_blank" rel="noopener">${type}/${id}</a>`;
+const osmLink = (type: string, id: number) => `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${type}/${id}</a>`;
 const fmt = (n: number) => String(Math.round(n * 10) / 10);
 function esc(s: unknown): string { return String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`); }
 const tagTable = (tags: Record<string, unknown>) =>

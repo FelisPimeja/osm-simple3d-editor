@@ -12,6 +12,8 @@ type V3 = [number, number, number];
 export interface BuildingTriangles {
   walls: number[];
   roof: number[];
+  /** С какого индекса в walls идут стены крыши (фронтоны), а не фасад; нет — фронтонов не выделяли. */
+  gableStart?: number;
   /** Форма крыши не поддерживается для этой геометрии и заменена плоской. */
   roofApproximated: boolean;
   /** Скелет ещё считается в воркере — крыша временно упрощённая, здание надо будет пересобрать. */
@@ -69,6 +71,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   for (const p of polygons) {
     for (const ring of [p.outer, ...p.inners]) addWalls(walls, ring, h.min, wallTop);
   }
+  const gableStart = walls.length;
 
   if (!supported || shape === 'flat') {
     for (const p of polygons) addFlat(roof, p, wallTop);
@@ -92,7 +95,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
     for (const sk of skeletons!) addSkeletonRoof(roof, walls, sk as Skeleton, h.wallTop, h.roofHeight, GABLED_SHAPES.has(shape), PROFILES[shape]);
   }
 
-  return { walls, roof, roofApproximated: !supported && !pending, pending };
+  return { walls, roof, gableStart, roofApproximated: !supported && !pending, pending };
 }
 
 function tri(out: number[], a: V3, b: V3, c: V3) {

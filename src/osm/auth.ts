@@ -1,4 +1,4 @@
-import { server, type OsmServer } from './servers';
+import { CLIENT_ID_ENV, server, type OsmServer } from './servers';
 
 /**
  * OAuth 2.0 Authorization Code + PKCE без бэкенда.
@@ -39,7 +39,7 @@ async function challenge(verifier: string): Promise<string> {
 
 export async function login(s: OsmServer = server()): Promise<string> {
   if (!s.clientId) {
-    throw new Error(`Не задан client_id для сервера «${s.label}» (VITE_OSM${s.id === 'dev' ? '_DEV' : ''}_CLIENT_ID в .env.local).`);
+    throw new Error(`Не задан client_id для сервера «${s.label}» (${CLIENT_ID_ENV[s.id]} в .env.local).`);
   }
   const verifier = randomString();
   const state = randomString();

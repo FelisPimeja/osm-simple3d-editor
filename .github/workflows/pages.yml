@@ -31,6 +31,8 @@ jobs:
         env:
           VITE_OSM_CLIENT_ID: ${{ vars.VITE_OSM_CLIENT_ID }}
           VITE_OSM_DEV_CLIENT_ID: ${{ vars.VITE_OSM_DEV_CLIENT_ID }}
+          VITE_OGF_CLIENT_ID: ${{ vars.VITE_OGF_CLIENT_ID }}
+          VITE_OHM_CLIENT_ID: ${{ vars.VITE_OHM_CLIENT_ID }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

@@ -2430,9 +2430,10 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     const rest = subtractFaces(polys, faces), covered = rest && coveredBy(polys, faces);
     if (rest && covered) { tri.roof = bottomTriangles(rest, heights.wallTop); joint = bottomTriangles(covered, heights.wallTop); }
   }
-  // building:part=roof принято рисовать одной крышей: без фасада, фронтонов и дна (навесы, крыши над пустотой)
+  // building:part=roof принято рисовать одной крышей: без фасада и дна (навесы, крыши над пустотой);
+  // фронтоны (торцы двускатной) — часть крыши, их оставляем
   const roofOnly = !flat && tags['building:part'] === 'roof' && tri.roof.length > 0;
-  if (roofOnly) tri.walls = [];
+  if (roofOnly) tri.walls = tri.gableStart === undefined ? [] : tri.walls.slice(tri.gableStart);
   // Дно — у объектов с объёмом над землёй (видно снизу); на земле его не видно — треугольники не тратим. Цвет — как у стен.
   // Участки, лежащие на плоских крышах других частей, вырезаем: совпадающие грани мерцают, а дно стеклянной части
   // просвечивает поверх крыши. Крышу оставляем — она и есть перекрытие между частями (видна сквозь стекло)

@@ -135,6 +135,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 #op-indicator[data-state="ready"] .dot { background: #16a34a; }
 #op-indicator[data-state="loading"] .dot { background: #2563eb; animation: op-pulse 1s ease-in-out infinite; }
 #op-indicator[data-state="waiting"] .dot { background: #f59e0b; }
+#op-indicator[data-state="down"] .dot { background: #dc2626; animation: op-pulse 1.6s ease-in-out infinite; }
+#op-indicator[data-state="down"] { background: #fef2f2; color: #991b1b; }
 #op-indicator[data-state="waiting"] { background: #fff7ed; color: #9a3412; }
 #op-indicator .retry { border: 1px solid #f59e0b; background: #fff; color: #9a3412; border-radius: 10px; padding: 1px 8px; font: inherit; cursor: pointer; }
 #op-indicator .retry[hidden] { display: none; }
@@ -385,3 +387,15 @@ body.mobile #right-col { bottom: calc(72px + env(safe-area-inset-bottom)); }
 .dp-slider { flex: 1; min-width: 60px; margin: 0; accent-color: #2563eb; }
 body.mobile #date-panel { width: auto; left: 12px; right: 12px; transform: none; min-width: 0; }
 body.mobile .dp-opt { display: none; }
+
+/* Карточка загрузки по центру (открытие здания по ссылке): что сейчас происходит */
+#loading-card {
+  position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 4; max-width: calc(100% - 32px); box-sizing: border-box;
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 10px;
+  background: rgba(255,255,255,.96); box-shadow: 0 2px 12px rgba(0,0,0,.2); font-size: 14px; color: #1f2937;
+}
+#loading-card[hidden] { display: none; }
+#loading-card.down { color: #991b1b; }
+#loading-card .spinner { flex: none; width: 16px; height: 16px; border: 2px solid #bfdbfe; border-top-color: #2563eb; border-radius: 50%; animation: spin .8s linear infinite; }
+#loading-card.down .spinner { border-color: #fecaca; border-top-color: #dc2626; }
+@keyframes spin { to { transform: rotate(360deg); } }

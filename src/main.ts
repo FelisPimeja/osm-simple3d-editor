@@ -8,7 +8,7 @@ import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
-import { SERVERS, server, setServer, type ServerId } from './osm/servers';
+import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
@@ -648,41 +648,75 @@ let linkLevel: number | undefined = (() => {
   return v !== null && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined;
 })();
 
+/** Сервер данных не отвечает: последний запрос к нему не дошёл (успешный ответ снимает признак). */
+const serverDown = () => overpass.pool.endpoints.some((e) => e.unreachable);
+
+/** Карточка по центру: что сейчас происходит (открытие здания по ссылке). undefined — убрать. */
+const loadingCard = document.getElementById('loading-card')!;
+function showLoading(text: string | undefined, down = false) {
+  loadingCard.hidden = text === undefined;
+  loadingCard.classList.toggle('down', down);
+  if (text !== undefined) loadingCard.querySelector('.text')!.textContent = text;
+}
+
 /** Открыть здание из ссылки ?edit=: без хэша — подлёт к объекту, вход — когда он появится в данных тайлов. */
 async function openEditLink() {
   const m = new URLSearchParams(location.search).get('edit')?.match(/^([wr])(\d+)$/);
   if (!m) return;
   const type = m[1] === 'w' ? 'way' : 'relation', key = `${type}/${m[2]}`;
   const linked = startHash.length >= 3 && startHash.every(Number.isFinite);
+  const what = `${type === 'way' ? 'Линия' : 'Отношение'} ${m[2]}`;
   if (!linked) {
+    showLoading(`${what}: ищу объект на сервере ${server().short}…`);
     try {
-      const res = await fetch(`${server().api}/${type}/${m[2]}/full.json`);
-      if (!res.ok) throw new Error(`OSM API ${res.status}`);
-      const nodes = ((await res.json()) as { elements: OsmElement[] }).elements.filter((e): e is OsmNode => e.type === 'node');
+      const full = async (t: string, id: number | string) => {
+        const res = await fetch(`${server().api}/${t}/${id}/full.json`);
+        if (!res.ok) throw new Error(`API ${res.status}`);
+        return ((await res.json()) as { elements: OsmElement[] }).elements;
+      };
+      const elements = await full(type, m[2]);
+      let nodes = elements.filter((e): e is OsmNode => e.type === 'node');
+      // full.json не раскрывает вложенные отношения: здание из частей-мультиполигонов приходит без узлов —
+      // берём узлы нескольких вложенных отношений (для подлёта хватит)
+      if (!nodes.length) {
+        const subs = elements.filter((e) => e.type === 'relation' && e.id !== Number(m[2])).slice(0, 5);
+        nodes = (await Promise.all(subs.map((e) => full('relation', e.id)))).flat().filter((e): e is OsmNode => e.type === 'node');
+      }
       if (!nodes.length) throw new Error('нет узлов');
       const lon = nodes.map((n) => n.lon), lat = nodes.map((n) => n.lat);
       map.fitBounds([[Math.min(...lon), Math.min(...lat)], [Math.max(...lon), Math.max(...lat)]], { padding: 80, maxZoom: 18, pitch: map.getPitch(), bearing: map.getBearing(), duration: 0 });
     } catch (err) {
       setEditParam(undefined);
+      showLoading(undefined);
       return setStatus(`Ссылка на ${key}: объект не загрузился (${(err as Error).message}).`, true);
     }
   }
-  const deadline = Date.now() + 60_000;
+  // «Не найдено» — только когда все участки карты загрузились (плюс пауза: отношение собирается из соседних тайлов),
+  // а здания так и нет; медленный сервер ждём, но не бесконечно
+  const hardDeadline = Date.now() + 300_000;
+  let loadedSince: number | undefined;
   const tryEnter = () => {
-    if (focus) return clearInterval(timer);
-    if (!map.getLayer(overpassLayer.id)) return; // стиль и слой зданий ещё не готовы
+    if (focus) { showLoading(undefined); return clearInterval(timer); }
+    if (!map.getLayer(overpassLayer.id)) return showLoading(`${what}: загружаю карту…`); // стиль и слой зданий ещё не готовы
+    const { ready, total, loading, waiting } = overpass.status();
+    loadedSince = total && !loading && !waiting ? loadedSince ?? Date.now() : undefined;
+    if (serverDown()) showLoading(`Сервер ${server().short} не отвечает — повторяю…`, true);
+    else if (loadedSince !== undefined) showLoading(`${what}: собираю здание из частей…`);
+    else showLoading(`${what}: загружаю данные здания${total ? ` (${ready} из ${total} участков карты)` : ''}…`);
     // Карту не показываем вовсе: пустая сцена режима здания, пока здание не пришло
     if (!focusHiddenLayers.length) { hideMapLayers(); overpassLayer.setFocus([]); }
     const g = type === 'relation' ? (groupOf(key)?.key === key ? groupOf(key) : soloGroup(key)) : groupOf(key) ?? soloGroup(key);
     // Отношение может прийти с соседним тайлом раньше своих частей — ждём, пока появится хоть одна
     if (g && groupFeatures(g).length) {
       clearInterval(timer);
+      showLoading(undefined);
       enterFocus(g, !linked);
       // Ракурс ссылки: наклон вне режима здания урезан, в режиме здания он снова допустим
       if (linked) map.jumpTo({ center: [startHash[2], startHash[1]], zoom: startHash[0], bearing: startHash[3] || 0, pitch: Math.min(startHash[4] || 0, map.getMaxPitch()) });
     }
-    else if (Date.now() > deadline) {
+    else if ((loadedSince !== undefined && Date.now() - loadedSince > 10_000) || Date.now() > hardDeadline) {
       clearInterval(timer);
+      showLoading(undefined);
       setEditParam(undefined);
       overpassLayer.setFocus(undefined);
       for (const { id, visibility } of focusHiddenLayers) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility as 'visible' | 'none');
@@ -2614,15 +2648,18 @@ function clearTileHighlight() {
 /** Минимальный индикатор загрузки данных в углу карты: точка цвета состояния + счётчик тайлов. */
 function updateOverpassIndicator() {
   const { ready, total, loading, waiting } = overpass.status();
-  const state = !overpass.enabled ? 'off' : loading ? 'loading' : waiting ? 'waiting' : 'ready';
+  // Сервер не отвечает (таймаут, обрыв): запросы до него не доходят — отдельное состояние, повторы идут сами
+  const down = serverDown();
+  const state = !overpass.enabled ? 'off' : down && (loading || waiting) ? 'down' : loading ? 'loading' : waiting ? 'waiting' : 'ready';
   opIndicator.dataset.state = state;
   opIndicator.hidden = state === 'off';
   const src = overpass.sourceLabel;
   opIndicator.querySelector('.label')!.textContent = {
     off: '',
-    loading: `Черновик из тайлов — загружаю точную геометрию (${src} ${ready}/${total})…`,
-    waiting: `Не удалось получить часть данных (${src} ${ready}/${total})`,
-    ready: `${src} ${ready}/${total}`,
+    down: `Сервер ${server().short} не отвечает — повторяю…`,
+    loading: `Загружаю данные зданий: ${ready} из ${total} участков карты…`,
+    waiting: `Не удалось загрузить ${total - ready} из ${total} участков карты`,
+    ready: `Данные загружены (${ready} из ${total})`,
   }[state];
   opIndicator.querySelector<HTMLButtonElement>('.retry')!.hidden = state !== 'waiting';
   const servers = overpass.pool.endpoints
@@ -2630,8 +2667,9 @@ function updateOverpassIndicator() {
     .join('\n');
   opIndicator.title = {
     off: '',
-    loading: `Загружается тайлов: ${loading}`,
-    waiting: `Ждут повтора: ${waiting} (лимит или ошибка OSM API, подробности в консоли)`,
+    down: `${server().web} не отвечает (таймаут или обрыв соединения); запросы повторяются раз в 30 с`,
+    loading: `Пока данные не пришли, здания — черновик из векторных тайлов. Загружается тайлов (${src}): ${loading}`,
+    waiting: `Ждут повтора: ${waiting} (лимит или ошибка API ${server().short}, подробности в консоли)`,
     ready: 'Все видимые тайлы загружены',
   }[state] + (state === 'off' ? '' : `\n${describeFreshness()}\n\n${servers}`);
 }
@@ -2665,7 +2703,7 @@ function updateDraftStyle() {
 /** Откуда и когда получены видимые тайлы — чтобы было видно, что на экране старые или неполные данные. */
 function describeFreshness(): string {
   const f = overpass.freshness();
-  const parts = [f.overpass && `из Overpass (старый кеш): ${f.overpass}`, f.api && `из OSM API: ${f.api}`, f.unknown && `источник неизвестен: ${f.unknown}`].filter(Boolean);
+  const parts = [f.overpass && `из Overpass (старый кеш): ${f.overpass}`, f.api && `из API ${server().short}: ${f.api}`, f.unknown && `источник неизвестен: ${f.unknown}`].filter(Boolean);
   if (!parts.length) return '';
   const age = f.oldest ? ` · самый старый загружен ${formatAge(Date.now() - f.oldest)} назад` : '';
   return `Тайлы ${parts.join(', ')}${age}`;
@@ -4157,7 +4195,7 @@ function renderUpload(count: number): string {
       <textarea id="upload-comment" data-comment rows="${rows}" placeholder="${esc(suggestedComment)}" ${uploading ? 'disabled' : ''}>${esc(uploadComment)}</textarea>
       <button type="button" class="upload-btn" data-upload ${canUpload ? '' : 'disabled'}>${uploading ? 'Отправка…' : `Сохранить в ${s.short} (${count})`}</button>
       <div class="upload-meta"><span>${osmUser ? commentHint() : `для отправки войдите в ${s.short}`}</span>
-        <span class="server-tag${s.id === 'dev' ? '' : ' prod'}" title="${esc(s.label)}">${s.id === 'dev' ? 'тестовый сервер' : s.id === 'prod' ? 'боевой сервер' : s.short}</span></div>
+        <span class="server-tag${s.id === 'dev' ? '' : ' prod'}" title="${esc(s.label)}">${esc(s.label)}</span></div>
     </div>`;
 }
 
@@ -4317,7 +4355,7 @@ accountEl.addEventListener('click', (e) => {
 });
 
 const serverSelect = document.getElementById('server-select') as HTMLSelectElement;
-serverSelect.innerHTML = Object.values(SERVERS).map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('');
+serverSelect.innerHTML = SERVER_LIST.map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('');
 serverSelect.value = server().id;
 serverSelect.addEventListener('change', () => {
   const n = session.changes().length;
@@ -4335,6 +4373,7 @@ serverSelect.addEventListener('change', () => {
   editMemberGroup = new Map();
   clearSelection();
   if (map.getLayer(overpassLayer.id)) overpass.setSource(tileSource()); // до загрузки стиля — в обработчике load
+  applyDate();
   renderChanges();
   void refreshUser();
 });
@@ -4571,7 +4610,7 @@ function describeTile(f: MapGeoJSONFeature): string {
     ? `<p><button type="button" data-hide="${esc(hideKey)}">Скрыть${merged ? ' полигон' : ''}</button>
        ${userHidden.size ? `<button type="button" data-unhide-all>Показать все (${userHidden.size})</button>` : ''}</p>`
     : '';
-  return `<h2>Здание из тайла</h2><p>feature.id: ${id ?? '—'}${merged ? ' (полигон склеенной фичи)' : ''}<br>OSM: ${decodeTileId(id)}</p>${hideBtns}
+  return `<h2>Здание из тайла</h2><p>feature.id: ${id ?? '—'}${merged ? ' (полигон склеенной фичи)' : ''}<br>${server().short}: ${decodeTileId(id)}</p>${hideBtns}
     <p id="resolved" class="hint">Ищем объекты OSM внутри фичи…</p>${tagTable(f.properties)}`;
 }
 

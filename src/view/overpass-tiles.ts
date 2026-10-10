@@ -1,4 +1,5 @@
 import type { Map as MlMap } from 'maplibre-gl';
+import { server } from '../osm/servers';
 import { ApiError, completeRelations, fetchMapSplit, type Bbox, type OsmElement } from '../osm/api';
 import { centroid, incompleteBuildingRelations, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type IndoorFeature, type MemberWay, type Polygon } from '../osm/model';
 import { RequestPool } from '../osm/request-pool';
@@ -41,6 +42,9 @@ export interface TileSource { api: string; db: string }
  * Источники по порядку: память (LRU) → IndexedDB → OSM API (/map). Устаревшие тайлы показываются сразу,
  * а в фоне перезапрашиваются. Меши есть только у видимых тайлов.
  */
+/** Таймаут запроса четверти тайла к API: дольше — сервер считаем не отвечающим (повтор через 30 с). */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export class OverpassTiles {
   private readonly cache = new Map<string, Entry>(); // порядок вставки = LRU
   private wanted: string[] = [];
@@ -106,7 +110,7 @@ export class OverpassTiles {
   }
 
   get sourceLabel(): string {
-    return 'OSM API';
+    return `API ${server().short}`;
   }
 
   /** Перерисовать объекты (после правки тегов): берётся версия из overlay. */
@@ -372,6 +376,7 @@ export class OverpassTiles {
     if (refreshing) refreshing.refreshing = abort;
     else this.cache.set(key, { state: 'loading', abort });
     let result: 'ok' | 'busy' | 'error' | 'aborted' = 'ok';
+    let unreachable = false;
     try {
       if (!this.source) throw new Error('источник данных не задан');
       const via: TileVia = 'api';
@@ -386,7 +391,9 @@ export class OverpassTiles {
         .sort((a, b) => a.d - b.d).map((x) => x.q);
       const seen = new Map<string, OsmElement>();
       for (let i = 0; i < quads.length; i++) {
-        for (const el of await fetchMapSplit(quads[i], ep.url, abort.signal)) seen.set(`${el.type}/${el.id}`, el);
+        // Свой таймаут: браузер ждёт недоступный сервер около минуты, а индикатор «не отвечает» нужен раньше
+        const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+        for (const el of await fetchMapSplit(quads[i], ep.url, signal)) seen.set(`${el.type}/${el.id}`, el);
         if (refreshing || i === quads.length - 1) continue;
         // Промежуточный показ: без догрузки мультиполигонов на границе и без записи в кеш
         const part = timed('тайлы: разбор четверти', () => parseBuildings([...seen.values()]), (r) => `${key}, ${r.features.length} зданий`);
@@ -418,7 +425,8 @@ export class OverpassTiles {
       }
       // Перегрузка или лимит сервера — повторим позже, сервер «остынет». Сетевая ошибка (TypeError) — тоже:
       // отказ по лимиту без CORS-заголовков (так отвечает OpenGeofiction) браузер отдаёт именно так
-      const busy = (err instanceof ApiError && [429, 503, 509].includes(err.status)) || err instanceof TypeError;
+      unreachable = err instanceof TypeError || (err instanceof DOMException && err.name === 'TimeoutError');
+      const busy = (err instanceof ApiError && [429, 503, 509].includes(err.status)) || unreachable;
       result = busy ? 'busy' : 'error';
       console.warn(`OSM API ${key}${refreshing ? ' (обновление)' : ''}:`, (err as Error).message);
       if (refreshing) {
@@ -445,7 +453,7 @@ export class OverpassTiles {
       this.schedulePump(delay);
     } finally {
       if (result === 'aborted') this.reloading.delete(key);
-      this.pool.release(ep, result);
+      this.pool.release(ep, result, unreachable);
       this.pump();
       this.onChange();
     }

@@ -92,7 +92,7 @@ export function buildOsmChange(edits: { element: OsmWay | OsmRelation | (OsmNode
 
 async function call(method: string, path: string, body?: string, accept = 'text/plain'): Promise<string> {
   const token = getToken();
-  if (!token) throw new Error('Нужно войти в OSM.');
+  if (!token) throw new Error(`Нужно войти в ${server().short}.`);
   const res = await fetch(`${server().api}${path}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/xml; charset=utf-8', Accept: accept },

@@ -3256,6 +3256,7 @@ let outlinerGroups = new Map<string, string[]>();
  */
 function renderOutliner() {
   renderLevels();
+  queueMicrotask(() => renderMobileCard()); // вход в режим здания и выход — карточка мобильного режима
   outlinerPanel.hidden = !focus;
   if (!focus) { outlinerEl.innerHTML = ''; return; }
   const g = focus;
@@ -4462,3 +4463,60 @@ if (import.meta.env.DEV) Object.assign(window, { map, overpassLayer, overpass, o
 
 void openEditLink();
 renderHelp();
+
+// ——— Мобильный режим: только просмотр ———
+// Узкий экран: инструменты, свойства и правки скрыты; панель приложения и (в режиме здания) панель этажей — свёрнуты.
+// Двойного клика нет (двойной тап приближает карту): здание открывается кнопкой в карточке, которая появляется
+// по тапу на здание; в режиме здания карточка — с кнопкой «К карте».
+const mobileQuery = matchMedia('(max-width: 768px)');
+const mobileCard = document.getElementById('mobile-card')!;
+let mobile = false;
+/** Здание карточки (в режиме карты). */
+let cardGroup: BuildingGroup | undefined;
+
+function applyMobile() {
+  mobile = mobileQuery.matches;
+  document.body.classList.toggle('mobile', mobile);
+  if (mobile) {
+    setCollapsed(document.getElementById('panel')!, true);
+    setCollapsed(levelsPanel, true);
+  }
+  renderMobileCard();
+}
+mobileQuery.addEventListener('change', applyMobile);
+
+function groupName(g: BuildingGroup): string {
+  return g.tags.name ?? outlineTags(g)?.name ?? (session.get(g.members[0]) ?? overpass.findFeature(g.members[0]))?.tags.name ?? g.key;
+}
+
+function renderMobileCard() {
+  if (!mobile) { mobileCard.hidden = true; return; }
+  if (focus) {
+    mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(groupName(focus))}</div><div class="mc-hint">Режим здания · этажи — в панели «Этажи»</div></div>`
+      + '<button type="button" class="secondary" data-mc-exit>К карте</button>';
+    mobileCard.hidden = false;
+    return;
+  }
+  if (!cardGroup) { mobileCard.hidden = true; return; }
+  mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(groupName(cardGroup))}</div><div class="mc-hint">Здание в 3D, этажи</div></div>`
+    + '<button type="button" data-mc-open>Открыть здание</button>';
+  mobileCard.hidden = false;
+}
+
+mobileCard.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest('[data-mc-exit]')) { closeFocus(); cardGroup = undefined; renderMobileCard(); }
+  else if (t.closest('[data-mc-open]') && cardGroup) { const g = cardGroup; cardGroup = undefined; enterFocus(g); renderMobileCard(); }
+});
+
+// Тап по зданию — карточка; мимо — убрать
+map.on('click', (e) => {
+  if (!mobile || focus) return;
+  const key = overpassLayer.pick(e.point);
+  cardGroup = key ? groupOf(key) ?? soloGroup(key) : undefined;
+  renderMobileCard();
+});
+
+// Долгое нажатие — без контекстного меню и выделения текста
+map.getCanvasContainer().addEventListener('contextmenu', (e) => { if (mobile) e.preventDefault(); });
+applyMobile();

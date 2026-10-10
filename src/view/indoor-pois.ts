@@ -13,9 +13,12 @@ const TEMAKI = import.meta.glob('/node_modules/@rapideditor/temaki/icons/{atm,ve
 
 /** Лестница — своя (в Maki и Temaki нет). */
 const STAIRS = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg"><path d="M1 13h3.5v-3h3V7h3V4H14v2h-2v3H9v3H6v3H1z"/></svg>';
+/** Вращающаяся дверь (в Maki и Temaki нет): круг с крестом створок. */
+const REVOLVING = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg" style="fill:none;stroke:currentColor;stroke-width:1.4"><circle cx="7.5" cy="7.5" r="6"/><path d="M7.5 1.5v12M1.5 7.5h12" transform="rotate(30 7.5 7.5)"/></svg>';
 
 function icon(name: string): string | undefined {
   if (name === 'stairs') return STAIRS;
+  if (name === 'revolving-door') return REVOLVING;
   return MAKI[`/node_modules/@mapbox/maki/icons/${name}.svg`] ?? TEMAKI[`/node_modules/@rapideditor/temaki/icons/${name}.svg`];
 }
 
@@ -54,7 +57,9 @@ export function poiIcon(t: Record<string, string>): string | undefined {
   if (t.office && t.office !== 'no') return 'suitcase';
   if (t.leisure === 'fitness_centre' || t.leisure === 'sports_centre') return 'fitness-centre';
   if (t.craft) return 'hardware';
-  if (t.entrance && t.entrance !== 'no') return 'entrance';
+  // Вращающаяся дверь — своим значком; вход — стрелкой в дверь (entrance в Maki — человек на ступенях, похож на эскалатор)
+  if (t.door === 'revolving') return 'revolving-door';
+  if (t.entrance && t.entrance !== 'no') return 'entrance-alt1';
   return; // двери — проёмами в стенах, без значков
 }
 

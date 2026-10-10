@@ -346,3 +346,19 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .indoor-badge svg { width: 100%; height: 100%; display: block; }
 .levels .lv-source { display: block; color: #888; font-size: 11px; line-height: 1.5; cursor: default; border-top: 1px solid #eee; margin-top: 4px; padding-top: 6px; }
 .levels .lv-source:hover { background: transparent; }
+
+/* Мобильный режим (узкий экран): только просмотр — без инструментов, свойств и правок; сверху свёрнутая панель
+   приложения, в режиме здания — панель этажей; здание открывается из карточки по тапу */
+body.mobile #toolbars, body.mobile #help-panel, body.mobile #outliner-panel, body.mobile #info-panel,
+body.mobile #edits-panel, body.mobile #op-indicator, body.mobile #panel .server-line { display: none !important; }
+body.mobile #map { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+#mobile-card { position: absolute; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 4;
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fff; border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.18); font-size: 14px; }
+#mobile-card[hidden] { display: none; }
+#mobile-card .mc-text { flex: 1; min-width: 0; }
+#mobile-card .mc-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#mobile-card .mc-hint { color: #888; font-size: 12px; }
+#mobile-card button { flex: none; padding: 8px 12px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-size: 14px; }
+#mobile-card button.secondary { background: #eef2f7; color: #1f2937; }
+body.mobile #right-col { bottom: calc(72px + env(safe-area-inset-bottom)); }

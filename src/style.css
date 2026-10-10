@@ -399,3 +399,29 @@ body.mobile .dp-opt { display: none; }
 #loading-card .spinner { flex: none; width: 16px; height: 16px; border: 2px solid #bfdbfe; border-top-color: #2563eb; border-radius: 50%; animation: spin .8s linear infinite; }
 #loading-card.down .spinner { border-color: #fecaca; border-top-color: #dc2626; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Уведомления над картой: подсказка инструмента и всплывающие сообщения */
+#toasts {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 20;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  width: max-content; max-width: min(560px, calc(100% - 32px)); pointer-events: none;
+}
+.toast-stack { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.toast {
+  pointer-events: auto; display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 8px 6px 12px; border-radius: 8px; background: rgba(255,255,255,.96); color: #222;
+  box-shadow: 0 2px 8px rgba(0,0,0,.18); font-size: 13px; line-height: 1.35;
+  user-select: text; -webkit-user-select: text; animation: toast-in .15s ease-out;
+}
+.toast.error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+.toast a { color: inherit; }
+.toast.hint-bar { background: rgba(30,41,59,.9); color: #fff; padding: 6px 12px; }
+.toast.hint-bar.error { background: #991b1b; border: none; color: #fff; }
+.toast[hidden] { display: none; }
+.toast-close {
+  flex: none; border: none; background: none; color: inherit; opacity: .55; cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 0 2px;
+}
+.toast-close:hover { opacity: 1; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-4px); } }
+body.mobile #toasts { top: 72px; max-width: calc(100% - 112px); }

@@ -4,6 +4,7 @@ import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJS
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
+import { Toasts } from './view/toasts';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -165,6 +166,7 @@ const editsCount = document.getElementById('edits-count')!;
 /** Было ли в панели правок что показать при прошлой отрисовке: раскрываем/сворачиваем только на переходе. */
 let editsHadContent = false;
 const statusEl = document.getElementById('status')!;
+const toasts = new Toasts(map.getContainer());
 const opIndicator = document.getElementById('op-indicator')!;
 opIndicator.querySelector('.retry')!.addEventListener('click', () => overpass.retryFailed());
 const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
@@ -378,12 +380,12 @@ function showOverpassStatus() {
   updateDraftStyle();
   if (uploading) return;
   const src = overpass.sourceLabel;
-  if (!overpass.enabled) return setStatus(`Здания из тайлов. С z ≥ ${OVERPASS_MIN_ZOOM} — из ${src}.`);
+  if (!overpass.enabled) return panelStatus(`Здания из тайлов. С z ≥ ${OVERPASS_MIN_ZOOM} — из ${src}.`);
   const { ready, total, loading, waiting } = overpass.status();
   if (overpass.mode === 'cached') {
-    return setStatus(`Здания из тайлов${ready ? `, рядом с центром — из кеша ${src} (${ready} тайлов)` : ''}. С z ≥ ${OVERPASS_MIN_ZOOM} — из ${src}.`);
+    return panelStatus(`Здания из тайлов${ready ? `, рядом с центром — из кеша ${src} (${ready} тайлов)` : ''}. С z ≥ ${OVERPASS_MIN_ZOOM} — из ${src}.`);
   }
-  setStatus(`${src}: ${ready}/${total} тайлов${loading ? `, загружается ${loading}` : ''}${waiting ? `, ждут повтора ${waiting} (лимит/ошибка, см. консоль)` : ''}.`);
+  panelStatus(`${src}: ${ready}/${total} тайлов${loading ? `, загружается ${loading}` : ''}${waiting ? `, ждут повтора ${waiting} (лимит/ошибка, см. консоль)` : ''}.`);
 }
 
 // Пересчитываем контуры с частями, когда догрузились новые тайлы
@@ -767,7 +769,8 @@ function soloGroup(key: string): BuildingGroup | undefined {
 
 /** Члены группы для отрисовки: из сессии (с правками) или из тайлов. */
 function groupFeatures(g: BuildingGroup): Feature3D[] {
-  return g.members.map((k) => (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature).filter((f): f is Feature3D => !!f);
+  // Не нарисованные объёмом (подземные) — из загруженных данных
+  return g.members.map((k) => (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature ?? overpass.findFeature(k)).filter((f): f is Feature3D => !!f);
 }
 
 /** Контуры отношения без своей высоты — в режиме здания рисуются плоским полигоном. */
@@ -1070,8 +1073,7 @@ const popupEl = document.getElementById('popup')!;
 const moveTool = new MoveTool(overpassLayer, map.getContainer(), commitMove, (hint) => {
   moveBtn.classList.toggle('active', moveTool.active);
   syncCursor();
-  if (hint) setStatus(hint);
-  else showOverpassStatus();
+  toolHint(hint);
 });
 
 moveBtn.addEventListener('click', () => (moveTool.active ? moveTool.stop() : startMove()));
@@ -1081,7 +1083,7 @@ const rotateBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="rot
 const rotateTool = new RotateTool(overpassLayer, map.getContainer(), commitRotate, (hint) => {
   rotateBtn.classList.toggle('active', rotateTool.active);
   syncCursor();
-  if (hint) setStatus(hint); else showOverpassStatus();
+  toolHint(hint);
 });
 rotateBtn.addEventListener('click', () => (rotateTool.active ? rotateTool.stop() : startRotate()));
 
@@ -1105,7 +1107,7 @@ const pushTool = new PushTool(overpassLayer, map.getContainer(),
   (hint) => {
     pushBtn.classList.toggle('active', pushTool.active);
     syncCursor();
-    if (hint) setStatus(hint); else showOverpassStatus();
+    toolHint(hint);
   });
 pushBtn.addEventListener('click', () => (pushTool.active ? pushTool.stop() : startPush()));
 
@@ -1122,7 +1124,7 @@ const splitBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="spli
 const splitTool = new SplitTool(overpassLayer, splitReason, splitFeature, (hint, error) => {
   splitBtn.classList.toggle('active', splitTool.active);
   syncCursor();
-  if (hint) setStatus(hint, error); else showOverpassStatus();
+  toolHint(hint, error);
 });
 splitBtn.addEventListener('click', () => (splitTool.active ? splitTool.stop() : startSplit()));
 
@@ -1142,7 +1144,7 @@ const measureBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="me
 const measureTool = new MeasureTool(overpassLayer, map.getContainer(), (hint) => {
   measureBtn.classList.toggle('active', measureTool.active);
   syncCursor();
-  if (hint) setStatus(hint); else showOverpassStatus();
+  toolHint(hint);
 });
 measureBtn.addEventListener('click', () => (measureTool.active ? measureTool.stop() : startMeasure()));
 
@@ -1172,7 +1174,7 @@ const paintTool = new PaintTool(overpassLayer,
   (hint, error) => {
     paintBtn.classList.toggle('active', paintTool.active);
     syncCursor();
-    if (hint) setStatus(hint, error); else showOverpassStatus();
+    toolHint(hint, error);
   });
 paintBtn.addEventListener('click', () => (paintTool.active ? paintTool.stop() : startPaint()));
 
@@ -1231,7 +1233,7 @@ const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
   (hint, error) => {
     offsetBtn.classList.toggle('active', offsetTool.active);
     syncCursor();
-    if (hint) setStatus(hint, error); else showOverpassStatus();
+    toolHint(hint, error);
   });
 offsetBtn.addEventListener('click', () => (offsetTool.active ? offsetTool.stop() : startOffset()));
 
@@ -1357,7 +1359,7 @@ const drawTool = new DrawTool(overpassLayer, map.getContainer(), createDrawn, (h
   ngonBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'ngon');
   try { localStorage.setItem('ngon-sides', String(drawTool.sides)); } catch { /* нет хранилища */ }
   syncCursor();
-  if (hint) setStatus(hint, error); else showOverpassStatus();
+  toolHint(hint, error);
 });
 rectBtn.addEventListener('click', () => toggleDraw('rect'));
 polyBtn.addEventListener('click', () => toggleDraw('polygon'));
@@ -2735,9 +2737,23 @@ function formatAge(ms: number): string {
   return h < 48 ? `${h} ч` : `${Math.round(h / 24)} дн`;
 }
 
-function setStatus(text: string, error = false) {
+/** Сообщение пользователю: всплывает над картой (и дублируется в строке панели); html — ссылка и т. п. */
+function setStatus(text: string, error = false, html = '') {
+  panelStatus(text, error);
+  if (html) statusEl.insertAdjacentHTML('beforeend', ` ${html}`);
+  toasts.show(text, error, html);
+}
+
+/** Только строка состояния в панели (фоновое: загрузка тайлов) — без всплывающего сообщения. */
+function panelStatus(text: string, error = false) {
   statusEl.textContent = text;
   statusEl.classList.toggle('error', error);
+}
+
+/** Подсказка инструмента над картой; undefined — инструмент закончил. */
+function toolHint(hint: string | undefined, error = false) {
+  toasts.hint(hint, error);
+  if (hint) panelStatus(hint, error); else showOverpassStatus();
 }
 
 /** Выделить объект (или группу); false — выделять нечего. */
@@ -4277,7 +4293,7 @@ async function doUpload() {
         nodeMoves: c.nodeMoves, wayNodes: c.wayNodes, newNodes: c.newNodes, deleted: c.deleted, version: c.feature.version, polygons: c.feature.polygons,
         splitFrom: c.feature.splitFrom };
     });
-    const res = await uploadEdits(edits, uploadComment.trim(), (t) => setStatus(t));
+    const res = await uploadEdits(edits, uploadComment.trim(), (t) => { toasts.hint(t); panelStatus(t); });
     // Временные id узлов и путей → настоящие: в геометрии, членах отношений и в отправленных полигонах
     const nodeIdMap = new Map<number, number>(), wayIdMap = new Map<number, number>();
     for (const [from, to] of res.newKeys) {
@@ -4325,10 +4341,11 @@ async function doUpload() {
     uploadComment = '';
     const link = `<a href="${s.web}/changeset/${res.changeset}" target="_blank" rel="noopener">changeset ${res.changeset}</a>`;
     uploading = false;
-    setStatus(`Сохранено: ${saved.size + res.deleted.size} объектов.` + (res.rebased.size ? ` Поверх чужих правок других тегов перенесено: ${res.rebased.size}.` : ''));
-    statusEl.insertAdjacentHTML('beforeend', ` ${link}`);
+    toasts.hint(undefined);
+    setStatus(`Сохранено: ${saved.size + res.deleted.size} объектов.` + (res.rebased.size ? ` Поверх чужих правок других тегов перенесено: ${res.rebased.size}.` : ''), false, link);
   } catch (err) {
     uploading = false;
+    toasts.hint(undefined);
     if (err instanceof ConflictError) {
       setStatus(`${err.message}. Эти теги уже изменил кто-то другой — перезагрузите тайлы, отмените свои правки этих объектов и повторите.`, true);
     } else {

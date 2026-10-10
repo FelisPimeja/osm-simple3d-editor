@@ -15,7 +15,7 @@ import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
 import { inheritedTags, inheritedValue } from './osm/inherit';
-import { BuildingsLayer, setInheritance, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, setInheritance, setLevelGrid, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
@@ -2811,9 +2811,13 @@ function focusLevels(g: BuildingGroup): Level[] {
     const under = Math.max(0, Math.round(Number(t['building:levels:underground']) || 0));
     const h = computeHeights(t);
     const step = levels > minLevel ? (h.wallTop - h.min) / (levels - minLevel) : LEVEL_HEIGHT;
+    // Этаж, который описывают несколько объектов, берём у самого надёжного: часть точнее контура (контур
+    // под частями — обычно общая этажность с высотой по умолчанию), явная высота точнее этажей × 3 м;
+    // при равенстве — у объекта с большим числом этажей. Шаг у каждой части свой: первые этажи бывают выше
+    const rank = (f.kind === 'part' ? 2000 : 0) + (h.source === 'height' ? 1000 : 0) + levels;
     const add = (n: number, floor: number) => {
       const cur = byN.get(n);
-      if (!cur || levels > cur.rank) byN.set(n, { n, floor, ceil: floor + step, rank: levels });
+      if (!cur || rank > cur.rank) byN.set(n, { n, floor, ceil: floor + step, rank });
     };
     for (let n = Math.floor(minLevel); n < Math.ceil(levels); n++) add(n, h.min + (n - minLevel) * step);
     for (let n = -under; n < 0; n++) add(n, n * step);
@@ -3661,6 +3665,14 @@ setInheritance((f) => {
   return inheritedTags(f.tags, t ? [t, g.tags] : [g.tags]);
 });
 
+// Перекрытия стеклянных частей — на высотах полов из той же раскладки, что у панели «Этажи»
+setLevelGrid((f) => {
+  const g = groupOf(f.key);
+  if (!g || g.key === f.key) return;
+  const levels = focusLevels(g);
+  return levels.length ? [...new Set([...levels.map((l) => l.floor), ...levels.map((l) => l.ceil)])] : undefined;
+});
+
 /** Откуда часть наследует теги в форме: контур здания, затем само отношение. Контур сам ни от кого не наследует. */
 function inheritSources(key: string): InheritSource[] {
   const g = groupOf(key);
@@ -4118,6 +4130,12 @@ window.addEventListener('beforeunload', (e) => {
   if (session.changes().length) e.preventDefault();
 });
 
+/** building:levels не больше building:min_level — ошибка: levels считается от земли, вместе с пропущенными снизу. */
+function levelsBelowMin(t: Record<string, string>): boolean {
+  const levels = Number(t['building:levels']), min = Number(t['building:min_level']);
+  return t['building:levels'] !== undefined && t['building:min_level'] !== undefined && Number.isFinite(levels) && Number.isFinite(min) && levels <= min;
+}
+
 function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: string): string {
   const h = computeHeights(f.tags);
   const warn = [
@@ -4125,6 +4143,8 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: s
     h.source === 'default' && 'Нет height и building:levels — высота взята по умолчанию.',
     f.tags.height && f.tags['building:levels'] && Math.abs(h.top - Number(f.tags['building:levels']) * 3) > h.top * 0.5 &&
       'height и building:levels заметно расходятся.',
+    levelsBelowMin(f.tags) && `building:levels (${esc(f.tags['building:levels'])}) не больше building:min_level (${esc(f.tags['building:min_level'])}) — `
+      + 'building:levels считает этажи от земли, включая пропущенные снизу: у части с одним этажом над 15-м — min_level=15, levels=16. Этажи части не показываются.',
   ].filter(Boolean);
   return `
     <h2>${f.kind === 'part' ? 'building:part' : 'building'} — <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a>${f.version ? ` v${f.version}` : ''}</h2>

@@ -4,9 +4,9 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
-import { computeHeights } from '../osm/heights';
+import { computeHeights, type Heights } from '../osm/heights';
 import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
-import { bottomTriangles, buildTriangles, shapeOf, type Pt } from './building-geometry';
+import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
 
@@ -97,6 +97,8 @@ const FRAME_BUDGET_MS = 8;
 /** Здание внутри группы: треугольники в локальных метрах и всё, что нужно для раскраски и выбора. */
 interface Item {
   feature: Feature3D;
+  /** Ключи объектов, с которыми у него общие грани (крыша–дно): их правка требует пересборки этого. */
+  contacts: string;
   /** Теги для рисования: свои + унаследованные от контура/отношения. */
   tags: Record<string, string>;
   roofApproximated: boolean;
@@ -105,6 +107,8 @@ interface Item {
   /** Треугольники: сначала стены, потом крыша, xyz. */
   positions: Float32Array;
   wallVertices: number;
+  /** Перекрытия (плиты стеклянных частей и крыша под соседней частью) — последние вершины, после крыши. */
+  floorVertices: number;
   wall: THREE.Color;
   roof: THREE.Color;
   top: number;
@@ -140,6 +144,8 @@ class MeshGroup {
   footprint = FOOTPRINT_HEIGHT;
   /** Рисовать плоским следом независимо от высоты (голый контур в режиме здания). */
   readonly flat = new Set<string>();
+  /** Плоские верхи и дна объектов — чтобы не рисовать совпадающие грани соседних частей. */
+  contacts?: Contacts;
   /** Обводки контуров под частями (в просмотре вместо заливки). */
   strokes?: THREE.LineSegments;
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
@@ -312,6 +318,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const g = new MeshGroup([c.x, c.y]);
     g.footprint = 0; // объекты нулевой высоты — точно на своём уровне: к ним привязываются следующие
     for (const k of flat) g.flat.add(k);
+    g.contacts = buildContacts(g, features);
     for (const f of features) if (shouldRender(f)) this.addItem(g, f);
     // Земля: квадрат с запасом вокруг здания, сетка 10 м
     const [x0, y0] = g.toLocal([box.min.x, box.min.y]), [x1, y1] = g.toLocal([box.max.x, box.max.y]);
@@ -1239,6 +1246,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   setGroup(key: string, features: Feature3D[], center: LonLat): RenderedFeature[] {
     this.pending.delete(key);
     const g = new MeshGroup(center);
+    g.contacts = buildContacts(g, features);
     timed(`${this.id}: треугольники (синхронно)`, () => { for (const f of features) if (shouldRender(f)) this.addItem(g, f); }, () => `${key}, ${features.length}`);
     this.install(key, g);
     return g.items.map(rendered);
@@ -1253,6 +1261,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.pending.set(key, token);
     const g = new MeshGroup(center);
     const todo = features.filter(shouldRender);
+    g.contacts = buildContacts(g, todo);
     let i = 0;
     while (i < todo.length) {
       await new Promise(requestAnimationFrame);
@@ -1303,6 +1312,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       g.items.splice(g.items.indexOf(it), 1);
       g.byKey.delete(k);
     }
+    this.refreshContacts(g, upsert, new Set([...upsert.map((f) => f.key), ...remove]));
     for (const f of upsert) {
       const old = g.byKey.get(f.key);
       if (!old) { this.addItem(g, f); continue; }
@@ -1571,6 +1581,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   private replaceItems(g: MeshGroup, features: Feature3D[]) {
+    const changed = new Set(features.filter((f) => g.byKey.has(f.key)).map((f) => f.key));
+    this.refreshContacts(g, features, changed);
     for (const f of features) {
       const old = g.byKey.get(f.key);
       if (!old) continue;
@@ -1580,6 +1592,27 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     this.rebuildGeometry(g);
     this.map?.triggerRepaint();
+  }
+
+  /**
+   * Пересчитать индекс соприкасающихся граней с новыми версиями объектов и пересобрать соседей,
+   * у которых контакты поменялись (часть сдвинули с крыши, поставили на крышу, удалили).
+   */
+  private refreshContacts(g: MeshGroup, fresh: Feature3D[], changed: Set<string>) {
+    if (!g.contacts) return;
+    const byKey = new Map(g.items.map((it) => [it.feature.key, it.feature]));
+    for (const k of changed) byKey.delete(k);
+    for (const f of fresh) byKey.set(f.key, f);
+    g.contacts = buildContacts(g, byKey.values());
+    for (let i = 0; i < g.items.length; i++) {
+      const it = g.items[i];
+      if (changed.has(it.feature.key)) continue;
+      if (contactKeys(g, it.feature) === it.contacts && !it.contacts.split(',').some((k) => changed.has(k))) continue;
+      const item = buildItem(g, it.feature);
+      if (it.edges) item.edges = itemEdges(item);
+      g.items[i] = item;
+      g.byKey.set(item.feature.key, item);
+    }
   }
 
   /** Сливает здания группы в одну геометрию. */
@@ -1711,7 +1744,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const depth = (1 - AO_MIN) * Math.min(1, it.top / AO_HEIGHT);
     const n = it.positions.length / 3;
     for (let v = 0; v < n; v++) {
-      const base = selected ? HIGHLIGHT : this.monochrome ? MONOCHROME : v < it.wallVertices ? it.wall : it.roof;
+      const base = selected ? HIGHLIGHT : this.monochrome ? MONOCHROME : v < it.wallVertices ? it.wall : v >= n - it.floorVertices ? FLOOR_SLAB : it.roof;
       let k = 1;
       if (ao) {
         const t = Math.min(1, Math.max(0, it.positions[v * 3 + 2] / fade));
@@ -2052,6 +2085,40 @@ const GLASS_MONO = new THREE.Color('#bfe3e6');
 const GLASS_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.45, depthWrite: false,
   side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 
+/** Цвет перекрытий (срезов этажей) внутри здания. */
+const FLOOR_SLAB = new THREE.Color(0xffffff);
+/** Высота этажа, если число этажей не указано, м. */
+const SLAB_LEVEL_HEIGHT = 3;
+
+/** Отступ плиты от низа и верха стен, м: у самого края плита совпала бы с дном или крышей. */
+const SLAB_MARGIN = 0.3;
+
+/**
+ * Высоты полов этажей здания (та же раскладка, что у планов этажей) — задаёт main; undefined — здание без
+ * раскладки (одиночное), тогда плиты считаются по тегам самой части.
+ */
+let levelGridFor: (f: Feature3D) => number[] | undefined = () => undefined;
+export function setLevelGrid(fn: (f: Feature3D) => number[] | undefined) { levelGridFor = fn; }
+
+/** Плиты перекрытий между этажами: по раскладке этажей здания, иначе по building:levels (с min_level) или через 3 м. */
+function floorSlabs(polys: LocalPolygon[], h: Heights, tags: Record<string, string>, grid?: number[]): number[] {
+  if (grid?.length) {
+    const out: number[] = [];
+    for (const z of grid) if (z > h.min + SLAB_MARGIN && z < h.wallTop - SLAB_MARGIN) out.push(...bottomTriangles(polys, z));
+    return out;
+  }
+  const span = h.wallTop - h.min;
+  const levels = Number(tags['building:levels']), minLevel = Number(tags['building:min_level'] ?? 0) || 0;
+  // Этажи указаны, но с ошибкой (building:levels не больше building:min_level) — не угадываем, плит нет
+  if (Number.isFinite(levels) && tags['building:levels'] !== undefined && levels - minLevel < 1) return [];
+  const count = Number.isFinite(levels) && tags['building:levels'] !== undefined
+    ? Math.round(levels - minLevel) : Math.round(span / SLAB_LEVEL_HEIGHT);
+  if (count < 2 || span / count < 1.5) return [];
+  const out: number[] = [];
+  for (let i = 1; i < count; i++) out.push(...bottomTriangles(polys, h.min + span * i / count));
+  return out;
+}
+
 const isGlass = (v: string | undefined) => !!v && v.split(';')[0].trim().toLowerCase() === 'glass';
 
 /** Выключатель стекла в настройках графики (одна сцена на страницу — достаточно модульного флага). */
@@ -2062,7 +2129,7 @@ function glassRanges(it: Item): [number, number][] {
   const n = it.positions.length / 3, out: [number, number][] = [];
   if (!glassEnabled) return out;
   if (it.glassWalls && it.wallVertices) out.push([0, it.wallVertices]);
-  if (it.glassRoof && n > it.wallVertices) out.push([it.wallVertices, n]);
+  if (it.glassRoof && n - it.floorVertices > it.wallVertices) out.push([it.wallVertices, n - it.floorVertices]);
   return out;
 }
 
@@ -2092,7 +2159,8 @@ let raiseDefault = true;
 let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;
 export function setInheritance(fn: (f: Feature3D) => Record<string, string> | undefined) { inheritFor = fn; }
 
-function buildItem(g: MeshGroup, f: Feature3D): Item {
+/** Теги для рисования, контур в локальных метрах и высоты объекта (с поправкой на плоский след). */
+function prepItem(g: MeshGroup, f: Feature3D) {
   // Свои теги главнее унаследованных; в данных объекта ничего не меняется — только для рисования
   const inherited = inheritFor(f);
   const tags = inherited && Object.keys(inherited).length ? { ...inherited, ...f.tags } : f.tags;
@@ -2106,33 +2174,144 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     const min = flat ? 0 : heights.min;
     heights = { ...heights, min, wallTop: min + g.footprint, top: min + g.footprint, roofShape: 'flat', roofHeight: 0 };
   }
+  return { tags, polys, heights, flat };
+}
+
+/** Совпадающие по высоте грани ближе этого — одна плоскость (крыша нижней части под дном верхней), м. */
+const CONTACT_DZ = 0.05;
+
+interface ContactFace { key: string; z: number; polys: LocalPolygon[]; box: THREE.Box2 }
+/** Плоские верхи и дна объектов группы по высоте (ключ — высота шагом CONTACT_DZ). */
+interface Contacts { tops: Map<number, ContactFace[]>; bottoms: Map<number, ContactFace[]> }
+
+function hasBottom(prep: ReturnType<typeof prepItem>): boolean {
+  const { tags, heights, flat } = prep;
+  return !flat && tags['building:part'] !== 'roof' && heights.min > 0.01 && heights.top - heights.min >= MIN_THICKNESS;
+}
+function hasFlatTop(prep: ReturnType<typeof prepItem>): boolean {
+  return !prep.flat && prep.heights.roofShape === 'flat';
+}
+
+/** Индекс плоских верхов и дон группы: по нему разбираются соприкасающиеся грани соседних частей. */
+function buildContacts(g: MeshGroup, features: Iterable<Feature3D>): Contacts {
+  const c: Contacts = { tops: new Map(), bottoms: new Map() };
+  const add = (m: Map<number, ContactFace[]>, face: ContactFace) => {
+    const k = Math.round(face.z / CONTACT_DZ);
+    (m.get(k) ?? m.set(k, []).get(k)!).push(face);
+  };
+  for (const f of features) {
+    if (!shouldRender(f)) continue;
+    const prep = prepItem(g, f);
+    const top = hasFlatTop(prep), bottom = hasBottom(prep);
+    if (!top && !bottom) continue;
+    const box = new THREE.Box2();
+    for (const p of prep.polys) for (const [x, y] of p.outer) box.expandByPoint(new THREE.Vector2(x, y));
+    if (top) add(c.tops, { key: f.key, z: prep.heights.wallTop, polys: prep.polys, box });
+    if (bottom) add(c.bottoms, { key: f.key, z: prep.heights.min, polys: prep.polys, box });
+  }
+  return c;
+}
+
+/** Грани другого объекта на высоте z, пересекающие рамку box (кроме самого объекта). */
+function contactFaces(m: Map<number, ContactFace[]>, key: string, z: number, box: THREE.Box2): ContactFace[] {
+  const k = Math.round(z / CONTACT_DZ), out: ContactFace[] = [];
+  for (let i = k - 1; i <= k + 1; i++) {
+    for (const face of m.get(i) ?? []) {
+      if (face.key !== key && Math.abs(face.z - z) < CONTACT_DZ && face.box.intersectsBox(box)) out.push(face);
+    }
+  }
+  return out;
+}
+
+const toClip = (polys: LocalPolygon[]): ClipMulti => polys.map((p) => [p.outer, ...p.inners].map((r) => [...r, r[0]] as [number, number][]));
+
+const fromClip = (m: ClipMulti): LocalPolygon[] =>
+  m.map(([outer, ...inners]) => ({ outer: outer.slice(0, -1) as Pt[], inners: inners.map((r) => r.slice(0, -1) as Pt[]) }));
+
+/** Контур без участков, закрытых гранями faces; undefined — вычитать нечего. */
+function subtractFaces(polys: LocalPolygon[], faces: ContactFace[]): LocalPolygon[] | undefined {
+  if (!faces.length) return;
+  try {
+    return fromClip(polygonClipping.difference(toClip(polys), ...faces.map((f) => toClip(f.polys))));
+  } catch {
+    return; // вырожденная геометрия — оставляем грань как есть
+  }
+}
+
+/** Участки контура, закрытые гранями faces (объединением); undefined — не получилось или нечего. */
+function coveredBy(polys: LocalPolygon[], faces: ContactFace[]): LocalPolygon[] | undefined {
+  if (!faces.length) return;
+  try {
+    const cover = polygonClipping.union(toClip(faces[0].polys), ...faces.slice(1).map((f) => toClip(f.polys)));
+    return fromClip(polygonClipping.intersection(toClip(polys), cover));
+  } catch {
+    return;
+  }
+}
+
+/** Ключи объектов, чьи грани соприкасаются с этим (по рамкам): поменялись — объект надо пересобрать. */
+function contactKeys(g: MeshGroup, f: Feature3D): string {
+  if (!g.contacts) return '';
+  const prep = prepItem(g, f);
+  const box = new THREE.Box2();
+  for (const p of prep.polys) for (const [x, y] of p.outer) box.expandByPoint(new THREE.Vector2(x, y));
+  const keys: string[] = [];
+  if (hasFlatTop(prep)) keys.push(...contactFaces(g.contacts.bottoms, f.key, prep.heights.wallTop, box).map((x) => x.key));
+  if (hasBottom(prep)) keys.push(...contactFaces(g.contacts.tops, f.key, prep.heights.min, box).map((x) => x.key));
+  return keys.sort().join(',');
+}
+
+function buildItem(g: MeshGroup, f: Feature3D): Item {
+  const prep = prepItem(g, f);
+  const { tags, polys, heights, flat } = prep;
+  const box2 = new THREE.Box2();
+  for (const p of polys) for (const [x, y] of p.outer) box2.expandByPoint(new THREE.Vector2(x, y));
   const tri = buildTriangles(polys, heights, tags);
+  // Плоская крыша, на которой стоят другие части: закрытый ими участок — уже не крыша, а перекрытие между
+  // частями (видно сквозь стекло) — рисуем его плитой перекрытия, остальное — крышей
+  let joint: number[] = [];
+  if (g.contacts && hasFlatTop(prep) && tri.roof.length) {
+    const faces = contactFaces(g.contacts.bottoms, f.key, heights.wallTop, box2);
+    const rest = subtractFaces(polys, faces), covered = rest && coveredBy(polys, faces);
+    if (rest && covered) { tri.roof = bottomTriangles(rest, heights.wallTop); joint = bottomTriangles(covered, heights.wallTop); }
+  }
   // building:part=roof принято рисовать одной крышей: без фасада, фронтонов и дна (навесы, крыши над пустотой)
   const roofOnly = !flat && tags['building:part'] === 'roof' && tri.roof.length > 0;
   if (roofOnly) tri.walls = [];
-  // Дно — у объектов с объёмом над землёй (видно снизу); на земле его не видно — треугольники не тратим. Цвет — как у стен
-  else if (!flat && heights.min > 0.01 && heights.top - heights.min >= MIN_THICKNESS) tri.walls.push(...bottomTriangles(polys, heights.min));
-  const positions = new Float32Array(tri.walls.length + tri.roof.length);
+  // Дно — у объектов с объёмом над землёй (видно снизу); на земле его не видно — треугольники не тратим. Цвет — как у стен.
+  // Участки, лежащие на плоских крышах других частей, вырезаем: совпадающие грани мерцают, а дно стеклянной части
+  // просвечивает поверх крыши. Крышу оставляем — она и есть перекрытие между частями (видна сквозь стекло)
+  else if (hasBottom(prep)) {
+    const rest = g.contacts && subtractFaces(polys, contactFaces(g.contacts.tops, f.key, heights.min, box2));
+    tri.walls.push(...bottomTriangles(rest ?? polys, heights.min));
+  }
+  // Стеклянный фасад: внутри видны перекрытия — плиты на границах этажей (непрозрачные, после крыши)
+  const glassWalls = isGlass(tags['building:material'] ?? tags.material);
+  const floors = [...joint, ...(glassWalls && !flat && !roofOnly ? floorSlabs(polys, heights, tags, levelGridFor(f)) : [])];
+  const positions = new Float32Array(tri.walls.length + tri.roof.length + floors.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);
+  positions.set(floors, tri.walls.length + tri.roof.length);
   const wall = tags['building:colour'] ?? tags.colour ?? DEFAULT_WALL;
   const roof = tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
   const box = new THREE.Box3();
   if (positions.length) box.setFromArray(positions);
   return {
+    contacts: contactKeys(g, f),
     feature: f,
     tags,
     roofApproximated: tri.roofApproximated,
     pending: !!tri.pending,
     positions,
     wallVertices: tri.walls.length / 3,
+    floorVertices: floors.length / 3,
     wall: parseColour(wall),
     roof: parseColour(roof),
     top: heights.top,
     box,
     start: 0,
     // material на здании — устаревший вариант building:material: только фасад
-    glassWalls: isGlass(tags['building:material'] ?? tags.material),
+    glassWalls,
     glassRoof: isGlass(tags['roof:material']),
     glassStart: 0,
   };

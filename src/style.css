@@ -61,7 +61,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
   box-shadow: 0 2px 8px rgba(0,0,0,.2);
 }
 #info-panel:has(#info:empty) { display: none; }
-#outliner-panel[hidden], #help-panel[hidden], #levels-panel[hidden] { display: none; }
+#outliner-panel[hidden], #help-panel[hidden], #levels-panel[hidden], #issues-panel[hidden] { display: none; }
 /* Контекстное меню списка частей */
 .ctx-menu { position: fixed; z-index: 20; min-width: 180px; padding: 4px; margin: 0; list-style: none; background: #fff;
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 13px; }
@@ -425,3 +425,21 @@ body.mobile .dp-opt { display: none; }
 .toast-close:hover { opacity: 1; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-4px); } }
 body.mobile #toasts { top: 72px; max-width: calc(100% - 112px); }
+
+/* Проверка здания: панель, значки в списке частей, список в «Правках» */
+#issues-panel { flex-shrink: 1; max-height: 25%; }
+#issues-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
+.issue-list { list-style: none; margin: 0 0 8px; padding: 0; font-size: 12px; }
+.issue-list li { display: flex; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; line-height: 1.35; }
+.issue-list li:hover { background: #f0f2f5; }
+.issue-list li.selected { background: #dbe7ff; }
+.issue-list li.error .issue-text { color: #991b1b; }
+.issue-list li.warning .issue-text { color: #92400e; }
+.issue-list .ol-key { margin-left: 6px; color: #888; }
+.issue-icon { flex: none; }
+.issue-mark { flex: none; font-size: 12px; cursor: help; }
+#info .warn.error { color: #b91c1c; }
+body.mobile #issues-panel { display: none !important; }
+.issues-all { display: flex; align-items: baseline; gap: 6px; font-size: 13px; margin: 0 0 6px; cursor: pointer; }
+.issue-list li.error .issue-icon, .issue-mark.error { color: #dc2626; }
+.issue-list li.warning .issue-icon, .issue-mark.warning { color: #d97706; }

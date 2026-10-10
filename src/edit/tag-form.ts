@@ -33,7 +33,7 @@ const ROOF_SHAPE_LABELS: Record<string, string> = {
   'hipped-and-gabled': 'Голландская (вальмовая с фронтоном)', bellcast_gable: 'Двускатная с отгибом у карниза',
   crosspitched: 'Крестовая', sawtooth: 'Шедовая (пилообразная)', butterfly: 'Бабочка (обратная двускатная)', cone: 'Коническая',
 };
-const ROOF_SHAPES = Object.keys(ROOF_SHAPE_LABELS);
+export const ROOF_SHAPES = Object.keys(ROOF_SHAPE_LABELS);
 
 /**
  * Иконки форм крыши (по рисункам Simple 3D Buildings в вики): грани 3D-моделей в ортопроекции, заливка

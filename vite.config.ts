@@ -27,9 +27,11 @@ function maplibreWorker(): Plugin {
 // maplibre-gl исключён из pre-bundling: иначе ломается загрузка его web worker.
 // oauth.html — страница возврата из OAuth (redirect_uri), отдельная точка входа сборки.
 // HTTPS=1 (npm run dev:https) — dev-сервер по https с самоподписанным сертификатом: OpenGeofiction
-// принимает только https-адреса возврата OAuth (https://localhost:5173/oauth.html).
+// принимает только https-адреса возврата OAuth (https://localhost:5173/oauth.html). Кеш зависимостей у него
+// свой: конфиги различаются, и общий кеш пересобирался при каждом запуске другого сервера (504 Outdated Optimize Dep).
 export default defineConfig({
   base: './',
+  cacheDir: process.env.HTTPS ? 'node_modules/.vite-https' : 'node_modules/.vite',
   optimizeDeps: { exclude: ['maplibre-gl'] },
   build: { rollupOptions: { input: { main: 'index.html', oauth: 'oauth.html' } } },
   plugins: [maplibreWorker(), ...(process.env.HTTPS ? [basicSsl()] : [])],

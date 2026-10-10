@@ -5,11 +5,12 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
+import { validateBuilding, validateGeometry, validateTags, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
-import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
+import { SERVERS, SERVER_LIST, apiBlockedHere, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
@@ -158,6 +159,11 @@ for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
 }
 const editsPanel = document.getElementById('edits-panel')!;
 const outlinerPanel = document.getElementById('outliner-panel')!;
+const issuesPanel = document.getElementById('issues-panel')!;
+const issuesEl = document.getElementById('issues')!;
+const issuesCount = document.getElementById('issues-count')!;
+const issuesAll = document.getElementById('issues-all') as HTMLInputElement;
+try { issuesAll.checked = localStorage.getItem('osm3d.issues-all') === '1'; } catch { /* без хранилища — выключено */ }
 const outlinerEl = document.getElementById('outliner')!;
 const outlinerCount = document.getElementById('outliner-count')!;
 /** Скрытые глазиком части в режиме здания — только показ, на данные не влияет. */
@@ -275,6 +281,8 @@ map.on('load', () => {
   });
 
   map.addLayer(overpassLayer);
+  const blocked = apiBlockedHere();
+  if (blocked) setStatus(blocked, true);
   // Подземные здания без объёма — пунктирный контур на поверхности (поверх объёмов не прячется: рисуется после)
   map.addSource('underground-outlines', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
@@ -721,7 +729,7 @@ async function openEditLink() {
     if (!map.getLayer(overpassLayer.id)) return showLoading(`${what}: загружаю карту…`); // стиль и слой зданий ещё не готовы
     const { ready, total, loading, waiting } = overpass.status();
     loadedSince = total && !loading && !waiting ? loadedSince ?? Date.now() : undefined;
-    if (serverDown()) showLoading(`Сервер ${server().short} не отвечает — повторяю…`, true);
+    if (serverDown()) showLoading(apiBlockedHere() ?? `Сервер ${server().short} не отвечает — повторяю…`, true);
     else if (loadedSince !== undefined) showLoading(`${what}: собираю здание из частей…`);
     else showLoading(`${what}: загружаю данные здания${total ? ` (${ready} из ${total} участков карты)` : ''}…`);
     // Карту не показываем вовсе: пустая сцена режима здания, пока здание не пришло
@@ -2677,7 +2685,7 @@ function updateOverpassIndicator() {
   const src = overpass.sourceLabel;
   opIndicator.querySelector('.label')!.textContent = {
     off: '',
-    down: `Сервер ${server().short} не отвечает — повторяю…`,
+    down: apiBlockedHere() ? `${server().short}: откройте в Firefox` : `Сервер ${server().short} не отвечает — повторяю…`,
     loading: `Загружаю данные зданий: ${ready} из ${total} участков карты…`,
     waiting: `Не удалось загрузить ${total - ready} из ${total} участков карты`,
     ready: `Данные загружены (${ready} из ${total})`,
@@ -2688,7 +2696,7 @@ function updateOverpassIndicator() {
     .join('\n');
   opIndicator.title = {
     off: '',
-    down: `${server().web} не отвечает (таймаут или обрыв соединения); запросы повторяются раз в 30 с`,
+    down: apiBlockedHere() ?? `${server().web} не отвечает (таймаут или обрыв соединения); запросы повторяются раз в 30 с`,
     loading: `Пока данные не пришли, здания — черновик из векторных тайлов. Загружается тайлов (${src}): ${loading}`,
     waiting: `Ждут повтора: ${waiting} (лимит или ошибка API ${server().short}, подробности в консоли)`,
     ready: 'Все видимые тайлы загружены',
@@ -3380,12 +3388,89 @@ let outlinerGroups = new Map<string, string[]>();
  * Панель частей режима здания: контур — первым, затем части; две и больше частей одного вида собираются
  * в группу (сворачивается стрелкой, клик выделяет все её части, глазик скрывает или показывает их все).
  */
+/** Проблемы здания режима здания — пересчитываются вместе со списком частей. */
+let focusIssues: Issue[] = [];
+
+/** Последние проверки по зданиям: пересчёт, только когда сменились объекты (правка даёт новый объект). */
+const issueCache = new Map<string, { feats: Feature3D[]; roles: string; issues: Issue[] }>();
+
+/** Проверить здание: члены с правками сессии, без удалённых. */
+function buildingIssues(g: BuildingGroup): Issue[] {
+  const feats = groupFeatures(g).filter((f) => !session.isDeleted(f.key));
+  const roles = g.roles.join();
+  const hit = issueCache.get(g.key);
+  if (hit && hit.roles === roles && hit.feats.length === feats.length && hit.feats.every((f, i) => f === feats[i])) return hit.issues;
+  const issues = timed('проверка здания', () => validateBuilding(g, feats), () => `${g.key}, ${feats.length}`);
+  if (issueCache.size > 50) issueCache.clear();
+  issueCache.set(g.key, { feats, roles, issues });
+  return issues;
+}
+
+/** Значок проблем в строке списка: ошибка — красный, предупреждение — жёлтый; текст — во всплывающей подсказке. */
+function issueMark(list: Issue[] | undefined): string {
+  if (!list?.length) return '';
+  const error = list.some((i) => i.level === 'error');
+  return `<span class="issue-mark ${error ? 'error' : 'warning'}" title="${esc(list.map((i) => i.text).join('\n'))}">${error ? '✖' : '⚠'}</span>`;
+}
+
+/** Панель «Проверка»: проблемы здания режима здания, клик — выделить объект (Shift — оба пересекающихся). */
+function renderIssues() {
+  focusIssues = focus ? buildingIssues(focus) : [];
+  highlightIssues();
+  issuesPanel.hidden = !focus || !focusIssues.length;
+  if (issuesPanel.hidden) { issuesEl.innerHTML = ''; return; }
+  const errors = focusIssues.filter((i) => i.level === 'error').length;
+  issuesCount.textContent = `(${errors ? `ошибок ${errors}, ` : ''}предупреждений ${focusIssues.length - errors})`.replace(', предупреждений 0', '');
+  const sorted = [...focusIssues].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
+  issuesEl.innerHTML = sorted.map((i) => `<li class="${i.level}${selection.includes(i.key) ? ' selected' : ''}" data-key="${esc(i.key)}"${i.other ? ` data-other="${esc(i.other)}"` : ''}>
+    <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span>
+    <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span></li>`).join('');
+}
+
+/** «Подсветить все»: рёбра объёмов с проблемами (ошибка важнее предупреждения). */
+function highlightIssues() {
+  const levels = new Map<string, 'error' | 'warning'>();
+  if (issuesAll.checked && focus) for (const i of focusIssues) if (levels.get(i.key) !== 'error') levels.set(i.key, i.level);
+  overpassLayer.setIssueHighlight(levels);
+}
+
+issuesAll.addEventListener('change', () => {
+  try { localStorage.setItem('osm3d.issues-all', issuesAll.checked ? '1' : '0'); } catch { /* не запомним */ }
+  highlightIssues();
+});
+
+issuesEl.addEventListener('click', (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
+  if (!li || !entity(li.dataset.key!)) return;
+  select(li.dataset.key);
+  if (li.dataset.other && entity(li.dataset.other)) toggleSelection(li.dataset.other);
+});
+issuesEl.addEventListener('mouseover', (e) => {
+  overpassLayer.setHover((e.target as HTMLElement).closest<HTMLElement>('li[data-key]')?.dataset.key);
+});
+issuesEl.addEventListener('mouseleave', () => overpassLayer.setHover(undefined));
+
+/** Проблемы изменённых объектов (для «Правок» перед отправкой): по зданиям, куда они входят. */
+function changeIssues(keys: string[]): Issue[] {
+  const changed = new Set(keys), seen = new Set<string>(), out: Issue[] = [];
+  for (const k of keys) {
+    const g = groupOf(k) ?? soloGroup(k);
+    if (!g || seen.has(g.key)) continue;
+    seen.add(g.key);
+    for (const i of buildingIssues(g)) if (changed.has(i.key) || (i.other && changed.has(i.other))) out.push(i);
+  }
+  return out;
+}
+
 function renderOutliner() {
   renderLevels();
   queueMicrotask(() => renderMobileCard()); // вход в режим здания и выход — карточка мобильного режима
   outlinerPanel.hidden = !focus;
+  renderIssues();
   if (!focus) { outlinerEl.innerHTML = ''; return; }
   const g = focus;
+  const issueOf = new Map<string, Issue[]>();
+  for (const i of focusIssues) (issueOf.get(i.key) ?? issueOf.set(i.key, []).get(i.key)!).push(i);
   const rows = g.members.map((key, i) => {
     const f = entity(key);
     const outline = g.roles[i] === 'outline';
@@ -3402,6 +3487,7 @@ function renderOutliner() {
     return `<li class="${cls}" data-key="${esc(r.key)}" title="${esc(title)}">
       <span class="ol-icon" title="${esc(r.kind.title)}">${r.kind.icon}</span>
       <span class="ol-label">${child && !r.f?.tags.name ? `<span class="ol-key bare">${esc(r.key)}</span>` : `${esc(r.f?.tags.name ?? r.kind.label)}<span class="ol-key">${esc(r.key)}</span>`}</span>
+      ${issueMark(issueOf.get(r.key))}
       <button type="button" class="ol-eye" data-eye title="${off ? 'Показать' : 'Скрыть'}">${off ? ICON_EYE_OFF : ICON_EYE}</button></li>`;
   };
   // Группы — по подписи вида, в порядке первого появления
@@ -4083,6 +4169,9 @@ function describeGroup(g: BuildingGroup): string {
 
 /** После правки тегов: пересобрать меши, обновить панель и список изменений. */
 function onSessionChange(keys: string[]) {
+  // Правка могла поменять объект на месте — проверки пересчитать (до перерисовки свойств, где они показаны)
+  issueCache.clear();
+  focusIssues = focus ? buildingIssues(focus) : [];
   // Созданные группы могли появиться или исчезнуть, у групп — смениться состав (undo/redo)
   if (keys.some((k) => editGroups.has(k))) {
     for (const k of keys) {
@@ -4191,8 +4280,13 @@ function renderChanges() {
       ${revert}
       <div class="ch-diff">${diff}</div></li>`;
   }).join('');
+  const issues = changes.length ? changeIssues(changes.filter((c) => !c.deleted).map((c) => c.key)) : [];
+  const issuesHtml = issues.length ? `<p class="warn">⚠ Проблемы в изменённых объектах (${issues.length}) — отправить можно, но лучше поправить:</p>
+    <ul class="issue-list">${issues.map((i) => `<li class="${i.level}" data-key="${esc(i.key)}">
+      <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span><span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span></li>`).join('')}</ul>` : '';
   changesEl.innerHTML = `
     ${changes.length ? `<ul class="change-list">${list}</ul>` : '<p class="hint">Изменений нет — можно повторить отменённое.</p>'}
+    ${issuesHtml}
     ${renderUpload(changes.length)}`;
 }
 
@@ -4258,6 +4352,8 @@ function renderUpload(count: number): string {
 }
 
 async function doLogin() {
+  const blocked = apiBlockedHere();
+  if (blocked) return setStatus(blocked, true);
   try {
     await login();
     osmUser = await fetchUser();
@@ -4601,21 +4697,6 @@ window.addEventListener('beforeunload', (e) => {
   if (session.changes().length) e.preventDefault();
 });
 
-/** Ниже этого этаж по высоте и этажности объекта — этажность явно не про этот объём, м. */
-const MIN_LEVEL_HEIGHT = 1.5;
-
-/** Этажность не помещается в высоту объекта: этаж получается ниже MIN_LEVEL_HEIGHT. */
-function lowLevels(t: Record<string, string>): string | false {
-  const levels = Number(t['building:levels']), min = Number(t['building:min_level']) || 0;
-  if (t['building:levels'] === undefined || !Number.isFinite(levels) || levels <= min) return false;
-  const h = computeHeights(t);
-  if (h.source !== 'height') return false;
-  const step = (h.wallTop - h.min) / (levels - min);
-  if (step >= MIN_LEVEL_HEIGHT) return false;
-  return `building:levels=${esc(t['building:levels'])} при высоте стен ${fmt(h.wallTop - h.min)} м — этаж выходит ${fmt(step)} м. `
-    + 'Этажность, похоже, не про этот объём (скопирована с контура?), а этажи в панели «Этажи» берутся из неё.';
-}
-
 /** Предупреждение об этажности части выше контура (для части) или частей выше него (для контура). */
 function levelsAboveOutline(f: Feature3D): string | false {
   const g = groupOf(f.key);
@@ -4629,28 +4710,21 @@ function levelsAboveOutline(f: Feature3D): string | false {
     + 'на контуре принято указывать максимальную этажность — поправьте контур или часть.';
 }
 
-/** building:levels не больше building:min_level — ошибка: levels считается от земли, вместе с пропущенными снизу. */
-function levelsBelowMin(t: Record<string, string>): boolean {
-  const levels = Number(t['building:levels']), min = Number(t['building:min_level']);
-  return t['building:levels'] !== undefined && t['building:min_level'] !== undefined && Number.isFinite(levels) && Number.isFinite(min) && levels <= min;
-}
-
 function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: string): string {
   const h = computeHeights(f.tags);
   const warn = [
     roofApproximated && `Форма крыши «${h.roofShape}» пока не поддерживается для этой геометрии — показаны стены до верха и плоская крыша.`,
     h.source === 'default' && 'Нет height и building:levels — высота взята по умолчанию.',
-    f.tags.height && f.tags['building:levels'] && Math.abs(h.top - Number(f.tags['building:levels']) * 3) > h.top * 0.5 &&
-      'height и building:levels заметно расходятся.',
     levelsAboveOutline(f),
-    lowLevels(f.tags),
-    levelsBelowMin(f.tags) && `building:levels (${esc(f.tags['building:levels'])}) не больше building:min_level (${esc(f.tags['building:min_level'])}) — `
-      + 'building:levels считает этажи от земли, включая пропущенные снизу: у части с одним этажом над 15-м — min_level=15, levels=16. Этажи части не показываются.',
   ].filter(Boolean);
+  // Проверка: в режиме здания — вся (с пересечениями частей), иначе — теги и геометрия объекта
+  const issues = (focus ? focusIssues.filter((i) => i.key === f.key || i.other === f.key) : [...validateTags(f.key, f.tags), ...validateGeometry(f)])
+    .filter((i) => i.code !== 'above');
   return `
     <h2>${f.kind === 'part' ? 'building:part' : 'building'} — <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a>${f.version ? ` v${f.version}` : ''}</h2>
     <pre>высота: ${fmt(h.min)} → ${fmt(roofApproximated ? h.top : h.wallTop)} → ${fmt(h.top)} м (${h.source})\nкрыша: ${h.roofShape}, ${fmt(h.roofHeight)} м</pre>
     ${warn.map((w) => `<p class="warn">⚠ ${w}</p>`).join('')}
+    ${issues.map((i) => `<p class="warn ${i.level}">${i.level === 'error' ? '✖' : '⚠'} ${esc(i.text)}</p>`).join('')}
     ${form ? `${form}<details class="all-tags"><summary>Все теги</summary>${tagTable(f.tags)}</details>` : tagTable(f.tags)}`;
 }
 

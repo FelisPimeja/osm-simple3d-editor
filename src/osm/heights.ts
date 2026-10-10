@@ -14,8 +14,10 @@ export interface Heights {
   source: 'height' | 'levels' | 'default';
 }
 
-/** Разбирает '12', '12 m', '40 ft', "40'". */
+/** Разбирает '12', '12 m', '40 ft', "40'", `7'4"` (футы и дюймы). */
 export function parseLength(v?: string): number | undefined {
+  const fi = v?.trim().match(/^(\d+)'(\d+(?:\.\d+)?)"$/);
+  if (fi) return Number(fi[1]) * 0.3048 + Number(fi[2]) * 0.0254;
   const m = v?.trim().match(/^(-?\d+(?:\.\d+)?)\s*(m|ft|')?$/);
   if (!m) return;
   const n = Number(m[1]);

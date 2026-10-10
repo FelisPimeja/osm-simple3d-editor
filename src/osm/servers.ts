@@ -30,6 +30,11 @@ export interface OsmServer {
   tileIds?: 'openfreemap' | 'openmaptiles';
   /** Не отправлять Referer: сервер подложки режет картинки (спрайт) с чужих сайтов (OGF). */
   noReferrer?: boolean;
+  /**
+   * API пускает только браузеры, чей User-Agent подходит под выражение: OGF отвечает 403 на Chrome, Safari и Edge
+   * (защита от ботов; исключение — Referer с их сайта), Firefox проходит. Из JS User-Agent и Referer не подменить.
+   */
+  apiBrowsers?: RegExp;
 }
 
 export const SERVERS: Record<ServerId, OsmServer> = {
@@ -65,6 +70,7 @@ export const SERVERS: Record<ServerId, OsmServer> = {
     tileBuildings: true,
     tileIds: 'openmaptiles',
     noReferrer: true,
+    apiBrowsers: /Firefox\//,
   },
   ohm: {
     id: 'ohm',
@@ -111,6 +117,12 @@ let current: OsmServer = SERVERS[load()];
 writeServerParam();
 
 export const server = (): OsmServer => current;
+
+/** Почему API сервера недоступно в этом браузере; undefined — доступно. */
+export function apiBlockedHere(s: OsmServer = current): string | undefined {
+  if (!s.apiBrowsers || s.apiBrowsers.test(navigator.userAgent)) return;
+  return `API ${s.short} не пускает этот браузер (Chrome, Safari, Edge) — данные, вход и сохранение работают в Firefox.`;
+}
 
 export function setServer(id: ServerId) {
   current = SERVERS[id];

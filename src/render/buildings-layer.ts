@@ -3,6 +3,8 @@ import polygonClipping, { type MultiPolygon as ClipMulti } from 'polygon-clippin
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, type Heights } from '../osm/heights';
 import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
@@ -94,6 +96,11 @@ const AO_MIN = 0.55;
 /** Порог угла между гранями для контуров, градусы: швы триангуляции на плоских гранях не рисуем. */
 const EDGE_ANGLE = 25;
 const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: 0.55 });
+/** Рёбра объёмов с проблемами проверки («Подсветить все»): ошибки — красные, предупреждения — оранжевые; толщина, px. */
+const ISSUE_COLOUR = { error: 0xff1a1a, warning: 0xff8a00 };
+const ISSUE_WIDTH_PX = 3;
+/** Сквозь другие объёмы — тоньше и бледнее: проблемная часть может прятаться внутри здания. */
+const ISSUE_XRAY_WIDTH_PX = 1.5;
 /**
  * Скрытые рёбра выделенного в режиме здания: пунктир рисуется только там, где ребро закрыто
  * (глубина больше записанной). Линии чуть подвинуты к камере — видимые рёбра не мерцают пунктиром.
@@ -1840,9 +1847,52 @@ export class BuildingsLayer implements CustomLayerInterface {
    */
   private applyEdges(g: MeshGroup, exclude?: Set<string>) {
     g.disposeEdges();
+    this.applyIssueEdges(g);
     if (!this.graphics.edges || !g.mesh) return;
     g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it)), EDGE_MATERIAL);
     g.scene.add(g.edges);
+  }
+
+  private issueLevels = new Map<string, 'error' | 'warning'>();
+  private issueEdges = new WeakMap<MeshGroup, LineSegments2[]>();
+
+  /** Подсветить рёбрами объёмы с проблемами проверки (пусто — снять). */
+  setIssueHighlight(levels: Map<string, 'error' | 'warning'>) {
+    this.issueLevels = levels;
+    for (const g of this.activeGroups()) this.applyIssueEdges(g);
+    this.map?.triggerRepaint();
+  }
+
+  private applyIssueEdges(g: MeshGroup) {
+    for (const l of this.issueEdges.get(g) ?? []) { l.geometry.dispose(); l.material.dispose(); g.scene.remove(l); }
+    this.issueEdges.delete(g);
+    if (!this.issueLevels.size || !this.map) return;
+    const canvas = this.map.getCanvas();
+    const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+    const out: LineSegments2[] = [];
+    for (const level of ['warning', 'error'] as const) {
+      const items = g.items.filter((it) => this.issueLevels.get(it.feature.key) === level && !g.hidden.has(it.feature.key) && it.positions.length);
+      if (!items.length) continue;
+      for (const it of items) it.edges ??= itemEdges(it);
+      const pos = new Float32Array(items.reduce((n, it) => n + it.edges!.length, 0));
+      let o = 0;
+      for (const it of items) { pos.set(it.edges!, o); o += it.edges!.length; }
+      const make = (width: number, xray: boolean) => {
+        const geo = new LineSegmentsGeometry();
+        geo.setPositions(pos);
+        const mat = new LineMaterial({ color: ISSUE_COLOUR[level], linewidth: width * dpr, transparent: xray, opacity: xray ? 0.35 : 1,
+          depthTest: !xray, depthWrite: false });
+        mat.resolution.set(canvas.width, canvas.height);
+        const line = new LineSegments2(geo, mat);
+        line.frustumCulled = false;
+        line.renderOrder = (level === 'error' ? 11 : 10) + (xray ? 2 : 0);
+        return line;
+      };
+      const lines = make(ISSUE_WIDTH_PX, false), xray = make(ISSUE_XRAY_WIDTH_PX, true);
+      g.scene.add(lines, xray);
+      out.push(lines, xray);
+    }
+    this.issueEdges.set(g, out);
   }
 
   private paintGroup(g: MeshGroup) {

@@ -293,7 +293,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .basemap-offset-btn { margin-left: auto; flex: none; width: 22px; height: 20px; padding: 2px 3px; border: 1px solid transparent;
   border-radius: 3px; background: none; color: #6b7280; cursor: pointer; }
 .basemap-offset-btn:hover { border-color: #d1d5db; color: #222; }
-.basemap-offset-btn.active { color: #fff; background: #2f7cff; }
+.basemap-offset-btn.active { color: #2f7cff; }
+.basemap-offset-btn[hidden] { display: none; }
 .basemap-offset-btn svg { width: 14px; height: 14px; display: block; }
 /* Панель смещения снимка */
 .offset-panel { position: absolute; z-index: 21; width: 250px; padding: 8px 10px; border-radius: 6px;

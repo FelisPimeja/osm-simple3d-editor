@@ -15,7 +15,7 @@ import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
-import { ImageryOffsetPanel } from './view/imagery-offset';
+import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
 import { applyBasemap, applyGpsTraces, BasemapButton, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
@@ -201,7 +201,48 @@ const basemapCtrl = server().imagery && navGroup ? new BasemapButton(navGroup, b
   if (basemap !== id) { setBasemap(id); void saveSetting('basemap'); }
   offsetPanel.show(id);
 }) : undefined;
-const offsetPanel = new ImageryOffsetPanel(map, () => basemapCtrl?.sync());
+const offsetPanel = new ImageryOffsetPanel(map, {
+  onChange: () => basemapCtrl?.sync(),
+  // Кнопка привязок — на время смещения снимка и вне режима здания (там её панель скрыта): переносим её на панель карты
+  onOpen: (open) => {
+    if (open && !focus) mapToolbar.querySelector('[data-help]')!.before(snapsBtn);
+    else if (!open && snapsBtn.parentElement === mapToolbar) focusToolbar.querySelector('[data-help]')!.before(snapsBtn);
+  },
+  snap: (pt) => snapGround(pt),
+});
+
+/**
+ * Привязка конца сдвига снимка: вершины и середины рёбер контуров зданий на земле (по ним сверяют снимок).
+ * Те же переключатели, что у привязок режима здания: кнопка (S), Alt, типы вершин и середин.
+ */
+function snapGround(pt: [number, number]): OffsetSnap | undefined {
+  const off = overpassLayer.snapKindsOff;
+  if (!overpassLayer.snapsEnabled || overpassLayer.snapsSuspended || (off.has('vertex') && off.has('midpoint'))) return;
+  const R = 12;
+  const a = map.unproject([pt[0] - R, pt[1] - R]), b = map.unproject([pt[0] + R, pt[1] + R]);
+  const c = map.unproject([pt[0] - R, pt[1] + R]), d = map.unproject([pt[0] + R, pt[1] - R]);
+  const w = Math.min(a.lng, b.lng, c.lng, d.lng), e = Math.max(a.lng, b.lng, c.lng, d.lng);
+  const s = Math.min(a.lat, b.lat, c.lat, d.lat), n = Math.max(a.lat, b.lat, c.lat, d.lat);
+  let best: { p: LonLat; d: number; kind: 'vertex' | 'midpoint' } | undefined;
+  const test = (p: LonLat, kind: 'vertex' | 'midpoint') => {
+    if (off.has(kind) || p[0] < w || p[0] > e || p[1] < s || p[1] > n) return;
+    const q = map.project(p);
+    const dist = Math.hypot(q.x - pt[0], q.y - pt[1]) + (kind === 'midpoint' ? 6 : 0); // вершины важнее
+    if (dist <= R + (kind === 'midpoint' ? 6 : 0) && (!best || dist < best.d)) best = { p, d: dist, kind };
+  };
+  for (const { feature } of overpass.renderedFeatures()) {
+    for (const poly of feature.polygons ?? []) for (const ring of [poly.outer, ...poly.inners]) {
+      for (let i = 0; i < ring.length; i++) {
+        const p = ring[i], q = ring[(i + 1) % ring.length];
+        test(p, 'vertex');
+        test([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], 'midpoint');
+      }
+    }
+  }
+  if (!best) return;
+  const q = map.project(best.p);
+  return { lngLat: new maplibregl.LngLat(best.p[0], best.p[1]), point: [q.x, q.y], kind: best.kind, label: SNAP_LABELS[best.kind] };
+}
 
 /** Слой подложки только что добавлен: в режиме здания окружение скрыто — прячем и его до выхода. */
 function hideInFocus(id: string) {

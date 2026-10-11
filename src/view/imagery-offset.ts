@@ -2,14 +2,28 @@
  * Панель смещения снимка: поля сдвига (м, по широте — на север, по долготе — на восток), «Подтвердить» и «Сбросить».
  * Пока панель открыта, сдвиг задаётся и мышью: щелчок по точке снимка — она «прилипает» к курсору (сдвиг только
  * в плоскости земли), повторный щелчок — закончить. Щелчки по карте в это время не выделяют объекты.
- * Esc или × — отменить (вернуть сдвиг, бывший до открытия).
+ * Esc или × — отменить (вернуть сдвиг, бывший до открытия). Точка первого щелчка отмечена, от неё до курсора —
+ * пунктир; конец прилипает к привязкам (вершины и середины рёбер зданий на земле) — их даёт main.ts.
  */
-import type { LngLat, Map as MlMap, MapMouseEvent } from 'maplibre-gl';
+import type { GeoJSONSource, LngLat, Map as MlMap, MapMouseEvent } from 'maplibre-gl';
 import { tr } from '../i18n';
 import { getOffset, IMAGERY, isOffset, refreshImagery, storeOffset, type Offset } from './basemaps';
 
 const R = 6378137;
 const POS_KEY = 'osm3d.offset-panel-pos';
+const ANCHOR = 'imagery-offset-anchor';
+
+/** Привязка конца сдвига: точка на земле и где её показать. */
+export interface OffsetSnap { lngLat: LngLat; point: [number, number]; kind: string; label: string }
+
+export interface OffsetPanelHooks {
+  /** Изменился сдвиг (подсветка кнопок). */
+  onChange(id: string): void;
+  /** Панель открылась или закрылась (кнопка привязок на панели инструментов). */
+  onOpen?(open: boolean): void;
+  /** Привязка под курсором (экранная точка); undefined — нет или выключены. */
+  snap?(point: [number, number]): OffsetSnap | undefined;
+}
 /** Пересборка тайлов при перетаскивании — не чаще, мс. */
 const LIVE_MS = 80;
 
@@ -29,7 +43,9 @@ export class ImageryOffsetPanel {
   private liveTimer = 0;
   private lastLive = 0;
 
-  constructor(private readonly map: MlMap, private readonly onChange: (id: string) => void) {
+  private readonly snapEl: HTMLDivElement;
+
+  constructor(private readonly map: MlMap, private readonly hooks: OffsetPanelHooks) {
     const el = this.el = document.createElement('div');
     el.className = 'offset-panel';
     el.hidden = true;
@@ -74,7 +90,10 @@ export class ImageryOffsetPanel {
     reset.addEventListener('click', () => { this.set({ east: 0, north: 0 }, true); this.confirm(); });
     buttons.append(ok, reset);
     el.append(head, lat.row, lon.row, this.info, buttons);
-    map.getContainer().append(el);
+    this.snapEl = document.createElement('div');
+    this.snapEl.className = 'snap-marker';
+    this.snapEl.hidden = true;
+    map.getContainer().append(el, this.snapEl);
 
     // Щелчки по карте, пока панель открыта, — только для сдвига (до обработчиков MapLibre и инструментов)
     const onCanvas = (e: Event) => !el.hidden && map.getCanvasContainer().contains(e.target as Node);
@@ -104,6 +123,7 @@ export class ImageryOffsetPanel {
     this.before = this.offset = getOffset(id);
     this.title.textContent = tr('Смещение: {name}', { name: IMAGERY.find((i) => i.id === id)?.name ?? id });
     this.el.hidden = false;
+    this.hooks.onOpen?.(true);
     this.place();
     this.syncInputs();
   }
@@ -158,29 +178,76 @@ export class ImageryOffsetPanel {
 
   private onClick(e: MouseEvent) {
     const r = this.map.getCanvasContainer().getBoundingClientRect();
-    const at = this.map.unproject([e.clientX - r.left, e.clientY - r.top]);
-    if (this.anchor) this.stopMove(false);
-    else {
+    const pt: [number, number] = [e.clientX - r.left, e.clientY - r.top];
+    if (this.anchor) {
+      this.dragTo(this.target(pt).lngLat); // конец — с привязкой
+      this.stopMove(false);
+    } else {
+      // Начало — точка на снимке, без привязок к данным
+      const at = this.map.unproject(pt);
       this.anchor = { at, base: this.offset };
       this.map.getCanvas().style.cursor = 'grabbing';
+      this.drawAnchor(at, at);
       this.syncInputs();
     }
   }
 
+  /** Куда ведём: привязка под курсором или точка на земле. */
+  private target(pt: [number, number]): { lngLat: LngLat; snap?: OffsetSnap } {
+    const snap = this.hooks.snap?.(pt);
+    return snap ? { lngLat: snap.lngLat, snap } : { lngLat: this.map.unproject(pt) };
+  }
+
   private onMove(e: MapMouseEvent) {
+    if (!this.anchor || this.el.hidden) return;
+    const t = this.target([e.point.x, e.point.y]);
+    this.showSnap(t.snap);
+    this.dragTo(t.lngLat);
+  }
+
+  /** Сдвиг, при котором точка снимка из первого щелчка оказывается в to. */
+  private dragTo(to: LngLat) {
     const a = this.anchor;
-    if (!a || this.el.hidden) return;
+    if (!a) return;
     const lat = (a.at.lat * Math.PI) / 180;
+    this.drawAnchor(a.at, to);
     this.set({
-      east: a.base.east + (R * ((e.lngLat.lng - a.at.lng) * Math.PI)) / 180 * Math.cos(lat),
-      north: a.base.north + (R * ((e.lngLat.lat - a.at.lat) * Math.PI)) / 180,
+      east: a.base.east + (R * ((to.lng - a.at.lng) * Math.PI)) / 180 * Math.cos(lat),
+      north: a.base.north + (R * ((to.lat - a.at.lat) * Math.PI)) / 180,
     });
+  }
+
+  private showSnap(s: OffsetSnap | undefined) {
+    this.snapEl.hidden = !s;
+    if (!s) return;
+    this.snapEl.className = `snap-marker ${s.kind}`;
+    this.snapEl.dataset.label = s.label;
+    this.snapEl.style.left = `${s.point[0]}px`;
+    this.snapEl.style.top = `${s.point[1]}px`;
+  }
+
+  /** Отметка точки первого щелчка и пунктир до текущего конца; undefined — убрать. */
+  private drawAnchor(from: LngLat | undefined, to?: LngLat) {
+    const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: from ? [
+      { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [from.lng, from.lat] } },
+      ...(to ? [{ type: 'Feature' as const, properties: {}, geometry: { type: 'LineString' as const, coordinates: [[from.lng, from.lat], [to.lng, to.lat]] } }] : []),
+    ] : [] };
+    const src = this.map.getSource(ANCHOR) as GeoJSONSource | undefined;
+    if (src) { src.setData(data); return; }
+    if (!from) return;
+    this.map.addSource(ANCHOR, { type: 'geojson', data });
+    this.map.addLayer({ id: `${ANCHOR}-line`, type: 'line', source: ANCHOR, filter: ['==', ['geometry-type'], 'LineString'],
+      paint: { 'line-color': '#ff7a00', 'line-width': 2, 'line-dasharray': [2, 1.5] } });
+    this.map.addLayer({ id: `${ANCHOR}-point`, type: 'circle', source: ANCHOR, filter: ['==', ['geometry-type'], 'Point'],
+      paint: { 'circle-radius': 5, 'circle-color': '#ff7a00', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
   }
 
   private stopMove(revert: boolean) {
     const a = this.anchor;
     this.anchor = undefined;
     this.map.getCanvas().style.cursor = '';
+    this.showSnap(undefined);
+    this.drawAnchor(undefined);
     if (revert && a) this.set(a.base, true);
     else this.apply();
     this.syncInputs();
@@ -206,7 +273,7 @@ export class ImageryOffsetPanel {
     if (!this.id) return;
     storeOffset(this.id, this.offset);
     refreshImagery(this.map, this.id);
-    this.onChange(this.id);
+    this.hooks.onChange(this.id);
   }
 
   private syncInputs() {
@@ -226,12 +293,17 @@ export class ImageryOffsetPanel {
   private confirm() {
     if (this.anchor) this.stopMove(false);
     this.apply();
-    this.el.hidden = true;
+    this.close();
   }
 
   private cancel() {
     if (this.anchor) this.stopMove(true);
     this.set(this.before, true);
+    this.close();
+  }
+
+  private close() {
     this.el.hidden = true;
+    this.hooks.onOpen?.(false);
   }
 }

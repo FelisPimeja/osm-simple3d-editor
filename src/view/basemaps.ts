@@ -234,7 +234,7 @@ export class BasemapButton {
       input.addEventListener('change', () => { if (input.checked) this.select(id); });
       row.append(input, ` ${label}`);
       if (id !== MAP_BASEMAP) {
-        // Смещение снимка: подсвечена, если снимок сдвинут
+        // Смещение снимка (видна у выбранного)
         const off = document.createElement('button');
         off.type = 'button';
         off.className = 'basemap-offset-btn';
@@ -299,6 +299,10 @@ export class BasemapButton {
   sync() {
     this.btn.classList.toggle('active', this.current !== MAP_BASEMAP || this.gps);
     for (const input of this.menu.querySelectorAll<HTMLInputElement>('input[type=radio]')) input.checked = input.value === this.current;
-    for (const [id, b] of this.offsetBtns) b.classList.toggle('active', isOffset(getOffset(id)));
+    // Кнопка смещения — только у выбранного снимка; синяя, если он сдвинут
+    for (const [id, b] of this.offsetBtns) {
+      b.hidden = id !== this.current;
+      b.classList.toggle('active', isOffset(getOffset(id)));
+    }
   }
 }

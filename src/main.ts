@@ -1272,6 +1272,7 @@ window.addEventListener('blur', () => { overpassLayer.snapsSuspended = false; })
 function updateSnapMarker(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
   if (point && pushTool.state === 'push') pushTool.move(point);
+  if (pushTool.state === 'pick') pushTool.hover(point, shiftHeld);
   if (point && splitTool.state === 'cut') splitTool.move(point);
   if (point && drawTool.active) drawTool.move(point);
   if (point && measureTool.active) measureTool.move(point);
@@ -1358,6 +1359,30 @@ const pushTool = new PushTool(overpassLayer, map.getContainer(),
     toolHint(hint);
   });
 pushBtn.addEventListener('click', () => (pushTool.active ? pushTool.stop() : startPush()));
+// Контур грани для подсветки при Shift: верх — по верху стен, низ — по основанию, стена — прямоугольник стены
+pushTool.faceOutline = (t) => {
+  const f = entity(t.key) as Feature3D | undefined;
+  const polys = overpassLayer.focusPolygons(t.key);
+  if (!f || !polys) return [];
+  const h = computeHeights(f.tags);
+  const at = (z: number) => (r: [number, number][]) => r.map(([x, y]) => new THREE.Vector3(x, y, z));
+  if (t.face !== 'side') return polys.flatMap((p) => [p.outer, ...p.inners].map(at(t.face === 'top' ? h.wallTop : h.min)));
+  const p = polys[t.edge!.poly];
+  const ring = t.edge!.ring ? p?.inners[t.edge!.ring - 1] : p?.outer;
+  if (!ring) return [];
+  const [a, b] = [ring[t.edge!.i], ring[(t.edge!.i + 1) % ring.length]];
+  return [[new THREE.Vector3(a[0], a[1], h.min), new THREE.Vector3(b[0], b[1], h.min), new THREE.Vector3(b[0], b[1], h.wallTop), new THREE.Vector3(a[0], a[1], h.wallTop)]];
+};
+// Shift в «Вытянуть»: подсветить заднюю грань под курсором, пока клавиша зажата
+let shiftHeld = false;
+for (const type of ['keydown', 'keyup'] as const) {
+  window.addEventListener(type, (e) => {
+    if (e.key !== 'Shift' || shiftHeld === (type === 'keydown')) return;
+    shiftHeld = type === 'keydown';
+    if (pushTool.state === 'pick') pushTool.hover(lastPointer, shiftHeld);
+  });
+}
+window.addEventListener('blur', () => { shiftHeld = false; if (pushTool.state === 'pick') pushTool.hover(undefined, false); });
 
 function startPush() {
   if (!focus) return;

@@ -26,7 +26,8 @@ const EDGE_EPS = 0.15;
 /**
  * Инструмент «Вытянуть» (как Push/Pull в SketchUp):
  * 1. клик по крыше — тянем верх (height); по стене — эту стену наружу/внутрь (два узла контура);
- *    по нижней грани — низ (min_height). Shift — задняя грань под курсором: дно или дальняя стена;
+ *    по нижней грани — низ (min_height). Shift — задняя грань под курсором: дно или дальняя стена
+ *    (пока Shift зажат, эта грань обведена контуром);
  * 2. движение курсора — верх/низ едут по вертикали, стена — по своей нормали; привязка к точке
  *    другого объекта выравнивает грань по ней;
  * 3. второй клик — применить; число + Enter — сдвиг в метрах или этажах (минус — внутрь/вниз). Esc — отмена.
@@ -48,6 +49,9 @@ export class PushTool {
   glue = loadGlue();
   /** Сколько соседей тянется вместе со стеной в текущем превью (задаёт preview). */
   linked = 0;
+  /** Контур грани t в метрах сцены (для подсветки грани под курсором при Shift); задаётся снаружи. */
+  faceOutline?: (t: PushTarget) => THREE.Vector3[][];
+  private outlined = false;
 
   constructor(
     private readonly layer: BuildingsLayer,
@@ -115,6 +119,7 @@ export class PushTool {
   }
 
   stop() {
+    this.hover(undefined, false);
     this.cancel();
     this.state = 'off';
     this.vcb.hidden = true;
@@ -164,11 +169,24 @@ export class PushTool {
     return { poly: best.poly, ring: best.ring, i: best.i, n };
   }
 
+  /**
+   * Подсветка контуром грани, которую возьмёт клик с Shift (задняя грань под курсором): пока инструмент ждёт
+   * клика и Shift зажат. Без Shift или point — снять.
+   */
+  hover(point: [number, number] | undefined, back: boolean) {
+    const t = this.state === 'pick' && back && point ? this.faceAt(point, true) : undefined;
+    const rings = t && this.faceOutline?.(t);
+    if (!rings?.length && !this.outlined) return;
+    this.outlined = !!rings?.length;
+    this.layer.setOutline(rings?.length ? rings : undefined);
+  }
+
   /** back — Shift: задняя грань под курсором. */
   click(point: [number, number], back = false): boolean {
     if (this.state === 'pick') {
       const t = this.faceAt(point, back);
       if (!t) return false;
+      this.hover(undefined, false);
       if (t.face === 'side' && !this.allowSide(t)) return true;
       this.target = t;
       this.dz = 0;

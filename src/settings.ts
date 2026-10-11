@@ -16,21 +16,37 @@ const CHANGED_KEY = 'osm3d.prefs.changed';
 /** Когда последний раз сверялись с профилем на сервере (мс). */
 const syncedKey = (s: OsmServer) => `osm3d.prefs.synced.${s.id}`;
 
-interface Setting {
+/** Что изменилось после применения значения из профиля. */
+export type Applied = 'same' | 'live' | 'reload';
+
+export interface Setting {
+  /** Ключ в профиле без префикса (simple3d:<key>); значение — до 255 символов. */
   key: string;
-  /** Явно выбранное значение в этом браузере (undefined — не выбирали, действует умолчание). */
+  /** Значение для профиля; undefined — в профиле этой настройки быть не должно (не выбирали или выключено). */
   local(): string | undefined;
-  /** Принять значение из профиля; false — значение не подходит. */
-  apply(v: string): boolean;
+  /** Принять значение из профиля (undefined — в профиле его нет). */
+  apply(v: string | undefined): Applied;
+  /** Нет в профиле, а здесь выбрано — занести (язык, выбранный до появления синхронизации). */
+  seed?: boolean;
 }
 
 const SETTINGS: Setting[] = [
   {
     key: 'locale',
     local: () => storedLang(),
-    apply: (v) => { if (!isLang(v)) return false; storeLang(v); return true; },
+    apply: (v) => {
+      if (!isLang(v)) return 'same';
+      storeLang(v);
+      return v === lang ? 'same' : 'reload';
+    },
+    seed: true,
   },
 ];
+
+/** Добавить настройку (из main.ts — у кого её состояние). */
+export function registerSetting(st: Setting) {
+  SETTINGS.push(st);
+}
 
 function num(key: string): number {
   try { return Number(localStorage.getItem(key)) || 0; } catch { return 0; }
@@ -53,15 +69,22 @@ async function readProfile(s: OsmServer): Promise<Record<string, string>> {
   return preferences ?? {};
 }
 
-async function writeProfile(s: OsmServer, key: string, value: string) {
-  await api(s, `/${encodeURIComponent(PREFIX + key)}`, { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: value });
+async function writeProfile(s: OsmServer, key: string, value: string | undefined) {
+  const path = `/${encodeURIComponent(PREFIX + key)}`;
+  if (value !== undefined) {
+    await api(s, path, { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: value });
+    return;
+  }
+  try { await api(s, path, { method: 'DELETE' }); } catch (err) {
+    if (!String(err).includes('404')) throw err; // и так нет
+  }
 }
 
-/** Отправить в профиль все явно выбранные настройки. */
-async function push(s: OsmServer) {
+/** Привести профиль к настройкам этого браузера: записать отличающиеся, удалить лишние. */
+async function push(s: OsmServer, profile: Record<string, string>) {
   for (const st of SETTINGS) {
     const v = st.local();
-    if (v !== undefined) await writeProfile(s, st.key, v);
+    if (v !== profile[PREFIX + st.key]) await writeProfile(s, st.key, v);
   }
   stamp(syncedKey(s));
 }
@@ -76,40 +99,49 @@ export function syncStatus(s: OsmServer = server()): SyncStatus {
 
 /**
  * Сверить настройки с профилем (после входа и при загрузке страницы с сохранённым токеном).
- * Возвращает язык из профиля, если он отличается от текущего (применится перезагрузкой).
+ * true — пришло значение, которое применится только перезагрузкой страницы (язык, сглаживание).
  */
-export async function syncPrefs(s: OsmServer = server()): Promise<Lang | undefined> {
-  if (!getToken(s)) return;
-  const localNewer = num(CHANGED_KEY) > num(syncedKey(s));
-  if (localNewer && canWritePrefs(s)) { await push(s); return; }
+export async function syncPrefs(s: OsmServer = server()): Promise<boolean> {
+  if (!getToken(s)) return false;
   const profile = await readProfile(s);
-  const missing: Setting[] = [];
+  const writable = canWritePrefs(s);
+  // Здесь меняли после последней сверки — главный браузер
+  if (num(CHANGED_KEY) > num(syncedKey(s))) {
+    if (writable) await push(s, profile);
+    return false;
+  }
+  let reload = false;
   for (const st of SETTINGS) {
     const v = profile[PREFIX + st.key];
-    if (v === undefined) missing.push(st);
-    else if (!localNewer) st.apply(v);
+    if (v === undefined && st.seed && st.local() !== undefined) continue; // занесём ниже
+    if (st.apply(v) === 'reload') reload = true;
   }
-  // В профиле ещё нет выбранного здесь значения — заносим
-  if (canWritePrefs(s) && missing.some((st) => st.local() !== undefined)) await push(s);
-  else if (!localNewer) stamp(syncedKey(s));
-  const l = storedLang();
-  return l && l !== lang ? l : undefined;
+  if (writable && SETTINGS.some((st) => st.seed && profile[PREFIX + st.key] === undefined && st.local() !== undefined)) await push(s, profile);
+  else stamp(syncedKey(s));
+  return reload;
 }
 
 /**
- * Пользователь сменил язык. Запоминает в браузере и, если можно, в профиле;
- * false — в профиль записать не удалось (запишется при следующей синхронизации).
+ * Настройку изменили здесь (новое значение уже в local()). Записывает в профиль, если можно;
+ * false — записать не удалось (запишется при следующей сверке).
  */
-export async function saveLang(l: Lang, s: OsmServer = server()): Promise<boolean> {
-  storeLang(l);
+export async function saveSetting(key: string, s: OsmServer = server()): Promise<boolean> {
   stamp(CHANGED_KEY);
-  if (syncStatus(s) !== 'synced') return syncStatus(s) === 'local';
+  const status = syncStatus(s);
+  if (status !== 'synced') return status === 'local';
+  const st = SETTINGS.find((x) => x.key === key)!;
   try {
-    await writeProfile(s, 'locale', l);
+    await writeProfile(s, key, st.local());
     stamp(syncedKey(s));
     return true;
   } catch (err) {
     console.warn('OSM preferences:', err);
     return false;
   }
+}
+
+/** Пользователь сменил язык (применится перезагрузкой). */
+export function saveLang(l: Lang, s: OsmServer = server()): Promise<boolean> {
+  storeLang(l);
+  return saveSetting('locale', s);
 }

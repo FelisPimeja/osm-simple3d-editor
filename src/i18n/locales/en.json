@@ -704,7 +704,6 @@
   "Сохраняются в профиле {name} на {server}.": "Saved to the profile of {name} on {server}.",
   "Настройки берутся из профиля на {server}, но записать их туда нельзя: при входе не было разрешения изменять настройки.": "Settings are read from your {server} profile but can’t be saved there: the login didn’t grant permission to modify preferences.",
   "Войти заново": "Log in again",
-  "В профиле выбран другой язык интерфейса — он включится при следующей загрузке страницы.": "Your profile has a different interface language; it will apply the next time the page loads.",
   "Приложение OAuth на {server} не разрешает изменять настройки пользователя. Нажмите «Войти» ещё раз — вход будет без сохранения настроек в профиле.": "The OAuth application on {server} isn’t allowed to modify user preferences. Click “Log in” again to log in without saving settings to your profile.",
   "Настройки пользователя": "User settings",
   "Язык интерфейса и другие личные настройки": "Interface language and other personal settings",
@@ -720,5 +719,8 @@
   "JOSM не отвечает на localhost:8111: запустите JOSM и включите Remote Control (Настройки → Remote Control). Если браузер спросил о доступе к локальной сети — разрешите.": "JOSM is not responding on localhost:8111: start JOSM and enable Remote Control (Preferences → Remote Control). If the browser asks for local network access, allow it.",
   "JOSM запретил экспорт: включите «Export data from JOSM» в Настройках → Remote Control.": "JOSM refused the export: enable “Export data from JOSM” in Preferences → Remote Control.",
   "JOSM ответил {status} на {path}": "JOSM responded {status} to {path}",
-  "JOSM отдал не .osm (ошибка разбора XML)": "JOSM did not return .osm data (XML parse error)"
+  "JOSM отдал не .osm (ошибка разбора XML)": "JOSM did not return .osm data (XML parse error)",
+  "Настройки из профиля применятся полностью при следующей загрузке страницы.": "Settings from your profile will fully apply the next time the page loads.",
+  "Хранить графические настройки": "Keep graphics settings",
+  "Галки «Убрать цвета» и «Настройки графики» сохраняются вместе с остальными настройками и применяются на других устройствах": "The “Hide colors” and “Graphics settings” checkboxes are saved along with your other settings and applied on other devices"
 }

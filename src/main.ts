@@ -4825,18 +4825,24 @@ dateSpeed.addEventListener('change', () => {
   if (playTimer) { stopPlay(); startPlay(); }
 });
 
-/** Слой JOSM: первая загрузка; карта переходит к его данным. */
-async function loadJosm() {
-  panelStatus(tr('Читаю данные из JOSM…'));
+/**
+ * Слой JOSM: первая загрузка; карта переходит к его данным. Не вышло (JOSM не запущен) — опрос повторяет
+ * загрузку (retry): ошибка тогда только в строке панели, а тайлы с ошибкой перечитываются.
+ */
+let josmReady = false;
+async function loadJosm(retry = false) {
+  if (!retry) panelStatus(tr('Читаю данные из JOSM…'));
   try {
     const { elements, bbox } = await josmLayer().then(josmApplied);
+    josmReady = true;
+    if (retry) await overpass.refreshJosm();
     setStatus(trn(elements.length, 'Из JOSM: {n} объект.|Из JOSM: {n} объекта.|Из JOSM: {n} объектов.'));
     if (!bbox) return;
     // Не мельче зума, с которого грузятся данные: иначе слой JOSM не покажется
     const cam = map.cameraForBounds(bbox, { padding: 40, maxZoom: 18 });
     map.jumpTo({ center: cam?.center, zoom: Math.max(cam?.zoom ?? 0, OVERPASS_MIN_ZOOM) });
   } catch (err) {
-    setStatus((err as Error).message, true);
+    if (retry) panelStatus((err as Error).message, true); else setStatus((err as Error).message, true);
   }
 }
 
@@ -4851,6 +4857,7 @@ function josmApplied(l: JosmLayer): JosmLayer {
 async function pollJosm() {
   try {
     if (document.hidden || toolActive()) return;
+    if (!josmReady) { await loadJosm(true); return; }
     const next = await pollJosmLayer();
     if (next) { josmApplied(next); await overpass.refreshJosm(); }
   } finally { setTimeout(pollJosm, 2000); }

@@ -260,6 +260,7 @@
   "Применено исправлений: {n} (объектов: {objects}).": "Fixes applied: {n} (objects: {objects}).",
   "Исправлено: {fix}.": "Fixed: {fix}.",
   "{key} — не загружен": "{key}: not loaded",
+  "{key} — нет в {year} году (слайдер времени)": "{key}: does not exist in {year} (time slider)",
   "Показать": "Show",
   "Скрыть": "Hide",
   "Выделить все: {kind}": "Select all: {kind}",

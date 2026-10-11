@@ -360,6 +360,10 @@ const outlinerEl = document.getElementById('outliner')!;
 const outlinerCount = document.getElementById('outliner-count')!;
 /** Скрытые глазиком части в режиме здания — только показ, на данные не влияет. */
 const focusHidden = new Set<string>();
+/** Части здания, которых нет в году слайдера времени (OHM), — скрыты в сцене, как глазиком; на данные не влияет. */
+let focusDated = new Set<string>();
+/** Часть скрыта в режиме здания: глазиком или по дате — её не выделить и не править в сцене. */
+const hiddenInFocus = (k: string) => focusHidden.has(k) || focusDated.has(k);
 const editsCount = document.getElementById('edits-count')!;
 /** Было ли в панели правок что показать при прошлой отрисовке: раскрываем/сворачиваем только на переходе. */
 let editsHadContent = false;
@@ -1083,7 +1087,7 @@ function enterFocus(g: BuildingGroup, flyIn = true) {
   syncMapTools();
   orbit.setUnderground(true);
   overpassLayer.setFocus(groupFeatures(g), bareOutlines(g));
-  overpassLayer.setFocusHidden(focusHidden);
+  syncFocusHidden();
   // На следующем кадре: внутри обработки dblclick MapLibre после обработчиков останавливает камеру (stop)
   if (fly) requestAnimationFrame(flyToFocus);
   addingTo = undefined;
@@ -1194,6 +1198,7 @@ function exitFocus() {
   setEditParam(undefined);
   if (tilesStale) { tilesStale = false; overpass.rerenderFeatures(staleKeys); staleKeys.clear(); }
   focusHidden.clear();
+  focusDated.clear();
   session.dropViewActions();
   overpassLayer.setHover(undefined);
   moveTool.stop();
@@ -1345,7 +1350,7 @@ function startRotate() {
 // Инструмент «Вытянуть»: верх/низ по вертикали (height / min_height) и стены по нормали (узлы контура)
 const pushBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="push"]')!;
 const pushTool = new PushTool(overpassLayer, map.getContainer(),
-  (key) => !!focus?.members.includes(key) && !focusHidden.has(key),
+  (key) => !!focus?.members.includes(key) && !hiddenInFocus(key),
   allowPushSide, clampPush, previewPush, commitPush,
   (hint) => {
     pushBtn.classList.toggle('active', pushTool.active);
@@ -1400,7 +1405,7 @@ function startMeasure() {
 // Инструмент «Заливка» (B): Ctrl+клик — взять цвет и материал поверхности, клик — назначить
 const paintBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="paint"]')!;
 const paintTool = new PaintTool(overpassLayer,
-  (key) => !!focus?.members.includes(key) && !focusHidden.has(key),
+  (key) => !!focus?.members.includes(key) && !hiddenInFocus(key),
   (key, face) => {
     const t = PAINT_TAGS[face];
     const own = entity(key)?.tags ?? {};
@@ -1434,7 +1439,7 @@ function startPaint() {
 const offsetBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="offset"]')!;
 const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
   (point, back) => {
-    const member = (k: string) => !!focus?.members.includes(k) && !focusHidden.has(k);
+    const member = (k: string) => !!focus?.members.includes(k) && !hiddenInFocus(k);
     // Ребро (вершина, середина) верхнего или нижнего контура плоской грани — сразу эта грань
     const snap = overpassLayer.snapAt(point, member);
     if (snap && (snap.kind === 'edge' || snap.kind === 'vertex' || snap.kind === 'midpoint')) {
@@ -1990,7 +1995,7 @@ function segDist2([px, py]: [number, number], [ax, ay]: [number, number], [bx, b
 /** Почему объект нельзя рассечь (undefined — можно). */
 function splitReason(key: string): string | undefined {
   if (isSolo(focus) && key !== focus!.members[0]) return tr('Копию режьте отдельно: выйдите и откройте её двойным кликом.');
-  if (!focus?.members.includes(key) || focusHidden.has(key)) return tr('Резать можно только части этого здания.');
+  if (!focus?.members.includes(key) || hiddenInFocus(key)) return tr('Резать можно только части этого здания.');
   const f = entity(key) as Feature3D | undefined;
   if (!f?.polygons) return tr('Объект не найден.');
   if (!key.startsWith('way/')) return tr('Пока режутся только простые контуры (линии), не мультиполигоны.');
@@ -3052,7 +3057,7 @@ function toggleSelection(key: string) {
 
 /** Добавить к выделению несколько объектов (рамкой). */
 function addToSelection(keys: string[]) {
-  const add = keys.filter((k) => !selection.includes(k) && !focusHidden.has(k) && entity(k));
+  const add = keys.filter((k) => !selection.includes(k) && !hiddenInFocus(k) && entity(k));
   if (!add.length) return;
   clearTileHighlight();
   selection = [...selection, ...add];
@@ -3101,7 +3106,7 @@ window.addEventListener('mouseup', (e) => {
   const keys = new Set<string>();
   // В режиме здания тайлы не пересобираются до выхода (нет новых частей, старая геометрия) — берём само здание
   const candidates = focus
-    ? groupFeatures(focus).filter((f) => f.polygons?.length && !focusHidden.has(f.key)).map((feature) => ({ feature }))
+    ? groupFeatures(focus).filter((f) => f.polygons?.length && !hiddenInFocus(f.key)).map((feature) => ({ feature }))
     : overpass.renderedFeatures();
   const inBox = candidates.filter(({ feature: f }) => {
     const p = map.project(centroid(f.polygons[0].outer));
@@ -3770,9 +3775,10 @@ function renderOutliner() {
   rows.sort((a, b) => rank(a) - rank(b));
   outlinerCount.textContent = `(${rows.length})`;
   const row = (r: (typeof rows)[number], child: boolean) => {
-    const off = focusHidden.has(r.key);
-    const cls = [child && 'ol-child', selection.includes(r.key) && 'selected', off && 'off', !r.f && 'missing'].filter(Boolean).join(' ');
-    const title = r.f ? r.key : tr('{key} — не загружен', { key: r.key });
+    const off = focusHidden.has(r.key), dated = focusDated.has(r.key);
+    const cls = [child && 'ol-child', selection.includes(r.key) && 'selected', off && 'off', dated && 'dated', !r.f && 'missing'].filter(Boolean).join(' ');
+    const title = !r.f ? tr('{key} — не загружен', { key: r.key })
+      : dated ? tr('{key} — нет в {year} году (слайдер времени)', { key: r.key, year: ohm.year }) : r.key;
     return `<li class="${cls}" data-key="${esc(r.key)}" title="${esc(title)}">
       <span class="ol-icon" title="${esc(r.kind.title)}">${r.kind.icon}</span>
       <span class="ol-label">${child && !r.f?.tags.name ? `<span class="ol-key bare">${esc(r.key)}</span>` : `${esc(r.f?.tags.name ?? r.kind.label)}<span class="ol-key">${esc(r.key)}</span>`}</span>
@@ -3794,7 +3800,7 @@ function renderOutliner() {
     outlinerGroups.set(r.kind.label, keys);
     const collapsed = collapsedKinds.has(r.kind.label);
     const allOff = keys.every((k) => focusHidden.has(k));
-    const live = keys.filter((k) => entity(k) && !focusHidden.has(k));
+    const live = keys.filter((k) => entity(k) && !hiddenInFocus(k));
     const sel = live.length > 0 && live.every((k) => selection.includes(k));
     const cls = ['ol-group', collapsed && 'collapsed', sel && 'selected', allOff && 'off'].filter(Boolean).join(' ');
     html.push(`<li class="${cls}" data-group="${esc(r.kind.label)}" title="${tr('Выделить все: {kind}', { kind: esc(r.kind.label) })}">
@@ -3827,7 +3833,7 @@ outlinerEl.addEventListener('click', (e) => {
     changeFocusHidden(next);
     return;
   }
-  const live = keys.filter((k) => entity(k) && !focusHidden.has(k));
+  const live = keys.filter((k) => entity(k) && !hiddenInFocus(k));
   if (!e.shiftKey) { select(undefined); addToSelection(live); return; }
   if (live.length && live.every((k) => selection.includes(k))) {
     // Вся группа уже выделена — Shift+клик снимает её
@@ -4130,13 +4136,26 @@ function changeFocusHidden(next: Set<string>) {
   session.pushView({ undo: () => applyFocusHidden(prev), redo: () => applyFocusHidden(next) });
 }
 
+/**
+ * Передать сцене скрытые части: глазиком и по дате слайдера времени. changed — только если набор частей,
+ * которых нет в году слайдера, поменялся (правка start_date / end_date): пересборка геометрии не бесплатна.
+ */
+function syncFocusHidden(changed = false): boolean {
+  if (!focus) return false;
+  const dated = new Set(focus.members.filter((k) => { const f = entity(k); return !!f && !overpass.isVisible(f as Feature3D); }));
+  if (changed && dated.size === focusDated.size && [...dated].every((k) => focusDated.has(k))) return false;
+  focusDated = dated;
+  overpassLayer.setFocusHidden([...focusHidden, ...dated]);
+  return true;
+}
+
 function applyFocusHidden(keys: Set<string>) {
   if (!focus) return;
   const hiding = [...keys].some((k) => !focusHidden.has(k));
   focusHidden.clear();
   for (const k of keys) focusHidden.add(k);
   if (hiding) outlinerUnhover();
-  overpassLayer.setFocusHidden(focusHidden);
+  syncFocusHidden();
   renderOutliner();
 }
 document.addEventListener('pointerdown', (e) => { if (!ctxMenu.contains(e.target as Node)) closeCtxMenu(); }, true);
@@ -4148,7 +4167,7 @@ window.addEventListener('blur', closeCtxMenu);
 outlinerEl.addEventListener('mouseover', (e) => {
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
   const key = li?.dataset.key;
-  if (key && !focusHidden.has(key)) {
+  if (key && !hiddenInFocus(key)) {
     overpassLayer.setHover(key);
   } else outlinerUnhover();
 });
@@ -4492,6 +4511,8 @@ function onSessionChange(keys: string[]) {
       const f = focus.members.includes(k) ? session.get(k) as Feature3D | undefined : undefined;
       if (f?.polygons) overpassLayer.previewFocusFeature(f);
     }
+    // Правка start_date / end_date могла убрать часть из года слайдера времени или вернуть
+    syncFocusHidden(true);
   }
   // Созданный путь (рассечение) появился или исчез (отмена) — тайлы перерисовать. Это полная пересборка всех
   // видимых тайлов (сотни мс), а в режиме здания карта скрыта — откладываем до выхода из него
@@ -4507,7 +4528,7 @@ function onSessionChange(keys: string[]) {
     // Отменили создание отношения из отдельного здания — назад к нему одному
     const outline = focus.members.find((_, i) => focus!.roles[i] === 'outline');
     const back = !g && focus.id < 0 && outline ? soloGroup(outline) : undefined;
-    if (g || back) { drill = focus = (g ?? back)!; overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus)); overpassLayer.setFocusHidden(focusHidden); } else closeFocus();
+    if (g || back) { drill = focus = (g ?? back)!; overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus)); syncFocusHidden(); } else closeFocus();
   } else if (isSolo(focus)) {
     // Повтор рассечения: отдельное здание снова в отношении
     const g = groupOf(focus!.members[0]);
@@ -4518,7 +4539,7 @@ function onSessionChange(keys: string[]) {
       if (gone.length) {
         drill = focus = { ...focus!, members: focus!.members.filter((k) => !gone.includes(k)), roles: focus!.roles.filter((_, i) => !gone.includes(focus!.members[i])) };
         overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
-        overpassLayer.setFocusHidden(focusHidden);
+        syncFocusHidden();
       }
     }
   }
@@ -4975,6 +4996,12 @@ function applyDate() {
   const span = on ? yearsSpan(ohm.year, ohm.year) : undefined;
   if (map.getSource('ohm')) applyBasemapDate(map, 'ohm', span);
   overpass.setFeatureFilter(span === undefined ? () => true : (f) => existsIn(f.tags, span));
+  // В режиме здания сцена — своя, не из тайлов: части не того года скрываем в ней
+  if (focus && syncFocusHidden(true)) {
+    outlinerUnhover();
+    if (selection.some((k) => focusDated.has(k))) select(undefined);
+    renderOutliner();
+  }
 }
 
 function setYear(y: number) {

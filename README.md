@@ -1,22 +1,43 @@
 # OSM Simple 3D Editor
 
-Браузерный 3D-редактор зданий для OpenStreetMap по схеме [Simple 3D Buildings](https://wiki.openstreetmap.org/wiki/Simple_3D_Buildings).
-Также работает с OpenHistoricalMap и OpenGeofiction.
+**English** · [Русский](README.ru.md)
 
-Открыть редактор: https://felispimeja.github.io/osm-simple3d-editor/
+A browser-based 3D building editor for OpenStreetMap, following the [Simple 3D Buildings](https://wiki.openstreetmap.org/wiki/Simple_3D_Buildings) tagging scheme.
+It also works with OpenHistoricalMap and OpenGeofiction.
 
-## Языки интерфейса
+Open the editor: https://felispimeja.github.io/osm-simple3d-editor/
 
-Русский и английский. Язык выбирается в панели настроек; при первом запуске — по языку браузера и системы
-(русский для ru, иначе английский).
+## Features
 
-Строки интерфейса пишутся в коде по-русски через `tr('…')` / `trn(n, '…')` (см. `src/i18n/index.ts`) и служат
-ключами перевода. Словари — плоские JSON в `src/i18n/locales/`: `ru.json` — исходный файл (собирается из кода
-командой `npm run i18n:extract`), `en.json` — перевод. `npm run i18n:check` проверяет, что английский перевод
-полный, лишних строк нет, а подстановки `{…}` совпадают. Строки с числом содержат формы через `|`
-(русские — для 1, 2, 5; английские — для 1 и остальных).
+- 3D view of buildings and building parts on a MapLibre map, with roofs (flat, pyramidal, gabled, hipped and more).
+- Tag panel for `height`, `min_height`, `building:levels`, `building:min_level`, `roof:*` and colours, with undo/redo and a before/after diff.
+- Single-building mode: open one building in its own scene and edit its parts.
+- Geometry tools: draw polygons, split, extrude and move, with SketchUp-like snapping and guides.
+- `type=building` relations: create them and manage their members.
+- Validator with automatic fixes, and a changeset comment generator.
+- Basemaps: satellite imagery and OSM GPS traces, with imagery offset and opacity.
+- Upload via OAuth 2.0 directly to the OSM API, no backend required. Data can also be read from a locally running JOSM.
 
-## Лицензия
+## Interface languages
 
-Код распространяется по лицензии [ISC](LICENSE). Данные карты — по лицензиям соответствующих проектов
-(ODbL у OpenStreetMap и OpenHistoricalMap, своя у OpenGeofiction).
+Russian and English. The language is chosen in the settings panel; on first launch it follows the browser and system language
+(Russian for `ru`, English otherwise).
+
+UI strings are written in Russian in the code via `tr('…')` / `trn(n, '…')` (see `src/i18n/index.ts`) and serve as
+translation keys. Dictionaries are flat JSON files in `src/i18n/locales/`: `ru.json` is the source file (extracted from the code
+with `npm run i18n:extract`), `en.json` is the translation. `npm run i18n:check` verifies that the English translation is
+complete, has no extra strings, and that `{…}` placeholders match. Strings with a number contain plural forms separated by `|`
+(Russian: forms for 1, 2, 5; English: forms for 1 and other).
+
+## Development
+
+```sh
+npm install
+npm run dev     # local dev server (Vite)
+npm run build   # type check and production build
+```
+
+## License
+
+The code is distributed under the [ISC](LICENSE) license. Map data is licensed by the respective projects
+(ODbL for OpenStreetMap and OpenHistoricalMap, its own license for OpenGeofiction).

@@ -2504,19 +2504,59 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
   return out;
 }
 
+/**
+ * Концы вытягиваемой стены: новые места (сторона сдвигается на d по нормали, концы скользят по соседним сторонам —
+ * соседние стены сохраняют направление, как в SketchUp) и keep — соседняя сторона на одной прямой со стеной
+ * (промежуточный узел, например общий угол с соседней частью на этой стороне): такой угол не скользит, старый
+ * узел остаётся на месте, а новый угол встаёт рядом — между ними новая сторона поперёк.
+ */
+interface SideEnds { ids: number[]; was: LonLat[]; i: number; j: number; a: LonLat; b: LonLat; keepA: boolean; keepB: boolean }
+
+function pushSideEnds(f: Feature3D, edge: NonNullable<PushTarget['edge']>, d: number): SideEnds | undefined {
+  const p = f.polygons[edge.poly];
+  const ids = edge.ring ? p?.innerIds?.[edge.ring - 1] : p?.outerIds;
+  const was = edge.ring ? p?.inners[edge.ring - 1] : p?.outer;
+  if (!ids || !was) return;
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  const pts = was.map(local), n = pts.length;
+  const i = edge.i, j = (i + 1) % n;
+  const [nx, ny] = [edge.n.x * d, edge.n.y * d];
+  const a2: [number, number] = [pts[i][0] + nx, pts[i][1] + ny], b2: [number, number] = [pts[j][0] + nx, pts[j][1] + ny];
+  const ex = b2[0] - a2[0], ey = b2[1] - a2[1];
+  // Новый конец — пересечение сдвинутой стороны с прямой соседней стороны; почти параллельная — keep
+  const slide = (moved: [number, number], other: [number, number], self: [number, number]): { at: [number, number]; keep: boolean } => {
+    const sx = self[0] - other[0], sy = self[1] - other[1];
+    const den = ex * sy - ey * sx;
+    if (Math.hypot(sx, sy) < 1e-6) return { at: moved, keep: false };
+    if (Math.abs(den) < 1e-3 * Math.hypot(ex, ey) * Math.hypot(sx, sy)) return { at: moved, keep: Math.abs(d) > 1e-6 };
+    const t = ((other[0] - a2[0]) * sy - (other[1] - a2[1]) * sx) / den;
+    return { at: [a2[0] + t * ex, a2[1] + t * ey], keep: false };
+  };
+  const sa = slide(a2, pts[(i - 1 + n) % n], pts[i]), sb = slide(b2, pts[(j + 1) % n], pts[j]);
+  const ll = (q: [number, number]) => overpassLayer.focusToLngLat(q[0], q[1])!;
+  return { ids, was, i, j, a: ll(sa.at), b: ll(sb.at), keepA: sa.keep, keepB: sb.keep };
+}
+
+/** Кольцо стены после вытягивания: узлы (новые — из fresh) и координаты; fresh — новые id углов keep. */
+function pushedRing(e: SideEnds, fresh: Map<number, LonLat>): { ids: number[]; coords: LonLat[] } {
+  const ids: number[] = [], coords: LonLat[] = [];
+  const put = (id: number, c: LonLat) => { ids.push(id); coords.push(c); };
+  const add = (c: LonLat) => { const id = nextNewId--; fresh.set(id, c); put(id, c); };
+  for (let k = 0; k < e.ids.length; k++) {
+    if (k === e.i) { if (e.keepA) { put(e.ids[k], e.was[k]); add(e.a); } else put(e.ids[k], e.a); }
+    else if (k === e.j) { if (e.keepB) { add(e.b); put(e.ids[k], e.was[k]); } else put(e.ids[k], e.b); }
+    else put(e.ids[k], e.was[k]);
+  }
+  return { ids, coords };
+}
+
 /** Правки вытягивания стены: свободные углы двигаются, общие — заменяются новыми узлами (см. topologyEdits). */
 function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: number): ObjectEdit[] | string {
-  if (pushTool.glue) {
-    const moves = gluedSideMoves(f, edge, dz);
-    return moves ? nodeMoveEdits(moves) : tr('В кеше нет id узлов этого объекта.');
-  }
-  const moved = pushSidePolygons(f, edge, dz);
-  const p = f.polygons[edge.poly], q = moved[edge.poly];
-  const ids = edge.ring ? p.innerIds?.[edge.ring - 1] : p.outerIds;
-  if (!ids) return tr('В кеше нет id узлов этого объекта.');
-  const was = edge.ring ? p.inners[edge.ring - 1] : p.outer;
-  const now = edge.ring ? q.inners[edge.ring - 1] : q.outer;
-  const n = ids.length, i = edge.i, j = (i + 1) % n;
+  const e = pushSideEnds(f, edge, dz);
+  if (!e) return tr('В кеше нет id узлов этого объекта.');
+  if (pushTool.glue) return gluedSideEdits(f, edge, e);
+  const { ids, was, i, j } = e;
+  const n = ids.length;
   const shared = nodesOutside(new Set([f.key]));
   const outIds: number[] = [], outC: LonLat[] = [], inserts: Insert[] = [], fresh = new Map<number, LonLat>();
   const put = (id: number, c: LonLat) => { outIds.push(id); outC.push(c); };
@@ -2529,35 +2569,60 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
     return { t, off: Math.abs((cx - ax) * dy - (cy - ay) * dx) / Math.sqrt(l2) };
   };
   for (let k = 0; k < n; k++) {
-    if (k !== i && k !== j) { put(ids[k], now[k]); continue; }
-    if (!shared.has(ids[k])) { put(ids[k], now[k]); continue; } // свободный угол — просто сдвинуть
+    if (k !== i && k !== j) { put(ids[k], was[k]); continue; }
+    const at = k === i ? e.a : e.b;
+    // Угол на прямой с соседней стороной — старый остаётся, новый рядом (поперечная сторона)
+    if (k === i ? e.keepA : e.keepB) { if (k === i) { put(ids[k], was[k]); add(at); } else { add(at); put(ids[k], was[k]); } continue; }
+    if (!shared.has(ids[k])) { put(ids[k], at); continue; } // свободный угол — просто сдвинуть
     // Соседняя сторона: у начала стены — предыдущая, у конца — следующая
     const nb = k === i ? (i - 1 + n) % n : (j + 1) % n;
-    const { t, off } = along(was[nb], was[k], now[k]);
+    const { t, off } = along(was[nb], was[k], at);
     if (off < 1e-3 && t > 1e-6 && t < 1 - 1e-6) {
       // Внутрь: новый угол на соседней стороне — вставить его во все пути с этой стороной
-      inserts.push({ id: add(now[k]), u: ids[nb], v: ids[k] });
-    } else if (k === i) { put(ids[k], was[k]); add(now[k]); } // наружу: старый угол остаётся, новый — следом
-    else { add(now[k]); put(ids[k], was[k]); }
+      inserts.push({ id: add(at), u: ids[nb], v: ids[k] });
+    } else if (k === i) { put(ids[k], was[k]); add(at); } // наружу: старый угол остаётся, новый — следом
+    else { add(at); put(ids[k], was[k]); }
   }
   return topologyEdits([{ f, rewrites: [{ poly: edge.poly, ring: edge.ring, ids: outIds, coords: outC }] }], inserts, fresh);
 }
 
 /**
- * Вытягивание стены «с соседями»: углы стены едут по своим соседним сторонам (как у одиночного объекта), общие
- * узлы не заменяются — соседи с этими узлами тянутся следом. Чужие узлы на самой стене (Т-образные стыки,
- * вставленные соседями углы) переносятся на то же место новой стены. Узел → новые координаты.
+ * Вытягивание стены «с соседями»: общие узлы не заменяются — соседи с ними тянутся следом (moves из gluedSideMoves).
+ * Углы на прямой с соседней стороной (keep) остаются, новый угол — новым узлом только у этого объекта.
  */
-function gluedSideMoves(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: number): Map<number, LonLat> | undefined {
-  const p = f.polygons[edge.poly], q = pushSidePolygons(f, edge, dz)[edge.poly];
-  const ids = edge.ring ? p.innerIds?.[edge.ring - 1] : p.outerIds;
-  if (!ids) return;
-  const was = edge.ring ? p.inners[edge.ring - 1] : p.outer;
-  const now = edge.ring ? q.inners[edge.ring - 1] : q.outer;
-  const i = edge.i, j = (i + 1) % ids.length;
-  const moves = new Map<number, LonLat>([[ids[i], now[i]], [ids[j], now[j]]]);
+function gluedSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, e: SideEnds): ObjectEdit[] | string {
+  const moves = gluedSideMoves(e);
+  if (!e.keepA && !e.keepB) return nodeMoveEdits(moves);
+  const fresh = new Map<number, LonLat>();
+  const ring = pushedRing(e, fresh);
+  const edits = topologyEdits([{ f, rewrites: [{ poly: edge.poly, ring: edge.ring, ...ring }] }], [], new Map([...fresh, ...moves]));
+  if (typeof edits === 'string') return edits;
+  const others = nodeMoveEdits(moves);
+  if (typeof others === 'string') return others;
+  const byKey = new Map(edits.map((x) => [x.key, x] as const));
+  for (const o of others) {
+    if (o.key === f.key) continue;
+    const x = byKey.get(o.key);
+    if (!x) { edits.push(o); continue; }
+    // Путь-член, уже переписанный разводкой, — сдвинутые узлы в его новых координатах; у отношения — контур
+    if (x.line) x.line = { ids: x.line.ids, coords: x.line.ids.map((id, k) => moves.get(id) ?? x.line!.coords[k]) };
+    if (o.polygons && !x.polygons) x.polygons = o.polygons;
+  }
+  return edits;
+}
+
+/**
+ * Вытягивание стены «с соседями»: концы стены (кроме keep) едут на новые места, общие узлы не заменяются —
+ * соседи с этими узлами тянутся следом. Чужие узлы на самой стене (Т-образные стыки, вставленные соседями
+ * углы) переносятся на то же место новой стены. Узел → новые координаты.
+ */
+function gluedSideMoves(e: SideEnds): Map<number, LonLat> {
+  const { ids, was, i, j } = e;
+  const moves = new Map<number, LonLat>();
+  if (!e.keepA) moves.set(ids[i], e.a);
+  if (!e.keepB) moves.set(ids[j], e.b);
   const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
-  const [ax, ay] = local(was[i]), [bx, by] = local(was[j]), [cx, cy] = local(now[i]), [dx, dy] = local(now[j]);
+  const [ax, ay] = local(was[i]), [bx, by] = local(was[j]), [cx, cy] = local(e.a), [dx, dy] = local(e.b);
   const ex = bx - ax, ey = by - ay, len = Math.hypot(ex, ey);
   if (len < 1e-6) return moves;
   for (const g of liveFeatures()) {
@@ -2565,7 +2630,7 @@ function gluedSideMoves(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz:
       const rings: [LonLat[], number[] | undefined][] = [[r.outer, r.outerIds], ...r.inners.map((c, k): [LonLat[], number[] | undefined] => [c, r.innerIds?.[k]])];
       for (const [ring, rids] of rings) {
         rids?.forEach((id, k) => {
-          if (moves.has(id)) return;
+          if (moves.has(id) || id === ids[i] || id === ids[j]) return;
           const [px, py] = local(ring[k]);
           const t = ((px - ax) * ex + (py - ay) * ey) / (len * len);
           const off = Math.abs((px - ax) * ey - (py - ay) * ex) / len;
@@ -2599,38 +2664,14 @@ function nodeMoveEdits(moves: Map<number, LonLat>, preview = false): ObjectEdit[
 /** Соседи, перестроенные в превью вытягивания «с соседями», — вернуть их при сбросе превью. */
 let pushPreviewed: string[] = [];
 
-/**
- * Контур с вытянутой стеной: сторона сдвигается на d по нормали, её концы скользят по соседним сторонам
- * (соседние стены сохраняют направление, как в SketchUp); при параллельных соседях — просто по нормали.
- */
+/** Контур с вытянутой стеной (для превью): углы — как в pushSideEnds, у углов keep — старый и новый. */
 function pushSidePolygons(f: Feature3D, edge: NonNullable<PushTarget['edge']>, d: number): Feature3D['polygons'] {
-  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
-  return f.polygons.map((p, pi) => {
-    if (pi !== edge.poly) return p;
-    const shift = (ring: LonLat[]): LonLat[] => {
-      const pts = ring.map(local), n = pts.length;
-      const i = edge.i, j = (i + 1) % n;
-      const [nx, ny] = [edge.n.x * d, edge.n.y * d];
-      const a2: [number, number] = [pts[i][0] + nx, pts[i][1] + ny], b2: [number, number] = [pts[j][0] + nx, pts[j][1] + ny];
-      // Новый конец — пересечение сдвинутой стороны с прямой соседней стороны
-      const slide = (moved: [number, number], other: [number, number], self: [number, number]): [number, number] => {
-        const ex = b2[0] - a2[0], ey = b2[1] - a2[1], sx = self[0] - other[0], sy = self[1] - other[1];
-        const den = ex * sy - ey * sx;
-        // Соседняя сторона почти параллельна стене (например, промежуточный узел на прямой) — пересечение
-        // улетает в бесконечность: такой угол просто сдвигается по нормали
-        if (Math.abs(den) < 1e-3 * Math.hypot(ex, ey) * Math.hypot(sx, sy) || Math.hypot(sx, sy) < 1e-6) return moved;
-        const t = ((other[0] - a2[0]) * sy - (other[1] - a2[1]) * sx) / den;
-        return [a2[0] + t * ex, a2[1] + t * ey];
-      };
-      const out = pts.slice();
-      out[i] = slide(a2, pts[(i - 1 + n) % n], pts[i]);
-      out[j] = slide(b2, pts[(j + 1) % n], pts[j]);
-      return ring.map((c, k) => (k === i || k === j ? overpassLayer.focusToLngLat(out[k][0], out[k][1])! : c));
-    };
-    return edge.ring
-      ? { ...p, inners: p.inners.map((r, ri) => (ri === edge.ring - 1 ? shift(r) : r)) }
-      : { ...p, outer: shift(p.outer) };
-  });
+  const e = pushSideEnds(f, edge, d);
+  if (!e) return f.polygons;
+  const ring = pushedRing(e, new Map()).coords;
+  return f.polygons.map((p, pi) => (pi !== edge.poly ? p : edge.ring
+    ? { ...p, inners: p.inners.map((r, ri) => (ri === edge.ring - 1 ? ring : r)) }
+    : { ...p, outer: ring }));
 }
 
 function clampPush(t: PushTarget, dz: number): number {
@@ -2656,16 +2697,18 @@ function previewPush(t: PushTarget, dz: number | undefined) {
   if (dz === undefined) { restore(new Set()); overpassLayer.setLinked([]); return overpassLayer.previewFocusFeature(f); }
   overpassLayer.setLinked([]);
   if (t.face === 'side' && pushTool.glue) {
-    const moves = gluedSideMoves(f, t.edge!, dz);
-    const edits = moves ? nodeMoveEdits(moves, true) : undefined;
+    const e = pushSideEnds(f, t.edge!, dz);
+    const edits = e ? nodeMoveEdits(gluedSideMoves(e), true) : undefined;
     if (Array.isArray(edits)) {
       const live = new Map(liveFeatures().map((g) => [g.key, g] as const));
-      const keys = new Set<string>();
-      for (const e of edits) {
-        const g = e.key === f.key ? f : live.get(e.key);
-        if (!e.polygons || !g) continue;
-        keys.add(e.key);
-        overpassLayer.previewFocusFeature({ ...g, polygons: e.polygons });
+      // Сам объект — со своими новыми углами (у углов на прямой с соседней стороной — старый и новый)
+      const keys = new Set<string>([f.key]);
+      overpassLayer.previewFocusFeature({ ...f, polygons: pushSidePolygons(f, t.edge!, dz) });
+      for (const x of edits) {
+        const g = live.get(x.key);
+        if (x.key === f.key || !x.polygons || !g) continue;
+        keys.add(x.key);
+        overpassLayer.previewFocusFeature({ ...g, polygons: x.polygons });
       }
       restore(keys);
       pushPreviewed = [...keys].filter((k) => k !== t.key);

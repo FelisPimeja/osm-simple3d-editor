@@ -2,6 +2,7 @@
   "name": "osm-simple3d-editor",
   "private": true,
   "version": "0.0.1",
+  "license": "ISC",
   "type": "module",
   "scripts": {
     "dev": "vite",

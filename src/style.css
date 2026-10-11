@@ -449,3 +449,20 @@ body.mobile #issues-panel { display: none !important; }
 .issues-fix-all { width: 100%; padding: 4px 8px; font-size: 13px; border: 1px solid #6b8fd6; border-radius: 4px; background: #eef3ff; cursor: pointer; }
 .issues-fix-all:hover { background: #dbe7ff; }
 .issues-fix-all[hidden] { display: none; }
+
+/* Настройки пользователя: кнопка в панели и окно */
+.settings-open { display: flex; align-items: center; gap: 6px; width: 100%; margin: 0 0 8px; padding: 5px 8px;
+  border: 1px solid #d1d5db; border-radius: 6px; background: #fff; font: inherit; font-size: 13px; color: #333; cursor: pointer; }
+.settings-open:hover { background: #f3f4f6; }
+.settings-open svg { flex: none; color: #555; }
+.settings-dialog { width: min(360px, calc(100vw - 32px)); padding: 0; border: 0; border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0,0,0,.3); font-size: 14px; }
+.settings-dialog::backdrop { background: rgba(0,0,0,.2); }
+.settings-dialog .panel-head { cursor: default; }
+.dialog-close { width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; font-size: 20px; line-height: 1;
+  color: #555; cursor: pointer; }
+.dialog-close:hover { background: #f3f4f6; }
+.dialog-body { padding: 4px 12px 12px; }
+.dialog-body .server-line { font-size: 13px; }
+.settings-sync { font-size: 12px; margin: 10px 0 0; }
+.settings-sync.warn { color: #b45309; }

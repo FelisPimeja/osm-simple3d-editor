@@ -10,7 +10,6 @@
   "Повторить": "Retry",
   "Сервер": "Server",
   "Откуда загружать данные для редактирования и куда отправлять": "Where to load data for editing from and where to upload it",
-  "Язык": "Language",
   "Язык интерфейса": "Interface language",
   "Убрать цвета": "Hide colors",
   "Вращение вокруг точки под курсором": "Orbit around the point under the cursor",
@@ -702,5 +701,14 @@
   "Центр прямоугольника": "Center of rectangle",
   "Центр окружности (r {r} м)": "Center of circle (r {r} m)",
   "Центр {n}-угольника": "Center of {n}-gon",
-  "Есть несохранённые изменения ({n} объект) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объекта) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объектов) — при смене языка страница перезагрузится и они пропадут. Продолжить?": "There are unsaved changes ({n} object). Changing the language reloads the page and they will be lost. Continue?|There are unsaved changes ({n} objects). Changing the language reloads the page and they will be lost. Continue?"
+  "Есть несохранённые изменения ({n} объект) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объекта) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объектов) — при смене языка страница перезагрузится и они пропадут. Продолжить?": "There are unsaved changes ({n} object). Changing the language reloads the page and they will be lost. Continue?|There are unsaved changes ({n} objects). Changing the language reloads the page and they will be lost. Continue?",
+  "Настройки хранятся в этом браузере. Войдите в {server}, чтобы сохранять их в профиле и получать на других устройствах.": "Settings are stored in this browser. Log in to {server} to save them to your profile and use them on other devices.",
+  "Войти": "Log in",
+  "Сохраняются в профиле {name} на {server}.": "Saved to the profile of {name} on {server}.",
+  "Настройки берутся из профиля на {server}, но записать их туда нельзя: при входе не было разрешения изменять настройки.": "Settings are read from your {server} profile but can’t be saved there: the login didn’t grant permission to modify preferences.",
+  "Войти заново": "Log in again",
+  "В профиле выбран другой язык интерфейса — он включится при следующей загрузке страницы.": "Your profile has a different interface language; it will apply the next time the page loads.",
+  "Приложение OAuth на {server} не разрешает изменять настройки пользователя. Нажмите «Войти» ещё раз — вход будет без сохранения настроек в профиле.": "The OAuth application on {server} isn’t allowed to modify user preferences. Click “Log in” again to log in without saving settings to your profile.",
+  "Настройки пользователя": "User settings",
+  "Язык интерфейса и другие личные настройки": "Interface language and other personal settings"
 }

@@ -9,7 +9,7 @@ import { validateBuilding, validateGeometry, validateTags, type Issue } from './
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
-import { fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
+import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, SERVER_LIST, apiBlockedHere, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
@@ -38,7 +38,8 @@ import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { bindTagForms, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
-import { LANGS, lang, localizeDom, setLang, tr, trn, locale, type Lang } from './i18n';
+import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
+import { saveLang, syncPrefs, syncStatus } from './settings';
 
 // Статичная разметка index.html — до того, как код ниже начнёт менять тексты
 localizeDom(document.body);
@@ -4432,6 +4433,7 @@ async function doLogin() {
     await login();
     osmUser = await fetchUser();
     setStatus(osmUser ? tr('Вход выполнен: {name}.', { name: osmUser.name }) : tr('Не удалось получить данные пользователя.'), !osmUser);
+    void syncSettings();
   } catch (err) {
     setStatus((err as Error).message, true);
   }
@@ -4444,6 +4446,7 @@ async function refreshUser() {
     try { osmUser = await fetchUser(); } catch (err) { console.warn('OSM user:', err); }
   }
   renderChanges();
+  void syncSettings();
 }
 
 async function doUpload() {
@@ -4587,19 +4590,72 @@ accountEl.addEventListener('click', (e) => {
 const serverSelect = document.getElementById('server-select') as HTMLSelectElement;
 serverSelect.innerHTML = SERVER_LIST.map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('');
 serverSelect.value = server().id;
-// Язык интерфейса: выбор запоминается, применяется перезагрузкой страницы (см. src/i18n)
+// Настройки пользователя — отдельное окно; хранятся в браузере и в профиле на сервере (см. src/settings.ts)
+const settingsDialog = document.getElementById('settings-dialog') as HTMLDialogElement;
+const settingsSyncEl = document.getElementById('settings-sync')!;
 const langSelect = document.getElementById('lang-select') as HTMLSelectElement;
 langSelect.innerHTML = LANGS.map((l) => `<option value="${l.id}">${esc(l.label)}</option>`).join('');
 langSelect.value = lang;
-langSelect.addEventListener('change', () => {
+
+function renderSettingsSync() {
+  const s = server();
+  const st = syncStatus(s);
+  settingsSyncEl.classList.toggle('warn', st === 'readonly');
+  settingsSyncEl.innerHTML = st === 'local'
+    ? esc(tr('Настройки хранятся в этом браузере. Войдите в {server}, чтобы сохранять их в профиле и получать на других устройствах.', { server: s.short }))
+      + ` <button type="button" class="link-btn" data-settings-login>${esc(tr('Войти'))}</button>`
+    : st === 'synced'
+      ? esc(tr('Сохраняются в профиле {name} на {server}.', { name: osmUser?.name ?? '…', server: s.short }))
+      : esc(tr('Настройки берутся из профиля на {server}, но записать их туда нельзя: при входе не было разрешения изменять настройки.', { server: s.short }))
+        + ` <button type="button" class="link-btn" data-settings-relogin>${esc(tr('Войти заново'))}</button>`;
+}
+
+document.getElementById('settings-open')!.addEventListener('click', () => {
+  langSelect.value = lang;
+  renderSettingsSync();
+  settingsDialog.showModal();
+});
+// Клик по затемнению вокруг окна — закрыть
+settingsDialog.addEventListener('click', (e) => { if (e.target === settingsDialog) settingsDialog.close(); });
+// Пока окно открыто, горячие клавиши редактора молчат (Esc закрывает само окно)
+window.addEventListener('keydown', (e) => { if (settingsDialog.open) e.stopImmediatePropagation(); }, true);
+settingsSyncEl.addEventListener('click', async (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest('[data-settings-relogin]')) { allowPrefsScope(); logout(); osmUser = undefined; }
+  else if (!t.closest('[data-settings-login]')) return;
+  await doLogin();
+  renderSettingsSync();
+});
+
+// Язык применяется перезагрузкой страницы
+langSelect.addEventListener('change', async () => {
   const n = session.changes().length;
   if (n && !confirm(trn(n, 'Есть несохранённые изменения ({n} объект) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объекта) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объектов) — при смене языка страница перезагрузится и они пропадут. Продолжить?'))) {
     langSelect.value = lang;
     return;
   }
+  langSelect.disabled = true;
+  await saveLang(langSelect.value as Lang);
   reloadConfirmed = true;
-  setLang(langSelect.value as Lang);
+  location.reload();
 });
+
+/** Сверить настройки с профилем; пришёл другой язык — перезагрузить, если не жалко правок. */
+async function syncSettings() {
+  if (!osmUser) return;
+  try {
+    const l = await syncPrefs();
+    if (!l) return;
+    if (session.changes().length) {
+      setStatus(tr('В профиле выбран другой язык интерфейса — он включится при следующей загрузке страницы.'));
+      return;
+    }
+    reloadConfirmed = true;
+    location.reload();
+  } catch (err) {
+    console.warn('OSM preferences:', err);
+  }
+}
 
 serverSelect.addEventListener('change', () => {
   const n = session.changes().length;

@@ -36,7 +36,7 @@ import { suggestComment } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
-import { JOSM_URL, josmLayer, josmMode, minElementId, writeJosmParam } from './osm/josm';
+import { JOSM_URL, josmLayer, josmMode, minElementId, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
 import { bindTagForms, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
@@ -4428,7 +4428,7 @@ function renderUpload(count: number): string {
     return '';
   }
   if (josmMode) {
-    return `<div class="upload"><p class="hint">${esc(tr('Источник — JOSM: отправка отсюда отключена, правки из 3D пока не возвращаются в JOSM. Вносите их в JOSM и нажмите «↻» у выбора источника.'))}</p></div>`;
+    return `<div class="upload"><p class="hint">${esc(tr('Источник — JOSM: отправка отсюда отключена, правки из 3D пока не возвращаются в JOSM. Вносите их в JOSM: изменения слоя подтягиваются сами (раз в 2 с).'))}</p></div>`;
   }
   const s = server();
   const canUpload = osmUser && uploadComment.trim() && !uploading;
@@ -4825,7 +4825,6 @@ dateSpeed.addEventListener('change', () => {
   if (playTimer) { stopPlay(); startPlay(); }
 });
 
-/** Источник тайлов для текущего сервера: его /map API (свой кеш; у боевого — прежняя база кеша). */
 /** Обновить из JOSM: кнопка «↻» у выбора источника (видна только в режиме JOSM). */
 const josmRefresh = Object.assign(document.createElement('button'), {
   type: 'button', className: 'link-btn', textContent: '↻', title: tr('Перечитать активный слой из JOSM'), hidden: !josmMode,
@@ -4842,10 +4841,8 @@ let josmShown = false;
 async function loadJosm(refresh = false) {
   panelStatus(tr('Читаю данные из JOSM…'));
   try {
-    const { elements, bbox } = await josmLayer(refresh);
-    // Временные id редактора — ниже новых объектов JOSM (у тех тоже отрицательные)
-    nextNewId = Math.min(nextNewId, minElementId(elements) - 1);
-    if (refresh) overpass.setSource(tileSource());
+    const { elements, bbox } = await josmLayer(refresh).then(josmApplied);
+    if (refresh) await overpass.refreshJosm();
     setStatus(trn(elements.length, 'Из JOSM: {n} объект.|Из JOSM: {n} объекта.|Из JOSM: {n} объектов.'));
     const view = map.getBounds();
     const inView = bbox && bbox[2] >= view.getWest() && bbox[0] <= view.getEast() && bbox[3] >= view.getSouth() && bbox[1] <= view.getNorth();
@@ -4859,6 +4856,24 @@ async function loadJosm(refresh = false) {
   }
 }
 
+/** Временные id редактора — ниже новых объектов JOSM (у тех тоже отрицательные). */
+function josmApplied(l: JosmLayer): JosmLayer {
+  nextNewId = Math.min(nextNewId, minElementId(l.elements) - 1);
+  return l;
+}
+
+// Изменения в JOSM — раз в 2 с, пока вкладка видна; перерисовка — только если слой изменился
+let josmPolling = false;
+if (josmMode) setInterval(async () => {
+  if (josmPolling || document.hidden) return;
+  josmPolling = true;
+  try {
+    const next = await pollJosmLayer();
+    if (next) { josmApplied(next); await overpass.refreshJosm(); }
+  } finally { josmPolling = false; }
+}, 2000);
+
+/** Источник тайлов для текущего сервера: его /map API (свой кеш; у боевого — прежняя база кеша). */
 function tileSource(): TileSource {
   if (josmMode) return { api: JOSM_URL, db: 'osm-simple3d-josm', josm: true };
   const s = server();

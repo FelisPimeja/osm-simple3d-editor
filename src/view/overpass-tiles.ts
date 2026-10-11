@@ -114,6 +114,19 @@ export class OverpassTiles {
     return this.source?.josm ? 'JOSM' : `API ${server().short}`;
   }
 
+  /** Слой JOSM перечитан: загруженные тайлы получают новые данные (старые остаются на экране до пересборки). */
+  async refreshJosm() {
+    if (!this.source?.josm) return;
+    const parsed = await josmParsed();
+    for (const [key, e] of [...this.cache]) {
+      if (e.state === 'ready') {
+        this.cache.set(key, { state: 'ready', ...josmTile(parsed, tileBbox(key)), fetchedAt: Date.now() });
+        this.tileReady(key);
+      } else if (e.state === 'error') this.cache.delete(key); // JOSM снова отвечает — без ожидания повтора
+    }
+    this.update();
+  }
+
   /** Перерисовать объекты (после правки тегов): берётся версия из overlay. */
   refreshFeatures(keys: string[]) {
     const want = new Set(keys);

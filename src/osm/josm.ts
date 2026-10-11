@@ -25,6 +25,8 @@ export function writeJosmParam(on: boolean) {
 export interface JosmLayer { elements: OsmElement[]; bbox?: Bbox; fetchedAt: number }
 
 let layer: Promise<JosmLayer> | undefined;
+/** Ответ /export последней загрузки — чтобы опрос перерисовывал только изменившийся слой. */
+let lastXml: string | undefined;
 
 /** Слой JOSM: запрашивается один раз, refresh — заново. */
 export function josmLayer(refresh = false): Promise<JosmLayer> {
@@ -40,13 +42,32 @@ async function loadLayer(): Promise<JosmLayer> {
   if (version.version && version.version < MIN_VERSION) {
     throw new Error(tr('JOSM {v} не умеет отдавать данные — нужна версия {min} (25.08) или новее.', { v: version.version, min: MIN_VERSION }));
   }
-  const res = await josmGet('/export');
-  const xml = await res.text();
+  const xml = await exportXml();
   if (!xml.trim()) {
     throw new Error(tr('JOSM ничего не отдал: активный слой не слой данных OSM или идёт отправка. Выберите слой данных в JOSM и обновите.'));
   }
+  return toLayer(xml);
+}
+
+const exportXml = () => josmGet('/export').then((r) => r.text());
+
+function toLayer(xml: string): JosmLayer {
   const elements = parseOsmXml(xml);
+  lastXml = xml;
   return { elements, bbox: elementsBbox(elements), fetchedAt: Date.now() };
+}
+
+/**
+ * Проверка изменений: слой JOSM, если он изменился с прошлой загрузки, иначе undefined. До первой удачной
+ * загрузки, во время отправки из JOSM (пустой ответ) и при ошибках — undefined: опрос не должен шуметь.
+ */
+export async function pollJosmLayer(): Promise<JosmLayer | undefined> {
+  if (lastXml === undefined) return;
+  const xml = await exportXml().catch(() => '');
+  if (!xml.trim() || xml === lastXml) return;
+  const next = toLayer(xml);
+  layer = Promise.resolve(next);
+  return next;
 }
 
 async function josmGet(path: string): Promise<Response> {

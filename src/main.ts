@@ -15,7 +15,7 @@ import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
-import { applyBasemap, BasemapControl, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap } from './view/basemaps';
+import { applyBasemap, BasemapButton, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap } from './view/basemaps';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
@@ -186,11 +186,12 @@ cubeBtn.addEventListener('click', () => {
 // и в профиле (simple3d:basemap)
 let basemap = server().imagery ? storedBasemap() : MAP_BASEMAP;
 let mapLoaded = false;
-const basemapCtrl = server().imagery ? new BasemapControl(basemap, (id) => {
+// Кнопка — в блоке кнопок масштаба и компаса, последней
+const navGroup = document.querySelector<HTMLElement>('.maplibregl-ctrl-compass')?.parentElement;
+const basemapCtrl = server().imagery && navGroup ? new BasemapButton(navGroup, basemap, (id) => {
   setBasemap(id);
   void saveSetting('basemap');
 }) : undefined;
-if (basemapCtrl) map.addControl(basemapCtrl, 'top-right');
 
 function setBasemap(id: string) {
   basemap = id;

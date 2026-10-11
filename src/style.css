@@ -279,7 +279,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .vc-mode .maplibregl-ctrl-group button.maplibregl-ctrl-cube { display: block; }
 .vc-mode .maplibregl-ctrl-group button.maplibregl-ctrl-compass { display: none; }
 /* Кнопка подложки и список (карта / снимки) */
-.basemap-ctrl { position: relative; }
+.maplibregl-ctrl-group.basemap-group { position: relative; }
 .maplibregl-ctrl-group button.maplibregl-ctrl-basemap { color: #333; }
 .maplibregl-ctrl-basemap svg { width: 20px; height: 20px; margin: auto; display: block; }
 .maplibregl-ctrl-basemap.active { color: #2f7cff; }

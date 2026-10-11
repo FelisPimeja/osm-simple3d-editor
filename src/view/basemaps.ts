@@ -4,7 +4,7 @@
  * атрибуцией. Bing не подключён: нужен свой ключ Bing Maps; Mapbox — только если в сборке задан VITE_MAPBOX_TOKEN.
  * Выбор хранится в localStorage (и в профиле на сервере — настройка simple3d:basemap, см. main.ts).
  */
-import type { IControl, Map as MlMap } from 'maplibre-gl';
+import type { Map as MlMap } from 'maplibre-gl';
 import { tr } from '../i18n';
 
 export interface Imagery {
@@ -86,20 +86,13 @@ export function applyBasemap(map: MlMap, id: string): boolean {
   return true;
 }
 
-/** Кнопка на карте со списком подложек. */
-export class BasemapControl implements IControl {
-  private container?: HTMLDivElement;
-  private btn?: HTMLButtonElement;
-  private menu?: HTMLDivElement;
-  private readonly onDocClick = (e: MouseEvent) => {
-    if (this.container && !this.container.contains(e.target as Node)) this.toggleMenu(false);
-  };
+/** Кнопка со списком подложек — в общем блоке кнопок карты (масштаб, компас). */
+export class BasemapButton {
+  private readonly btn: HTMLButtonElement;
+  private readonly menu: HTMLDivElement;
 
-  constructor(private current: string, private readonly onSelect: (id: string) => void) {}
-
-  onAdd(): HTMLElement {
-    const c = this.container = document.createElement('div');
-    c.className = 'maplibregl-ctrl maplibregl-ctrl-group basemap-ctrl';
+  constructor(group: HTMLElement, private current: string, private readonly onSelect: (id: string) => void) {
+    group.classList.add('basemap-group');
     const btn = this.btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'maplibregl-ctrl-basemap';
@@ -126,21 +119,16 @@ export class BasemapControl implements IControl {
     note.className = 'basemap-note';
     note.textContent = tr('Снимки, разрешённые для обводки в OSM. Проверяйте сдвиг снимков по GPS-трекам.');
     menu.append(note);
-    c.append(btn, menu);
+    group.append(btn, menu);
     this.sync();
-    document.addEventListener('click', this.onDocClick);
-    return c;
+    document.addEventListener('click', (e) => {
+      if (!this.menu.hidden && !this.menu.contains(e.target as Node)) this.toggleMenu(false);
+    });
   }
 
-  onRemove() {
-    document.removeEventListener('click', this.onDocClick);
-    this.container?.remove();
-  }
-
-  private toggleMenu(open = this.menu?.hidden) {
-    if (!this.menu) return;
+  private toggleMenu(open = this.menu.hidden) {
     this.menu.hidden = !open;
-    this.btn?.setAttribute('aria-expanded', String(!!open));
+    this.btn.setAttribute('aria-expanded', String(open));
   }
 
   private select(id: string) {
@@ -156,7 +144,7 @@ export class BasemapControl implements IControl {
   }
 
   private sync() {
-    this.btn?.classList.toggle('active', this.current !== MAP_BASEMAP);
-    for (const input of this.menu?.querySelectorAll('input') ?? []) input.checked = input.value === this.current;
+    this.btn.classList.toggle('active', this.current !== MAP_BASEMAP);
+    for (const input of this.menu.querySelectorAll('input')) input.checked = input.value === this.current;
   }
 }

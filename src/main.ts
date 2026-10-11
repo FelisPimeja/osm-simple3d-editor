@@ -15,6 +15,8 @@ import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
+import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
+import { applyBasemap, applyGpsTraces, BasemapButton, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
@@ -181,6 +183,151 @@ cubeBtn.addEventListener('click', () => {
   viewCube.update();
 });
 
+// Подложка: карта или спутниковые снимки (только у OSM — у OHM и OGF кнопки нет). Выбор — в localStorage
+// и в профиле (simple3d:basemap)
+let basemap = server().imagery ? storedBasemap() : MAP_BASEMAP;
+let gpsTraces = server().imagery ? storedGps() : false;
+/** В режиме здания — свой выбор подложки и треков: при входе выключены, обрезаны тайлами вокруг здания. */
+let focusBasemap = MAP_BASEMAP;
+let focusGps = false;
+let mapLoaded = false;
+/** Сцена режима здания (окружение скрыто) — подложка своя. */
+const focusScene = () => focusHiddenLayers.length > 0;
+// Кнопка — в блоке кнопок масштаба и компаса, последней
+const navGroup = document.querySelector<HTMLElement>('.maplibregl-ctrl-compass')?.parentElement;
+const basemapCtrl = server().imagery && navGroup ? new BasemapButton(navGroup, basemap, (id) => {
+  pickBasemap(id);
+}, gpsTraces, (on) => {
+  if (focusScene()) { focusGps = on; syncBasemapLayers(); return; }
+  setGpsTraces(on);
+  void saveSetting('gps-traces');
+}, (id) => {
+  // Настройки снимка: показать его (если выбран другой) и открыть панель
+  if ((focusScene() ? focusBasemap : basemap) !== id) pickBasemap(id);
+  offsetPanel.show(id);
+}) : undefined;
+
+/** Подложку выбрали в списке: в режиме здания — только для него, иначе — запомнить. */
+function pickBasemap(id: string) {
+  if (!focusScene()) { setBasemap(id); void saveSetting('basemap'); return; }
+  if (id !== focusBasemap) offsetPanel.hide();
+  focusBasemap = id;
+  syncBasemapLayers();
+}
+
+/** Область снимков в режиме здания: здание с запасом FOCUS_IMAGERY_PAD_M; дальше — по границе тайлов. */
+const FOCUS_IMAGERY_PAD_M = 40;
+function focusImageryBounds(): [number, number, number, number] | undefined {
+  if (!focus) return;
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const f of groupFeatures(focus)) for (const p of f.polygons ?? []) for (const [lng, lat] of p.outer) {
+    w = Math.min(w, lng); e = Math.max(e, lng); s = Math.min(s, lat); n = Math.max(n, lat);
+  }
+  if (!Number.isFinite(w)) return;
+  const dLat = FOCUS_IMAGERY_PAD_M / 111320, dLng = dLat / Math.cos(((s + n) / 2) * Math.PI / 180);
+  return [w - dLng, s - dLat, e + dLng, n + dLat];
+}
+
+/** Слои снимков и треков — по режиму (карта или здание). */
+function syncBasemapLayers() {
+  const f = focusScene();
+  const id = f ? focusBasemap : basemap, gps = f ? focusGps : gpsTraces;
+  basemapCtrl?.set(id);
+  basemapCtrl?.setGps(gps);
+  if (!mapLoaded) return; // слои добавит обработчик load
+  const bounds = f ? focusImageryBounds() : undefined;
+  applyGpsTraces(map, gps && (!f || !!bounds), bounds);
+  applyBasemap(map, f && !bounds ? MAP_BASEMAP : id, bounds);
+  if (!f) applyVectorStyle(id !== MAP_BASEMAP);
+}
+
+/** Слои стиля карты (без фона и экструзий) и их видимость в стиле — запоминаются при загрузке. */
+let styleLayers: { id: string; visibility: 'visible' | 'none' }[] = [];
+
+/**
+ * Под снимками стиль карты не нужен (сквозь прозрачный снимок проглядывал бы): скрыть его заливки, линии и подписи,
+ * оставив здания (наши слои). В режиме здания видимостью слоёв ведает он сам.
+ */
+function applyVectorStyle(hidden: boolean) {
+  for (const l of styleLayers) if (map.getLayer(l.id)) map.setLayoutProperty(l.id, 'visibility', hidden ? 'none' : l.visibility);
+}
+
+const offsetPanel = new ImageryOffsetPanel(map, {
+  onChange: () => basemapCtrl?.sync(),
+  // Кнопка привязок — на время смещения снимка и вне режима здания (там её панель скрыта): переносим её на панель карты
+  onOpen: (open) => {
+    if (open && !focus) mapToolbar.querySelector('[data-help]')!.before(snapsBtn);
+    else if (!open && snapsBtn.parentElement === mapToolbar) focusToolbar.querySelector('[data-help]')!.before(snapsBtn);
+  },
+  snap: (pt) => snapGround(pt),
+});
+
+/**
+ * Привязка конца сдвига снимка: вершины и середины рёбер контуров зданий на земле (по ним сверяют снимок).
+ * Те же переключатели, что у привязок режима здания: кнопка (S), Alt, типы вершин и середин.
+ */
+function snapGround(pt: [number, number]): OffsetSnap | undefined {
+  const off = overpassLayer.snapKindsOff;
+  if (!overpassLayer.snapsEnabled || overpassLayer.snapsSuspended || (off.has('vertex') && off.has('midpoint'))) return;
+  const R = 12;
+  const a = map.unproject([pt[0] - R, pt[1] - R]), b = map.unproject([pt[0] + R, pt[1] + R]);
+  const c = map.unproject([pt[0] - R, pt[1] + R]), d = map.unproject([pt[0] + R, pt[1] - R]);
+  const w = Math.min(a.lng, b.lng, c.lng, d.lng), e = Math.max(a.lng, b.lng, c.lng, d.lng);
+  const s = Math.min(a.lat, b.lat, c.lat, d.lat), n = Math.max(a.lat, b.lat, c.lat, d.lat);
+  let best: { p: LonLat; d: number; kind: 'vertex' | 'midpoint' } | undefined;
+  const test = (p: LonLat, kind: 'vertex' | 'midpoint') => {
+    if (off.has(kind) || p[0] < w || p[0] > e || p[1] < s || p[1] > n) return;
+    const q = map.project(p);
+    const dist = Math.hypot(q.x - pt[0], q.y - pt[1]) + (kind === 'midpoint' ? 6 : 0); // вершины важнее
+    if (dist <= R + (kind === 'midpoint' ? 6 : 0) && (!best || dist < best.d)) best = { p, d: dist, kind };
+  };
+  for (const { feature } of overpass.renderedFeatures()) {
+    for (const poly of feature.polygons ?? []) for (const ring of [poly.outer, ...poly.inners]) {
+      for (let i = 0; i < ring.length; i++) {
+        const p = ring[i], q = ring[(i + 1) % ring.length];
+        test(p, 'vertex');
+        test([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], 'midpoint');
+      }
+    }
+  }
+  if (!best) return;
+  const q = map.project(best.p);
+  return { lngLat: new maplibregl.LngLat(best.p[0], best.p[1]), point: [q.x, q.y], kind: best.kind, label: SNAP_LABELS[best.kind] };
+}
+
+function setGpsTraces(on: boolean) {
+  gpsTraces = on;
+  storeGps(on);
+  syncBasemapLayers();
+}
+
+function setBasemap(id: string) {
+  if (id !== basemap) offsetPanel.hide();
+  basemap = id;
+  storeBasemap(id);
+  syncBasemapLayers();
+}
+
+if (server().imagery) registerSetting({
+  key: 'basemap',
+  local: () => (basemap === MAP_BASEMAP ? undefined : basemap),
+  apply: (v) => {
+    const id = isBasemap(v) ? v : MAP_BASEMAP;
+    if (id === basemap) return 'same';
+    setBasemap(id);
+    return 'live';
+  },
+});
+if (server().imagery) registerSetting({
+  key: 'gps-traces',
+  local: () => (gpsTraces ? '1' : undefined),
+  apply: (v) => {
+    if ((v === '1') === gpsTraces) return 'same';
+    setGpsTraces(v === '1');
+    return 'live';
+  },
+});
+
 const infoEl = document.getElementById('info')!;
 
 // Сворачивание панелей в заголовок; состояние запоминается.
@@ -268,6 +415,8 @@ map.on('load', () => {
   for (const layer of map.getStyle().layers) {
     if (layer.type === 'fill-extrusion') map.removeLayer(layer.id);
   }
+  styleLayers = map.getStyle().layers.filter((l) => l.type !== 'background')
+    .map((l) => ({ id: l.id, visibility: l.layout?.visibility === 'none' ? 'none' as const : 'visible' as const }));
 
   const extrusion: FillExtrusionLayerSpecification['paint'] = {
     'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 5],
@@ -337,6 +486,8 @@ map.on('load', () => {
     minzoom: 15,
     paint: { 'line-color': '#5a5f66', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.85 },
   });
+  mapLoaded = true;
+  syncBasemapLayers();
   overpass.setSource(tileSource());
   applyDate();
   refreshOverpass();
@@ -821,6 +972,10 @@ async function openEditLink() {
       overpassLayer.setFocus(undefined);
       for (const { id, visibility } of focusHiddenLayers) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility as 'visible' | 'none');
       focusHiddenLayers = [];
+      offsetPanel.hide();
+      syncBasemapLayers();
+  offsetPanel.hide();
+  syncBasemapLayers();
       setFocusBackground(false);
       setStatus(tr('{key}: здание не найдено в загруженных данных.', { key }), true);
     }
@@ -897,11 +1052,17 @@ function hideMapLayers() {
   if (focusHiddenLayers.length) return;
   setFocusBackground(true);
   for (const l of map.getStyle().layers) {
-    if (l.id === overpassLayer.id || l.type === 'background') continue;
+    // Снимки и треки в режиме здания — свои (syncBasemapLayers), отметка сдвига — у панели настроек
+    if (l.id === overpassLayer.id || l.type === 'background' || l.id === IMAGERY_LAYER || l.id === GPS_LAYER || l.id.startsWith('imagery-offset')) continue;
     const pending = pendingTileLayers.find((p) => p.id === l.id);
     focusHiddenLayers.push(pending ?? { id: l.id, visibility: (map.getLayoutProperty(l.id, 'visibility') as string | undefined) ?? 'visible' });
     map.setLayoutProperty(l.id, 'visibility', 'none');
   }
+  // Подложка в режиме здания по умолчанию выключена
+  offsetPanel.hide();
+  focusBasemap = MAP_BASEMAP;
+  focusGps = false;
+  syncBasemapLayers();
 }
 
 function enterFocus(g: BuildingGroup, flyIn = true) {
@@ -917,6 +1078,7 @@ function enterFocus(g: BuildingGroup, flyIn = true) {
     for (const k of bareOutlines(g)) focusHidden.add(k);
   }
   drill = focus = g;
+  syncBasemapLayers(); // область снимков — вокруг этого здания
   focusToolbar.hidden = false;
   syncMapTools();
   orbit.setUnderground(true);
@@ -1052,6 +1214,8 @@ function exitFocus() {
   const tileLayers = pendingTileLayers = focusHiddenLayers.filter((l) => TILE_LAYERS.includes(l.id));
   restore(focusHiddenLayers.filter((l) => !TILE_LAYERS.includes(l.id)));
   focusHiddenLayers = [];
+  offsetPanel.hide();
+  syncBasemapLayers();
   setFocusBackground(false);
   map.once('idle', () => {
     if (focus || pendingTileLayers !== tileLayers) return; // успели снова войти в режим здания — вернёт следующий выход

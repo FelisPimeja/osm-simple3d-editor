@@ -25,6 +25,11 @@ export interface OsmServer {
   /** Здания из векторных тайлов в схеме OpenMapTiles (источник openmaptiles). */
   tileBuildings: boolean;
   /**
+   * Спутниковые подложки (src/view/basemaps.ts). Только у OSM: OGF — вымышленный мир, у OHM — прошлое,
+   * обводить по сегодняшним снимкам там нечего.
+   */
+  imagery?: boolean;
+  /**
    * Кодировка id фич тайлов: openfreemap — id·10 + тип (1 узел, 2 линия, 3 отношение; 0 — склеенные здания);
    * openmaptiles (imposm, как у OGF) — id·10 + 0 у линий, + 1 у отношений, склеенных нет.
    */
@@ -48,6 +53,7 @@ export const SERVERS: Record<ServerId, OsmServer> = {
     clientId: import.meta.env?.VITE_OSM_DEV_CLIENT_ID ?? '',
     style: OPENFREEMAP,
     tileBuildings: true,
+    imagery: true,
   },
   prod: {
     id: 'prod',
@@ -58,6 +64,7 @@ export const SERVERS: Record<ServerId, OsmServer> = {
     clientId: import.meta.env?.VITE_OSM_CLIENT_ID ?? '',
     style: OPENFREEMAP,
     tileBuildings: true,
+    imagery: true,
   },
   ogf: {
     id: 'ogf',

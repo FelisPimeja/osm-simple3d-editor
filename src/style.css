@@ -278,6 +278,41 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .maplibregl-ctrl-cube.active { color: #2f7cff; }
 .vc-mode .maplibregl-ctrl-group button.maplibregl-ctrl-cube { display: block; }
 .vc-mode .maplibregl-ctrl-group button.maplibregl-ctrl-compass { display: none; }
+/* Кнопка подложки и список (карта / снимки) */
+.maplibregl-ctrl-group.basemap-group { position: relative; }
+.maplibregl-ctrl-group button.maplibregl-ctrl-basemap { color: #333; }
+.maplibregl-ctrl-basemap svg { width: 20px; height: 20px; margin: auto; display: block; }
+.maplibregl-ctrl-basemap.active { color: #2f7cff; }
+.basemap-menu { position: absolute; right: calc(100% + 6px); top: 0; min-width: 230px; padding: 6px 8px; border-radius: 4px;
+  background: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.1); font: 12px/1.4 system-ui, sans-serif; color: #222; }
+.basemap-menu[hidden] { display: none; }
+.basemap-menu label { display: flex; align-items: center; gap: 4px; padding: 2px 0; cursor: pointer; white-space: nowrap; }
+.basemap-overlay { margin-top: 4px; padding-top: 4px !important; border-top: 1px solid #eee; }
+.basemap-note { margin-top: 4px; padding-top: 4px; border-top: 1px solid #eee; color: #6b7280; font-size: 11px; }
+.basemap-menu label { justify-content: flex-start; }
+.basemap-offset-btn { margin-left: auto; flex: none; width: 22px; height: 20px; padding: 2px 3px; border: 1px solid transparent;
+  border-radius: 3px; background: none; color: #6b7280; cursor: pointer; }
+.basemap-offset-btn:hover { border-color: #d1d5db; color: #222; }
+.basemap-offset-btn.active { color: #2f7cff; }
+.basemap-offset-btn[hidden] { display: none; }
+.basemap-offset-btn svg { width: 14px; height: 14px; display: block; }
+/* Панель смещения снимка */
+.offset-panel { position: absolute; z-index: 21; width: 250px; padding: 8px 10px; border-radius: 6px;
+  background: rgba(255,255,255,.97); box-shadow: 0 2px 8px rgba(0,0,0,.2); font: 12px/1.4 system-ui, sans-serif; color: #222; }
+.offset-panel[hidden] { display: none; }
+.offset-head { display: flex; align-items: flex-start; gap: 6px; margin: -8px -10px 6px; padding: 8px 10px 0; cursor: move; user-select: none; touch-action: none; }
+.offset-title { flex: 1; font-weight: 600; }
+.offset-close { border: none; background: none; font-size: 16px; line-height: 1; padding: 0 2px; cursor: pointer; opacity: .55; }
+.offset-close:hover { opacity: 1; }
+.offset-panel label { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.offset-panel label input { width: 80px; margin-left: auto; font: inherit; padding: 2px 4px; }
+.offset-panel label.offset-alpha input { width: auto; flex: 1; margin-left: 4px; padding: 0; }
+.offset-alpha span { width: 40px; flex: none; white-space: nowrap; text-align: right; color: #4b5563; }
+.offset-sub { margin-top: 6px; padding-top: 6px; border-top: 1px solid #eee; font-weight: 600; }
+.offset-info { margin: 6px 0; color: #4b5563; }
+.offset-buttons { display: flex; gap: 6px; }
+.offset-buttons button { flex: 1; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+.offset-buttons .offset-ok { background: #2f7cff; border-color: #2f7cff; color: #fff; font-weight: 600; }
 /* Подписи длин сторон при рисовании */
 .draw-dims { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .draw-dim { position: absolute; transform: translate(-50%, -50%); padding: 1px 5px; border-radius: 3px; white-space: nowrap;

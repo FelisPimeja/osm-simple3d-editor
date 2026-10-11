@@ -15,6 +15,7 @@ import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
+import { ImageryOffsetPanel } from './view/imagery-offset';
 import { applyBasemap, applyGpsTraces, BasemapButton, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
@@ -195,7 +196,12 @@ const basemapCtrl = server().imagery && navGroup ? new BasemapButton(navGroup, b
 }, gpsTraces, (on) => {
   setGpsTraces(on);
   void saveSetting('gps-traces');
+}, (id) => {
+  // Смещение снимка: показать его (если выбран другой) и открыть панель
+  if (basemap !== id) { setBasemap(id); void saveSetting('basemap'); }
+  offsetPanel.show(id);
 }) : undefined;
+const offsetPanel = new ImageryOffsetPanel(map, () => basemapCtrl?.sync());
 
 /** Слой подложки только что добавлен: в режиме здания окружение скрыто — прячем и его до выхода. */
 function hideInFocus(id: string) {
@@ -214,6 +220,7 @@ function setGpsTraces(on: boolean) {
 }
 
 function setBasemap(id: string) {
+  if (id !== basemap) offsetPanel.hide();
   basemap = id;
   storeBasemap(id);
   basemapCtrl?.set(id);

@@ -73,8 +73,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .ctx-menu button:disabled { color: #aaa; cursor: default; }
 .ctx-menu button { display: flex; align-items: center; gap: 16px; }
 .ctx-menu kbd { margin-left: auto; font: inherit; font-size: 11px; color: #888; }
-#outliner-panel { flex-shrink: 1; max-height: 30%; }
-#levels-panel { flex-shrink: 1; max-height: 25%; }
+#outliner-panel { max-height: 30%; }
+#levels-panel { max-height: 25%; }
 #levels-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
 .levels li { justify-content: space-between; }
 .levels .lv-name { display: flex; align-items: center; gap: 6px; }
@@ -101,10 +101,13 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 #edits-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
 /* Кнопки карты — слева от панели свойств, пока она видна */
 .maplibregl-ctrl-top-right { right: 334px; }
-.panel-head { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 12px; cursor: pointer; user-select: none; }
+.panel-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 12px; cursor: pointer; user-select: none; }
 .panel-head h1 { font-size: 16px; margin: 0; flex: 1; }
 .panel-body { min-height: 0; overflow: auto; padding: 0 12px 12px; }
 .panel.collapsed .panel-body { display: none; }
+/* Свёрнутая панель не сжимается ниже заголовка, развёрнутая — оставляет заголовок и хоть немного содержимого */
+.panel.collapsed { flex-shrink: 0; }
+.panel:not(.collapsed) { min-height: 80px; }
 .collapse-btn { width: 24px; height: 24px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; font-size: 12px; color: #555; }
 .collapse-btn:hover { background: #f3f4f6; }
 .collapse-btn::before { content: "▲"; }
@@ -427,7 +430,7 @@ body.mobile .dp-opt { display: none; }
 body.mobile #toasts { top: 72px; max-width: calc(100% - 112px); }
 
 /* Проверка здания: панель, значки в списке частей, список в «Правках» */
-#issues-panel { flex-shrink: 1; max-height: 25%; }
+#issues-panel { max-height: 25%; }
 #issues-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
 .issue-list { list-style: none; margin: 0 0 8px; padding: 0; font-size: 12px; }
 .issue-list li { display: flex; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; line-height: 1.35; }

@@ -11,7 +11,7 @@ import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
-import { setTreesMonochrome, type TreeGroup } from './trees';
+import { setTreesMonochrome, setTreesSeasonal, type TreeGroup } from './trees';
 
 const DEFAULT_WALL = '#ffffff';
 const DEFAULT_ROOF = '#ffffff';
@@ -88,6 +88,8 @@ export interface GraphicsOptions {
   defaultHeight?: boolean;
   /** Деревья (natural=tree, ряды, леса) на карте. */
   trees?: boolean;
+  /** Цвет лиственных — по времени года (сегодняшняя дата). */
+  seasons?: boolean;
 }
 
 /** Высота, на которой затемнение у земли сходит на нет, м (для зданий выше AO_HEIGHT). */
@@ -1710,7 +1712,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.paintGroup(g);
       this.applyEdges(g);
     }
-    for (const t of this.trees.values()) t.applyLighting(o.hemisphere);
+    setTreesSeasonal(!!o.seasons);
+    for (const t of this.trees.values()) { t.applyLighting(o.hemisphere); t.recolour(); }
     this.applyLevel(); // рёбра внутренних стен
     this.map?.triggerRepaint();
   }
@@ -1718,6 +1721,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   setMonochrome(on: boolean) {
     this.monochrome = on;
     setTreesMonochrome(on);
+    for (const t of this.trees.values()) t.recolour();
     for (const g of this.groups.values()) this.paintGroup(g);
     this.map?.triggerRepaint();
   }

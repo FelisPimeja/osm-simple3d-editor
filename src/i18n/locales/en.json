@@ -760,5 +760,7 @@
   "Хранить графические настройки": "Keep graphics settings",
   "Галки «Убрать цвета» и «Настройки графики» сохраняются вместе с остальными настройками и применяются на других устройствах": "The “Hide colors” and “Graphics settings” checkboxes are saved along with your other settings and applied on other devices",
   "Деревья": "Trees",
-  "natural=tree, natural=tree_row, леса natural=wood и landuse=forest — низкополигональные модели по leaf_type": "natural=tree, natural=tree_row, natural=wood and landuse=forest woods — low-poly models by leaf_type"
+  "natural=tree, natural=tree_row, леса natural=wood и landuse=forest — низкополигональные модели по leaf_type": "natural=tree, natural=tree_row, natural=wood and landuse=forest woods — low-poly models by leaf_type",
+  "Деревья по времени года": "Seasonal trees",
+  "Цвет лиственных по сегодняшней дате: весна, лето, осень, голые кроны зимой; в южном полушарии — со сдвигом на полгода, в тропиках — всегда зелёные": "Broadleaved tree colour follows today's date: spring, summer, autumn, bare crowns in winter; shifted by half a year in the southern hemisphere, always green in the tropics"
 }

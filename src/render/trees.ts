@@ -77,14 +77,58 @@ const COLOURS = { trunk: new THREE.Color('#7a5c43'), broad: new THREE.Color('#79
 const PALE = 0.25;
 const WHITE = new THREE.Color(0xffffff);
 const TRUNK_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.trunk, flatShading: true });
-const BROAD_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.broad, flatShading: true });
+/** Цвет лиственных крон целиком в цвете инстанса (сезон, разброс, бледность) — материал белый. */
+const BROAD_MATERIAL = new THREE.MeshLambertMaterial({ color: WHITE, flatShading: true });
 const NEEDLE_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.needle, flatShading: true });
 
+let monochrome = false;
+/** Лиственные по времени года (сегодняшняя дата, южное полушарие — со сдвигом на полгода). */
+let seasonal = false;
+
 export function setTreesMonochrome(on: boolean) {
+  monochrome = on;
   const t = on ? PALE : 0;
   TRUNK_MATERIAL.color.copy(COLOURS.trunk).lerp(WHITE, t);
-  BROAD_MATERIAL.color.copy(COLOURS.broad).lerp(WHITE, t);
   NEEDLE_MATERIAL.color.copy(COLOURS.needle).lerp(WHITE, t);
+}
+
+export function setTreesSeasonal(on: boolean) {
+  seasonal = on;
+}
+
+/** День года (0–365) без учёта високосных — для календаря листвы. */
+const dayOf = (month: number, day: number) => [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334][month - 1] + day - 1;
+const BARE = new THREE.Color('#8f8578');
+const SPRING = new THREE.Color('#a6cc64');
+const SUMMER = COLOURS.broad;
+const AUTUMN = ['#e0b83a', '#d98a2b', '#c4532c', '#a9b043'].map((c) => new THREE.Color(c));
+const LATE = new THREE.Color('#9c7a4c');
+/** Календарь листвы умеренного пояса (северное полушарие): опорные дни и цвет кроны в них (r — свой у дерева). */
+const SEASON_KEYS: { day: number; colour: (r: number) => THREE.Color }[] = [
+  { day: dayOf(4, 5), colour: () => BARE },
+  { day: dayOf(5, 5), colour: () => SPRING },
+  { day: dayOf(6, 15), colour: () => SUMMER },
+  { day: dayOf(9, 5), colour: () => SUMMER },
+  { day: dayOf(10, 5), colour: (r) => AUTUMN[Math.floor(r * AUTUMN.length)] },
+  { day: dayOf(11, 1), colour: () => LATE },
+  { day: dayOf(11, 20), colour: () => BARE },
+];
+/** Ближе к экватору — вечнозелёные, м. широты. */
+const TROPICS = 23.5;
+
+/** Цвет лиственной кроны в день года day на широте lat; seed — разброс по деревьям (сроки ±1 неделя, оттенок осени). */
+function seasonColour(out: THREE.Color, day: number, lat: number, seed: number): THREE.Color {
+  if (Math.abs(lat) < TROPICS) return out.copy(SUMMER);
+  const r1 = hash(Math.round(seed * 1e6), 11), r2 = hash(Math.round(seed * 1e6), 12);
+  let d = day + (lat < 0 ? 182 : 0) + (r1 - 0.5) * 14;
+  d = ((d % 365) + 365) % 365;
+  const n = SEASON_KEYS.length;
+  let i = SEASON_KEYS.findIndex((k) => k.day > d) - 1;
+  if (i === -2) i = n - 1; // после последней опорной точки
+  const a = SEASON_KEYS[(i + n) % n], b = SEASON_KEYS[(i + 1) % n];
+  const span = (b.day - a.day + 365) % 365 || 365;
+  const t = ((d - a.day + 365) % 365) / span;
+  return out.copy(a.colour(r2)).lerp(b.colour(r2), t);
 }
 
 /**
@@ -97,6 +141,9 @@ export class TreeGroup {
   readonly model: THREE.Matrix4;
   readonly count: number;
   private readonly trunks: THREE.InstancedMesh;
+  private readonly broad: THREE.InstancedMesh;
+  private readonly broadSeeds: Float32Array;
+  private readonly lat: number;
   private readonly near: THREE.InstancedMesh[] = [];
   private readonly far: THREE.InstancedMesh[] = [];
   /** Углы и центр тайла (локальные метры) — по ним выбирается детализация. */
@@ -136,6 +183,8 @@ export class TreeGroup {
     const scale = new THREE.Vector3();
     const colour = new THREE.Color();
     let b = 0, nd = 0, tr = 0;
+    this.broadSeeds = new Float32Array(total - needles);
+    this.lat = (s + n) / 2;
     for (let i = 0; i < total; i++) {
       const o = i * TREE_STRIDE;
       const height = trees[o + F.HEIGHT], crown = trees[o + F.CROWN], seed = trees[o + F.SEED], flags = trees[o + F.FLAGS];
@@ -154,7 +203,7 @@ export class TreeGroup {
       const l = 0.85 + 0.3 * seed, warm = 0.06 * (hash(i, Math.round(seed * 1e6)) - 0.5);
       colour.setRGB(l * (1 + warm), l, l * (1 - warm));
       if (isNeedle) { needle.setMatrixAt(nd, m); needle.setColorAt(nd++, colour); }
-      else { broad.setMatrixAt(b, m); broad.setColorAt(b++, colour); }
+      else { broad.setMatrixAt(b, m); broad.setColorAt(b, colour); this.broadSeeds[b++] = seed; }
     }
     // Дальний план — те же матрицы и цвета (общие буферы), другие модели
     const farOf = (mesh: THREE.InstancedMesh, geo: THREE.BufferGeometry) => {
@@ -165,6 +214,8 @@ export class TreeGroup {
     };
     // Стволы — только у отдельных деревьев и рядов, их немного: остаются и на дальнем плане (иначе кроны висят в воздухе)
     this.trunks = trunks;
+    this.broad = broad;
+    this.recolour();
     this.near.push(broad, needle);
     this.far.push(farOf(broad, BROAD_FAR_GEO), farOf(needle, NEEDLE_FAR_GEO));
     for (const mesh of [trunks, ...this.near, ...this.far]) {
@@ -177,6 +228,22 @@ export class TreeGroup {
     sun.position.set(-0.5, -1, 1.5);
     this.scene.add(this.ambient, this.hemi, sun);
     this.setFar(false);
+  }
+
+  /** Цвета лиственных крон: лето или сегодняшний сезон, разброс оттенка, бледность «Убрать цвета». */
+  recolour() {
+    const now = new Date();
+    const day = dayOf(now.getMonth() + 1, now.getDate());
+    const base = new THREE.Color();
+    const colour = new THREE.Color();
+    this.broadSeeds.forEach((seed, i) => {
+      if (seasonal) seasonColour(base, day, this.lat, seed); else base.copy(SUMMER);
+      const l = 0.85 + 0.3 * seed, warm = 0.06 * (hash(Math.round(seed * 1e6), 7) - 0.5);
+      colour.setRGB(base.r * l * (1 + warm), base.g * l, base.b * l * (1 - warm));
+      if (monochrome) colour.lerp(WHITE, PALE);
+      this.broad.setColorAt(i, colour);
+    });
+    if (this.broad.instanceColor) this.broad.instanceColor.needsUpdate = true;
   }
 
   applyLighting(hemisphere: boolean) {

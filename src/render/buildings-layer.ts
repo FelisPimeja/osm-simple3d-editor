@@ -11,6 +11,7 @@ import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
+import { setTreesMonochrome, type TreeGroup } from './trees';
 
 const DEFAULT_WALL = '#ffffff';
 const DEFAULT_ROOF = '#ffffff';
@@ -85,6 +86,8 @@ export interface GraphicsOptions {
   noGlass?: boolean;
   /** Здания без высоты и этажей поднимать на высоту по умолчанию (иначе — плоский след). */
   defaultHeight?: boolean;
+  /** Деревья (natural=tree, ряды, леса) на карте. */
+  trees?: boolean;
 }
 
 /** Высота, на которой затемнение у земли сходит на нет, м (для зданий выше AO_HEIGHT). */
@@ -249,6 +252,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   private map?: MlMap;
   private renderer?: THREE.WebGLRenderer;
   private readonly groups = new Map<string, MeshGroup>();
+  /** Деревья тайлов — только на карте (в режиме здания не рисуются), без выбора и привязок. */
+  private readonly trees = new Map<string, TreeGroup>();
   /** Асинхронные сборки групп: новая сборка или удаление группы отменяет предыдущую. */
   private readonly pending = new Map<string, symbol>();
   private selected = new Set<string>();
@@ -296,6 +301,14 @@ export class BuildingsLayer implements CustomLayerInterface {
       renderer.resetState();
       renderer.render(g.scene, g.camera);
       triangles += renderer.info.render.triangles;
+    }
+    if (!this.focused && this.graphics.trees !== false) {
+      for (const t of this.trees.values()) {
+        t.camera.projectionMatrix = main.clone().multiply(t.model);
+        renderer.resetState();
+        renderer.render(t.scene, t.camera);
+        triangles += renderer.info.render.triangles;
+      }
     }
     this.lastTriangles = triangles;
   }
@@ -1558,6 +1571,25 @@ export class BuildingsLayer implements CustomLayerInterface {
   clear() {
     this.lastTriangles = 0;
     for (const key of [...this.groups.keys(), ...this.pending.keys()]) this.removeGroup(key);
+    for (const key of [...this.trees.keys()]) this.setTrees(key, undefined);
+  }
+
+  /** Деревья тайла (undefined — убрать). */
+  setTrees(key: string, trees: TreeGroup | undefined) {
+    const old = this.trees.get(key);
+    if (old === trees) return;
+    old?.dispose();
+    if (trees) { trees.applyLighting(this.graphics.hemisphere); this.trees.set(key, trees); } else this.trees.delete(key);
+    this.map?.triggerRepaint();
+  }
+
+  /** Подпись набора, из которого собраны деревья тайла (undefined — деревьев тайла нет). */
+  treeSignature(key: string): string | undefined {
+    return this.trees.get(key)?.signature;
+  }
+
+  treeKeys(): string[] {
+    return [...this.trees.keys()];
   }
 
   setVisible(visible: boolean) {
@@ -1676,12 +1708,14 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.paintGroup(g);
       this.applyEdges(g);
     }
+    for (const t of this.trees.values()) t.applyLighting(o.hemisphere);
     this.applyLevel(); // рёбра внутренних стен
     this.map?.triggerRepaint();
   }
 
   setMonochrome(on: boolean) {
     this.monochrome = on;
+    setTreesMonochrome(on);
     for (const g of this.groups.values()) this.paintGroup(g);
     this.map?.triggerRepaint();
   }

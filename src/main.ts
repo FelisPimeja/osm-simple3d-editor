@@ -88,7 +88,7 @@ const userHidden = new Set<string>();
 
 interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, trees: true, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {

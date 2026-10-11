@@ -178,7 +178,6 @@
   "Низ {key} сдвинут на {d} м{levels}.": "Bottom of {key} moved by {d} m{levels}.",
   "Стена {key} сдвинута на {d} м{levels}.": "Wall of {key} moved by {d} m{levels}.",
   "Понятно": "Got it",
-  "Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Переместить».": "First select an object in the building (or several with Shift), then the Move tool.",
   "Перемещено объектов: {n} на {d} м.": "Objects moved: {n} by {d} m.",
   "Повёрнуто объектов: {n} на {deg}°. Отменить — Ctrl+Z.": "Objects rotated: {n} by {deg}°. Undo: Ctrl+Z.",
   "Скрыто вручную: {n}": "Hidden manually: {n}",
@@ -702,5 +701,7 @@
   "Центр прямоугольника": "Center of rectangle",
   "Центр окружности (r {r} м)": "Center of circle (r {r} m)",
   "Центр {n}-угольника": "Center of {n}-gon",
-  "Есть несохранённые изменения ({n} объект) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объекта) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объектов) — при смене языка страница перезагрузится и они пропадут. Продолжить?": "There are unsaved changes ({n} object). Changing the language reloads the page and they will be lost. Continue?|There are unsaved changes ({n} objects). Changing the language reloads the page and they will be lost. Continue?"
+  "Есть несохранённые изменения ({n} объект) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объекта) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объектов) — при смене языка страница перезагрузится и они пропадут. Продолжить?": "There are unsaved changes ({n} object). Changing the language reloads the page and they will be lost. Continue?|There are unsaved changes ({n} objects). Changing the language reloads the page and they will be lost. Continue?",
+  "Кликните по объекту здания, который нужно переместить. Esc — выйти из инструмента.": "Click the building part you want to move. Esc — exit the tool.",
+  "Если ничего не выделено, первый клик выбирает часть, следующий — точка захвата на ней.": "If nothing is selected, the first click selects a part and the next one sets the grab point on it."
 }

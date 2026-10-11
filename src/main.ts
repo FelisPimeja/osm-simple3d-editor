@@ -4862,16 +4862,16 @@ function josmApplied(l: JosmLayer): JosmLayer {
   return l;
 }
 
-// Изменения в JOSM — раз в 2 с, пока вкладка видна; перерисовка — только если слой изменился
-let josmPolling = false;
-if (josmMode) setInterval(async () => {
-  if (josmPolling || document.hidden) return;
-  josmPolling = true;
+// Изменения в JOSM: через 2 с после прошлой проверки (большой слой JOSM отдаёт секунду-две), пока вкладка видна
+// и не включён инструмент (пересборка под курсором сбила бы правку); перерисовка — только если слой изменился
+async function pollJosm() {
   try {
+    if (document.hidden || toolActive()) return;
     const next = await pollJosmLayer();
     if (next) { josmApplied(next); await overpass.refreshJosm(); }
-  } finally { josmPolling = false; }
-}, 2000);
+  } finally { setTimeout(pollJosm, 2000); }
+}
+if (josmMode) setTimeout(pollJosm, 2000);
 
 /** Источник тайлов для текущего сервера: его /map API (свой кеш; у боевого — прежняя база кеша). */
 function tileSource(): TileSource {

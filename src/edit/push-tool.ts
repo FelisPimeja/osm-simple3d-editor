@@ -5,6 +5,7 @@ import { tr } from '../i18n';
 
 export type PushUnits = 'm' | 'levels';
 const UNITS_STORAGE = 'push-units';
+const GLUE_STORAGE = 'push-glue';
 
 export type PushFace = 'top' | 'bottom' | 'side';
 
@@ -31,6 +32,8 @@ const EDGE_EPS = 0.15;
  * 3. второй клик — применить; число + Enter — сдвиг в метрах или этажах (минус — внутрь/вниз). Esc — отмена.
  * Единицы (метры / этажи) — в панели, видной всё время работы инструмента; Tab — переключить. В этажах верх
  * и низ ходят шагом в этаж, стены — всегда в метрах.
+ * Общие с соседями узлы стены (там же в панели; D — переключить): «вместе» — едут вместе со стеной, соседи
+ * тянутся следом; «отдельно» — у стены новые узлы, соседи остаются на месте.
  * Пересчёт тегов и геометрии, проверка общих узлов и ограничения — снаружи (allowSide, clamp, preview, commit).
  */
 export class PushTool {
@@ -41,6 +44,8 @@ export class PushTool {
   private typed = '';
   private readonly vcb: HTMLDivElement;
   units: PushUnits = loadUnits();
+  /** Общие узлы стены двигаются вместе с соседями (иначе стена отделяется от них). */
+  glue = loadGlue();
 
   constructor(
     private readonly layer: BuildingsLayer,
@@ -64,6 +69,8 @@ export class PushTool {
     this.vcb.addEventListener('click', (e) => {
       const u = (e.target as HTMLElement).closest<HTMLElement>('[data-units]')?.dataset.units as PushUnits | undefined;
       if (u) this.setUnits(u);
+      const g = (e.target as HTMLElement).closest<HTMLElement>('[data-glue]')?.dataset.glue;
+      if (g) this.setGlue(g === 'on');
     });
   }
 
@@ -73,6 +80,17 @@ export class PushTool {
     this.typed = '';
     if (this.state === 'push' && this.target && this.target.face !== 'side') this.dz = this.clamp(this.target, this.step(this.dz));
     if (this.state === 'push' && this.target) { this.preview(this.target, this.dz); this.guide(); }
+    this.updateVcb();
+  }
+
+  setGlue(on: boolean) {
+    this.glue = on;
+    try { localStorage.setItem(GLUE_STORAGE, on ? 'on' : 'off'); } catch { /* без хранилища — до перезагрузки */ }
+    if (this.state === 'push' && this.target?.face === 'side') {
+      // Превью прежнего режима могло задеть соседей — сбросить его целиком
+      this.preview(this.target, undefined);
+      this.preview(this.target, this.dz);
+    }
     this.updateVcb();
   }
 
@@ -158,7 +176,7 @@ export class PushTool {
       this.updateVcb();
       const units = this.units === 'levels' ? tr('в этажах') : tr('в метрах');
       this.onState(t.face === 'side'
-        ? tr('Тянем стену: ведите курсор наружу или внутрь. Клик — применить, число + Enter — в метрах, Esc — отмена.')
+        ? tr('Тянем стену: ведите курсор наружу или внутрь. Клик — применить, число + Enter — в метрах, D — с соседями или отдельно, Esc — отмена.')
         : t.face === 'top'
           ? tr('Тянем верх: ведите курсор вверх или вниз. Клик — применить, число + Enter — {units}, Tab — единицы, Esc — отмена.', { units })
           : tr('Тянем низ: ведите курсор вверх или вниз. Клик — применить, число + Enter — {units}, Tab — единицы, Esc — отмена.', { units }));
@@ -191,6 +209,7 @@ export class PushTool {
   key(e: KeyboardEvent): boolean {
     if (!this.active || e.type !== 'keydown') return false;
     if (e.key === 'Tab') { this.setUnits(this.units === 'm' ? 'levels' : 'm'); return true; }
+    if (e.code === 'KeyD' && !e.ctrlKey && !e.metaKey && !e.altKey) { this.setGlue(!this.glue); return true; }
     if (e.key === 'Escape') {
       if (this.state === 'push') { this.cancel(); this.start(); } else this.stop();
       return true;
@@ -246,10 +265,12 @@ export class PushTool {
     const value = this.typed || (shown >= 0 ? '+' : '') + (levels ? String(shown) : shown.toFixed(2));
     const units = `<span class="vcb-units" title="${tr('Единицы сдвига верха и низа (Tab)')}">${(['m', 'levels'] as const)
       .map((u) => `<button type="button" data-units="${u}"${u === this.units ? ' class="active"' : ''}>${u === 'm' ? tr('м') : tr('этажи')}</button>`).join('')}</span>`;
+    const glue = `<span class="vcb-units" title="${tr('Общие с соседями углы стены: «с соседями» — соседи тянутся следом, «отдельно» — стена отделяется от них (D)')}">${[true, false]
+      .map((on) => `<button type="button" data-glue="${on ? 'on' : 'off'}"${on === this.glue ? ' class="active"' : ''}>${on ? tr('с соседями') : tr('отдельно')}</button>`).join('')}</span>`;
     this.vcb.innerHTML = t
       ? `<span class="vcb-label">${{ top: tr('Верх'), bottom: tr('Низ'), side: tr('Стена') }[t.face]}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${levels ? tr('эт.') : tr('м')}
-      <span class="vcb-axis">${this.snap ? tr('до точки') : t.face === 'side' ? tr('по нормали') : tr('по вертикали')}</span>${units}`
-      : `<span class="vcb-label">${tr('Сдвиг')}</span>${units}`;
+      <span class="vcb-axis">${this.snap ? tr('до точки') : t.face === 'side' ? tr('по нормали') : tr('по вертикали')}</span>${t.face === 'side' ? glue : units}`
+      : `<span class="vcb-label">${tr('Сдвиг')}</span>${units}${glue}`;
   }
 }
 
@@ -275,6 +296,10 @@ function inRing([x, y]: [number, number], ring: [number, number][]): boolean {
     if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
   }
   return inside;
+}
+
+function loadGlue(): boolean {
+  try { return localStorage.getItem(GLUE_STORAGE) !== 'off'; } catch { return true; }
 }
 
 function loadUnits(): PushUnits {

@@ -2312,7 +2312,10 @@ function sideNodes(f: Feature3D, edge: NonNullable<PushTarget['edge']>): [number
   return [ids[edge.i], ids[(edge.i + 1) % ids.length]];
 }
 
-/** Стену можно тянуть всегда: общие с соседями узлы и пути при применении разводятся (topologyEdits). */
+/**
+ * Стену можно тянуть всегда: общие с соседями узлы едут вместе с ней (соседи тянутся следом) или, в режиме
+ * «отдельно», при применении разводятся (topologyEdits).
+ */
 function allowPushSide(t: PushTarget): boolean {
   const f = entity(t.key) as Feature3D | undefined;
   const nodes = f && t.edge ? sideNodes(f, t.edge) : undefined;
@@ -2478,6 +2481,10 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
 
 /** Правки вытягивания стены: свободные углы двигаются, общие — заменяются новыми узлами (см. topologyEdits). */
 function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: number): ObjectEdit[] | string {
+  if (pushTool.glue) {
+    const moves = gluedSideMoves(f, edge, dz);
+    return moves ? nodeMoveEdits(moves) : tr('В кеше нет id узлов этого объекта.');
+  }
   const moved = pushSidePolygons(f, edge, dz);
   const p = f.polygons[edge.poly], q = moved[edge.poly];
   const ids = edge.ring ? p.innerIds?.[edge.ring - 1] : p.outerIds;
@@ -2510,6 +2517,62 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
   }
   return topologyEdits([{ f, rewrites: [{ poly: edge.poly, ring: edge.ring, ids: outIds, coords: outC }] }], inserts, fresh);
 }
+
+/**
+ * Вытягивание стены «с соседями»: углы стены едут по своим соседним сторонам (как у одиночного объекта), общие
+ * узлы не заменяются — соседи с этими узлами тянутся следом. Чужие узлы на самой стене (Т-образные стыки,
+ * вставленные соседями углы) переносятся на то же место новой стены. Узел → новые координаты.
+ */
+function gluedSideMoves(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: number): Map<number, LonLat> | undefined {
+  const p = f.polygons[edge.poly], q = pushSidePolygons(f, edge, dz)[edge.poly];
+  const ids = edge.ring ? p.innerIds?.[edge.ring - 1] : p.outerIds;
+  if (!ids) return;
+  const was = edge.ring ? p.inners[edge.ring - 1] : p.outer;
+  const now = edge.ring ? q.inners[edge.ring - 1] : q.outer;
+  const i = edge.i, j = (i + 1) % ids.length;
+  const moves = new Map<number, LonLat>([[ids[i], now[i]], [ids[j], now[j]]]);
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  const [ax, ay] = local(was[i]), [bx, by] = local(was[j]), [cx, cy] = local(now[i]), [dx, dy] = local(now[j]);
+  const ex = bx - ax, ey = by - ay, len = Math.hypot(ex, ey);
+  if (len < 1e-6) return moves;
+  for (const g of liveFeatures()) {
+    for (const r of g.polygons) {
+      const rings: [LonLat[], number[] | undefined][] = [[r.outer, r.outerIds], ...r.inners.map((c, k): [LonLat[], number[] | undefined] => [c, r.innerIds?.[k]])];
+      for (const [ring, rids] of rings) {
+        rids?.forEach((id, k) => {
+          if (moves.has(id)) return;
+          const [px, py] = local(ring[k]);
+          const t = ((px - ax) * ex + (py - ay) * ey) / (len * len);
+          const off = Math.abs((px - ax) * ey - (py - ay) * ex) / len;
+          if (off < 1e-3 && t > 1e-6 && t < 1 - 1e-6) moves.set(id, overpassLayer.focusToLngLat(cx + t * (dx - cx), cy + t * (dy - cy))!);
+        });
+      }
+    }
+  }
+  return moves;
+}
+
+/**
+ * Правки «узлы moves — на новые места» у всех объектов и путей-членов с этими узлами (соседи — следом).
+ * preview — только посчитать, не начиная отслеживать соседей в сессии.
+ */
+function nodeMoveEdits(moves: Map<number, LonLat>, preview = false): ObjectEdit[] | string {
+  const out: ObjectEdit[] = [];
+  const ring = (cs: LonLat[], ids: number[] | undefined) => (ids?.some((id) => moves.has(id)) ? cs.map((c, k) => moves.get(ids[k]) ?? c) : cs);
+  for (const g of liveFeatures()) {
+    if (!g.polygons.some((r) => [r.outerIds, ...(r.innerIds ?? [])].some((ids) => ids?.some((id) => moves.has(id))))) continue;
+    if (!preview && !entity(g.key)) return tr('{key}: нет в данных.', { key: g.key });
+    out.push({ key: g.key, polygons: g.polygons.map((r) => ({ ...r, outer: ring(r.outer, r.outerIds), inners: r.inners.map((c, k) => ring(c, r.innerIds?.[k])) })) });
+  }
+  for (const t of session.lineEntities()) {
+    const l = t.line!;
+    if (l.ids.some((id) => moves.has(id))) out.push({ key: t.key, line: { ids: l.ids, coords: l.ids.map((id, k) => moves.get(id) ?? l.coords[k]) } });
+  }
+  return out;
+}
+
+/** Соседи, перестроенные в превью вытягивания «с соседями», — вернуть их при сбросе превью. */
+let pushPreviewed: string[] = [];
 
 /**
  * Контур с вытянутой стеной: сторона сдвигается на d по нормали, её концы скользят по соседним сторонам
@@ -2557,7 +2620,29 @@ function clampPush(t: PushTarget, dz: number): number {
 function previewPush(t: PushTarget, dz: number | undefined) {
   const f = entity(t.key) as Feature3D | undefined;
   if (!f) return;
-  if (dz === undefined) return overpassLayer.previewFocusFeature(f);
+  const restore = (keep: Set<string>) => {
+    const live = pushPreviewed.length ? new Map(liveFeatures().map((g) => [g.key, g] as const)) : undefined;
+    for (const k of pushPreviewed) { const g = live?.get(k); if (!keep.has(k) && g) overpassLayer.previewFocusFeature(g); }
+    pushPreviewed = pushPreviewed.filter((k) => keep.has(k));
+  };
+  if (dz === undefined) { restore(new Set()); return overpassLayer.previewFocusFeature(f); }
+  if (t.face === 'side' && pushTool.glue) {
+    const moves = gluedSideMoves(f, t.edge!, dz);
+    const edits = moves ? nodeMoveEdits(moves, true) : undefined;
+    if (Array.isArray(edits)) {
+      const live = new Map(liveFeatures().map((g) => [g.key, g] as const));
+      const keys = new Set<string>();
+      for (const e of edits) {
+        const g = e.key === f.key ? f : live.get(e.key);
+        if (!e.polygons || !g) continue;
+        keys.add(e.key);
+        overpassLayer.previewFocusFeature({ ...g, polygons: e.polygons });
+      }
+      restore(keys);
+      pushPreviewed = [...keys].filter((k) => k !== t.key);
+      return;
+    }
+  }
   overpassLayer.previewFocusFeature(t.face === 'side'
     ? { ...f, polygons: pushSidePolygons(f, t.edge!, dz) }
     : { ...f, tags: pushTags(f.tags, t.face, dz) });

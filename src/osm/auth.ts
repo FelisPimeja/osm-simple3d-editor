@@ -8,9 +8,16 @@ import { tr } from '../i18n';
  * Токен хранится в localStorage отдельно для каждого сервера.
  */
 
-const SCOPES = 'read_prefs write_api';
+/** write_prefs — настройки пользователя в профиле (src/settings.ts). */
+const SCOPES = 'read_prefs write_prefs write_api';
+/** Без write_prefs: приложение OAuth на сервере зарегистрировано без права «изменять настройки». */
+const SCOPES_NO_PREFS = 'read_prefs write_api';
 const OAUTH_CHANNEL = 'osm3d-oauth';
 const tokenKey = (s: OsmServer) => `osm3d.token.${s.id}`;
+/** Права, выданные токену (из ответа /oauth2/token); у токенов, полученных до появления записи, — нет. */
+const scopeKey = (s: OsmServer) => `osm3d.scope.${s.id}`;
+/** Сервер отказал в write_prefs (invalid_scope) — дальше входим без него. */
+const noPrefsKey = (s: OsmServer) => `osm3d.noPrefsScope.${s.id}`;
 
 export interface OsmUser { id: number; name: string }
 
@@ -23,7 +30,17 @@ export function getToken(s: OsmServer = server()): string | undefined {
 }
 
 export function logout(s: OsmServer = server()) {
-  try { localStorage.removeItem(tokenKey(s)); } catch { /* не критично */ }
+  try { localStorage.removeItem(tokenKey(s)); localStorage.removeItem(scopeKey(s)); } catch { /* не критично */ }
+}
+
+/** Снова просить write_prefs при входе (после того как на сервере разрешили это приложению). */
+export function allowPrefsScope(s: OsmServer = server()) {
+  try { localStorage.removeItem(noPrefsKey(s)); } catch { /* не критично */ }
+}
+
+/** Токен даёт право записывать настройки в профиль (write_prefs). */
+export function canWritePrefs(s: OsmServer = server()): boolean {
+  try { return !!getToken(s) && (localStorage.getItem(scopeKey(s)) ?? '').split(/\s+/).includes('write_prefs'); } catch { return false; }
 }
 
 const base64url = (bytes: Uint8Array) =>
@@ -44,11 +61,14 @@ export async function login(s: OsmServer = server()): Promise<string> {
   }
   const verifier = randomString();
   const state = randomString();
+  let noPrefs = false;
+  try { noPrefs = !!localStorage.getItem(noPrefsKey(s)); } catch { /* без хранилища */ }
+  const scope = noPrefs ? SCOPES_NO_PREFS : SCOPES;
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: s.clientId,
     redirect_uri: redirectUri(),
-    scope: SCOPES,
+    scope,
     state,
     code_challenge: await challenge(verifier),
     code_challenge_method: 'S256',
@@ -66,7 +86,11 @@ export async function login(s: OsmServer = server()): Promise<string> {
       if (e.data?.type !== 'osm-oauth' || e.data.state !== state) return; // ответ на другую попытку входа
       clearTimeout(timer);
       channel.close();
-      if (e.data.error) reject(new Error(`OAuth: ${e.data.error}`));
+      if (e.data.errorCode === 'invalid_scope' && !noPrefs) {
+        // Приложению на сервере не разрешено изменять настройки — следующий вход без этого права
+        try { localStorage.setItem(noPrefsKey(s), '1'); } catch { /* без хранилища */ }
+        reject(new Error(tr('Приложение OAuth на {server} не разрешает изменять настройки пользователя. Нажмите «Войти» ещё раз — вход будет без сохранения настроек в профиле.', { server: s.short })));
+      } else if (e.data.error) reject(new Error(`OAuth: ${e.data.error}`));
       else resolve(e.data.code);
     };
   });
@@ -83,8 +107,12 @@ export async function login(s: OsmServer = server()): Promise<string> {
     }),
   });
   if (!res.ok) throw new Error(tr('Не удалось получить токен: {status} {text}', { status: res.status, text: await res.text() }));
-  const token = ((await res.json()) as { access_token: string }).access_token;
-  try { localStorage.setItem(tokenKey(s), token); } catch { /* живём без сохранения */ }
+  const data = (await res.json()) as { access_token: string; scope?: string };
+  const token = data.access_token;
+  try {
+    localStorage.setItem(tokenKey(s), token);
+    localStorage.setItem(scopeKey(s), data.scope ?? scope);
+  } catch { /* живём без сохранения */ }
   return token;
 }
 

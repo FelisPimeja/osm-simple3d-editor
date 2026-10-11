@@ -5,7 +5,7 @@
  * npm run i18n:extract. Чего нет в словаре — показывается по-русски (в dev-сборке — с предупреждением в консоли).
  * Проверка полноты словарей: npm run i18n:check.
  *
- * Язык выбирается один раз при загрузке страницы: сохранённый выбор (панель настроек), иначе — первый
+ * Язык выбирается один раз при загрузке страницы: сохранённый выбор (настройки пользователя, src/settings.ts), иначе — первый
  * из языков браузера и системы, который мы знаем; если ни один не подошёл — английский.
  * Смена языка перезагружает страницу: строки собираются в разных местах при старте.
  */
@@ -21,7 +21,7 @@ export const LANGS: { id: Lang; label: string }[] = [
 const STORE_KEY = 'osm3d.lang';
 const DICTS: Record<Exclude<Lang, 'ru'>, Record<string, string>> = { en };
 
-function isLang(v: unknown): v is Lang {
+export function isLang(v: unknown): v is Lang {
   return LANGS.some((l) => l.id === v);
 }
 
@@ -36,7 +36,8 @@ export function detectLang(): Lang {
   return 'en';
 }
 
-function storedLang(): Lang | undefined {
+/** Язык, выбранный пользователем явно (в настройках или из профиля); undefined — определяется автоматически. */
+export function storedLang(): Lang | undefined {
   try {
     const v = localStorage.getItem(STORE_KEY);
     return isLang(v) ? v : undefined;
@@ -46,10 +47,9 @@ function storedLang(): Lang | undefined {
 export const lang: Lang = storedLang() ?? detectLang();
 if (typeof document !== 'undefined') document.documentElement.lang = lang;
 
-/** Запомнить выбор и перезагрузить страницу (вызывающий сам спрашивает о несохранённых правках). */
-export function setLang(l: Lang) {
+/** Запомнить выбор; применится при следующей загрузке страницы. */
+export function storeLang(l: Lang) {
   try { localStorage.setItem(STORE_KEY, l); } catch { /* без хранилища — только до перезагрузки, т.е. никак */ }
-  location.reload();
 }
 
 /** Локаль для toLocaleString и Intl. */

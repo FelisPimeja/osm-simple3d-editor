@@ -2,164 +2,39 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MercatorCoordinate } from 'maplibre-gl';
 import type { LonLat } from '../osm/model';
-import type { LeafType, TreeData } from '../osm/trees';
+import type { TreeData } from '../osm/trees';
+import { hash, NEEDLE_FLAG, scatterTrees, TREE_STRIDE, TreeField as F, WOOD_FLAG } from './tree-scatter';
 
-/** Шаг разброса деревьев в лесу, м (сетка общая для всех тайлов — на стыках нет повторов и пустот). */
-const WOOD_STEP = 9;
-/** Больше деревьев леса на тайл не ставим: шаг растёт (кроны — шире, чтобы полог оставался сомкнутым). */
-const MAX_WOOD_TREES = 8000;
-/** Шаг деревьев в ряду (natural=tree_row), м. */
-const ROW_STEP = 7;
-/** Ячейка индекса зданий (деревья леса внутри зданий не ставим), м. */
-const BUILDING_CELL = 40;
+/** Дерево в 15 м ниже этого на экране (во всём тайле) — упрощённые модели, px. */
+const FAR_PX = 30;
+const PROBE_HEIGHT = 15;
 
-/** Дерево в мировых координатах Меркатора: размеры в метрах, seed — для разброса цвета и поворота. */
-export interface TreeInstance { mx: number; my: number; needle: boolean; height: number; crown: number; trunk: number; seed: number }
+let worker: Worker | undefined;
+let nextJob = 1;
+const jobs = new Map<number, (trees: Float64Array) => void>();
 
-/** Детерминированный шум [0, 1) по целым числам. */
-function hash(a: number, b: number, c = 0): number {
-  let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(c | 0, 0x2545f491);
-  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
-const merc = ([lng, lat]: LonLat): [number, number] => {
-  const c = MercatorCoordinate.fromLngLat({ lng, lat }, 0);
-  return [c.x, c.y];
-};
-
-function isNeedle(leaf: LeafType | undefined, r: number, mixedDefault: boolean): boolean {
-  if (leaf === 'needleleaved') return true;
-  if (leaf === 'broadleaved') return false;
-  return (leaf === 'mixed' || mixedDefault) && r < 0.5;
-}
-
-/** Размеры одиночного дерева: теги, иначе типичные с разбросом ±20 %. */
-function single(needle: boolean, r: number, height?: number, crown?: number, trunk?: number) {
-  const h = height ?? (needle ? 12 : 10) * (0.8 + 0.4 * r);
-  const c = crown ?? h * (needle ? 0.4 : 0.6);
-  return { height: h, crown: c, trunk: trunk ?? Math.min(0.6, Math.max(0.12, h * 0.022)) };
-}
-
-function pointInRings(x: number, y: number, rings: number[][]): boolean {
-  let inside = false;
-  for (const ring of rings) {
-    for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
-      const xi = ring[i], yi = ring[i + 1], xj = ring[j], yj = ring[j + 1];
-      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
-    }
+/** Разброс деревьев тайла в воркере (без воркера — в главном потоке). */
+export function scatterTreesAsync(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][], bbox: [number, number, number, number]): Promise<Float64Array> {
+  if (typeof Worker === 'undefined') return Promise.resolve(scatterTrees(own, woods, buildings, bbox));
+  if (!worker) {
+    worker = new Worker(new URL('./tree-scatter-worker.ts', import.meta.url), { type: 'module' });
+    worker.onmessage = (e: MessageEvent<{ id: number; trees: Float64Array }>) => {
+      jobs.get(e.data.id)?.(e.data.trees);
+      jobs.delete(e.data.id);
+    };
+    worker.onerror = (e) => {
+      console.warn('деревья: ошибка воркера — разброс в главном потоке:', e.message);
+      worker?.terminate();
+      worker = undefined;
+      for (const done of jobs.values()) done(new Float64Array(0));
+      jobs.clear();
+    };
   }
-  return inside;
-}
-
-/**
- * Деревья тайла bbox [w, s, e, n]: отдельные и ряды — свои (по положению в тайле), леса (woods — из всех
- * загруженных тайлов) разбрасываются по общей сетке. В зданиях (buildings — внешние кольца) лес не растёт.
- */
-export function scatterTrees(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][], [w, s, e, n]: [number, number, number, number]): TreeInstance[] {
-  const [x0, y0] = merc([w, n]);
-  const [x1, y1] = merc([e, s]);
-  const inTile = (x: number, y: number) => x >= x0 && x < x1 && y >= y0 && y < y1;
-  // Метр в единицах Меркатора — по широте, округлённой до градуса: соседние тайлы получают одну и ту же сетку
-  const meter = MercatorCoordinate.fromLngLat({ lng: 0, lat: Math.round((s + n) / 2) }, 0).meterInMercatorCoordinateUnits();
-  const out: TreeInstance[] = [];
-
-  for (const t of own.points) {
-    const [x, y] = merc(t.p);
-    if (!inTile(x, y)) continue;
-    const r = hash(Math.round(x * 1e9), Math.round(y * 1e9));
-    const needle = isNeedle(t.leaf, r, false);
-    out.push({ mx: x, my: y, needle, seed: r, ...single(needle, hash(Math.round(x * 1e9), 3, 1), t.height, t.crown, t.trunk) });
-  }
-
-  for (const row of own.rows) {
-    const pts = row.line.map(merc);
-    let next = ROW_STEP / 2, walked = 0; // первое дерево — в полушаге от начала ряда
-    for (let i = 1; i < pts.length; i++) {
-      const [ax, ay] = pts[i - 1], [bx, by] = pts[i];
-      const len = Math.hypot(bx - ax, by - ay) / meter;
-      for (; next <= walked + len; next += ROW_STEP) {
-        const f = (next - walked) / len;
-        const x = ax + (bx - ax) * f, y = ay + (by - ay) * f;
-        if (!inTile(x, y)) continue;
-        const r = hash(Math.round(x * 1e9), Math.round(y * 1e9));
-        const needle = isNeedle(row.leaf, r, false);
-        out.push({ mx: x, my: y, needle, seed: r, ...single(needle, hash(Math.round(y * 1e9), 5, 2), row.height, row.crown) });
-      }
-      walked += len;
-    }
-  }
-
-  // Леса: кольца в Меркаторе, обрезанные bbox тайла
-  const areas = woods.map((wood) => {
-    const rings = wood.polygons.flatMap((p) => [p.outer, ...p.inners]).map((ring) => ring.flatMap(merc));
-    let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
-    for (const ring of rings) for (let i = 0; i < ring.length; i += 2) {
-      bx0 = Math.min(bx0, ring[i]); bx1 = Math.max(bx1, ring[i]); by0 = Math.min(by0, ring[i + 1]); by1 = Math.max(by1, ring[i + 1]);
-    }
-    return { wood, rings, box: [Math.max(bx0, x0), Math.max(by0, y0), Math.min(bx1, x1), Math.min(by1, y1)] };
-  }).filter((a) => a.box[0] < a.box[2] && a.box[1] < a.box[3]);
-  if (!areas.length) return out;
-
-  let step = WOOD_STEP * meter;
-  const estimate = areas.reduce((sum, a) => sum + (a.box[2] - a.box[0]) * (a.box[3] - a.box[1]), 0) / (step * step);
-  if (estimate > MAX_WOOD_TREES) step *= Math.sqrt(estimate / MAX_WOOD_TREES);
-  const stepM = step / meter;
-
-  // Индекс зданий: ячейка → кольца (Меркатор)
-  const cell = BUILDING_CELL * meter;
-  const index = new Map<string, number[][]>();
-  for (const b of buildings) {
-    const ring = b.flatMap(merc);
-    let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
-    for (let i = 0; i < ring.length; i += 2) {
-      bx0 = Math.min(bx0, ring[i]); bx1 = Math.max(bx1, ring[i]); by0 = Math.min(by0, ring[i + 1]); by1 = Math.max(by1, ring[i + 1]);
-    }
-    if (bx1 < x0 || bx0 > x1 || by1 < y0 || by0 > y1) continue;
-    for (let i = Math.floor(bx0 / cell); i <= Math.floor(bx1 / cell); i++) {
-      for (let j = Math.floor(by0 / cell); j <= Math.floor(by1 / cell); j++) {
-        const k = `${i},${j}`;
-        const list = index.get(k);
-        if (list) list.push(ring); else index.set(k, [ring]);
-      }
-    }
-  }
-  const inBuilding = (x: number, y: number) => (index.get(`${Math.floor(x / cell)},${Math.floor(y / cell)}`) ?? []).some((r) => pointInRings(x, y, [r]));
-
-  const taken = new Set<string>();
-  for (const { wood, rings, box } of areas) {
-    // Построчно: пересечения строки сетки с рёбрами колец (чёт-нечет — дыры тоже), затем ячейки в промежутках
-    for (let j = Math.floor(box[1] / step); j * step <= box[3]; j++) {
-      const yc = (j + 0.5) * step;
-      const xs: number[] = [];
-      for (const ring of rings) {
-        for (let a = 0, b = ring.length - 2; a < ring.length; b = a, a += 2) {
-          const ya = ring[a + 1], yb = ring[b + 1];
-          if (ya > yc !== yb > yc) xs.push(ring[a] + ((yc - ya) * (ring[b] - ring[a])) / (yb - ya));
-        }
-      }
-      xs.sort((p, q) => p - q);
-      for (let k = 0; k + 1 < xs.length; k += 2) {
-        const from = Math.max(xs[k], box[0]), to = Math.min(xs[k + 1], box[2]);
-        for (let i = Math.ceil(from / step - 0.5); (i + 0.5) * step <= to; i++) {
-          const id = `${i},${j}`;
-          if (taken.has(id)) continue;
-          const x = (i + 0.15 + 0.7 * hash(i, j, 1)) * step;
-          const y = (j + 0.15 + 0.7 * hash(i, j, 2)) * step;
-          if (!inTile(x, y) || inBuilding(x, y)) continue;
-          taken.add(id);
-          const r = hash(i, j, 3);
-          const needle = isNeedle(wood.leaf, hash(i, j, 4), true);
-          const height = (needle ? 19 : 16) * (0.8 + 0.4 * r);
-          // Кроны — по шагу сетки: полог почти сомкнут, сколько бы деревьев ни уместилось в тайл
-          const crown = needle ? Math.min(height * 0.45, Math.max(height * 0.25, stepM * 0.95)) : Math.min(height * 0.8, Math.max(height * 0.4, stepM * 1.2));
-          out.push({ mx: x, my: y, needle, height, crown, trunk: Math.min(0.5, height * 0.02), seed: hash(i, j, 5) });
-        }
-      }
-    }
-  }
-  return out;
+  const id = nextJob++;
+  return new Promise((resolve) => {
+    jobs.set(id, resolve);
+    worker!.postMessage({ id, own, woods, buildings, bbox });
+  });
 }
 
 // Модели: ось z вверх, основание в z = 0, высота и радиус 1 (масштабируются на дерево)
@@ -169,8 +44,8 @@ const Z_UP = new THREE.Matrix4().makeRotationX(Math.PI / 2);
 const TRUNK_GEO = new THREE.CylinderGeometry(1, 1, 1, 5, 1, true).applyMatrix4(Z_UP).translate(0, 0, 0.5);
 
 /** Лиственная крона — икосаэдр со сдвинутыми вершинами: гранёный «лоу-поли» шар от z = 0 до z = 1. */
-const BROAD_GEO = (() => {
-  const g = new THREE.IcosahedronGeometry(1, 1);
+const broadCrown = (detail: number) => {
+  const g = new THREE.IcosahedronGeometry(1, detail);
   const p = g.attributes.position as THREE.BufferAttribute;
   const v = new THREE.Vector3();
   for (let i = 0; i < p.count; i++) {
@@ -181,48 +56,78 @@ const BROAD_GEO = (() => {
   }
   g.computeVertexNormals();
   return g.applyMatrix4(Z_UP).scale(1, 1, 0.5).translate(0, 0, 0.5);
-})();
+};
+const BROAD_GEO = broadCrown(1);
+/** Дальний план: 20 граней вместо 80. */
+const BROAD_FAR_GEO = broadCrown(0);
 
-/** Хвойная крона — три яруса конусов от z = 0 до z = 1. */
+/** Хвойная крона — три яруса конусов от z = 0 до z = 1; донья не нужны — снизу (pitch ≤ 85°) их не видно. */
 const NEEDLE_GEO = (() => {
   const tiers = [[1, 0, 0.5], [0.78, 0.28, 0.45], [0.55, 0.55, 0.45]].map(([r, z, h]) =>
-    new THREE.ConeGeometry(r, h, 7, 1).applyMatrix4(Z_UP).translate(0, 0, z + h / 2));
+    new THREE.ConeGeometry(r, h, 7, 1, true).applyMatrix4(Z_UP).translate(0, 0, z + h / 2));
   const g = mergeGeometries(tiers.map((t) => t.toNonIndexed()))!;
   g.computeVertexNormals();
   return g;
 })();
+/** Дальний план: один конус на всю крону. */
+const NEEDLE_FAR_GEO = new THREE.ConeGeometry(0.85, 1, 6, 1, true).applyMatrix4(Z_UP).translate(0, 0, 0.5);
 
-const COLOURS = {
-  trunk: new THREE.Color('#7a5c43'), broad: new THREE.Color('#79a356'), needle: new THREE.Color('#3f7650'),
-  mono: new THREE.Color('#f2f2f2'), monoTrunk: new THREE.Color('#d9d9d9'),
-};
+const COLOURS = { trunk: new THREE.Color('#7a5c43'), broad: new THREE.Color('#79a356'), needle: new THREE.Color('#3f7650') };
+/** «Убрать цвета»: деревья на 25 % бледнее (смешаны с белым), но не белые. */
+const PALE = 0.25;
+const WHITE = new THREE.Color(0xffffff);
 const TRUNK_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.trunk, flatShading: true });
 const BROAD_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.broad, flatShading: true });
 const NEEDLE_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.needle, flatShading: true });
 
-/** Белые деревья — в монохромном режиме, как макет. */
 export function setTreesMonochrome(on: boolean) {
-  TRUNK_MATERIAL.color.copy(on ? COLOURS.monoTrunk : COLOURS.trunk);
-  BROAD_MATERIAL.color.copy(on ? COLOURS.mono : COLOURS.broad);
-  NEEDLE_MATERIAL.color.copy(on ? COLOURS.mono : COLOURS.needle);
+  const t = on ? PALE : 0;
+  TRUNK_MATERIAL.color.copy(COLOURS.trunk).lerp(WHITE, t);
+  BROAD_MATERIAL.color.copy(COLOURS.broad).lerp(WHITE, t);
+  NEEDLE_MATERIAL.color.copy(COLOURS.needle).lerp(WHITE, t);
 }
 
-/** Деревья одного тайла: три инстансированных меша (стволы, лиственные и хвойные кроны) — три draw call. */
+/**
+ * Деревья одного тайла: стволы, лиственные и хвойные кроны — инстансированные меши (по draw call на каждый).
+ * Для дальнего плана — те же инстансы с упрощёнными кронами.
+ */
 export class TreeGroup {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.Camera();
   readonly model: THREE.Matrix4;
   readonly count: number;
-  /** Подпись набора лесов, из которого собран тайл: пересобираем, только если она поменялась. */
-  constructor(center: LonLat, trees: TreeInstance[], readonly signature: string) {
-    const origin = MercatorCoordinate.fromLngLat({ lng: center[0], lat: center[1] }, 0);
-    const s = origin.meterInMercatorCoordinateUnits();
-    this.model = new THREE.Matrix4().makeTranslation(origin.x, origin.y, 0).scale(new THREE.Vector3(s, -s, s));
-    this.count = trees.length;
+  private readonly trunks: THREE.InstancedMesh;
+  private readonly near: THREE.InstancedMesh[] = [];
+  private readonly far: THREE.InstancedMesh[] = [];
+  /** Углы и центр тайла (локальные метры) — по ним выбирается детализация. */
+  private readonly probes: THREE.Vector3[];
+  private isFar?: boolean;
+  // Свет — как у зданий (MeshGroup)
+  private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
+  private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
 
-    const needles = trees.filter((t) => t.needle).length;
-    const trunks = new THREE.InstancedMesh(TRUNK_GEO, TRUNK_MATERIAL, trees.length);
-    const broad = new THREE.InstancedMesh(BROAD_GEO, BROAD_MATERIAL, trees.length - needles);
+  /** signature — подпись набора лесов и данных тайла: пересобираем, только если она поменялась. */
+  constructor(bbox: [number, number, number, number], trees: Float64Array, readonly signature: string) {
+    const [w, s, e, n] = bbox;
+    const origin = MercatorCoordinate.fromLngLat({ lng: (w + e) / 2, lat: (s + n) / 2 }, 0);
+    const unit = origin.meterInMercatorCoordinateUnits();
+    this.model = new THREE.Matrix4().makeTranslation(origin.x, origin.y, 0).scale(new THREE.Vector3(unit, -unit, unit));
+    const local = (lng: number, lat: number) => {
+      const c = MercatorCoordinate.fromLngLat({ lng, lat }, 0);
+      return new THREE.Vector3((c.x - origin.x) / unit, -(c.y - origin.y) / unit, 0);
+    };
+    this.probes = [local(w, s), local(e, s), local(w, n), local(e, n), new THREE.Vector3()];
+
+    const total = trees.length / TREE_STRIDE;
+    this.count = total;
+    let needles = 0, trunked = 0;
+    for (let i = 0; i < total; i++) {
+      const flags = trees[i * TREE_STRIDE + F.FLAGS];
+      if (flags & NEEDLE_FLAG) needles++;
+      if (!(flags & WOOD_FLAG)) trunked++;
+    }
+    const trunks = new THREE.InstancedMesh(TRUNK_GEO, TRUNK_MATERIAL, trunked);
+    const broad = new THREE.InstancedMesh(BROAD_GEO, BROAD_MATERIAL, total - needles);
     const needle = new THREE.InstancedMesh(NEEDLE_GEO, NEEDLE_MATERIAL, needles);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
@@ -230,22 +135,39 @@ export class TreeGroup {
     const pos = new THREE.Vector3();
     const scale = new THREE.Vector3();
     const colour = new THREE.Color();
-    let b = 0, n = 0;
-    trees.forEach((t, i) => {
-      const x = (t.mx - origin.x) / s, y = -(t.my - origin.y) / s;
+    let b = 0, nd = 0, tr = 0;
+    for (let i = 0; i < total; i++) {
+      const o = i * TREE_STRIDE;
+      const height = trees[o + F.HEIGHT], crown = trees[o + F.CROWN], seed = trees[o + F.SEED], flags = trees[o + F.FLAGS];
+      const isNeedle = (flags & NEEDLE_FLAG) !== 0;
+      const x = (trees[o + F.MX] - origin.x) / unit, y = -(trees[o + F.MY] - origin.y) / unit;
       // Крона: у лиственного — верхние 65 % высоты, у хвойного — от 15 % до верха; ствол уходит в крону
-      const base = t.height * (t.needle ? 0.15 : 0.35);
-      q.setFromAxisAngle(zAxis, t.seed * Math.PI * 2);
-      m.compose(pos.set(x, y, 0), q, scale.set(t.trunk, t.trunk, base + (t.height - base) * 0.3));
-      trunks.setMatrixAt(i, m);
-      m.compose(pos.set(x, y, base), q, scale.set(t.crown / 2, t.crown / 2, t.height - base));
+      const base = height * (isNeedle ? 0.15 : 0.35);
+      q.setFromAxisAngle(zAxis, seed * Math.PI * 2);
+      if (!(flags & WOOD_FLAG)) {
+        const trunk = trees[o + F.TRUNK];
+        m.compose(pos.set(x, y, 0), q, scale.set(trunk, trunk, base + (height - base) * 0.3));
+        trunks.setMatrixAt(tr++, m);
+      }
+      m.compose(pos.set(x, y, base), q, scale.set(crown / 2, crown / 2, height - base));
       // Разброс оттенка: светлее/темнее и чуть теплее/холоднее — множитель к цвету материала
-      const l = 0.85 + 0.3 * t.seed, warm = 0.06 * (hash(i, Math.round(t.seed * 1e6)) - 0.5);
+      const l = 0.85 + 0.3 * seed, warm = 0.06 * (hash(i, Math.round(seed * 1e6)) - 0.5);
       colour.setRGB(l * (1 + warm), l, l * (1 - warm));
-      if (t.needle) { needle.setMatrixAt(n, m); needle.setColorAt(n++, colour); }
+      if (isNeedle) { needle.setMatrixAt(nd, m); needle.setColorAt(nd++, colour); }
       else { broad.setMatrixAt(b, m); broad.setColorAt(b++, colour); }
-    });
-    for (const mesh of [trunks, broad, needle]) {
+    }
+    // Дальний план — те же матрицы и цвета (общие буферы), другие модели
+    const farOf = (mesh: THREE.InstancedMesh, geo: THREE.BufferGeometry) => {
+      const f = new THREE.InstancedMesh(geo, mesh.material, mesh.count);
+      f.instanceMatrix = mesh.instanceMatrix;
+      f.instanceColor = mesh.instanceColor;
+      return f;
+    };
+    // Стволы — только у отдельных деревьев и рядов, их немного: остаются и на дальнем плане (иначе кроны висят в воздухе)
+    this.trunks = trunks;
+    this.near.push(broad, needle);
+    this.far.push(farOf(broad, BROAD_FAR_GEO), farOf(needle, NEEDLE_FAR_GEO));
+    for (const mesh of [trunks, ...this.near, ...this.far]) {
       mesh.frustumCulled = false;
       if (mesh.count) this.scene.add(mesh);
     }
@@ -254,19 +176,58 @@ export class TreeGroup {
     const sun = new THREE.DirectionalLight(0xffffff, 1.8);
     sun.position.set(-0.5, -1, 1.5);
     this.scene.add(this.ambient, this.hemi, sun);
+    this.setFar(false);
   }
-
-  // Свет — как у зданий (MeshGroup)
-  private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
-  private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
 
   applyLighting(hemisphere: boolean) {
     this.ambient.visible = !hemisphere;
     this.hemi.visible = hemisphere;
   }
 
+  private readonly a = new THREE.Vector4();
+  private readonly b = new THREE.Vector4();
+
+  /**
+   * Перед кадром (camera.projectionMatrix уже выставлена, viewportHeight — в px): false — тайл целиком вне
+   * кадра, не рисовать. Иначе выбирается детализация: если 15-метровое дерево хоть где-то в тайле (углы,
+   * центр) крупнее FAR_PX — подробные модели.
+   */
+  prepare(viewportHeight: number): boolean {
+    const pm = this.camera.projectionMatrix;
+    let far = true;
+    // Отсечение: все углы тайла (на земле и на высоте деревьев) по одну сторону одной плоскости кадра
+    let left = 0, right = 0, below = 0, above = 0, behind = 0;
+    for (const p of this.probes) {
+      this.a.set(p.x, p.y, 0, 1).applyMatrix4(pm);
+      this.b.set(p.x, p.y, PROBE_HEIGHT, 1).applyMatrix4(pm);
+      for (const v of [this.a, this.b]) {
+        if (v.x < -v.w) left++;
+        if (v.x > v.w) right++;
+        if (v.y < -v.w) below++;
+        if (v.y > v.w) above++;
+        if (v.w <= 0) behind++;
+      }
+      // Точка за камерой — тайл тянется прямо под неё, значит рядом
+      if (this.a.w <= 0 || this.b.w <= 0) far = false;
+      else if (Math.abs(this.b.y / this.b.w - this.a.y / this.a.w) * viewportHeight / 2 > FAR_PX) far = false;
+    }
+    const all = this.probes.length * 2;
+    if (left === all || right === all || below === all || above === all || behind === all) return false;
+    this.setFar(far);
+    return true;
+  }
+
+  private setFar(far: boolean) {
+    if (this.isFar === far) return;
+    this.isFar = far;
+    for (const mesh of this.near) mesh.visible = !far;
+    for (const mesh of this.far) mesh.visible = far;
+  }
+
   dispose() {
-    for (const o of this.scene.children) if (o instanceof THREE.InstancedMesh) o.dispose();
+    this.trunks.dispose();
+    for (const mesh of this.near) mesh.dispose();
+    for (const mesh of this.far) mesh.dispose();
     this.scene.clear();
   }
 }

@@ -9,7 +9,7 @@ import { TileStore, type TileVia } from './tile-store';
 import { timed } from '../perf';
 import { josmLayer } from '../osm/josm';
 import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type WoodArea } from '../osm/trees';
-import { scatterTrees, TreeGroup } from '../render/trees';
+import { scatterTreesAsync, TreeGroup } from '../render/trees';
 
 export const OVERPASS_TILE_ZOOM = GRID_ZOOM;
 /** Сколько тайлов держать в кеше данных. */
@@ -99,6 +99,7 @@ export class OverpassTiles {
     }
     this.cache.clear();
     this.layer.clear();
+    this.treesPending.clear();
     this.rendered.clear();
     this.hiddenOutlines.clear();
     this.groups.clear();
@@ -304,6 +305,7 @@ export class OverpassTiles {
       this.hiddenOutlines.delete(key);
     }
     for (const key of this.layer.treeKeys()) if (!wanted.has(key)) this.layer.setTrees(key, undefined);
+    for (const key of [...this.treesPending.keys()]) if (!wanted.has(key)) this.treesPending.delete(key);
     for (const [key, e] of this.cache) {
       // Ушедшие из вида загрузки отменяем, чтобы не занимать слоты Overpass
       if (wanted.has(key)) continue;
@@ -636,13 +638,21 @@ export class OverpassTiles {
     const bbox = tileBbox(key);
     const woods = this.woodsIn(bbox);
     const signature = `${e.fetchedAt}:${own.points.length}:${own.rows.length}:${e.features.length}|${woods.map((w) => w.key).sort().join(',')}`;
-    if (this.layer.treeSignature(key) === signature) return;
-    if (!own.points.length && !own.rows.length && !woods.length) { this.layer.setTrees(key, undefined); return; }
+    if (this.layer.treeSignature(key) === signature || this.treesPending.get(key) === signature) return;
+    if (!own.points.length && !own.rows.length && !woods.length) { this.treesPending.delete(key); this.layer.setTrees(key, undefined); return; }
     const buildings = e.features.flatMap((f) => f.polygons.map((p) => p.outer));
-    const trees = timed('деревья: разброс', () => scatterTrees(own, woods, buildings, bbox), (r) => `${key}, ${r.length}`);
-    const [w, s, east, n] = bbox;
-    this.layer.setTrees(key, new TreeGroup([(w + east) / 2, (s + n) / 2], trees, signature));
+    // Разброс — в воркере; старые деревья тайла остаются на экране, пока не придут новые
+    this.treesPending.set(key, signature);
+    void scatterTreesAsync(own, woods, buildings, bbox).then((trees) => {
+      if (this.treesPending.get(key) !== signature) return; // за это время тайл пересобрали заново или убрали
+      this.treesPending.delete(key);
+      if (!this.wanted.includes(key)) return;
+      this.layer.setTrees(key, timed('деревья: инстансы', () => new TreeGroup(bbox, trees, signature), (g) => `${key}, ${g.count}`));
+    });
   }
+
+  /** Деревья, которые сейчас считает воркер: тайл → подпись. */
+  private readonly treesPending = new Map<string, string>();
 
   /**
    * Здания, принадлежащие тайлу: Overpass отдаёт всё, что задевает bbox, поэтому здание на границе приходит

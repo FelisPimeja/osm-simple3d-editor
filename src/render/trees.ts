@@ -72,19 +72,19 @@ const NEEDLE_GEO = (() => {
 /** Дальний план: один конус на всю крону. */
 const NEEDLE_FAR_GEO = new THREE.ConeGeometry(0.85, 1, 6, 1, true).applyMatrix4(Z_UP).translate(0, 0, 0.5);
 
-const COLOURS = {
-  trunk: new THREE.Color('#7a5c43'), broad: new THREE.Color('#79a356'), needle: new THREE.Color('#3f7650'),
-  mono: new THREE.Color('#f2f2f2'), monoTrunk: new THREE.Color('#d9d9d9'),
-};
+const COLOURS = { trunk: new THREE.Color('#7a5c43'), broad: new THREE.Color('#79a356'), needle: new THREE.Color('#3f7650') };
+/** «Убрать цвета»: деревья вполовину бледнее (смешаны с белым), но не белые. */
+const PALE = 0.5;
+const WHITE = new THREE.Color(0xffffff);
 const TRUNK_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.trunk, flatShading: true });
 const BROAD_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.broad, flatShading: true });
 const NEEDLE_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.needle, flatShading: true });
 
-/** Белые деревья — в монохромном режиме, как макет. */
 export function setTreesMonochrome(on: boolean) {
-  TRUNK_MATERIAL.color.copy(on ? COLOURS.monoTrunk : COLOURS.trunk);
-  BROAD_MATERIAL.color.copy(on ? COLOURS.mono : COLOURS.broad);
-  NEEDLE_MATERIAL.color.copy(on ? COLOURS.mono : COLOURS.needle);
+  const t = on ? PALE : 0;
+  TRUNK_MATERIAL.color.copy(COLOURS.trunk).lerp(WHITE, t);
+  BROAD_MATERIAL.color.copy(COLOURS.broad).lerp(WHITE, t);
+  NEEDLE_MATERIAL.color.copy(COLOURS.needle).lerp(WHITE, t);
 }
 
 /**

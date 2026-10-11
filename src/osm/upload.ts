@@ -1,6 +1,6 @@
 import { fetchElements, fetchNodes, fetchWayRelations, type OsmMember, type OsmNode, type OsmRelation, type OsmWay } from './api';
 import { getToken } from './auth';
-import { server } from './servers';
+import { apiFetch, server } from './servers';
 import { tr, trn } from '../i18n';
 
 type Tags = Record<string, string>;
@@ -94,7 +94,7 @@ export function buildOsmChange(edits: { element: OsmWay | OsmRelation | (OsmNode
 async function call(method: string, path: string, body?: string, accept = 'text/plain'): Promise<string> {
   const token = getToken();
   if (!token) throw new Error(tr('Нужно войти в {server}.', { server: server().short }));
-  const res = await fetch(`${server().api}${path}`, {
+  const res = await apiFetch(`${server().api}${path}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/xml; charset=utf-8', Accept: accept },
     body,

@@ -1,4 +1,4 @@
-import { CLIENT_ID_ENV, server, type OsmServer } from './servers';
+import { CLIENT_ID_ENV, apiFetch, server, type OsmServer } from './servers';
 import { tr } from '../i18n';
 
 /**
@@ -95,7 +95,7 @@ export async function login(s: OsmServer = server()): Promise<string> {
     };
   });
 
-  const res = await fetch(`${s.web}/oauth2/token`, {
+  const res = await apiFetch(`${s.web}/oauth2/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -120,7 +120,7 @@ export async function login(s: OsmServer = server()): Promise<string> {
 export async function fetchUser(s: OsmServer = server()): Promise<OsmUser | undefined> {
   const token = getToken(s);
   if (!token) return;
-  const res = await fetch(`${s.api}/user/details.json`, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await apiFetch(`${s.api}/user/details.json`, { headers: { Authorization: `Bearer ${token}` } });
   if (res.status === 401 || res.status === 403) { logout(s); return; }
   if (!res.ok) throw new Error(`OSM API ${res.status}`);
   const { user } = (await res.json()) as { user: { id: number; display_name: string } };

@@ -10,7 +10,7 @@ import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
-import { SERVERS, SERVER_LIST, apiBlockedHere, server, setServer, type ServerId } from './osm/servers';
+import { SERVERS, SERVER_LIST, apiBlockedHere, apiFetch, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
@@ -923,7 +923,7 @@ async function openEditLink() {
     showLoading(tr('{what}: ищу объект на сервере {server}…', { what, server: server().short }));
     try {
       const full = async (t: string, id: number | string) => {
-        const res = await fetch(`${server().api}/${t}/${id}/full.json`);
+        const res = await apiFetch(`${server().api}/${t}/${id}/full.json`);
         if (!res.ok) throw new Error(`API ${res.status}`);
         return ((await res.json()) as { elements: OsmElement[] }).elements;
       };

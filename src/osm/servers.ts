@@ -132,6 +132,14 @@ export function apiBlockedHere(s: OsmServer = current): string | undefined {
   return tr('API {server} не пускает этот браузер (Chrome, Safari, Edge) — данные, вход и сохранение работают в Firefox.', { server: s.short });
 }
 
+/**
+ * fetch к API и OAuth сервера. Для OGF на странице стоит no-referrer (ради подложки, см. noReferrer), а их API
+ * без Referer отвечает 403 — здесь Referer возвращаем: у чужого сервера это только origin редактора.
+ */
+export function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { referrerPolicy: 'strict-origin-when-cross-origin', ...init });
+}
+
 export function setServer(id: ServerId) {
   current = SERVERS[id];
   writeServerParam(id);

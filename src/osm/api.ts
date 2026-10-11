@@ -1,4 +1,4 @@
-import { server } from './servers';
+import { apiFetch, server } from './servers';
 import { tr } from '../i18n';
 
 export type Bbox = [west: number, south: number, east: number, north: number];
@@ -12,7 +12,7 @@ export type OsmElement = OsmNode | OsmWay | OsmRelation;
 // /map отдаёт все узлы и пути в bbox плюс отношения, которые на них ссылаются.
 // Члены отношений за пределами bbox не приходят — такие мультиполигоны будут неполными.
 export async function fetchMap(bbox: Bbox, api = server().api, signal?: AbortSignal): Promise<OsmElement[]> {
-  const res = await fetch(`${api}/map.json?bbox=${bbox.join(',')}`, { signal });
+  const res = await apiFetch(`${api}/map.json?bbox=${bbox.join(',')}`, { signal });
   if (!res.ok) {
     const text = await res.text();
     throw new ApiError(res.status, `OSM API ${res.status}: ${text || res.statusText}`);
@@ -46,7 +46,7 @@ export async function fetchMapSplit(bbox: Bbox, api = server().api, signal?: Abo
 
 /** Отношение со всеми членами и их узлами. */
 export async function fetchRelationFull(id: number, api = server().api, signal?: AbortSignal): Promise<OsmElement[]> {
-  const res = await fetch(`${api}/relation/${id}/full.json`, { signal });
+  const res = await apiFetch(`${api}/relation/${id}/full.json`, { signal });
   if (!res.ok) throw new Error(tr('OSM API {status} для relation/{id}', { status: res.status, id }));
   return ((await res.json()) as { elements: OsmElement[] }).elements;
 }
@@ -80,7 +80,7 @@ export async function completeRelations(
 export async function fetchNodes(ids: number[], api = server().api): Promise<Map<number, OsmNode & { version: number }>> {
   const out = new Map<number, OsmNode & { version: number }>();
   for (let i = 0; i < ids.length; i += 100) {
-    const res = await fetch(`${api}/nodes.json?nodes=${ids.slice(i, i + 100).join(',')}`);
+    const res = await apiFetch(`${api}/nodes.json?nodes=${ids.slice(i, i + 100).join(',')}`);
     if (!res.ok) throw new Error(`OSM API ${res.status}: ${(await res.text()) || res.statusText}`);
     for (const e of ((await res.json()) as { elements: (OsmNode & { version: number })[] }).elements) out.set(e.id, e);
   }
@@ -92,7 +92,7 @@ export async function fetchElements(keys: string[], api = server().api): Promise
   for (const type of ['way', 'relation'] as const) {
     const ids = keys.filter((k) => k.startsWith(`${type}/`)).map((k) => k.split('/')[1]);
     for (let i = 0; i < ids.length; i += 100) {
-      const res = await fetch(`${api}/${type}s.json?${type}s=${ids.slice(i, i + 100).join(',')}`);
+      const res = await apiFetch(`${api}/${type}s.json?${type}s=${ids.slice(i, i + 100).join(',')}`);
       if (!res.ok) throw new Error(`OSM API ${res.status}: ${(await res.text()) || res.statusText}`);
       for (const e of ((await res.json()) as { elements: (OsmWay | OsmRelation)[] }).elements) out.set(`${e.type}/${e.id}`, e);
     }
@@ -102,7 +102,7 @@ export async function fetchElements(keys: string[], api = server().api): Promise
 
 /** Отношения, в которые входит путь (текущие версии). */
 export async function fetchWayRelations(id: number, api = server().api): Promise<OsmRelation[]> {
-  const res = await fetch(`${api}/way/${id}/relations.json`);
+  const res = await apiFetch(`${api}/way/${id}/relations.json`);
   if (!res.ok) throw new Error(`OSM API ${res.status}: ${(await res.text()) || res.statusText}`);
   return ((await res.json()) as { elements: OsmRelation[] }).elements;
 }

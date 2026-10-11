@@ -8,7 +8,7 @@
  */
 import { isLang, lang, storedLang, storeLang, type Lang } from './i18n';
 import { canWritePrefs, getToken } from './osm/auth';
-import { server, type OsmServer } from './osm/servers';
+import { apiFetch, server, type OsmServer } from './osm/servers';
 
 const PREFIX = 'simple3d:';
 /** Когда настройки последний раз меняли в этом браузере (мс). */
@@ -56,7 +56,7 @@ function stamp(key: string) {
 }
 
 async function api(s: OsmServer, path: string, init: RequestInit = {}): Promise<Response> {
-  const res = await fetch(`${s.api}/user/preferences${path}`, {
+  const res = await apiFetch(`${s.api}/user/preferences${path}`, {
     ...init,
     headers: { ...init.headers, Authorization: `Bearer ${getToken(s)}` },
   });

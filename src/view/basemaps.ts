@@ -54,8 +54,11 @@ export const IMAGERY: Imagery[] = [
 /** 'map' — векторная карта без снимков. */
 export const MAP_BASEMAP = 'map';
 export const IMAGERY_LAYER = 'imagery';
+/** Общедоступные GPS-треки OSM — эталон, по которому видно смещение снимков. */
+export const GPS_LAYER = 'gps-traces';
 
 const STORE_KEY = 'osm3d.basemap';
+const GPS_KEY = 'osm3d.gps-traces';
 
 export const isBasemap = (id: string | undefined | null): id is string => id === MAP_BASEMAP || IMAGERY.some((i) => i.id === id);
 
@@ -67,6 +70,33 @@ export function storedBasemap(): string {
 
 export function storeBasemap(id: string) {
   try { if (id === MAP_BASEMAP) localStorage.removeItem(STORE_KEY); else localStorage.setItem(STORE_KEY, id); } catch { /* до перезагрузки */ }
+}
+
+export function storedGps(): boolean {
+  try { return localStorage.getItem(GPS_KEY) === '1'; } catch { return false; }
+}
+
+export function storeGps(on: boolean) {
+  try { if (on) localStorage.setItem(GPS_KEY, '1'); else localStorage.removeItem(GPS_KEY); } catch { /* до перезагрузки */ }
+}
+
+/** Слой подписей стиля, под который кладём растры. */
+const firstSymbol = (map: MlMap) => map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+
+/** GPS-треки поверх подложки (и карты, и снимков), под подписями и зданиями. Возвращает, добавлен ли слой. */
+export function applyGpsTraces(map: MlMap, on: boolean): boolean {
+  if (map.getLayer(GPS_LAYER)) map.removeLayer(GPS_LAYER);
+  if (map.getSource(GPS_LAYER)) map.removeSource(GPS_LAYER);
+  if (!on) return false;
+  map.addSource(GPS_LAYER, {
+    type: 'raster',
+    tiles: ['a', 'b', 'c'].map((s) => `https://${s}.gps-tile.openstreetmap.org/lines/{z}/{x}/{y}.png`),
+    tileSize: 256,
+    maxzoom: 20,
+    attribution: tr('GPS-треки') + ' <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>',
+  });
+  map.addLayer({ id: GPS_LAYER, type: 'raster', source: GPS_LAYER, paint: { 'raster-fade-duration': 150 } }, firstSymbol(map));
+  return true;
 }
 
 /**
@@ -81,7 +111,8 @@ export function applyBasemap(map: MlMap, id: string): boolean {
   map.addSource(IMAGERY_LAYER, {
     type: 'raster', tiles: im.tiles, tileSize: im.tileSize, maxzoom: im.maxzoom, attribution: im.attribution,
   });
-  const before = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+  // Под GPS-треками, если они включены
+  const before = map.getLayer(GPS_LAYER) ? GPS_LAYER : firstSymbol(map);
   map.addLayer({ id: IMAGERY_LAYER, type: 'raster', source: IMAGERY_LAYER, paint: { 'raster-fade-duration': 150 } }, before);
   return true;
 }
@@ -90,8 +121,10 @@ export function applyBasemap(map: MlMap, id: string): boolean {
 export class BasemapButton {
   private readonly btn: HTMLButtonElement;
   private readonly menu: HTMLDivElement;
+  private readonly gpsInput: HTMLInputElement;
 
-  constructor(group: HTMLElement, private current: string, private readonly onSelect: (id: string) => void) {
+  constructor(group: HTMLElement, private current: string, private readonly onSelect: (id: string) => void,
+    gps: boolean, onGps: (on: boolean) => void) {
     group.classList.add('basemap-group');
     const btn = this.btn = document.createElement('button');
     btn.type = 'button';
@@ -115,6 +148,15 @@ export class BasemapButton {
       row.append(input, ` ${label}`);
       menu.append(row);
     }
+    const gpsRow = document.createElement('label');
+    gpsRow.className = 'basemap-overlay';
+    gpsRow.title = tr('Общедоступные GPS-треки участников OSM: по ним видно, куда сдвинуты снимки');
+    const gpsInput = this.gpsInput = document.createElement('input');
+    gpsInput.type = 'checkbox';
+    gpsInput.checked = gps;
+    gpsInput.addEventListener('change', () => onGps(gpsInput.checked));
+    gpsRow.append(gpsInput, ` ${tr('GPS-треки OSM')}`);
+    menu.append(gpsRow);
     const note = document.createElement('div');
     note.className = 'basemap-note';
     note.textContent = tr('Снимки, разрешённые для обводки в OSM. Проверяйте сдвиг снимков по GPS-трекам.');
@@ -135,6 +177,11 @@ export class BasemapButton {
     this.current = id;
     this.sync();
     this.onSelect(id);
+  }
+
+  /** GPS-треки включили или выключили не галкой (из профиля). */
+  setGps(on: boolean) {
+    this.gpsInput.checked = on;
   }
 
   /** Подложку сменили не кнопкой (пришла из профиля). */

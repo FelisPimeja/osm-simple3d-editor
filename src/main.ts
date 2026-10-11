@@ -15,7 +15,7 @@ import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
-import { applyBasemap, BasemapButton, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap } from './view/basemaps';
+import { applyBasemap, applyGpsTraces, BasemapButton, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
@@ -185,13 +185,33 @@ cubeBtn.addEventListener('click', () => {
 // Подложка: карта или спутниковые снимки (только у OSM — у OHM и OGF кнопки нет). Выбор — в localStorage
 // и в профиле (simple3d:basemap)
 let basemap = server().imagery ? storedBasemap() : MAP_BASEMAP;
+let gpsTraces = server().imagery ? storedGps() : false;
 let mapLoaded = false;
 // Кнопка — в блоке кнопок масштаба и компаса, последней
 const navGroup = document.querySelector<HTMLElement>('.maplibregl-ctrl-compass')?.parentElement;
 const basemapCtrl = server().imagery && navGroup ? new BasemapButton(navGroup, basemap, (id) => {
   setBasemap(id);
   void saveSetting('basemap');
+}, gpsTraces, (on) => {
+  setGpsTraces(on);
+  void saveSetting('gps-traces');
 }) : undefined;
+
+/** Слой подложки только что добавлен: в режиме здания окружение скрыто — прячем и его до выхода. */
+function hideInFocus(id: string) {
+  if (!focusHiddenLayers.length) return;
+  map.setLayoutProperty(id, 'visibility', 'none');
+  focusHiddenLayers.push({ id, visibility: 'visible' });
+}
+
+function setGpsTraces(on: boolean) {
+  gpsTraces = on;
+  storeGps(on);
+  basemapCtrl?.setGps(on);
+  if (!mapLoaded) return;
+  focusHiddenLayers = focusHiddenLayers.filter((l) => l.id !== GPS_LAYER);
+  if (applyGpsTraces(map, on)) hideInFocus(GPS_LAYER);
+}
 
 function setBasemap(id: string) {
   basemap = id;
@@ -199,12 +219,7 @@ function setBasemap(id: string) {
   basemapCtrl?.set(id);
   if (!mapLoaded) return; // слой добавит обработчик load
   focusHiddenLayers = focusHiddenLayers.filter((l) => l.id !== IMAGERY_LAYER);
-  if (!applyBasemap(map, id)) return;
-  // В режиме здания окружение скрыто — снимки тоже; вернутся с выходом из него
-  if (focusHiddenLayers.length) {
-    map.setLayoutProperty(IMAGERY_LAYER, 'visibility', 'none');
-    focusHiddenLayers.push({ id: IMAGERY_LAYER, visibility: 'visible' });
-  }
+  if (applyBasemap(map, id)) hideInFocus(IMAGERY_LAYER);
 }
 
 if (server().imagery) registerSetting({
@@ -214,6 +229,15 @@ if (server().imagery) registerSetting({
     const id = isBasemap(v) ? v : MAP_BASEMAP;
     if (id === basemap) return 'same';
     setBasemap(id);
+    return 'live';
+  },
+});
+if (server().imagery) registerSetting({
+  key: 'gps-traces',
+  local: () => (gpsTraces ? '1' : undefined),
+  apply: (v) => {
+    if ((v === '1') === gpsTraces) return 'same';
+    setGpsTraces(v === '1');
     return 'live';
   },
 });
@@ -375,6 +399,7 @@ map.on('load', () => {
     paint: { 'line-color': '#5a5f66', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.85 },
   });
   mapLoaded = true;
+  if (gpsTraces) setGpsTraces(true);
   if (basemap !== MAP_BASEMAP) setBasemap(basemap);
   overpass.setSource(tileSource());
   applyDate();

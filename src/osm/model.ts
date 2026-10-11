@@ -261,7 +261,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
 }
 
 /** Склеивает пути в замкнутые кольца по общим концевым узлам. null — если кольцо не замыкается. */
-function joinRings(segments: number[][]): number[][] | null {
+export function joinRings(segments: number[][]): number[][] | null {
   const pool = segments.map((s) => [...s]);
   const rings: number[][] = [];
   while (pool.length) {

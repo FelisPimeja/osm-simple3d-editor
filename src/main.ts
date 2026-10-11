@@ -238,6 +238,18 @@ function syncBasemapLayers() {
   const bounds = f ? focusImageryBounds() : undefined;
   applyGpsTraces(map, gps && (!f || !!bounds), bounds);
   applyBasemap(map, f && !bounds ? MAP_BASEMAP : id, bounds);
+  if (!f) applyVectorStyle(id !== MAP_BASEMAP);
+}
+
+/** Слои стиля карты (без фона и экструзий) и их видимость в стиле — запоминаются при загрузке. */
+let styleLayers: { id: string; visibility: 'visible' | 'none' }[] = [];
+
+/**
+ * Под снимками стиль карты не нужен (сквозь прозрачный снимок проглядывал бы): скрыть его заливки, линии и подписи,
+ * оставив здания (наши слои). В режиме здания видимостью слоёв ведает он сам.
+ */
+function applyVectorStyle(hidden: boolean) {
+  for (const l of styleLayers) if (map.getLayer(l.id)) map.setLayoutProperty(l.id, 'visibility', hidden ? 'none' : l.visibility);
 }
 
 const offsetPanel = new ImageryOffsetPanel(map, {
@@ -403,6 +415,8 @@ map.on('load', () => {
   for (const layer of map.getStyle().layers) {
     if (layer.type === 'fill-extrusion') map.removeLayer(layer.id);
   }
+  styleLayers = map.getStyle().layers.filter((l) => l.type !== 'background')
+    .map((l) => ({ id: l.id, visibility: l.layout?.visibility === 'none' ? 'none' as const : 'visible' as const }));
 
   const extrusion: FillExtrusionLayerSpecification['paint'] = {
     'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 5],

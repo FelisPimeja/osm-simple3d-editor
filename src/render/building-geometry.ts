@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Heights } from '../osm/heights';
 import { skeletonOf, type Skeleton } from './skeleton';
+import { tr } from '../i18n';
 
 /** Локальная точка в метрах: x — восток, y — север. */
 export type Pt = [number, number];
@@ -755,7 +756,7 @@ export function shapeOf(ring: Pt[]): { c: Pt; label: string; r?: number } | unde
       if (Math.abs(u[0] * v[0] + u[1] * v[1]) / (Math.hypot(u[0], u[1]) * Math.hypot(v[0], v[1])) > cos) return;
     }
     const c: Pt = [(pts[0][0] + pts[2][0]) / 2, (pts[0][1] + pts[2][1]) / 2];
-    return { c, label: Math.abs(side(0) - side(1)) < SHAPE_REGULAR * (side(0) + side(1)) ? 'Центр квадрата' : 'Центр прямоугольника' };
+    return { c, label: Math.abs(side(0) - side(1)) < SHAPE_REGULAR * (side(0) + side(1)) ? tr('Центр квадрата') : tr('Центр прямоугольника') };
   }
   // Центр — центроид площади; радиусы и стороны — разброс относительно среднего
   let A = 0, cx = 0, cy = 0;
@@ -772,8 +773,8 @@ export function shapeOf(ring: Pt[]): { c: Pt; label: string; r?: number } | unde
   const sides = pts.map((_, i) => side(i));
   const sMean = sides.reduce((s, x) => s + x, 0) / n;
   if (spread(radii, r) < SHAPE_REGULAR && spread(sides, sMean) < SHAPE_REGULAR * 2) {
-    return { c, r, label: n >= 12 ? `Центр окружности (r ${r.toFixed(2)} м)` : `Центр ${n}-угольника` };
+    return { c, r, label: n >= 12 ? tr('Центр окружности (r {r} м)', { r: r.toFixed(2) }) : tr('Центр {n}-угольника', { n }) };
   }
-  if (n >= 8 && spread(radii, r) < SHAPE_CIRCLE) return { c, r, label: `Центр окружности (r ${r.toFixed(2)} м)` };
+  if (n >= 8 && spread(radii, r) < SHAPE_CIRCLE) return { c, r, label: tr('Центр окружности (r {r} м)', { r: r.toFixed(2) }) };
   return;
 }

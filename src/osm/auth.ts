@@ -1,4 +1,5 @@
 import { CLIENT_ID_ENV, server, type OsmServer } from './servers';
+import { tr } from '../i18n';
 
 /**
  * OAuth 2.0 Authorization Code + PKCE без бэкенда.
@@ -39,7 +40,7 @@ async function challenge(verifier: string): Promise<string> {
 
 export async function login(s: OsmServer = server()): Promise<string> {
   if (!s.clientId) {
-    throw new Error(`Не задан client_id для сервера «${s.label}» (${CLIENT_ID_ENV[s.id]} в .env.local).`);
+    throw new Error(tr('Не задан client_id для сервера «{server}» ({env} в .env.local).', { server: s.label, env: CLIENT_ID_ENV[s.id] }));
   }
   const verifier = randomString();
   const state = randomString();
@@ -53,14 +54,14 @@ export async function login(s: OsmServer = server()): Promise<string> {
     code_challenge_method: 'S256',
   });
   const popup = window.open(`${s.web}/oauth2/authorize?${params}`, 'osm-oauth', 'width=600,height=700');
-  if (!popup) throw new Error('Браузер заблокировал окно входа — разрешите всплывающие окна для этого сайта.');
+  if (!popup) throw new Error(tr('Браузер заблокировал окно входа — разрешите всплывающие окна для этого сайта.'));
 
   // Сайт OSM отдаёт Cross-Origin-Opener-Policy: после перехода на него связь с окном рвётся
   // (window.opener пуст, popup.closed сразу true). Поэтому code приходит через BroadcastChannel —
   // он работает между любыми окнами одного origin, а закрытие окна не отслеживаем.
   const code = await new Promise<string>((resolve, reject) => {
     const channel = new BroadcastChannel(OAUTH_CHANNEL);
-    const timer = setTimeout(() => { channel.close(); reject(new Error('Вход не завершён за 5 минут — попробуйте ещё раз.')); }, 5 * 60_000);
+    const timer = setTimeout(() => { channel.close(); reject(new Error(tr('Вход не завершён за 5 минут — попробуйте ещё раз.'))); }, 5 * 60_000);
     channel.onmessage = (e: MessageEvent) => {
       if (e.data?.type !== 'osm-oauth' || e.data.state !== state) return; // ответ на другую попытку входа
       clearTimeout(timer);
@@ -81,7 +82,7 @@ export async function login(s: OsmServer = server()): Promise<string> {
       code_verifier: verifier,
     }),
   });
-  if (!res.ok) throw new Error(`Не удалось получить токен: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(tr('Не удалось получить токен: {status} {text}', { status: res.status, text: await res.text() }));
   const token = ((await res.json()) as { access_token: string }).access_token;
   try { localStorage.setItem(tokenKey(s), token); } catch { /* живём без сохранения */ }
   return token;

@@ -1,4 +1,5 @@
 import type { BuildingsLayer } from '../render/buildings-layer';
+import { tr } from '../i18n';
 
 export type PaintFace = 'roof' | 'wall';
 /** Скопированное: цвет и материал (undefined — не задан, при заливке удаляется). */
@@ -49,7 +50,7 @@ export class PaintTool {
       this.hint();
       return;
     }
-    if (!this.sample) { this.onState('Сначала возьмите образец: Ctrl+клик по поверхности.', true); return; }
+    if (!this.sample) { this.onState(tr('Сначала возьмите образец: Ctrl+клик по поверхности.'), true); return; }
     this.apply(hit.key, face, this.sample);
   }
 
@@ -61,9 +62,11 @@ export class PaintTool {
 
   private hint() {
     const s = this.sample;
-    const what = s ? `${s.from === 'roof' ? 'крыша' : 'фасад'}: цвет ${s.colour ?? '—'}, материал ${s.material ?? '—'}` : '';
+    const what = !s ? '' : s.from === 'roof'
+      ? tr('крыша: цвет {colour}, материал {material}', { colour: s.colour ?? '—', material: s.material ?? '—' })
+      : tr('фасад: цвет {colour}, материал {material}', { colour: s.colour ?? '—', material: s.material ?? '—' });
     this.onState(s
-      ? `Заливка (${what}): клик по крыше или стене — назначить. Ctrl+клик — взять другой образец. Esc — выйти.`
-      : 'Заливка: Ctrl+клик по поверхности — взять цвет и материал (крыша или фасад). Esc — выйти.');
+      ? tr('Заливка ({what}): клик по крыше или стене — назначить. Ctrl+клик — взять другой образец. Esc — выйти.', { what })
+      : tr('Заливка: Ctrl+клик по поверхности — взять цвет и материал (крыша или фасад). Esc — выйти.'));
   }
 }

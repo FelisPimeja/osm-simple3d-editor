@@ -1,6 +1,7 @@
 import { fetchElements, fetchNodes, fetchWayRelations, type OsmMember, type OsmNode, type OsmRelation, type OsmWay } from './api';
 import { getToken } from './auth';
 import { server } from './servers';
+import { tr, trn } from '../i18n';
 
 type Tags = Record<string, string>;
 
@@ -49,7 +50,7 @@ export interface UploadResult {
 /** Конфликт, который нельзя разрешить автоматически: кто-то изменил те же теги. */
 export class ConflictError extends Error {
   constructor(readonly conflicts: { key: string; tags: string[] }[]) {
-    super(`Конфликт правок: ${conflicts.map((c) => `${c.key} (${c.tags.join(', ')})`).join('; ')}`);
+    super(tr('Конфликт правок: {list}', { list: conflicts.map((c) => `${c.key} (${c.tags.join(', ')})`).join('; ') }));
   }
 }
 
@@ -92,7 +93,7 @@ export function buildOsmChange(edits: { element: OsmWay | OsmRelation | (OsmNode
 
 async function call(method: string, path: string, body?: string, accept = 'text/plain'): Promise<string> {
   const token = getToken();
-  if (!token) throw new Error(`Нужно войти в ${server().short}.`);
+  if (!token) throw new Error(tr('Нужно войти в {server}.', { server: server().short }));
   const res = await fetch(`${server().api}${path}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/xml; charset=utf-8', Accept: accept },
@@ -142,7 +143,7 @@ function parseDiffResult(xml: string): Pick<UploadResult, 'versions' | 'newKeys'
  * кто-то ещё — ConflictError, ничего не отправляется.
  */
 export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (s: string) => void = () => {}): Promise<UploadResult> {
-  onStatus('Получаем текущие версии объектов…');
+  onStatus(tr('Получаем текущие версии объектов…'));
   const fresh = await fetchElements(edits.filter((e) => !e.created).map((e) => e.key));
   const conflicts: { key: string; tags: string[] }[] = [];
   const payload: Parameters<typeof buildOsmChange>[0] = [];
@@ -159,8 +160,8 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
     if (movedIds.has(m.id)) continue;
     movedIds.add(m.id);
     const n = nodes.get(m.id);
-    if (!n) { conflicts.push({ key: m.key, tags: [`узел ${m.id} удалён на сервере`] }); continue; }
-    if (!near(n.lon, m.from[0]) || !near(n.lat, m.from[1])) { conflicts.push({ key: m.key, tags: [`узел ${m.id} уже сдвинут`] }); continue; }
+    if (!n) { conflicts.push({ key: m.key, tags: [tr('узел {id} удалён на сервере', { id: m.id })] }); continue; }
+    if (!near(n.lon, m.from[0]) || !near(n.lat, m.from[1])) { conflicts.push({ key: m.key, tags: [tr('узел {id} уже сдвинут', { id: m.id })] }); continue; }
     payload.push({ element: { ...n, lon: m.to[0], lat: m.to[1] }, tags: n.tags ?? {} });
     geometrySaved.add(m.key);
   }
@@ -192,7 +193,7 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
       const f = fresh.get(edit.key);
       if (!f) continue; // уже удалён на сервере
       const r = rebase({ ...edit, after: edit.before }, f);
-      if ('conflict' in r || !sameTags(f.tags ?? {}, edit.before)) { conflicts.push({ key: edit.key, tags: ['объект изменён на сервере после загрузки'] }); continue; }
+      if ('conflict' in r || !sameTags(f.tags ?? {}, edit.before)) { conflicts.push({ key: edit.key, tags: [tr('объект изменён на сервере после загрузки')] }); continue; }
       payload.push({ element: f, tags: {}, deleted: true });
       deleted.add(edit.key);
       continue;
@@ -206,14 +207,14 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
       continue;
     }
     const f = fresh.get(edit.key);
-    if (!f) { conflicts.push({ key: edit.key, tags: ['объект удалён на сервере'] }); continue; }
+    if (!f) { conflicts.push({ key: edit.key, tags: [tr('объект удалён на сервере')] }); continue; }
     const r = rebase(edit, f);
     if ('conflict' in r) { conflicts.push({ key: edit.key, tags: r.conflict }); continue; }
     // Список узлов пути: на сервере он должен быть таким, с какого начиналась правка
     let element: OsmWay | OsmRelation = f;
     if (edit.wayNodes && f.type === 'way') {
       const same = f.nodes.length === edit.wayNodes.before.length && f.nodes.every((id, i) => id === edit.wayNodes!.before[i]);
-      if (!same) { conflicts.push({ key: edit.key, tags: ['список узлов изменён на сервере'] }); continue; }
+      if (!same) { conflicts.push({ key: edit.key, tags: [tr('список узлов изменён на сервере')] }); continue; }
       element = { ...f, nodes: edit.wayNodes.after };
     }
     // Сдвинуты только узлы — сам путь не трогаем
@@ -228,7 +229,7 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
   if (conflicts.length) throw new ConflictError(conflicts);
   const dropped = await settleTopology(edits, payload, fresh, onStatus);
 
-  onStatus('Открываем changeset…');
+  onStatus(tr('Открываем changeset…'));
   const changesetXml = `<osm><changeset>${tagsXml({
     comment,
     created_by: GENERATOR,
@@ -236,7 +237,7 @@ export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (
   })}</changeset></osm>`;
   const changeset = Number(await call('PUT', '/changeset/create', changesetXml));
   try {
-    onStatus(`Загружаем ${payload.length} объектов в changeset ${changeset}…`);
+    onStatus(trn(payload.length, 'Загружаем {n} объект в changeset {changeset}…|Загружаем {n} объекта в changeset {changeset}…|Загружаем {n} объектов в changeset {changeset}…', { changeset }));
     const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
     return { changeset, ...diff, written, rebased, geometrySaved, deleted, dropped };
   } finally {
@@ -262,7 +263,7 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
   for (const e of edits) {
     if (e.created?.type === 'way' && e.splitFrom !== undefined) splits.set(e.splitFrom, [...(splits.get(e.splitFrom) ?? []), e.created.id]);
   }
-  if (splits.size) onStatus('Проверяем отношения разрезанных путей…');
+  if (splits.size) onStatus(tr('Проверяем отношения разрезанных путей…'));
   const patched = new Map<number, OsmRelation>();
   for (const [orig, ids] of splits) {
     for (const r of await fetchWayRelations(orig)) {

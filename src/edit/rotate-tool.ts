@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import { tr } from '../i18n';
 
 /** Шаг «прилипания» угла, градусы. */
 const STEP_DEG = 15;
@@ -45,7 +46,7 @@ export class RotateTool {
   start(keys: string[]) {
     this.keys = new Set(keys);
     this.state = 'pivot';
-    this.onState('Поворот: кликните ось поворота (вершина, центр, точка на объекте или на земле). Esc — выйти.');
+    this.onState(tr('Поворот: кликните ось поворота (вершина, центр, точка на объекте или на земле). Esc — выйти.'));
   }
 
   stop() {
@@ -62,7 +63,7 @@ export class RotateTool {
       this.pivot.copy(p);
       this.state = 'ref';
       this.preview(point);
-      this.onState('Кликните опорное направление — от оси на точку (например, на угол здания). Esc — отмена.');
+      this.onState(tr('Кликните опорное направление — от оси на точку (например, на угол здания). Esc — отмена.'));
       return;
     }
     if (this.state === 'ref') {
@@ -72,7 +73,7 @@ export class RotateTool {
       this.refAngle = Math.atan2(p.y - this.pivot.y, p.x - this.pivot.x);
       this.angle = 0;
       this.state = 'rotate';
-      this.onState(`Ведите курсор — поворот (у кратных ${STEP_DEG}° прилипает, Shift — только шагом ${STEP_DEG}°). Клик — применить, число + Enter — угол в градусах, Esc — отмена.`);
+      this.onState(tr('Ведите курсор — поворот (у кратных {step}° прилипает, Shift — только шагом {step}°). Клик — применить, число + Enter — угол в градусах, Esc — отмена.', { step: STEP_DEG }));
       this.preview(point);
       return;
     }
@@ -171,7 +172,7 @@ export class RotateTool {
     if (this.state !== 'rotate') { this.vcb.hidden = true; return; }
     this.vcb.hidden = false;
     const deg = (this.angle * 180) / Math.PI;
-    this.vcb.innerHTML = `<span class="vcb-label">Угол</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || deg.toFixed(1)}</span>°
-      <span class="vcb-axis">${this.snap ? 'привязка' : this.shift ? `шаг ${STEP_DEG}° (Shift)` : 'против часовой'}</span>`;
+    this.vcb.innerHTML = `<span class="vcb-label">${tr('Угол')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || deg.toFixed(1)}</span>°
+      <span class="vcb-axis">${this.snap ? tr('привязка') : this.shift ? tr('шаг {step}° (Shift)', { step: STEP_DEG }) : tr('против часовой')}</span>`;
   }
 }

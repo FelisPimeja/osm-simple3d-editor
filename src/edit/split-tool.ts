@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import { tr } from '../i18n';
 
 type Pt = [number, number];
 
@@ -44,7 +45,7 @@ export class SplitTool {
 
   begin() {
     this.state = 'pick';
-    this.onState('Рассечь: кликните по ребру верхней грани — начало разреза. Esc — выйти.');
+    this.onState(tr('Рассечь: кликните по ребру верхней грани — начало разреза. Esc — выйти.'));
   }
 
   stop() {
@@ -64,7 +65,7 @@ export class SplitTool {
       this.target = hit.key;
       this.z = box.max.z;
       const c = this.cutPointAt(point);
-      if (!c) { this.target = undefined; this.onState('Кликните точно по ребру верхней грани (вершины и середины подсвечиваются).', true); return true; }
+      if (!c) { this.target = undefined; this.onState(tr('Кликните точно по ребру верхней грани (вершины и середины подсвечиваются).'), true); return true; }
       this.start = c;
       const ring = this.layer.focusPolygons(hit.key)![0].outer;
       const a = ring[c.edge], b = ring[(c.edge + 1) % ring.length];
@@ -73,12 +74,12 @@ export class SplitTool {
       this.axis = this.locked = undefined;
       this.state = 'cut';
       this.guide(c.p);
-      this.onState('Ведите разрез ко второму ребру этой грани и кликните. Оси — по начальному ребру и перпендикулярно (Shift — держать ось). Esc — отмена.');
+      this.onState(tr('Ведите разрез ко второму ребру этой грани и кликните. Оси — по начальному ребру и перпендикулярно (Shift — держать ось). Esc — отмена.'));
       return true;
     }
     if (this.state === 'cut' && this.target && this.start) {
       const c = this.endAt(point);
-      if (!c) { this.onState('Конец разреза — на ребре верхней грани.', true); return true; }
+      if (!c) { this.onState(tr('Конец разреза — на ребре верхней грани.'), true); return true; }
       const err = this.split(this.target, this.start, c);
       if (err) { this.onState(err, true); return true; }
       this.cancel();

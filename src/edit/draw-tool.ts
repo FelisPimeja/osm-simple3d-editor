@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import { tr } from '../i18n';
 
 type Pt = [number, number];
 
@@ -10,11 +11,19 @@ const ROUND: DrawShape[] = ['circle', 'ngon'];
 export type RectMode = 'corners' | 'three' | 'center';
 
 export const RECT_MODES: RectMode[] = ['corners', 'three', 'center'];
-export const RECT_LABELS: Record<RectMode, string> = { corners: 'по двум углам', three: 'по трём точкам', center: 'от центра' };
+export const RECT_LABELS: Record<RectMode, string> = { corners: tr('по двум углам'), three: tr('по трём точкам'), center: tr('от центра') };
+/** Полное название инструмента для каждого способа: «Прямоугольник по двум углам». */
+export const RECT_TITLES: Record<RectMode, string> = {
+  corners: tr('Прямоугольник по двум углам'), three: tr('Прямоугольник по трём точкам'), center: tr('Прямоугольник от центра'),
+};
 /** Способ построения круга: центр и радиус; вписанный в прямой угол (касательные по осям здания); по трём точкам окружности. */
 export type CircleMode = 'center' | 'corner' | 'three';
 export const CIRCLE_MODES: CircleMode[] = ['center', 'corner', 'three'];
-export const CIRCLE_LABELS: Record<CircleMode, string> = { center: 'по центру и радиусу', corner: 'по двум касательным под 90°', three: 'по трём точкам' };
+export const CIRCLE_LABELS: Record<CircleMode, string> = { center: tr('по центру и радиусу'), corner: tr('по двум касательным под 90°'), three: tr('по трём точкам') };
+/** Полное название инструмента для каждого способа: «Круг по центру и радиусу». */
+export const CIRCLE_TITLES: Record<CircleMode, string> = {
+  center: tr('Круг по центру и радиусу'), corner: tr('Круг по двум касательным под 90°'), three: tr('Круг по трём точкам'),
+};
 /** Направление ребра ближе этого угла к оси здания — выравниваем по оси, градусы. */
 const AXIS_LOCK_DEG = 3;
 /** Клик ближе стольких px к первой точке замыкает полигон. */
@@ -83,7 +92,7 @@ export class DrawTool {
     this.opts = document.createElement('div');
     this.opts.className = 'draw-opts';
     this.opts.hidden = true;
-    this.opts.innerHTML = `<label>Углов <input type="number" min="${NGON_MIN}" max="${NGON_MAX}" step="1" /></label>`;
+    this.opts.innerHTML = `<label>${tr('Углов')} <input type="number" min="${NGON_MIN}" max="${NGON_MAX}" step="1" /></label>`;
     const input = this.opts.querySelector('input')!;
     input.addEventListener('input', () => {
       const n = Math.round(Number(input.value));
@@ -298,7 +307,7 @@ export class DrawTool {
     if (this.shape === 'circle' && this.circleMode === 'three') {
       if (this.pts.length < 3) { this.hint(); this.preview(); return; }
       const c = this.circleOf(this.pts);
-      if (!c) { this.pts.pop(); this.onState('Три точки на одной прямой — окружность через них не проходит.', true); this.preview(); return; }
+      if (!c) { this.pts.pop(); this.onState(tr('Три точки на одной прямой — окружность через них не проходит.'), true); this.preview(); return; }
       this.finish(circleRing(c.c, c.r, circleSegments(c.r)));
       return;
     }
@@ -385,7 +394,7 @@ export class DrawTool {
       const f = this.layer.focusAxes;
       const ax: Pt = f?.x ?? [1, 0], ay: Pt = f?.y ?? [0, 1];
       const su = Math.sign(dir[0] * ax[0] + dir[1] * ax[1]) || 1, sv = Math.sign(dir[0] * ay[0] + dir[1] * ay[1]) || 1;
-      if (!(nums[0] > 0)) { this.onState('Радиус должен быть больше нуля.', true); return; }
+      if (!(nums[0] > 0)) { this.onState(tr('Радиус должен быть больше нуля.'), true); return; }
       const k = 2 * nums[0];
       this.add([last[0] + (ax[0] * su + ay[0] * sv) * k, last[1] + (ax[1] * su + ay[1] * sv) * k]);
       return;
@@ -394,7 +403,7 @@ export class DrawTool {
       // Радиус — в сторону курсора (без направления — по оси x здания)
       const ax = this.layer.focusAxes?.x ?? [1, 0];
       const u: Pt = len > 1e-6 ? [dir[0] / len, dir[1] / len] : [ax[0], ax[1]];
-      if (!(nums[0] > 0)) { this.onState('Радиус должен быть больше нуля.', true); return; }
+      if (!(nums[0] > 0)) { this.onState(tr('Радиус должен быть больше нуля.'), true); return; }
       this.add([last[0] + u[0] * nums[0], last[1] + u[1] * nums[0]]);
       return;
     }
@@ -416,7 +425,7 @@ export class DrawTool {
       this.add([last[0] + ax[0] * u + ay[0] * v, last[1] + ax[1] * u + ay[1] * v]);
       return;
     }
-    if (len < 1e-6) { this.onState('Укажите направление курсором, затем введите длину.', true); return; }
+    if (len < 1e-6) { this.onState(tr('Укажите направление курсором, затем введите длину.'), true); return; }
     this.add([last[0] + dir[0] / len * nums[0], last[1] + dir[1] / len * nums[0]]);
   }
 
@@ -441,7 +450,7 @@ export class DrawTool {
       if (len < 0.05) continue;
       const px = this.layer.focusProject(new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, this.z));
       if (!px) continue;
-      html += `<span class="draw-dim${i === r.current ? ' current' : ''}" style="left:${px[0].toFixed(1)}px;top:${px[1].toFixed(1)}px">${len.toFixed(2)} м</span>`;
+      html += `<span class="draw-dim${i === r.current ? ' current' : ''}" style="left:${px[0].toFixed(1)}px;top:${px[1].toFixed(1)}px">${len.toFixed(2)} ${tr('м')}</span>`;
     }
     this.dims.innerHTML = html;
   }
@@ -487,52 +496,53 @@ export class DrawTool {
     const last = this.pts[this.pts.length - 1];
     if (!last || !this.cursor) { this.vcb.hidden = true; return; }
     this.vcb.hidden = false;
-    let label = 'Длина', value: string;
+    let label = tr('Длина'), value: string;
     if (ROUND.includes(this.shape)) {
-      label = 'Радиус';
+      label = tr('Радиус');
       const c = this.shape === 'circle' ? this.circleOf([...this.pts, this.cursor]) : undefined;
       value = (c ? c.r : Math.hypot(this.cursor[0] - last[0], this.cursor[1] - last[1])).toFixed(2);
     } else if (this.shape === 'rect' && !(this.rectMode === 'three' && this.pts.length === 1)) {
       const r = this.rectRing([...this.pts, this.cursor]);
       const side = (i: number) => r && r.length === 4 ? Math.hypot(r[i + 1][0] - r[i][0], r[i + 1][1] - r[i][1]) : 0;
-      label = this.rectMode === 'three' ? 'Ширина' : 'Размер';
+      label = this.rectMode === 'three' ? tr('Ширина') : tr('Размер');
       value = this.rectMode === 'three' ? side(1).toFixed(2) : `${side(0).toFixed(2)}; ${side(1).toFixed(2)}`;
     } else value = Math.hypot(this.cursor[0] - last[0], this.cursor[1] - last[1]).toFixed(2);
-    this.vcb.innerHTML = `<span class="vcb-label">${label}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || value}</span> м
-      <span class="vcb-axis">${this.snap ? 'привязка' : this.axis === 0 ? 'по оси X' : this.axis === 1 ? 'по оси Y' : ''}${this.locked !== undefined ? ' (Shift)' : ''}</span>`;
+    this.vcb.innerHTML = `<span class="vcb-label">${label}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || value}</span> ${tr('м')}
+      <span class="vcb-axis">${this.snap ? tr('привязка') : this.axis === 0 ? tr('по оси X') : this.axis === 1 ? tr('по оси Y') : ''}${this.locked !== undefined ? ' (Shift)' : ''}</span>`;
   }
 
   private hint() {
     if (this.shape === 'circle' && this.circleMode === 'three') {
-      this.onState(`Круг по трём точкам (Tab — сменить способ): точка ${this.pts.length + 1} из 3 на окружности. Backspace — убрать точку, Esc — ${this.pts.length ? 'отмена' : 'выйти'}.`);
+      this.onState(tr('Круг по трём точкам (Tab — сменить способ): точка {i} из 3 на окружности. Backspace — убрать точку, Esc — {esc}.',
+        { i: this.pts.length + 1, esc: this.pts.length ? tr('отмена') : tr('выйти') }));
       return;
     }
     if (this.shape === 'circle' && this.circleMode === 'corner') {
       this.onState(this.pts.length
-        ? 'Круг в прямом угле: размер — курсором в нужную четверть (число + Enter — радиус). Esc — отмена.'
-        : 'Круг по двум касательным под 90° (Tab — сменить способ): кликните вершину угла (касательные идут по осям здания). Esc — выйти.');
+        ? tr('Круг в прямом угле: размер — курсором в нужную четверть (число + Enter — радиус). Esc — отмена.')
+        : tr('Круг по двум касательным под 90° (Tab — сменить способ): кликните вершину угла (касательные идут по осям здания). Esc — выйти.'));
       return;
     }
     if (ROUND.includes(this.shape)) {
-      const what = this.shape === 'circle' ? 'Круг (Tab — сменить способ)' : `Многоугольник, углов: ${this.sides} (поле «Углов»)`;
+      const what = this.shape === 'circle' ? tr('Круг (Tab — сменить способ)') : tr('Многоугольник, углов: {n} (поле «Углов»)', { n: this.sides });
       this.onState(this.pts.length
-        ? `${what}: ${this.shape === 'circle' ? 'точка на окружности' : 'вершина'} (число + Enter — радиус). Esc — отмена.`
-        : `${what}: кликните центр на земле или на плоской крыше. Esc — выйти.`);
+        ? tr('{what}: {target} (число + Enter — радиус). Esc — отмена.', { what, target: this.shape === 'circle' ? tr('точка на окружности') : tr('вершина') })
+        : tr('{what}: кликните центр на земле или на плоской крыше. Esc — выйти.', { what }));
       return;
     }
     if (this.shape === 'polygon') {
       this.onState(this.pts.length
-        ? 'Следующая точка; клик в первую точку или Enter — замкнуть, число + Enter — длина стороны, Backspace — убрать точку, Esc — отмена.'
-        : 'Полигон: кликните первую точку на земле или на плоской крыше. Esc — выйти.');
+        ? tr('Следующая точка; клик в первую точку или Enter — замкнуть, число + Enter — длина стороны, Backspace — убрать точку, Esc — отмена.')
+        : tr('Полигон: кликните первую точку на земле или на плоской крыше. Esc — выйти.'));
       return;
     }
-    const mode = `Прямоугольник ${RECT_LABELS[this.rectMode]} (Tab — сменить способ)`;
     const step = this.rectMode === 'three'
-      ? ['первая точка стороны', 'конец стороны (число + Enter — длина)', 'ширина (число + Enter)'][this.pts.length]
+      ? [tr('первая точка стороны'), tr('конец стороны (число + Enter — длина)'), tr('ширина (число + Enter)')][this.pts.length]
       : this.rectMode === 'center'
-        ? ['центр', 'угол (число;число + Enter — ширина;глубина)'][this.pts.length]
-        : ['первый угол', 'противоположный угол (число;число + Enter — ширина;глубина)'][this.pts.length];
-    this.onState(`${mode}: ${step}. Esc — ${this.pts.length ? 'отмена' : 'выйти'}.`);
+        ? [tr('центр'), tr('угол (число;число + Enter — ширина;глубина)')][this.pts.length]
+        : [tr('первый угол'), tr('противоположный угол (число;число + Enter — ширина;глубина)')][this.pts.length];
+    this.onState(tr('{mode} (Tab — сменить способ): {step}. Esc — {esc}.',
+      { mode: RECT_TITLES[this.rectMode], step, esc: this.pts.length ? tr('отмена') : tr('выйти') }));
   }
 }
 
@@ -558,15 +568,15 @@ export function circumcircle(a: Pt, b: Pt, c: Pt): { c: Pt; r: number } | undefi
 
 /** Контур годится для части: ≥ 3 точек, без самопересечений и не слишком мал. */
 export function validRing(ring: Pt[]): string | undefined {
-  if (ring.length < 3) return 'Нужно хотя бы три точки.';
+  if (ring.length < 3) return tr('Нужно хотя бы три точки.');
   let s = 0;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) s += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
-  if (Math.abs(s / 2) < MIN_AREA) return `Слишком маленький контур (меньше ${MIN_AREA} м²).`;
+  if (Math.abs(s / 2) < MIN_AREA) return tr('Слишком маленький контур (меньше {area} м²).', { area: MIN_AREA });
   const n = ring.length;
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       if (j === i + 1 || (i === 0 && j === n - 1)) continue;
-      if (cross(ring[i], ring[(i + 1) % n], ring[j], ring[(j + 1) % n])) return 'Стороны контура пересекаются.';
+      if (cross(ring[i], ring[(i + 1) % n], ring[j], ring[(j + 1) % n])) return tr('Стороны контура пересекаются.');
     }
   }
   return;

@@ -1,5 +1,6 @@
 import type { OsmMember } from '../osm/api';
 import type { LonLat, Polygon } from '../osm/model';
+import { tr } from '../i18n';
 
 export type Tags = Record<string, string>;
 
@@ -305,7 +306,7 @@ export class EditSession {
       if (this.deleted.has(key)) {
         const before = this.original.get(key)!;
         out.push({ key, feature: f, created: false, deleted: true, before, after: {},
-          diff: [{ tag: '(объект)', from: 'есть', to: 'удалён' }] });
+          diff: [{ tag: tr('(объект)'), from: tr('есть'), to: tr('удалён') }] });
         continue;
       }
       if (!this.exists(key)) continue;
@@ -319,12 +320,13 @@ export class EditSession {
       const diff = tags.filter((t) => before[t] !== f.tags[t]).map((tag) => ({ tag, from: before[tag], to: f.tags[tag] }));
       if (members) {
         const orig = this.originalMembers.get(key)!;
+        // '(члены)' — метка-данные: по ней main.ts показывает состав отношения, не переводим
         diff.push({ tag: '(члены)', from: String(orig.length), to: String(f.relMembers!.length) });
       }
-      if (moves.length) diff.push({ tag: '(геометрия)', from: '', to: `сдвинуто узлов: ${moves.length}` });
+      if (moves.length) diff.push({ tag: tr('(геометрия)'), from: '', to: tr('сдвинуто узлов: {n}', { n: moves.length }) });
       const coords = f.line ? new Map(f.line.ids.map((id, i) => [id, f.line!.coords[i]] as const)) : nodeCoords(f.polygons ?? []);
       const newNodes = nodes ? [...coords].filter(([id]) => id < 0).map(([id, at]) => ({ id, at })) : [];
-      if (nodes && !created) diff.push({ tag: '(узлы)', from: String(nodes.before.length - 1), to: String(nodes.after.length - 1) });
+      if (nodes && !created) diff.push({ tag: tr('(узлы)'), from: String(nodes.before.length - 1), to: String(nodes.after.length - 1) });
       out.push({ key, feature: f, created, before, after: { ...f.tags }, diff,
         members: members ? f.relMembers : undefined, membersBefore: members ? this.originalMembers.get(key) : undefined,
         nodeMoves: moves.length ? moves : undefined, wayNodes: nodes, newNodes: newNodes.length ? newNodes : undefined });

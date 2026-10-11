@@ -3,6 +3,8 @@
  * всплывающих сообщений — обычные уходят через 4 с, ошибки через 10 с; наведение придерживает, × закрывает.
  * Текст выделяется и копируется. Повтор того же текста не плодит копию, а продлевает показ.
  */
+import { tr } from '../i18n';
+
 const INFO_MS = 4000;
 const ERROR_MS = 10000;
 const MAX_TOASTS = 4;
@@ -45,7 +47,7 @@ export class Toasts {
       const close = document.createElement('button');
       close.type = 'button';
       close.className = 'toast-close';
-      close.title = 'Закрыть';
+      close.title = tr('Закрыть');
       close.textContent = '×';
       close.addEventListener('click', () => el.remove());
       el.append(body, close);

@@ -8,7 +8,9 @@
     "dev": "vite",
     "dev:https": "HTTPS=1 vite --port 5173 --strictPort",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "i18n:check": "node scripts/i18n-check.mjs",
+    "i18n:extract": "node scripts/i18n-check.mjs --write"
   },
   "dependencies": {
     "@mapbox/maki": "^8.2.0",

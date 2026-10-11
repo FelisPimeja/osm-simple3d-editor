@@ -15,6 +15,7 @@ import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
+import { applyBasemap, BasemapControl, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap } from './view/basemaps';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
@@ -181,6 +182,41 @@ cubeBtn.addEventListener('click', () => {
   viewCube.update();
 });
 
+// Подложка: карта или спутниковые снимки (только у OSM — у OHM и OGF кнопки нет). Выбор — в localStorage
+// и в профиле (simple3d:basemap)
+let basemap = server().imagery ? storedBasemap() : MAP_BASEMAP;
+let mapLoaded = false;
+const basemapCtrl = server().imagery ? new BasemapControl(basemap, (id) => {
+  setBasemap(id);
+  void saveSetting('basemap');
+}) : undefined;
+if (basemapCtrl) map.addControl(basemapCtrl, 'top-right');
+
+function setBasemap(id: string) {
+  basemap = id;
+  storeBasemap(id);
+  basemapCtrl?.set(id);
+  if (!mapLoaded) return; // слой добавит обработчик load
+  focusHiddenLayers = focusHiddenLayers.filter((l) => l.id !== IMAGERY_LAYER);
+  if (!applyBasemap(map, id)) return;
+  // В режиме здания окружение скрыто — снимки тоже; вернутся с выходом из него
+  if (focusHiddenLayers.length) {
+    map.setLayoutProperty(IMAGERY_LAYER, 'visibility', 'none');
+    focusHiddenLayers.push({ id: IMAGERY_LAYER, visibility: 'visible' });
+  }
+}
+
+if (server().imagery) registerSetting({
+  key: 'basemap',
+  local: () => (basemap === MAP_BASEMAP ? undefined : basemap),
+  apply: (v) => {
+    const id = isBasemap(v) ? v : MAP_BASEMAP;
+    if (id === basemap) return 'same';
+    setBasemap(id);
+    return 'live';
+  },
+});
+
 const infoEl = document.getElementById('info')!;
 
 // Сворачивание панелей в заголовок; состояние запоминается.
@@ -337,6 +373,8 @@ map.on('load', () => {
     minzoom: 15,
     paint: { 'line-color': '#5a5f66', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.85 },
   });
+  mapLoaded = true;
+  if (basemap !== MAP_BASEMAP) setBasemap(basemap);
   overpass.setSource(tileSource());
   applyDate();
   refreshOverpass();

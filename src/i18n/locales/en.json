@@ -709,5 +709,16 @@
   "Настройки пользователя": "User settings",
   "Язык интерфейса и другие личные настройки": "Interface language and other personal settings",
   "Кликните по объекту здания, который нужно переместить. Esc — выйти из инструмента.": "Click the building part you want to move. Esc — exit the tool.",
-  "Если ничего не выделено, первый клик выбирает часть, следующий — точка захвата на ней.": "If nothing is selected, the first click selects a part and the next one sets the grab point on it."
+  "Если ничего не выделено, первый клик выбирает часть, следующий — точка захвата на ней.": "If nothing is selected, the first click selects a part and the next one sets the grab point on it.",
+  "Источник — JOSM: отправка отсюда отключена, правки из 3D пока не возвращаются в JOSM. Вносите их в JOSM: изменения слоя подтягиваются сами (раз в 2 с).": "Source is JOSM: uploading from here is disabled, and 3D edits are not sent back to JOSM yet. Make your changes in JOSM: layer changes are picked up automatically (every 2 s).",
+  "Активный слой запущенного JOSM (Remote Control, localhost:8111)": "Active layer of the running JOSM (Remote Control, localhost:8111)",
+  "JOSM (локально)": "JOSM (local)",
+  "Читаю данные из JOSM…": "Reading data from JOSM…",
+  "Из JOSM: {n} объект.|Из JOSM: {n} объекта.|Из JOSM: {n} объектов.": "From JOSM: {n} object.|From JOSM: {n} objects.",
+  "JOSM {v} не умеет отдавать данные — нужна версия {min} (25.08) или новее.": "JOSM {v} cannot export data: version {min} (25.08) or newer is required.",
+  "JOSM ничего не отдал: активный слой не слой данных OSM или идёт отправка. Выберите слой данных в JOSM и обновите.": "JOSM returned nothing: the active layer is not an OSM data layer, or an upload is in progress. Select a data layer in JOSM and reload.",
+  "JOSM не отвечает на localhost:8111: запустите JOSM и включите Remote Control (Настройки → Remote Control). Если браузер спросил о доступе к локальной сети — разрешите.": "JOSM is not responding on localhost:8111: start JOSM and enable Remote Control (Preferences → Remote Control). If the browser asks for local network access, allow it.",
+  "JOSM запретил экспорт: включите «Export data from JOSM» в Настройках → Remote Control.": "JOSM refused the export: enable “Export data from JOSM” in Preferences → Remote Control.",
+  "JOSM ответил {status} на {path}": "JOSM responded {status} to {path}",
+  "JOSM отдал не .osm (ошибка разбора XML)": "JOSM did not return .osm data (XML parse error)"
 }

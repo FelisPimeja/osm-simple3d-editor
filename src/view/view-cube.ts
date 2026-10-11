@@ -1,4 +1,5 @@
 import type * as maplibregl from 'maplibre-gl';
+import { tr } from '../i18n';
 
 type V3 = [number, number, number];
 type P2 = [number, number];
@@ -7,11 +8,11 @@ type P2 = [number, number];
 interface Face { label: string; n: V3; right: V3; up: V3 }
 
 const FACES: Face[] = [
-  { label: 'Сверху', n: [0, 0, 1], right: [1, 0, 0], up: [0, 1, 0] },
-  { label: 'Спереди', n: [0, -1, 0], right: [1, 0, 0], up: [0, 0, 1] },
-  { label: 'Справа', n: [1, 0, 0], right: [0, 1, 0], up: [0, 0, 1] },
-  { label: 'Сзади', n: [0, 1, 0], right: [-1, 0, 0], up: [0, 0, 1] },
-  { label: 'Слева', n: [-1, 0, 0], right: [0, -1, 0], up: [0, 0, 1] },
+  { label: tr('Сверху'), n: [0, 0, 1], right: [1, 0, 0], up: [0, 1, 0] },
+  { label: tr('Спереди'), n: [0, -1, 0], right: [1, 0, 0], up: [0, 0, 1] },
+  { label: tr('Справа'), n: [1, 0, 0], right: [0, 1, 0], up: [0, 0, 1] },
+  { label: tr('Сзади'), n: [0, 1, 0], right: [-1, 0, 0], up: [0, 0, 1] },
+  { label: tr('Слева'), n: [-1, 0, 0], right: [0, -1, 0], up: [0, 0, 1] },
 ];
 
 /** Размер элемента, px. */
@@ -87,7 +88,7 @@ export class ViewCube implements maplibregl.IControl {
       const a = (i / 64) * 2 * Math.PI;
       ring.push(project(worldDir(f, [Math.cos(a) * RING_R, Math.sin(a) * RING_R], -1)));
     }
-    const dirs = [['С', [0, 1]], ['В', [1, 0]], ['Ю', [0, -1]], ['З', [-1, 0]]] as const;
+    const dirs = [[tr('С'), [0, 1]], [tr('В'), [1, 0]], [tr('Ю'), [0, -1]], [tr('З'), [-1, 0]]] as const;
     const dirPts = dirs.map(([l, d]) => ({ l, d, p: project(worldDir(f, [d[0] * RING_R, d[1] * RING_R], -1)) }));
     const all: P2[] = [];
     for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) { const p = pr([x, y, z]); if (p) all.push(p); }

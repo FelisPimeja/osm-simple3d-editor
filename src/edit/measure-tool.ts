@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import { tr } from '../i18n';
 
 /**
  * Инструмент «Рулетка»: расстояние между двумя точками (с привязками). Клик — первая точка, второй клик —
@@ -31,7 +32,7 @@ export class MeasureTool {
 
   start() {
     this.state = 'first';
-    this.onState('Рулетка: кликните первую точку (привязки к вершинам, рёбрам, сетке). Esc — выйти.');
+    this.onState(tr('Рулетка: кликните первую точку (привязки к вершинам, рёбрам, сетке). Esc — выйти.'));
   }
 
   stop() {
@@ -48,14 +49,14 @@ export class MeasureTool {
       this.a = p;
       this.state = 'second';
       this.show(p);
-      this.onState('Рулетка: кликните вторую точку. Esc — отмена.');
+      this.onState(tr('Рулетка: кликните вторую точку. Esc — отмена.'));
       return;
     }
     // Замер остаётся на экране; следующий клик начнёт новый
     this.show(p, true);
     this.a = undefined;
     this.state = 'first';
-    this.onState('Рулетка: кликните первую точку следующего замера. Esc — выйти.');
+    this.onState(tr('Рулетка: кликните первую точку следующего замера. Esc — выйти.'));
   }
 
   move(point: [number, number]) {
@@ -121,8 +122,8 @@ export class MeasureTool {
     const d = b.clone().sub(a);
     const flat = Math.hypot(d.x, d.y);
     this.vcb.hidden = false;
-    this.vcb.innerHTML = `<span class="vcb-label">${done ? 'Замер' : 'Расстояние'}</span><span class="vcb-value">${d.length().toFixed(2)}</span> м
-      <span class="vcb-axis">${this.locked !== undefined ? `по оси ${'xyz'[this.locked]} (Shift) · ` : ''}по горизонтали ${flat.toFixed(2)} · по высоте ${d.z >= 0 ? '+' : ''}${d.z.toFixed(2)}</span>`;
+    this.vcb.innerHTML = `<span class="vcb-label">${done ? tr('Замер') : tr('Расстояние')}</span><span class="vcb-value">${d.length().toFixed(2)}</span> ${tr('м')}
+      <span class="vcb-axis">${this.locked !== undefined ? `${tr('по оси {axis} (Shift)', { axis: 'xyz'[this.locked] })} · ` : ''}${tr('по горизонтали {h} · по высоте {v}', { h: flat.toFixed(2), v: `${d.z >= 0 ? '+' : ''}${d.z.toFixed(2)}` })}</span>`;
   }
 
   private reset() {

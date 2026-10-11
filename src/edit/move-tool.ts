@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import { tr } from '../i18n';
 
 /** Угол между движением курсора и осью на экране, при котором движение «прилипает» к оси. */
 const AXIS_SNAP_DEG = 15;
@@ -54,7 +55,7 @@ export class MoveTool {
   start(keys: string[]) {
     this.keys = new Set(keys);
     this.state = 'pick';
-    this.onState('Кликните по точке на выбранном объекте — от неё пойдёт перемещение. Esc — выйти из инструмента.');
+    this.onState(tr('Кликните по точке на выбранном объекте — от неё пойдёт перемещение. Esc — выйти из инструмента.'));
   }
 
   /** Сразу тянуть keys от точки from (без выбора точки захвата); done — после применения, cancel — Esc/выход. */
@@ -92,7 +93,7 @@ export class MoveTool {
       const s = this.layer.snapAt(point, this.pickFilter);
       const hit = s ? undefined : this.layer.pickHit(point);
       const p = s?.local ?? (hit && this.keys.has(hit.key) ? hit.local : undefined);
-      if (!p) return this.onState('Кликните по точке на выбранном объекте (подсвеченные привязки — вершины, середины, центр).');
+      if (!p) return this.onState(tr('Кликните по точке на выбранном объекте (подсвеченные привязки — вершины, середины, центр).'));
       this.from.copy(p);
       this.offset.set(0, 0, 0);
       this.axis = this.locked = undefined;
@@ -100,7 +101,7 @@ export class MoveTool {
       this.state = 'move';
       this.layer.setMoveGuide({ from: this.from });
       this.updateVcb();
-      this.onState('Ведите курсор: вдоль оси здания движение прилипает к ней. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.');
+      this.onState(tr('Ведите курсор: вдоль оси здания движение прилипает к ней. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.'));
       return;
     }
     if (this.state === 'move') this.apply(this.offset);
@@ -245,11 +246,11 @@ export class MoveTool {
   private updateVcb() {
     if (this.state !== 'move') { this.vcb.hidden = true; return; }
     this.vcb.hidden = false;
-    const along = this.locked !== undefined ? `ось ${AXIS_NAMES[this.locked]} (зафиксирована)`
-      : this.axis !== undefined ? `ось ${AXIS_NAMES[this.axis]}` : 'свободно';
+    const along = this.locked !== undefined ? tr('ось {axis} (зафиксирована)', { axis: AXIS_NAMES[this.locked] })
+      : this.axis !== undefined ? tr('ось {axis}', { axis: AXIS_NAMES[this.axis] }) : tr('свободно');
     const value = this.typed || this.offset.length().toFixed(2);
-    this.vcb.innerHTML = `<span class="vcb-label">Расстояние</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> м
-      <span class="vcb-axis">${this.snap ? `к точке · ${along}` : along}</span>`;
+    this.vcb.innerHTML = `<span class="vcb-label">${tr('Расстояние')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
+      <span class="vcb-axis">${this.snap ? tr('к точке · {along}', { along }) : along}</span>`;
   }
 }
 

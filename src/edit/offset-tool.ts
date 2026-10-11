@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BuildingsLayer } from '../render/buildings-layer';
 import polygonClipping from 'polygon-clipping';
+import { tr } from '../i18n';
 
 type Pt = [number, number];
 
@@ -43,7 +44,7 @@ export class OffsetTool {
 
   start() {
     this.state = 'pick';
-    this.onState('Отступ: клик по плоской грани или по её ребру (Shift+клик по объекту — низ). Esc — выйти.');
+    this.onState(tr('Отступ: клик по плоской грани или по её ребру (Shift+клик по объекту — низ). Esc — выйти.'));
   }
 
   stop() {
@@ -62,7 +63,7 @@ export class OffsetTool {
       this.d = 0;
       this.typed = '';
       this.state = 'offset';
-      this.onState('Отступ — от внешнего контура грани: ведите курсор наружу или внутрь. Клик — новый контур, число + Enter — отступ в метрах (минус — внутрь), Esc — отмена.');
+      this.onState(tr('Отступ — от внешнего контура грани: ведите курсор наружу или внутрь. Клик — новый контур, число + Enter — отступ в метрах (минус — внутрь), Esc — отмена.'));
       // Начинаем с самого контура: точка клика (внутри грани) не задаёт отступ
       this.preview();
       return;
@@ -116,9 +117,9 @@ export class OffsetTool {
   private apply(d: number) {
     const t = this.target;
     if (!t) return;
-    if (Math.abs(d) < MIN_OFFSET) { this.onState('Отведите курсор от контура.', true); return; }
+    if (Math.abs(d) < MIN_OFFSET) { this.onState(tr('Отведите курсор от контура.'), true); return; }
     const r = offsetPolygon(t, d);
-    if (typeof r === 'string') { this.onState(`Такой отступ не получится: ${r}`, true); return; }
+    if (typeof r === 'string') { this.onState(tr('Такой отступ не получится: {reason}', { reason: r }), true); return; }
     const fail = this.commit(t, r);
     if (fail) { this.onState(fail, true); return; }
     this.cancel();
@@ -135,9 +136,9 @@ export class OffsetTool {
     const rings = typeof r === 'string' ? [t.ring, ...t.inners] : r.flat();
     this.layer.setOutline(rings.map((ring) => ring.map((p) => new THREE.Vector3(p[0], p[1], t.z))), 2);
     this.vcb.hidden = false;
-    const holes = typeof r === 'string' ? '' : `${r.length > 1 ? ` · частей: ${r.length}` : ''}${t.inners.length || r.some((p) => p.length > 1) ? ` · дворов: ${r.reduce((n, p) => n + p.length - 1, 0)}` : ''}`;
-    this.vcb.innerHTML = `<span class="vcb-label">Отступ</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || Math.abs(d).toFixed(2)}</span> м
-      <span class="vcb-axis">${d < 0 ? 'внутрь' : 'наружу'}${typeof r === 'string' ? ` · ${r}` : holes}</span>`;
+    const holes = typeof r === 'string' ? '' : `${r.length > 1 ? ` · ${tr('частей: {n}', { n: r.length })}` : ''}${t.inners.length || r.some((p) => p.length > 1) ? ` · ${tr('дворов: {n}', { n: r.reduce((n, p) => n + p.length - 1, 0) })}` : ''}`;
+    this.vcb.innerHTML = `<span class="vcb-label">${tr('Отступ')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || Math.abs(d).toFixed(2)}</span> ${tr('м')}
+      <span class="vcb-axis">${d < 0 ? tr('внутрь') : tr('наружу')}${typeof r === 'string' ? ` · ${r}` : holes}</span>`;
   }
 
   private cancel() {
@@ -196,7 +197,7 @@ export function offsetPolygon(t: { ring: Pt[]; inners: Pt[][] }, d: number): Off
   try {
     res = (d > 0 ? polygonClipping.union(face as never, ...(pieces as never[])) : polygonClipping.difference(face as never, ...(pieces as never[]))) as unknown as Pt[][][];
   } catch {
-    return 'не удалось построить контур';
+    return tr('не удалось построить контур');
   }
   // Кольца без повтора первой точки и без узлов на прямых; мелкие осколки — прочь
   const out: Pt[][][] = [];
@@ -206,7 +207,7 @@ export function offsetPolygon(t: { ring: Pt[]; inners: Pt[][] }, d: number): Off
     if (!big(outer)) continue;
     out.push([outer, ...poly.slice(1).map((r) => simplify(r.slice(0, -1))).filter(big)]);
   }
-  return out.length ? out : 'контур вырождается';
+  return out.length ? out : tr('контур вырождается');
 }
 
 /** Осколки меньше этой площади после отступа отбрасываются, м². */

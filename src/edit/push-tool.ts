@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import { LEVEL_HEIGHT } from '../osm/heights';
+import { tr } from '../i18n';
 
 export type PushUnits = 'm' | 'levels';
 const UNITS_STORAGE = 'push-units';
@@ -90,7 +91,7 @@ export class PushTool {
   start() {
     this.state = 'pick';
     this.updateVcb();
-    this.onState('Клик по крыше — тянем верх, по стене — стену; Shift+клик — задняя грань (дно или дальняя стена). Esc — выйти.');
+    this.onState(tr('Клик по крыше — тянем верх, по стене — стену; Shift+клик — задняя грань (дно или дальняя стена). Esc — выйти.'));
   }
 
   stop() {
@@ -155,9 +156,12 @@ export class PushTool {
       this.state = 'push';
       this.guide();
       this.updateVcb();
+      const units = this.units === 'levels' ? tr('в этажах') : tr('в метрах');
       this.onState(t.face === 'side'
-        ? 'Тянем стену: ведите курсор наружу или внутрь. Клик — применить, число + Enter — в метрах, Esc — отмена.'
-        : `Тянем ${t.face === 'top' ? 'верх' : 'низ'}: ведите курсор вверх или вниз. Клик — применить, число + Enter — в ${this.units === 'levels' ? 'этажах' : 'метрах'}, Tab — единицы, Esc — отмена.`);
+        ? tr('Тянем стену: ведите курсор наружу или внутрь. Клик — применить, число + Enter — в метрах, Esc — отмена.')
+        : t.face === 'top'
+          ? tr('Тянем верх: ведите курсор вверх или вниз. Клик — применить, число + Enter — {units}, Tab — единицы, Esc — отмена.', { units })
+          : tr('Тянем низ: ведите курсор вверх или вниз. Клик — применить, число + Enter — {units}, Tab — единицы, Esc — отмена.', { units }));
       return true;
     }
     if (this.state === 'push') { this.apply(this.dz); return true; }
@@ -240,12 +244,12 @@ export class PushTool {
     const levels = this.levelsNow;
     const shown = levels ? Math.round(this.dz / LEVEL_HEIGHT) : this.dz;
     const value = this.typed || (shown >= 0 ? '+' : '') + (levels ? String(shown) : shown.toFixed(2));
-    const units = `<span class="vcb-units" title="Единицы сдвига верха и низа (Tab)">${(['m', 'levels'] as const)
-      .map((u) => `<button type="button" data-units="${u}"${u === this.units ? ' class="active"' : ''}>${u === 'm' ? 'м' : 'этажи'}</button>`).join('')}</span>`;
+    const units = `<span class="vcb-units" title="${tr('Единицы сдвига верха и низа (Tab)')}">${(['m', 'levels'] as const)
+      .map((u) => `<button type="button" data-units="${u}"${u === this.units ? ' class="active"' : ''}>${u === 'm' ? tr('м') : tr('этажи')}</button>`).join('')}</span>`;
     this.vcb.innerHTML = t
-      ? `<span class="vcb-label">${{ top: 'Верх', bottom: 'Низ', side: 'Стена' }[t.face]}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${levels ? 'эт.' : 'м'}
-      <span class="vcb-axis">${this.snap ? 'до точки' : t.face === 'side' ? 'по нормали' : 'по вертикали'}</span>${units}`
-      : `<span class="vcb-label">Сдвиг</span>${units}`;
+      ? `<span class="vcb-label">${{ top: tr('Верх'), bottom: tr('Низ'), side: tr('Стена') }[t.face]}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${levels ? tr('эт.') : tr('м')}
+      <span class="vcb-axis">${this.snap ? tr('до точки') : t.face === 'side' ? tr('по нормали') : tr('по вертикали')}</span>${units}`
+      : `<span class="vcb-label">${tr('Сдвиг')}</span>${units}`;
   }
 }
 

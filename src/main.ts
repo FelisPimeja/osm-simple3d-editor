@@ -31,13 +31,17 @@ import { MeasureTool } from './edit/measure-tool';
 import { OffsetTool, type OffsetTarget } from './edit/offset-tool';
 import { setToolCursor, type ToolCursor } from './view/cursors';
 import { PAINT_TAGS, PaintTool } from './edit/paint-tool';
-import { CIRCLE_LABELS, CIRCLE_MODES, DrawTool, RECT_LABELS, RECT_MODES, type CircleMode, type DrawShape, type RectMode } from './edit/draw-tool';
+import { CIRCLE_LABELS, CIRCLE_MODES, CIRCLE_TITLES, DrawTool, RECT_LABELS, RECT_MODES, RECT_TITLES, type CircleMode, type DrawShape, type RectMode } from './edit/draw-tool';
 import { suggestComment } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { bindTagForms, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
+import { LANGS, lang, localizeDom, setLang, tr, trn, locale, type Lang } from './i18n';
+
+// Статичная разметка index.html — до того, как код ниже начнёт менять тексты
+localizeDom(document.body);
 
 const BUILDINGS_LAYER = 'simple3d-buildings';
 const REMAINDERS_LAYER = 'simple3d-outline-remainders';
@@ -124,7 +128,7 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
 const cubeBtn = document.createElement('button');
 cubeBtn.type = 'button';
 cubeBtn.className = 'maplibregl-ctrl-cube';
-cubeBtn.title = 'Куб вида';
+cubeBtn.title = tr('Куб вида');
 // Куб на кольце компаса (как сам view cube) — чтобы не путать со значком части здания
 cubeBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><ellipse cx="10" cy="13.2" rx="8" ry="3.6" stroke-width="1.6" opacity=".55"/><path d="M10 2.2 14.6 4.7v5.4L10 12.6 5.4 10.1V4.7z" fill="#fff"/><path d="M5.4 4.7 10 7.2l4.6-2.5M10 7.2v5.4"/></svg>';
 document.querySelector('.maplibregl-ctrl-compass')?.after(cubeBtn);
@@ -144,7 +148,7 @@ function setCollapsed(panel: HTMLElement, collapsed: boolean) {
   const btn = panel.querySelector<HTMLButtonElement>('.collapse-btn')!;
   panel.classList.toggle('collapsed', collapsed);
   btn.setAttribute('aria-expanded', String(!collapsed));
-  btn.title = collapsed ? 'Развернуть' : 'Свернуть';
+  btn.title = collapsed ? tr('Развернуть') : tr('Свернуть');
 }
 for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
   // Панель правок сворачивается и раскрывается сама (renderChanges) — состояние не запоминаем
@@ -349,15 +353,15 @@ applyGraphics();
 // Постоянный кеш тайлов OSM API (IndexedDB)
 const cacheInfo = document.getElementById('cache-info')!;
 async function showCacheInfo() {
-  cacheInfo.textContent = `Кэш тайлов: ${await overpass.store.count()}`;
+  cacheInfo.textContent = tr('Кэш тайлов: {n}', { n: await overpass.store.count() });
 }
 document.getElementById('cache-clear')!.addEventListener('click', async () => {
   await overpass.clearStore();
   await showCacheInfo();
 });
 document.getElementById('tiles-reload')!.addEventListener('click', () => {
-  if (overpass.mode !== 'full') return setStatus(`Тайлы загружаются с z ≥ ${OVERPASS_MIN_ZOOM}.`, true);
-  setStatus(`Перезапрашиваем тайлов (${overpass.sourceLabel}): ${overpass.reloadVisible()}.`);
+  if (overpass.mode !== 'full') return setStatus(tr('Тайлы загружаются с z ≥ {z}.', { z: OVERPASS_MIN_ZOOM }), true);
+  setStatus(tr('Перезапрашиваем тайлов ({src}): {n}.', { src: overpass.sourceLabel, n: overpass.reloadVisible() }));
 });
 document.getElementById('gfx')!.addEventListener('toggle', () => void showCacheInfo());
 void showCacheInfo();
@@ -368,7 +372,7 @@ let frames = 0;
 map.on('render', () => frames++);
 setInterval(() => {
   const triangles = overpassLayer.lastTriangles;
-  perfEl.textContent = `FPS: ${frames} · треугольников: ${triangles.toLocaleString('ru')}`;
+  perfEl.textContent = tr('FPS: {fps} · треугольников: {n}', { fps: frames, n: triangles.toLocaleString(locale) });
   frames = 0;
 }, 1000);
 
@@ -389,12 +393,16 @@ function showOverpassStatus() {
   updateDraftStyle();
   if (uploading) return;
   const src = overpass.sourceLabel;
-  if (!overpass.enabled) return panelStatus(`Здания из тайлов. С z ≥ ${OVERPASS_MIN_ZOOM} — из ${src}.`);
+  if (!overpass.enabled) return panelStatus(tr('Здания из тайлов. С z ≥ {z} — из {src}.', { z: OVERPASS_MIN_ZOOM, src }));
   const { ready, total, loading, waiting } = overpass.status();
   if (overpass.mode === 'cached') {
-    return panelStatus(`Здания из тайлов${ready ? `, рядом с центром — из кеша ${src} (${ready} тайлов)` : ''}. С z ≥ ${OVERPASS_MIN_ZOOM} — из ${src}.`);
+    return panelStatus(ready
+      ? trn(ready, 'Здания из тайлов, рядом с центром — из кеша {src} ({n} тайл). С z ≥ {z} — из {src}.|Здания из тайлов, рядом с центром — из кеша {src} ({n} тайла). С z ≥ {z} — из {src}.|Здания из тайлов, рядом с центром — из кеша {src} ({n} тайлов). С z ≥ {z} — из {src}.', { src, z: OVERPASS_MIN_ZOOM })
+      : tr('Здания из тайлов. С z ≥ {z} — из {src}.', { z: OVERPASS_MIN_ZOOM, src }));
   }
-  panelStatus(`${src}: ${ready}/${total} тайлов${loading ? `, загружается ${loading}` : ''}${waiting ? `, ждут повтора ${waiting} (лимит/ошибка, см. консоль)` : ''}.`);
+  panelStatus(tr('{src}: {ready}/{total} тайлов', { src, ready, total })
+    + (loading ? tr(', загружается {n}', { n: loading }) : '')
+    + (waiting ? tr(', ждут повтора {n} (лимит/ошибка, см. консоль)', { n: waiting }) : '') + '.');
 }
 
 // Пересчитываем контуры с частями, когда догрузились новые тайлы
@@ -624,7 +632,7 @@ function cyclePick(p: { x: number; y: number }): string | undefined {
   for (const k of keys) if (!uniq.some((u) => resolved(u) === resolved(k))) uniq.push(k);
   const i = same && altCycle!.keys.join() === uniq.join() ? (altCycle!.i + 1) % uniq.length : 0;
   altCycle = { x: p.x, y: p.y, keys: uniq, i };
-  setStatus(`Alt+клик: объект ${i + 1} из ${uniq.length} под курсором.`);
+  setStatus(tr('Alt+клик: объект {i} из {n} под курсором.', { i: i + 1, n: uniq.length }));
   return uniq[i];
 }
 
@@ -695,9 +703,9 @@ async function openEditLink() {
   if (!m) return;
   const type = m[1] === 'w' ? 'way' : 'relation', key = `${type}/${m[2]}`;
   const linked = startHash.length >= 3 && startHash.every(Number.isFinite);
-  const what = `${type === 'way' ? 'Линия' : 'Отношение'} ${m[2]}`;
+  const what = type === 'way' ? tr('Линия {id}', { id: m[2] }) : tr('Отношение {id}', { id: m[2] });
   if (!linked) {
-    showLoading(`${what}: ищу объект на сервере ${server().short}…`);
+    showLoading(tr('{what}: ищу объект на сервере {server}…', { what, server: server().short }));
     try {
       const full = async (t: string, id: number | string) => {
         const res = await fetch(`${server().api}/${t}/${id}/full.json`);
@@ -712,13 +720,13 @@ async function openEditLink() {
         const subs = elements.filter((e) => e.type === 'relation' && e.id !== Number(m[2])).slice(0, 5);
         nodes = (await Promise.all(subs.map((e) => full('relation', e.id)))).flat().filter((e): e is OsmNode => e.type === 'node');
       }
-      if (!nodes.length) throw new Error('нет узлов');
+      if (!nodes.length) throw new Error(tr('нет узлов'));
       const lon = nodes.map((n) => n.lon), lat = nodes.map((n) => n.lat);
       map.fitBounds([[Math.min(...lon), Math.min(...lat)], [Math.max(...lon), Math.max(...lat)]], { padding: 80, maxZoom: 18, pitch: map.getPitch(), bearing: map.getBearing(), duration: 0 });
     } catch (err) {
       setEditParam(undefined);
       showLoading(undefined);
-      return setStatus(`Ссылка на ${key}: объект не загрузился (${(err as Error).message}).`, true);
+      return setStatus(tr('Ссылка на {key}: объект не загрузился ({error}).', { key, error: (err as Error).message }), true);
     }
   }
   // «Не найдено» — только когда все участки карты загрузились (плюс пауза: отношение собирается из соседних тайлов),
@@ -727,12 +735,14 @@ async function openEditLink() {
   let loadedSince: number | undefined;
   const tryEnter = () => {
     if (focus) { showLoading(undefined); return clearInterval(timer); }
-    if (!map.getLayer(overpassLayer.id)) return showLoading(`${what}: загружаю карту…`); // стиль и слой зданий ещё не готовы
+    if (!map.getLayer(overpassLayer.id)) return showLoading(tr('{what}: загружаю карту…', { what })); // стиль и слой зданий ещё не готовы
     const { ready, total, loading, waiting } = overpass.status();
     loadedSince = total && !loading && !waiting ? loadedSince ?? Date.now() : undefined;
-    if (serverDown()) showLoading(apiBlockedHere() ?? `Сервер ${server().short} не отвечает — повторяю…`, true);
-    else if (loadedSince !== undefined) showLoading(`${what}: собираю здание из частей…`);
-    else showLoading(`${what}: загружаю данные здания${total ? ` (${ready} из ${total} участков карты)` : ''}…`);
+    if (serverDown()) showLoading(apiBlockedHere() ?? tr('Сервер {server} не отвечает — повторяю…', { server: server().short }), true);
+    else if (loadedSince !== undefined) showLoading(tr('{what}: собираю здание из частей…', { what }));
+    else showLoading(total
+      ? tr('{what}: загружаю данные здания ({ready} из {total} участков карты)…', { what, ready, total })
+      : tr('{what}: загружаю данные здания…', { what }));
     // Карту не показываем вовсе: пустая сцена режима здания, пока здание не пришло
     if (!focusHiddenLayers.length) { hideMapLayers(); overpassLayer.setFocus([]); }
     const g = type === 'relation' ? (groupOf(key)?.key === key ? groupOf(key) : soloGroup(key)) : groupOf(key) ?? soloGroup(key);
@@ -752,7 +762,7 @@ async function openEditLink() {
       for (const { id, visibility } of focusHiddenLayers) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility as 'visible' | 'none');
       focusHiddenLayers = [];
       setFocusBackground(false);
-      setStatus(`${key}: здание не найдено в загруженных данных.`, true);
+      setStatus(tr('{key}: здание не найдено в загруженных данных.', { key }), true);
     }
   };
   // Не ждём, пока догрузится вся карта (idle): входим, как только здание пришло с первым тайлом
@@ -880,10 +890,10 @@ function flyToFocus() {
   type Tr = { clone(): Tr; setCenter(c: maplibregl.LngLat): void; setZoom(z: number): void; getProjectionDataForCustomLayer(): { mainMatrix: ArrayLike<number> } };
   const measure = (z: number) => {
     // В maplibre-gl 6 состояние камеры — во внутреннем map._camera.transform
-    const tr = (map as unknown as { _camera: { transform: Tr } })._camera.transform.clone();
-    tr.setCenter(center);
-    tr.setZoom(z);
-    return overpassLayer.focusFrame(tr.getProjectionDataForCustomLayer().mainMatrix)?.rect;
+    const transform = (map as unknown as { _camera: { transform: Tr } })._camera.transform.clone();
+    transform.setCenter(center);
+    transform.setZoom(z);
+    return overpassLayer.focusFrame(transform.getProjectionDataForCustomLayer().mainMatrix)?.rect;
   };
   let zoom = map.getZoom();
   let rect: [number, number, number, number] | undefined;
@@ -930,11 +940,11 @@ function deleteSelected() {
   const keys = [...selection];
   const why = (k: string): string | undefined => {
     // Мультиполигон удаляется вместе со своими путями без тегов (при отправке)
-    if (!k.startsWith('way/') && entity(k)?.tags.type !== 'multipolygon') return `${k}: удалять можно только пути и мультиполигоны.`;
+    if (!k.startsWith('way/') && entity(k)?.tags.type !== 'multipolygon') return tr('{key}: удалять можно только пути и мультиполигоны.', { key: k });
     if (focus && !isSolo(focus)) {
-      if (!inFocus(k)) return `${k} не входит в это здание.`;
-      if (focus.roles[focus.members.indexOf(k)] === 'outline') return 'Контур здания (outline) удалить нельзя — только части.';
-    } else if (!focus && groupOf(k)) return `${k} входит в здание type=building — удалите его в режиме здания (двойной клик).`;
+      if (!inFocus(k)) return tr('{key} не входит в это здание.', { key: k });
+      if (focus.roles[focus.members.indexOf(k)] === 'outline') return tr('Контур здания (outline) удалить нельзя — только части.');
+    } else if (!focus && groupOf(k)) return tr('{key} входит в здание type=building — удалите его в режиме здания (двойной клик).', { key: k });
     return;
   };
   const err = keys.map(why).find(Boolean);
@@ -949,7 +959,7 @@ function deleteSelected() {
   select(undefined);
   session.editMany(edits);
   if (solo) leaveDrill();
-  setStatus(`Удалено объектов: ${keys.length}. Отменить — Ctrl+Z.`);
+  setStatus(tr('Удалено объектов: {n}. Отменить — Ctrl+Z.', { n: keys.length }));
 }
 
 /** Тайлы карты устарели (правки в режиме здания) — перерисовать при выходе. */
@@ -1013,7 +1023,7 @@ const snapEl = document.createElement('div');
 snapEl.className = 'snap-marker';
 snapEl.hidden = true;
 map.getContainer().appendChild(snapEl);
-const SNAP_LABELS = { vertex: 'Вершина', midpoint: 'Середина', center: 'Центр', shape: 'Центр фигуры', grid: 'Сетка', perpendicular: 'Перпендикуляр', edge: 'На ребре', extension: 'Продолжение' } as const;
+const SNAP_LABELS = { vertex: tr('Вершина'), midpoint: tr('Середина'), center: tr('Центр'), shape: tr('Центр фигуры'), grid: tr('Сетка'), perpendicular: tr('Перпендикуляр'), edge: tr('На ребре'), extension: tr('Продолжение') } as const;
 /** Текущая привязка под курсором — для будущих инструментов геометрии. */
 let currentSnap: SnapHit | undefined;
 
@@ -1099,10 +1109,10 @@ rotateBtn.addEventListener('click', () => (rotateTool.active ? rotateTool.stop()
 function startRotate() {
   if (!focus) return;
   const keys = selection.filter((k) => focus!.members.includes(k));
-  if (!keys.length) return setStatus('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Повернуть».', true);
+  if (!keys.length) return setStatus(tr('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Повернуть».'), true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
-    return setStatus('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
   }
   moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   rotateTool.start(keys);
@@ -1178,7 +1188,10 @@ const paintTool = new PaintTool(overpassLayer,
     const t = PAINT_TAGS[face];
     if (!entity(key)) return;
     session.setTags(key, { [t.colour]: sample.colour, [t.material]: sample.material });
-    setStatus(`${face === 'roof' ? 'Крыша' : 'Фасад'} ${key}: цвет ${sample.colour ?? '—'}, материал ${sample.material ?? '—'}. Отменить — Ctrl+Z.`);
+    const params = { key, colour: sample.colour ?? '—', material: sample.material ?? '—' };
+    setStatus(face === 'roof'
+      ? tr('Крыша {key}: цвет {colour}, материал {material}. Отменить — Ctrl+Z.', params)
+      : tr('Фасад {key}: цвет {colour}, материал {material}. Отменить — Ctrl+Z.', params));
   },
   (hint, error) => {
     paintBtn.classList.toggle('active', paintTool.active);
@@ -1217,7 +1230,7 @@ const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
       const shape = f.tags['roof:shape'];
       // Только плоская крыша: верх у скатов не плоский — откладывать не от чего
       if (h.face === 'wall' || (shape && shape !== 'flat') || Math.abs(h.local.z - box.max.z) > 0.05) {
-        return 'Отступ — от плоской крыши (или Shift+клик — от низа).';
+        return tr('Отступ — от плоской крыши (или Shift+клик — от низа).');
       }
       face = 'top';
     }
@@ -1251,7 +1264,7 @@ offsetBtn.addEventListener('click', () => (offsetTool.active ? offsetTool.stop()
  * с тегами части. Узлы — новые (у контура отступа общих с соседями нет).
  */
 function createDrawnMultipolygon(shape: [number, number][][][], z: number, tags: Record<string, string>): string | undefined {
-  if (!focus) return 'Нет здания.';
+  if (!focus) return tr('Нет здания.');
   const ring = (pts: [number, number][]) => {
     const coords = pts.map((p) => overpassLayer.focusToLngLat(p[0], p[1])!);
     return { ids: coords.map(() => nextNewId--), coords };
@@ -1280,7 +1293,7 @@ function createDrawnMultipolygon(shape: [number, number][][][], z: number, tags:
   session.editMany(edits);
   if (group) enterFocus(group);
   select(key);
-  setStatus(`Создана часть ${key} (мультиполигон: частей ${shape.length}, внутренних колец ${inners}). Высоту задайте «Вытянуть» (P).`);
+  setStatus(tr('Создана часть {key} (мультиполигон: частей {parts}, внутренних колец {inners}). Высоту задайте «Вытянуть» (P).', { key, parts: shape.length, inners }));
   return;
 }
 
@@ -1400,9 +1413,12 @@ try { const m = localStorage.getItem('rect-mode') as RectMode | null; if (m && R
 let rectFlyout: HTMLElement | undefined;
 function closeRectFlyout() { rectFlyout?.remove(); rectFlyout = undefined; }
 function syncRectIcons() {
-  for (const [btn, what] of [[rectBtn, 'новая часть'], [mapRectBtn, 'новое здание']] as const) {
-    btn.innerHTML = `${rectSvg(drawTool.rectMode)}<span class="flyout-arrow" data-flyout title="Способ построения"></span>`;
-    btn.title = `Прямоугольник ${RECT_LABELS[drawTool.rectMode]}: ${what} (R; Tab или стрелка в углу — способ построения)`;
+  for (const [btn, part] of [[rectBtn, true], [mapRectBtn, false]] as const) {
+    btn.innerHTML = `${rectSvg(drawTool.rectMode)}<span class="flyout-arrow" data-flyout title="${tr('Способ построения')}"></span>`;
+    const tool = RECT_TITLES[drawTool.rectMode];
+    btn.title = part
+      ? tr('{tool}: новая часть (R; Tab или стрелка в углу — способ построения)', { tool })
+      : tr('{tool}: новое здание (R; Tab или стрелка в углу — способ построения)', { tool });
   }
   try { localStorage.setItem('rect-mode', drawTool.rectMode); } catch { /* нет хранилища */ }
 }
@@ -1410,7 +1426,7 @@ function openRectFlyout(btn: HTMLButtonElement, start: () => void) {
   closeRectFlyout();
   const fly = document.createElement('div');
   fly.className = 'tool-flyout';
-  fly.innerHTML = RECT_MODES.map((m) => `<button type="button" data-mode="${m}" class="${m === drawTool.rectMode ? 'active' : ''}" title="Прямоугольник ${RECT_LABELS[m]}">${rectSvg(m)}<span>${RECT_LABELS[m]}</span></button>`).join('');
+  fly.innerHTML = RECT_MODES.map((m) => `<button type="button" data-mode="${m}" class="${m === drawTool.rectMode ? 'active' : ''}" title="${RECT_TITLES[m]}">${rectSvg(m)}<span>${RECT_LABELS[m]}</span></button>`).join('');
   fly.addEventListener('click', (e) => {
     const m = (e.target as HTMLElement).closest<HTMLElement>('[data-mode]')?.dataset.mode as RectMode | undefined;
     if (!m) return;
@@ -1445,9 +1461,12 @@ const CIRCLE_ICONS: Record<CircleMode, string> = {
 const circleSvg = (m: CircleMode) => `<svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">${CIRCLE_ICONS[m]}</svg>`;
 try { const m = localStorage.getItem('circle-mode') as CircleMode | null; if (m && CIRCLE_MODES.includes(m)) drawTool.circleMode = m; } catch { /* нет хранилища */ }
 function syncCircleIcons() {
-  for (const [btn, what] of [[circleBtn, 'новая часть'], [mapCircleBtn, 'новое здание']] as const) {
-    btn.innerHTML = `${circleSvg(drawTool.circleMode)}<span class="flyout-arrow" data-flyout title="Способ построения"></span>`;
-    btn.title = `Круг ${CIRCLE_LABELS[drawTool.circleMode]}: ${what} (C; Tab или стрелка в углу — способ построения)`;
+  for (const [btn, part] of [[circleBtn, true], [mapCircleBtn, false]] as const) {
+    btn.innerHTML = `${circleSvg(drawTool.circleMode)}<span class="flyout-arrow" data-flyout title="${tr('Способ построения')}"></span>`;
+    const tool = CIRCLE_TITLES[drawTool.circleMode];
+    btn.title = part
+      ? tr('{tool}: новая часть (C; Tab или стрелка в углу — способ построения)', { tool })
+      : tr('{tool}: новое здание (C; Tab или стрелка в углу — способ построения)', { tool });
   }
   try { localStorage.setItem('circle-mode', drawTool.circleMode); } catch { /* нет хранилища */ }
 }
@@ -1460,7 +1479,7 @@ for (const [btn, start] of [[circleBtn, () => startDraw('circle')], [mapCircleBt
     closeRectFlyout();
     const fly = document.createElement('div');
     fly.className = 'tool-flyout';
-    fly.innerHTML = CIRCLE_MODES.map((m) => `<button type="button" data-mode="${m}" class="${m === drawTool.circleMode ? 'active' : ''}" title="Круг ${CIRCLE_LABELS[m]}">${circleSvg(m)}<span>${CIRCLE_LABELS[m]}</span></button>`).join('');
+    fly.innerHTML = CIRCLE_MODES.map((m) => `<button type="button" data-mode="${m}" class="${m === drawTool.circleMode ? 'active' : ''}" title="${CIRCLE_TITLES[m]}">${circleSvg(m)}<span>${CIRCLE_LABELS[m]}</span></button>`).join('');
     fly.addEventListener('click', (ev) => {
       const m = (ev.target as HTMLElement).closest<HTMLElement>('[data-mode]')?.dataset.mode as CircleMode | undefined;
       if (!m) return;
@@ -1485,7 +1504,7 @@ function toggleSketch(shape: DrawShape) {
 
 function startSketch(shape: DrawShape) {
   if (focus) return startDraw(shape);
-  if (map.getZoom() < 15) return setStatus('Приблизьте карту (z ≥ 15), чтобы нарисовать здание.', true);
+  if (map.getZoom() < 15) return setStatus(tr('Приблизьте карту (z ≥ 15), чтобы нарисовать здание.'), true);
   cancelCopyPick();
   select(undefined);
   const c = map.getCenter();
@@ -1530,7 +1549,7 @@ function createSketched(ring: [number, number][]): string | undefined {
     enterFocus(g);
     select(key);
     startPush();
-    setStatus(`Новое здание ${key}. Задайте высоту: клик по крыше и тяните вверх (или число + Enter).`);
+    setStatus(tr('Новое здание {key}. Задайте высоту: клик по крыше и тяните вверх (или число + Enter).', { key }));
   });
   return;
 }
@@ -1559,7 +1578,7 @@ const SHARE_EPS = 0.03;
 /** tags — теги новой части (по умолчанию — плоская часть на высоте z в метрах). */
 function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<string, string>): string | undefined {
   if (sketching) return createSketched(ring);
-  if (!focus) return 'Нет здания.';
+  if (!focus) return tr('Нет здания.');
   const lngLat = (p: [number, number]) => overpassLayer.focusToLngLat(p[0], p[1])!;
   // Кандидаты на общие узлы — пути рядом с контуром (грубый отбор по габаритам в градусах)
   const ll = ring.map(lngLat);
@@ -1595,7 +1614,7 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
     }
     return id;
   });
-  if (new Set(ids).size !== ids.length) return 'Две точки контура попали в один узел.';
+  if (new Set(ids).size !== ids.length) return tr('Две точки контура попали в один узел.');
   const wayId = nextNewId--;
   const key = `way/${wayId}`;
   const neighbours = fresh.length ? insertIntoNeighbours(key, fresh, coord) : new Map<string, Feature3D['polygons']>();
@@ -1617,7 +1636,9 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
   if (group) enterFocus(group);
   select(key);
   const shared = ids.filter((id) => id > 0).length;
-  setStatus(`Создана часть ${key}${shared || fresh.length ? ` (общих узлов: ${shared}, новых на сторонах соседей: ${fresh.length})` : ''}. Высоту задайте «Вытянуть» (P).`);
+  setStatus(shared || fresh.length
+    ? tr('Создана часть {key} (общих узлов: {shared}, новых на сторонах соседей: {fresh}). Высоту задайте «Вытянуть» (P).', { key, shared, fresh: fresh.length })
+    : tr('Создана часть {key}. Высоту задайте «Вытянуть» (P).', { key }));
   return;
 }
 
@@ -1626,7 +1647,7 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
  * (исходный путь — контур). Правки дописываются в edits; созданное отношение возвращается (в него потом входим).
  */
 function attachParts(edits: Parameters<typeof session.editMany>[0], wayIds: (number | { type: 'way' | 'relation'; ref: number })[]): EditGroup | undefined | string {
-  if (!focus) return 'Нет здания.';
+  if (!focus) return tr('Нет здания.');
   const parts = wayIds.map((m) => (typeof m === 'number' ? { type: 'way' as const, ref: m, role: 'part' } : { ...m, role: 'part' }));
   if (isSolo(focus)) {
     const relId = nextNewId--;
@@ -1639,7 +1660,7 @@ function attachParts(edits: Parameters<typeof session.editMany>[0], wayIds: (num
     return group;
   }
   const g = entity(focus.key) as EditGroup | undefined;
-  if (!g) return 'Отношение здания не найдено.';
+  if (!g) return tr('Отношение здания не найдено.');
   edits.push({ key: g.key, members: [...g.relMembers, ...parts] });
   return;
 }
@@ -1661,10 +1682,12 @@ function copySelected() {
     if (!f?.polygons || !k.startsWith('way/') || role === 'outline' || f.polygons.length !== 1 || f.polygons[0].inners.length) { skipped++; continue; }
     items.push({ tags: { ...f.tags }, polygons: f.polygons.map((p) => ({ outer: p.outer.map((c) => [...c] as LonLat), inners: [] })) });
   }
-  if (!items.length) return setStatus(keys.length ? 'Копируются только части-пути (не контур здания и не мультиполигоны).' : 'Выберите части здания, затем Ctrl+C.', true);
+  if (!items.length) return setStatus(keys.length ? tr('Копируются только части-пути (не контур здания и не мультиполигоны).') : tr('Выберите части здания, затем Ctrl+C.'), true);
   moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   copyPick = { items };
-  setStatus(`Копирование (${items.length}${skipped ? `, пропущено ${skipped} — контур или мультиполигон` : ''}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.`);
+  setStatus(skipped
+    ? tr('Копирование ({n}, пропущено {skipped} — контур или мультиполигон): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.', { n: items.length, skipped })
+    : tr('Копирование ({n}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.', { n: items.length }));
   if (lastPointer) updateSnap(lastPointer);
 }
 
@@ -1677,20 +1700,20 @@ function pickCopyBase(point: [number, number]) {
     const ray = overpassLayer.focusRay(point);
     if (ray && Math.abs(ray.direction.z) > 1e-6 && -ray.origin.z / ray.direction.z > 0) p = ray.at(-ray.origin.z / ray.direction.z, new THREE.Vector3());
   }
-  if (!p) return setStatus('Кликните по точке здания или земли.', true);
+  if (!p) return setStatus(tr('Кликните по точке здания или земли.'), true);
   const ll = overpassLayer.focusToLngLat(p.x, p.y);
   if (!ll) return;
   clipboard = { items: copyPick.items, base: { lngLat: ll, z: p.z } };
   copyPick = undefined;
   updateSnap(undefined);
-  setStatus(`Скопировано частей: ${clipboard.items.length}. Ctrl+V — вставить (копия поедет за курсором).`);
+  setStatus(tr('Скопировано частей: {n}. Ctrl+V — вставить (копия поедет за курсором).', { n: clipboard.items.length }));
 }
 
 function cancelCopyPick() {
   if (!copyPick) return;
   copyPick = undefined;
   updateSnap(undefined);
-  setStatus('Копирование отменено.');
+  setStatus(tr('Копирование отменено.'));
 }
 
 /**
@@ -1698,7 +1721,7 @@ function cancelCopyPick() {
  * сразу привязаны к курсору за базовую точку; клик — место базовой точки. Esc — вставка отменяется целиком.
  */
 function pasteClipboard() {
-  if (!focus || !clipboard) return setStatus('Буфер пуст: выберите части, Ctrl+C и клик по базовой точке.', true);
+  if (!focus || !clipboard) return setStatus(tr('Буфер пуст: выберите части, Ctrl+C и клик по базовой точке.'), true);
   const edits: Parameters<typeof session.editMany>[0] = [];
   const wayIds: number[] = [];
   const keys: string[] = [];
@@ -1729,9 +1752,9 @@ function pasteClipboard() {
   if (!b) return;
   pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   moveTool.drag(keys, new THREE.Vector3(b[0], b[1], clipboard.base.z),
-    `Вставка (${keys.length}): кликните, куда поставить базовую точку. Shift/стрелки — ось, число + Enter — сдвиг. Esc — отмена вставки.`,
-    () => setStatus(`Вставлено частей: ${keys.length}.`),
-    () => { selectAfterHistory(session.undo()); setStatus('Вставка отменена.'); });
+    tr('Вставка ({n}): кликните, куда поставить базовую точку. Shift/стрелки — ось, число + Enter — сдвиг. Esc — отмена вставки.', { n: keys.length }),
+    () => setStatus(tr('Вставлено частей: {n}.', { n: keys.length })),
+    () => { selectAfterHistory(session.undo()); setStatus(tr('Вставка отменена.')); });
 }
 
 function segDist2([px, py]: [number, number], [ax, ay]: [number, number], [bx, by]: [number, number]): number {
@@ -1742,18 +1765,18 @@ function segDist2([px, py]: [number, number], [ax, ay]: [number, number], [bx, b
 
 /** Почему объект нельзя рассечь (undefined — можно). */
 function splitReason(key: string): string | undefined {
-  if (isSolo(focus) && key !== focus!.members[0]) return 'Копию режьте отдельно: выйдите и откройте её двойным кликом.';
-  if (!focus?.members.includes(key) || focusHidden.has(key)) return 'Резать можно только части этого здания.';
+  if (isSolo(focus) && key !== focus!.members[0]) return tr('Копию режьте отдельно: выйдите и откройте её двойным кликом.');
+  if (!focus?.members.includes(key) || focusHidden.has(key)) return tr('Резать можно только части этого здания.');
   const f = entity(key) as Feature3D | undefined;
-  if (!f?.polygons) return 'Объект не найден.';
-  if (!key.startsWith('way/')) return 'Пока режутся только простые контуры (линии), не мультиполигоны.';
-  if (f.polygons.length !== 1 || f.polygons[0].inners.length) return 'Пока режутся только контуры без дыр.';
+  if (!f?.polygons) return tr('Объект не найден.');
+  if (!key.startsWith('way/')) return tr('Пока режутся только простые контуры (линии), не мультиполигоны.');
+  if (f.polygons.length !== 1 || f.polygons[0].inners.length) return tr('Пока режутся только контуры без дыр.');
   const role = focus.roles[focus.members.indexOf(key)];
-  if (role === 'outline') return 'Контур здания (outline) не режем — только части.';
+  if (role === 'outline') return tr('Контур здания (outline) не режем — только части.');
   const shape = f.tags['roof:shape'];
   const h = computeHeights(f.tags);
-  if (shape && shape !== 'flat' && h.top - h.min > 0.1) return `Резать можно плоский объект или с плоской крышей, здесь roof:shape=${shape}.`;
-  if (!nodeIds(f)) return 'В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.';
+  if (shape && shape !== 'flat' && h.top - h.min > 0.1) return tr('Резать можно плоский объект или с плоской крышей, здесь roof:shape={shape}.', { shape });
+  if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
   return;
 }
 
@@ -1796,17 +1819,17 @@ function splitFeature(key: string, a: CutPoint, b: CutPoint): string | undefined
   const f = entity(key) as Feature3D | undefined;
   const solo = isSolo(focus);
   const g = focus && !solo ? (entity(focus.key) as EditGroup | undefined) : undefined;
-  if (!f || (!g && !solo)) return 'Объект не найден.';
+  if (!f || (!g && !solo)) return tr('Объект не найден.');
   const poly = f.polygons[0];
   const ids = poly.outerIds!;
   const local = poly.outer.map((c) => overpassLayer.focusToLocal(c)!);
   const n = local.length;
-  if (a.vertex !== undefined && b.vertex !== undefined && a.vertex === b.vertex) return 'Начало и конец разреза совпадают.';
-  if (a.edge === b.edge && a.vertex === undefined && b.vertex === undefined) return 'Начало и конец разреза — на одном ребре.';
+  if (a.vertex !== undefined && b.vertex !== undefined && a.vertex === b.vertex) return tr('Начало и конец разреза совпадают.');
+  if (a.edge === b.edge && a.vertex === undefined && b.vertex === undefined) return tr('Начало и конец разреза — на одном ребре.');
   // Отрезок внутри контура: середина внутри, и он не пересекает стороны
   const mid: [number, number] = [(a.p[0] + b.p[0]) / 2, (a.p[1] + b.p[1]) / 2];
-  if (!inLocalRing(mid, local)) return 'Разрез проходит снаружи контура.';
-  for (let i = 0; i < n; i++) if (segCross(a.p, b.p, local[i], local[(i + 1) % n])) return 'Разрез пересекает стороны контура.';
+  if (!inLocalRing(mid, local)) return tr('Разрез проходит снаружи контура.');
+  for (let i = 0; i < n; i++) if (segCross(a.p, b.p, local[i], local[(i + 1) % n])) return tr('Разрез пересекает стороны контура.');
 
   // Кольцо с новыми узлами: вставляем с конца, чтобы номера сторон не съезжали
   type V = { p: [number, number]; id: number };
@@ -1825,7 +1848,7 @@ function splitFeature(key: string, a: CutPoint, b: CutPoint): string | undefined
     return out;
   };
   const r1 = walk(ia, ib), r2 = walk(ib, ia);
-  if (r1.length < 3 || r2.length < 3) return 'Разрез идёт по стороне контура — делить нечего.';
+  if (r1.length < 3 || r2.length < 3) return tr('Разрез идёт по стороне контура — делить нечего.');
   const [keep, part] = ringArea(r1.map((v) => v.p)) >= ringArea(r2.map((v) => v.p)) ? [r1, r2] : [r2, r1];
   const lngLat = (p: [number, number]) => overpassLayer.focusToLngLat(p[0], p[1])!;
   const coord = new Map<number, LonLat>(ids.map((id, i) => [id, poly.outer[i]]));
@@ -1846,7 +1869,9 @@ function splitFeature(key: string, a: CutPoint, b: CutPoint): string | undefined
     { key: g!.key, members },
   ]);
   select(created.key);
-  setStatus(`Рассечено: ${key} и новая часть ${created.key}${neighbours.size ? `, узлы добавлены в соседей: ${neighbours.size}` : ''}.`);
+  setStatus(neighbours.size
+    ? tr('Рассечено: {key} и новая часть {part}, узлы добавлены в соседей: {n}.', { key, part: created.key, n: neighbours.size })
+    : tr('Рассечено: {key} и новая часть {part}.', { key, part: created.key }));
   return;
 }
 
@@ -1880,7 +1905,7 @@ function insertIntoNeighbours(key: string, fresh: FreshNode[], coord: Map<number
       });
       if (!changed) continue;
       // Узлы мультиполигона живут в его путях-членах, которых у нас нет отдельно — такое ребро не трогаем
-      if (!o.key.startsWith('way/')) return `Ребро общее с мультиполигоном ${o.key} — резать через него пока нельзя.`;
+      if (!o.key.startsWith('way/')) return tr('Ребро общее с мультиполигоном {key} — резать через него пока нельзя.', { key: o.key });
       entity(o.key);
       neighbours.set(o.key, next);
     }
@@ -1914,7 +1939,7 @@ function unitedOutline(outline: Feature3D, parts: Feature3D[]): [number, number]
   };
   const polys = [outline, ...parts].flatMap((f) => f.polygons.map((p) => toRing(p.outer)));
   const u = polygonClipping.union(polys[0], ...polys.slice(1));
-  if (u.length !== 1) return 'Части не соприкасаются с контуром: контур из нескольких кусков (мультиполигон) пока не поддерживается — соедините части.';
+  if (u.length !== 1) return tr('Части не соприкасаются с контуром: контур из нескольких кусков (мультиполигон) пока не поддерживается — соедините части.');
   // Дворы внутри объединения — тоже под контуром (путь без дыр); лишние точки на прямых — убираем
   const ring = u[0][0].slice(0, -1) as [number, number][];
   const out: [number, number][] = [];
@@ -1924,7 +1949,7 @@ function unitedOutline(outline: Feature3D, parts: Feature3D[]): [number, number]
     if (segDist2(b, a, c) < 0.01) continue; // на прямой a–c
     out.push(b);
   }
-  return out.length >= 3 ? out : 'Не удалось построить контур.';
+  return out.length >= 3 ? out : tr('Не удалось построить контур.');
 }
 
 /**
@@ -1935,7 +1960,7 @@ function unitedOutline(outline: Feature3D, parts: Feature3D[]): [number, number]
 function fixOutline() {
   if (!focus || isSolo(focus)) return;
   const r = partsOutsideOutline(focus);
-  if (!r) return setStatus('Контур здания — не простой путь: обновить его пока нельзя.', true);
+  if (!r) return setStatus(tr('Контур здания — не простой путь: обновить его пока нельзя.'), true);
   const ring = unitedOutline(r.outline, r.parts);
   if (typeof ring === 'string') return setStatus(ring, true);
   // Узлы: существующие узлы контура и частей в тех же точках, иначе новые
@@ -1952,7 +1977,7 @@ function fixOutline() {
   }
   const edits: Parameters<typeof session.editMany>[0] = [];
   const g = entity(focus.key) as EditGroup | undefined;
-  if (!g) return setStatus('Отношение здания не найдено.', true);
+  if (!g) return setStatus(tr('Отношение здания не найдено.'), true);
   const outlineTags = { ...r.outline.tags };
   if (!isBareOutlineTags(outlineTags)) {
     // Объём контура — новой частью прежней формы (на тех же узлах)
@@ -1968,7 +1993,7 @@ function fixOutline() {
   overpassLayer.setDrawPreview(undefined);
   session.editMany(edits);
   renderSelected();
-  setStatus(`Контур ${r.outline.key} обновлён: охватывает все части (${r.parts.length}). Отменить — Ctrl+Z.`);
+  setStatus(tr('Контур {key} обновлён: охватывает все части ({n}). Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length }));
 }
 
 /** Предупреждение в панели режима здания: части за контуром и кнопка «Обновить контур». */
@@ -1976,8 +2001,8 @@ function outlineWarning(g: BuildingGroup): string {
   if (isSolo(g)) return '';
   const r = partsOutsideOutline(g);
   const above = partsAboveOutline(g);
-  return (r?.out.length ? `<p class="warn">⚠ Частей за контуром здания: ${r.out.length}. Контур должен охватывать все части.
-    <button type="button" data-outline-fix title="Наведите — предпросмотр нового контура">Обновить контур</button></p>` : '')
+  return (r?.out.length ? `<p class="warn">⚠ ${tr('Частей за контуром здания: {n}. Контур должен охватывать все части.', { n: r.out.length })}
+    <button type="button" data-outline-fix title="${tr('Наведите — предпросмотр нового контура')}">${tr('Обновить контур')}</button></p>` : '')
     + (above ? `<p class="warn">⚠ ${aboveOutlineText(above)}</p>` : '');
 }
 
@@ -2001,9 +2026,9 @@ function partsAboveOutline(g: BuildingGroup): { outline: number; max: number; ke
 
 function aboveOutlineText(a: { outline: number; max: number; keys: string[] }): string {
   const list = a.keys.slice(0, 5).map((k) => `<a href="${server().web}/${k}" target="_blank" rel="noopener">${k}</a>`).join(', ')
-    + (a.keys.length > 5 ? ` и ещё ${a.keys.length - 5}` : '');
-  return `У контура building:levels=${a.outline}, а у частей больше (до ${a.max}): ${list}. `
-    + 'На контуре принято указывать максимальную этажность здания.';
+    + (a.keys.length > 5 ? ' ' + tr('и ещё {n}', { n: a.keys.length - 5 }) : '');
+  return tr('У контура building:levels={outline}, а у частей больше (до {max}): {list}.', { outline: a.outline, max: a.max, list })
+    + ' ' + tr('На контуре принято указывать максимальную этажность здания.');
 }
 
 /** Теги объёма, которые переходят от отдельного здания к его частям. */
@@ -2042,7 +2067,7 @@ function splitSolo(f: Feature3D, whole: Polygon, a: Polygon, b: Polygon, fresh: 
   ]);
   enterFocus(group);
   select(parts[0].key);
-  setStatus(`Создано здание ${group.key}: контур ${f.key} и части ${parts.map((p) => p.key).join(', ')}.`);
+  setStatus(tr('Создано здание {key}: контур {outline} и части {parts}.', { key: group.key, outline: f.key, parts: parts.map((p) => p.key).join(', ') }));
   return;
 }
 
@@ -2063,7 +2088,7 @@ function allowPushSide(t: PushTarget): boolean {
   const f = entity(t.key) as Feature3D | undefined;
   const nodes = f && t.edge ? sideNodes(f, t.edge) : undefined;
   if (!nodes || (f!.type === 'relation' && !relWays(f!))) {
-    setStatus('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
+    setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
     return false;
   }
   return true;
@@ -2157,19 +2182,19 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
     });
     if (f.type !== 'relation') continue;
     const rw = relWays(f);
-    if (!rw) return `${f.key}: в кеше нет путей-членов — перезагрузите видимые тайлы.`;
+    if (!rw) return tr('{key}: в кеше нет путей-членов — перезагрузите видимые тайлы.', { key: f.key });
     let members: OsmMember[] = session.get(f.key)?.relMembers ?? rw.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }));
     for (const r of rewrites) {
       const p = f.polygons[r.poly];
       const old = r.ring ? p.innerIds?.[r.ring - 1] : p.outerIds;
-      if (!old) return `${f.key}: в кеше нет id узлов.`;
+      if (!old) return tr('{key}: в кеше нет id узлов.', { key: f.key });
       const allowed = new Set([...old, ...r.ids]);
       const role = r.ring ? 'inner' : 'outer';
       const ringWays: RingWay[] = [];
       for (const m of members) {
         if (m.type !== 'way' || (m.role === 'inner') !== (role === 'inner')) continue;
         const nodes = lineOf(m.ref);
-        if (!nodes) return `${f.key}: нет данных пути way/${m.ref} — перезагрузите видимые тайлы.`;
+        if (!nodes) return tr('{key}: нет данных пути way/{ref} — перезагрузите видимые тайлы.', { key: f.key, ref: m.ref });
         if (nodes.every((id) => allowed.has(id))) ringWays.push({ id: m.ref, role: m.role, nodes, tags: ways.get(m.ref)?.tags });
       }
       const res = restructureRing(ringWays, r.ids, role, () => nextNewId--);
@@ -2201,9 +2226,9 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
   // Объекты — в сессию (до editMany), пути-члены — отдельными объектами без геометрии здания
   for (const key of edits.keys()) {
     const e = entity(key);
-    if (!e) return `${key}: нет в данных.`;
+    if (!e) return tr('{key}: нет в данных.', { key });
     // У мультиполигона в сессии должен быть состав, иначе его правку не с чем сравнить
-    if (edits.get(key)!.members && !e.relMembers) return `${key}: нет состава отношения.`;
+    if (edits.get(key)!.members && !e.relMembers) return tr('{key}: нет состава отношения.', { key });
   }
   const out = [...edits.values()];
   for (const [id, nodes] of lines) {
@@ -2212,7 +2237,7 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
     const c = created.get(id);
     if (c) { out.push({ key, create: { key, version: 0, tags: { ...(c.tags ?? {}) }, line, splitFrom: c.splitFrom } }); continue; }
     const known = session.get(key);
-    if (known && !known.line) return `${key} — сам по себе здание или часть, его не разрезать.`;
+    if (known && !known.line) return tr('{key} — сам по себе здание или часть, его не разрезать.', { key });
     if (!known) {
       const w = ways.get(id)!;
       session.track({ key, version: 0, tags: { ...w.tags }, line: { ids: w.nodes, coords: w.nodes.map(at) } });
@@ -2227,7 +2252,7 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
   const moved = pushSidePolygons(f, edge, dz);
   const p = f.polygons[edge.poly], q = moved[edge.poly];
   const ids = edge.ring ? p.innerIds?.[edge.ring - 1] : p.outerIds;
-  if (!ids) return 'В кеше нет id узлов этого объекта.';
+  if (!ids) return tr('В кеше нет id узлов этого объекта.');
   const was = edge.ring ? p.inners[edge.ring - 1] : p.outer;
   const now = edge.ring ? q.inners[edge.ring - 1] : q.outer;
   const n = ids.length, i = edge.i, j = (i + 1) % n;
@@ -2318,8 +2343,11 @@ function commitPush(t: PushTarget, dz: number) {
     session.editMany(edits);
   }
   else session.setTags(t.key, diffTags(f.tags, pushTags(f.tags, t.face, dz)));
-  const levels = t.face !== 'side' && pushTool.units === 'levels' ? ` (${dz >= 0 ? '+' : ''}${Math.round(dz / LEVEL_HEIGHT)} эт.)` : '';
-  setStatus(`${{ top: 'Верх', bottom: 'Низ', side: 'Стена' }[t.face]} ${t.key} сдвинут${t.face === 'side' ? 'а' : ''} на ${dz >= 0 ? '+' : ''}${dz.toFixed(2)} м${levels}.`);
+  const levels = t.face !== 'side' && pushTool.units === 'levels' ? ' ' + tr('({n} эт.)', { n: `${dz >= 0 ? '+' : ''}${Math.round(dz / LEVEL_HEIGHT)}` }) : '';
+  const params = { key: t.key, d: `${dz >= 0 ? '+' : ''}${dz.toFixed(2)}`, levels };
+  setStatus(t.face === 'top' ? tr('Верх {key} сдвинут на {d} м{levels}.', params)
+    : t.face === 'bottom' ? tr('Низ {key} сдвинут на {d} м{levels}.', params)
+    : tr('Стена {key} сдвинута на {d} м{levels}.', params));
 }
 
 /** Значения для setTags: новые и удалённые (undefined) теги. */
@@ -2362,7 +2390,7 @@ function pushTags(tags: Record<string, string>, face: PushTarget['face'], dz: nu
 
 /** Попап посреди карты; пустой html — закрыть. */
 function showPopup(html: string) {
-  popupEl.innerHTML = html ? `<div class="popup-card">${html}<p><button type="button" data-popup-close>Понятно</button></p></div>` : '';
+  popupEl.innerHTML = html ? `<div class="popup-card">${html}<p><button type="button" data-popup-close>${tr('Понятно')}</button></p></div>` : '';
   if (!html) renderSelected(); // вернуть обычную подсветку
 }
 popupEl.addEventListener('click', (e) => {
@@ -2426,10 +2454,10 @@ function nodeIds(f: Feature3D): number[] | undefined {
 function startMove() {
   if (!focus) return;
   const keys = selection.filter((k) => focus!.members.includes(k));
-  if (!keys.length) return setStatus('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Переместить».', true);
+  if (!keys.length) return setStatus(tr('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Переместить».'), true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
-    return setStatus('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.', true);
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
   }
   pushTool.stop();
   splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
@@ -2461,7 +2489,7 @@ function commitMove(keys: string[], offset: THREE.Vector3) {
     }
     session.editMany(edits);
   }
-  setStatus(`Перемещено объектов: ${features.length} на ${offset.length().toFixed(2)} м.`);
+  setStatus(tr('Перемещено объектов: {n} на {d} м.', { n: features.length, d: offset.length().toFixed(2) }));
 }
 
 /**
@@ -2515,7 +2543,7 @@ function commitRotate(keys: string[], pivot: THREE.Vector3, angle: number) {
     if (e) e.tags = { ...(e.tags ?? f.tags), 'roof:direction': String(Math.round((((d - deg) % 360) + 360) % 360 * 10) / 10) };
   }
   session.editMany(edits);
-  setStatus(`Повёрнуто объектов: ${features.length} на ${deg.toFixed(1)}°. Отменить — Ctrl+Z.`);
+  setStatus(tr('Повёрнуто объектов: {n} на {deg}°. Отменить — Ctrl+Z.', { n: features.length, deg: deg.toFixed(1) }));
 }
 
 /** Поднять или опустить объект на dz метров, сохранив способ разметки (этажи — если сдвиг кратен этажу). */
@@ -2655,7 +2683,7 @@ infoEl.addEventListener('click', (e) => {
   updateTileFilter();
   clearSelection();
   if (userHidden.size) {
-    infoEl.innerHTML = `<p>Скрыто вручную: ${userHidden.size}</p><p><button type="button" data-unhide-all>Показать все</button></p>`;
+    infoEl.innerHTML = `<p>${tr('Скрыто вручную: {n}', { n: userHidden.size })}</p><p><button type="button" data-unhide-all>${tr('Показать все')}</button></p>`;
   }
 });
 
@@ -2686,21 +2714,21 @@ function updateOverpassIndicator() {
   const src = overpass.sourceLabel;
   opIndicator.querySelector('.label')!.textContent = {
     off: '',
-    down: apiBlockedHere() ? `${server().short}: откройте в Firefox` : `Сервер ${server().short} не отвечает — повторяю…`,
-    loading: `Загружаю данные зданий: ${ready} из ${total} участков карты…`,
-    waiting: `Не удалось загрузить ${total - ready} из ${total} участков карты`,
-    ready: `Данные загружены (${ready} из ${total})`,
+    down: apiBlockedHere() ? tr('{server}: откройте в Firefox', { server: server().short }) : tr('Сервер {server} не отвечает — повторяю…', { server: server().short }),
+    loading: tr('Загружаю данные зданий: {ready} из {total} участков карты…', { ready, total }),
+    waiting: tr('Не удалось загрузить {failed} из {total} участков карты', { failed: total - ready, total }),
+    ready: tr('Данные загружены ({ready} из {total})', { ready, total }),
   }[state];
   opIndicator.querySelector<HTMLButtonElement>('.retry')!.hidden = state !== 'waiting';
   const servers = overpass.pool.endpoints
-    .map((e) => `${e.host}: ${e.active} в работе, ок ${e.ok}, ошибок ${e.failed}${e.coolUntil > Date.now() ? ', остывает' : ''}`)
+    .map((e) => tr('{host}: {active} в работе, ок {ok}, ошибок {failed}', { host: e.host, active: e.active, ok: e.ok, failed: e.failed }) + (e.coolUntil > Date.now() ? tr(', остывает') : ''))
     .join('\n');
   opIndicator.title = {
     off: '',
-    down: apiBlockedHere() ?? `${server().web} не отвечает (таймаут или обрыв соединения); запросы повторяются раз в 30 с`,
-    loading: `Пока данные не пришли, здания — черновик из векторных тайлов. Загружается тайлов (${src}): ${loading}`,
-    waiting: `Ждут повтора: ${waiting} (лимит или ошибка API ${server().short}, подробности в консоли)`,
-    ready: 'Все видимые тайлы загружены',
+    down: apiBlockedHere() ?? tr('{server} не отвечает (таймаут или обрыв соединения); запросы повторяются раз в 30 с', { server: server().web }),
+    loading: tr('Пока данные не пришли, здания — черновик из векторных тайлов. Загружается тайлов ({src}): {n}', { src, n: loading }),
+    waiting: tr('Ждут повтора: {n} (лимит или ошибка API {server}, подробности в консоли)', { n: waiting, server: server().short }),
+    ready: tr('Все видимые тайлы загружены'),
   }[state] + (state === 'off' ? '' : `\n${describeFreshness()}\n\n${servers}`);
 }
 
@@ -2733,17 +2761,21 @@ function updateDraftStyle() {
 /** Откуда и когда получены видимые тайлы — чтобы было видно, что на экране старые или неполные данные. */
 function describeFreshness(): string {
   const f = overpass.freshness();
-  const parts = [f.overpass && `из Overpass (старый кеш): ${f.overpass}`, f.api && `из API ${server().short}: ${f.api}`, f.unknown && `источник неизвестен: ${f.unknown}`].filter(Boolean);
+  const parts = [
+    f.overpass && tr('из Overpass (старый кеш): {n}', { n: f.overpass }),
+    f.api && tr('из API {server}: {n}', { server: server().short, n: f.api }),
+    f.unknown && tr('источник неизвестен: {n}', { n: f.unknown }),
+  ].filter(Boolean);
   if (!parts.length) return '';
-  const age = f.oldest ? ` · самый старый загружен ${formatAge(Date.now() - f.oldest)} назад` : '';
-  return `Тайлы ${parts.join(', ')}${age}`;
+  const age = f.oldest ? tr(' · самый старый загружен {age} назад', { age: formatAge(Date.now() - f.oldest) }) : '';
+  return tr('Тайлы {list}', { list: parts.join(', ') }) + age;
 }
 
 function formatAge(ms: number): string {
   const min = Math.round(ms / 60_000);
-  if (min < 60) return `${min} мин`;
+  if (min < 60) return tr('{n} мин', { n: min });
   const h = Math.round(min / 60);
-  return h < 48 ? `${h} ч` : `${Math.round(h / 24)} дн`;
+  return h < 48 ? tr('{n} ч', { n: h }) : tr('{n} дн', { n: Math.round(h / 24) });
 }
 
 /** Сообщение пользователю: всплывает над картой (и дублируется в строке панели); html — ссылка и т. п. */
@@ -2906,22 +2938,22 @@ const PART_ICONS = {
  * (apartments, house, retail…) — обычная «Часть» со значением в подписи.
  */
 const PART_KINDS: Record<string, [string, keyof typeof PART_ICONS]> = {
-  roof: ['Крыша', 'roof'], 'roof section': ['Крыша', 'roof'],
-  steps: ['Ступени', 'steps'], stairs: ['Лестница', 'steps'], staircase: ['Лестница', 'steps'], stairway: ['Лестница', 'steps'], grandstand: ['Трибуна', 'steps'],
-  balcony: ['Балкон', 'balcony'], loggia: ['Лоджия', 'balcony'],
-  deck: ['Настил', 'deck'], terrace: ['Терраса', 'deck'], patio: ['Патио', 'deck'],
-  column: ['Колонна', 'column'], pillar: ['Столб', 'column'], buttress: ['Контрфорс', 'column'],
-  tower: ['Башня', 'tower'], bell_tower: ['Колокольня', 'tower'],
-  elevator: ['Лифт', 'elevator'], verticalpassage: ['Лифт', 'elevator'],
-  porch: ['Крыльцо', 'porch'], veranda: ['Веранда', 'porch'], portico: ['Портик', 'porch'], entrance: ['Вход', 'porch'],
-  canopy: ['Навес', 'canopy'], carport: ['Навес для машин', 'canopy'],
-  mast: ['Мачта', 'mast'], antenna: ['Антенна', 'mast'],
-  dome: ['Купол', 'dome'], cupola: ['Купол', 'dome'],
-  chimney: ['Труба', 'chimney'],
-  base: ['Основание', 'base'], stylobate: ['Стилобат', 'base'], foundation: ['Фундамент', 'base'], basement: ['Подвал', 'base'],
-  wall: ['Стена', 'wall'],
-  corridor: ['Переход', 'bridge'], bridge: ['Переход', 'bridge'], passageway: ['Переход', 'bridge'],
-  construction: ['Строится', 'construction'],
+  roof: [tr('Крыша'), 'roof'], 'roof section': [tr('Крыша'), 'roof'],
+  steps: [tr('Ступени'), 'steps'], stairs: [tr('Лестница'), 'steps'], staircase: [tr('Лестница'), 'steps'], stairway: [tr('Лестница'), 'steps'], grandstand: [tr('Трибуна'), 'steps'],
+  balcony: [tr('Балкон'), 'balcony'], loggia: [tr('Лоджия'), 'balcony'],
+  deck: [tr('Настил'), 'deck'], terrace: [tr('Терраса'), 'deck'], patio: [tr('Патио'), 'deck'],
+  column: [tr('Колонна'), 'column'], pillar: [tr('Столб'), 'column'], buttress: [tr('Контрфорс'), 'column'],
+  tower: [tr('Башня'), 'tower'], bell_tower: [tr('Колокольня'), 'tower'],
+  elevator: [tr('Лифт'), 'elevator'], verticalpassage: [tr('Лифт'), 'elevator'],
+  porch: [tr('Крыльцо'), 'porch'], veranda: [tr('Веранда'), 'porch'], portico: [tr('Портик'), 'porch'], entrance: [tr('Вход'), 'porch'],
+  canopy: [tr('Навес'), 'canopy'], carport: [tr('Навес для машин'), 'canopy'],
+  mast: [tr('Мачта'), 'mast'], antenna: [tr('Антенна'), 'mast'],
+  dome: [tr('Купол'), 'dome'], cupola: [tr('Купол'), 'dome'],
+  chimney: [tr('Труба'), 'chimney'],
+  base: [tr('Основание'), 'base'], stylobate: [tr('Стилобат'), 'base'], foundation: [tr('Фундамент'), 'base'], basement: [tr('Подвал'), 'base'],
+  wall: [tr('Стена'), 'wall'],
+  corridor: [tr('Переход'), 'bridge'], bridge: [tr('Переход'), 'bridge'], passageway: [tr('Переход'), 'bridge'],
+  construction: [tr('Строится'), 'construction'],
 };
 
 /** Панель частей режима здания: все члены отношения, контур — первым. */
@@ -2931,12 +2963,15 @@ try { for (const k of JSON.parse(localStorage.getItem('outliner-collapsed') ?? '
 const ICON_CHEVRON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>';
 
 /** Вид части для панели: подпись и иконка (контур — отдельно). */
-function partKind(t: Record<string, string>, outline: boolean): { label: string; icon: string; title: string } {
-  if (outline) return { label: 'Контур', icon: ICON_OUTLINE, title: 'Контур (outline)' };
+/** order — место в списке: контур, крыши, прочие виды, обычные части (building:part=yes). */
+function partKind(t: Record<string, string>, outline: boolean): { label: string; icon: string; title: string; order: number } {
+  if (outline) return { label: tr('Контур'), icon: ICON_OUTLINE, title: tr('Контур (outline)'), order: 0 };
   const value = t['building:part'];
   const kind = PART_KINDS[value?.toLowerCase() ?? ''];
-  const label = kind?.[0] ?? (value && value !== 'yes' ? `Часть: ${value}` : 'Часть');
-  return { label, icon: kind ? PART_ICONS[kind[1]] : ICON_PART, title: `${label} (building:part=${value ?? '—'})` };
+  const plain = !kind && !(value && value !== 'yes');
+  const label = kind?.[0] ?? (plain ? tr('Часть') : tr('Часть: {value}', { value }));
+  const order = kind?.[1] === 'roof' ? 1 : plain ? 3 : 2;
+  return { label, icon: kind ? PART_ICONS[kind[1]] : ICON_PART, title: `${label} (building:part=${value ?? '—'})`, order };
 }
 
 /** Этаж здания режима: номер level (0 — первый этаж) и высоты пола и потолка, м. */
@@ -3061,8 +3096,8 @@ function levelSources(levels: Level[]): string {
     else runs.push({ src: l.src, from: l.n, to: l.n });
   }
   const range = (r: { from: number; to: number }) => (r.from === r.to ? `${r.from}` : `${r.from}…${r.to}`);
-  const lines = runs.map((r) => `${r.from === r.to ? 'Этаж' : 'Этажи'} ${range(r)} — `
-    + (r.src ? `по тегам <a href="#" data-select="${esc(r.src)}">${esc(r.src)}</a>` : 'из indoor-данных'));
+  const lines = runs.map((r) => (r.from === r.to ? tr('Этаж {range}', { range: range(r) }) : tr('Этажи {range}', { range: range(r) })) + ' — '
+    + (r.src ? tr('по тегам {link}', { link: `<a href="#" data-select="${esc(r.src)}">${esc(r.src)}</a>` }) : tr('из indoor-данных')));
   return `<li class="lv-source">${lines.join('<br>')}</li>`;
 }
 
@@ -3151,7 +3186,10 @@ function updateIndoorBadges() {
     }
     if (!Number.isFinite(w)) continue;
     const name = (g && (g.tags.name ?? outlineTags(g)?.name)) ?? feats[0]?.tags.name;
-    badges.push({ key, at: [(w + e) / 2, (s + nn) / 2], top, title: `${name ? `${name} — ` : ''}есть поэтажный план (${n} помещений). Клик — открыть здание` });
+    const title = name
+      ? trn(n, '{name} — есть поэтажный план ({n} помещение). Клик — открыть здание|{name} — есть поэтажный план ({n} помещения). Клик — открыть здание|{name} — есть поэтажный план ({n} помещений). Клик — открыть здание', { name })
+      : trn(n, 'есть поэтажный план ({n} помещение). Клик — открыть здание|есть поэтажный план ({n} помещения). Клик — открыть здание|есть поэтажный план ({n} помещений). Клик — открыть здание');
+    badges.push({ key, at: [(w + e) / 2, (s + nn) / 2], top, title });
   }
   indoorBadges.set(badges);
 }
@@ -3203,7 +3241,7 @@ let shownLevel: Level | undefined;
 let shownIndoor: IndoorFeature[] = [];
 let selectedIndoor: IndoorFeature | undefined;
 
-const INDOOR_NAMES: Record<string, string> = { room: 'Помещение', corridor: 'Коридор', area: 'Площадка', level: 'Этаж', wall: 'Стена', column: 'Колонна', poi: 'Объект' };
+const INDOOR_NAMES: Record<string, string> = { room: tr('Помещение'), corridor: tr('Коридор'), area: tr('Площадка'), level: tr('Этаж'), wall: tr('Стена'), column: tr('Колонна'), poi: tr('Объект') };
 
 /** Помещение, коридор или площадка показанного этажа под курсором (самое маленькое из накрывающих). */
 function indoorAt(point: [number, number]): IndoorFeature | undefined {
@@ -3231,13 +3269,13 @@ function selectIndoor(f: IndoorFeature | undefined) {
   const t = f.tags;
   const kind = INDOOR_NAMES[f.kind];
   const levels = f.levels.map((n) => LEVEL_NAME(n)).join(', ');
-  infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ` «${esc(t.name)}»` : t.ref ? ` ${esc(t.ref)}` : ''} — `
+  infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''} — `
     + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
-    + `<p class="hint">${esc(levels)} · только просмотр</p>`
+    + `<p class="hint">${tr('{levels} · только просмотр', { levels: esc(levels) })}</p>`
     + `<table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table>`;
 }
 
-const LEVEL_NAME = (n: number) => (n < 0 ? `Подземный ${-n}` : `${n + 1} этаж`);
+const LEVEL_NAME = (n: number) => (n < 0 ? tr('Подземный {n}', { n: -n }) : tr('{n} этаж', { n: n + 1 }));
 
 /** Панель этажей режима здания: список по этажности и indoor-данным, клик — срез здания выше этажа. */
 function renderLevels() {
@@ -3271,11 +3309,11 @@ function renderLevelsImpl() {
   levelsCount.textContent = levels.length ? `(${levels.length})` : '';
   const planned = plannedLevels(focus, levels, indoor);
   levelsEl.innerHTML = levels.length
-    ? `<li class="${currentLevel === undefined ? 'selected' : ''}" data-level=""><span class="lv-name"><span class="lv-plan"></span>Всё здание</span></li>` + levels.map((l) =>
-      `<li class="${l.n === currentLevel ? 'selected' : ''}" data-level="${l.n}" title="level=${l.n} · ${l.src ? `по тегам ${l.src}` : 'из indoor-данных'}${planned.has(l.n) ? ' · есть поэтажный план' : ''}">`
+    ? `<li class="${currentLevel === undefined ? 'selected' : ''}" data-level=""><span class="lv-name"><span class="lv-plan"></span>${tr('Всё здание')}</span></li>` + levels.map((l) =>
+      `<li class="${l.n === currentLevel ? 'selected' : ''}" data-level="${l.n}" title="level=${l.n} · ${l.src ? tr('по тегам {link}', { link: l.src }) : tr('из indoor-данных')}${planned.has(l.n) ? ' · ' + tr('есть поэтажный план') : ''}">`
       + `<span class="lv-name"><span class="lv-plan">${planned.has(l.n) ? ICON_PLAN : ''}</span>${LEVEL_NAME(l.n)}</span>`
-      + `<span class="lv-meta">${l.floor.toFixed(1)}–${l.ceil.toFixed(1)} м</span></li>`).join('') + levelSources(levels)
-    : '<li class="lv-empty">Нет этажности (building:levels) и indoor-данных</li>';
+      + `<span class="lv-meta">${tr('{floor}–{ceil} м', { floor: l.floor.toFixed(1), ceil: l.ceil.toFixed(1) })}</span></li>`).join('') + levelSources(levels)
+    : `<li class="lv-empty">${tr('Нет этажности (building:levels) и indoor-данных')}</li>`;
   const level = levels.find((l) => l.n === currentLevel);
   const onLevel = level ? indoor.filter((f) => f.levels.includes(level.n)) : [];
   shownLevel = level;
@@ -3423,15 +3461,16 @@ function renderIssues() {
   issuesPanel.hidden = !focus || !focusIssues.length;
   if (issuesPanel.hidden) { issuesEl.innerHTML = ''; return; }
   const errors = focusIssues.filter((i) => i.level === 'error').length;
-  issuesCount.textContent = `(${errors ? `ошибок ${errors}, ` : ''}предупреждений ${focusIssues.length - errors})`.replace(', предупреждений 0', '');
+  const warnings = focusIssues.length - errors;
+  issuesCount.textContent = `(${[errors ? tr('ошибок {n}', { n: errors }) : '', warnings || !errors ? tr('предупреждений {n}', { n: warnings }) : ''].filter(Boolean).join(', ')})`;
   shownIssues = [...focusIssues].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
   issuesEl.innerHTML = shownIssues.map((i, n) => `<li class="${i.level}${selection.includes(i.key) ? ' selected' : ''}" data-key="${esc(i.key)}"${i.other ? ` data-other="${esc(i.other)}"` : ''}>
     <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span>
     <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span>
-    ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="Исправить: ${esc(i.fix.label)}">Исправить</button>` : ''}</li>`).join('');
+    ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</li>`).join('');
   const fixable = shownIssues.filter((i) => i.fix).length;
   issuesFixAll.hidden = !fixable;
-  issuesFixAll.textContent = `Применить все исправления (${fixable})`;
+  issuesFixAll.textContent = tr('Применить все исправления ({n})', { n: fixable });
 }
 
 /** «Подсветить все»: рёбра объёмов с проблемами (ошибка важнее предупреждения). */
@@ -3457,7 +3496,7 @@ function applyFixes(list: Issue[]) {
   }
   if (!tags.size) return;
   session.editMany([...tags].map(([key, t]) => ({ key, tags: t })));
-  setStatus(list.length > 1 ? `Применено исправлений: ${list.length} (объектов: ${tags.size}).` : `Исправлено: ${list[0].fix!.label}.`);
+  setStatus(list.length > 1 ? tr('Применено исправлений: {n} (объектов: {objects}).', { n: list.length, objects: tags.size }) : tr('Исправлено: {fix}.', { fix: list[0].fix!.label }));
 }
 
 issuesFixAll.addEventListener('click', () => applyFixes(shownIssues.filter((i) => i.fix)));
@@ -3502,18 +3541,18 @@ function renderOutliner() {
     return { key, f, outline, kind: partKind(f?.tags ?? {}, outline) };
   });
   // Порядок: контур, крыши, прочие виды (как встретились), обычные части (building:part=yes) — в конце
-  const rank = (r: (typeof rows)[number]) => (r.outline ? 0 : r.kind.label === 'Крыша' ? 1 : r.kind.label === 'Часть' ? 3 : 2);
+  const rank = (r: (typeof rows)[number]) => r.kind.order;
   rows.sort((a, b) => rank(a) - rank(b));
   outlinerCount.textContent = `(${rows.length})`;
   const row = (r: (typeof rows)[number], child: boolean) => {
     const off = focusHidden.has(r.key);
     const cls = [child && 'ol-child', selection.includes(r.key) && 'selected', off && 'off', !r.f && 'missing'].filter(Boolean).join(' ');
-    const title = r.f ? r.key : `${r.key} — не загружен`;
+    const title = r.f ? r.key : tr('{key} — не загружен', { key: r.key });
     return `<li class="${cls}" data-key="${esc(r.key)}" title="${esc(title)}">
       <span class="ol-icon" title="${esc(r.kind.title)}">${r.kind.icon}</span>
       <span class="ol-label">${child && !r.f?.tags.name ? `<span class="ol-key bare">${esc(r.key)}</span>` : `${esc(r.f?.tags.name ?? r.kind.label)}<span class="ol-key">${esc(r.key)}</span>`}</span>
       ${issueMark(issueOf.get(r.key))}
-      <button type="button" class="ol-eye" data-eye title="${off ? 'Показать' : 'Скрыть'}">${off ? ICON_EYE_OFF : ICON_EYE}</button></li>`;
+      <button type="button" class="ol-eye" data-eye title="${off ? tr('Показать') : tr('Скрыть')}">${off ? ICON_EYE_OFF : ICON_EYE}</button></li>`;
   };
   // Группы — по подписи вида, в порядке первого появления
   const byKind = new Map<string, typeof rows>();
@@ -3533,11 +3572,11 @@ function renderOutliner() {
     const live = keys.filter((k) => entity(k) && !focusHidden.has(k));
     const sel = live.length > 0 && live.every((k) => selection.includes(k));
     const cls = ['ol-group', collapsed && 'collapsed', sel && 'selected', allOff && 'off'].filter(Boolean).join(' ');
-    html.push(`<li class="${cls}" data-group="${esc(r.kind.label)}" title="Выделить все: ${esc(r.kind.label)}">
-      <button type="button" class="ol-toggle" data-toggle title="${collapsed ? 'Развернуть' : 'Свернуть'}">${ICON_CHEVRON}</button>
+    html.push(`<li class="${cls}" data-group="${esc(r.kind.label)}" title="${tr('Выделить все: {kind}', { kind: esc(r.kind.label) })}">
+      <button type="button" class="ol-toggle" data-toggle title="${collapsed ? tr('Развернуть') : tr('Свернуть')}">${ICON_CHEVRON}</button>
       <span class="ol-icon" title="${esc(r.kind.title)}">${r.kind.icon}</span>
       <span class="ol-label">${esc(r.kind.label)}<span class="ol-key">${keys.length}</span></span>
-      <button type="button" class="ol-eye" data-eye title="${allOff ? 'Показать все' : 'Скрыть все'}">${allOff ? ICON_EYE_OFF : ICON_EYE}</button></li>`);
+      <button type="button" class="ol-eye" data-eye title="${allOff ? tr('Показать все') : tr('Скрыть все')}">${allOff ? ICON_EYE_OFF : ICON_EYE}</button></li>`);
     if (!collapsed) for (const x of list) html.push(row(x, true));
   }
   outlinerEl.innerHTML = html.join('');
@@ -3637,20 +3676,20 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty') {
   if (!focus) return;
   const inScene = where !== 'list';
   const kbd = (k: string) => `<kbd>${k}</kbd>`;
-  const snaps = `<li class="ctx-sep"></li><li><button type="button" data-ctx="snaps">${overpassLayer.snapsEnabled ? 'Выключить привязки' : 'Включить привязки'}${kbd('S')}</button></li>`;
-  const exit = inScene ? `<li class="ctx-sep"></li><li><button type="button" data-ctx="exit">Выйти из режима редактирования${kbd('Esc')}</button></li>` : '';
+  const snaps = `<li class="ctx-sep"></li><li><button type="button" data-ctx="snaps">${overpassLayer.snapsEnabled ? tr('Выключить привязки') : tr('Включить привязки')}${kbd('S')}</button></li>`;
+  const exit = inScene ? `<li class="ctx-sep"></li><li><button type="button" data-ctx="exit">${tr('Выйти из режима редактирования')}${kbd('Esc')}</button></li>` : '';
   const keys = selection.filter((k) => focus!.members.includes(k));
   const anyShown = keys.some((k) => !focusHidden.has(k)), anyHidden = keys.some((k) => focusHidden.has(k));
   const n = keys.length > 1 ? ` (${keys.length})` : '';
   ctxMenu.innerHTML = where === 'empty' ? `
-    <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>${snaps}${exit}` : `
-    <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>Скрыть объекты${n}${kbd('H')}</button></li>
-    <li><button type="button" data-ctx="isolate"${keys.length && focus.members.some((k) => !keys.includes(k) && !focusHidden.has(k)) ? '' : ' disabled'}>Изолировать${n}</button></li>
+    <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>${tr('Показать всё')}${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>${snaps}${exit}` : `
+    <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>${tr('Скрыть объекты')}${n}${kbd('H')}</button></li>
+    <li><button type="button" data-ctx="isolate"${keys.length && focus.members.some((k) => !keys.includes(k) && !focusHidden.has(k)) ? '' : ' disabled'}>${tr('Изолировать')}${n}</button></li>
     ${inScene
-      ? `<li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>Показать всё скрытое${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>`
-      : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>Показать объекты${n}</button></li>`}
-    <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>Исключить из модели${n}</button></li>
-    <li><button type="button" data-ctx="delete"${keys.length ? '' : ' disabled'}>Удалить${n}${kbd('Del')}</button></li>${snaps}${exit}`;
+      ? `<li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>${tr('Показать всё скрытое')}${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>`
+      : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>${tr('Показать объекты')}${n}</button></li>`}
+    <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>${tr('Исключить из модели')}${n}</button></li>
+    <li><button type="button" data-ctx="delete"${keys.length ? '' : ' disabled'}>${tr('Удалить')}${n}${kbd('Del')}</button></li>${snaps}${exit}`;
   ctxMenu.hidden = false;
   // Не выходим за край окна
   const { width, height } = ctxMenu.getBoundingClientRect();
@@ -3672,81 +3711,81 @@ const helpTool = document.getElementById('help-tool')!;
 const helpBtns = document.querySelectorAll<HTMLButtonElement>('[data-help]');
 type HelpTopic = { title: string; desc: string; items: string[] };
 const HELP: Record<string, HelpTopic> = {
-  map: { title: 'Карта', desc: 'Просмотр зданий из OSM в 3D. Выделенное здание можно править в панели «Свойства» или открыть в режиме здания.', items: [
-    'Клик — выделить здание, Shift+клик — добавить к выделению, Alt+клик — следующий объект под курсором.',
-    'Двойной клик по зданию — режим здания (правка частей).',
-    'R — новое здание прямоугольником, L — полигоном, C — кругом, N — правильным многоугольником. Delete — удалить, Ctrl+Z — отменить.',
-    'Перетаскивание правой кнопкой — поворот и наклон карты.',
+  map: { title: tr('Карта'), desc: tr('Просмотр зданий из OSM в 3D. Выделенное здание можно править в панели «Свойства» или открыть в режиме здания.'), items: [
+    tr('Клик — выделить здание, Shift+клик — добавить к выделению, Alt+клик — следующий объект под курсором.'),
+    tr('Двойной клик по зданию — режим здания (правка частей).'),
+    tr('R — новое здание прямоугольником, L — полигоном, C — кругом, N — правильным многоугольником. Delete — удалить, Ctrl+Z — отменить.'),
+    tr('Перетаскивание правой кнопкой — поворот и наклон карты.'),
   ] },
-  focus: { title: 'Режим здания', desc: 'Одно здание отдельно от карты: его части, контур и правка геометрии инструментами слева.', items: [
-    'Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.',
-    'Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.',
-    'M — переместить, Q — повернуть, P — вытянуть, K — рассечь, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.',
-    'Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, Shift+H — показать все.',
-    'Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.',
-    'Esc — снять выделение, ещё раз — назад к карте; двойной клик мимо здания — тоже к карте.',
+  focus: { title: tr('Режим здания'), desc: tr('Одно здание отдельно от карты: его части, контур и правка геометрии инструментами слева.'), items: [
+    tr('Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.'),
+    tr('Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.'),
+    tr('M — переместить, Q — повернуть, P — вытянуть, K — рассечь, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.'),
+    tr('Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, Shift+H — показать все.'),
+    tr('Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.'),
+    tr('Esc — снять выделение, ещё раз — назад к карте; двойной клик мимо здания — тоже к карте.'),
   ] },
-  move: { title: 'Переместить (M)', desc: 'Сдвигает выделенные части по горизонтали или вертикали, как Move в SketchUp. Общие с соседями углы заменяются новыми узлами, чтобы не было нахлёстов.', items: [
-    'Клик по точке выделенной части — точка захвата, второй клик — применить; выделенные части едут вместе.',
-    'Вдоль оси здания движение прилипает к ней; Shift держит ось, стрелки фиксируют ось (→ x, ← y, ↑ z, ↓ — снять).',
-    'Число + Enter — сдвиг в метрах. Привязка к точкам других объектов.',
-    'Esc — отмена.',
+  move: { title: tr('Переместить (M)'), desc: tr('Сдвигает выделенные части по горизонтали или вертикали, как Move в SketchUp. Общие с соседями углы заменяются новыми узлами, чтобы не было нахлёстов.'), items: [
+    tr('Клик по точке выделенной части — точка захвата, второй клик — применить; выделенные части едут вместе.'),
+    tr('Вдоль оси здания движение прилипает к ней; Shift держит ось, стрелки фиксируют ось (→ x, ← y, ↑ z, ↓ — снять).'),
+    tr('Число + Enter — сдвиг в метрах. Привязка к точкам других объектов.'),
+    tr('Esc — отмена.'),
   ] },
-  rotate: { title: 'Повернуть (Q)', desc: 'Поворачивает выделенные части вокруг вертикальной оси. Общие с соседями углы заменяются новыми узлами; направление ската (roof:direction) поворачивается вместе с частью.', items: [
-    'Клик — ось поворота (с привязкой к вершине, центру, сетке), второй клик — опорное направление.',
-    'Ведите курсор: у кратных 15° угол прилипает, Shift — только шагом 15°, привязка к точке — направление точно на неё.',
-    'Клик — применить; число + Enter — угол в градусах (против часовой, минус — по часовой). Esc — отмена.',
+  rotate: { title: tr('Повернуть (Q)'), desc: tr('Поворачивает выделенные части вокруг вертикальной оси. Общие с соседями углы заменяются новыми узлами; направление ската (roof:direction) поворачивается вместе с частью.'), items: [
+    tr('Клик — ось поворота (с привязкой к вершине, центру, сетке), второй клик — опорное направление.'),
+    tr('Ведите курсор: у кратных 15° угол прилипает, Shift — только шагом 15°, привязка к точке — направление точно на неё.'),
+    tr('Клик — применить; число + Enter — угол в градусах (против часовой, минус — по часовой). Esc — отмена.'),
   ] },
-  push: { title: 'Вытянуть (P)', desc: 'Меняет высоту верха (height) или низа (min_height) части либо сдвигает одну стену, как Push/Pull в SketchUp.', items: [
-    'Клик по крыше — тянуть верх, по низу — низ, по стене — эту стену наружу или внутрь; второй клик — применить.',
-    'Shift — задняя грань под курсором: дно или дальняя стена.',
-    'Число + Enter — сдвиг (минус — внутрь или вниз); Tab — метры или этажи.',
-    'Привязка к точке другого объекта выравнивает грань по ней. Esc — отмена.',
+  push: { title: tr('Вытянуть (P)'), desc: tr('Меняет высоту верха (height) или низа (min_height) части либо сдвигает одну стену, как Push/Pull в SketchUp.'), items: [
+    tr('Клик по крыше — тянуть верх, по низу — низ, по стене — эту стену наружу или внутрь; второй клик — применить.'),
+    tr('Shift — задняя грань под курсором: дно или дальняя стена.'),
+    tr('Число + Enter — сдвиг (минус — внутрь или вниз); Tab — метры или этажи.'),
+    tr('Привязка к точке другого объекта выравнивает грань по ней. Esc — отмена.'),
   ] },
-  split: { title: 'Рассечь (K)', desc: 'Прямым разрезом делит верхнюю грань части на две части с теми же тегами.', items: [
-    'Клик по ребру верхней грани — начало разреза, клик по другому ребру той же грани — конец.',
-    'Разрез идёт прямо и целиком внутри контура; часть делится на две.',
-    'Esc — отмена.',
+  split: { title: tr('Рассечь (K)'), desc: tr('Прямым разрезом делит верхнюю грань части на две части с теми же тегами.'), items: [
+    tr('Клик по ребру верхней грани — начало разреза, клик по другому ребру той же грани — конец.'),
+    tr('Разрез идёт прямо и целиком внутри контура; часть делится на две.'),
+    tr('Esc — отмена.'),
   ] },
-  rect: { title: 'Прямоугольник (R)', desc: 'Рисует новую часть — плоский прямоугольный контур; потом её можно вытянуть (P). На карте — новое отдельное здание.', items: [
-    'Клики — точки прямоугольника на земле или на плоской крыше (по первому клику).',
-    'Способ построения — во всплывашке у кнопки или Tab (первая точка сохраняется).',
-    'Число + Enter — длина стороны или «ширина;глубина». Shift — держать ось здания.',
-    'Esc — отмена.',
+  rect: { title: tr('Прямоугольник (R)'), desc: tr('Рисует новую часть — плоский прямоугольный контур; потом её можно вытянуть (P). На карте — новое отдельное здание.'), items: [
+    tr('Клики — точки прямоугольника на земле или на плоской крыше (по первому клику).'),
+    tr('Способ построения — во всплывашке у кнопки или Tab (первая точка сохраняется).'),
+    tr('Число + Enter — длина стороны или «ширина;глубина». Shift — держать ось здания.'),
+    tr('Esc — отмена.'),
   ] },
-  polygon: { title: 'Полигон (L)', desc: 'Рисует новую часть произвольной формы — плоский контур; потом её можно вытянуть (P). На карте — новое отдельное здание.', items: [
-    'Клики — вершины на земле или на плоской крыше; клик в первую вершину или Enter — замкнуть.',
-    'Число + Enter — длина текущей стороны, Backspace — убрать последнюю точку.',
-    'Shift — держать ось здания (на привязке «продолжение» — линию ребра). Esc — отмена.',
+  polygon: { title: tr('Полигон (L)'), desc: tr('Рисует новую часть произвольной формы — плоский контур; потом её можно вытянуть (P). На карте — новое отдельное здание.'), items: [
+    tr('Клики — вершины на земле или на плоской крыше; клик в первую вершину или Enter — замкнуть.'),
+    tr('Число + Enter — длина текущей стороны, Backspace — убрать последнюю точку.'),
+    tr('Shift — держать ось здания (на привязке «продолжение» — линию ребра). Esc — отмена.'),
   ] },
-  circle: { title: 'Круг (C)', desc: 'Рисует новую часть — плоский круглый контур; на карте — новое отдельное здание. Пока рисуете, круг гладкий, в данные он попадает многоугольником (вершин — по размеру: стороны отходят от окружности не больше чем на 10 см).', items: [
-    'Способ построения — во всплывашке у кнопки или Tab: по центру и радиусу; по двум касательным под 90° (клик — вершина прямого угла, касательные по осям здания, размер — курсором); по трём точкам (три клика — точки, через которые проходит окружность).',
-    'По центру: клик — центр на земле или на плоской крыше, второй клик — точка на окружности.',
-    'Число + Enter — радиус в метрах. Работают привязки к вершинам и рёбрам.',
-    'Esc — отмена.',
+  circle: { title: tr('Круг (C)'), desc: tr('Рисует новую часть — плоский круглый контур; на карте — новое отдельное здание. Пока рисуете, круг гладкий, в данные он попадает многоугольником (вершин — по размеру: стороны отходят от окружности не больше чем на 10 см).'), items: [
+    tr('Способ построения — во всплывашке у кнопки или Tab: по центру и радиусу; по двум касательным под 90° (клик — вершина прямого угла, касательные по осям здания, размер — курсором); по трём точкам (три клика — точки, через которые проходит окружность).'),
+    tr('По центру: клик — центр на земле или на плоской крыше, второй клик — точка на окружности.'),
+    tr('Число + Enter — радиус в метрах. Работают привязки к вершинам и рёбрам.'),
+    tr('Esc — отмена.'),
   ] },
-  ngon: { title: 'Правильный многоугольник (N)', desc: 'Рисует новую часть — плоский правильный многоугольник; на карте — новое отдельное здание.', items: [
-    'Число углов — в поле «Углов» внизу (3–64), запоминается.',
-    'Клик — центр, второй клик — вершина (задаёт радиус и поворот).',
-    'Число + Enter — радиус в метрах. Esc — отмена.',
+  ngon: { title: tr('Правильный многоугольник (N)'), desc: tr('Рисует новую часть — плоский правильный многоугольник; на карте — новое отдельное здание.'), items: [
+    tr('Число углов — в поле «Углов» внизу (3–64), запоминается.'),
+    tr('Клик — центр, второй клик — вершина (задаёт радиус и поворот).'),
+    tr('Число + Enter — радиус в метрах. Esc — отмена.'),
   ] },
-  offset: { title: 'Отступ (O)', desc: 'Строит новый плоский контур, параллельный контуру плоской крыши или низа части, — например, для парапета, надстройки или козырька.', items: [
-    'Наведите на плоскую крышу (Shift — на низ части): контур отступает наружу или внутрь по стороне курсора.',
-    'Клик — новый плоский контур на высоте грани; число + Enter — отступ в метрах (минус — внутрь).',
-    'Новая часть берёт этажи или метры, как у исходной. Esc — отмена, повторный Esc — выйти.',
+  offset: { title: tr('Отступ (O)'), desc: tr('Строит новый плоский контур, параллельный контуру плоской крыши или низа части, — например, для парапета, надстройки или козырька.'), items: [
+    tr('Наведите на плоскую крышу (Shift — на низ части): контур отступает наружу или внутрь по стороне курсора.'),
+    tr('Клик — новый плоский контур на высоте грани; число + Enter — отступ в метрах (минус — внутрь).'),
+    tr('Новая часть берёт этажи или метры, как у исходной. Esc — отмена, повторный Esc — выйти.'),
   ] },
-  measure: { title: 'Рулетка (T)', desc: 'Измеряет расстояние между двумя точками; данные не меняет.', items: [
-    'Клик — первая точка, второй клик — вторая: расстояние, по горизонтали и по высоте.',
-    'Работают привязки; Shift — держать ось здания (x, y или вертикаль).',
-    'Esc — сбросить замер, повторный Esc — выйти.',
+  measure: { title: tr('Рулетка (T)'), desc: tr('Измеряет расстояние между двумя точками; данные не меняет.'), items: [
+    tr('Клик — первая точка, второй клик — вторая: расстояние, по горизонтали и по высоте.'),
+    tr('Работают привязки; Shift — держать ось здания (x, y или вертикаль).'),
+    tr('Esc — сбросить замер, повторный Esc — выйти.'),
   ] },
-  pick: { title: 'Заливка (B): взять образец', desc: 'Переносит цвет и материал с одной поверхности на другие. Сначала возьмите образец.', items: [
-    'Ctrl/Cmd/Alt+клик по крыше или стене — взять цвет и материал.',
-    'Крыша — roof:colour и roof:material, стена — building:colour и building:material.',
+  pick: { title: tr('Заливка (B): взять образец'), desc: tr('Переносит цвет и материал с одной поверхности на другие. Сначала возьмите образец.'), items: [
+    tr('Ctrl/Cmd/Alt+клик по крыше или стене — взять цвет и материал.'),
+    tr('Крыша — roof:colour и roof:material, стена — building:colour и building:material.'),
   ] },
-  paint: { title: 'Заливка (B)', desc: 'Переносит цвет и материал с одной поверхности на другие. Образец взят — назначайте его поверхностям.', items: [
-    'Клик по крыше или стене — назначить взятые цвет и материал этой поверхности.',
-    'Ctrl/Cmd/Alt+клик — взять новый образец. Esc — выключить.',
+  paint: { title: tr('Заливка (B)'), desc: tr('Переносит цвет и материал с одной поверхности на другие. Образец взят — назначайте его поверхностям.'), items: [
+    tr('Клик по крыше или стене — назначить взятые цвет и материал этой поверхности.'),
+    tr('Ctrl/Cmd/Alt+клик — взять новый образец. Esc — выключить.'),
   ] },
 };
 let helpShown = false;
@@ -3777,18 +3816,18 @@ snapsBtn.addEventListener('click', () => toggleSnaps());
 
 // Типы привязок — галками во всплывашке у кнопки привязок (стрелка в углу); выбор запоминается
 const SNAP_KINDS: [SnapKind, string][] = [
-  ['vertex', 'Вершины'], ['midpoint', 'Середины рёбер'], ['center', 'Центры'], ['edge', 'На ребре'],
-  ['perpendicular', 'Перпендикуляр'], ['extension', 'Продолжение ребра'], ['grid', 'Узлы сетки'], ['shape', 'Центр фигуры'],
+  ['vertex', tr('Вершины')], ['midpoint', tr('Середины рёбер')], ['center', tr('Центры')], ['edge', tr('На ребре')],
+  ['perpendicular', tr('Перпендикуляр')], ['extension', tr('Продолжение ребра')], ['grid', tr('Узлы сетки')], ['shape', tr('Центр фигуры')],
 ];
 try { for (const k of JSON.parse(localStorage.getItem('snaps-off') ?? '[]') as SnapKind[]) overpassLayer.snapKindsOff.add(k); } catch { /* нет хранилища */ }
-snapsBtn.insertAdjacentHTML('beforeend', '<span class="flyout-arrow" data-flyout title="Типы привязок"></span>');
+snapsBtn.insertAdjacentHTML('beforeend', `<span class="flyout-arrow" data-flyout title="${tr('Типы привязок')}"></span>`);
 let snapsFlyout: HTMLElement | undefined;
 function closeSnapsFlyout() { snapsFlyout?.remove(); snapsFlyout = undefined; }
 function renderSnapsFlyout() {
   if (!snapsFlyout) return;
   const off = overpassLayer.snapKindsOff;
   // «Все привязки» — включить все типы; доступен, только если какой-то выключен
-  snapsFlyout.innerHTML = `<button type="button" class="flyout-all" data-snap-all${off.size ? '' : ' disabled'}>Включить все привязки</button>
+  snapsFlyout.innerHTML = `<button type="button" class="flyout-all" data-snap-all${off.size ? '' : ' disabled'}>${tr('Включить все привязки')}</button>
     <div class="flyout-sep"></div>
     ${SNAP_KINDS.map(([k, label]) => `<label class="flyout-check${overpassLayer.snapsEnabled ? '' : ' disabled'}"><input type="checkbox" data-snap-kind="${k}"${off.has(k) ? '' : ' checked'}${overpassLayer.snapsEnabled ? '' : ' disabled'}> ${label}</label>`).join('')}`;
 }
@@ -3824,7 +3863,7 @@ function toggleGrid() {
   const on = !overpassLayer.gridVisible;
   overpassLayer.setGridVisible(on);
   try { localStorage.setItem('grid', on ? '1' : '0'); } catch { /* без хранилища — только на сеанс */ }
-  setStatus(on ? 'Сетка 10 м включена (G).' : 'Сетка выключена (G) — привязки к ней тоже.');
+  setStatus(on ? tr('Сетка 10 м включена (G).') : tr('Сетка выключена (G) — привязки к ней тоже.'));
   if (lastPointer) updateSnap(lastPointer);
 }
 try { if (localStorage.getItem('grid') === '0') overpassLayer.setGridVisible(false); } catch { /* нет хранилища */ }
@@ -3832,9 +3871,9 @@ try { if (localStorage.getItem('grid') === '0') overpassLayer.setGridVisible(fal
 function toggleSnaps() {
   overpassLayer.snapsEnabled = !overpassLayer.snapsEnabled;
   snapsBtn.classList.toggle('active', overpassLayer.snapsEnabled);
-  snapsBtn.title = overpassLayer.snapsEnabled ? 'Привязки включены (S)' : 'Привязки выключены (S)';
+  snapsBtn.title = overpassLayer.snapsEnabled ? tr('Привязки включены (S)') : tr('Привязки выключены (S)');
   renderSnapsFlyout();
-  setStatus(overpassLayer.snapsEnabled ? 'Привязки включены (S).' : 'Привязки выключены (S) — инструменты двигают свободно.');
+  setStatus(overpassLayer.snapsEnabled ? tr('Привязки включены (S).') : tr('Привязки выключены (S) — инструменты двигают свободно.'));
   // Обновить маркер и текущее движение инструмента под курсором
   if (lastPointer) updateSnap(lastPointer);
 }
@@ -3895,10 +3934,10 @@ function outlinerUnhover() {
 /** Почему объект нельзя добавить в группу (undefined — можно). */
 function addReason(key: string): string | undefined {
   const f = entity(key);
-  if (!f || !('polygons' in f)) return 'это не здание и не часть';
-  if (!f.tags['building:part'] || f.tags['building:part'] === 'no') return 'нет тега building:part';
+  if (!f || !('polygons' in f)) return tr('это не здание и не часть');
+  if (!f.tags['building:part'] || f.tags['building:part'] === 'no') return tr('нет тега building:part');
   const g = groupOf(key);
-  if (g) return g.key === addingTo?.key ? 'уже в этом здании' : `уже входит в ${g.key}`;
+  if (g) return g.key === addingTo?.key ? tr('уже в этом здании') : tr('уже входит в {key}', { key: g.key });
 }
 
 let addMessage = '';
@@ -3945,12 +3984,12 @@ function renderAdding() {
   const g = addingTo!;
   const list = addPending.map((k) => `<li>${esc(k)}</li>`).join('');
   infoEl.innerHTML = `
-    <h2>Добавить части в <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a></h2>
-    <p class="hint">Shift+клик по частям — отметить или снять. Обычный клик — отмена.</p>
-    ${list ? `<ul class="change-list">${list}</ul>` : '<p class="hint">Пока ничего не отмечено.</p>'}
+    <h2>${tr('Добавить части в {link}', { link: `<a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>` })}</h2>
+    <p class="hint">${tr('Shift+клик по частям — отметить или снять. Обычный клик — отмена.')}</p>
+    ${list ? `<ul class="change-list">${list}</ul>` : `<p class="hint">${tr('Пока ничего не отмечено.')}</p>`}
     ${addMessage ? `<p class="warn">⚠ ${esc(addMessage)}</p>` : ''}
-    <p><button type="button" data-add-confirm ${addPending.length ? '' : 'disabled'}>Добавить (${addPending.length})</button>
-       <button type="button" data-add-cancel>Отмена</button></p>`;
+    <p><button type="button" data-add-confirm ${addPending.length ? '' : 'disabled'}>${tr('Добавить ({n})', { n: addPending.length })}</button>
+       <button type="button" data-add-cancel>${tr('Отмена')}</button></p>`;
 }
 
 /** candidates — кандидаты в контур, если их несколько (для выбора в панели). */
@@ -3961,14 +4000,14 @@ let chosenOutline: string | undefined;
 
 /** Можно ли объединить выделенное в здание type=building: один контур (выделенный или скрытый под частями) и части. */
 function mergePlan(keys: string[]): MergePlan {
-  if (keys.some((k) => editGroups.has(k))) return { reason: 'В выделении есть здание type=building — объединять можно только отдельные объекты.' };
-  if (keys.some((k) => groupOf(k))) return { reason: 'Часть объектов уже входит в здание type=building.' };
+  if (keys.some((k) => editGroups.has(k))) return { reason: tr('В выделении есть здание type=building — объединять можно только отдельные объекты.') };
+  if (keys.some((k) => groupOf(k))) return { reason: tr('Часть объектов уже входит в здание type=building.') };
   const feats = keys.map(entity).filter((f): f is Feature3D => !!f && 'polygons' in f);
   // Контур — всё с тегом building, даже если на нём же стоит building:part (так часто размечают)
   const isBuilding = (f: Feature3D) => !!f.tags.building && f.tags.building !== 'no';
   const outlines = new Set(feats.filter(isBuilding));
   const parts = feats.filter((f) => f.kind === 'part' && !(outlines.has(f) && f.kind !== 'part'));
-  if (!parts.length) return { reason: 'Выделите части здания (building:part).' };
+  if (!parts.length) return { reason: tr('Выделите части здания (building:part).') };
   // Контур под частями часто не выделить: закрыт ими (не рисуется) или нулевой высоты — ищем его сами,
   // если явно не выделен. Годится любое здание (тег building), внутри которого лежат центры частей.
   if (!outlines.size) {
@@ -3984,16 +4023,16 @@ function mergePlan(keys: string[]): MergePlan {
       if (centres.some(inside)) outlines.add(f);
     }
   }
-  if (!outlines.size) return { reason: 'Не найден контур здания (building) вокруг частей — выделите его тоже.' };
+  if (!outlines.size) return { reason: tr('Не найден контур здания (building) вокруг частей — выделите его тоже.') };
   const candidates = [...outlines];
   // Выбор контура: вручную → единственный «чистый» building (без building:part) → единственный кандидат
   const pure = candidates.filter((f) => f.kind !== 'part');
   const outline = candidates.find((f) => f.key === chosenOutline) ?? (pure.length === 1 ? pure[0] : candidates.length === 1 ? candidates[0] : undefined);
-  if (!outline) return { reason: `Найдено контуров: ${candidates.length} — выберите, какой из них контур здания.`, candidates };
+  if (!outline) return { reason: tr('Найдено контуров: {n} — выберите, какой из них контур здания.', { n: candidates.length }), candidates };
   // Прочие «чистые» здания частями быть не могут
   const extra = pure.filter((f) => f !== outline);
-  if (extra.length) return { reason: `${extra.map((f) => f.key).join(', ')} — здание без building:part: уберите из выделения или выберите контуром.`, candidates };
-  if (groupOf(outline.key)) return { reason: `Контур ${outline.key} уже входит в здание type=building.` };
+  if (extra.length) return { reason: tr('{keys} — здание без building:part: уберите из выделения или выберите контуром.', { keys: extra.map((f) => f.key).join(', ') }), candidates };
+  if (groupOf(outline.key)) return { reason: tr('Контур {key} уже входит в здание type=building.', { key: outline.key }) };
   // Контур с building:part одновременно и часть — входит в отношение в обеих ролях
   const outlineAsPart = outline.kind === 'part' ? [{ key: outline.key, role: 'part' as const }] : [];
   const rest = parts.filter((p) => p !== outline);
@@ -4025,7 +4064,7 @@ function mergeIntoBuilding() {
 /** Кнопка исключения выделенных частей из группы, в которую «провалились». */
 function excludeButton(): string {
   if (!drill || !selection.length || !selection.every((k) => drill!.members.includes(k))) return '';
-  return `<p><button type="button" data-exclude>Исключить из этого здания${selection.length > 1 ? ` (${selection.length})` : ''}</button></p>`;
+  return `<p><button type="button" data-exclude>${tr('Исключить из этого здания')}${selection.length > 1 ? ` (${selection.length})` : ''}</button></p>`;
 }
 
 function excludeFromGroup() {
@@ -4046,8 +4085,8 @@ function outlineChooser(plan: MergePlan): string {
   outlineOverlay = current;
   const list = cands.map((f) => `<label class="outline-cand" data-outline-cand="${esc(f.key)}"><input type="radio" name="outline" value="${
     esc(f.key)}" ${f.key === current ? 'checked' : ''} /><span>${esc(f.key)} — building=${esc(f.tags.building)}${
-    f.tags['building:part'] ? `, building:part=${esc(f.tags['building:part'])}` : ''}${f.tags.name ? ` «${esc(f.tags.name)}»` : ''}</span></label>`).join('');
-  return `<fieldset class="outline-choice"><legend>Контур здания</legend>${list}</fieldset>`;
+    f.tags['building:part'] ? `, building:part=${esc(f.tags['building:part'])}` : ''}${f.tags.name ? ' ' + tr('«{name}»', { name: esc(f.tags.name) }) : ''}</span></label>`).join('');
+  return `<fieldset class="outline-choice"><legend>${tr('Контур здания')}</legend>${list}</fieldset>`;
 }
 
 infoEl.addEventListener('change', (e) => {
@@ -4075,14 +4114,14 @@ function renderMulti() {
   const list = selection.map((k) => `<li data-hover-key="${esc(k)}"><a href="#" data-select="${esc(k)}">${esc(k)}</a>${
     editGroups.has(k) ? ' (type=building)' : ''}</li>`).join('');
   infoEl.innerHTML = `
-    <h2>Выделено: ${selection.length}</h2>
+    <h2>${tr('Выделено: {n}', { n: selection.length })}</h2>
     <ul class="change-list">${list}</ul>
     ${renderMultiTagForm(selection.filter((k) => session.get(k)?.tags.type !== 'building'), session)}
-    ${drill ? excludeButton() : `<p><button type="button" data-merge ${'reason' in plan ? 'disabled' : ''}>Объединить в здание</button></p>`}
-    ${drill ? '' : 'reason' in plan ? `<p class="hint">${esc(plan.reason)}</p>` : `<p class="hint">Будет создано отношение type=building: контур ${
-      esc(plan.members[0].key)} и частей ${plan.members.filter((m) => m.role === 'part').length}.</p>`}
+    ${drill ? excludeButton() : `<p><button type="button" data-merge ${'reason' in plan ? 'disabled' : ''}>${tr('Объединить в здание')}</button></p>`}
+    ${drill ? '' : 'reason' in plan ? `<p class="hint">${esc(plan.reason)}</p>` : `<p class="hint">${tr('Будет создано отношение type=building: контур {outline} и частей {n}.', {
+      outline: esc(plan.members[0].key), n: plan.members.filter((m) => m.role === 'part').length })}</p>`}
     ${drill ? '' : outlineChooser(plan)}
-    <p class="hint">Shift+клик — добавить или убрать объект.</p>`;
+    <p class="hint">${tr('Shift+клик — добавить или убрать объект.')}</p>`;
 }
 
 function renderSelected() {
@@ -4142,8 +4181,8 @@ function inheritSources(key: string): InheritSource[] {
   if (outline === key) return [];
   const out: InheritSource[] = [];
   const t = outlineTags(g);
-  if (t) out.push({ label: `контура ${outline}`, tags: t });
-  out.push({ label: `отношения ${g.key}`, tags: g.tags });
+  if (t) out.push({ label: tr('контура {key}', { key: outline! }), tags: t });
+  out.push({ label: tr('отношения {key}', { key: g.key }), tags: g.tags });
   return out;
 }
 
@@ -4151,24 +4190,26 @@ function inheritSources(key: string): InheritSource[] {
 function describeFocus(g: BuildingGroup): string {
   const name = g.tags.name ?? outlineTags(g)?.name;
   return `
-    <h2>Режим здания</h2>
+    <h2>${tr('Режим здания')}</h2>
     ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
-    <p class="hint"><a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>, членов: ${g.members.length}.
-      Клик по части — выделить её, Shift — несколько. Двойной клик мимо здания — выход.</p>
+    <p class="hint">${tr('{link}, членов: {n}.', { link: `<a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>`, n: g.members.length })}
+      ${tr('Клик по части — выделить её, Shift — несколько. Двойной клик мимо здания — выход.')}</p>
     ${outlineWarning(g)}
     ${focusExitButton('Esc')}`;
 }
 
 function focusExitButton(keys = 'Esc ×2'): string {
-  return `<p><button type="button" data-focus-exit>Выйти из режима здания</button> <span class="hint">(${keys})</span></p>`;
+  return `<p><button type="button" data-focus-exit>${tr('Выйти из режима здания')}</button> <span class="hint">(${keys})</span></p>`;
 }
 
 /** Подсказка над частью, выделенной внутри группы. */
 function drillHint(key: string): string {
   if (!drill || !drill.members.includes(key)) return '';
   const name = drill.tags.name ?? outlineTags(drill)?.name;
-  return `<p class="hint drill">Внутри группы <a href="${server().web}/${drill.key}" target="_blank" rel="noopener">${drill.key}</a>${
-    name ? ` «${esc(name)}»` : ''} — ${focus ? 'Esc снимет выделение, повторный Esc — выход из режима здания' : 'клик вне группы вернёт к ней'}.</p>${focus ? outlineWarning(drill) : ''}`;
+  const group = `<a href="${server().web}/${drill.key}" target="_blank" rel="noopener">${drill.key}</a>${name ? ' ' + tr('«{name}»', { name: esc(name) }) : ''}`;
+  return `<p class="hint drill">${focus
+    ? tr('Внутри группы {group} — Esc снимет выделение, повторный Esc — выход из режима здания.', { group })
+    : tr('Внутри группы {group} — клик вне группы вернёт к ней.', { group })}</p>${focus ? outlineWarning(drill) : ''}`;
 }
 
 /** Теги контура группы (роль outline) — название и адрес здания обычно на нём. */
@@ -4186,9 +4227,9 @@ function describeGroup(g: BuildingGroup): string {
     ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
     ${addr ? `<p class="hint">${esc(addr)}</p>` : ''}
     <h2>type=building — <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>${g.version ? ` v${g.version}` : ''}</h2>
-    <p class="hint">Членов: ${g.members.length}. Двойной клик по зданию — режим одного здания.
-      Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.</p>
-    <p><button type="button" data-add-parts>Добавить части</button></p>
+    <p class="hint">${tr('Членов: {n}. Двойной клик по зданию — режим одного здания.', { n: g.members.length })}
+      ${tr('Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.')}</p>
+    <p><button type="button" data-add-parts>${tr('Добавить части')}</button></p>
     ${tagTable(g.tags)}`;
 }
 
@@ -4284,7 +4325,7 @@ function renderChanges() {
   editsHistory.hidden = !session.canUndo() && !session.canRedo();
   undoBtn.disabled = !session.canUndo();
   redoBtn.disabled = !session.canRedo();
-  editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : '· не выполнен вход';
+  editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : tr('· не выполнен вход');
   // Появились правки — раскрываем панель, исчезли — сворачиваем; в остальное время решает пользователь
   if (show !== editsHadContent) setCollapsed(editsPanel, !show);
   editsHadContent = show;
@@ -4296,21 +4337,21 @@ function renderChanges() {
     const diff = c.diff.map((d) => d.tag === '(члены)' ? membersDiff(c)
       : d.tag.startsWith('(')
       ? `<div>${esc(d.tag.slice(1, -1))}: ${esc(d.to ?? '')}</div>`
-      : `<div><span class="ch-tag">${esc(d.tag)}</span> ${d.from === undefined ? '' : `<del>${esc(d.from)}</del> → `}${d.to === undefined ? '<del>удалён</del>' : `<ins>${esc(d.to)}</ins>`}</div>`).join('');
+      : `<div><span class="ch-tag">${esc(d.tag)}</span> ${d.from === undefined ? '' : `<del>${esc(d.from)}</del> → `}${d.to === undefined ? `<del>${tr('удалён')}</del>` : `<ins>${esc(d.to)}</ins>`}</div>`).join('');
     // Создание и удаление отменяются через undo (там же — состав отношения)
-    const revert = c.created || c.deleted ? '' : `<button type="button" class="icon-btn ch-revert" data-revert-key="${esc(c.key)}" title="Вернуть как было">${ICON_REVERT}</button>`;
+    const revert = c.created || c.deleted ? '' : `<button type="button" class="icon-btn ch-revert" data-revert-key="${esc(c.key)}" title="${tr('Вернуть как было')}">${ICON_REVERT}</button>`;
     return `<li data-key="${esc(c.key)}" class="${selection.includes(c.key) ? 'selected' : ''}" title="${esc(c.key)}">
       <span class="ch-icon">${icon}</span>
-      <span class="ch-title">${name ? esc(name) : ''}<span class="ch-key">${esc(c.key)}</span>${c.created ? '<span class="ch-new">новый</span>' : ''}</span>
+      <span class="ch-title">${name ? esc(name) : ''}<span class="ch-key">${esc(c.key)}</span>${c.created ? `<span class="ch-new">${tr('новый')}</span>` : ''}</span>
       ${revert}
       <div class="ch-diff">${diff}</div></li>`;
   }).join('');
   const issues = changes.length ? changeIssues(changes.filter((c) => !c.deleted).map((c) => c.key)) : [];
-  const issuesHtml = issues.length ? `<p class="warn">⚠ Проблемы в изменённых объектах (${issues.length}) — отправить можно, но лучше поправить:</p>
+  const issuesHtml = issues.length ? `<p class="warn">⚠ ${tr('Проблемы в изменённых объектах ({n}) — отправить можно, но лучше поправить:', { n: issues.length })}</p>
     <ul class="issue-list">${issues.map((i) => `<li class="${i.level}" data-key="${esc(i.key)}">
       <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span><span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span></li>`).join('')}</ul>` : '';
   changesEl.innerHTML = `
-    ${changes.length ? `<ul class="change-list">${list}</ul>` : '<p class="hint">Изменений нет — можно повторить отменённое.</p>'}
+    ${changes.length ? `<ul class="change-list">${list}</ul>` : `<p class="hint">${tr('Изменений нет — можно повторить отменённое.')}</p>`}
     ${issuesHtml}
     ${renderUpload(changes.length)}`;
 }
@@ -4322,15 +4363,15 @@ function membersDiff(c: TagChange): string {
   const was = new Set(before.map(id)), now = new Set(after.map(id));
   const added = after.filter((m) => !was.has(id(m))).length, removed = before.filter((m) => !now.has(id(m))).length;
   const delta = [added && `+${added}`, removed && `−${removed}`].filter(Boolean).join(', ');
-  return `<div><span class="ch-tag">члены</span> <del>${before.length}</del> → <ins>${after.length}</ins>${delta ? ` (${delta})` : ''}</div>`;
+  return `<div><span class="ch-tag">${tr('члены')}</span> <del>${before.length}</del> → <ins>${after.length}</ins>${delta ? ` (${delta})` : ''}</div>`;
 }
 
 function renderAccount() {
   const s = server();
   accountEl.innerHTML = osmUser
     ? `<a href="${s.web}/user/${encodeURIComponent(osmUser.name)}" target="_blank" rel="noopener">${esc(osmUser.name)}</a> ·
-       <button type="button" class="link-btn" data-logout ${uploading ? 'disabled' : ''}>выйти</button>`
-    : `<button type="button" class="login-btn" data-login ${uploading ? 'disabled' : ''}>Войти в ${server().short}</button>`;
+       <button type="button" class="link-btn" data-logout ${uploading ? 'disabled' : ''}>${tr('Выйти')}</button>`
+    : `<button type="button" class="login-btn" data-login ${uploading ? 'disabled' : ''}>${tr('Войти в {server}', { server: server().short })}</button>`;
 }
 
 /** Предложенный комментарий: показывается серым в пустом поле, Tab вставляет его для правки. */
@@ -4376,10 +4417,10 @@ function renderUpload(count: number): string {
   const rows = Math.min(8, Math.max(1, (uploadComment || suggestedComment).split('\n').length));
   return `
     <div class="upload">
-      <label class="upload-label" for="upload-comment">Комментарий к пакету правок</label>
+      <label class="upload-label" for="upload-comment">${tr('Комментарий к пакету правок')}</label>
       <textarea id="upload-comment" data-comment rows="${rows}" placeholder="${esc(suggestedComment)}" ${uploading ? 'disabled' : ''}>${esc(uploadComment)}</textarea>
-      <button type="button" class="upload-btn" data-upload ${canUpload ? '' : 'disabled'}>${uploading ? 'Отправка…' : `Сохранить в ${s.short} (${count})`}</button>
-      <div class="upload-meta"><span>${osmUser ? commentHint() : `для отправки войдите в ${s.short}`}</span>
+      <button type="button" class="upload-btn" data-upload ${canUpload ? '' : 'disabled'}>${uploading ? tr('Отправка…') : tr('Сохранить в {server} ({n})', { server: s.short, n: count })}</button>
+      <div class="upload-meta"><span>${osmUser ? commentHint() : tr('для отправки войдите в {server}', { server: s.short })}</span>
         <span class="server-tag${s.id === 'dev' ? '' : ' prod'}" title="${esc(s.label)}">${esc(s.label)}</span></div>
     </div>`;
 }
@@ -4390,7 +4431,7 @@ async function doLogin() {
   try {
     await login();
     osmUser = await fetchUser();
-    setStatus(osmUser ? `Вход выполнен: ${osmUser.name}.` : 'Не удалось получить данные пользователя.', !osmUser);
+    setStatus(osmUser ? tr('Вход выполнен: {name}.', { name: osmUser.name }) : tr('Не удалось получить данные пользователя.'), !osmUser);
   } catch (err) {
     setStatus((err as Error).message, true);
   }
@@ -4471,14 +4512,15 @@ async function doUpload() {
     const link = `<a href="${s.web}/changeset/${res.changeset}" target="_blank" rel="noopener">changeset ${res.changeset}</a>`;
     uploading = false;
     toasts.hint(undefined);
-    setStatus(`Сохранено: ${saved.size + res.deleted.size} объектов.` + (res.rebased.size ? ` Поверх чужих правок других тегов перенесено: ${res.rebased.size}.` : ''), false, link);
+    setStatus(trn(saved.size + res.deleted.size, 'Сохранено: {n} объект.|Сохранено: {n} объекта.|Сохранено: {n} объектов.')
+      + (res.rebased.size ? ' ' + tr('Поверх чужих правок других тегов перенесено: {n}.', { n: res.rebased.size }) : ''), false, link);
   } catch (err) {
     uploading = false;
     toasts.hint(undefined);
     if (err instanceof ConflictError) {
-      setStatus(`${err.message}. Эти теги уже изменил кто-то другой — перезагрузите тайлы, отмените свои правки этих объектов и повторите.`, true);
+      setStatus(tr('{error}. Эти теги уже изменил кто-то другой — перезагрузите тайлы, отмените свои правки этих объектов и повторите.', { error: err.message }), true);
     } else {
-      setStatus(`Ошибка отправки: ${(err as Error).message}`, true);
+      setStatus(tr('Ошибка отправки: {error}', { error: (err as Error).message }), true);
     }
   } finally {
     uploading = false;
@@ -4513,7 +4555,7 @@ changesEl.addEventListener('mouseleave', () => { overpassLayer.setHover(undefine
 
 function commentHint(): string {
   if (uploadComment.trim()) return '';
-  return suggestedComment ? 'Tab в поле — вставить предложенный' : 'нужен комментарий';
+  return suggestedComment ? tr('Tab в поле — вставить предложенный') : tr('нужен комментарий');
 }
 
 // Tab в пустом поле — вставить предложенный комментарий (дальше его можно править)
@@ -4545,9 +4587,23 @@ accountEl.addEventListener('click', (e) => {
 const serverSelect = document.getElementById('server-select') as HTMLSelectElement;
 serverSelect.innerHTML = SERVER_LIST.map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('');
 serverSelect.value = server().id;
+// Язык интерфейса: выбор запоминается, применяется перезагрузкой страницы (см. src/i18n)
+const langSelect = document.getElementById('lang-select') as HTMLSelectElement;
+langSelect.innerHTML = LANGS.map((l) => `<option value="${l.id}">${esc(l.label)}</option>`).join('');
+langSelect.value = lang;
+langSelect.addEventListener('change', () => {
+  const n = session.changes().length;
+  if (n && !confirm(trn(n, 'Есть несохранённые изменения ({n} объект) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объекта) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объектов) — при смене языка страница перезагрузится и они пропадут. Продолжить?'))) {
+    langSelect.value = lang;
+    return;
+  }
+  reloadConfirmed = true;
+  setLang(langSelect.value as Lang);
+});
+
 serverSelect.addEventListener('change', () => {
   const n = session.changes().length;
-  if (n && !confirm(`Есть несохранённые изменения (${n} объектов) — при смене сервера они пропадут. Продолжить?`)) {
+  if (n && !confirm(trn(n, 'Есть несохранённые изменения ({n} объект) — при смене сервера они пропадут. Продолжить?|Есть несохранённые изменения ({n} объекта) — при смене сервера они пропадут. Продолжить?|Есть несохранённые изменения ({n} объектов) — при смене сервера они пропадут. Продолжить?'))) {
     serverSelect.value = server().id;
     return;
   }
@@ -4607,7 +4663,7 @@ function showDateControls(year = ohm.year) {
   dateStep.value = String(ohm.step);
   dateSpeed.value = String(ohm.speed);
   datePlay.classList.toggle('playing', !!playTimer);
-  datePlay.title = playTimer ? 'Пауза' : 'Воспроизвести';
+  datePlay.title = playTimer ? tr('Пауза') : tr('Воспроизвести');
 }
 
 function applyDate() {
@@ -4726,8 +4782,10 @@ function selectAfterHistory(key: string | undefined) {
   select(key);
 }
 
+/** Перезагрузка уже подтверждена своим диалогом (смена языка) — браузерный не нужен. */
+let reloadConfirmed = false;
 window.addEventListener('beforeunload', (e) => {
-  if (session.changes().length) e.preventDefault();
+  if (session.changes().length && !reloadConfirmed) e.preventDefault();
 });
 
 /** Предупреждение об этажности части выше контура (для части) или частей выше него (для контура). */
@@ -4739,15 +4797,15 @@ function levelsAboveOutline(f: Feature3D): string | false {
   const outlineKey = g.members.find((_, i) => g.roles[i] === 'outline');
   if (f.key === outlineKey) return aboveOutlineText(above);
   if (!above.keys.includes(f.key)) return false;
-  return `building:levels (${esc(f.tags['building:levels'])}) больше, чем у контура здания (${above.outline}): `
-    + 'на контуре принято указывать максимальную этажность — поправьте контур или часть.';
+  return tr('building:levels ({levels}) больше, чем у контура здания ({outline}):', { levels: esc(f.tags['building:levels']), outline: above.outline })
+    + ' ' + tr('на контуре принято указывать максимальную этажность — поправьте контур или часть.');
 }
 
 function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: string): string {
   const h = computeHeights(f.tags);
   const warn = [
-    roofApproximated && `Форма крыши «${h.roofShape}» пока не поддерживается для этой геометрии — показаны стены до верха и плоская крыша.`,
-    h.source === 'default' && 'Нет height и building:levels — высота взята по умолчанию.',
+    roofApproximated && tr('Форма крыши «{shape}» пока не поддерживается для этой геометрии — показаны стены до верха и плоская крыша.', { shape: h.roofShape }),
+    h.source === 'default' && tr('Нет height и building:levels — высота взята по умолчанию.'),
     levelsAboveOutline(f),
   ].filter(Boolean);
   // Проверка: в режиме здания — вся (с пересечениями частей), иначе — теги и геометрия объекта
@@ -4755,17 +4813,17 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: s
     .filter((i) => i.code !== 'above');
   return `
     <h2>${f.kind === 'part' ? 'building:part' : 'building'} — <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a>${f.version ? ` v${f.version}` : ''}</h2>
-    <pre>высота: ${fmt(h.min)} → ${fmt(roofApproximated ? h.top : h.wallTop)} → ${fmt(h.top)} м (${h.source})\nкрыша: ${h.roofShape}, ${fmt(h.roofHeight)} м</pre>
+    <pre>${tr('высота: {min} → {wall} → {top} м ({source})', { min: fmt(h.min), wall: fmt(roofApproximated ? h.top : h.wallTop), top: fmt(h.top), source: h.source })}\n${tr('крыша: {shape}, {height} м', { shape: h.roofShape, height: fmt(h.roofHeight) })}</pre>
     ${warn.map((w) => `<p class="warn">⚠ ${w}</p>`).join('')}
     ${issues.map((i) => `<p class="warn ${i.level}">${i.level === 'error' ? '✖' : '⚠'} ${esc(i.text)}</p>`).join('')}
-    ${form ? `${form}<details class="all-tags"><summary>Все теги</summary>${tagTable(f.tags)}</details>` : tagTable(f.tags)}`;
+    ${form ? `${form}<details class="all-tags"><summary>${tr('Все теги')}</summary>${tagTable(f.tags)}</details>` : tagTable(f.tags)}`;
 }
 
 /** Planetiler: id = osmId * 10 + (1 — node, 2 — way, 3 — relation); 0 — фича, склеенная из нескольких зданий. */
 function decodeTileId(id: unknown): string {
   if (typeof id !== 'number') return '—';
   const type = (OFM_IDS ? { 1: 'node', 2: 'way', 3: 'relation' } : { 0: 'way', 1: 'relation' } as Record<number, string>)[id % 10];
-  return type ? osmLink(type, Math.floor(id / 10)) : 'склеенная фича (несколько зданий) — уточняем через API…';
+  return type ? osmLink(type, Math.floor(id / 10)) : tr('склеенная фича (несколько зданий) — уточняем через API…');
 }
 
 function describeTile(f: MapGeoJSONFeature): string {
@@ -4773,11 +4831,11 @@ function describeTile(f: MapGeoJSONFeature): string {
   const id = merged ? f.properties.src : f.id;
   const hideKey = merged ? f.properties.key : f.id;
   const hideBtns = hideKey !== undefined
-    ? `<p><button type="button" data-hide="${esc(hideKey)}">Скрыть${merged ? ' полигон' : ''}</button>
-       ${userHidden.size ? `<button type="button" data-unhide-all>Показать все (${userHidden.size})</button>` : ''}</p>`
+    ? `<p><button type="button" data-hide="${esc(hideKey)}">${merged ? tr('Скрыть полигон') : tr('Скрыть')}</button>
+       ${userHidden.size ? `<button type="button" data-unhide-all>${tr('Показать все ({n})', { n: userHidden.size })}</button>` : ''}</p>`
     : '';
-  return `<h2>Здание из тайла</h2><p>feature.id: ${id ?? '—'}${merged ? ' (полигон склеенной фичи)' : ''}<br>${server().short}: ${decodeTileId(id)}</p>${hideBtns}
-    <p id="resolved" class="hint">Ищем объекты OSM внутри фичи…</p>${tagTable(f.properties)}`;
+  return `<h2>${tr('Здание из тайла')}</h2><p>feature.id: ${id ?? '—'}${merged ? ' ' + tr('(полигон склеенной фичи)') : ''}<br>${server().short}: ${decodeTileId(id)}</p>${hideBtns}
+    <p id="resolved" class="hint">${tr('Ищем объекты OSM внутри фичи…')}</p>${tagTable(f.properties)}`;
 }
 
 let resolveSeq = 0;
@@ -4788,7 +4846,7 @@ async function resolveTileFeature(f: MapGeoJSONFeature) {
   const xs = polys.flatMap((p) => p[0].map((c) => c[0])), ys = polys.flatMap((p) => p[0].map((c) => c[1]));
   const bbox: Bbox = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
   const out = (html: string) => { if (seq === resolveSeq) document.getElementById('resolved')!.innerHTML = html; };
-  if ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) > MAX_API_AREA) return out('Фича слишком большая для запроса к API.');
+  if ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) > MAX_API_AREA) return out(tr('Фича слишком большая для запроса к API.'));
   try {
     const { features } = parseBuildings(await fetchMap(bbox, server().id === 'dev' ? SERVERS.prod.api : server().api)); // у тестового сервера тайлы боевые
     const h = f.properties.render_height ?? Infinity, min = f.properties.render_min_height ?? 0;
@@ -4800,10 +4858,10 @@ async function resolveTileFeature(f: MapGeoJSONFeature) {
       return pt && polys.some((p) => inPolygon(pt, p)) && hh.min < h + 1 && hh.top > min - 1;
     });
     out(matches.length
-      ? `По данным API (${matches.length}): ${matches.slice(0, 15).map((o) => osmLink(o.type, o.id)).join(', ')}${matches.length > 15 ? ' …' : ''}`
-      : 'В текущих данных OSM совпадений не найдено (тайлы могут отставать).');
+      ? tr('По данным API ({n}): {list}', { n: matches.length, list: matches.slice(0, 15).map((o) => osmLink(o.type, o.id)).join(', ') + (matches.length > 15 ? ' …' : '') })
+      : tr('В текущих данных OSM совпадений не найдено (тайлы могут отставать).'));
   } catch (err) {
-    out(`Не удалось запросить API: ${(err as Error).message}`);
+    out(tr('Не удалось запросить API: {error}', { error: (err as Error).message }));
   }
 }
 
@@ -4846,14 +4904,14 @@ function groupName(g: BuildingGroup): string {
 function renderMobileCard() {
   if (!mobile) { mobileCard.hidden = true; return; }
   if (focus) {
-    mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(groupName(focus))}</div><div class="mc-hint">Режим здания · этажи — в панели «Этажи»</div></div>`
-      + '<button type="button" class="secondary" data-mc-exit>К карте</button>';
+    mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(groupName(focus))}</div><div class="mc-hint">${tr('Режим здания · этажи — в панели «Этажи»')}</div></div>`
+      + `<button type="button" class="secondary" data-mc-exit>${tr('К карте')}</button>`;
     mobileCard.hidden = false;
     return;
   }
   if (!cardGroup) { mobileCard.hidden = true; return; }
-  mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(groupName(cardGroup))}</div><div class="mc-hint">Здание в 3D, этажи</div></div>`
-    + '<button type="button" data-mc-open>Открыть здание</button>';
+  mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(groupName(cardGroup))}</div><div class="mc-hint">${tr('Здание в 3D, этажи')}</div></div>`
+    + `<button type="button" data-mc-open>${tr('Открыть здание')}</button>`;
   mobileCard.hidden = false;
 }
 

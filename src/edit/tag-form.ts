@@ -1,5 +1,6 @@
 import { INHERITABLE, inheritedValue } from '../osm/inherit';
 import type { EditSession } from './session';
+import { tr, trn } from '../i18n';
 
 type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour' | 'combo';
 
@@ -19,19 +20,19 @@ interface Field {
 
 /** Частые значения building:part (taginfo) с подписями; можно ввести и своё. */
 const PART_VALUES: Record<string, string> = {
-  yes: 'Часть', roof: 'Крыша', steps: 'Ступени', balcony: 'Балкон', deck: 'Настил', terrace: 'Терраса',
-  column: 'Колонна', tower: 'Башня', bell_tower: 'Колокольня', porch: 'Крыльцо', veranda: 'Веранда',
-  canopy: 'Навес', elevator: 'Лифт', mast: 'Мачта', dome: 'Купол', chimney: 'Труба', base: 'Основание',
-  wall: 'Стена', corridor: 'Переход', construction: 'Строится',
+  yes: tr('Часть'), roof: tr('Крыша'), steps: tr('Ступени'), balcony: tr('Балкон'), deck: tr('Настил'), terrace: tr('Терраса'),
+  column: tr('Колонна'), tower: tr('Башня'), bell_tower: tr('Колокольня'), porch: tr('Крыльцо'), veranda: tr('Веранда'),
+  canopy: tr('Навес'), elevator: tr('Лифт'), mast: tr('Мачта'), dome: tr('Купол'), chimney: tr('Труба'), base: tr('Основание'),
+  wall: tr('Стена'), corridor: tr('Переход'), construction: tr('Строится'),
 };
 
 const ROOF_SHAPE_LABELS: Record<string, string> = {
-  flat: 'Плоская', gabled: 'Двускатная', hipped: 'Вальмовая', pyramidal: 'Шатровая', skillion: 'Односкатная',
-  dome: 'Купол', onion: 'Луковица', round: 'Сводчатая', gambrel: 'Ломаная двускатная', mansard: 'Мансардная',
-  'half-hipped': 'Полувальмовая', saltbox: 'Несимметричная двускатная',
-  side_hipped: 'Двускатная с вальмой с одной стороны', 'side_half-hipped': 'Двускатная с полувальмой с одной стороны',
-  'hipped-and-gabled': 'Голландская (вальмовая с фронтоном)', bellcast_gable: 'Двускатная с отгибом у карниза',
-  crosspitched: 'Крестовая', sawtooth: 'Шедовая (пилообразная)', butterfly: 'Бабочка (обратная двускатная)', cone: 'Коническая',
+  flat: tr('Плоская'), gabled: tr('Двускатная'), hipped: tr('Вальмовая'), pyramidal: tr('Шатровая'), skillion: tr('Односкатная'),
+  dome: tr('Купол'), onion: tr('Луковица'), round: tr('Сводчатая'), gambrel: tr('Ломаная двускатная'), mansard: tr('Мансардная'),
+  'half-hipped': tr('Полувальмовая'), saltbox: tr('Несимметричная двускатная'),
+  side_hipped: tr('Двускатная с вальмой с одной стороны'), 'side_half-hipped': tr('Двускатная с полувальмой с одной стороны'),
+  'hipped-and-gabled': tr('Голландская (вальмовая с фронтоном)'), bellcast_gable: tr('Двускатная с отгибом у карниза'),
+  crosspitched: tr('Крестовая'), sawtooth: tr('Шедовая (пилообразная)'), butterfly: tr('Бабочка (обратная двускатная)'), cone: tr('Коническая'),
 };
 export const ROOF_SHAPES = Object.keys(ROOF_SHAPE_LABELS);
 
@@ -65,17 +66,17 @@ const ROOF_ICONS: Record<string, string> = {
 };
 
 const FIELDS: Field[] = [
-  { tag: 'building:part', label: 'Часть здания', type: 'combo', options: Object.keys(PART_VALUES), labels: PART_VALUES, placeholder: 'yes', empty: 'yes' },
-  { tag: 'height', label: 'Высота, м', type: 'length', placeholder: 'до верха крыши' },
-  { tag: 'min_height', label: 'Низ, м', type: 'length' },
-  { tag: 'building:levels', label: 'Этажей', type: 'int' },
-  { tag: 'building:min_level', label: 'Нижний этаж', type: 'int' },
-  { tag: 'roof:shape', label: 'Форма крыши', type: 'combo', options: ROOF_SHAPES, labels: ROOF_SHAPE_LABELS, icons: ROOF_ICONS },
-  { tag: 'roof:height', label: 'Высота крыши, м', type: 'length' },
-  { tag: 'roof:direction', label: 'Направление ската', type: 'direction', placeholder: '0–360 или N, SE…' },
-  { tag: 'roof:orientation', label: 'Конёк', type: 'select', options: ['along', 'across'] },
-  { tag: 'building:colour', label: 'Цвет стен', type: 'colour' },
-  { tag: 'roof:colour', label: 'Цвет крыши', type: 'colour' },
+  { tag: 'building:part', label: tr('Часть здания'), type: 'combo', options: Object.keys(PART_VALUES), labels: PART_VALUES, placeholder: 'yes', empty: 'yes' },
+  { tag: 'height', label: tr('Высота, м'), type: 'length', placeholder: tr('до верха крыши') },
+  { tag: 'min_height', label: tr('Низ, м'), type: 'length' },
+  { tag: 'building:levels', label: tr('Этажей'), type: 'int' },
+  { tag: 'building:min_level', label: tr('Нижний этаж'), type: 'int' },
+  { tag: 'roof:shape', label: tr('Форма крыши'), type: 'combo', options: ROOF_SHAPES, labels: ROOF_SHAPE_LABELS, icons: ROOF_ICONS },
+  { tag: 'roof:height', label: tr('Высота крыши, м'), type: 'length' },
+  { tag: 'roof:direction', label: tr('Направление ската'), type: 'direction', placeholder: tr('0–360 или N, SE…') },
+  { tag: 'roof:orientation', label: tr('Конёк'), type: 'select', options: ['along', 'across'] },
+  { tag: 'building:colour', label: tr('Цвет стен'), type: 'colour' },
+  { tag: 'roof:colour', label: tr('Цвет крыши'), type: 'colour' },
 ];
 
 const CARDINALS = new Set(['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']);
@@ -153,11 +154,12 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   }).map((field) => {
     const value = f.tags[field.tag] ?? '';
     const changed = session.isChanged(key, field.tag);
-    const was = changed ? `было: ${orig[field.tag] ?? '—'}` : '';
+    const was = changed ? tr('было: {value}', { value: orig[field.tag] ?? '—' }) : '';
     // Своего значения нет — показываем унаследованное серым (placeholder) со значком и пояснением
     const from = !value && INHERITABLE_SET.has(field.tag) ? sources.find((src) => inheritedValue(src.tags, field.tag)) : undefined;
     const inherited = from ? inheritedValue(from.tags, field.tag) : undefined;
-    const hint = from ? `Не задано у объекта — унаследовано из ${from.label}: ${field.tag}=${inherited}. Модель рисуется с ним, но в OSM лучше задать значение на самой части.` : '';
+    const hint = from ? tr('Не задано у объекта — унаследовано из {source}: {tag}. Модель рисуется с ним, но в OSM лучше задать значение на самой части.',
+      { source: from.label, tag: `${field.tag}=${inherited}` }) : '';
     if (from) inheritedAny.push(field.label.replace(/,.*$/, '').toLowerCase());
     const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || was || field.tag)}"`;
     let control: string;
@@ -172,22 +174,24 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
       control = withBadge(combo(field, common, value, inherited ?? field.placeholder ?? '—', inherited ? ' class="inherited"' : '', inherited), hint);
     } else if (field.type === 'colour') {
       control = `<span class="colour-field"><input type="color" value="${toHex(value || inherited)}" data-picker-for="${esc(field.tag)}"${inherited ? ' class="inherited"' : ''} />
-        ${withBadge(`<input type="text" ${common} value="${esc(value)}" placeholder="${esc(inherited ?? '#rrggbb или имя')}" />`, hint)}</span>`;
+        ${withBadge(`<input type="text" ${common} value="${esc(value)}" placeholder="${esc(inherited ?? tr('#rrggbb или имя'))}" />`, hint)}</span>`;
     } else {
       control = withBadge(`<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common} value="${esc(value)}" placeholder="${esc(inherited ?? field.placeholder ?? '')}" />`, hint);
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
   }).join('');
   // У нового объекта «как было» — нет (отменить создание — undo)
-  const revert = session.isChanged(key) && !session.isCreated(key) ? '<button type="button" data-revert>Вернуть как было</button>' : '';
+  const revert = session.isChanged(key) && !session.isCreated(key) ? `<button type="button" data-revert>${tr('Вернуть как было')}</button>` : '';
   // Наследование — соглашение рендереров, а не схемы: советуем задать свойства на самой части
   const warn = inheritedAny.length
-    ? `<p class="warn inherit-warn">⚠ ${esc(inheritedAny.join(', '))} — взято у здания (серым в полях). Другие программы могут не наследовать: лучше задать на самой части.</p>`
+    ? `<p class="warn inherit-warn">⚠ ${tr('{fields} — взято у здания (серым в полях). Другие программы могут не наследовать: лучше задать на самой части.', { fields: esc(inheritedAny.join(', ')) })}</p>`
     : '';
   // material на здании — устаревший вариант building:material (вики: Key:material): предлагаем замену
   const legacy = f.tags.material !== undefined
-    ? `<p class="warn">⚠ material=${esc(f.tags.material)} — для зданий устарел, фасад описывает building:material${f.tags['building:material'] ? ' (уже задан — material можно удалить)' : ''}.
-        <button type="button" data-fix-material>${f.tags['building:material'] ? 'Удалить material' : 'Заменить на building:material'}</button></p>`
+    ? `<p class="warn">⚠ ${f.tags['building:material']
+      ? tr('{tag} — для зданий устарел, фасад описывает building:material (уже задан — material можно удалить).', { tag: `material=${esc(f.tags.material)}` })
+      : tr('{tag} — для зданий устарел, фасад описывает building:material.', { tag: `material=${esc(f.tags.material)}` })}
+        <button type="button" data-fix-material>${f.tags['building:material'] ? tr('Удалить material') : tr('Заменить на building:material')}</button></p>`
     : '';
   return `<form class="tag-form" data-key="${esc(key)}" onsubmit="return false">${legacy}${warn}${rows}${revert}</form>`;
 }
@@ -207,28 +211,28 @@ export function renderMultiTagForm(keys: string[], session: EditSession): string
     const mixed = vs.length > 1;
     const value = mixed ? '' : vs[0];
     const changed = feats.some((f) => session.isChanged(f.key, field.tag));
-    const shown = mixed ? `разные: ${vs.map((v) => v || '—').slice(0, 6).join(', ')}${vs.length > 6 ? '…' : ''}` : '';
-    const tip = mixed ? `${shown}${NUMERIC.has(field.type) ? '. Число — всем одно значение; =+1, =-2, =*2, =/8 — к значению каждого' : ''}` : field.tag;
+    const shown = mixed ? tr('разные: {values}', { values: `${vs.map((v) => v || '—').slice(0, 6).join(', ')}${vs.length > 6 ? '…' : ''}` }) : '';
+    const tip = mixed ? `${shown}${NUMERIC.has(field.type) ? tr('. Число — всем одно значение; =+1, =-2, =*2, =/8 — к значению каждого') : ''}` : field.tag;
     const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(tip)}"`;
     const cls = mixed ? ' class="mixed"' : '';
     let control: string;
     if (field.type === 'select') {
       const extra = vs.filter((v) => v && !field.options!.includes(v));
       const options = [...new Set([...extra, ...field.options!])];
-      control = `<select ${common}${cls}><option value="">${mixed ? 'разные' : '—'}</option>${options
+      control = `<select ${common}${cls}><option value="">${mixed ? tr('разные') : '—'}</option>${options
         .map((o) => `<option value="${esc(o)}"${o === value ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
     } else if (field.type === 'combo') {
-      control = combo(field, common, value, mixed ? 'разные' : field.placeholder ?? '—', cls);
+      control = combo(field, common, value, mixed ? tr('разные') : field.placeholder ?? '—', cls);
     } else if (field.type === 'colour') {
       control = `<span class="colour-field"><input type="color" value="${toHex(value || vs.find(Boolean))}" data-picker-for="${esc(field.tag)}"${cls} />
-        <input type="text" ${common}${cls} value="${esc(value)}" placeholder="${mixed ? 'разные' : '#rrggbb или имя'}" /></span>`;
+        <input type="text" ${common}${cls} value="${esc(value)}" placeholder="${mixed ? tr('разные') : tr('#rrggbb или имя')}" /></span>`;
     } else {
-      control = `<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${cls} value="${esc(value)}" placeholder="${esc(mixed ? 'разные' : field.placeholder ?? '')}" />`;
+      control = `<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${cls} value="${esc(value)}" placeholder="${esc(mixed ? tr('разные') : field.placeholder ?? '')}" />`;
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
   }).join('');
   return `<form class="tag-form" data-keys="${esc(feats.map((f) => f.key).join(' '))}" onsubmit="return false">
-    <p class="hint">Общие свойства ${feats.length} объектов. Для чисел формула: =+1, =-2, =*2, =/8 — к значению каждого.</p>${rows}</form>`;
+    <p class="hint">${trn(feats.length, 'Общие свойства {n} объекта. Для чисел формула: =+1, =-2, =*2, =/8 — к значению каждого.|Общие свойства {n} объектов. Для чисел формула: =+1, =-2, =*2, =/8 — к значению каждого.|Общие свойства {n} объектов. Для чисел формула: =+1, =-2, =*2, =/8 — к значению каждого.')}</p>${rows}</form>`;
 }
 
 /**
@@ -244,7 +248,7 @@ function combo(field: Field, common: string, value: string, placeholder: string,
   const shown = field.icons?.[value || inherited || ''];
   const lead = field.icons ? `<i class="combo-icon combo-lead${!value && inherited ? ' inherited' : ''}">${shown ?? ''}</i>` : '';
   return `<span class="combo-field${field.icons ? ' with-icons' : ''}">${lead}<input type="text" autocomplete="off" ${common}${cls} value="${esc(value)}" placeholder="${esc(placeholder)}" />`
-    + `<button type="button" class="combo-btn" tabindex="-1" title="Выбрать из списка"></button><ul class="combo-list" hidden>${items}</ul></span>`;
+    + `<button type="button" class="combo-btn" tabindex="-1" title="${tr('Выбрать из списка')}"></button><ul class="combo-list" hidden>${items}</ul></span>`;
 }
 
 /** Поле со значком «унаследовано» справа (только если есть пояснение). */

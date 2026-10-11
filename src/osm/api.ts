@@ -1,4 +1,5 @@
 import { server } from './servers';
+import { tr } from '../i18n';
 
 export type Bbox = [west: number, south: number, east: number, north: number];
 
@@ -46,7 +47,7 @@ export async function fetchMapSplit(bbox: Bbox, api = server().api, signal?: Abo
 /** Отношение со всеми членами и их узлами. */
 export async function fetchRelationFull(id: number, api = server().api, signal?: AbortSignal): Promise<OsmElement[]> {
   const res = await fetch(`${api}/relation/${id}/full.json`, { signal });
-  if (!res.ok) throw new Error(`OSM API ${res.status} для relation/${id}`);
+  if (!res.ok) throw new Error(tr('OSM API {status} для relation/{id}', { status: res.status, id }));
   return ((await res.json()) as { elements: OsmElement[] }).elements;
 }
 
@@ -56,13 +57,13 @@ export async function completeRelations(
 ): Promise<OsmElement[]> {
   const missing = isIncomplete(elements);
   // Неполный результат (часть зданий без геометрии) не должен выглядеть как полный — иначе он попадёт в кеш
-  if (missing.length > 200) throw new Error(`слишком много неполных мультиполигонов (${missing.length})`);
+  if (missing.length > 200) throw new Error(tr('слишком много неполных мультиполигонов ({n})', { n: missing.length }));
   const extra: OsmElement[] = [];
   // По одному: тайлы и так грузятся в два потока, а правила OSMF — не больше двух потоков скачивания
   for (let i = 0; i < missing.length; i++) {
     const batch = await Promise.allSettled([fetchRelationFull(missing[i], api, signal)]);
     for (const r of batch) {
-      if (r.status === 'rejected') throw new Error(`не догрузилось отношение: ${(r.reason as Error).message}`);
+      if (r.status === 'rejected') throw new Error(tr('не догрузилось отношение: {error}', { error: (r.reason as Error).message }));
       extra.push(...r.value);
     }
   }

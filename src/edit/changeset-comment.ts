@@ -1,4 +1,5 @@
 import type { TagChange } from './session';
+import { tr } from '../i18n';
 
 /** Что генератору нужно знать о зданиях: к какому отношению относится объект и как оно называется. */
 export interface CommentContext {
@@ -64,17 +65,19 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
     if (!c.created && ctx.fixedIssues?.(c.key)) e.fixed = true;
   }
 
-  const loosePoints = points(loose, 'зданий');
+  const loosePoints = points(loose, false);
   const names = [...buildings.keys()].map((k) => ctx.buildingName(k));
 
   // 1. Подробно: по блоку на здание с пунктами
   const blocks: string[] = [];
   [...buildings].forEach(([key, e], i) => {
-    const title = created.has(key) ? `Новое отношение здания${names[i] ? ` «${names[i]}»` : ''}`
-      : names[i] ? `«${names[i]}»` : 'Правки в отношение здания';
-    blocks.push([`${title}:`, ...points(e, 'частей')].join('\n'));
+    const name = names[i];
+    const title = created.has(key)
+      ? (name ? tr('Новое отношение здания «{name}»:', { name }) : tr('Новое отношение здания:'))
+      : name ? tr('«{name}»:', { name }) : tr('Правки в отношение здания:');
+    blocks.push([title, ...points(e, true)].join('\n'));
   });
-  if (loosePoints.length) blocks.push(['Правки отдельных зданий:', ...loosePoints].join('\n'));
+  if (loosePoints.length) blocks.push([tr('Правки отдельных зданий:'), ...loosePoints].join('\n'));
   const full = blocks.join('\n\n');
   if (full.length <= MAX_LENGTH) return full;
 
@@ -85,14 +88,17 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
     all.attributes ||= e.attributes; all.moved ||= e.moved; all.deleted ||= e.deleted; all.fixed ||= e.fixed;
   }
   const allNew = [...buildings.keys()].every((k) => created.has(k));
-  const head = (list: string) => `${allNew ? 'Новые отношения зданий' : 'Правки в отношения зданий'}${list}:`;
-  const named = names.filter((n): n is string => !!n).map((n) => `«${n}»`);
-  const tail = [...(buildings.size ? points(all, 'частей') : []), ...(loosePoints.length ? ['* правки отдельных зданий'] : [])];
-  const lines = (list: string) => (buildings.size ? [head(list), ...tail] : ['Правки отдельных зданий:', ...loosePoints]).join('\n');
+  const head = (list: string) => allNew
+    ? tr('Новые отношения зданий{list}:', { list }) : tr('Правки в отношения зданий{list}:', { list });
+  const named = names.filter((n): n is string => !!n).map((name) => tr('«{name}»', { name }));
+  const tail = [...(buildings.size ? points(all, true) : []), ...(loosePoints.length ? [tr('* правки отдельных зданий')] : [])];
+  const lines = (list: string) => (buildings.size ? [head(list), ...tail] : [tr('Правки отдельных зданий:'), ...loosePoints]).join('\n');
   // Названий — сколько влезет, остальные — «и ещё N»
   for (let n = named.length; n >= 0; n--) {
     const rest = buildings.size - n;
-    const list = n ? ` ${named.slice(0, n).join(', ')}${rest ? ` и ещё ${rest}` : ''}` : buildings.size > 1 ? ` (${buildings.size})` : '';
+    const shown = named.slice(0, n).join(', ');
+    const list = n ? ' ' + (rest ? tr('{names} и ещё {rest}', { names: shown, rest }) : shown)
+      : buildings.size > 1 ? ` (${buildings.size})` : '';
     const text = lines(list);
     if (text.length <= MAX_LENGTH) return text;
   }
@@ -102,13 +108,14 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
 /** Ограничение длины комментария (в OSM — 255 символов, оставляем запас). */
 const MAX_LENGTH = 250;
 
-function points(e: BuildingEdits, what: string): string[] {
+/** Пункты комментария; parts — правки частей здания (иначе — отдельных зданий вне отношений). */
+function points(e: BuildingEdits, parts: boolean): string[] {
   const out: string[] = [];
-  if (e.added && !e.removed) out.push('* добавлены новые части');
-  else if (e.removed) out.push('* изменён состав частей');
-  if (e.attributes) out.push(`* изменены параметры отдельных ${what}`);
-  if (e.deleted) out.push(`* удалены отдельные ${what === 'частей' ? 'части' : 'здания'}`);
-  if (e.moved) out.push(`* перемещены отдельные ${what === 'частей' ? 'части' : 'здания'}`);
-  if (e.fixed) out.push('* исправление ошибок');
+  if (e.added && !e.removed) out.push(tr('* добавлены новые части'));
+  else if (e.removed) out.push(tr('* изменён состав частей'));
+  if (e.attributes) out.push(parts ? tr('* изменены параметры отдельных частей') : tr('* изменены параметры отдельных зданий'));
+  if (e.deleted) out.push(parts ? tr('* удалены отдельные части') : tr('* удалены отдельные здания'));
+  if (e.moved) out.push(parts ? tr('* перемещены отдельные части') : tr('* перемещены отдельные здания'));
+  if (e.fixed) out.push(tr('* исправление ошибок'));
   return out;
 }

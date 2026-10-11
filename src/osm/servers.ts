@@ -1,4 +1,5 @@
 import type { StyleSpecification } from 'maplibre-gl';
+import { tr } from '../i18n';
 
 /**
  * Серверы на движке openstreetmap-website (API 0.6, OAuth2): тестовый и боевой OSM, OpenGeofiction, OpenHistoricalMap.
@@ -41,7 +42,7 @@ export const SERVERS: Record<ServerId, OsmServer> = {
   dev: {
     id: 'dev',
     label: 'OpenStreetMap (Dev)',
-    short: 'OpenStreetMap (тестовый)',
+    short: tr('OpenStreetMap (тестовый)'),
     web: 'https://master.apis.dev.openstreetmap.org',
     api: 'https://master.apis.dev.openstreetmap.org/api/0.6',
     clientId: import.meta.env?.VITE_OSM_DEV_CLIENT_ID ?? '',
@@ -121,7 +122,7 @@ export const server = (): OsmServer => current;
 /** Почему API сервера недоступно в этом браузере; undefined — доступно. */
 export function apiBlockedHere(s: OsmServer = current): string | undefined {
   if (!s.apiBrowsers || s.apiBrowsers.test(navigator.userAgent)) return;
-  return `API ${s.short} не пускает этот браузер (Chrome, Safari, Edge) — данные, вход и сохранение работают в Firefox.`;
+  return tr('API {server} не пускает этот браузер (Chrome, Safari, Edge) — данные, вход и сохранение работают в Firefox.', { server: s.short });
 }
 
 export function setServer(id: ServerId) {

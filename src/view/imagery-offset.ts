@@ -1,5 +1,5 @@
 /**
- * Панель смещения снимка: поля сдвига (м, по широте — на север, по долготе — на восток), «Подтвердить» и «Сбросить».
+ * Панель настроек снимка: прозрачность и смещение — поля сдвига (м, по широте — на север, по долготе — на восток), «Подтвердить» и «Сбросить».
  * Пока панель открыта, сдвиг задаётся и мышью: щелчок по точке снимка — она «прилипает» к курсору (сдвиг только
  * в плоскости земли), повторный щелчок — закончить. Щелчки по карте в это время не выделяют объекты.
  * Esc или × — отменить (вернуть сдвиг, бывший до открытия). Точка первого щелчка отмечена, от неё до курсора —
@@ -7,7 +7,7 @@
  */
 import type { GeoJSONSource, LngLat, Map as MlMap, MapMouseEvent } from 'maplibre-gl';
 import { tr } from '../i18n';
-import { getOffset, IMAGERY, isOffset, refreshImagery, storeOffset, type Offset } from './basemaps';
+import { getOffset, getOpacity, IMAGERY, isOffset, refreshImagery, setImageryOpacity, storeOffset, storeOpacity, type Offset } from './basemaps';
 
 const R = 6378137;
 const POS_KEY = 'osm3d.offset-panel-pos';
@@ -33,6 +33,11 @@ export class ImageryOffsetPanel {
   private readonly latInput: HTMLInputElement;
   private readonly lonInput: HTMLInputElement;
   private readonly info: HTMLDivElement;
+  private readonly alphaInput: HTMLInputElement;
+  private readonly alphaValue: HTMLSpanElement;
+  /** Непрозрачность: текущая и до открытия панели. */
+  private opacity = 1;
+  private opacityBefore = 1;
   private id: string | undefined;
   /** Сдвиг до открытия панели — для отмены. */
   private before: Offset = { east: 0, north: 0 };
@@ -75,6 +80,26 @@ export class ImageryOffsetPanel {
     const lon = field(tr('По долготе'), tr('Сдвиг на восток (минус — на запад), м'));
     this.latInput = lat.input;
     this.lonInput = lon.input;
+    // Прозрачность снимка: 0 % — как есть, 100 % — не виден
+    const alphaRow = document.createElement('label');
+    alphaRow.className = 'offset-alpha';
+    this.alphaInput = document.createElement('input');
+    this.alphaInput.type = 'range';
+    this.alphaInput.min = '0';
+    this.alphaInput.max = '100';
+    this.alphaInput.step = '5';
+    this.alphaValue = document.createElement('span');
+    this.alphaInput.addEventListener('input', () => {
+      this.opacity = 1 - Number(this.alphaInput.value) / 100;
+      this.syncAlpha();
+      setImageryOpacity(this.map, this.opacity);
+      if (this.id) storeOpacity(this.id, this.opacity);
+      if (this.id) this.hooks.onChange(this.id);
+    });
+    alphaRow.append(tr('Прозрачность'), this.alphaInput, this.alphaValue);
+    const shiftHead = document.createElement('div');
+    shiftHead.className = 'offset-sub';
+    shiftHead.textContent = tr('Смещение');
     this.info = document.createElement('div');
     this.info.className = 'offset-info';
     const buttons = document.createElement('div');
@@ -87,9 +112,10 @@ export class ImageryOffsetPanel {
     const reset = document.createElement('button');
     reset.type = 'button';
     reset.textContent = tr('Сбросить');
-    reset.addEventListener('click', () => { this.set({ east: 0, north: 0 }, true); this.confirm(); });
+    reset.title = tr('Убрать смещение и прозрачность');
+    reset.addEventListener('click', () => { this.setOpacity(1); this.set({ east: 0, north: 0 }, true); this.confirm(); });
     buttons.append(ok, reset);
-    el.append(head, lat.row, lon.row, this.info, buttons);
+    el.append(head, alphaRow, shiftHead, lat.row, lon.row, this.info, buttons);
     this.snapEl = document.createElement('div');
     this.snapEl.className = 'snap-marker';
     this.snapEl.hidden = true;
@@ -121,7 +147,9 @@ export class ImageryOffsetPanel {
     if (this.id && this.id !== id && !this.el.hidden) this.cancel();
     this.id = id;
     this.before = this.offset = getOffset(id);
-    this.title.textContent = tr('Смещение: {name}', { name: IMAGERY.find((i) => i.id === id)?.name ?? id });
+    this.opacityBefore = this.opacity = getOpacity(id);
+    this.title.textContent = tr('Подложка: {name}', { name: IMAGERY.find((i) => i.id === id)?.name ?? id });
+    this.syncAlpha();
     this.el.hidden = false;
     this.hooks.onOpen?.(true);
     this.place();
@@ -282,6 +310,12 @@ export class ImageryOffsetPanel {
     this.syncInfo();
   }
 
+  private syncAlpha() {
+    const t = Math.round((1 - this.opacity) * 100);
+    this.alphaInput.value = String(t);
+    this.alphaValue.textContent = `${t} %`;
+  }
+
   private syncInfo() {
     const d = Math.hypot(this.offset.east, this.offset.north);
     const moved = isOffset(this.offset) ? tr('Сдвиг {d} м.', { d: d.toFixed(1) }) : tr('Без сдвига.');
@@ -296,8 +330,16 @@ export class ImageryOffsetPanel {
     this.close();
   }
 
+  private setOpacity(v: number) {
+    this.opacity = v;
+    this.syncAlpha();
+    setImageryOpacity(this.map, v);
+    if (this.id) storeOpacity(this.id, v);
+  }
+
   private cancel() {
     if (this.anchor) this.stopMove(true);
+    this.setOpacity(this.opacityBefore);
     this.set(this.before, true);
     this.close();
   }

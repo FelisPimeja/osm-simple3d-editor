@@ -92,6 +92,27 @@ const offsets: Record<string, Offset> = (() => {
 export const getOffset = (id: string): Offset => offsets[id] ?? { east: 0, north: 0 };
 export const isOffset = (o: Offset) => Math.abs(o.east) >= 0.005 || Math.abs(o.north) >= 0.005;
 
+const OPACITY_KEY = 'osm3d.imagery-opacity';
+const opacities: Record<string, number> = (() => {
+  try { return JSON.parse(localStorage.getItem(OPACITY_KEY) ?? '{}') as Record<string, number>; } catch { return {}; }
+})();
+
+/** Непрозрачность снимка, 0…1. */
+export const getOpacity = (id: string): number => opacities[id] ?? 1;
+
+export function storeOpacity(id: string, v: number) {
+  if (v < 0.995) opacities[id] = +v.toFixed(2); else delete opacities[id];
+  try { localStorage.setItem(OPACITY_KEY, JSON.stringify(opacities)); } catch { /* до перезагрузки */ }
+}
+
+/** У снимка изменены настройки (сдвиг или прозрачность) — шестерёнка синяя. */
+export const isTuned = (id: string) => isOffset(getOffset(id)) || getOpacity(id) < 0.995;
+
+/** Показать непрозрачность снимка сразу (панель настроек). */
+export function setImageryOpacity(map: MlMap, v: number) {
+  if (map.getLayer(IMAGERY_LAYER)) map.setPaintProperty(IMAGERY_LAYER, 'raster-opacity', v);
+}
+
 /** Запомнить смещение снимка (в этом браузере). */
 export function storeOffset(id: string, o: Offset) {
   if (isOffset(o)) offsets[id] = { east: +o.east.toFixed(2), north: +o.north.toFixed(2) };
@@ -169,8 +190,11 @@ export function refreshImagery(map: MlMap, id: string) {
 /** Слой подписей стиля, под который кладём растры. */
 const firstSymbol = (map: MlMap) => map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
 
+/** Область показа [з, ю, в, с]: снимки грузятся только тайлами, задевающими её (режим здания — вокруг здания). */
+export type Bounds = [number, number, number, number];
+
 /** GPS-треки поверх подложки (и карты, и снимков), под подписями и зданиями. Возвращает, добавлен ли слой. */
-export function applyGpsTraces(map: MlMap, on: boolean): boolean {
+export function applyGpsTraces(map: MlMap, on: boolean, bounds?: Bounds): boolean {
   if (map.getLayer(GPS_LAYER)) map.removeLayer(GPS_LAYER);
   if (map.getSource(GPS_LAYER)) map.removeSource(GPS_LAYER);
   if (!on) return false;
@@ -179,6 +203,7 @@ export function applyGpsTraces(map: MlMap, on: boolean): boolean {
     tiles: ['a', 'b', 'c'].map((s) => `https://${s}.gps-tile.openstreetmap.org/lines/{z}/{x}/{y}.png`),
     tileSize: 256,
     maxzoom: 20,
+    ...(bounds && { bounds }),
     attribution: tr('GPS-треки') + ' <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>',
   });
   map.addLayer({ id: GPS_LAYER, type: 'raster', source: GPS_LAYER, paint: { 'raster-fade-duration': 150 } }, firstSymbol(map));
@@ -189,17 +214,18 @@ export function applyGpsTraces(map: MlMap, on: boolean): boolean {
  * Показать подложку: снимки — растровым слоем под первым слоем подписей стиля (заливки и линии карты под ним
  * не видны), здания и подписи остаются сверху. Возвращает, добавлен ли слой снимков.
  */
-export function applyBasemap(map: MlMap, id: string): boolean {
+export function applyBasemap(map: MlMap, id: string, bounds?: Bounds): boolean {
   if (map.getLayer(IMAGERY_LAYER)) map.removeLayer(IMAGERY_LAYER);
   if (map.getSource(IMAGERY_LAYER)) map.removeSource(IMAGERY_LAYER);
   const im = IMAGERY.find((i) => i.id === id);
   if (!im) return false;
   map.addSource(IMAGERY_LAYER, {
     type: 'raster', tiles: imageryTiles(im), tileSize: im.tileSize, maxzoom: im.maxzoom, attribution: im.attribution,
+    ...(bounds && { bounds }),
   });
   // Под GPS-треками, если они включены
   const before = map.getLayer(GPS_LAYER) ? GPS_LAYER : firstSymbol(map);
-  map.addLayer({ id: IMAGERY_LAYER, type: 'raster', source: IMAGERY_LAYER, paint: { 'raster-fade-duration': 150 } }, before);
+  map.addLayer({ id: IMAGERY_LAYER, type: 'raster', source: IMAGERY_LAYER, paint: { 'raster-fade-duration': 150, 'raster-opacity': getOpacity(id) } }, before);
   return true;
 }
 
@@ -234,12 +260,13 @@ export class BasemapButton {
       input.addEventListener('change', () => { if (input.checked) this.select(id); });
       row.append(input, ` ${label}`);
       if (id !== MAP_BASEMAP) {
-        // Смещение снимка (видна у выбранного)
+        // Настройки снимка (видна у выбранного)
         const off = document.createElement('button');
         off.type = 'button';
         off.className = 'basemap-offset-btn';
-        off.title = tr('Смещение снимка');
-        off.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5v13M1.5 8h13M8 1.5 6.2 3.3M8 1.5l1.8 1.8M8 14.5l-1.8-1.8M8 14.5l1.8-1.8M1.5 8l1.8-1.8M1.5 8l1.8 1.8M14.5 8l-1.8-1.8M14.5 8l-1.8 1.8"/></svg>';
+        off.title = tr('Настройки подложки: смещение и прозрачность');
+        // Шестерёнка
+        off.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M6.8 1.5h2.4l.4 1.8 1.2.7 1.8-.6 1.2 2.1-1.4 1.2v1.4l1.4 1.2-1.2 2.1-1.8-.6-1.2.7-.4 1.8H6.8l-.4-1.8-1.2-.7-1.8.6-1.2-2.1 1.4-1.2V6.7L2.2 5.5l1.2-2.1 1.8.6 1.2-.7z"/><circle cx="8" cy="8" r="2"/></svg>';
         off.addEventListener('click', (e) => {
           e.preventDefault(); // не выбирать радиокнопку строки дважды
           e.stopPropagation();
@@ -299,10 +326,10 @@ export class BasemapButton {
   sync() {
     this.btn.classList.toggle('active', this.current !== MAP_BASEMAP || this.gps);
     for (const input of this.menu.querySelectorAll<HTMLInputElement>('input[type=radio]')) input.checked = input.value === this.current;
-    // Кнопка смещения — только у выбранного снимка; синяя, если он сдвинут
+    // Шестерёнка — только у выбранного снимка; синяя, если сдвиг или прозрачность изменены
     for (const [id, b] of this.offsetBtns) {
       b.hidden = id !== this.current;
-      b.classList.toggle('active', isOffset(getOffset(id)));
+      b.classList.toggle('active', isTuned(id));
     }
   }
 }

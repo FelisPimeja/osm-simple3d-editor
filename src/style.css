@@ -306,6 +306,9 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .offset-close:hover { opacity: 1; }
 .offset-panel label { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
 .offset-panel label input { width: 80px; margin-left: auto; font: inherit; padding: 2px 4px; }
+.offset-panel label.offset-alpha input { width: auto; flex: 1; margin-left: 4px; padding: 0; }
+.offset-alpha span { width: 40px; flex: none; white-space: nowrap; text-align: right; color: #4b5563; }
+.offset-sub { margin-top: 6px; padding-top: 6px; border-top: 1px solid #eee; font-weight: 600; }
 .offset-info { margin: 6px 0; color: #4b5563; }
 .offset-buttons { display: flex; gap: 6px; }
 .offset-buttons button { flex: 1; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }

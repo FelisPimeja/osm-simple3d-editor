@@ -177,7 +177,6 @@
   "Низ {key} сдвинут на {d} м{levels}.": "Bottom of {key} moved by {d} m{levels}.",
   "Стена {key} сдвинута на {d} м{levels}.": "Wall of {key} moved by {d} m{levels}.",
   "Понятно": "Got it",
-  "Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Переместить».": "First select an object in the building (or several with Shift), then the Move tool.",
   "Перемещено объектов: {n} на {d} м.": "Objects moved: {n} by {d} m.",
   "Повёрнуто объектов: {n} на {deg}°. Отменить — Ctrl+Z.": "Objects rotated: {n} by {deg}°. Undo: Ctrl+Z.",
   "Скрыто вручную: {n}": "Hidden manually: {n}",
@@ -710,5 +709,7 @@
   "В профиле выбран другой язык интерфейса — он включится при следующей загрузке страницы.": "Your profile has a different interface language; it will apply the next time the page loads.",
   "Приложение OAuth на {server} не разрешает изменять настройки пользователя. Нажмите «Войти» ещё раз — вход будет без сохранения настроек в профиле.": "The OAuth application on {server} isn’t allowed to modify user preferences. Click “Log in” again to log in without saving settings to your profile.",
   "Настройки пользователя": "User settings",
-  "Язык интерфейса и другие личные настройки": "Interface language and other personal settings"
+  "Язык интерфейса и другие личные настройки": "Interface language and other personal settings",
+  "Кликните по объекту здания, который нужно переместить. Esc — выйти из инструмента.": "Click the building part you want to move. Esc — exit the tool.",
+  "Если ничего не выделено, первый клик выбирает часть, следующий — точка захвата на ней.": "If nothing is selected, the first click selects a part and the next one sets the grab point on it."
 }

@@ -582,6 +582,27 @@ map.on('click', (e) => {
     updateSnap(p);
     return;
   }
+  if (moveTool.state === 'select') {
+    // Инструмент включён без выделения: клик выбирает объект, дальше — точка захвата на нём
+    const key = resolveClick(e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point));
+    if (!key) { moveTool.stop(); select(undefined); updateSnap(undefined); return; }
+    select(key);
+    startMove();
+    moveSelectedByClick = true;
+    updateSnap([e.point.x, e.point.y]);
+    return;
+  }
+  if (moveTool.state === 'pick' && moveSelectedByClick && !overpassLayer.snapAt([e.point.x, e.point.y], moveTool.pickFilter)) {
+    // Объект выбран самим инструментом — клик по другому объекту здания выбирает его вместо прежнего
+    const key = resolveClick(e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point));
+    if (key && !moveTool.keys.has(key)) {
+      select(key);
+      startMove();
+      moveSelectedByClick = true;
+      updateSnap([e.point.x, e.point.y]);
+      return;
+    }
+  }
   if (moveTool.active) {
     // Перемещение не начато, клик мимо всех объектов — выключаем инструмент и снимаем выделение
     if (moveTool.state === 'pick' && !overpassLayer.snapAt([e.point.x, e.point.y], moveTool.pickFilter) && !overpassLayer.pickHit(e.point)) {
@@ -1090,6 +1111,8 @@ map.getCanvasContainer().addEventListener('mouseleave', () => updateSnap(undefin
 const focusToolbar = document.getElementById('focus-tools')!;
 const moveBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="move"]')!;
 const popupEl = document.getElementById('popup')!;
+/** Объект для перемещения выбран первым кликом инструмента (а не заранее). */
+let moveSelectedByClick = false;
 const moveTool = new MoveTool(overpassLayer, map.getContainer(), commitMove, (hint) => {
   moveBtn.classList.toggle('active', moveTool.active);
   syncCursor();
@@ -2454,8 +2477,8 @@ function nodeIds(f: Feature3D): number[] | undefined {
 /** Проверить выделение и включить перемещение (общие с соседями узлы и пути разведутся при применении). */
 function startMove() {
   if (!focus) return;
+  moveSelectedByClick = false;
   const keys = selection.filter((k) => focus!.members.includes(k));
-  if (!keys.length) return setStatus(tr('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Переместить».'), true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
     return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
@@ -2463,6 +2486,7 @@ function startMove() {
   pushTool.stop();
   splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
+  // Без выделения инструмент сначала ждёт клика по объекту (см. обработчик клика)
   moveTool.start(keys);
 }
 
@@ -3728,6 +3752,7 @@ const HELP: Record<string, HelpTopic> = {
   ] },
   move: { title: tr('Переместить (M)'), desc: tr('Сдвигает выделенные части по горизонтали или вертикали, как Move в SketchUp. Общие с соседями углы заменяются новыми узлами, чтобы не было нахлёстов.'), items: [
     tr('Клик по точке выделенной части — точка захвата, второй клик — применить; выделенные части едут вместе.'),
+    tr('Если ничего не выделено, первый клик выбирает часть, следующий — точка захвата на ней.'),
     tr('Вдоль оси здания движение прилипает к ней; Shift держит ось, стрелки фиксируют ось (→ x, ← y, ↑ z, ↓ — снять).'),
     tr('Число + Enter — сдвиг в метрах. Привязка к точкам других объектов.'),
     tr('Esc — отмена.'),

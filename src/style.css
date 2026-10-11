@@ -91,6 +91,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .outliner li:hover { background: #f0f2f5; }
 .outliner li.selected { background: #dbe7ff; }
 .outliner li.off .ol-label, .outliner li.off .ol-icon { opacity: .4; }
+/* Нет в году слайдера времени — скрыта в сцене, глазик при этом свой */
+.outliner li.dated .ol-label, .outliner li.dated .ol-icon { opacity: .4; font-style: italic; }
 .outliner li.missing { cursor: default; color: #999; }
 .ol-eye { flex: none; width: 22px; height: 20px; padding: 0; border: 0; background: transparent; cursor: pointer; color: #555; display: grid; place-items: center; }
 .ol-eye:hover { color: #000; }

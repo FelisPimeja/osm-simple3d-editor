@@ -7,6 +7,7 @@ import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer'
 import { GRID_ZOOM } from '../tiles/tile-features';
 import { TileStore, type TileVia } from './tile-store';
 import { timed } from '../perf';
+import { josmLayer } from '../osm/josm';
 
 export const OVERPASS_TILE_ZOOM = GRID_ZOOM;
 /** Сколько тайлов держать в кеше данных. */
@@ -35,7 +36,7 @@ type Entry =
 export type OverpassMode = 'full' | 'cached' | 'off';
 
 /** Откуда брать данные тайлов: /map OSM API сервера, куда идёт запись; у каждого сервера свой кеш. */
-export interface TileSource { api: string; db: string }
+export interface TileSource { api: string; db: string; josm?: boolean }
 
 /**
  * Подменяет тайловые здания данными OSM API по сетке тайлов z14.
@@ -110,7 +111,7 @@ export class OverpassTiles {
   }
 
   get sourceLabel(): string {
-    return `API ${server().short}`;
+    return this.source?.josm ? 'JOSM' : `API ${server().short}`;
   }
 
   /** Перерисовать объекты (после правки тегов): берётся версия из overlay. */
@@ -347,7 +348,8 @@ export class OverpassTiles {
 
   private async lookup(key: string) {
     this.cache.set(key, { state: 'lookup' });
-    const stored = await this.store.get(key);
+    // Слой JOSM в IndexedDB не кладём: он меняется вместе с правками в JOSM
+    const stored = this.source?.josm ? undefined : await this.store.get(key);
     if (this.cache.get(key)?.state !== 'lookup') return; // за время поиска ушли с тайла
     if (stored) {
       this.cache.set(key, { state: 'ready', ...stored });
@@ -381,6 +383,16 @@ export class OverpassTiles {
     let unreachable = false;
     try {
       if (!this.source) throw new Error('источник данных не задан');
+      if (this.source.josm) {
+        const { features, groups, indoor } = josmTile(await josmParsed(), tileBbox(key));
+        if (abort.signal.aborted) throw new DOMException('aborted', 'AbortError');
+        this.cache.set(key, { state: 'ready', features, groups, indoor, fetchedAt: Date.now() });
+        this.reloading.delete(key);
+        this.reloadFailed.delete(key);
+        this.evict();
+        this.tileReady(key);
+        return;
+      }
       const via: TileVia = 'api';
       // Тайл — четвертями, первой та, что ближе к центру экрана: на плотном тайле (десятки МБ ответа) первые
       // здания видны через пару секунд, а не после скачивания всего. Запросы идут по очереди в том же слоте
@@ -661,6 +673,29 @@ export class OverpassTiles {
     // При сильном наклоне в bbox попадает горизонт — берём только ближайшие к центру
     return tiles.sort((a, b) => a.d - b.d).slice(0, MAX_VISIBLE).map((t) => t.key);
   }
+}
+
+/** Разобранный слой JOSM — один на все тайлы (разбор заново, только когда слой перезапрошен). */
+let josmCache: { elements: OsmElement[]; parsed: ReturnType<typeof parseBuildings> } | undefined;
+async function josmParsed() {
+  const { elements } = await josmLayer();
+  if (josmCache?.elements !== elements) josmCache = { elements, parsed: timed('JOSM: разбор слоя', () => parseBuildings(elements), (r) => `${r.features.length} зданий`) };
+  return josmCache.parsed;
+}
+
+/** Объекты слоя JOSM, задевающие тайл: кому из соседей принадлежит здание, решает ownedFeatures (по центру). */
+function josmTile(all: ReturnType<typeof parseBuildings>, [w, s, e, n]: Bbox) {
+  const hits = (polygons: Polygon[], point?: [number, number]) => {
+    const pts = point ? [point] : polygons.flatMap((p) => p.outer);
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    return x1 >= w && x0 <= e && y1 >= s && y0 <= n;
+  };
+  return {
+    features: all.features.filter((f) => hits(f.polygons)),
+    groups: all.groups, // без геометрии; по ключу дубли не страшны
+    indoor: all.indoor.filter((f) => hits(f.polygons, f.point)),
+  };
 }
 
 function neighbours(key: string): string[] {

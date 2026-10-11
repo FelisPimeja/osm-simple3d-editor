@@ -1,0 +1,107 @@
+import type { Bbox, OsmElement, OsmMember } from './api';
+import { tr } from '../i18n';
+
+/**
+ * Данные из JOSM через его Remote Control: GET /export отдаёт активный слой в .osm (вместе с несохранёнными
+ * правками и новыми объектами с отрицательными id). Нужен JOSM 19439 (25.08) или новее, включённый Remote Control
+ * и разрешение «Export data from JOSM» (по умолчанию выключено). Ответы JOSM — с Access-Control-Allow-Origin: *;
+ * http://127.0.0.1 браузеры считают надёжным источником, со страницы по https запрос не блокируется
+ * (Chrome 142+ один раз спрашивает разрешение на доступ к локальной сети).
+ */
+export const JOSM_URL = 'http://127.0.0.1:8111';
+/** Первая стабильная версия JOSM с командой /export (r19425). */
+const MIN_VERSION = 19439;
+
+/** Источник данных из адреса: ?source=josm. */
+export const josmMode = new URLSearchParams(location.search).get('source') === 'josm';
+
+/** Включить или выключить источник JOSM в адресе (replaceState, без перезагрузки). */
+export function writeJosmParam(on: boolean) {
+  const url = new URL(location.href);
+  if (on) url.searchParams.set('source', 'josm'); else url.searchParams.delete('source');
+  if (url.href !== location.href) history.replaceState(history.state, '', url);
+}
+
+export interface JosmLayer { elements: OsmElement[]; bbox?: Bbox; fetchedAt: number }
+
+let layer: Promise<JosmLayer> | undefined;
+
+/** Слой JOSM: запрашивается один раз, refresh — заново. */
+export function josmLayer(refresh = false): Promise<JosmLayer> {
+  if (refresh || !layer) {
+    layer = loadLayer();
+    layer.catch(() => { layer = undefined; }); // после ошибки следующий вызов спросит JOSM снова
+  }
+  return layer;
+}
+
+async function loadLayer(): Promise<JosmLayer> {
+  const version = await josmGet('/version').then((r) => r.json() as Promise<{ version?: number }>);
+  if (version.version && version.version < MIN_VERSION) {
+    throw new Error(tr('JOSM {v} не умеет отдавать данные — нужна версия {min} (25.08) или новее.', { v: version.version, min: MIN_VERSION }));
+  }
+  const res = await josmGet('/export');
+  const xml = await res.text();
+  if (!xml.trim()) {
+    throw new Error(tr('JOSM ничего не отдал: активный слой не слой данных OSM или идёт отправка. Выберите слой данных в JOSM и обновите.'));
+  }
+  const elements = parseOsmXml(xml);
+  return { elements, bbox: elementsBbox(elements), fetchedAt: Date.now() };
+}
+
+async function josmGet(path: string): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(JOSM_URL + path);
+  } catch {
+    throw new Error(tr('JOSM не отвечает на localhost:8111: запустите JOSM и включите Remote Control (Настройки → Remote Control). '
+      + 'Если браузер спросил о доступе к локальной сети — разрешите.'));
+  }
+  if (res.status === 403) {
+    throw new Error(tr('JOSM запретил экспорт: включите «Export data from JOSM» в Настройках → Remote Control.'));
+  }
+  if (!res.ok) throw new Error(tr('JOSM ответил {status} на {path}', { status: res.status, path }));
+  return res;
+}
+
+/** .osm XML → элементы в форме ответа API (JSON). Удалённые в JOSM (action="delete", visible="false") пропускаются. */
+export function parseOsmXml(xml: string): OsmElement[] {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error(tr('JOSM отдал не .osm (ошибка разбора XML)'));
+  const out: OsmElement[] = [];
+  for (const el of doc.documentElement.children) {
+    if (el.getAttribute('action') === 'delete' || el.getAttribute('visible') === 'false') continue;
+    const id = Number(el.getAttribute('id'));
+    const version = Number(el.getAttribute('version') ?? 0);
+    const tags: Record<string, string> = {};
+    for (const t of el.getElementsByTagName('tag')) tags[t.getAttribute('k')!] = t.getAttribute('v') ?? '';
+    const withTags = Object.keys(tags).length ? { tags } : {};
+    if (el.tagName === 'node') {
+      out.push({ type: 'node', id, lat: Number(el.getAttribute('lat')), lon: Number(el.getAttribute('lon')), ...withTags });
+    } else if (el.tagName === 'way') {
+      const nodes = [...el.getElementsByTagName('nd')].map((n) => Number(n.getAttribute('ref')));
+      out.push({ type: 'way', id, version, nodes, ...withTags });
+    } else if (el.tagName === 'relation') {
+      const members = [...el.getElementsByTagName('member')].map((m) => ({
+        type: m.getAttribute('type') as OsmMember['type'], ref: Number(m.getAttribute('ref')), role: m.getAttribute('role') ?? '',
+      }));
+      out.push({ type: 'relation', id, version, members, ...withTags });
+    }
+  }
+  return out;
+}
+
+function elementsBbox(elements: OsmElement[]): Bbox | undefined {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const el of elements) {
+    if (el.type !== 'node') continue;
+    w = Math.min(w, el.lon); e = Math.max(e, el.lon);
+    s = Math.min(s, el.lat); n = Math.max(n, el.lat);
+  }
+  return w <= e ? [w, s, e, n] : undefined;
+}
+
+/** Самый маленький id в слое — временные id редактора должны начинаться ниже, чтобы не совпасть с новыми объектами JOSM. */
+export function minElementId(elements: OsmElement[]): number {
+  return elements.reduce((m, el) => Math.min(m, el.id), 0);
+}

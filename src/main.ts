@@ -36,6 +36,7 @@ import { suggestComment } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
+import { JOSM_URL, josmLayer, josmMode, minElementId, writeJosmParam } from './osm/josm';
 import { bindTagForms, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
@@ -305,6 +306,7 @@ map.on('load', () => {
   overpass.setSource(tileSource());
   applyDate();
   refreshOverpass();
+  if (josmMode) void loadJosm();
 });
 
 map.on('moveend', () => { refreshOverpass(); scheduleIndoorBadges(); });
@@ -4425,6 +4427,9 @@ function renderUpload(count: number): string {
     insertedSuggestion = undefined;
     return '';
   }
+  if (josmMode) {
+    return `<div class="upload"><p class="hint">${esc(tr('Источник — JOSM: отправка отсюда отключена, правки из 3D пока не возвращаются в JOSM. Вносите их в JOSM и нажмите «↻» у выбора источника.'))}</p></div>`;
+  }
   const s = server();
   const canUpload = osmUser && uploadComment.trim() && !uploading;
   suggestedComment = commentSuggestion();
@@ -4607,8 +4612,9 @@ accountEl.addEventListener('click', (e) => {
 });
 
 const serverSelect = document.getElementById('server-select') as HTMLSelectElement;
-serverSelect.innerHTML = SERVER_LIST.map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('');
-serverSelect.value = server().id;
+serverSelect.innerHTML = SERVER_LIST.map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('')
+  + `<option value="josm" title="${esc(tr('Активный слой запущенного JOSM (Remote Control, localhost:8111)'))}">${esc(tr('JOSM (локально)'))}</option>`;
+serverSelect.value = josmMode ? 'josm' : server().id;
 // Настройки пользователя — отдельное окно; хранятся в браузере и в профиле на сервере (см. src/settings.ts)
 const settingsDialog = document.getElementById('settings-dialog') as HTMLDialogElement;
 const settingsSyncEl = document.getElementById('settings-sync')!;
@@ -4679,8 +4685,14 @@ async function syncSettings() {
 serverSelect.addEventListener('change', () => {
   const n = session.changes().length;
   if (n && !confirm(trn(n, 'Есть несохранённые изменения ({n} объект) — при смене сервера они пропадут. Продолжить?|Есть несохранённые изменения ({n} объекта) — при смене сервера они пропадут. Продолжить?|Есть несохранённые изменения ({n} объектов) — при смене сервера они пропадут. Продолжить?'))) {
-    serverSelect.value = server().id;
+    serverSelect.value = josmMode ? 'josm' : server().id;
     return;
+  }
+  // В JOSM и обратно — с перезагрузкой: от источника зависят данные, отправка и временные id
+  if (serverSelect.value === 'josm' || josmMode) {
+    if (serverSelect.value !== 'josm') setServer(serverSelect.value as ServerId);
+    writeJosmParam(serverSelect.value === 'josm');
+    return void location.reload();
   }
   const style = server().style;
   setServer(serverSelect.value as ServerId);
@@ -4814,7 +4826,41 @@ dateSpeed.addEventListener('change', () => {
 });
 
 /** Источник тайлов для текущего сервера: его /map API (свой кеш; у боевого — прежняя база кеша). */
+/** Обновить из JOSM: кнопка «↻» у выбора источника (видна только в режиме JOSM). */
+const josmRefresh = Object.assign(document.createElement('button'), {
+  type: 'button', className: 'link-btn', textContent: '↻', title: tr('Перечитать активный слой из JOSM'), hidden: !josmMode,
+});
+serverSelect.after(josmRefresh);
+josmRefresh.addEventListener('click', () => {
+  const n = session.changes().length;
+  if (n && !confirm(trn(n, 'Есть изменения в 3D ({n} объект): они останутся поверх обновлённых данных JOSM. Продолжить?|Есть изменения в 3D ({n} объекта): они останутся поверх обновлённых данных JOSM. Продолжить?|Есть изменения в 3D ({n} объектов): они останутся поверх обновлённых данных JOSM. Продолжить?'))) return;
+  void loadJosm(true);
+});
+
+/** Слой JOSM: загрузить (или перечитать); карта переходит к его данным при первой загрузке и если они не в кадре. */
+let josmShown = false;
+async function loadJosm(refresh = false) {
+  panelStatus(tr('Читаю данные из JOSM…'));
+  try {
+    const { elements, bbox } = await josmLayer(refresh);
+    // Временные id редактора — ниже новых объектов JOSM (у тех тоже отрицательные)
+    nextNewId = Math.min(nextNewId, minElementId(elements) - 1);
+    if (refresh) overpass.setSource(tileSource());
+    setStatus(trn(elements.length, 'Из JOSM: {n} объект.|Из JOSM: {n} объекта.|Из JOSM: {n} объектов.'));
+    const view = map.getBounds();
+    const inView = bbox && bbox[2] >= view.getWest() && bbox[0] <= view.getEast() && bbox[3] >= view.getSouth() && bbox[1] <= view.getNorth();
+    if (!bbox || (josmShown && inView)) return;
+    josmShown = true;
+    // Не мельче зума, с которого грузятся данные: иначе слой JOSM не покажется
+    const cam = map.cameraForBounds(bbox, { padding: 40, maxZoom: 18 });
+    map.jumpTo({ center: cam?.center, zoom: Math.max(cam?.zoom ?? 0, OVERPASS_MIN_ZOOM) });
+  } catch (err) {
+    setStatus((err as Error).message, true);
+  }
+}
+
 function tileSource(): TileSource {
+  if (josmMode) return { api: JOSM_URL, db: 'osm-simple3d-josm', josm: true };
   const s = server();
   return { api: s.api, db: s.id === 'prod' ? 'osm-simple3d' : `osm-simple3d-${s.id}` };
 }

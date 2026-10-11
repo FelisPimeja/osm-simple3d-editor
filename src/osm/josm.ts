@@ -28,9 +28,9 @@ let layer: Promise<JosmLayer> | undefined;
 /** Ответ /export последней загрузки — чтобы опрос перерисовывал только изменившийся слой. */
 let lastXml: string | undefined;
 
-/** Слой JOSM: запрашивается один раз, refresh — заново. */
-export function josmLayer(refresh = false): Promise<JosmLayer> {
-  if (refresh || !layer) {
+/** Слой JOSM: запрашивается один раз (дальше его обновляет опрос, pollJosmLayer). */
+export function josmLayer(): Promise<JosmLayer> {
+  if (!layer) {
     layer = loadLayer();
     layer.catch(() => { layer = undefined; }); // после ошибки следующий вызов спросит JOSM снова
   }

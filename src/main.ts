@@ -4825,29 +4825,13 @@ dateSpeed.addEventListener('change', () => {
   if (playTimer) { stopPlay(); startPlay(); }
 });
 
-/** Обновить из JOSM: кнопка «↻» у выбора источника (видна только в режиме JOSM). */
-const josmRefresh = Object.assign(document.createElement('button'), {
-  type: 'button', className: 'link-btn', textContent: '↻', title: tr('Перечитать активный слой из JOSM'), hidden: !josmMode,
-});
-serverSelect.after(josmRefresh);
-josmRefresh.addEventListener('click', () => {
-  const n = session.changes().length;
-  if (n && !confirm(trn(n, 'Есть изменения в 3D ({n} объект): они останутся поверх обновлённых данных JOSM. Продолжить?|Есть изменения в 3D ({n} объекта): они останутся поверх обновлённых данных JOSM. Продолжить?|Есть изменения в 3D ({n} объектов): они останутся поверх обновлённых данных JOSM. Продолжить?'))) return;
-  void loadJosm(true);
-});
-
-/** Слой JOSM: загрузить (или перечитать); карта переходит к его данным при первой загрузке и если они не в кадре. */
-let josmShown = false;
-async function loadJosm(refresh = false) {
+/** Слой JOSM: первая загрузка; карта переходит к его данным. */
+async function loadJosm() {
   panelStatus(tr('Читаю данные из JOSM…'));
   try {
-    const { elements, bbox } = await josmLayer(refresh).then(josmApplied);
-    if (refresh) await overpass.refreshJosm();
+    const { elements, bbox } = await josmLayer().then(josmApplied);
     setStatus(trn(elements.length, 'Из JOSM: {n} объект.|Из JOSM: {n} объекта.|Из JOSM: {n} объектов.'));
-    const view = map.getBounds();
-    const inView = bbox && bbox[2] >= view.getWest() && bbox[0] <= view.getEast() && bbox[3] >= view.getSouth() && bbox[1] <= view.getNorth();
-    if (!bbox || (josmShown && inView)) return;
-    josmShown = true;
+    if (!bbox) return;
     // Не мельче зума, с которого грузятся данные: иначе слой JOSM не покажется
     const cam = map.cameraForBounds(bbox, { padding: 40, maxZoom: 18 });
     map.jumpTo({ center: cam?.center, zoom: Math.max(cam?.zoom ?? 0, OVERPASS_MIN_ZOOM) });

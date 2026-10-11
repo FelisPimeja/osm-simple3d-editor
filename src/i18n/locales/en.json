@@ -713,8 +713,6 @@
   "Источник — JOSM: отправка отсюда отключена, правки из 3D пока не возвращаются в JOSM. Вносите их в JOSM: изменения слоя подтягиваются сами (раз в 2 с).": "Source is JOSM: uploading from here is disabled, and 3D edits are not sent back to JOSM yet. Make your changes in JOSM: layer changes are picked up automatically (every 2 s).",
   "Активный слой запущенного JOSM (Remote Control, localhost:8111)": "Active layer of the running JOSM (Remote Control, localhost:8111)",
   "JOSM (локально)": "JOSM (local)",
-  "Перечитать активный слой из JOSM": "Reload the active layer from JOSM",
-  "Есть изменения в 3D ({n} объект): они останутся поверх обновлённых данных JOSM. Продолжить?|Есть изменения в 3D ({n} объекта): они останутся поверх обновлённых данных JOSM. Продолжить?|Есть изменения в 3D ({n} объектов): они останутся поверх обновлённых данных JOSM. Продолжить?": "There are 3D edits ({n} object): they will stay on top of the reloaded JOSM data. Continue?|There are 3D edits ({n} objects): they will stay on top of the reloaded JOSM data. Continue?",
   "Читаю данные из JOSM…": "Reading data from JOSM…",
   "Из JOSM: {n} объект.|Из JOSM: {n} объекта.|Из JOSM: {n} объектов.": "From JOSM: {n} object.|From JOSM: {n} objects.",
   "JOSM {v} не умеет отдавать данные — нужна версия {min} (25.08) или новее.": "JOSM {v} cannot export data: version {min} (25.08) or newer is required.",

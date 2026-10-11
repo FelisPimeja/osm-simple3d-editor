@@ -2616,7 +2616,9 @@ function pushSidePolygons(f: Feature3D, edge: NonNullable<PushTarget['edge']>, d
       const slide = (moved: [number, number], other: [number, number], self: [number, number]): [number, number] => {
         const ex = b2[0] - a2[0], ey = b2[1] - a2[1], sx = self[0] - other[0], sy = self[1] - other[1];
         const den = ex * sy - ey * sx;
-        if (Math.abs(den) < 1e-9 * Math.hypot(ex, ey) * Math.hypot(sx, sy) || Math.hypot(sx, sy) < 1e-6) return moved;
+        // Соседняя сторона почти параллельна стене (например, промежуточный узел на прямой) — пересечение
+        // улетает в бесконечность: такой угол просто сдвигается по нормали
+        if (Math.abs(den) < 1e-3 * Math.hypot(ex, ey) * Math.hypot(sx, sy) || Math.hypot(sx, sy) < 1e-6) return moved;
         const t = ((other[0] - a2[0]) * sy - (other[1] - a2[1]) * sx) / den;
         return [a2[0] + t * ex, a2[1] + t * ey];
       };

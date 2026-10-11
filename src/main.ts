@@ -90,7 +90,7 @@ const userHidden = new Set<string>();
 /** roads3d — объёмные мосты, тоннели и развязки (эксперимент). */
 interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; roads3d: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, roads3d: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, trees: true, roads3d: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {

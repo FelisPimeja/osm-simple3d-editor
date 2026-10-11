@@ -380,7 +380,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     gridFrame.visible = this.gridVisible;
     this.gridFrame = gridFrame;
     g.scene.add(ground, gridFrame);
-    if (this.focusAxes) g.scene.add(axesGizmo(this.focusAxes));
+    if (this.focusAxes) g.scene.add(axesGizmo(this.focusAxes, undefined, AXES_LENGTH, true));
     this.install(FOCUS_GROUP, g);
     this.updateHiddenEdges();
     this.applyLevel();
@@ -2233,13 +2233,16 @@ const ORIGIN_OFFSET = 5;
 const AXIS_DIM_COLOUR = 0x9ca3af;
 /** Длина направляющей зафиксированной оси в каждую сторону, м. */
 const LOCK_GUIDE_M = 300;
+/** Насколько видны оси начала координат сквозь модель (доля обычной непрозрачности). */
+const OCCLUDED_AXES_OPACITY = 0.2;
 const AXIS_COLOURS = [0xd43a3a, 0x3fa34d, 0x3a52b4]; // x, y, z — как в 3D-редакторах
 
 /**
  * Обозначение начала координат: оси x/y/z стрелками в положительную сторону, отрицательные — тонкой линией.
- * Рисуется поверх геометрии (без проверки глубины), чтобы не терялось за стенами.
+ * Значок инструмента рисуется поверх геометрии (без проверки глубины), чтобы не терялся за стенами;
+ * occluded (начало координат на сетке) — модель его закрывает, а сквозь неё он лишь слегка просвечивает.
  */
-function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH): THREE.Object3D {
+function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH, occluded = false): THREE.Object3D {
   const r = len * 0.012, head = len * 0.12;
   const root = new THREE.Group();
   // Базис: x, y — оси здания на земле, z — вверх
@@ -2274,7 +2277,21 @@ function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH): THREE
       guide.renderOrder = 1001;
       root.add(guide);
     }
-    for (const o of [shaft, tip, neg]) { o.renderOrder = 1001; root.add(o); }
+    for (const o of [shaft, tip, neg]) {
+      o.renderOrder = 1001;
+      root.add(o);
+      if (!occluded) continue;
+      // Видимая часть — с проверкой глубины; закрытая моделью — бледной копией поверх
+      // (материал у стержня и наконечника общий — копия со своими параметрами)
+      const mat = o.material as THREE.Material;
+      const ghostMat = mat.clone();
+      Object.assign(ghostMat, { depthTest: false, opacity: mat.opacity * OCCLUDED_AXES_OPACITY });
+      const ghost = o.clone() as typeof o;
+      (ghost as THREE.Mesh).material = ghostMat;
+      ghost.renderOrder = 1002;
+      root.add(ghost);
+      mat.depthTest = true;
+    }
   });
   return root;
 }

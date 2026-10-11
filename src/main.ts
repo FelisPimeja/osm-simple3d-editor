@@ -29,6 +29,8 @@ import { CursorOrbit } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
 import { SplitTool, type CutPoint } from './edit/split-tool';
 import { insertInLine, insertInRing, restructureRing, type Insert, type RingWay } from './edit/topology';
+import { MAX_DEVIATION_DEG, orthogonalize } from './edit/orthogonalize';
+import type { Pt } from './render/building-geometry';
 import { MeasureTool } from './edit/measure-tool';
 import { OffsetTool, type OffsetTarget } from './edit/offset-tool';
 import { setToolCursor, type ToolCursor } from './view/cursors';
@@ -1346,6 +1348,89 @@ function startRotate() {
   }
   moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   rotateTool.start(keys);
+}
+
+// «Выровнять углы» (A): все углы выделенных частей — 90°, одним шагом истории
+const squareBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="square"]')!;
+squareBtn.addEventListener('click', () => squareSelected());
+
+/**
+ * Выровнять углы выделенных частей (orthogonalize): узлы только сдвигаются — общие с соседями тянут соседей
+ * следом (как «Вытянуть» с соседями), чужие узлы на наших сторонах (Т-образные стыки) остаются на этих сторонах.
+ */
+function squareSelected() {
+  if (!focus) return;
+  const keys = selection.filter((k) => focus!.members.includes(k));
+  if (!keys.length) return setStatus(tr('Сначала выберите в здании части (или несколько с Shift), затем «Выровнять углы».'), true);
+  const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
+  if (features.some((f) => !nodeIds(f))) {
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
+  }
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  // Новые места узлов; узел, общий у двух выделенных частей, — среднее их вариантов
+  const acc = new Map<number, { x: number; y: number; n: number }>();
+  /** Стороны колец: узлы концов (старые и новые места — после усреднения). */
+  const sides: { u: number; v: number; a: Pt; b: Pt }[] = [];
+  let skewed = 0;
+  for (const f of features) {
+    const rings: { ids: number[]; pts: Pt[] }[] = f.polygons.flatMap((p) => [
+      { ids: p.outerIds!, pts: p.outer.map(local) },
+      ...p.inners.map((r, j) => ({ ids: p.innerIds![j], pts: r.map(local) })),
+    ]);
+    const res = orthogonalize(rings.map((r) => r.pts));
+    if (typeof res === 'string') {
+      if (keys.length === 1) {
+        return setStatus(res === 'skewed'
+          ? tr('{key}: стороны слишком далеки от прямых углов (больше {deg}°) — выровнять нельзя.', { key: f.key, deg: MAX_DEVIATION_DEG })
+          : tr('{key}: контур не похож на прямоугольный (мало сторон).', { key: f.key }), true);
+      }
+      skewed++;
+      continue;
+    }
+    rings.forEach((r, ri) => r.ids.forEach((id, k) => {
+      const [x, y] = res.rings[ri][k];
+      const a = acc.get(id) ?? acc.set(id, { x: 0, y: 0, n: 0 }).get(id)!;
+      a.x += x; a.y += y; a.n++;
+      sides.push({ u: id, v: r.ids[(k + 1) % r.ids.length], a: r.pts[k], b: r.pts[(k + 1) % r.ids.length] });
+    }));
+  }
+  if (!acc.size) return setStatus(tr('Ни одну из частей не выровнять: стороны слишком далеки от прямых углов.'), true);
+  const target = new Map([...acc].map(([id, a]) => [id, [a.x / a.n, a.y / a.n] as Pt]));
+  const moves = new Map<number, LonLat>();
+  for (const f of features) for (const p of f.polygons) {
+    [[p.outer, p.outerIds], ...p.inners.map((r, j) => [r, p.innerIds?.[j]] as const)].forEach(([ring, ids]) => (ids as number[] | undefined)?.forEach((id, k) => {
+      const t = target.get(id), c = (ring as LonLat[])[k];
+      if (!t || moves.has(id)) return;
+      const [x, y] = local(c);
+      if (Math.hypot(t[0] - x, t[1] - y) > 1e-3) moves.set(id, overpassLayer.focusToLngLat(t[0], t[1])!);
+    }));
+  }
+  // Чужие узлы на наших сторонах — на то же место выровненной стороны
+  for (const g of liveFeatures()) for (const r of g.polygons) {
+    const rings: [LonLat[], number[] | undefined][] = [[r.outer, r.outerIds], ...r.inners.map((c, k): [LonLat[], number[] | undefined] => [c, r.innerIds?.[k]])];
+    for (const [ring, rids] of rings) rids?.forEach((id, k) => {
+      if (target.has(id) || moves.has(id)) return;
+      const [px, py] = local(ring[k]);
+      for (const sd of sides) {
+        const ex = sd.b[0] - sd.a[0], ey = sd.b[1] - sd.a[1], len = Math.hypot(ex, ey);
+        if (len < 1e-6) continue;
+        const t = ((px - sd.a[0]) * ex + (py - sd.a[1]) * ey) / (len * len);
+        if (Math.abs((px - sd.a[0]) * ey - (py - sd.a[1]) * ex) / len >= 1e-3 || t <= 1e-6 || t >= 1 - 1e-6) continue;
+        const a = target.get(sd.u)!, b = target.get(sd.v)!;
+        moves.set(id, overpassLayer.focusToLngLat(a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))!);
+        break;
+      }
+    });
+  }
+  if (!moves.size) return setStatus(tr('Углы уже прямые.'));
+  const edits = nodeMoveEdits(moves);
+  if (typeof edits === 'string') return setStatus(edits, true);
+  session.editMany(edits);
+  const neighbours = edits.filter((e) => e.polygons && !keys.includes(e.key)).length;
+  const done = trn(features.length - skewed, 'Углы выровнены у {n} объекта|Углы выровнены у {n} объектов|Углы выровнены у {n} объектов');
+  setStatus(done + (neighbours ? tr(', соседи с общими узлами подтянуты следом: {n}', { n: neighbours }) : '')
+    + (skewed ? tr(', пропущено {n} (стороны далеки от прямых углов)', { n: skewed }) : '') + tr('. Отменить — Ctrl+Z.'));
 }
 
 // Инструмент «Вытянуть»: верх/низ по вертикали (height / min_height) и стены по нормали (узлы контура)
@@ -3022,6 +3107,7 @@ document.addEventListener('keydown', (e) => {
     : e.code === 'KeyB' && !e.shiftKey ? 'paint'
     : e.code === 'KeyO' && !e.shiftKey ? 'offset'
     : e.code === 'KeyQ' && !e.shiftKey ? 'rotate'
+    : e.code === 'KeyA' && !e.shiftKey ? 'square'
     : e.code === 'KeyH' ? (e.shiftKey ? 'show-all' : 'hide')
     : e.code === 'KeyR' && !e.shiftKey ? 'rect'
     : e.code === 'KeyL' && !e.shiftKey ? 'polygon'
@@ -3032,7 +3118,7 @@ document.addEventListener('keydown', (e) => {
   closeCtxMenu();
   cancelCopyPick();
   if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'split') startSplit();
-  else if (action === 'rotate') startRotate();
+  else if (action === 'rotate') startRotate(); else if (action === 'square') squareSelected();
   else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);
 }, { capture: true });
@@ -4111,7 +4197,7 @@ const HELP: Record<string, HelpTopic> = {
   focus: { title: tr('Режим здания'), desc: tr('Одно здание отдельно от карты: его части, контур и правка геометрии инструментами слева.'), items: [
     tr('Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.'),
     tr('Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.'),
-    tr('M — переместить, Q — повернуть, P — вытянуть, K — рассечь, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.'),
+    tr('M — переместить, Q — повернуть, A — выровнять углы (90°), P — вытянуть, K — рассечь, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.'),
     tr('Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, Shift+H — показать все.'),
     tr('Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.'),
     tr('Esc — снять выделение, ещё раз — назад к карте; двойной клик мимо здания — тоже к карте.'),

@@ -73,8 +73,8 @@ const NEEDLE_GEO = (() => {
 const NEEDLE_FAR_GEO = new THREE.ConeGeometry(0.85, 1, 6, 1, true).applyMatrix4(Z_UP).translate(0, 0, 0.5);
 
 const COLOURS = { trunk: new THREE.Color('#7a5c43'), broad: new THREE.Color('#79a356'), needle: new THREE.Color('#3f7650') };
-/** «Убрать цвета»: деревья вполовину бледнее (смешаны с белым), но не белые. */
-const PALE = 0.5;
+/** «Убрать цвета»: деревья на 25 % бледнее (смешаны с белым), но не белые. */
+const PALE = 0.25;
 const WHITE = new THREE.Color(0xffffff);
 const TRUNK_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.trunk, flatShading: true });
 const BROAD_MATERIAL = new THREE.MeshLambertMaterial({ color: COLOURS.broad, flatShading: true });

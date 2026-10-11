@@ -303,8 +303,10 @@ export class BuildingsLayer implements CustomLayerInterface {
       triangles += renderer.info.render.triangles;
     }
     if (!this.focused && this.graphics.trees !== false) {
+      const height = renderer.getContext().drawingBufferHeight;
       for (const t of this.trees.values()) {
         t.camera.projectionMatrix = main.clone().multiply(t.model);
+        if (!t.prepare(height)) continue;
         renderer.resetState();
         renderer.render(t.scene, t.camera);
         triangles += renderer.info.render.triangles;

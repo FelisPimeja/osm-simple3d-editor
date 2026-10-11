@@ -21,11 +21,10 @@ const MIN_PITCH = 0;
  * Камера поворачивается жёстко (и положение, и направление взгляда) вокруг оси через точку —
  * поэтому сама точка остаётся на том же месте экрана.
  *
- * Жесты: средняя или правая кнопка мыши, либо Ctrl + левая. Стандартное вращение MapLibre на время
- * включения режима отключается, перемещение левой кнопкой остаётся.
+ * Жесты: средняя или правая кнопка мыши, либо Ctrl + левая. Стандартное вращение MapLibre отключено,
+ * перемещение левой кнопкой остаётся.
  */
 export class CursorOrbit {
-  private enabled = false;
   private drag?: { pivot: Pivot; x: number; y: number; pointerId: number };
   private readonly marker: HTMLDivElement;
 
@@ -40,7 +39,9 @@ export class CursorOrbit {
     canvas.addEventListener('pointermove', this.onMove);
     canvas.addEventListener('pointerup', this.onUp);
     canvas.addEventListener('pointercancel', this.onUp);
-    canvas.addEventListener('contextmenu', (e) => { if (this.enabled) e.preventDefault(); });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    map.dragRotate.disable();
+    this.updateMaxPitch();
   }
 
   /** Наклон за горизонт — камера уходит под землю (режим здания: добраться до нижних граней). */
@@ -52,20 +53,17 @@ export class CursorOrbit {
     this.map.setCenterClampedToGround(!on);
     if (!on && this.map.getPitch() > 85) this.map.setPitch(85);
     if (!on) this.map.setCenterElevation(0);
-    this.setEnabled(this.enabled);
+    this.updateMaxPitch();
   }
 
-  setEnabled(on: boolean) {
-    this.enabled = on;
+  private updateMaxPitch() {
     // Для свободного облёта нужен наклон почти до горизонта (по умолчанию в MapLibre 60°);
     // в режиме здания — и под землю (MapLibre допускает до 180°, выше 90° — экспериментально)
-    this.map.setMaxPitch(on && this.underground ? 175 : on ? 85 : 60);
-    if (on) this.map.dragRotate.disable();
-    else this.map.dragRotate.enable();
+    this.map.setMaxPitch(this.underground ? 175 : 85);
   }
 
   private onDown = (e: PointerEvent) => {
-    if (!this.enabled || e.pointerType === 'touch') return;
+    if (e.pointerType === 'touch') return;
     const orbit = e.button === 1 || e.button === 2 || (e.button === 0 && e.ctrlKey);
     if (!orbit) return;
     // Не даём MapLibre начать своё перемещение или вращение

@@ -296,10 +296,10 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .basemap-offset-btn.active { color: #fff; background: #2f7cff; }
 .basemap-offset-btn svg { width: 14px; height: 14px; display: block; }
 /* Панель смещения снимка */
-.offset-panel { position: absolute; top: 10px; right: 50px; z-index: 21; width: 250px; padding: 8px 10px; border-radius: 6px;
+.offset-panel { position: absolute; z-index: 21; width: 250px; padding: 8px 10px; border-radius: 6px;
   background: rgba(255,255,255,.97); box-shadow: 0 2px 8px rgba(0,0,0,.2); font: 12px/1.4 system-ui, sans-serif; color: #222; }
 .offset-panel[hidden] { display: none; }
-.offset-head { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 6px; }
+.offset-head { display: flex; align-items: flex-start; gap: 6px; margin: -8px -10px 6px; padding: 8px 10px 0; cursor: move; user-select: none; touch-action: none; }
 .offset-title { flex: 1; font-weight: 600; }
 .offset-close { border: none; background: none; font-size: 16px; line-height: 1; padding: 0 2px; cursor: pointer; opacity: .55; }
 .offset-close:hover { opacity: 1; }

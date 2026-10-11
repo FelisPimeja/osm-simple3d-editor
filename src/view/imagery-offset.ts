@@ -9,6 +9,7 @@ import { tr } from '../i18n';
 import { getOffset, IMAGERY, isOffset, refreshImagery, storeOffset, type Offset } from './basemaps';
 
 const R = 6378137;
+const POS_KEY = 'osm3d.offset-panel-pos';
 /** Пересборка тайлов при перетаскивании — не чаще, мс. */
 const LIVE_MS = 80;
 
@@ -43,6 +44,7 @@ export class ImageryOffsetPanel {
     close.textContent = '×';
     close.addEventListener('click', () => this.cancel());
     head.append(this.title, close);
+    this.draggable(head);
     const field = (label: string, title: string) => {
       const row = document.createElement('label');
       row.title = title;
@@ -102,7 +104,50 @@ export class ImageryOffsetPanel {
     this.before = this.offset = getOffset(id);
     this.title.textContent = tr('Смещение: {name}', { name: IMAGERY.find((i) => i.id === id)?.name ?? id });
     this.el.hidden = false;
+    this.place();
     this.syncInputs();
+  }
+
+  /**
+   * Где показать: где оставили (в пределах карты), иначе — сверху, слева от кнопок карты, между колонками панелей.
+   */
+  private place() {
+    const box = this.map.getContainer().getBoundingClientRect();
+    const w = this.el.offsetWidth, h = this.el.offsetHeight;
+    let pos: { x: number; y: number } | undefined;
+    try { pos = JSON.parse(localStorage.getItem(POS_KEY) ?? 'null') ?? undefined; } catch { /* по умолчанию */ }
+    if (!pos) {
+      const ctrl = this.map.getContainer().querySelector('.maplibregl-ctrl-top-right .maplibregl-ctrl-group')?.getBoundingClientRect();
+      const left = document.getElementById('left-col')?.getBoundingClientRect();
+      const right = ctrl ? ctrl.left - box.left - 8 : box.width - 12;
+      const min = left ? left.right - box.left + 8 : 12;
+      pos = { x: Math.max(min, right - w), y: 10 };
+    }
+    this.moveTo(pos.x, pos.y, w, h);
+  }
+
+  private moveTo(x: number, y: number, w = this.el.offsetWidth, h = this.el.offsetHeight) {
+    const box = this.map.getContainer().getBoundingClientRect();
+    this.el.style.left = `${Math.round(Math.min(Math.max(0, x), box.width - w))}px`;
+    this.el.style.top = `${Math.round(Math.min(Math.max(0, y), box.height - h))}px`;
+  }
+
+  /** Панель перетаскивается за заголовок; место запоминается. */
+  private draggable(head: HTMLElement) {
+    head.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
+      e.preventDefault();
+      const sx = e.clientX - this.el.offsetLeft, sy = e.clientY - this.el.offsetTop;
+      head.setPointerCapture(e.pointerId);
+      const move = (ev: PointerEvent) => this.moveTo(ev.clientX - sx, ev.clientY - sy);
+      const up = () => {
+        head.removeEventListener('pointermove', move);
+        try { localStorage.setItem(POS_KEY, JSON.stringify({ x: this.el.offsetLeft, y: this.el.offsetTop })); } catch { /* до перезагрузки */ }
+      };
+      head.addEventListener('pointermove', move);
+      head.addEventListener('pointerup', up, { once: true });
+      head.addEventListener('pointercancel', up, { once: true });
+    });
   }
 
   /** Снимок сменили или убрали — панель закрыть, оставив сдвиг как есть. */

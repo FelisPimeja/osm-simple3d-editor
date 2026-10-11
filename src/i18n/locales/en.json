@@ -712,6 +712,7 @@
   "Отменить": "Cancel",
   "Общие с соседями углы стены: «с соседями» — соседи тянутся следом, «отдельно» — стена отделяется от них (D)": "Wall corners shared with neighbours: “with neighbours” drags them along, “detached” separates the wall from them (D)",
   "с соседями": "with neighbours",
+  "тянет {n} соседа|тянет {n} соседей|тянет {n} соседей": "drags {n} neighbour|drags {n} neighbours",
   "отдельно": "detached",
   "По широте": "Latitude",
   "Сдвиг на север (минус — на юг), м": "Shift north (minus is south), m",

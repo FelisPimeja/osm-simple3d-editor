@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import { LEVEL_HEIGHT } from '../osm/heights';
-import { tr } from '../i18n';
+import { tr, trn } from '../i18n';
 
 export type PushUnits = 'm' | 'levels';
 const UNITS_STORAGE = 'push-units';
@@ -46,6 +46,8 @@ export class PushTool {
   units: PushUnits = loadUnits();
   /** Общие узлы стены двигаются вместе с соседями (иначе стена отделяется от них). */
   glue = loadGlue();
+  /** Сколько соседей тянется вместе со стеной в текущем превью (задаёт preview). */
+  linked = 0;
 
   constructor(
     private readonly layer: BuildingsLayer,
@@ -269,7 +271,7 @@ export class PushTool {
       .map((on) => `<button type="button" data-glue="${on ? 'on' : 'off'}"${on === this.glue ? ' class="active"' : ''}>${on ? tr('с соседями') : tr('отдельно')}</button>`).join('')}</span>`;
     this.vcb.innerHTML = t
       ? `<span class="vcb-label">${{ top: tr('Верх'), bottom: tr('Низ'), side: tr('Стена') }[t.face]}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${levels ? tr('эт.') : tr('м')}
-      <span class="vcb-axis">${this.snap ? tr('до точки') : t.face === 'side' ? tr('по нормали') : tr('по вертикали')}</span>${t.face === 'side' ? glue : units}`
+      <span class="vcb-axis">${this.snap ? tr('до точки') : t.face === 'side' ? tr('по нормали') : tr('по вертикали')}</span>${t.face === 'side' && this.glue && this.linked ? `<span class="vcb-axis vcb-linked">${trn(this.linked, 'тянет {n} соседа|тянет {n} соседей|тянет {n} соседей')}</span>` : ''}${t.face === 'side' ? glue : units}`
       : `<span class="vcb-label">${tr('Сдвиг')}</span>${units}${glue}`;
   }
 }

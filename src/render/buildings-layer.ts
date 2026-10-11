@@ -99,6 +99,8 @@ const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent
 /** Рёбра объёмов с проблемами проверки («Подсветить все»): ошибки — красные, предупреждения — оранжевые; толщина, px. */
 const ISSUE_COLOUR = { error: 0xff1a1a, warning: 0xff8a00 };
 const ISSUE_WIDTH_PX = 3;
+/** Цвет рёбер соседей, которые правка тянет за собой (общие узлы). */
+const LINKED_COLOUR = 0x7c3aed;
 /** Сквозь другие объёмы — тоньше и бледнее: проблемная часть может прятаться внутри здания. */
 const ISSUE_XRAY_WIDTH_PX = 1.5;
 /**
@@ -1860,6 +1862,40 @@ export class BuildingsLayer implements CustomLayerInterface {
   setIssueHighlight(levels: Map<string, 'error' | 'warning'>) {
     this.issueLevels = levels;
     for (const g of this.activeGroups()) this.applyIssueEdges(g);
+    this.map?.triggerRepaint();
+  }
+
+  private linkedLines: LineSegments2[] = [];
+
+  /**
+   * Рёбра объектов сцены режима здания, которые текущая правка тянет за собой (соседи с общими узлами),
+   * по их текущей (в т. ч. предварительной) геометрии; сквозь другие объекты — бледнее. Пусто — снять.
+   */
+  setLinked(keys: string[]) {
+    for (const l of this.linkedLines) { l.geometry.dispose(); l.material.dispose(); l.parent?.remove(l); }
+    this.linkedLines = [];
+    const g = this.groups.get(FOCUS_GROUP);
+    const items = g ? keys.map((k) => g.byKey.get(k)).filter((it): it is Item => !!it && !g.hidden.has(it.feature.key) && !!it.positions.length) : [];
+    if (g && this.map && items.length) {
+      const canvas = this.map.getCanvas();
+      const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+      for (const it of items) it.edges ??= itemEdges(it);
+      const pos = new Float32Array(items.reduce((n, it) => n + it.edges!.length, 0));
+      let o = 0;
+      for (const it of items) { pos.set(it.edges!, o); o += it.edges!.length; }
+      for (const xray of [false, true]) {
+        const geo = new LineSegmentsGeometry();
+        geo.setPositions(pos);
+        const mat = new LineMaterial({ color: LINKED_COLOUR, linewidth: (xray ? ISSUE_XRAY_WIDTH_PX : ISSUE_WIDTH_PX) * dpr,
+          transparent: xray, opacity: xray ? 0.35 : 1, depthTest: !xray, depthWrite: false });
+        mat.resolution.set(canvas.width, canvas.height);
+        const line = new LineSegments2(geo, mat);
+        line.frustumCulled = false;
+        line.renderOrder = 14 + (xray ? 1 : 0);
+        g.scene.add(line);
+        this.linkedLines.push(line);
+      }
+    }
     this.map?.triggerRepaint();
   }
 

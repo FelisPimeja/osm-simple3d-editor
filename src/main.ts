@@ -2625,7 +2625,9 @@ function previewPush(t: PushTarget, dz: number | undefined) {
     for (const k of pushPreviewed) { const g = live?.get(k); if (!keep.has(k) && g) overpassLayer.previewFocusFeature(g); }
     pushPreviewed = pushPreviewed.filter((k) => keep.has(k));
   };
-  if (dz === undefined) { restore(new Set()); return overpassLayer.previewFocusFeature(f); }
+  pushTool.linked = 0;
+  if (dz === undefined) { restore(new Set()); overpassLayer.setLinked([]); return overpassLayer.previewFocusFeature(f); }
+  overpassLayer.setLinked([]);
   if (t.face === 'side' && pushTool.glue) {
     const moves = gluedSideMoves(f, t.edge!, dz);
     const edits = moves ? nodeMoveEdits(moves, true) : undefined;
@@ -2640,6 +2642,9 @@ function previewPush(t: PushTarget, dz: number | undefined) {
       }
       restore(keys);
       pushPreviewed = [...keys].filter((k) => k !== t.key);
+      // Соседи, которых стена тянет за собой, — фиолетовыми рёбрами (как общие узлы на схемах) и числом в панели
+      overpassLayer.setLinked(pushPreviewed);
+      pushTool.linked = pushPreviewed.length;
       return;
     }
   }

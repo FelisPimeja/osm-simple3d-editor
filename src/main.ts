@@ -81,12 +81,16 @@ let replacedIds: number[] = [];
  */
 const userHidden = new Set<string>();
 
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; orbitAtCursor: boolean }
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, orbitAtCursor: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
-  try { return JSON.parse(localStorage.getItem(GFX_KEY) ?? '{}'); } catch { return {}; }
+  try {
+    // orbitAtCursor — бывшая галка «Вращение вокруг точки под курсором»: теперь так всегда
+    const { orbitAtCursor: _, ...saved } = JSON.parse(localStorage.getItem(GFX_KEY) ?? '{}');
+    return saved;
+  } catch { return {}; }
 }
 function saveGraphics() {
   try { localStorage.setItem(GFX_KEY, JSON.stringify(gfx)); } catch { /* приватный режим и т.п. */ }
@@ -319,14 +323,6 @@ const orbit = new CursorOrbit(map, (x, y) => {
   if (!hit && focus) { const c = overpassLayer.focusCenter(); if (c) return c; }
   // Не попали в 3D-слой (тайловое здание или пусто) — точка на земле
   return hit ?? { lngLat: map.unproject([x, y]), altitude: 0 };
-});
-const orbitToggle = document.getElementById('orbit-toggle') as HTMLInputElement;
-orbitToggle.checked = gfx.orbitAtCursor;
-orbit.setEnabled(gfx.orbitAtCursor);
-orbitToggle.addEventListener('change', () => {
-  gfx.orbitAtCursor = orbitToggle.checked;
-  saveGraphics();
-  orbit.setEnabled(gfx.orbitAtCursor || !!focus); // в режиме здания вращение вокруг курсора всегда
 });
 
 function applyMonochrome() {
@@ -881,7 +877,6 @@ function enterFocus(g: BuildingGroup, flyIn = true) {
   drill = focus = g;
   focusToolbar.hidden = false;
   syncMapTools();
-  orbit.setEnabled(true);
   orbit.setUnderground(true);
   overpassLayer.setFocus(groupFeatures(g), bareOutlines(g));
   overpassLayer.setFocusHidden(focusHidden);
@@ -1006,7 +1001,6 @@ function exitFocus() {
   renderOutliner();
   updateSnap(undefined);
   orbit.setUnderground(false);
-  orbit.setEnabled(gfx.orbitAtCursor);
   overpassLayer.setFocus(undefined);
   const restore = (ls: typeof focusHiddenLayers) => {
     for (const { id, visibility } of ls) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility as 'visible' | 'none');

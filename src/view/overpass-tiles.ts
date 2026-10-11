@@ -11,6 +11,7 @@ import { timed } from '../perf';
 import { josmLayer } from '../osm/josm';
 import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type WoodArea } from '../osm/trees';
 import { scatterTreesAsync, TreeGroup } from '../render/trees';
+import { parseRoads, type RoadWay } from '../osm/roads';
 
 export const OVERPASS_TILE_ZOOM = GRID_ZOOM;
 /** Сколько тайлов держать в кеше данных. */
@@ -31,7 +32,7 @@ type Entry =
   | { state: 'lookup' } // ищем в IndexedDB
   | { state: 'queued' } // в IndexedDB нет, ждёт свободного слота запроса к API
   | { state: 'loading'; abort: AbortController }
-  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; indoor: IndoorFeature[]; trees?: TreeData; fetchedAt: number; via?: TileVia; refreshing?: AbortController; refreshAfter?: number; partial?: boolean }
+  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; indoor: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; fetchedAt: number; via?: TileVia; refreshing?: AbortController; refreshAfter?: number; partial?: boolean }
   | { state: 'error'; retryAt: number; attempts: number };
 
 /**
@@ -74,6 +75,8 @@ export class OverpassTiles {
   /** Перезапрос не удался после всех попыток — в индикаторе это «ждут повтора». */
   private readonly reloadFailed = new Set<string>();
   mode: OverpassMode = 'off';
+  /** Нужны дороги (мосты и развязки): тайлы из кеша без них перезапрашиваются в фоне. */
+  roadsWanted = false;
 
   /**
    * overlay — подмена объекта перед отрисовкой (несохранённые правки живут поверх данных тайлов
@@ -152,6 +155,13 @@ export class OverpassTiles {
       }
       if (batch.length) for (const r of this.layer.updateFeatures(tile, batch)) this.rendered.set(r.feature.key, r);
     }
+  }
+
+  /** Дороги показанных тайлов (пути на границе — по разу от каждого тайла). */
+  roads(): RoadWay[] {
+    const out: RoadWay[] = [];
+    for (const k of this.wanted) { const e = this.cache.get(k); if (e?.state === 'ready' && e.roads) out.push(...e.roads); }
+    return out;
   }
 
   /** Indoor-объекты загруженных тайлов (без повторов), хотя бы одной вершиной внутри bbox [w, s, e, n]. */
@@ -365,7 +375,8 @@ export class OverpassTiles {
 
   private isStale(e: Extract<Entry, { state: 'ready' }>): boolean {
     const now = Date.now();
-    return !e.refreshing && now - e.fetchedAt > MAX_AGE_MS && now >= (e.refreshAfter ?? 0);
+    const old = now - e.fetchedAt > MAX_AGE_MS || (this.roadsWanted && !e.roads && !e.partial);
+    return !e.refreshing && old && now >= (e.refreshAfter ?? 0);
   }
 
   /** false — свободных инстансов нет. */
@@ -420,9 +431,9 @@ export class OverpassTiles {
     try {
       if (!this.source) throw new Error('источник данных не задан');
       if (this.source.josm) {
-        const { features, groups, indoor, trees } = josmTile(await josmParsed(), tileBbox(key));
+        const { features, groups, indoor, trees, roads } = josmTile(await josmParsed(), tileBbox(key));
         if (abort.signal.aborted) throw new DOMException('aborted', 'AbortError');
-        this.cache.set(key, { state: 'ready', features, groups, indoor, trees, fetchedAt: Date.now() });
+        this.cache.set(key, { state: 'ready', features, groups, indoor, trees, roads, fetchedAt: Date.now() });
         this.reloading.delete(key);
         this.reloadFailed.delete(key);
         this.evict();
@@ -478,11 +489,12 @@ export class OverpassTiles {
       catch (err) { if (abort.signal.aborted) throw err; console.warn('[tiles] леса: догрузка не удалась', err); }
       const { features, groups, indoor } = timed('тайлы: разбор ответа API', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const trees = timed('тайлы: разбор деревьев', () => parseTrees(elements), (r) => `${key}, ${r.points.length} деревьев, ${r.woods.length} лесов`);
+      const roads = timed('тайлы: дороги', () => parseRoads(elements), (r) => `${key}, ${r.length} путей`);
       const fetchedAt = Date.now();
-      this.cache.set(key, { state: 'ready', features, groups, indoor, trees, fetchedAt, via });
+      this.cache.set(key, { state: 'ready', features, groups, indoor, trees, roads, fetchedAt, via });
       this.reloading.delete(key);
       this.reloadFailed.delete(key);
-      void this.store.put(key, { features, groups, indoor, trees, fetchedAt, via });
+      void this.store.put(key, { features, groups, indoor, trees, roads, fetchedAt, via });
       this.stored.add(key);
       this.evict();
       this.tileReady(key);
@@ -795,15 +807,16 @@ export class OverpassTiles {
 }
 
 /** Разобранный слой JOSM — один на все тайлы (разбор заново, только когда слой перезапрошен). */
-let josmCache: { elements: OsmElement[]; parsed: ReturnType<typeof parseBuildings> & { trees: TreeData } } | undefined;
+type JosmParsed = ReturnType<typeof parseBuildings> & { trees: TreeData; roads: RoadWay[] };
+let josmCache: { elements: OsmElement[]; parsed: JosmParsed } | undefined;
 async function josmParsed() {
   const { elements } = await josmLayer();
-  if (josmCache?.elements !== elements) josmCache = { elements, parsed: { ...timed('JOSM: разбор слоя', () => parseBuildings(elements), (r) => `${r.features.length} зданий`), trees: parseTrees(elements) } };
+  if (josmCache?.elements !== elements) josmCache = { elements, parsed: { ...timed('JOSM: разбор слоя', () => parseBuildings(elements), (r) => `${r.features.length} зданий`), trees: parseTrees(elements), roads: parseRoads(elements) } };
   return josmCache.parsed;
 }
 
 /** Объекты слоя JOSM, задевающие тайл: кому из соседей принадлежит здание, решает ownedFeatures (по центру). */
-function josmTile(all: ReturnType<typeof parseBuildings> & { trees: TreeData }, [w, s, e, n]: Bbox) {
+function josmTile(all: JosmParsed, [w, s, e, n]: Bbox) {
   const hits = (polygons: Polygon[], point?: [number, number]) => {
     const pts = point ? [point] : polygons.flatMap((p) => p.outer);
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -815,6 +828,7 @@ function josmTile(all: ReturnType<typeof parseBuildings> & { trees: TreeData }, 
     groups: all.groups, // без геометрии; по ключу дубли не страшны
     indoor: all.indoor.filter((f) => hits(f.polygons, f.point)),
     trees: all.trees, // свои деревья тайл отбирает сам (по положению), леса — по bbox
+    roads: all.roads.filter((r) => r.coords.some(([x, y]) => x >= w && x <= e && y >= s && y <= n)),
   };
 }
 

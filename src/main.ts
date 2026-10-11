@@ -23,6 +23,7 @@ import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
 import { inheritedTags, inheritedValue } from './osm/inherit';
 import { TileBorders } from './view/tile-borders';
+import { RoadsLayer } from './render/roads-layer';
 import { BuildingsLayer, isHiddenUnderground, setInheritance, setLevelGrid, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
@@ -88,10 +89,10 @@ let replacedIds: number[] = [];
  */
 const userHidden = new Set<string>();
 
-/** tileBorders — отладка: границы тайлов данных. */
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean }
+/** tileBorders — отладка: границы тайлов данных; roads3d — объёмные мосты, тоннели и развязки (эксперимент). */
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; roads3d: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, roads3d: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -386,6 +387,7 @@ const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
 let session = new EditSession([], onSessionChange);
 const overpassLayer = new BuildingsLayer('osm-overpass-buildings');
 const tileBorders = new TileBorders(map);
+const roadsLayer = new RoadsLayer('osm-roads-3d');
 const indoorPois = new IndoorPois(map, overpassLayer, (f) => selectIndoor(f));
 const overpass = new OverpassTiles(map, overpassLayer, () => {
   updateTileFilter();
@@ -393,6 +395,7 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
   if (focus) renderLevels(); // пришли indoor-объекты здания
   scheduleIndoorBadges();
   tileBorders.setTiles(overpass.tiles());
+  scheduleRoads();
 }, (f) => (session.isDeleted(f.key) ? { ...f, polygons: [] } : (session.get(f.key) as Feature3D | undefined) ?? f));
 overpass.setExtras(() => session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length) as Feature3D[]);
 let selectedKey: string | undefined;
@@ -486,6 +489,7 @@ map.on('load', () => {
     paint: { ...extrusion, 'fill-extrusion-color': '#ff7a00' },
   });
 
+  map.addLayer(roadsLayer);
   map.addLayer(overpassLayer);
   tileBorders.addLayer();
   tileBorders.setEnabled(gfx.tileBorders);
@@ -547,6 +551,23 @@ function applyGraphics() {
   overpassLayer.setGraphics(gfx);
   tileBorders.setEnabled(gfx.tileBorders);
   tileBorders.setTiles(overpass.tiles());
+  if (roadsLayer.isEnabled !== gfx.roads3d) {
+    roadsLayer.setEnabled(gfx.roads3d);
+    overpass.roadsWanted = gfx.roads3d;
+    // Тайлы из кеша без дорог перезапросятся в фоне
+    if (mapLoaded) refreshOverpass();
+    scheduleRoads();
+  }
+}
+
+/** Мосты и развязки — по дорогам показанных тайлов; пересборка не чаще раза в 300 мс. */
+let roadsTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleRoads() {
+  if (!roadsLayer.isEnabled || roadsTimer) return;
+  roadsTimer = setTimeout(() => {
+    roadsTimer = undefined;
+    roadsLayer.setRoads(overpass.roads());
+  }, 300);
 }
 applyGraphics();
 

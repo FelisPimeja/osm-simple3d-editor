@@ -758,5 +758,7 @@
   "JOSM отдал не .osm (ошибка разбора XML)": "JOSM did not return .osm data (XML parse error)",
   "Настройки из профиля применятся полностью при следующей загрузке страницы.": "Settings from your profile will fully apply the next time the page loads.",
   "Хранить графические настройки": "Keep graphics settings",
-  "Галки «Убрать цвета» и «Настройки графики» сохраняются вместе с остальными настройками и применяются на других устройствах": "The “Hide colors” and “Graphics settings” checkboxes are saved along with your other settings and applied on other devices"
+  "Галки «Убрать цвета» и «Настройки графики» сохраняются вместе с остальными настройками и применяются на других устройствах": "The “Hide colors” and “Graphics settings” checkboxes are saved along with your other settings and applied on other devices",
+  "Мосты, тоннели и развязки": "Bridges, tunnels and interchanges",
+  "Эксперимент: мосты и тоннели по тегам layer, bridge, tunnel; подходы к ним плавно поднимаются от земли (уклон 5 %, шаг уровня 6 м)": "Experimental: bridges and tunnels from the layer, bridge and tunnel tags; their approaches rise smoothly from the ground (5% grade, 6 m per layer)"
 }

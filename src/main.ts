@@ -40,7 +40,7 @@ import { JOSM_URL, josmLayer, josmMode, minElementId, pollJosmLayer, writeJosmPa
 import { bindTagForms, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
-import { saveLang, syncPrefs, syncStatus } from './settings';
+import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from './settings';
 
 // Статичная разметка index.html — до того, как код ниже начнёт менять тексты
 localizeDom(document.body);
@@ -95,7 +95,41 @@ function loadGraphics(): Partial<GraphicsSettings> {
 }
 function saveGraphics() {
   try { localStorage.setItem(GFX_KEY, JSON.stringify(gfx)); } catch { /* приватный режим и т.п. */ }
+  if (keepGraphics()) void saveSetting('graphics');
 }
+
+/**
+ * «Хранить графические настройки» (окно настроек пользователя): галки графики уходят в профиль на сервере
+ * (simple3d:graphics, JSON ~120 символов) и приходят оттуда на других устройствах. Выключено — только в браузере.
+ */
+const KEEP_GFX_KEY = 'osm3d.prefs.graphics';
+function keepGraphics(): boolean {
+  try { return localStorage.getItem(KEEP_GFX_KEY) === '1'; } catch { return false; }
+}
+function setKeepGraphics(on: boolean) {
+  try { if (on) localStorage.setItem(KEEP_GFX_KEY, '1'); else localStorage.removeItem(KEEP_GFX_KEY); } catch { /* без хранилища */ }
+}
+registerSetting({
+  key: 'graphics',
+  local: () => (keepGraphics() ? JSON.stringify(gfx) : undefined),
+  apply: (v) => {
+    if (v === undefined) { setKeepGraphics(false); return 'same'; } // на другом устройстве выключили
+    let saved: Record<string, unknown>;
+    try { saved = JSON.parse(v); } catch { return 'same'; }
+    setKeepGraphics(true);
+    let changed = false, reload = false;
+    for (const k of Object.keys(gfx) as (keyof GraphicsSettings)[]) {
+      if (typeof saved[k] !== 'boolean' || saved[k] === gfx[k]) continue;
+      gfx[k] = saved[k];
+      changed = true;
+      if (k === 'antialias') reload = true; // контекст WebGL создаётся при старте
+    }
+    if (!changed) return 'same';
+    try { localStorage.setItem(GFX_KEY, JSON.stringify(gfx)); } catch { /* приватный режим */ }
+    syncGraphicsInputs(); applyMonochrome(); applyGraphics(); // сверка идёт после загрузки модуля
+    return reload ? 'reload' : 'live';
+  },
+});
 
 // В сборке воркер MapLibre лежит в maplibre/ рядом со страницей (см. vite.config.ts); в dev — штатно из node_modules
 if (import.meta.env.PROD) maplibregl.setWorkerUrl(new URL('maplibre/maplibre-gl-worker.mjs', document.baseURI).href);
@@ -348,6 +382,12 @@ function applyGraphics() {
   overpassLayer.setGraphics(gfx);
 }
 applyGraphics();
+
+/** Галки графики — по gfx (после значений из профиля). */
+function syncGraphicsInputs() {
+  monoToggle.checked = gfx.monochrome;
+  for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) input.checked = !!gfx[input.dataset.gfx as keyof GraphicsSettings];
+}
 
 // Постоянный кеш тайлов OSM API (IndexedDB)
 const cacheInfo = document.getElementById('cache-info')!;
@@ -4619,6 +4659,11 @@ serverSelect.value = josmMode ? 'josm' : server().id;
 const settingsDialog = document.getElementById('settings-dialog') as HTMLDialogElement;
 const settingsSyncEl = document.getElementById('settings-sync')!;
 const langSelect = document.getElementById('lang-select') as HTMLSelectElement;
+const keepGfxToggle = document.getElementById('keep-gfx') as HTMLInputElement;
+keepGfxToggle.addEventListener('change', () => {
+  setKeepGraphics(keepGfxToggle.checked);
+  void saveSetting('graphics'); // включили — записать текущие, выключили — убрать из профиля
+});
 langSelect.innerHTML = LANGS.map((l) => `<option value="${l.id}">${esc(l.label)}</option>`).join('');
 langSelect.value = lang;
 
@@ -4637,6 +4682,7 @@ function renderSettingsSync() {
 
 document.getElementById('settings-open')!.addEventListener('click', () => {
   langSelect.value = lang;
+  keepGfxToggle.checked = keepGraphics();
   renderSettingsSync();
   settingsDialog.showModal();
 });
@@ -4665,14 +4711,15 @@ langSelect.addEventListener('change', async () => {
   location.reload();
 });
 
-/** Сверить настройки с профилем; пришёл другой язык — перезагрузить, если не жалко правок. */
+/** Сверить настройки с профилем; пришло то, что требует перезагрузки (язык, сглаживание), — перезагрузить, если не жалко правок. */
 async function syncSettings() {
   if (!osmUser) return;
   try {
-    const l = await syncPrefs();
-    if (!l) return;
+    const reload = await syncPrefs();
+    if (settingsDialog.open) keepGfxToggle.checked = keepGraphics();
+    if (!reload) return;
     if (session.changes().length) {
-      setStatus(tr('В профиле выбран другой язык интерфейса — он включится при следующей загрузке страницы.'));
+      setStatus(tr('Настройки из профиля применятся полностью при следующей загрузке страницы.'));
       return;
     }
     reloadConfirmed = true;

@@ -3,6 +3,7 @@ import { pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type L
 import { computeHeights, parseLength, roofShapeOf } from '../osm/heights';
 import { ROOF_SHAPES } from './tag-form';
 import { tr, trn } from '../i18n';
+import { floatingParts } from '../osm/floating';
 
 /**
  * Проверка здания по схеме Simple 3D: теги объёма (числа, противоречия высот и этажей), геометрия
@@ -331,6 +332,14 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
         if (Number.isFinite(l) && l > ol) out.push({ key: f.key, level: 'warning', code: 'above', text: tr('building:levels ({part}) больше, чем у контура ({outline}): на контуре указывают максимальную этажность здания.', { part: l, outline: ol }) });
       }
     }
+  }
+
+  // Висящая часть: без min_height внутри части, начинающейся выше земли, — столб от земли сквозь неё
+  for (const [key, fl] of floatingParts(parts.filter((f) => !broken.has(f.key)))) {
+    out.push({ key, other: fl.on, level: 'warning', code: 'floating',
+      text: tr('Нет min_height, а в плане часть целиком внутри частей, которые начинаются выше земли (с {min} м): выходит столб от земли. Похоже, часть стоит на {other} (верх {seat} м).',
+        { other: fl.on, min: fmt(fl.lift), seat: fmt(fl.seat) }),
+      fix: { label: `min_height=${fmt(fl.seat)}`, tags: { min_height: fmt(fl.seat) } } });
   }
 
   // Две части в одном объёме: почти совпадают в плане и по высоте (копия, наложенная поверх)

@@ -355,3 +355,23 @@ function signedArea(r: Pt[] | [number, number][]): number {
 function multiArea(m: ClipMulti): number {
   return m.reduce((sum, poly) => sum + Math.abs(signedArea(poly[0])) - poly.slice(1).reduce((t, r) => t + Math.abs(signedArea(r)), 0), 0);
 }
+
+/** Треугольники pos[from, to) (номера вершин), обрезанные снизу плоскостью z = zMin (висящая часть без min_height). */
+export function clipAbove(pos: ArrayLike<number>, from: number, to: number, zMin: number): number[] {
+  const out: number[] = [];
+  for (let o = from * 3; o + 9 <= to * 3; o += 9) {
+    const vs: V3[] = [[pos[o], pos[o + 1], pos[o + 2]], [pos[o + 3], pos[o + 4], pos[o + 5]], [pos[o + 6], pos[o + 7], pos[o + 8]]];
+    if (vs.every((v) => v[2] >= zMin)) { for (const v of vs) out.push(...v); continue; }
+    const poly: V3[] = [];
+    for (let i = 0; i < 3; i++) {
+      const v = vs[i], w = vs[(i + 1) % 3];
+      if (v[2] >= zMin) poly.push(v);
+      if ((v[2] >= zMin) !== (w[2] >= zMin)) {
+        const t = (zMin - v[2]) / (w[2] - v[2]);
+        poly.push([v[0] + (w[0] - v[0]) * t, v[1] + (w[1] - v[1]) * t, zMin]);
+      }
+    }
+    for (let i = 1; i + 1 < poly.length; i++) out.push(...poly[0], ...poly[i], ...poly[i + 1]);
+  }
+  return out;
+}

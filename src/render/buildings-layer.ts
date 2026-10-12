@@ -7,7 +7,8 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, type Heights } from '../osm/heights';
-import { prepareSolid, trimTriangles, type PreparedSolid } from './shell-trim';
+import { clipAbove, prepareSolid, trimTriangles, type PreparedSolid } from './shell-trim';
+import { floatingParts } from '../osm/floating';
 import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { timed } from '../perf';
@@ -191,6 +192,8 @@ class MeshGroup {
   strokes?: THREE.LineSegments;
   /** Из чего посчитана оболочка (исходные треугольники, скрытые и плоские объекты, стекло) — не пересчитывать зря. */
   shellOf?: { bases: Float32Array[]; hidden: string };
+  /** Висящие части в режиме этажей (ключ → низ, ниже которого части нет): см. floatingParts. */
+  lift?: Map<string, number>;
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
   // Цвет «земли» — посередине между белым и 0x8a8478: контраст неба и земли вдвое меньше
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
@@ -527,7 +530,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (hasParts && it.feature.kind === 'building') continue;
       // Срез должен пересекать стены, а не крышу (купол, скат выше стен — без обводки)
       const h = computeHeights(it.tags);
-      if (h.min > top - 0.5 || h.wallTop < top) continue;
+      if ((g.lift?.get(it.feature.key) ?? h.min) > top - 0.5 || h.wallTop < top) continue;
       const column = it.tags['building:part'] === 'column';
       for (const p of it.feature.polygons) {
         const outer = p.outer.map(g.toLocal);
@@ -1871,6 +1874,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (it.edges) it.edges = itemEdges(it);
       }
       g.shellOf = undefined;
+      g.lift = undefined;
       return;
     }
     const bases = g.items.map((it) => it.full?.positions ?? it.positions);
@@ -1881,14 +1885,33 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Не дольше SHELL_BUDGET_MS: дальше грани остаются как есть (большие комплексы из сотен частей)
       const deadline = performance.now() + SHELL_BUDGET_MS;
       const solids = new Map<Item, PreparedSolid>();
+      // Висящие части (забытый min_height) — без столба от земли до низа охватывающей части
+      const floating = floatingParts(g.items.filter((it) => !g.hidden.has(it.feature.key)).map((it) => it.feature));
+      g.lift = new Map([...floating].map(([k, f]) => [k, f.lift]));
+      const lifted = new Map<Item, { positions: Float32Array; wallVertices: number }>();
       for (const it of g.items) {
+        const lift = g.lift.get(it.feature.key);
+        if (lift === undefined) continue;
         const full = it.full ?? { positions: it.positions, wallVertices: it.wallVertices };
+        const end = full.positions.length / 3 - it.floorVertices;
+        const walls = clipAbove(full.positions, 0, full.wallVertices, lift), roof = clipAbove(full.positions, full.wallVertices, end, lift);
+        const slabs = full.positions.slice(end * 3);
+        // Плиты под низом — вырожденными: число вершин плит (floorVertices) не меняется
+        for (let i = 0; i + 8 < slabs.length; i += 9) if (slabs[i + 2] < lift - 1e-3) slabs.fill(0, i, i + 9);
+        const pos = new Float32Array(walls.length + roof.length + slabs.length);
+        pos.set(walls, 0);
+        pos.set(roof, walls.length);
+        pos.set(slabs, walls.length + roof.length);
+        lifted.set(it, { positions: pos, wallVertices: walls.length / 3 });
+      }
+      for (const it of g.items) {
+        const full = lifted.get(it) ?? it.full ?? { positions: it.positions, wallVertices: it.wallVertices };
         if (!shellSolid(g, it)) continue;
         const h = computeHeights(it.tags);
         const end = full.positions.length / 3 - it.floorVertices;
         solids.set(it, prepareSolid({
           polys: it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })),
-          min: h.min,
+          min: g.lift.get(it.feature.key) ?? h.min,
           // Неподдерживаемая крыша — стены до самого верха
           wallTop: it.roofApproximated ? h.top : h.wallTop,
           roof: full.positions.subarray(full.wallVertices * 3, end * 3),
@@ -1897,8 +1920,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         }));
       }
       for (const it of g.items) {
-        const full = it.full ?? { positions: it.positions, wallVertices: it.wallVertices };
-        it.full = full;
+        it.full ??= { positions: it.positions, wallVertices: it.wallVertices };
+        const full = lifted.get(it) ?? it.full;
         const others = [...solids].filter(([o]) => o !== it).map(([, s]) => s);
         if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || !others.length) {
           it.positions = full.positions;
@@ -2316,7 +2339,7 @@ function buildShell(g: MeshGroup): Shell {
     for (const p of polys) for (const [x, y] of p.outer) { box[0] = Math.min(box[0], x); box[1] = Math.min(box[1], y); box[2] = Math.max(box[2], x); box[3] = Math.max(box[3], y); }
     if (!(box[0] <= box[2])) continue;
     const flat = h.roofShape === 'flat' || h.roofHeight <= 0;
-    const idx = parts.push({ min: h.min, top: flat ? h.wallTop : h.top, flat, polys, box }) - 1;
+    const idx = parts.push({ min: g.lift?.get(it.feature.key) ?? h.min, top: flat ? h.wallTop : h.top, flat, polys, box }) - 1;
     for (const p of polys) for (const r of [p.outer, ...p.inners]) for (let i = 0; i < r.length; i++) addSeg(...r[i], ...r[(i + 1) % r.length]);
     if (flat) continue;
     // Скаты — треугольники крыши (между стенами и перекрытиями); вертикальные (торцы) не в счёт.

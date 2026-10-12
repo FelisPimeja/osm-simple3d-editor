@@ -398,7 +398,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 
 /* Значки «есть поэтажный план» над зданиями в режиме карты */
 .indoor-badges { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-.indoor-badge { cursor: pointer; position: absolute; left: 0; top: 0; width: 22px; height: 22px; margin: -28px 0 0 -11px; padding: 3px; box-sizing: border-box;
+.indoor-badge { cursor: pointer; position: absolute; left: 0; top: 10px; width: 22px; height: 22px; margin: -28px 0 0 -11px; padding: 3px; box-sizing: border-box;
   background: #fff; border: 1px solid #9ca3af; border-radius: 5px; color: #374151; pointer-events: auto; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
 .indoor-badge:hover { border-color: #2563eb; color: #2563eb; }
 .indoor-badge[hidden] { display: none; }
@@ -521,3 +521,10 @@ body.mobile #issues-panel { display: none !important; }
 .dialog-body .server-line { font-size: 13px; }
 .settings-sync { font-size: 12px; margin: 10px 0 0; }
 .settings-sync.warn { color: #b45309; }
+/* Переключатель перспектива/аксонометрия — в левом верхнем углу куба */
+.view-cube { position: relative; }
+.view-cube .vc-proj {
+  position: absolute; left: 0; top: 10px; width: 22px; height: 22px; padding: 0; border: none; border-radius: 4px;
+  background: none; color: #111; font: 600 15px/22px system-ui, sans-serif; cursor: pointer;
+}
+.view-cube .vc-proj:hover { background: rgba(0, 0, 0, 0.06); }

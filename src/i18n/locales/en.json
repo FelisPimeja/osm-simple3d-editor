@@ -764,5 +764,9 @@
   "natural=tree, natural=tree_row, леса natural=wood и landuse=forest — низкополигональные модели по leaf_type": "natural=tree, natural=tree_row, natural=wood and landuse=forest woods — low-poly models by leaf_type",
   "Деревья по времени года": "Seasonal trees",
   "Цвет лиственных по сегодняшней дате: весна, лето, осень, голые кроны зимой; в южном полушарии — со сдвигом на полгода, в тропиках — всегда зелёные": "Broadleaved tree colour follows today's date: spring, summer, autumn, bare crowns in winter; shifted by half a year in the southern hemisphere, always green in the tropics",
-  "Нет min_height, а в плане часть целиком внутри частей, которые начинаются выше земли (с {min} м): выходит столб от земли. Похоже, часть стоит на {other} (верх {seat} м).": "No min_height, yet in plan the part lies entirely inside parts that start above the ground (from {min} m): it becomes a column from the ground. The part probably stands on {other} (top {seat} m)."
+  "Нет min_height, а в плане часть целиком внутри частей, которые начинаются выше земли (с {min} м): выходит столб от земли. Похоже, часть стоит на {other} (верх {seat} м).": "No min_height, yet in plan the part lies entirely inside parts that start above the ground (from {min} m): it becomes a column from the ground. The part probably stands on {other} (top {seat} m).",
+  "П": "P",
+  "А": "A",
+  "Перспектива — переключить на аксонометрию": "Perspective — switch to axonometric",
+  "Аксонометрия — переключить на перспективу": "Axonometric — switch to perspective"
 }

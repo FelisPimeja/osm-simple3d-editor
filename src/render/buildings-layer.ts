@@ -1878,6 +1878,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const hidden = `${[...g.hidden].sort().join(',')}|${[...g.flat].sort().join(',')}|${glassEnabled}`;
     if (g.shellOf && g.shellOf.hidden === hidden && g.shellOf.bases.length === bases.length && g.shellOf.bases.every((b, i) => b === bases[i])) return;
     timed('этажи: оболочка здания', () => {
+      // Не дольше SHELL_BUDGET_MS: дальше грани остаются как есть (большие комплексы из сотен частей)
+      const deadline = performance.now() + SHELL_BUDGET_MS;
       const solids = new Map<Item, PreparedSolid>();
       for (const it of g.items) {
         const full = it.full ?? { positions: it.positions, wallVertices: it.wallVertices };
@@ -1904,8 +1906,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         } else {
           const n = full.positions.length / 3, end = n - it.floorVertices;
           const polys = it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
-          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, others, thinItem(it));
-          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, others, thinItem(it));
+          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, others, thinItem(it), deadline);
+          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, others, thinItem(it), deadline);
           const pos = new Float32Array(walls.length + roof.length + it.floorVertices * 3);
           pos.set(walls, 0);
           pos.set(roof, walls.length);
@@ -2671,6 +2673,9 @@ function glassRanges(it: Item): [number, number][] {
   if (it.glassRoof && n - it.floorVertices > it.wallVertices) out.push([it.wallVertices, n - it.floorVertices]);
   return out;
 }
+
+/** Бюджет расчёта оболочки здания в режиме этажей, мс. */
+const SHELL_BUDGET_MS = 600;
 
 /** Объект закрывает собой грани соседей в оболочке: объём с высотой (не навес building:part=roof, не плоский след). */
 function shellSolid(g: MeshGroup, it: Item): boolean {

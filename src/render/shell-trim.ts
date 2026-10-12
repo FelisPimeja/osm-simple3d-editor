@@ -45,6 +45,12 @@ const PROBE = 0.05;
 const FACE_EPS = 0.02;
 /** Меньше этой площади кусок не в счёт, м². */
 const MIN_AREA = 1e-4;
+/**
+ * Больше стольких закрытых кусков у грани — без точного вычитания: polygon-clipping на сотне почти совпадающих
+ * кусков (скат внутри скатов наложенных частей) считает секунды и даже не возвращается. Тогда грань убираем
+ * целиком, если закрыты все её пробные точки, иначе оставляем.
+ */
+const MAX_PIECES = 24;
 
 export function prepareSolid(s: ShellSolid): PreparedSolid {
   const box: Box = [Infinity, Infinity, -Infinity, -Infinity];
@@ -70,10 +76,12 @@ export function prepareSolid(s: ShellSolid): PreparedSolid {
  * (по нему видно, с какой стороны стены своя часть); glass — грани стеклянные; others — объёмы остальных частей;
  * flat — объект нулевой толщины (плоский след): закрыт и лёжа на дне соседа.
  */
-export function trimTriangles(pos: ArrayLike<number>, from: number, to: number, ownPolys: LocalPolygon[], glass: boolean, others: PreparedSolid[], flat = false): number[] {
+export function trimTriangles(pos: ArrayLike<number>, from: number, to: number, ownPolys: LocalPolygon[], glass: boolean, others: PreparedSolid[], flat = false, deadline = Infinity): number[] {
   const out: number[] = [];
   for (let v = from; v + 3 <= to; v += 3) {
     const o = v * 3;
+    // Время вышло — остальные грани как есть (здание с сотнями частей не должно вешать вкладку)
+    if (performance.now() > deadline) { for (let i = o; i < to * 3; i++) out.push(pos[i]); break; }
     const a: V3 = [pos[o], pos[o + 1], pos[o + 2]], b: V3 = [pos[o + 3], pos[o + 4], pos[o + 5]], c: V3 = [pos[o + 6], pos[o + 7], pos[o + 8]];
     const n = normal(a, b, c);
     const len = Math.hypot(n[0], n[1], n[2]);
@@ -152,6 +160,8 @@ function trimWall(a: V3, b: V3, c: V3, ownPolys: LocalPolygon[], glass: boolean,
       }
     }
     if (!side.length) return; // с одной из сторон ничего — стену видно целиком
+    // У стены куски — полосы по длине стены, почти не перекрываются: их объединять дёшево, предел выше
+    if (side.length > MAX_PIECES * 3) return coarse(tri, side) ? [] : undefined;
     const u = polygonClipping.union(side[0], ...side.slice(1));
     hidden = hidden ? polygonClipping.intersection(hidden, u) : u;
     if (!hidden.length) return;
@@ -184,7 +194,19 @@ function trimFace(a: V3, b: V3, c: V3, glass: boolean, near: PreparedSolid[], fl
     }
   }
   if (!hidden.length) return;
+  if (hidden.length > MAX_PIECES) return coarse(tri, hidden) ? [] : undefined;
   return rest(tri, polygonClipping.union(hidden[0], ...hidden.slice(1)), (v) => [v[0], v[1], zf(v)]);
+}
+
+/** Закрыт ли треугольник кусками целиком — по пробным точкам: центр и точки у вершин и середин сторон. */
+function coarse(tri: Pt[], pieces: ClipPolygon[]): boolean {
+  const cx = (tri[0][0] + tri[1][0] + tri[2][0]) / 3, cy = (tri[0][1] + tri[1][1] + tri[2][1]) / 3;
+  const probes: Pt[] = [[cx, cy]];
+  for (let i = 0; i < 3; i++) {
+    const [x, y] = tri[i], [x2, y2] = tri[(i + 1) % 3];
+    probes.push([x + (cx - x) * 0.05, y + (cy - y) * 0.05], [(x + x2) / 2 + (cx - (x + x2) / 2) * 0.05, (y + y2) / 2 + (cy - (y + y2) / 2) * 0.05]);
+  }
+  return probes.every(([x, y]) => pieces.some((poly) => inRing(poly[0] as Pt[], x, y) && !poly.slice(1).some((r) => inRing(r as Pt[], x, y))));
 }
 
 /** Треугольник tri без hidden, триангулированный и поднятый в 3D; undefined — ничего не закрыто. */

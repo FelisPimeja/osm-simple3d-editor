@@ -110,6 +110,10 @@ const ISSUE_COLOUR = { error: 0xff1a1a, warning: 0xff8a00 };
 const ISSUE_WIDTH_PX = 3;
 /** Цвет рёбер соседей, которые правка тянет за собой (общие узлы). */
 const LINKED_COLOUR = 0x7c3aed;
+/** Превью автоисправления проверки: каркас объёма после исправления. */
+const FIX_COLOUR = 0x16a34a;
+/** Цикл анимации превью: пауза на текущем виде, переход, пауза на исправленном, мс. */
+const FIX_HOLD_FROM = 500, FIX_MORPH = 900, FIX_HOLD_TO = 900;
 /** Сквозь другие объёмы — тоньше и бледнее: проблемная часть может прятаться внутри здания. */
 const ISSUE_XRAY_WIDTH_PX = 1.5;
 /**
@@ -2146,6 +2150,69 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  private fixLines: LineSegments2[] = [];
+  private fixFrame = 0;
+
+  /**
+   * Превью автоисправления: каркас объекта сцены режима здания по исправленным тегам, по кругу перетекающий
+   * из текущего вида в исправленный (min_height — объём отрывается от земли). Рёбра одной топологии
+   * (меняются только высоты) — плавный морфинг, иначе — смена прозрачности. Без отличий в геометрии
+   * и без аргумента — снять.
+   */
+  setFixPreview(f: Feature3D | undefined) {
+    cancelAnimationFrame(this.fixFrame);
+    for (const l of this.fixLines) { l.geometry.dispose(); l.material.dispose(); l.parent?.remove(l); }
+    this.fixLines = [];
+    const g = this.groups.get(FOCUS_GROUP);
+    const cur = f && g?.byKey.get(f.key);
+    if (!f || !g || !cur || !this.map || g.hidden.has(f.key) || !cur.positions.length) return void this.map?.triggerRepaint();
+    const from = (cur.edges ??= itemEdges(cur));
+    let to: Float32Array;
+    try { to = itemEdges(buildItem(g, f)); } catch { return; }
+    if (to.length === from.length && to.every((v, i) => Math.abs(v - from[i]) < 1e-3)) return;
+    const canvas = this.map.getCanvas();
+    const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+    const make = (pos: Float32Array, xray: boolean) => {
+      const geo = new LineSegmentsGeometry();
+      geo.setPositions(pos);
+      const mat = new LineMaterial({ color: FIX_COLOUR, linewidth: (xray ? ISSUE_XRAY_WIDTH_PX : ISSUE_WIDTH_PX) * dpr,
+        transparent: true, opacity: xray ? 0.45 : 1, depthTest: !xray, depthWrite: false });
+      mat.resolution.set(canvas.width, canvas.height);
+      const line = new LineSegments2(geo, mat);
+      line.frustumCulled = false;
+      line.renderOrder = 16 + (xray ? 1 : 0);
+      g.scene.add(line);
+      this.fixLines.push(line);
+      return line;
+    };
+    // Морфинг: одна пара линий с перемешиваемыми вершинами; иначе — старый и новый каркас попеременно
+    const matched = matchSegments(from, to);
+    const src = matched?.[0] ?? from, dst = matched?.[1] ?? to;
+    const mixed = matched ? new Float32Array(src) : undefined;
+    const pairs = mixed ? [[make(mixed, false), make(mixed, true)]] : [[make(from, false), make(from, true)], [make(to, false), make(to, true)]];
+    const period = FIX_HOLD_FROM + FIX_MORPH + FIX_HOLD_TO;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = (now - start) % period;
+      const k = Math.min(1, Math.max(0, (t - FIX_HOLD_FROM) / FIX_MORPH));
+      const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2; // ease-in-out
+      if (mixed) {
+        for (let i = 0; i < mixed.length; i++) mixed[i] = src[i] + (dst[i] - src[i]) * e;
+        for (const l of pairs[0]) {
+          const attr = l.geometry.attributes.instanceStart as THREE.InterleavedBufferAttribute;
+          (attr.data.array as Float32Array).set(mixed);
+          attr.data.needsUpdate = true;
+          l.geometry.computeBoundingSphere();
+        }
+      } else {
+        pairs.forEach((pair, n) => pair.forEach((l, x) => { l.material.opacity = (n ? e : 1 - e) * (x ? 0.45 : 1); }));
+      }
+      this.map?.triggerRepaint();
+      this.fixFrame = requestAnimationFrame(tick);
+    };
+    this.fixFrame = requestAnimationFrame(tick);
+  }
+
   private applyIssueEdges(g: MeshGroup) {
     for (const l of this.issueEdges.get(g) ?? []) { l.geometry.dispose(); l.material.dispose(); g.scene.remove(l); }
     this.issueEdges.delete(g);
@@ -2254,6 +2321,37 @@ function edgeLines(items: Item[], material: THREE.LineBasicMaterial): THREE.Line
 /** Крыши с кривыми поверхностями (купол, луковица, бочка): их грани — аппроксимация, изломы не рисуем. */
 const CURVED_ROOFS = new Set(['dome', 'onion', 'round', 'cone', 'conical', 'spherical']);
 const PLANAR_ROOF_EDGE_ANGLE = 1;
+
+/**
+ * Пары рёбер «до» и «после» для морфинга превью исправления: порядок рёбер в двух сборках разный, поэтому
+ * сопоставляем по плану — концы с теми же x, y (меняются только высоты), внутри одной проекции — по высоте
+ * по порядку, концы ребра — снизу вверх. Не сопоставилось (изменилась форма) — undefined.
+ */
+function matchSegments(a: Float32Array, b: Float32Array): [Float32Array, Float32Array] | undefined {
+  if (a.length !== b.length) return undefined;
+  const group = (arr: Float32Array) => {
+    const m = new Map<string, number[][]>();
+    for (let i = 0; i < arr.length; i += 6) {
+      let p = [arr[i], arr[i + 1], arr[i + 2]], q = [arr[i + 3], arr[i + 4], arr[i + 5]];
+      const pk = `${p[0].toFixed(2)},${p[1].toFixed(2)}`, qk = `${q[0].toFixed(2)},${q[1].toFixed(2)}`;
+      // Концы по порядку: в плане, а у вертикального ребра — снизу вверх
+      if (pk > qk || (pk === qk && p[2] > q[2])) [p, q] = [q, p];
+      const k = pk < qk ? pk + ';' + qk : qk + ';' + pk;
+      (m.get(k) ?? m.set(k, []).get(k)!).push([...p, ...q]);
+    }
+    for (const list of m.values()) list.sort((x, y) => x[2] + x[5] - y[2] - y[5]);
+    return m;
+  };
+  const ga = group(a), gb = group(b);
+  const outA = new Float32Array(a.length), outB = new Float32Array(b.length);
+  let o = 0;
+  for (const [k, la] of ga) {
+    const lb = gb.get(k);
+    if (!lb || lb.length !== la.length) return undefined;
+    for (let i = 0; i < la.length; i++) { outA.set(la[i], o); outB.set(lb[i], o); o += 6; }
+  }
+  return [outA, outB];
+}
 
 function itemEdges(it: Item): Float32Array {
   const all = edgeSegments(it.positions, EDGE_ANGLE);

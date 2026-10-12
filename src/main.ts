@@ -3911,6 +3911,8 @@ let outlinerGroups = new Map<string, string[]>();
 let focusIssues: Issue[] = [];
 /** Проблемы в порядке списка панели (кнопки «Исправить» ссылаются по номеру). */
 let shownIssues: Issue[] = [];
+/** Проблема, исправление которой показано каркасом (наведение на строку «Проверки»). */
+let fixPreviewed: Issue | undefined;
 
 /** Последние проверки по зданиям: пересчёт, только когда сменились объекты (правка даёт новый объект). */
 const issueCache = new Map<string, { feats: Feature3D[]; roles: string; issues: Issue[] }>();
@@ -3937,6 +3939,8 @@ function issueMark(list: Issue[] | undefined): string {
 /** Панель «Проверка»: проблемы здания режима здания, клик — выделить объект (Shift — оба пересекающихся). */
 function renderIssues() {
   focusIssues = focus ? buildingIssues(focus) : [];
+  // Список пересобирается — строки под курсором уже нет, превью исправления снимаем
+  if (fixPreviewed) { fixPreviewed = undefined; overpassLayer.setFixPreview(undefined); }
   highlightIssues();
   issuesPanel.hidden = !focus || !focusIssues.length;
   if (issuesPanel.hidden) { issuesEl.innerHTML = ''; return; }
@@ -3990,9 +3994,23 @@ issuesEl.addEventListener('click', (e) => {
   if (li.dataset.other && entity(li.dataset.other)) toggleSelection(li.dataset.other);
 });
 issuesEl.addEventListener('mouseover', (e) => {
-  overpassLayer.setHover((e.target as HTMLElement).closest<HTMLElement>('li[data-key]')?.dataset.key);
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
+  overpassLayer.setHover(li?.dataset.key);
+  // С автоисправлением — ещё и каркас объёма после него (если геометрия изменится)
+  const issue = li ? shownIssues[[...issuesEl.children].indexOf(li)] : undefined;
+  if (issue === fixPreviewed) return;
+  fixPreviewed = issue;
+  const f = issue?.fix ? liveFeatures().find((x) => x.key === issue.key) : undefined;
+  if (!f || !issue?.fix) return overpassLayer.setFixPreview(undefined);
+  const tags = { ...f.tags };
+  for (const [k, v] of Object.entries(issue.fix.tags)) if (v === undefined) delete tags[k]; else tags[k] = v;
+  overpassLayer.setFixPreview({ ...f, tags });
 });
-issuesEl.addEventListener('mouseleave', () => overpassLayer.setHover(undefined));
+issuesEl.addEventListener('mouseleave', () => {
+  overpassLayer.setHover(undefined);
+  fixPreviewed = undefined;
+  overpassLayer.setFixPreview(undefined);
+});
 
 /** Проблемы изменённых объектов (для «Правок» перед отправкой): по зданиям, куда они входят. */
 function changeIssues(keys: string[]): Issue[] {

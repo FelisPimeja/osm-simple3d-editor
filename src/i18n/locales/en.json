@@ -677,6 +677,7 @@
   "Конфликт правок: {list}": "Edit conflict: {list}",
   "Нужно войти в {server}.": "Please log in to {server}.",
   "Получаем текущие версии объектов…": "Fetching current object versions…",
+  "Лимит скачивания OSM API исчерпан — ждём {seconds} с и повторяем…": "OSM API download limit reached — waiting {seconds} s and retrying…",
   "узел {id} удалён на сервере": "node {id} was deleted on the server",
   "узел {id} уже сдвинут": "node {id} has already been moved",
   "объект изменён на сервере после загрузки": "the object was changed on the server after loading",

@@ -122,7 +122,15 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
   #right-col { width: auto; left: 12px; top: auto; bottom: 28px; max-height: 40%; justify-content: flex-end; }
   .maplibregl-ctrl-top-right { right: 0; }
 }
+#status {
+  position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 2; margin: 0;
+  max-width: calc(100% - 700px); padding: 4px 10px; border-radius: 6px; background: rgba(255,255,255,.9);
+  box-shadow: 0 1px 4px rgba(0,0,0,.15); color: #444; font-size: 12px; text-align: center; pointer-events: none;
+}
+#status:empty { display: none; }
+#status a, #status button { pointer-events: auto; }
 #status.error { color: #b91c1c; }
+@media (max-width: 1000px) { #status { max-width: calc(100% - 24px); bottom: 56px; } }
 #info h2 { font-size: 14px; margin: 8px 0 4px; }
 #info a { color: #2563eb; }
 #info table { border-collapse: collapse; width: 100%; font-size: 12px; }

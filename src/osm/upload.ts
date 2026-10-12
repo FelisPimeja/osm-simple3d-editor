@@ -1,4 +1,4 @@
-import { fetchElements, fetchNodes, fetchWayRelations, type OsmMember, type OsmNode, type OsmRelation, type OsmWay } from './api';
+import { fetchElements, fetchNodes, fetchWayRelations, onApiWait, type OsmMember, type OsmNode, type OsmRelation, type OsmWay } from './api';
 import { getToken } from './auth';
 import { server } from './servers';
 import { tr, trn } from '../i18n';
@@ -143,6 +143,15 @@ function parseDiffResult(xml: string): Pick<UploadResult, 'versions' | 'newKeys'
  * кто-то ещё — ConflictError, ничего не отправляется.
  */
 export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (s: string) => void = () => {}): Promise<UploadResult> {
+  onApiWait((seconds) => onStatus(tr('Лимит скачивания OSM API исчерпан — ждём {seconds} с и повторяем…', { seconds })));
+  try {
+    return await uploadInner(edits, comment, onStatus);
+  } finally {
+    onApiWait(undefined);
+  }
+}
+
+async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: string) => void): Promise<UploadResult> {
   onStatus(tr('Получаем текущие версии объектов…'));
   const fresh = await fetchElements(edits.filter((e) => !e.created).map((e) => e.key));
   const conflicts: { key: string; tags: string[] }[] = [];

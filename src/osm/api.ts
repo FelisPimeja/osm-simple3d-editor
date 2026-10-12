@@ -1,3 +1,4 @@
+import { getToken } from './auth';
 import { server } from './servers';
 import { tr } from '../i18n';
 
@@ -125,25 +126,50 @@ export async function completeRelations(
   return elements;
 }
 
-/** Текущие версии путей и отношений (multi-fetch, пачками по 100). */
+/** Дольше этого после 509 не ждём — пусть пользователь повторит сам, мс. */
+const MAX_WAIT = 120_000;
+
+/**
+ * Чтение текущих версий (перед отправкой правок). С токеном, если вошли: лимит скачивания API тогда считается
+ * по пользователю, а не по IP, который уже потратила загрузка тайлов. После 509 ждём названное сервером время.
+ */
+async function getJson(url: string): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const token = server().api === url.slice(0, server().api.length) ? getToken() : undefined;
+    const res = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+    if (res.ok) return res;
+    const text = await res.text();
+    const wait = retryAfterMs(res, text);
+    if (res.status === 509 && attempt < 2 && wait !== undefined && wait <= MAX_WAIT) {
+      apiWaitListener?.(Math.ceil(wait / 1000));
+      await new Promise((r) => setTimeout(r, wait + 1000));
+      continue;
+    }
+    throw new ApiError(res.status, `OSM API ${res.status}: ${text || res.statusText}`, wait);
+  }
+}
+
+let apiWaitListener: ((seconds: number) => void) | undefined;
+/** Кому сообщать об ожидании после 509 (статус отправки правок). */
+export function onApiWait(f: ((seconds: number) => void) | undefined) { apiWaitListener = f; }
+
 /** Текущие узлы (с версиями и тегами) по id. */
 export async function fetchNodes(ids: number[], api = server().api): Promise<Map<number, OsmNode & { version: number }>> {
   const out = new Map<number, OsmNode & { version: number }>();
   for (let i = 0; i < ids.length; i += 100) {
-    const res = await fetch(`${api}/nodes.json?nodes=${ids.slice(i, i + 100).join(',')}`);
-    if (!res.ok) throw new Error(`OSM API ${res.status}: ${(await res.text()) || res.statusText}`);
+    const res = await getJson(`${api}/nodes.json?nodes=${ids.slice(i, i + 100).join(',')}`);
     for (const e of ((await res.json()) as { elements: (OsmNode & { version: number })[] }).elements) out.set(e.id, e);
   }
   return out;
 }
 
+/** Текущие версии путей и отношений (multi-fetch, пачками по 100). */
 export async function fetchElements(keys: string[], api = server().api): Promise<Map<string, OsmWay | OsmRelation>> {
   const out = new Map<string, OsmWay | OsmRelation>();
   for (const type of ['way', 'relation'] as const) {
     const ids = keys.filter((k) => k.startsWith(`${type}/`)).map((k) => k.split('/')[1]);
     for (let i = 0; i < ids.length; i += 100) {
-      const res = await fetch(`${api}/${type}s.json?${type}s=${ids.slice(i, i + 100).join(',')}`);
-      if (!res.ok) throw new Error(`OSM API ${res.status}: ${(await res.text()) || res.statusText}`);
+      const res = await getJson(`${api}/${type}s.json?${type}s=${ids.slice(i, i + 100).join(',')}`);
       for (const e of ((await res.json()) as { elements: (OsmWay | OsmRelation)[] }).elements) out.set(`${e.type}/${e.id}`, e);
     }
   }
@@ -152,7 +178,6 @@ export async function fetchElements(keys: string[], api = server().api): Promise
 
 /** Отношения, в которые входит путь (текущие версии). */
 export async function fetchWayRelations(id: number, api = server().api): Promise<OsmRelation[]> {
-  const res = await fetch(`${api}/way/${id}/relations.json`);
-  if (!res.ok) throw new Error(`OSM API ${res.status}: ${(await res.text()) || res.statusText}`);
+  const res = await getJson(`${api}/way/${id}/relations.json`);
   return ((await res.json()) as { elements: OsmRelation[] }).elements;
 }

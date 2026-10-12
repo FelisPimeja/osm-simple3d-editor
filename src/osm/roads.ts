@@ -2,7 +2,7 @@ import type { OsmElement, OsmNode, OsmWay } from './api';
 import type { LonLat } from './model';
 
 /**
- * Дороги для объёмных мостов, тоннелей и развязок (эксперимент). Рисуем не все дороги, а только «неплоские»:
+ * Дороги и железные дороги для объёмных мостов, тоннелей и развязок (эксперимент). Рисуем не все дороги, а только «неплоские»:
  * мосты, тоннели, пути с layer ≠ 0 — и их подходы (пандусы), по которым высота спускается к земле.
  */
 export interface RoadWay {
@@ -21,7 +21,17 @@ const SKIP_HIGHWAY = new Set(['proposed', 'construction', 'abandoned', 'razed', 
 /** Тоннели «на уровне земли»: проезд под зданием, крытая улица — для высоты это обычная дорога. */
 const GROUND_TUNNELS = new Set(['no', 'building_passage', 'covered']);
 
+/** Действующие рельсовые пути (заброшенные, разобранные, проекты и платформы не рисуем). */
+export const RAILWAYS = new Set(['rail', 'light_rail', 'subway', 'tram', 'narrow_gauge', 'monorail', 'funicular', 'preserved', 'miniature']);
+
+export function isRailTags(tags?: Record<string, string>): boolean {
+  return !!tags?.railway && RAILWAYS.has(tags.railway);
+}
+
 export function isRoadTags(tags?: Record<string, string>): boolean {
+  // Переходы и коридоры внутри зданий (indoor=*) — не мосты и не тоннели, их рисует план этажа
+  if (tags?.indoor && tags.indoor !== 'no') return false;
+  if (isRailTags(tags)) return true;
   const h = tags?.highway;
   return !!h && !SKIP_HIGHWAY.has(h) && tags.area !== 'yes';
 }
@@ -93,9 +103,21 @@ export function parseRoads(elements: OsmElement[]): RoadWay[] {
     }
   }
 
+  // Пути под мостами (не связанные с ними по сети, например рельсы под путепроводом) — по пересечению габаритов
+  const bbox = (w: OsmWay) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const n of w.nodes) { const p = pos(n); if (p) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); } }
+    return [x0, y0, x1, y1];
+  };
+  const raised = ways.filter((w) => isElevated(w.tags!) && roadLevel(w.tags!) >= 0).map(bbox);
+  const under = (w: OsmWay) => {
+    const [a0, b0, a1, b1] = bbox(w);
+    return raised.some(([c0, d0, c1, d1]) => a0 <= c1 && c0 <= a1 && b0 <= d1 && d0 <= b1);
+  };
+
   const out: RoadWay[] = [];
   for (const w of ways) {
-    if (!w.nodes.some((n) => dist.has(n))) continue;
+    if (!w.nodes.some((n) => dist.has(n)) && !under(w)) continue;
     const coords: LonLat[] = [], ids: number[] = [];
     for (const n of w.nodes) { const p = pos(n); if (p) { coords.push(p); ids.push(n); } }
     if (coords.length >= 2) out.push({ id: w.id, tags: w.tags!, nodes: ids, coords });

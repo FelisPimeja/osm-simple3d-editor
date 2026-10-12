@@ -24,6 +24,7 @@ import * as THREE from 'three';
 import { inheritedTags, inheritedValue } from './osm/inherit';
 import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
+import { isBridge, isTunnel, roadLevel, type RoadWay } from './osm/roads';
 import { BuildingsLayer, isHiddenUnderground, setInheritance, setLevelGrid, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
@@ -89,10 +90,10 @@ let replacedIds: number[] = [];
  */
 const userHidden = new Set<string>();
 
-/** tileBorders — отладка: границы тайлов данных; roads3d — объёмные мосты, тоннели и развязки (эксперимент). */
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; roads3d: boolean }
+/** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, roads3d: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -532,6 +533,7 @@ const orbit = new CursorOrbit(map, (x, y) => {
 
 function applyMonochrome() {
   overpassLayer.setMonochrome(gfx.monochrome);
+  roadsLayer.setMonochrome(gfx.monochrome);
 }
 applyMonochrome();
 
@@ -551,9 +553,12 @@ function applyGraphics() {
   overpassLayer.setGraphics(gfx);
   tileBorders.setEnabled(gfx.tileBorders);
   tileBorders.setTiles(overpass.tiles());
-  if (roadsLayer.isEnabled !== gfx.roads3d) {
-    roadsLayer.setEnabled(gfx.roads3d);
-    overpass.roadsWanted = gfx.roads3d;
+  const roadsOn = gfx.bridges3d || gfx.tunnels3d;
+  roadsLayer.setKinds(gfx.bridges3d, gfx.tunnels3d);
+  scheduleRoads();
+  if (roadsLayer.isEnabled !== roadsOn) {
+    roadsLayer.setEnabled(roadsOn);
+    overpass.roadsWanted = roadsOn;
     // Тайлы из кеша без дорог перезапросятся в фоне
     if (mapLoaded) refreshOverpass();
     scheduleRoads();
@@ -566,7 +571,12 @@ function scheduleRoads() {
   if (!roadsLayer.isEnabled || roadsTimer) return;
   roadsTimer = setTimeout(() => {
     roadsTimer = undefined;
-    roadsLayer.setRoads(overpass.roads());
+    // Здания — для подъёма мостов над крышами (контур с частями не рисуется — берём части)
+    const obstacles = overpass.allFeatures().filter((f) => !f.hasParts).map((f) => {
+      const h = computeHeights(f.tags);
+      return { rings: f.polygons.map((p) => p.outer), min: h.min, top: h.top };
+    });
+    roadsLayer.setRoads(overpass.roads(), obstacles);
   }, 300);
 }
 applyGraphics();
@@ -864,6 +874,12 @@ map.on('click', (e) => {
     const k = drill ? (drill.members.includes(key) ? key : undefined) : (groupOf(key)?.key ?? key);
     if (k) toggleSelection(k);
     return;
+  }
+  // Мост или тоннель под курсором ближе здания — его теги (только просмотр)
+  const road = addingTo ? undefined : roadsLayer.pick(e.point.x, e.point.y);
+  if (road) {
+    const hit = key ? overpassLayer.pickHit(e.point) : undefined;
+    if (!hit || road.depth < roadsLayer.depthOf(hit.lngLat, hit.altitude)) { selectRoad(road.way, e.originalEvent.shiftKey); return; }
   }
   if (select(resolveClick(key))) return;
   const f = queryTileLayers(e.point)[0];
@@ -3214,6 +3230,8 @@ infoEl.addEventListener('click', (e) => {
 });
 
 function clearSelection() {
+  roadsLayer.select([]);
+  roadSelection = [];
   leaveDrill();
   addingTo = undefined;
   addPending = [];
@@ -3337,6 +3355,8 @@ function toolHint(hint: string | undefined, error = false) {
 
 /** Выделить объект (или группу); false — выделять нечего. */
 function select(key: string | undefined): boolean {
+  roadsLayer.select([]);
+  roadSelection = [];
   if (key && selectedIndoor) selectIndoor(undefined);
   addingTo = undefined;
   addPending = [];
@@ -3811,6 +3831,40 @@ function selectIndoor(f: IndoorFeature | undefined) {
     + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
     + `<p class="hint">${tr('{levels} · только просмотр', { levels: esc(levels) })}</p>`
     + `<table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table>`;
+}
+
+/** Мост, тоннель или подход к ним: теги пути в панели свойств (только просмотр). */
+/** Выделенные мосты, тоннели и подходы (Shift+клик добавляет и убирает). */
+let roadSelection: RoadWay[] = [];
+
+/** Мост, тоннель или подход: теги пути в панели свойств (только просмотр). add — Shift: добавить к выделению или убрать. */
+function selectRoad(w: RoadWay, add = false) {
+  const keep = add ? roadSelection : [];
+  select(undefined); // сбрасывает и выделение дорог
+  clearTileHighlight();
+  roadSelection = keep.some((r) => r.id === w.id) ? keep.filter((r) => r.id !== w.id) : [...keep, w];
+  roadsLayer.select(roadSelection.map((r) => r.id));
+  if (!roadSelection.length) { infoEl.innerHTML = ''; return; }
+  if (roadSelection.length === 1) {
+    const kind = isBridge(w.tags) ? tr('Мост') : isTunnel(w.tags) ? tr('Тоннель') : tr('Подход');
+    infoEl.innerHTML = `<h2>${esc(kind)}${w.tags.name ? ' ' + tr('«{name}»', { name: esc(w.tags.name) }) : w.tags.ref ? ` ${esc(w.tags.ref)}` : ''} — `
+      + `<a href="${server().web}/way/${w.id}" target="_blank" rel="noopener">way/${w.id}</a></h2>`
+      + `<p class="hint">${tr('layer {layer} · только просмотр', { layer: roadLevel(w.tags) })}</p>`
+      + `<details class="all-tags" open><summary>${tr('Все теги')}</summary>${tagTable(w.tags)}</details>`;
+    return;
+  }
+  // Несколько: общие значения как есть, у остальных тегов — серое «разные значения»
+  const keys = [...new Set(roadSelection.flatMap((r) => Object.keys(r.tags)))].sort((a, b) => a.localeCompare(b));
+  const rows = keys.map((k) => {
+    // Нет тега у части путей — тоже «разные»
+    const values = new Set(roadSelection.map((r) => r.tags[k] as string | undefined));
+    const only = values.size === 1 ? [...values][0] : undefined;
+    const v = only !== undefined ? esc(only) : `<span class="hint">${tr('разные значения')}</span>`;
+    return `<tr><td>${esc(k)}</td><td>${v}</td></tr>`;
+  });
+  infoEl.innerHTML = `<h2>${tr('Выбрано путей: {n}', { n: roadSelection.length })}</h2>`
+    + `<p class="hint">${roadSelection.map((r) => `<a href="${server().web}/way/${r.id}" target="_blank" rel="noopener">way/${r.id}</a>`).join(', ')} · ${tr('только просмотр')}</p>`
+    + `<details class="all-tags" open><summary>${tr('Все теги')}</summary><table>${rows.join('')}</table></details>`;
 }
 
 const LEVEL_NAME = (n: number) => (n < 0 ? tr('Подземный {n}', { n: -n }) : tr('{n} этаж', { n: n + 1 }));

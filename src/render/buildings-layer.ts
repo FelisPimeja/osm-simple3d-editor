@@ -1940,6 +1940,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
         if (it.edges) it.edges = itemEdges(it);
       }
+      if (performance.now() > deadline) console.warn(`[levels] оболочка здания не досчитана за ${SHELL_BUDGET_MS} мс — часть граней внутри частей осталась`);
     }, () => `${g.items.length} объектов`);
     g.shellOf = { bases: g.items.map((it) => it.full!.positions), hidden };
   }
@@ -2697,8 +2698,11 @@ function glassRanges(it: Item): [number, number][] {
   return out;
 }
 
-/** Бюджет расчёта оболочки здания в режиме этажей, мс. */
-const SHELL_BUDGET_MS = 600;
+/**
+ * Бюджет расчёта оболочки здания в режиме этажей, мс: считается один раз при входе в этажи. Храм из ~450 частей
+ * (relation/3224486) — около 1.5 с; при 600 мс часть граней оставалась необрезанной (гребни внутри основания на плане).
+ */
+const SHELL_BUDGET_MS = 5000;
 
 /** Объект закрывает собой грани соседей в оболочке: объём с высотой (не навес building:part=roof, не плоский след). */
 function shellSolid(g: MeshGroup, it: Item): boolean {

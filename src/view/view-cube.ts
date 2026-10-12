@@ -47,6 +47,8 @@ export class ViewCube implements maplibregl.IControl {
   private el!: HTMLDivElement;
   private readonly sync = () => this.update();
   private lastKey = '';
+  /** Выбрана аксонометрия — действует только в режиме здания, вне его всегда перспектива. */
+  private axoChosen = false;
   /** Куб включён кнопкой (в режиме здания). */
   shown = true;
 
@@ -62,10 +64,8 @@ export class ViewCube implements maplibregl.IControl {
     el.addEventListener('mouseover', (e) => this.hover((e.target as Element).closest<SVGElement>('.vc-cell')?.dataset.v));
     el.addEventListener('mouseleave', () => this.hover(undefined));
     el.addEventListener('mousedown', (e) => { if ((e.target as Element).closest('.vc-ring')) this.dragRing(e); });
+    try { this.axoChosen = localStorage.getItem(PROJECTION_KEY) === 'axo'; } catch { /* перспектива */ }
     map.on('move', this.sync);
-    let axo = false;
-    try { axo = localStorage.getItem(PROJECTION_KEY) === 'axo'; } catch { /* перспектива */ }
-    if (axo) map.setVerticalFieldOfView(FOV_AXONOMETRIC);
     return el;
   }
 
@@ -78,6 +78,9 @@ export class ViewCube implements maplibregl.IControl {
   /** Перерисовать куб под текущую камеру (только если она поменялась). */
   update() {
     const frame = this.map ? this.opts.frame() : undefined;
+    // Смена угла шлёт move и снова вызывает update — к этому моменту угол уже нужный, повтора нет
+    const fov = frame && this.axoChosen ? FOV_AXONOMETRIC : FOV_PERSPECTIVE;
+    if (this.map && Math.abs(this.map.getVerticalFieldOfView() - fov) > 1e-6) this.map.setVerticalFieldOfView(fov);
     // Режим здания: вместо компаса карты — кнопка куба (стили по этому классу)
     this.map?.getContainer().classList.toggle('vc-mode', !!frame);
     // Своя камера: тот же азимут и наклон, что у карты, но с небольшой перспективой и постоянным размером
@@ -156,13 +159,12 @@ export class ViewCube implements maplibregl.IControl {
 
   private hovered?: string;
 
-  private get axonometric() { return !!this.map && this.map.getVerticalFieldOfView() < FOV_PERSPECTIVE / 2; }
+  private get axonometric() { return this.axoChosen; }
 
   /** Переключить перспективу и аксонометрию (выбор запоминается). */
   private toggleProjection() {
     if (!this.map) return;
-    const axo = !this.axonometric;
-    this.map.setVerticalFieldOfView(axo ? FOV_AXONOMETRIC : FOV_PERSPECTIVE);
+    const axo = this.axoChosen = !this.axoChosen;
     try { localStorage.setItem(PROJECTION_KEY, axo ? 'axo' : 'persp'); } catch { /* только до перезагрузки */ }
     this.lastKey = '';
     this.update();

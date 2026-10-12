@@ -36,8 +36,11 @@ const MIN_LEVEL_HEIGHT = 1.5;
 const MAX_LEVEL_HEIGHT = 10;
 /** Площадь, меньше которой контур вырожден, м² (детали крестов бывают и по 0.005 м² — это нормально). */
 const MIN_AREA = 0.0001;
-/** Отношение площади к квадрату периметра, ниже которого контур — «щель» нулевой ширины (у квадрата 1/16). */
-const MIN_FATNESS = 0.002;
+/**
+ * Средняя ширина контура (2·площадь/периметр), ниже которой он — «щель» нулевой ширины, м. Не доля от периметра:
+ * длинные узкие, но настоящие контуры (ограда в толщину стенки, relation/3023352) иначе выходили вырожденными.
+ */
+const MIN_WIDTH = 0.05;
 /** Части за контуром: допуск по площади, м² и доля части (погрешности обрисовки). */
 const OUTSIDE_AREA = 1;
 const OUTSIDE_SHARE = 0.03;
@@ -258,7 +261,7 @@ export function validateGeometry(f: Feature3D): Issue[] {
       if (distinct >= 3 && selfIntersects(r)) {
         const text = i ? tr('Внутреннее кольцо самопересекается — объём строится неверно.') : tr('Контур самопересекается — объём строится неверно.');
         out.push({ key: f.key, level: 'error', code: 'self', text });
-      } else if (distinct < 3 || ringArea(r) < MIN_AREA || ringArea(r) < MIN_FATNESS * perimeter(r) ** 2) {
+      } else if (distinct < 3 || ringArea(r) < MIN_AREA || 2 * ringArea(r) < MIN_WIDTH * perimeter(r)) {
         const params = { points: distinct, area: fmt(ringArea(r)) };
         const text = i ? tr('Внутреннее кольцо вырождено (разных точек: {points}, площадь {area} м²).', params)
           : tr('Контур вырожден (разных точек: {points}, площадь {area} м²).', params);

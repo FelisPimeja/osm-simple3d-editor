@@ -509,6 +509,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
     };
     const top = this.level.cut - CUT_BELOW_CEIL;
+    let shellCache: Shell | undefined;
+    const shell = () => (shellCache ??= buildShell(g));
     // Внешний периметр этажа: объединение следов объектов здания, которые есть на высоте среза, — толстой линией
     const spans: ClipMulti = [];
     // Есть части — контур здания (outline) не в счёт: его след накрывает и то, что у частей лишь крыша
@@ -574,17 +576,20 @@ export class BuildingsLayer implements CustomLayerInterface {
       const el = new THREE.LineSegments(eg, INDOOR_VOID_EDGE);
       el.frustumCulled = false;
       root.add(el);
-      for (const b of this.level.below) this.drawPlan(root, g, b.items, b.doors ?? [], b.cut - CUT_BELOW_CEIL, true);
+      for (const b of this.level.below) this.drawPlan(root, g, b.items, b.doors ?? [], b.cut - CUT_BELOW_CEIL, true, shell());
     }
-    this.drawPlan(root, g, this.level.items, this.level.doors ?? [], top, false);
+    this.drawPlan(root, g, this.level.items, this.level.doors ?? [], top, false, shell());
   }
 
-  /** План этажа: стены помещений и стены-линии с проёмами, полы по видам, крышки колонн; pale — бледный (этаж под вторым светом). */
-  private drawPlan(root: THREE.Group, g: MeshGroup, items: IndoorItem[], doorList: LonLat[], top: number, pale: boolean) {
+  /**
+   * План этажа: стены помещений и стены-линии с проёмами, полы по видам, крышки колонн; pale — бледный (этаж под вторым светом).
+   * Стены и крышки не выше оболочки здания (shell): под скатом крыши стена срезается по скату.
+   */
+  private drawPlan(root: THREE.Group, g: MeshGroup, items: IndoorItem[], doorList: LonLat[], top: number, pale: boolean, shell?: Shell) {
     if (!items.length) return;
     const capPos: number[] = [], floorPos: number[] = [], floorCol: number[] = [];
     const white = new THREE.Color(0xffffff);
-    const fill = (outer: Pt[], holes: Pt[][], z: number, colour?: number) => {
+    const fill = (outer: Pt[], holes: Pt[][], z: number | ((x: number, y: number) => number), colour?: number) => {
       const v2 = (r: Pt[]) => r.map(([x, y]) => new THREE.Vector2(x, y));
       const contour = v2(outer), hs = holes.map(v2);
       if (THREE.ShapeUtils.isClockWise(contour)) contour.reverse();
@@ -593,7 +598,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const c = colour === undefined ? undefined : new THREE.Color(colour);
       if (c && pale) c.lerp(white, PALE_MIX);
       for (const tri of THREE.ShapeUtils.triangulateShape(contour, hs)) for (const i of tri) {
-        (c ? floorPos : capPos).push(pts[i].x, pts[i].y, z);
+        (c ? floorPos : capPos).push(pts[i].x, pts[i].y, typeof z === 'number' ? z : z(pts[i].x, pts[i].y));
         if (c) floorCol.push(c.r, c.g, c.b);
       }
     };
@@ -619,22 +624,24 @@ export class BuildingsLayer implements CustomLayerInterface {
     const end = (x: number, y: number, z0: number, z1: number, dx: number, dy: number) => {
       const k = `${Math.round(x * 20)},${Math.round(y * 20)}`;
       const e = ends.get(k) ?? { x, y, z0, z1, dirs: [] };
+      e.z1 = Math.max(e.z1, z1);
       e.dirs.push([dx, dy]);
       ends.set(k, e);
     };
-    const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1: number, ends = true) => {
-      walls.push(ax, ay, z0, bx, by, z0, bx, by, z1, ax, ay, z0, bx, by, z1, ax, ay, z1);
-      lines.push(ax, ay, z1, bx, by, z1);
+    /** Кусок стены; верх — z1a в начале, z1b в конце (под скатом крыши — наклонный). */
+    const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, ends = true) => {
+      walls.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
+      lines.push(ax, ay, z1a, bx, by, z1b);
       if (!this.graphics.edges) return;
       edges.push(ax, ay, z0, bx, by, z0);
       if (!ends) return; // перемычка над проёмом: вертикали дают откосы соседних кусков
       const l = Math.hypot(bx - ax, by - ay) || 1;
-      end(ax, ay, z0, z1, (bx - ax) / l, (by - ay) / l);
-      end(bx, by, z0, z1, (ax - bx) / l, (ay - by) / l);
+      end(ax, ay, z0, z1a, (bx - ax) / l, (by - ay) / l);
+      end(bx, by, z0, z1b, (ax - bx) / l, (ay - by) / l);
     };
     const doors = doorList.map(g.toLocal);
     /** Стена с дверными проёмами (DOOR_WIDTH × DOOR_HEIGHT) там, где на ней стоит дверь. */
-    const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1: number) => {
+    const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number) => {
       const len = Math.hypot(bx - ax, by - ay);
       const gaps: [number, number][] = [];
       if (len > 1e-6) {
@@ -646,10 +653,11 @@ export class BuildingsLayer implements CustomLayerInterface {
           gaps.push([Math.max(0, t - DOOR_WIDTH / 2) / len, Math.min(len, t + DOOR_WIDTH / 2) / len]);
         }
       }
-      if (!gaps.length) { slab(ax, ay, bx, by, z0, z1); return; }
+      if (!gaps.length) { slab(ax, ay, bx, by, z0, z1a, z1b); return; }
       gaps.sort((p, q) => p[0] - q[0]);
       const at = (t: number): [number, number] => [ax + (bx - ax) * t, ay + (by - ay) * t];
-      const lintel = Math.min(z0 + DOOR_HEIGHT, z1);
+      const z1 = (t: number) => z1a + (z1b - z1a) * t;
+      const lintel = z0 + DOOR_HEIGHT;
       let from = 0;
       const pieces: [number, number][] = [];
       for (const [lo, hi] of gaps) {
@@ -657,15 +665,13 @@ export class BuildingsLayer implements CustomLayerInterface {
         from = Math.max(from, hi);
       }
       if (from < 1) pieces.push([from, 1]);
-      for (const [t0, t1] of pieces) slab(...at(t0), ...at(t1), z0, z1);
-      // Перемычки над проёмами
-      if (z1 - lintel > 0.01) {
-        let lo = gaps[0][0], hi = gaps[0][1];
-        for (const [g0, g1] of [...gaps.slice(1), [2, 2] as [number, number]]) {
-          if (g0 <= hi) { hi = Math.max(hi, g1); continue; }
-          slab(...at(lo), ...at(hi), lintel, z1, false);
-          [lo, hi] = [g0, g1];
-        }
+      for (const [t0, t1] of pieces) slab(...at(t0), ...at(t1), z0, z1(t0), z1(t1));
+      // Перемычки над проёмами (где проём выше стены под скатом — перемычки нет)
+      let lo = gaps[0][0], hi = gaps[0][1];
+      for (const [g0, g1] of [...gaps.slice(1), [2, 2] as [number, number]]) {
+        if (g0 <= hi) { hi = Math.max(hi, g1); continue; }
+        if (Math.max(z1(lo), z1(hi)) - lintel > 0.01) slab(...at(lo), ...at(hi), lintel, Math.max(lintel, z1(lo)), Math.max(lintel, z1(hi)), false);
+        [lo, hi] = [g0, g1];
       }
     };
     // Уже стоящие стены: периметр объектов здания и стены-линии; стены помещений, совпадающие с ними, — пропускаем
@@ -720,11 +726,24 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (1 - at > minGap) out.push([at, 1]);
       return out;
     };
+    /** Стена от пола z0 до среза, обрезанная оболочкой здания. */
+    const shellWall = (ax: number, ay: number, bx: number, by: number, z0: number) => {
+      for (const [t0, t1, za, zb] of shellPieces(shell, ax, ay, bx, by, z0, top))
+        wall(ax + (bx - ax) * t0, ay + (by - ay) * t0, ax + (bx - ax) * t1, ay + (by - ay) * t1, z0, za, zb);
+    };
+    /** Крышка сечения (колонна, стена-полигон, короб): на срезе, а под скатом — по скату; целиком над крышей — нет крышки. */
+    const cap = (outer: Pt[], holes: Pt[][], z0: number) => {
+      if (!shell) { fill(outer, holes, top); return; }
+      const zOf = (x: number, y: number) => Math.max(z0, Math.min(top, shell.at(x, y, z0) ?? top));
+      const zs = [outer, ...holes].flat().map(([x, y]) => zOf(x, y));
+      if (zs.every((z) => z >= top - 1e-3)) fill(outer, holes, top);
+      else if (zs.some((z) => z > z0 + 0.05)) fill(outer, holes, zOf);
+    };
     /** Стена на участках ребра, ещё не занятых другими стенами (совпадающие грани мерцали бы). */
     const wallFree = (ax: number, ay: number, bx: number, by: number, z0: number) => {
       for (const [t0, t1] of uncovered(ax, ay, bx, by)) {
         const x0 = ax + (bx - ax) * t0, y0 = ay + (by - ay) * t0, x1 = ax + (bx - ax) * t1, y1 = ay + (by - ay) * t1;
-        wall(x0, y0, x1, y1, z0, top);
+        shellWall(x0, y0, x1, y1, z0);
         taken.push([x0, y0, x1, y1]);
       }
     };
@@ -737,7 +756,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         // Замкнутая стена (короб, шахта) — с крышкой сечения, а не открытой коробкой
         const [f0, fl] = [pts[0], pts[pts.length - 1]];
         if (pts.length >= 4 && Math.hypot(f0[0] - fl[0], f0[1] - fl[1]) < 1e-3) {
-          fill(pts.slice(0, -1), [], top);
+          cap(pts.slice(0, -1), [], it.z);
         }
       }
     }
@@ -747,12 +766,13 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const p of it.polygons) {
         if (it.line) continue; // нарисованы выше
         // У колонны и стены-полигона — крышка сечения, у остальных — пол своего цвета
-        fill(p.outer.map(g.toLocal), p.inners.map((h) => h.map(g.toLocal)), solid ? top : z, solid ? undefined : INDOOR_COLOURS[it.kind]);
+        if (solid) cap(p.outer.map(g.toLocal), p.inners.map((h) => h.map(g.toLocal)), it.z);
+        else fill(p.outer.map(g.toLocal), p.inners.map((h) => h.map(g.toLocal)), z, INDOOR_COLOURS[it.kind]);
         for (const r of [p.outer, ...p.inners]) {
           const rp = r.map(g.toLocal);
           for (let i = 0; i < rp.length; i++) {
             const [ax, ay] = rp[i], [bx, by] = rp[(i + 1) % rp.length];
-            if (solid) wall(ax, ay, bx, by, it.z, top);
+            if (solid) shellWall(ax, ay, bx, by, it.z);
             else if (it.kind === 'room') {
               // Стена помещения — там, где её ещё нет (периметр, indoor=wall с проёмами, соседнее помещение)
               wallFree(ax, ay, bx, by, it.z);
@@ -2177,6 +2197,147 @@ function pointInLocalRing([x, y]: Pt, ring: Pt[]): boolean {
     if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
   }
   return inside;
+}
+
+/** Оболочка здания для плана этажа: indoor-стены и крышки не выходят наружу сквозь скаты крыш. */
+interface Shell {
+  /** Низ крыши над (x, y) для пола z0 — по частям, стоящим не выше пола; undefined — над точкой нет оболочки. */
+  at(x: number, y: number, z0: number): number | undefined;
+  /** Доли (0…1) отрезка a→b, где крыша над ним ломается или обрывается: рёбра скатов и контуры частей. */
+  breaks(ax: number, ay: number, bx: number, by: number): number[];
+}
+
+const SHELL_CELL = 4;
+/** Часть начинается не выше пола этажа (с этим допуском, м) — её крыша накрывает этаж. */
+const SHELL_LEVEL_TOL = 0.5;
+/** Точка ближе этого (м) к контуру части — считается под её крышей. */
+const SHELL_EDGE_TOL = 0.05;
+
+function buildShell(g: MeshGroup): Shell {
+  type Part = { min: number; top: number; flat: boolean; polys: { outer: Pt[]; inners: Pt[][] }[]; box: [number, number, number, number] };
+  const parts: Part[] = [];
+  /** Треугольники скатов (x, y, z × 3) и номер части; сетка — номера треугольников и отрезки контуров/рёбер. */
+  const tris: number[] = [], triPart: number[] = [];
+  const triGrid = new Map<string, number[]>(), segGrid = new Map<string, number[][]>();
+  const cellsOf = (x0: number, y0: number, x1: number, y1: number) => {
+    const out: string[] = [];
+    for (let i = Math.floor(Math.min(x0, x1) / SHELL_CELL); i <= Math.floor(Math.max(x0, x1) / SHELL_CELL); i++)
+      for (let j = Math.floor(Math.min(y0, y1) / SHELL_CELL); j <= Math.floor(Math.max(y0, y1) / SHELL_CELL); j++) out.push(`${i},${j}`);
+    return out;
+  };
+  const addSeg = (x0: number, y0: number, x1: number, y1: number) => {
+    const sg = [x0, y0, x1, y1];
+    for (const c of cellsOf(x0, y0, x1, y1)) (segGrid.get(c) ?? segGrid.set(c, []).get(c)!).push(sg);
+  };
+  const hasParts = g.items.some((it) => it.feature.kind === 'part' && !g.hidden.has(it.feature.key));
+  for (const it of g.items) {
+    if (g.hidden.has(it.feature.key) || g.flat.has(it.feature.key)) continue;
+    if (hasParts && it.feature.kind === 'building') continue;
+    const h = computeHeights(it.tags);
+    const polys = it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+    const box: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const p of polys) for (const [x, y] of p.outer) { box[0] = Math.min(box[0], x); box[1] = Math.min(box[1], y); box[2] = Math.max(box[2], x); box[3] = Math.max(box[3], y); }
+    if (!(box[0] <= box[2])) continue;
+    const flat = h.roofShape === 'flat' || h.roofHeight <= 0;
+    const idx = parts.push({ min: h.min, top: flat ? h.wallTop : h.top, flat, polys, box }) - 1;
+    for (const p of polys) for (const r of [p.outer, ...p.inners]) for (let i = 0; i < r.length; i++) addSeg(...r[i], ...r[(i + 1) % r.length]);
+    if (flat) continue;
+    // Скаты — треугольники крыши (между стенами и перекрытиями); вертикальные (торцы) не в счёт
+    const pos = it.positions;
+    for (let o = it.wallVertices * 3; o + 9 <= pos.length - it.floorVertices * 3; o += 9) {
+      const [x0, y0, x1, y1, x2, y2] = [pos[o], pos[o + 1], pos[o + 3], pos[o + 4], pos[o + 6], pos[o + 7]];
+      if (Math.abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)) < 1e-6) continue;
+      const t = tris.length / 9;
+      for (let k = 0; k < 9; k++) tris.push(pos[o + k]);
+      triPart.push(idx);
+      for (const c of cellsOf(Math.min(x0, x1, x2), Math.min(y0, y1, y2), Math.max(x0, x1, x2), Math.max(y0, y1, y2))) (triGrid.get(c) ?? triGrid.set(c, []).get(c)!).push(t);
+      addSeg(x0, y0, x1, y1); addSeg(x1, y1, x2, y2); addSeg(x2, y2, x0, y0);
+    }
+  }
+  // Внутри части или на её контуре (стена по границе двух частей — под крышей более высокой)
+  const inside = (p: Part, x: number, y: number) => {
+    const e = SHELL_EDGE_TOL;
+    if (x < p.box[0] - e || x > p.box[2] + e || y < p.box[1] - e || y > p.box[3] + e) return false;
+    if (p.polys.some((q) => pointInLocalRing([x, y], q.outer) && !q.inners.some((r) => pointInLocalRing([x, y], r)))) return true;
+    return p.polys.some((q) => [q.outer, ...q.inners].some((r) => r.some((a, i) => {
+      const b = r[(i + 1) % r.length], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+      const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
+      return Math.hypot(x - a[0] - dx * t, y - a[1] - dy * t) < e;
+    })));
+  };
+  return {
+    at(x, y, z0) {
+      // Скат над точкой по каждой части: накрывающий треугольник (наивысший), иначе ближайший —
+      // для точек на самом контуре части
+      const roof = new Map<number, { score: number; z: number }>();
+      for (const t of triGrid.get(`${Math.floor(x / SHELL_CELL)},${Math.floor(y / SHELL_CELL)}`) ?? []) {
+        const o = t * 9;
+        const [x0, y0, z0t, x1, y1, z1t, x2, y2, z2t] = tris.slice(o, o + 9);
+        const d = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+        const l0 = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / d, l1 = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / d, l2 = 1 - l0 - l1;
+        const score = Math.min(0, l0, l1, l2);
+        if (score < -0.05) continue;
+        const z = l0 * z0t + l1 * z1t + l2 * z2t, p = triPart[t], cur = roof.get(p);
+        if (!cur || score > cur.score + 1e-9 || (score >= cur.score - 1e-9 && z > cur.z)) roof.set(p, { score, z });
+      }
+      let best: number | undefined;
+      parts.forEach((p, i) => {
+        if (p.min > z0 + SHELL_LEVEL_TOL || !inside(p, x, y)) return;
+        const z = p.flat ? p.top : roof.get(i)?.z ?? p.top;
+        best = best === undefined ? z : Math.max(best, z);
+      });
+      return best;
+    },
+    breaks(ax, ay, bx, by) {
+      const out: number[] = [];
+      const seen = new Set<number[]>();
+      const dx = bx - ax, dy = by - ay;
+      for (const c of cellsOf(ax, ay, bx, by)) for (const sg of segGrid.get(c) ?? []) {
+        if (seen.has(sg)) continue;
+        seen.add(sg);
+        const [px, py, qx, qy] = sg, ex = qx - px, ey = qy - py;
+        const den = dx * ey - dy * ex;
+        if (Math.abs(den) < 1e-12) continue;
+        const t = ((px - ax) * ey - (py - ay) * ex) / den, u = ((px - ax) * dy - (py - ay) * dx) / den;
+        if (t > 0 && t < 1 && u >= -1e-9 && u <= 1 + 1e-9) out.push(t);
+      }
+      return out.sort((p, q) => p - q);
+    },
+  };
+}
+
+/** Стена a→b от пола z0 до top под оболочкой: куски [t0, t1, верх в t0, верх в t1]; где крыша ниже пола — стены нет. */
+function shellPieces(shell: Shell | undefined, ax: number, ay: number, bx: number, by: number, z0: number, top: number): [number, number, number, number][] {
+  const len = Math.hypot(bx - ax, by - ay);
+  if (!shell || len < 1e-6) return [[0, 1, top, top]];
+  const ts = [0, ...shell.breaks(ax, ay, bx, by), 1].filter((t, i, a) => i === 0 || t - a[i - 1] > 1e-9);
+  const h = (t: number) => shell.at(ax + (bx - ax) * t, ay + (by - ay) * t, z0) ?? top;
+  const pieces: [number, number, number, number][] = [];
+  const push = (t0: number, t1: number, za: number, zb: number) => {
+    const last = pieces[pieces.length - 1];
+    // Продолжение без излома — тем же куском (необрезанная стена остаётся одной)
+    if (last && Math.abs(last[1] - t0) < 1e-9 && Math.abs(last[3] - za) < 1e-6
+      && Math.abs((last[3] - last[2]) / (last[1] - last[0]) - (zb - za) / (t1 - t0)) * len < 1e-4) { last[1] = t1; last[3] = zb; return; }
+    pieces.push([t0, t1, za, zb]);
+  };
+  for (let i = 0; i + 1 < ts.length; i++) {
+    const t0 = ts[i], t1 = ts[i + 1];
+    // Крыша над промежутком между изломами — линейна: берём её у концов изнутри (скачок на контуре части — снаружи)
+    const e = Math.min(1e-3 / len, (t1 - t0) / 4);
+    const h0 = h(t0 + e), h1 = h(t1 - e);
+    const k = (h1 - h0) / (t1 - t0 - 2 * e);
+    const hA = h0 - k * e, hB = h1 + k * e;
+    const cuts = [t0, t1];
+    for (const lvl of [top, z0]) if ((hA - lvl) * (hB - lvl) < 0) cuts.push(t0 + ((t1 - t0) * (lvl - hA)) / (hB - hA));
+    cuts.sort((p, q) => p - q);
+    const zAt = (t: number) => Math.max(z0, Math.min(top, hA + ((hB - hA) * (t - t0)) / (t1 - t0)));
+    for (let j = 0; j + 1 < cuts.length; j++) {
+      const u0 = cuts[j], u1 = cuts[j + 1];
+      if (u1 - u0 < 1e-9 || zAt((u0 + u1) / 2) <= z0 + 0.05) continue;
+      push(u0, u1, zAt(u0), zAt(u1));
+    }
+  }
+  return pieces;
 }
 
 export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'shape' | 'grid' | 'perpendicular' | 'edge' | 'extension';

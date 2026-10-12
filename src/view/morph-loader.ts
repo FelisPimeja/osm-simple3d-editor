@@ -5,8 +5,11 @@
  * Соприкасающиеся части с общей плоскостью сливаются в один объём без шва.
  */
 
-/** Часть объёма: коробка [x0, y0, z0, x1, y1, z1]; roof — вместо коробки двускатная крыша с коньком вдоль оси. */
-export interface Part { b: readonly number[]; roof?: 'x' | 'y' }
+/**
+ * Часть объёма: коробка [x0, y0, z0, x1, y1, z1]. С roof — вместо коробки крыша с коньком вдоль оси roof:
+ * двускатная (gable), односкатная (skillion, высокий край у меньшей координаты) или ломаная двускатная (gambrel).
+ */
+export interface Part { b: readonly number[]; roof?: 'x' | 'y'; kind?: 'gable' | 'skillion' | 'gambrel' }
 export type Shape = readonly Part[];
 
 type Plane = { n: readonly [number, number, number]; off: number };
@@ -15,6 +18,18 @@ const S2 = Math.SQRT1_2, S6 = 1 / Math.sqrt(6), S3 = 1 / Math.sqrt(3);
 // Изометрия: зритель в (+1, +1, +1), видны грани +x, +y, +z
 const R = [S2, -S2, 0] as const, UP = [-S6, -S6, 2 * S6] as const, D = [S3, S3, S3] as const;
 const dot = (a: readonly number[], b: readonly number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/** Профиль крыши в поперечном сечении (s — поперёк конька, z — высота): отрезки скатов. */
+function profile(kind: Part['kind'], s0: number, s1: number, z0: number, z1: number): [number, number][][] {
+  const sc = (s0 + s1) / 2, w = s1 - s0, h = z1 - z0;
+  if (kind === 'skillion') return [[[s0, z1], [s1, z0]]];
+  if (kind === 'gambrel') {
+    // Нижние скаты крутые, верхние пологие: перелом на 0.15 ширины от карниза и 0.6 высоты
+    const l: [number, number] = [s0 + 0.15 * w, z0 + 0.6 * h], r: [number, number] = [s1 - 0.15 * w, z0 + 0.6 * h];
+    return [[[s0, z0], l], [l, [sc, z1]], [[s1, z0], r], [r, [sc, z1]]];
+  }
+  return [[[s0, z0], [sc, z1]], [[s1, z0], [sc, z1]]];
+}
 
 function planes(p: Part): Plane[] {
   const [x0, y0, z0, x1, y1, z1] = p.b;
@@ -25,16 +40,17 @@ function planes(p: Part): Plane[] {
     { n: [0, 0, -1], off: -z0 },
   ];
   if (!p.roof) return [...sides, { n: [0, 0, 1], off: z1 }];
-  // Скаты: через карниз (низ коробки по краю) и конёк (верх по середине)
-  const h = z1 - z0;
-  if (p.roof === 'x') {
-    const w = (y1 - y0) / 2, l = Math.hypot(h, w);
-    const a: Plane['n'] = [0, h / l, w / l], b: Plane['n'] = [0, -h / l, w / l];
-    return [...sides, { n: a, off: a[1] * y1 + a[2] * z0 }, { n: b, off: b[1] * y0 + b[2] * z0 }];
-  }
-  const w = (x1 - x0) / 2, l = Math.hypot(h, w);
-  const a: Plane['n'] = [h / l, 0, w / l], b: Plane['n'] = [-h / l, 0, w / l];
-  return [...sides, { n: a, off: a[0] * x1 + a[2] * z0 }, { n: b, off: b[0] * x0 + b[2] * z0 }];
+  const [s0, s1] = p.roof === 'x' ? [y0, y1] : [x0, x1];
+  const inner = [(s0 + s1) / 2, z0 + 1e-3 * (z1 - z0)];
+  return [...sides, ...profile(p.kind, s0, s1, z0, z1).map(([a, b]): Plane => {
+    // Нормаль отрезка наружу (от точки внутри профиля)
+    let ns = -(b[1] - a[1]), nz = b[0] - a[0];
+    const l = Math.hypot(ns, nz);
+    ns /= l; nz /= l;
+    if (ns * (inner[0] - a[0]) + nz * (inner[1] - a[1]) > 0) { ns = -ns; nz = -nz; }
+    const n: Plane['n'] = p.roof === 'x' ? [0, ns, nz] : [ns, 0, nz];
+    return { n, off: ns * a[0] + nz * a[1] };
+  })];
 }
 
 const ease = (t: number) => (t < 0 ? 0 : t > 1 ? 1 : t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
@@ -110,7 +126,7 @@ export class MorphLoader {
     const lerp = (x: readonly number[], y: readonly number[], f: number) => x.map((v, j) => v + (y[j] - v) * f);
     const flat = (x: readonly number[]) => [x[0], x[1], x[2], x[3], x[4], x[2]];
     // Части, которые совпадают и до, и после перехода, движутся вместе — иначе их грани расходятся двойной линией
-    const same = (j: number, k: number) => a[j].roof === a[k].roof && a[j].b.every((v, q) => v === a[k].b[q]) && b[j].b.every((v, q) => v === b[k].b[q]);
+    const same = (j: number, k: number) => a[j].roof === a[k].roof && a[j].kind === a[k].kind && a[j].b.every((v, q) => v === a[k].b[q]) && b[j].b.every((v, q) => v === b[k].b[q]);
     return a.map((p, k) => {
       const order = a.findIndex((_, j) => same(j, k));
       const f = (local - order * stagger) / span;
@@ -118,7 +134,7 @@ export class MorphLoader {
       // Крыша сначала ложится, переезжает вместе со стенами и поднимается уже на новом месте
       const pa = p.b, pb = b[k].b;
       const box = f < 0.3 ? lerp(pa, flat(pa), ease(f / 0.3)) : f < 0.7 ? lerp(flat(pa), flat(pb), ease((f - 0.3) / 0.4)) : lerp(flat(pb), pb, ease((f - 0.7) / 0.3));
-      return { roof: p.roof, b: box };
+      return { roof: p.roof, kind: p.kind, b: box };
     });
   }
 
@@ -218,6 +234,23 @@ export const BUILDING_SHAPES: readonly Shape[] = [
   [box(0, 0, 0, 3, 1.2, 1.3), box(0, 0, 0, 1.2, 3, 1.3), box(0.2, 0.1, 0, 1, 1.1, 1.3), roofX(0, 0, 1.3, 3, 1.2, 2.1), roofY(0, 0, 1.3, 1.2, 3, 2.1)],
   [box(0, 0.8, 0, 2.2, 2.2, 1.3), box(0, 0.8, 0, 2.2, 2.2, 1.3), box(2.2, 0.9, 0, 3.2, 2.1, 2.9), roofX(0, 0.8, 1.3, 2.2, 2.2, 2.2), roofY(2.2, 0.9, 2.9, 3.2, 2.1, 3.7)],
   [box(0.2, 0.2, 0, 2.8, 2.8, 0.7), box(0.2, 0.2, 0, 2.8, 2.8, 0.7), box(0.8, 0.8, 0, 2.2, 2.2, 3.4), roofX(0.8, 0.8, 3.4, 2.2, 2.2, 3.4), roofY(1, 1, 3.4, 2, 2, 3.4)],
+];
+
+const gambrelY = (...b: number[]): Part => ({ b, roof: 'y', kind: 'gambrel' });
+const skillionX = (...b: number[]): Part => ({ b, roof: 'x', kind: 'skillion' });
+
+/**
+ * Формы, вписанные в куб 3×3×3: двускатная крыша → ломаная → высокий корпус с односкатной пристройкой →
+ * односкатная на весь куб → половина с плоской крышей, половина с двускатной.
+ * Части: нижний объём, верхний объём, двускатная (конёк по x), ломаная (по y), односкатная (по x), двускатная (по y).
+ */
+const flat = (z: number, x0 = 0, y0 = 0, x1 = 3, y1 = 3) => [x0, y0, z, x1, y1, z];
+export const CUBE_SHAPES: readonly Shape[] = [
+  [box(0, 0, 0, 3, 3, 1.8), box(0, 0, 0, 3, 3, 1.8), roofX(0, 0, 1.8, 3, 3, 3), gambrelY(...flat(1.8)), skillionX(...flat(1.8)), roofY(...flat(1.8))],
+  [box(0, 0, 0, 3, 3, 1.2), box(0, 0, 0, 3, 3, 1.2), roofX(...flat(1.2)), gambrelY(0, 0, 1.2, 3, 3, 3), skillionX(...flat(1.2)), roofY(...flat(1.2))],
+  [box(0, 0, 0, 3, 3, 1.4), box(0, 0, 1.4, 3, 1.4, 3), roofX(...flat(1.4, 0, 1.4)), gambrelY(...flat(1.4, 0, 1.4)), skillionX(0, 1.4, 1.4, 3, 3, 2.6), roofY(...flat(1.4, 0, 1.4))],
+  [box(0, 0, 0, 3, 3, 1.6), box(0, 0, 0, 3, 3, 1.6), roofX(...flat(1.6)), gambrelY(...flat(1.6)), skillionX(0, 0, 1.6, 3, 3, 3), roofY(...flat(1.6))],
+  [box(0, 0, 0, 3, 3, 1.6), box(1.5, 0, 1.6, 3, 3, 3), roofX(...flat(1.6, 0, 0, 1.5)), gambrelY(...flat(1.6, 0, 0, 1.5)), skillionX(...flat(1.6, 0, 0, 1.5)), roofY(0, 0, 1.6, 1.5, 3, 3)],
 ];
 
 /** Параметры анимации индикатора в редакторе. */

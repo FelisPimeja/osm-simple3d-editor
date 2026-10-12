@@ -45,6 +45,7 @@ import { bindTagForms, renderMultiTagForm, renderTagForm, type InheritSource } f
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
 import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from './settings';
+import { LOADER_TIMING, CUBE_SHAPES, MorphLoader } from './view/morph-loader';
 
 // Статичная разметка index.html — до того, как код ниже начнёт менять тексты
 localizeDom(document.body);
@@ -909,8 +910,10 @@ const serverDown = () => overpass.pool.endpoints.some((e) => e.unreachable);
 
 /** Карточка по центру: что сейчас происходит (открытие здания по ссылке). undefined — убрать. */
 const loadingCard = document.getElementById('loading-card')!;
+const loadingAnim = new MorphLoader(loadingCard.querySelector('canvas')!, { shapes: CUBE_SHAPES, ...LOADER_TIMING });
 function showLoading(text: string | undefined, down = false) {
   loadingCard.hidden = text === undefined;
+  if (text === undefined) loadingAnim.stop(); else loadingAnim.start();
   loadingCard.classList.toggle('down', down);
   if (text !== undefined) loadingCard.querySelector('.text')!.textContent = text;
 }

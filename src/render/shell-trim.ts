@@ -50,6 +50,7 @@ const MIN_AREA = 1e-4;
  * кусков (скат внутри скатов наложенных частей) считает секунды и даже не возвращается. Тогда грань убираем
  * целиком, если закрыты все её пробные точки, иначе оставляем.
  */
+const SNAP = 1e6;
 const MAX_PIECES = 24;
 
 export function prepareSolid(s: ShellSolid): PreparedSolid {
@@ -68,7 +69,7 @@ export function prepareSolid(s: ShellSolid): PreparedSolid {
     grow(b, x0, y0); grow(b, x1, y1); grow(b, x2, y2);
     roof.push({ tri: [[x0, y0], [x1, y1], [x2, y2]], plane, box: b, opaque: !s.glassRoof });
   }
-  return { polys: s.polys, clip: toClip(s.polys), min: s.min, wallTop: s.wallTop, top, box, opaqueWalls: !s.glassWalls, roof };
+  return { polys: s.polys, clip: snap(toClip(s.polys)), min: s.min, wallTop: s.wallTop, top, box, opaqueWalls: !s.glassWalls, roof };
 }
 
 /**
@@ -162,8 +163,8 @@ function trimWall(a: V3, b: V3, c: V3, ownPolys: LocalPolygon[], glass: boolean,
     if (!side.length) return; // с одной из сторон ничего — стену видно целиком
     // У стены куски — полосы по длине стены, почти не перекрываются: их объединять дёшево, предел выше
     if (side.length > MAX_PIECES * 3) return coarse(tri, side) ? [] : undefined;
-    const u = polygonClipping.union(side[0], ...side.slice(1));
-    hidden = hidden ? polygonClipping.intersection(hidden, u) : u;
+    const u = polygonClipping.union(snap(side[0]), ...side.slice(1).map(snap));
+    hidden = hidden ? polygonClipping.intersection(snap(hidden), snap(u)) : u;
     if (!hidden.length) return;
   }
   const lift = ([s, z]: Pt): V3 => [p[0] + ux * s, p[1] + uy * s, z];
@@ -184,7 +185,7 @@ function trimFace(a: V3, b: V3, c: V3, glass: boolean, near: PreparedSolid[], fl
   for (const s of near) {
     if (s.opaqueWalls || glass) {
       const piece = clipAll(tri, [(v) => zf(v) - s.min - floor, (v) => s.wallTop - FACE_EPS - zf(v)]);
-      if (piece) for (const poly of polygonClipping.intersection([ring(piece)], s.clip)) hidden.push(poly);
+      if (piece) for (const poly of polygonClipping.intersection(snap([ring(piece)]), s.clip)) hidden.push(poly);
     }
     for (const r of s.roof) {
       if (!(r.opaque || glass) || r.box[0] > tb[2] || r.box[2] < tb[0] || r.box[1] > tb[3] || r.box[3] < tb[1]) continue;
@@ -195,7 +196,7 @@ function trimFace(a: V3, b: V3, c: V3, glass: boolean, near: PreparedSolid[], fl
   }
   if (!hidden.length) return;
   if (hidden.length > MAX_PIECES) return coarse(tri, hidden) ? [] : undefined;
-  return rest(tri, polygonClipping.union(hidden[0], ...hidden.slice(1)), (v) => [v[0], v[1], zf(v)]);
+  return rest(tri, polygonClipping.union(snap(hidden[0]), ...hidden.slice(1).map(snap)), (v) => [v[0], v[1], zf(v)]);
 }
 
 /** Закрыт ли треугольник кусками целиком — по пробным точкам: центр и точки у вершин и середин сторон. */
@@ -214,7 +215,7 @@ function rest(tri: Pt[], hidden: ClipMulti, lift: (v: Pt) => V3): V3[][] | undef
   const hiddenArea = multiArea(hidden);
   if (hiddenArea < MIN_AREA) return;
   if (hiddenArea >= Math.abs(signedArea(tri)) - MIN_AREA) return []; // закрыт целиком
-  const visible = polygonClipping.difference([ring(tri)], hidden);
+  const visible = polygonClipping.difference(snap([ring(tri)]), snap(hidden));
   const out: V3[][] = [];
   for (const poly of visible) {
     if (multiArea([poly]) < MIN_AREA) continue;
@@ -229,6 +230,16 @@ function rest(tri: Pt[], hidden: ClipMulti, lift: (v: Pt) => V3): V3[][] | undef
     }
   }
   return out;
+}
+
+/**
+ * Координаты на сетку в микрон. На вершинах, различающихся в последних знаках double (клинья у стыков стен),
+ * polygon-clipping зацикливается внутри одного вызова; после округления те же входы считаются за миллисекунды.
+ */
+function snap<T extends ClipPolygon | ClipMulti>(g: T): T {
+  const r = (v: number) => Math.round(v * SNAP) / SNAP;
+  const deep = (x: unknown): unknown => (typeof x === 'number' ? r(x) : (x as unknown[]).map(deep));
+  return deep(g) as T;
 }
 
 /** Выпуклый многоугольник, обрезанный условиями g(v) ≥ 0; undefined — пусто или меньше MIN_AREA. */

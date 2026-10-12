@@ -269,6 +269,11 @@ export class OverpassTiles {
     }
   }
 
+  /** Ключи нужных сейчас тайлов (видимые и взятые из кеша). */
+  tiles(): string[] {
+    return this.wanted;
+  }
+
   /** Ключи тайлов, чьи здания сейчас нарисованы нашим слоем. */
   displayed(): string[] {
     return this.layer.groupKeys();

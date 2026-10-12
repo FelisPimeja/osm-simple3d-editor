@@ -768,5 +768,7 @@
   "П": "P",
   "А": "A",
   "Перспектива — переключить на аксонометрию": "Perspective — switch to axonometric",
-  "Аксонометрия — переключить на перспективу": "Axonometric — switch to perspective"
+  "Аксонометрия — переключить на перспективу": "Axonometric — switch to perspective",
+  "Границы тайлов": "Tile borders",
+  "Отладка: границы тайлов данных — розовые полупрозрачные стенки высотой 50 м, к верху тают": "Debug: data tile borders as translucent pink walls, 50 m high, fading upwards"
 }

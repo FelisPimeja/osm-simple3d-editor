@@ -34,17 +34,20 @@ export interface Fix {
 /** Высота этажа, ниже и выше которой этажность и высота противоречат друг другу, м. */
 const MIN_LEVEL_HEIGHT = 1.5;
 const MAX_LEVEL_HEIGHT = 10;
-/** Площадь, меньше которой контур вырожден, м² (кресты и шпили бывают по 0.1–0.5 м² — это нормально). */
-const MIN_AREA = 0.01;
+/** Площадь, меньше которой контур вырожден, м² (детали крестов бывают и по 0.005 м² — это нормально). */
+const MIN_AREA = 0.0001;
+/** Отношение площади к квадрату периметра, ниже которого контур — «щель» нулевой ширины (у квадрата 1/16). */
+const MIN_FATNESS = 0.002;
 /** Части за контуром: допуск по площади, м² и доля части (погрешности обрисовки). */
 const OUTSIDE_AREA = 1;
 const OUTSIDE_SHARE = 0.03;
 /**
- * Дубликат объёма: две части совпадают в плане (общая площадь — от этой доли каждой) и по высоте (общий
- * интервал — от этой доли большего). Просто пересечения не ищем: башня с min_height=0 внутри основания —
+ * Дубликат объёма: две части совпадают по высоте (общий интервал — от этой доли большего) и в плане (DUPLICATE_PLAN). Просто пересечения не ищем: башня с min_height=0 внутри основания —
  * обычная практика обрисовки, это не ошибка.
  */
 const DUPLICATE_SHARE = 0.8;
+/** …а в плане — от этой доли каждой (вложенные ярусы кокошников отличаются на 15% — это не дубли). */
+const DUPLICATE_PLAN = 0.9;
 /** Части покрывают контур меньше чем наполовину — рендеры (и наш) рисуют контур сам по себе. */
 const PARTS_COVERAGE = 0.5;
 
@@ -206,6 +209,12 @@ function ringArea(r: [number, number][]): number {
   return Math.abs(a) / 2;
 }
 
+function perimeter(r: [number, number][]): number {
+  let l = 0;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) l += Math.hypot(r[i][0] - r[j][0], r[i][1] - r[j][1]);
+  return l;
+}
+
 const closed = (r: [number, number][]) => [...r, r[0]];
 
 function toMulti(polys: Polygon[], p: (c: LonLat) => [number, number]): MultiPolygon {
@@ -249,7 +258,7 @@ export function validateGeometry(f: Feature3D): Issue[] {
       if (distinct >= 3 && selfIntersects(r)) {
         const text = i ? tr('Внутреннее кольцо самопересекается — объём строится неверно.') : tr('Контур самопересекается — объём строится неверно.');
         out.push({ key: f.key, level: 'error', code: 'self', text });
-      } else if (distinct < 3 || ringArea(r) < MIN_AREA) {
+      } else if (distinct < 3 || ringArea(r) < MIN_AREA || ringArea(r) < MIN_FATNESS * perimeter(r) ** 2) {
         const params = { points: distinct, area: fmt(ringArea(r)) };
         const text = i ? tr('Внутреннее кольцо вырождено (разных точек: {points}, площадь {area} м²).', params)
           : tr('Контур вырожден (разных точек: {points}, площадь {area} м²).', params);
@@ -357,7 +366,7 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
       const dz = Math.min(a.top, b.top) - Math.max(a.min, b.min);
       if (dz < 0.5 || dz < Math.max(a.top - a.min, b.top - b.min) * DUPLICATE_SHARE) continue;
       const x = safe(() => multiArea(polygonClipping.intersection(multi(a.f), multi(b.f))));
-      if (x === undefined || x < a.area * DUPLICATE_SHARE || x < b.area * DUPLICATE_SHARE) continue;
+      if (x === undefined || x < a.area * DUPLICATE_PLAN || x < b.area * DUPLICATE_PLAN) continue;
       out.push({ key: a.f.key, other: b.f.key, level: 'warning', code: 'overlap',
         text: tr('Почти совпадает с {other} ({area} м² в плане, высоты {from}–{to} м) — похоже на дубликат части.',
           { other: b.f.key, area: fmt(x), from: fmt(Math.max(a.min, b.min)), to: fmt(Math.min(a.top, b.top)) }) });

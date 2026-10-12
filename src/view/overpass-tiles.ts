@@ -436,7 +436,7 @@ export class OverpassTiles {
       for (let i = 0; i < quads.length; i++) {
         // Свой таймаут: браузер ждёт недоступный сервер около минуты, а индикатор «не отвечает» нужен раньше
         const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
-        for (const el of await fetchMapSplit(quads[i], ep.url, signal)) seen.set(`${el.type}/${el.id}`, el);
+        for (const el of await fetchMapSplit(quads[i], ep.url, signal, 4, `${key} quarter ${i + 1}/4`)) seen.set(`${el.type}/${el.id}`, el);
         if (refreshing || i === quads.length - 1) continue;
         // Промежуточный показ: без догрузки мультиполигонов на границе и без записи в кеш
         const els = [...seen.values()];
@@ -445,12 +445,12 @@ export class OverpassTiles {
         this.tileReady(key);
         this.onChange();
       }
-      let elements = await completeRelations([...seen.values()], incompleteBuildingRelations, ep.url, abort.signal);
+      let elements = await completeRelations([...seen.values()], incompleteBuildingRelations, ep.url, abort.signal, key);
       // Помещения и коридоры на границе тайла (план этажа): без них не страшно — ошибка догрузки не роняет тайл
-      try { elements = await completeRelations(elements, incompleteIndoorRelations, ep.url, abort.signal); }
+      try { elements = await completeRelations(elements, incompleteIndoorRelations, ep.url, abort.signal, key); }
       catch (err) { if (abort.signal.aborted) throw err; console.warn('[tiles] indoor: догрузка не удалась', err); }
       // Леса-мультиполигоны на границе тайла (только небольшие и ещё не собранные): без них просто меньше деревьев
-      try { elements = await completeRelations(elements, incompleteWoodRelations(this.knownWoods()), ep.url, abort.signal); }
+      try { elements = await completeRelations(elements, incompleteWoodRelations(this.knownWoods()), ep.url, abort.signal, key); }
       catch (err) { if (abort.signal.aborted) throw err; console.warn('[tiles] леса: догрузка не удалась', err); }
       const { features, groups, indoor } = timed('тайлы: разбор ответа API', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const trees = timed('тайлы: разбор деревьев', () => parseTrees(elements), (r) => `${key}, ${r.points.length} деревьев, ${r.woods.length} лесов`);

@@ -7,6 +7,8 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, type Heights } from '../osm/heights';
+import { clipAbove, prepareSolid, trimTriangles, type PreparedSolid } from './shell-trim';
+import { floatingParts } from '../osm/floating';
 import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { timed } from '../perf';
@@ -35,6 +37,8 @@ const DOOR_HEIGHT = 2.2;
 const DOOR_SNAP = 0.15;
 /** Насколько ниже потолка этажа проходит срез, м. */
 const CUT_BELOW_CEIL = 0.1;
+/** Части, начинающиеся не ниже этого под потолком этажа, считаются потолком (срез — под их днищем), м. */
+const CEIL_SNAP = 0.5;
 /** Стены, перегородки и колонны — белые, как здание; в полную высоту этажа (до среза). */
 const INDOOR_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 /** Выделенное помещение: заливка цветом выделения частей и контур. */
@@ -160,6 +164,8 @@ interface Item {
   glassStart: number;
   /** Рёбра здания (отрезки xyz) — считаются один раз, когда контуры включены. */
   edges?: Float32Array;
+  /** Режим этажей: positions — оболочка (без граней внутри соседних частей), здесь — исходные треугольники. */
+  full?: { positions: Float32Array; wallVertices: number };
 }
 
 /**
@@ -186,6 +192,17 @@ class MeshGroup {
   contacts?: Contacts;
   /** Обводки контуров под частями (в просмотре вместо заливки). */
   strokes?: THREE.LineSegments;
+  /** Из чего посчитана оболочка (исходные треугольники, скрытые и плоские объекты, стекло) — не пересчитывать зря. */
+  shellOf?: { bases: Float32Array[]; hidden: string };
+  /** Висящие части в режиме этажей (ключ → низ, ниже которого части нет): см. floatingParts. */
+  lift?: Map<string, number>;
+  /** Кеш оболочки по частям (см. applyShell): sig — скрытые/голые объекты и стекло. */
+  shellCache?: {
+    sig: string;
+    lifted: Map<Item, { src: Float32Array; lift: number; out: { positions: Float32Array; wallVertices: number } }>;
+    solids: Map<Item, { base: Float32Array; solid: PreparedSolid }>;
+    trimmed: Map<Item, { base: Float32Array; deps: PreparedSolid[]; positions: Float32Array; wallVertices: number }>;
+  };
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
   // Цвет «земли» — посередине между белым и 0x8a8478: контраст неба и земли вдвое меньше
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
@@ -457,17 +474,39 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** doors — двери этажа (lon/lat): в стенах на их месте вырезаются проёмы. */
   setLevel(level: IndoorLevel | undefined) {
     const hadVoids = !!this.level?.voidCuts?.length, hasVoids = !!level?.voidCuts?.length;
+    const toggled = !this.level !== !level;
     this.level = level;
     const focus = this.groups.get(FOCUS_GROUP);
-    if (focus && (hadVoids || hasVoids)) this.rebuildGeometry(focus);
+    // Вход в этажи и выход — оболочка здания вместо частей и обратно
+    if (focus && (hadVoids || hasVoids || toggled)) this.rebuildGeometry(focus);
     timed('этажи: план этажа', () => this.applyLevel(), () => `${level?.items.length ?? 0} объектов`);
     this.applyIndoorSelection();
     this.map?.triggerRepaint();
   }
 
+  /**
+   * Высота среза плана: чуть ниже потолка этажа. Части, начинающиеся чуть ниже потолка (ступени мавзолея с 2.8 м
+   * при этажах по 3 м, relation/3272772), — тоже потолок: срез под их днищем, иначе днища ложатся на план крышкой.
+   */
+  private levelCut?: number;
+
+  private cutZ(): number | undefined {
+    const lv = this.level;
+    if (!lv) return;
+    let cut = lv.cut - CUT_BELOW_CEIL;
+    const g = this.groups.get(FOCUS_GROUP);
+    for (const it of g?.items ?? []) {
+      if (!shellSolid(g!, it) || g!.flat.has(it.feature.key)) continue;
+      const min = g!.lift?.get(it.feature.key) ?? computeHeights(it.tags).min;
+      if (min < lv.cut && min >= lv.cut - CEIL_SNAP && min > lv.floor + CEIL_SNAP) cut = Math.min(cut, min - CUT_BELOW_CEIL);
+    }
+    return cut;
+  }
+
   private applyLevel() {
     // Чуть ниже потолка: днища частей, начинающихся на потолке, и крыши частей на этой высоте не накрывают план
-    const planes = this.level ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), this.level.cut - CUT_BELOW_CEIL)] : null;
+    const cut = this.levelCut = this.cutZ();
+    const planes = cut !== undefined ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), cut)] : null;
     for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL]) m.clippingPlanes = planes;
     if (this.indoorObj) {
       this.indoorObj.parent?.remove(this.indoorObj);
@@ -508,25 +547,39 @@ export class BuildingsLayer implements CustomLayerInterface {
         root.add(mesh);
       }
     };
-    const top = this.level.cut - CUT_BELOW_CEIL;
+    const top = cut!;
     let shellCache: Shell | undefined;
     const shell = () => (shellCache ??= buildShell(g));
     // Внешний периметр этажа: объединение следов объектов здания, которые есть на высоте среза, — толстой линией
     const spans: ClipMulti = [];
     // Есть части — контур здания (outline) не в счёт: его след накрывает и то, что у частей лишь крыша
     const hasParts = g.items.some((it) => it.feature.kind === 'part' && !g.hidden.has(it.feature.key));
+    // Части, разрезанные срезом, — для проверки «сечение внутри другой части»
+    const cutParts = g.items.filter((it) => !g.hidden.has(it.feature.key) && !g.flat.has(it.feature.key) && shellSolid(g, it) && !(hasParts && it.feature.kind === 'building')
+      && !(glassEnabled && it.glassWalls)).filter((it) => {
+      const h = computeHeights(it.tags);
+      return (g.lift?.get(it.feature.key) ?? h.min) <= top && h.wallTop >= top;
+    }).map((it) => ({ it, rings: it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })) }));
+    const insideCut = (self: Item, outer: Pt[]) => {
+      const n = outer.length > 1 && outer[0][0] === outer.at(-1)![0] && outer[0][1] === outer.at(-1)![1] ? outer.length - 1 : outer.length;
+      const cx = outer.slice(0, n).reduce((a, v) => a + v[0], 0) / n, cy = outer.slice(0, n).reduce((a, v) => a + v[1], 0) / n;
+      const probes = outer.slice(0, n).map(([x, y]): Pt => [x + (cx - x) * 0.02, y + (cy - y) * 0.02]);
+      return cutParts.some(({ it, rings }) => it !== self && probes.every((q) => rings.some((r) => pointInLocalRing(q, r.outer) && !r.inners.some((h) => pointInLocalRing(q, h)))));
+    };
     for (const it of g.items) {
       if (g.hidden.has(it.feature.key) || g.flat.has(it.feature.key)) continue;
       if (hasParts && it.feature.kind === 'building') continue;
       // Срез должен пересекать стены, а не крышу (купол, скат выше стен — без обводки)
       const h = computeHeights(it.tags);
-      if (h.min > top - 0.5 || h.wallTop < top) continue;
+      if ((g.lift?.get(it.feature.key) ?? h.min) > top - 0.5 || h.wallTop < top) continue;
       const column = it.tags['building:part'] === 'column';
       for (const p of it.feature.polygons) {
         const outer = p.outer.map(g.toLocal);
         spans.push([outer, ...p.inners.map((r) => r.map(g.toLocal))].map((rp) => [...rp, rp[0]]));
         // Колонна или мелкая часть (столб, пилон) на срезе — сплошное сечение с крышкой, а не открытая коробка
         if (!column && Math.abs(THREE.ShapeUtils.area(outer.map(([x, y]) => new THREE.Vector2(x, y)))) >= SOLID_PART_AREA) continue;
+        // Внутри другой части, разрезанной тем же срезом (гребни в основании), — крышка не нужна: часть скрыта оболочкой
+        if (insideCut(it, outer)) continue;
         fill(outer, p.inners.map((h) => h.map(g.toLocal)), top);
       }
     }
@@ -1055,7 +1108,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (let i = 0; i < pos.length; i += 9) {
         a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
         if (!ray.intersectTriangle(a, b, c, false, p)) continue;
-        if (this.level && p.z > this.level.cut - CUT_BELOW_CEIL + 1e-3) continue; // выше среза этажа — не видно
+        if (this.level && p.z > (this.levelCut ?? this.level.cut) + 1e-3) continue; // выше среза этажа — не видно
         n.subVectors(c, b).cross(a.clone().sub(b));
         if (n.lengthSq() < 1e-10) continue;
         n.normalize();
@@ -1071,7 +1124,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           const q = ray.at(t, new THREE.Vector3());
           const inside = it.feature.polygons.some((poly) => pointInLocalRing([q.x, q.y], poly.outer.map(g.toLocal))
             && !poly.inners.some((r) => pointInLocalRing([q.x, q.y], r.map(g.toLocal))));
-          if (inside && !(this.level && q.z > this.level.cut - CUT_BELOW_CEIL + 1e-3)) out.push({ key, t, local: q, face: 'bottom' });
+          if (inside && !(this.level && q.z > (this.levelCut ?? this.level.cut) + 1e-3)) out.push({ key, t, local: q, face: 'bottom' });
         }
       }
     }
@@ -1792,6 +1845,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Сливает здания группы в одну геометрию. */
   private rebuildGeometry(g: MeshGroup) {
     g.disposeMesh();
+    this.applyShell(g);
     let total = 0;
     for (const it of g.items) { it.start = total; total += it.positions.length / 3; }
     const positions = new Float32Array(total * 3);
@@ -1847,6 +1901,137 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /**
+   * Режим этажей: здание рисуется оболочкой — грани частей, спрятанные внутри соседних частей (общие стены,
+   * крыша подиума внутри башни), вырезаны, чтобы на срезе этажа не торчали стенки «кубиков». Вне этажей —
+   * исходные треугольники (правка частей работает с ними).
+   */
+  private applyShell(g: MeshGroup) {
+    const on = !!this.level && g === this.groups.get(FOCUS_GROUP);
+    if (!on) {
+      if (!g.shellOf) return;
+      for (const it of g.items) {
+        if (!it.full) continue;
+        it.positions = it.full.positions;
+        it.wallVertices = it.full.wallVertices;
+        it.full = undefined;
+        if (it.edges) it.edges = itemEdges(it);
+      }
+      g.shellOf = undefined;
+      g.shellCache = undefined;
+      g.lift = undefined;
+      return;
+    }
+    const bases = g.items.map((it) => it.full?.positions ?? it.positions);
+    // Скрытые, голые контуры и стекло меняют, что чем закрыто
+    const hidden = `${[...g.hidden].sort().join(',')}|${[...g.flat].sort().join(',')}|${glassEnabled}`;
+    if (g.shellOf && g.shellOf.hidden === hidden && g.shellOf.bases.length === bases.length && g.shellOf.bases.every((b, i) => b === bases[i])) return;
+    // Крыши ещё считаются в воркере — оболочку посчитаем, когда придёт последняя (иначе пересчёт на каждую порцию)
+    if (g.items.some((it) => it.pending && !g.hidden.has(it.feature.key))) return;
+    // Кеш по частям: крыши приходят из воркера по одной — пересчитываются только изменившаяся часть и её соседи
+    if (g.shellCache?.sig !== hidden) g.shellCache = { sig: hidden, lifted: new Map(), solids: new Map(), trimmed: new Map() };
+    const cache = g.shellCache;
+    let done = 0;
+    timed('этажи: оболочка здания', () => {
+      // Не дольше SHELL_BUDGET_MS: дальше грани остаются как есть (большие комплексы из сотен частей)
+      const deadline = performance.now() + SHELL_BUDGET_MS;
+      // Висящие части (забытый min_height) — без столба от земли до низа охватывающей части
+      const floating = floatingParts(g.items.filter((it) => !g.hidden.has(it.feature.key)).map((it) => it.feature));
+      g.lift = new Map([...floating].map(([k, f]) => [k, f.lift]));
+      const base = new Map<Item, { positions: Float32Array; wallVertices: number }>();
+      for (const it of g.items) {
+        it.full ??= { positions: it.positions, wallVertices: it.wallVertices };
+        const full = it.full;
+        const lift = g.lift.get(it.feature.key);
+        if (lift === undefined) { base.set(it, full); continue; }
+        const hit = cache.lifted.get(it);
+        if (hit && hit.src === full.positions && hit.lift === lift) { base.set(it, hit.out); continue; }
+        const end = full.positions.length / 3 - it.floorVertices;
+        const walls = clipAbove(full.positions, 0, full.wallVertices, lift), roof = clipAbove(full.positions, full.wallVertices, end, lift);
+        const slabs = full.positions.slice(end * 3);
+        // Плиты под низом — вырожденными: число вершин плит (floorVertices) не меняется
+        for (let i = 0; i + 8 < slabs.length; i += 9) if (slabs[i + 2] < lift - 1e-3) slabs.fill(0, i, i + 9);
+        const pos = new Float32Array(walls.length + roof.length + slabs.length);
+        pos.set(walls, 0);
+        pos.set(roof, walls.length);
+        pos.set(slabs, walls.length + roof.length);
+        const out = { positions: pos, wallVertices: walls.length / 3 };
+        cache.lifted.set(it, { src: full.positions, lift, out });
+        base.set(it, out);
+      }
+      const solids = new Map<Item, PreparedSolid>();
+      for (const it of g.items) {
+        if (!shellSolid(g, it)) continue;
+        const full = base.get(it)!;
+        const hit = cache.solids.get(it);
+        if (hit && hit.base === full.positions) { solids.set(it, hit.solid); continue; }
+        const h = computeHeights(it.tags);
+        const end = full.positions.length / 3 - it.floorVertices;
+        const solid = prepareSolid({
+          polys: it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })),
+          min: g.lift.get(it.feature.key) ?? h.min,
+          // Неподдерживаемая крыша — стены до самого верха
+          wallTop: it.roofApproximated ? h.top : h.wallTop,
+          roof: full.positions.subarray(full.wallVertices * 3, end * 3),
+          glassWalls: glassEnabled && it.glassWalls,
+          glassRoof: glassEnabled && it.glassRoof,
+        });
+        cache.solids.set(it, { base: full.positions, solid });
+        solids.set(it, solid);
+      }
+      for (const it of g.items) {
+        const full = base.get(it)!;
+        if (g.hidden.has(it.feature.key) || strokeOnly(g, it)) {
+          it.positions = full.positions;
+          it.wallVertices = full.wallVertices;
+          if (it.edges) it.edges = itemEdges(it);
+          continue;
+        }
+        // Соседи — объёмы, чей прямоугольник в плане задевает часть
+        const b = positionsBox(full.positions);
+        const deps = [...solids].filter(([o, sd]) => o !== it && sd.box[0] <= b[2] + 0.1 && sd.box[2] >= b[0] - 0.1 && sd.box[1] <= b[3] + 0.1 && sd.box[3] >= b[1] - 0.1).map(([, sd]) => sd);
+        const hit = cache.trimmed.get(it);
+        if (hit && hit.base === full.positions && hit.deps.length === deps.length && hit.deps.every((d, i) => d === deps[i])) {
+          if (it.positions !== hit.positions) {
+            it.positions = hit.positions;
+            it.wallVertices = hit.wallVertices;
+            if (it.edges) it.edges = itemEdges(it);
+          }
+          continue;
+        }
+        if (!deps.length) {
+          it.positions = full.positions;
+          it.wallVertices = full.wallVertices;
+        } else {
+          const n = full.positions.length / 3, end = n - it.floorVertices;
+          const polys = it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, deps, thinItem(it), deadline);
+          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, deps, thinItem(it), deadline);
+          // Перекрытия (крыша под соседней частью) внутри непрозрачного соседа — внутренняя грань оболочки. Число вершин
+          // плит не меняется (floorVertices считается по исходным): убранное — вырожденными треугольниками
+          let floors: ArrayLike<number> = full.positions.subarray(end * 3);
+          const cut = trimTriangles(full.positions, end, n, polys, false, deps, true, deadline);
+          if (cut.length <= floors.length) { const f = new Float32Array(floors.length); f.set(cut); floors = f; }
+          const pos = new Float32Array(walls.length + roof.length + it.floorVertices * 3);
+          pos.set(walls, 0);
+          pos.set(roof, walls.length);
+          pos.set(floors, walls.length + roof.length);
+          it.positions = pos;
+          it.wallVertices = walls.length / 3;
+          done++;
+        }
+        // Не досчитанное к дедлайну в кеш не идёт — досчитается при следующем обновлении
+        if (performance.now() <= deadline) cache.trimmed.set(it, { base: full.positions, deps, positions: it.positions, wallVertices: it.wallVertices });
+        if (it.edges) it.edges = itemEdges(it);
+      }
+      // Заменённые части (пришла крыша, правка) — из кеша вон
+      const live = new Set(g.items);
+      for (const m of [cache.lifted, cache.solids, cache.trimmed] as Map<Item, unknown>[]) for (const k of m.keys()) if (!live.has(k)) m.delete(k);
+      if (performance.now() > deadline) console.warn(`[levels] оболочка здания не досчитана за ${SHELL_BUDGET_MS} мс — часть граней внутри частей осталась`);
+    }, () => `${g.items.length} объектов, пересчитано ${done}`);
+    g.shellOf = { bases: g.items.map((it) => it.full!.positions), hidden };
+  }
+
+  /**
    * Второй свет: горизонтальные грани частей здания на высоте пола этажа (крыши нижних частей, перекрытия,
    * плиты стеклянных частей), попавшие в пустоту, — вырожденными: сквозь пустоту видно этажи ниже.
    */
@@ -1881,6 +2066,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const lines: number[] = [], colors: number[] = [];
     for (const it of g.items) {
       if (!(strokeOnly(g, it) || thinItem(it)) || g.hidden.has(it.feature.key)) continue;
+      // Оболочка этажей: плоский объект целиком внутри соседних частей (навес в объёме подиума) — без обводки
+      if (!strokeOnly(g, it) && it.full?.positions.length && !it.positions.length) continue;
       const c = this.selected.has(it.feature.key) || this.hovered === it.feature.key ? STROKE_SELECTED : STROKE_COLOUR;
       const z = it.box.isEmpty() ? g.footprint : it.box.max.z;
       for (const p of it.feature.polygons) {
@@ -2239,12 +2426,13 @@ function buildShell(g: MeshGroup): Shell {
     for (const p of polys) for (const [x, y] of p.outer) { box[0] = Math.min(box[0], x); box[1] = Math.min(box[1], y); box[2] = Math.max(box[2], x); box[3] = Math.max(box[3], y); }
     if (!(box[0] <= box[2])) continue;
     const flat = h.roofShape === 'flat' || h.roofHeight <= 0;
-    const idx = parts.push({ min: h.min, top: flat ? h.wallTop : h.top, flat, polys, box }) - 1;
+    const idx = parts.push({ min: g.lift?.get(it.feature.key) ?? h.min, top: flat ? h.wallTop : h.top, flat, polys, box }) - 1;
     for (const p of polys) for (const r of [p.outer, ...p.inners]) for (let i = 0; i < r.length; i++) addSeg(...r[i], ...r[(i + 1) % r.length]);
     if (flat) continue;
-    // Скаты — треугольники крыши (между стенами и перекрытиями); вертикальные (торцы) не в счёт
-    const pos = it.positions;
-    for (let o = it.wallVertices * 3; o + 9 <= pos.length - it.floorVertices * 3; o += 9) {
+    // Скаты — треугольники крыши (между стенами и перекрытиями); вертикальные (торцы) не в счёт.
+    // Исходные, а не оболочка: скат под соседней частью — тоже крыша над этим местом
+    const pos = it.full?.positions ?? it.positions;
+    for (let o = (it.full?.wallVertices ?? it.wallVertices) * 3; o + 9 <= pos.length - it.floorVertices * 3; o += 9) {
       const [x0, y0, x1, y1, x2, y2] = [pos[o], pos[o + 1], pos[o + 3], pos[o + 4], pos[o + 6], pos[o + 7]];
       if (Math.abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)) < 1e-6) continue;
       const t = tris.length / 9;
@@ -2594,6 +2782,29 @@ function glassRanges(it: Item): [number, number][] {
   if (it.glassWalls && it.wallVertices) out.push([0, it.wallVertices]);
   if (it.glassRoof && n - it.floorVertices > it.wallVertices) out.push([it.wallVertices, n - it.floorVertices]);
   return out;
+}
+
+/**
+ * Бюджет расчёта оболочки здания в режиме этажей, мс — страховка: дальше грани остаются как есть. Храм из ~450 частей
+ * (relation/3224486) считается около 1.5 с, 600 мс ему не хватало.
+ */
+const SHELL_BUDGET_MS = 5000;
+
+/** Объект закрывает собой грани соседей в оболочке: объём с высотой (не навес building:part=roof, не плоский след). */
+/** Прямоугольник треугольников в плане: [x0, y0, x1, y1]. */
+function positionsBox(pos: ArrayLike<number>): [number, number, number, number] {
+  const b: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let i = 0; i + 2 < pos.length; i += 3) {
+    if (pos[i] < b[0]) b[0] = pos[i];
+    if (pos[i] > b[2]) b[2] = pos[i];
+    if (pos[i + 1] < b[1]) b[1] = pos[i + 1];
+    if (pos[i + 1] > b[3]) b[3] = pos[i + 1];
+  }
+  return b;
+}
+
+function shellSolid(g: MeshGroup, it: Item): boolean {
+  return !g.hidden.has(it.feature.key) && !strokeOnly(g, it) && !thinItem(it) && it.tags['building:part'] !== 'roof' && it.positions.length > 0;
 }
 
 /** Контур под частями (и голый контур в режиме здания): только обводка — заливку всё равно закрывают части. */

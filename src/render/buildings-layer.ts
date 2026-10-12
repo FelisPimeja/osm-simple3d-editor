@@ -525,6 +525,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     const spans: ClipMulti = [];
     // Есть части — контур здания (outline) не в счёт: его след накрывает и то, что у частей лишь крыша
     const hasParts = g.items.some((it) => it.feature.kind === 'part' && !g.hidden.has(it.feature.key));
+    // Части, разрезанные срезом, — для проверки «сечение внутри другой части»
+    const cutParts = g.items.filter((it) => !g.hidden.has(it.feature.key) && !g.flat.has(it.feature.key) && shellSolid(g, it) && !(hasParts && it.feature.kind === 'building')
+      && !(glassEnabled && it.glassWalls)).filter((it) => {
+      const h = computeHeights(it.tags);
+      return (g.lift?.get(it.feature.key) ?? h.min) <= top && h.wallTop >= top;
+    }).map((it) => ({ it, rings: it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })) }));
+    const insideCut = (self: Item, outer: Pt[]) => {
+      const n = outer.length > 1 && outer[0][0] === outer.at(-1)![0] && outer[0][1] === outer.at(-1)![1] ? outer.length - 1 : outer.length;
+      const cx = outer.slice(0, n).reduce((a, v) => a + v[0], 0) / n, cy = outer.slice(0, n).reduce((a, v) => a + v[1], 0) / n;
+      const probes = outer.slice(0, n).map(([x, y]): Pt => [x + (cx - x) * 0.02, y + (cy - y) * 0.02]);
+      return cutParts.some(({ it, rings }) => it !== self && probes.every((q) => rings.some((r) => pointInLocalRing(q, r.outer) && !r.inners.some((h) => pointInLocalRing(q, h)))));
+    };
     for (const it of g.items) {
       if (g.hidden.has(it.feature.key) || g.flat.has(it.feature.key)) continue;
       if (hasParts && it.feature.kind === 'building') continue;
@@ -537,6 +549,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         spans.push([outer, ...p.inners.map((r) => r.map(g.toLocal))].map((rp) => [...rp, rp[0]]));
         // Колонна или мелкая часть (столб, пилон) на срезе — сплошное сечение с крышкой, а не открытая коробка
         if (!column && Math.abs(THREE.ShapeUtils.area(outer.map(([x, y]) => new THREE.Vector2(x, y)))) >= SOLID_PART_AREA) continue;
+        // Внутри другой части, разрезанной тем же срезом (гребни в основании), — крышка не нужна: часть скрыта оболочкой
+        if (insideCut(it, outer)) continue;
         fill(outer, p.inners.map((h) => h.map(g.toLocal)), top);
       }
     }
@@ -2699,8 +2713,8 @@ function glassRanges(it: Item): [number, number][] {
 }
 
 /**
- * Бюджет расчёта оболочки здания в режиме этажей, мс: считается один раз при входе в этажи. Храм из ~450 частей
- * (relation/3224486) — около 1.5 с; при 600 мс часть граней оставалась необрезанной (гребни внутри основания на плане).
+ * Бюджет расчёта оболочки здания в режиме этажей, мс — страховка: дальше грани остаются как есть. Храм из ~450 частей
+ * (relation/3224486) считается около 1.5 с, 600 мс ему не хватало.
  */
 const SHELL_BUDGET_MS = 5000;
 

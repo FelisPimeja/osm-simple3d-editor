@@ -162,13 +162,18 @@ function trimWall(a: V3, b: V3, c: V3, ownPolys: LocalPolygon[], glass: boolean,
     }
     if (!side.length) return; // с одной из сторон ничего — стену видно целиком
     // У стены куски — полосы по длине стены, почти не перекрываются: их объединять дёшево, предел выше
-    if (side.length > MAX_PIECES * 3) return coarse(tri, side) ? [] : undefined;
-    const u = polygonClipping.union(snap(side[0]), ...side.slice(1).map(snap));
+    let use = side;
+    if (side.length > MAX_PIECES * 3) {
+      if (coarse(tri, side)) continue; // с этой стороны закрыто целиком
+      use = largest(side, MAX_PIECES / 2);
+    }
+    const u = polygonClipping.union(snap(use[0]), ...use.slice(1).map(snap));
     hidden = hidden ? polygonClipping.intersection(snap(hidden), snap(u)) : u;
     if (!hidden.length) return;
   }
+  if (!hidden) return []; // закрыто целиком со всех сторон
   const lift = ([s, z]: Pt): V3 => [p[0] + ux * s, p[1] + uy * s, z];
-  return rest(tri, hidden!, lift);
+  return rest(tri, hidden, lift);
 }
 
 /** Наклонная или горизонтальная грань: в плане, z — по её плоскости. */
@@ -195,8 +200,17 @@ function trimFace(a: V3, b: V3, c: V3, glass: boolean, near: PreparedSolid[], fl
     }
   }
   if (!hidden.length) return;
+  // Скат в гуще чужих скатов (купола, главки): точно — долго, а такие грани выше плана этажа
   if (hidden.length > MAX_PIECES) return coarse(tri, hidden) ? [] : undefined;
   return rest(tri, polygonClipping.union(snap(hidden[0]), ...hidden.slice(1).map(snap)), (v) => [v[0], v[1], zf(v)]);
+}
+
+/**
+ * Самые крупные n кусков. Объединять сотню мелких полос (скаты соседних крыш у длинной стены) — долго, а без них
+ * закрыто чуть меньше, но не больше, чем на самом деле: низ стены внутри основания всё равно уходит.
+ */
+function largest(pieces: ClipPolygon[], n: number): ClipPolygon[] {
+  return pieces.map((p) => ({ p, a: Math.abs(signedArea(p[0] as Pt[])) })).sort((x, y) => y.a - x.a).slice(0, n).map((x) => x.p);
 }
 
 /** Закрыт ли треугольник кусками целиком — по пробным точкам: центр и точки у вершин и середин сторон. */

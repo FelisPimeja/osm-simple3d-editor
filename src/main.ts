@@ -140,6 +140,7 @@ if (import.meta.env.PROD) maplibregl.setWorkerUrl(new URL('maplibre/maplibre-gl-
 
 /** Хэш карты из адреса до создания карты: в режиме здания наклон бывает больше, чем MapLibre примет вне его. */
 const startHash = location.hash.slice(1).split('/').map(Number);
+const startHashValid = startHash.length >= 3 && startHash.every(Number.isFinite);
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -919,7 +920,7 @@ async function openEditLink() {
   const m = new URLSearchParams(location.search).get('edit')?.match(/^([wr])(\d+)$/);
   if (!m) return;
   const type = m[1] === 'w' ? 'way' : 'relation', key = `${type}/${m[2]}`;
-  const linked = startHash.length >= 3 && startHash.every(Number.isFinite);
+  const linked = startHashValid;
   const what = type === 'way' ? tr('Линия {id}', { id: m[2] }) : tr('Отношение {id}', { id: m[2] });
   if (!linked) {
     showLoading(tr('{what}: ищу объект на сервере {server}…', { what, server: server().short }));
@@ -5322,6 +5323,9 @@ async function loadJosm(retry = false) {
     if (retry) await overpass.refreshJosm();
     setStatus(trn(elements.length, 'Из JOSM: {n} объект.|Из JOSM: {n} объекта.|Из JOSM: {n} объектов.'));
     if (!bbox) return;
+    // Ракурс из адреса (перезагрузка, ссылка) сохраняем, если он над данными слоя; иначе — к данным
+    const c = map.getCenter();
+    if (startHashValid && c.lng >= bbox[0] && c.lng <= bbox[2] && c.lat >= bbox[1] && c.lat <= bbox[3]) return;
     // Не мельче зума, с которого грузятся данные: иначе слой JOSM не покажется
     const cam = map.cameraForBounds(bbox, { padding: 40, maxZoom: 18 });
     map.jumpTo({ center: cam?.center, zoom: Math.max(cam?.zoom ?? 0, OVERPASS_MIN_ZOOM) });

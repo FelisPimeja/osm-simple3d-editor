@@ -437,24 +437,9 @@ body.mobile .dp-opt { display: none; }
 }
 #loading-card[hidden] { display: none; }
 #loading-card.down { color: #991b1b; }
-/* Индикатор: изометрическое здание собирается по этажам снизу вверх */
-#loading-card .loader { flex: none; width: 26px; height: 26px; }
-#loading-card .loader .t { fill: #bfdbfe; }
-#loading-card .loader .l { fill: #60a5fa; }
-#loading-card .loader .r { fill: #2563eb; }
-#loading-card.down .loader .t { fill: #fecaca; }
-#loading-card.down .loader .l { fill: #f87171; }
-#loading-card.down .loader .r { fill: #dc2626; }
-#loading-card .fl { animation: 2.4s ease-out infinite; }
-#loading-card .fl0 { animation-name: floor0; }
-#loading-card .fl1 { animation-name: floor1; }
-#loading-card .fl2 { animation-name: floor2; }
-#loading-card .fl3 { animation-name: floor3; }
-@keyframes floor0 { 0% { opacity: 0; transform: translateY(-3px); } 8%, 82% { opacity: 1; transform: none; } 95%, 100% { opacity: 0; } }
-@keyframes floor1 { 0%, 18% { opacity: 0; transform: translateY(-3px); } 26%, 82% { opacity: 1; transform: none; } 95%, 100% { opacity: 0; } }
-@keyframes floor2 { 0%, 36% { opacity: 0; transform: translateY(-3px); } 44%, 82% { opacity: 1; transform: none; } 95%, 100% { opacity: 0; } }
-@keyframes floor3 { 0%, 54% { opacity: 0; transform: translateY(-3px); } 62%, 82% { opacity: 1; transform: none; } 95%, 100% { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { #loading-card .fl { animation: none; } #loading-card .loader { animation: op-pulse 2s ease-in-out infinite; } }
+/* Индикатор: контурный объём здания, части которого перетекают из формы в форму (src/view/morph-loader.ts); цвет линий — color */
+#loading-card .loader { flex: none; width: 30px; height: 30px; color: #374151; }
+#loading-card.down .loader { color: #dc2626; }
 
 /* Уведомления над картой: подсказка инструмента и всплывающие сообщения */
 #toasts {

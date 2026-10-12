@@ -438,7 +438,7 @@ body.mobile .dp-opt { display: none; }
 #loading-card[hidden] { display: none; }
 #loading-card.down { color: #991b1b; }
 /* Индикатор: контурный объём здания, части которого перетекают из формы в форму (src/view/morph-loader.ts); цвет линий — color */
-#loading-card .loader { flex: none; width: 30px; height: 30px; color: #374151; }
+#loading-card .loader { flex: none; width: 36px; height: 36px; margin: -6px 0; color: #374151; }
 #loading-card.down .loader { color: #dc2626; }
 
 /* Уведомления над картой: подсказка инструмента и всплывающие сообщения */

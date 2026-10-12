@@ -67,9 +67,10 @@ export function prepareSolid(s: ShellSolid): PreparedSolid {
 
 /**
  * Треугольники pos[from, to) (номера вершин) без закрытых соседями участков. ownPolys — контур своей части
- * (по нему видно, с какой стороны стены своя часть); glass — грани стеклянные; others — объёмы остальных частей.
+ * (по нему видно, с какой стороны стены своя часть); glass — грани стеклянные; others — объёмы остальных частей;
+ * flat — объект нулевой толщины (плоский след): закрыт и лёжа на дне соседа.
  */
-export function trimTriangles(pos: ArrayLike<number>, from: number, to: number, ownPolys: LocalPolygon[], glass: boolean, others: PreparedSolid[]): number[] {
+export function trimTriangles(pos: ArrayLike<number>, from: number, to: number, ownPolys: LocalPolygon[], glass: boolean, others: PreparedSolid[], flat = false): number[] {
   const out: number[] = [];
   for (let v = from; v + 3 <= to; v += 3) {
     const o = v * 3;
@@ -81,7 +82,7 @@ export function trimTriangles(pos: ArrayLike<number>, from: number, to: number, 
       const near = nearby(others, a, b, c);
       if (near.length) {
         try {
-          pieces = Math.abs(n[2]) < 1e-6 * len ? trimWall(a, b, c, ownPolys, glass, near) : trimFace(a, b, c, glass, near);
+          pieces = Math.abs(n[2]) < 1e-6 * len ? trimWall(a, b, c, ownPolys, glass, near) : trimFace(a, b, c, glass, near, flat);
         } catch {
           pieces = undefined; // вырожденная геометрия — грань как есть
         }
@@ -108,9 +109,9 @@ function nearby(solids: PreparedSolid[], a: V3, b: V3, c: V3): PreparedSolid[] {
 }
 
 /**
- * Стена: координаты (s — метры вдоль стены от a, z). Закрытые куски — пересечение линии, сдвинутой на PROBE
- * наружу, со столбами соседей. Если своя часть ни с одной стороны (внутренняя вертикальная грань) — закрыто
- * там, где соседи с обеих сторон.
+ * Стена: координаты (s — метры вдоль стены от a, z). Закрытые куски — участки стены, за которыми (со стороны,
+ * где нет своей части) столб соседа. Если своя часть ни с одной стороны (внутренняя вертикальная грань) —
+ * закрыто там, где соседи с обеих сторон.
  */
 function trimWall(a: V3, b: V3, c: V3, ownPolys: LocalPolygon[], glass: boolean, near: PreparedSolid[]): V3[][] | undefined {
   // Линия стены — по самой длинной горизонтальной паре вершин
@@ -128,25 +129,26 @@ function trimWall(a: V3, b: V3, c: V3, ownPolys: LocalPolygon[], glass: boolean,
   const sides = [1, -1].filter((sg) => !insidePolys(ownPolys, mx - uy * PROBE * sg, my + ux * PROBE * sg));
   if (!sides.length) return;
   let hidden: ClipMulti | undefined;
+  const box: Box = [Math.min(p[0], q[0]) - PROBE, Math.min(p[1], q[1]) - PROBE, Math.max(p[0], q[0]) + PROBE, Math.max(p[1], q[1]) + PROBE];
   for (const sg of sides) {
-    const ox = -uy * PROBE * sg, oy = ux * PROBE * sg;
-    const ax = p[0] + ox, ay = p[1] + oy, bx = q[0] + ox, by = q[1] + oy;
+    const line: WallLine = { ax: p[0], ay: p[1], ux, uy, nx: -uy * sg, ny: ux * sg, len };
     const side: ClipPolygon[] = [];
     for (const s of near) {
       if (s.opaqueWalls || glass) {
-        for (const [t0, t1] of segmentInside(ax, ay, bx, by, s.polys)) {
+        for (const [t0, t1] of coveredAlong(line, s.polys.flatMap((poly) => [poly.outer, ...poly.inners]), (x, y) => insidePolys(s.polys, x, y))) {
           const piece = clipAll(tri, [(v) => v[0] - t0 * len, (v) => t1 * len - v[0], (v) => v[1] - s.min, (v) => s.wallTop - v[1]]);
           if (piece) side.push([ring(piece)]);
         }
       }
       for (const r of s.roof) {
-        if (!(r.opaque || glass) || !segBoxHit(ax, ay, bx, by, r.box)) continue;
-        const span = segmentInTriangle(ax, ay, bx, by, r.tri);
-        if (!span) continue;
-        // Плоскость ската над самой стеной (не над пробной линией): z = c0 + c1·s
+        if (!(r.opaque || glass) || r.box[0] > box[2] || r.box[2] < box[0] || r.box[1] > box[3] || r.box[3] < box[1]) continue;
+        const inTri = triangleHalfPlanes(r.tri);
+        // Плоскость ската над стеной: z = c0 + c1·s
         const c0 = r.plane[0] * p[0] + r.plane[1] * p[1] + r.plane[2], c1 = r.plane[0] * ux + r.plane[1] * uy;
-        const piece = clipAll(tri, [(v) => v[0] - span[0] * len, (v) => span[1] * len - v[0], (v) => v[1] - s.wallTop, (v) => c0 + c1 * v[0] - v[1]]);
-        if (piece) side.push([ring(piece)]);
+        for (const [t0, t1] of coveredAlong(line, [r.tri], (x, y) => inTri.every((g) => g([x, y]) > 0))) {
+          const piece = clipAll(tri, [(v) => v[0] - t0 * len, (v) => t1 * len - v[0], (v) => v[1] - s.wallTop, (v) => c0 + c1 * v[0] - v[1]]);
+          if (piece) side.push([ring(piece)]);
+        }
       }
     }
     if (!side.length) return; // с одной из сторон ничего — стену видно целиком
@@ -159,7 +161,9 @@ function trimWall(a: V3, b: V3, c: V3, ownPolys: LocalPolygon[], glass: boolean,
 }
 
 /** Наклонная или горизонтальная грань: в плане, z — по её плоскости. */
-function trimFace(a: V3, b: V3, c: V3, glass: boolean, near: PreparedSolid[]): V3[][] | undefined {
+function trimFace(a: V3, b: V3, c: V3, glass: boolean, near: PreparedSolid[], flat: boolean): V3[][] | undefined {
+  // Плоский след на полу соседа (навес без высоты, голый контур) — внутри него, а не на его дне
+  const floor = flat ? -FACE_EPS : FACE_EPS;
   const plane = planeOf(...a, ...b, ...c);
   if (!plane) return;
   const zf = (v: Pt) => plane[0] * v[0] + plane[1] * v[1] + plane[2];
@@ -169,7 +173,7 @@ function trimFace(a: V3, b: V3, c: V3, glass: boolean, near: PreparedSolid[]): V
   const hidden: ClipPolygon[] = [];
   for (const s of near) {
     if (s.opaqueWalls || glass) {
-      const piece = clipAll(tri, [(v) => zf(v) - s.min - FACE_EPS, (v) => s.wallTop - FACE_EPS - zf(v)]);
+      const piece = clipAll(tri, [(v) => zf(v) - s.min - floor, (v) => s.wallTop - FACE_EPS - zf(v)]);
       if (piece) for (const poly of polygonClipping.intersection([ring(piece)], s.clip)) hidden.push(poly);
     }
     for (const r of s.roof) {
@@ -185,7 +189,9 @@ function trimFace(a: V3, b: V3, c: V3, glass: boolean, near: PreparedSolid[]): V
 
 /** Треугольник tri без hidden, триангулированный и поднятый в 3D; undefined — ничего не закрыто. */
 function rest(tri: Pt[], hidden: ClipMulti, lift: (v: Pt) => V3): V3[][] | undefined {
-  if (multiArea(hidden) < MIN_AREA) return;
+  const hiddenArea = multiArea(hidden);
+  if (hiddenArea < MIN_AREA) return;
+  if (hiddenArea >= Math.abs(signedArea(tri)) - MIN_AREA) return []; // закрыт целиком
   const visible = polygonClipping.difference([ring(tri)], hidden);
   const out: V3[][] = [];
   for (const poly of visible) {
@@ -194,7 +200,10 @@ function rest(tri: Pt[], hidden: ClipMulti, lift: (v: Pt) => V3): V3[][] | undef
     const holes = poly.slice(1).map((r) => r.slice(0, -1).map(([x, y]) => new THREE.Vector2(x, y)));
     const all = [contour, ...holes].flat();
     for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(contour, holes)) {
-      out.push([lift([all[i].x, all[i].y]), lift([all[j].x, all[j].y]), lift([all[k].x, all[k].y])]);
+      const t = [all[i], all[j], all[k]];
+      // Вырожденные треугольники не нужны: у них нет площади, а рёбра рисуются чёрточками
+      if (Math.abs((t[1].x - t[0].x) * (t[2].y - t[0].y) - (t[2].x - t[0].x) * (t[1].y - t[0].y)) < MIN_AREA) continue;
+      out.push(t.map((v) => lift([v.x, v.y])));
     }
   }
   return out;
@@ -228,47 +237,45 @@ function triangleHalfPlanes(t: [Pt, Pt, Pt]): ((v: Pt) => number)[] {
   });
 }
 
-/** Участки [t0, t1] отрезка a→b (t от 0 до 1) внутри полигонов. */
-function segmentInside(ax: number, ay: number, bx: number, by: number, polys: LocalPolygon[]): [number, number][] {
+interface WallLine { ax: number; ay: number; ux: number; uy: number; nx: number; ny: number; len: number }
+
+/** Ближе этого (м) к линии стены вершина соседа — на стене (общий узел или зазор между частями без общих узлов). */
+const ON_LINE = PROBE;
+
+/**
+ * Участки [t0, t1] стены (t от 0 до 1), за которыми (в сторону n) область inside с контурами rings. Точки
+ * раздела — по самой стене: пересечения с краями области и проекции её вершин, лежащих на стене (общие узлы,
+ * общие стены), — а не по сдвинутой линии: у конца стены она выходит из соседа раньше, и остаются полоски.
+ * Сторону каждого участка проверяем точкой чуть в сторону n от его середины.
+ */
+function coveredAlong(l: WallLine, rings: Pt[][], inside: (x: number, y: number) => boolean): [number, number][] {
   const ts = [0, 1];
-  const dx = bx - ax, dy = by - ay;
-  for (const poly of polys) for (const r of [poly.outer, ...poly.inners]) {
+  const dist = (x: number, y: number) => (x - l.ax) * l.nx + (y - l.ay) * l.ny;
+  const along = (x: number, y: number) => ((x - l.ax) * l.ux + (y - l.ay) * l.uy) / l.len;
+  for (const r of rings) {
     for (let i = 0; i < r.length; i++) {
       const [px, py] = r[i], [qx, qy] = r[(i + 1) % r.length];
-      const ex = qx - px, ey = qy - py, den = dx * ey - dy * ex;
-      if (Math.abs(den) < 1e-12) continue;
-      const t = ((px - ax) * ey - (py - ay) * ex) / den, u = ((px - ax) * dy - (py - ay) * dx) / den;
-      if (t > 0 && t < 1 && u >= 0 && u <= 1) ts.push(t);
+      const dp = dist(px, py), dq = dist(qx, qy);
+      if (Math.abs(dp) <= ON_LINE) ts.push(along(px, py));
+      if (Math.abs(dp) <= ON_LINE || Math.abs(dq) <= ON_LINE || (dp > 0) === (dq > 0)) continue;
+      ts.push(along(px + (qx - px) * dp / (dp - dq), py + (qy - py) * dp / (dp - dq)));
     }
   }
-  ts.sort((x, y) => x - y);
+  // Общий узел почти на конце стены — ровно на конце: иначе остаётся полоска в доли миллиметра,
+  // а на почти совпадающих контурах polygon-clipping ошибается
+  const snap = 1e-3 / l.len;
+  const cuts = ts.map((t) => (Math.abs(t) < snap ? 0 : Math.abs(1 - t) < snap ? 1 : t)).filter((t) => t >= 0 && t <= 1).sort((x, y) => x - y);
   const out: [number, number][] = [];
-  for (let i = 0; i + 1 < ts.length; i++) {
-    const t0 = ts[i], t1 = ts[i + 1];
-    if (t1 - t0 < 1e-9) continue;
-    const tm = (t0 + t1) / 2;
-    if (!insidePolys(polys, ax + dx * tm, ay + dy * tm)) continue;
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const t0 = cuts[i], t1 = cuts[i + 1];
+    if ((t1 - t0) * l.len < 1e-4) continue;
+    const tm = (t0 + t1) / 2, e = Math.min(PROBE, (t1 - t0) * l.len / 4);
+    if (!inside(l.ax + l.ux * tm * l.len + l.nx * e, l.ay + l.uy * tm * l.len + l.ny * e)) continue;
     const last = out[out.length - 1];
-    if (last && Math.abs(last[1] - t0) < 1e-9) last[1] = t1;
+    if (last && t0 - last[1] < 1e-9) last[1] = t1;
     else out.push([t0, t1]);
   }
   return out;
-}
-
-/** Участок [t0, t1] отрезка a→b внутри треугольника; undefined — не задевает. */
-function segmentInTriangle(ax: number, ay: number, bx: number, by: number, t: [Pt, Pt, Pt]): [number, number] | undefined {
-  let lo = 0, hi = 1;
-  for (const g of triangleHalfPlanes(t)) {
-    const g0 = g([ax, ay]), g1 = g([bx, by]);
-    if (g0 < 0 && g1 < 0) return;
-    if (g0 < 0) lo = Math.max(lo, g0 / (g0 - g1));
-    else if (g1 < 0) hi = Math.min(hi, g0 / (g0 - g1));
-  }
-  return hi - lo > 1e-9 ? [lo, hi] : undefined;
-}
-
-function segBoxHit(ax: number, ay: number, bx: number, by: number, b: Box): boolean {
-  return Math.min(ax, bx) <= b[2] && Math.max(ax, bx) >= b[0] && Math.min(ay, by) <= b[3] && Math.max(ay, by) >= b[1];
 }
 
 function insidePolys(polys: LocalPolygon[], x: number, y: number): boolean {

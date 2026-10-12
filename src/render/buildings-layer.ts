@@ -1904,8 +1904,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         } else {
           const n = full.positions.length / 3, end = n - it.floorVertices;
           const polys = it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
-          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, others);
-          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, others);
+          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, others, thinItem(it));
+          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, others, thinItem(it));
           const pos = new Float32Array(walls.length + roof.length + it.floorVertices * 3);
           pos.set(walls, 0);
           pos.set(roof, walls.length);
@@ -1954,6 +1954,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const lines: number[] = [], colors: number[] = [];
     for (const it of g.items) {
       if (!(strokeOnly(g, it) || thinItem(it)) || g.hidden.has(it.feature.key)) continue;
+      // Оболочка этажей: плоский объект целиком внутри соседних частей (навес в объёме подиума) — без обводки
+      if (!strokeOnly(g, it) && it.full?.positions.length && !it.positions.length) continue;
       const c = this.selected.has(it.feature.key) || this.hovered === it.feature.key ? STROKE_SELECTED : STROKE_COLOUR;
       const z = it.box.isEmpty() ? g.footprint : it.box.max.z;
       for (const p of it.feature.polygons) {

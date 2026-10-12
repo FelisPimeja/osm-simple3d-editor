@@ -26,12 +26,13 @@ export class RequestPool {
     return ep;
   }
 
-  release(ep: Endpoint, result: 'ok' | 'busy' | 'error' | 'aborted', unreachable = false) {
+  /** cooldown — сколько сервер просил подождать (509 «try again in N seconds»); иначе COOLDOWN_MS. */
+  release(ep: Endpoint, result: 'ok' | 'busy' | 'error' | 'aborted', unreachable = false, cooldown?: number) {
     ep.active--;
     if (result === 'ok') { ep.ok++; ep.unreachable = false; }
     if (unreachable) ep.unreachable = true;
     if (result === 'busy' || result === 'error') ep.failed++;
-    if (result === 'busy') ep.coolUntil = Date.now() + COOLDOWN_MS;
+    if (result === 'busy') ep.coolUntil = Math.max(ep.coolUntil, Date.now() + Math.max(COOLDOWN_MS, cooldown ?? 0));
   }
 
   /** Через сколько мс освободится ближайший остывающий сервер (0 — есть доступные). */

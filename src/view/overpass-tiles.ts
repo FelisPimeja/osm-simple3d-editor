@@ -1,5 +1,6 @@
 import type { Map as MlMap } from 'maplibre-gl';
-import { server } from '../osm/servers';
+import { server, SERVERS } from '../osm/servers';
+import { fetchOverpassTile, overpassFree } from '../osm/overpass';
 import { ApiError, completeRelations, fetchMapSplit, type Bbox, type OsmElement } from '../osm/api';
 import { centroid, incompleteBuildingRelations, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type IndoorFeature, type MemberWay, type Polygon } from '../osm/model';
 import { RequestPool } from '../osm/request-pool';
@@ -410,6 +411,7 @@ export class OverpassTiles {
     else this.cache.set(key, { state: 'loading', abort });
     let result: 'ok' | 'busy' | 'error' | 'aborted' = 'ok';
     let unreachable = false;
+    let cooldown: number | undefined;
     try {
       if (!this.source) throw new Error('источник данных не задан');
       if (this.source.josm) {
@@ -422,28 +424,45 @@ export class OverpassTiles {
         this.tileReady(key);
         return;
       }
-      const via: TileVia = 'api';
-      // Тайл — четвертями, первой та, что ближе к центру экрана: на плотном тайле (десятки МБ ответа) первые
-      // здания видны через пару секунд, а не после скачивания всего. Запросы идут по очереди в том же слоте
-      // пула — правило «не больше двух потоков» не нарушается. Обновление устаревшего — без промежуточных показов
-      const [w, s, e, n] = tileBbox(key);
-      const mx = (w + e) / 2, my = (s + n) / 2;
-      const c = this.map.getCenter();
-      const quads = ([[w, s, mx, my], [mx, s, e, my], [w, my, mx, n], [mx, my, e, n]] as Bbox[])
-        .map((q) => ({ q, d: Math.hypot((q[0] + q[2]) / 2 - c.lng, (q[1] + q[3]) / 2 - c.lat) }))
-        .sort((a, b) => a.d - b.d).map((x) => x.q);
+      let via: TileVia = 'api';
       const seen = new Map<string, OsmElement>();
-      for (let i = 0; i < quads.length; i++) {
-        // Свой таймаут: браузер ждёт недоступный сервер около минуты, а индикатор «не отвечает» нужен раньше
-        const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
-        for (const el of await fetchMapSplit(quads[i], ep.url, signal, 4, `${key} quarter ${i + 1}/4`)) seen.set(`${el.type}/${el.id}`, el);
-        if (refreshing || i === quads.length - 1) continue;
-        // Промежуточный показ: без догрузки мультиполигонов на границе и без записи в кеш
-        const els = [...seen.values()];
-        const part = timed('тайлы: разбор четверти', () => parseBuildings(els), (r) => `${key}, ${r.features.length} зданий`);
-        this.cache.set(key, { state: 'ready', ...part, trees: parseTrees(els), fetchedAt: 0, via, partial: true, refreshing: abort });
-        this.tileReady(key);
-        this.onChange();
+      // Боевой OSM — сначала Overpass: ответ в разы меньше и не тратит лимит скачивания API (509).
+      // Отказ, таймаут или неполный ответ — тот же тайл через /map
+      if (this.source.api === SERVERS.prod.api && overpassFree()) {
+        try {
+          for (const el of await fetchOverpassTile(tileBbox(key), abort.signal)) {
+            const id = `${el.type}/${el.id}`;
+            // Голая копия пути (out skel после рекурсии) не затирает путь с тегами
+            if (!(seen.get(id) as { tags?: unknown } | undefined)?.tags || el.tags) seen.set(id, el);
+          }
+          via = 'overpass';
+        } catch (err) {
+          if (abort.signal.aborted) throw err;
+          console.warn(`Overpass ${key}: ${(err as Error).message} — загружаю через OSM API`);
+        }
+      }
+      if (via === 'api') {
+        // Тайл — четвертями, первой та, что ближе к центру экрана: на плотном тайле (десятки МБ ответа) первые
+        // здания видны через пару секунд, а не после скачивания всего. Запросы идут по очереди в том же слоте
+        // пула — правило «не больше двух потоков» не нарушается. Обновление устаревшего — без промежуточных показов
+        const [w, s, e, n] = tileBbox(key);
+        const mx = (w + e) / 2, my = (s + n) / 2;
+        const c = this.map.getCenter();
+        const quads = ([[w, s, mx, my], [mx, s, e, my], [w, my, mx, n], [mx, my, e, n]] as Bbox[])
+          .map((q) => ({ q, d: Math.hypot((q[0] + q[2]) / 2 - c.lng, (q[1] + q[3]) / 2 - c.lat) }))
+          .sort((a, b) => a.d - b.d).map((x) => x.q);
+        for (let i = 0; i < quads.length; i++) {
+          // Свой таймаут: браузер ждёт недоступный сервер около минуты, а индикатор «не отвечает» нужен раньше
+          const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+          for (const el of await fetchMapSplit(quads[i], ep.url, signal, 4, `${key} quarter ${i + 1}/4`)) seen.set(`${el.type}/${el.id}`, el);
+          if (refreshing || i === quads.length - 1) continue;
+          // Промежуточный показ: без догрузки мультиполигонов на границе и без записи в кеш
+          const els = [...seen.values()];
+          const part = timed('тайлы: разбор четверти', () => parseBuildings(els), (r) => `${key}, ${r.features.length} зданий`);
+          this.cache.set(key, { state: 'ready', ...part, trees: parseTrees(els), fetchedAt: 0, via, partial: true, refreshing: abort });
+          this.tileReady(key);
+          this.onChange();
+        }
       }
       let elements = await completeRelations([...seen.values()], incompleteBuildingRelations, ep.url, abort.signal, key);
       // Помещения и коридоры на границе тайла (план этажа): без них не страшно — ошибка догрузки не роняет тайл
@@ -476,6 +495,8 @@ export class OverpassTiles {
       unreachable = err instanceof TypeError || (err instanceof DOMException && err.name === 'TimeoutError');
       const busy = (err instanceof ApiError && [429, 503, 509].includes(err.status)) || unreachable;
       result = busy ? 'busy' : 'error';
+      // Лимит скачивания (509): сервер сам говорит, когда можно снова, — до тех пор к нему не ходим
+      if (err instanceof ApiError) cooldown = err.retryAfter;
       console.warn(`OSM API ${key}${refreshing ? ' (обновление)' : ''}:`, (err as Error).message);
       if (refreshing) {
         refreshing.refreshing = undefined;
@@ -483,7 +504,7 @@ export class OverpassTiles {
         if (tries !== undefined && tries + 1 < RELOAD_ATTEMPTS) {
           // Перезапрос по кнопке — повторяем вскоре (инстанс с ошибкой остынет, пойдёт другой)
           this.reloading.set(key, tries + 1);
-          const delay = busy ? 1_000 : 2_000 * 2 ** tries;
+          const delay = Math.max(busy ? 1_000 : 2_000 * 2 ** tries, cooldown ?? 0);
           refreshing.refreshAfter = Date.now() + delay;
           this.schedulePump(delay);
           return;
@@ -496,12 +517,12 @@ export class OverpassTiles {
       }
       // При перегрузке инстанса повтор сразу уйдёт на другой — пауза короткая;
       // при прочих ошибках — экспоненциальная
-      const delay = busy ? 1_000 : Math.min(60_000, 2_000 * 2 ** attempts);
+      const delay = Math.max(busy ? 1_000 : Math.min(60_000, 2_000 * 2 ** attempts), cooldown ?? 0);
       this.cache.set(key, { state: 'error', retryAt: Date.now() + delay, attempts: attempts + 1 });
       this.schedulePump(delay);
     } finally {
       if (result === 'aborted') this.reloading.delete(key);
-      this.pool.release(ep, result, unreachable);
+      this.pool.release(ep, result, unreachable, cooldown);
       this.pump();
       this.onChange();
     }

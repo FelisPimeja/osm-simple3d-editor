@@ -35,7 +35,7 @@ export async function fetchMap(bbox: Bbox, api = server().api, signal?: AbortSig
     contentLength = res.headers.get('content-length');
     if (!res.ok) {
       const text = await res.text();
-      throw new ApiError(res.status, `OSM API ${res.status}: ${text || res.statusText}`);
+      throw new ApiError(res.status, `OSM API ${res.status}: ${text || res.statusText}`, retryAfterMs(res, text));
     }
     const data = (await res.json()) as { elements: OsmElement[] };
     count = data.elements.length;
@@ -48,8 +48,16 @@ export async function fetchMap(bbox: Bbox, api = server().api, signal?: AbortSig
   }
 }
 
+/** retryAfter — через сколько мс сервер разрешил повторить (Retry-After или «try again in N seconds» у 509). */
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  constructor(readonly status: number, message: string, readonly retryAfter?: number) { super(message); }
+}
+
+function retryAfterMs(res: Response, text: string): number | undefined {
+  const header = Number(res.headers.get('retry-after'));
+  if (header > 0) return header * 1000;
+  const m = /try again in (\d+) seconds?/i.exec(text);
+  return m ? Number(m[1]) * 1000 : undefined;
 }
 
 /**

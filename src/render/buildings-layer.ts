@@ -194,6 +194,13 @@ class MeshGroup {
   shellOf?: { bases: Float32Array[]; hidden: string };
   /** Висящие части в режиме этажей (ключ → низ, ниже которого части нет): см. floatingParts. */
   lift?: Map<string, number>;
+  /** Кеш оболочки по частям (см. applyShell): sig — скрытые/голые объекты и стекло. */
+  shellCache?: {
+    sig: string;
+    lifted: Map<Item, { src: Float32Array; lift: number; out: { positions: Float32Array; wallVertices: number } }>;
+    solids: Map<Item, { base: Float32Array; solid: PreparedSolid }>;
+    trimmed: Map<Item, { base: Float32Array; deps: PreparedSolid[]; positions: Float32Array; wallVertices: number }>;
+  };
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
   // Цвет «земли» — посередине между белым и 0x8a8478: контраст неба и земли вдвое меньше
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
@@ -1888,6 +1895,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (it.edges) it.edges = itemEdges(it);
       }
       g.shellOf = undefined;
+      g.shellCache = undefined;
       g.lift = undefined;
       return;
     }
@@ -1895,18 +1903,26 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Скрытые, голые контуры и стекло меняют, что чем закрыто
     const hidden = `${[...g.hidden].sort().join(',')}|${[...g.flat].sort().join(',')}|${glassEnabled}`;
     if (g.shellOf && g.shellOf.hidden === hidden && g.shellOf.bases.length === bases.length && g.shellOf.bases.every((b, i) => b === bases[i])) return;
+    // Крыши ещё считаются в воркере — оболочку посчитаем, когда придёт последняя (иначе пересчёт на каждую порцию)
+    if (g.items.some((it) => it.pending && !g.hidden.has(it.feature.key))) return;
+    // Кеш по частям: крыши приходят из воркера по одной — пересчитываются только изменившаяся часть и её соседи
+    if (g.shellCache?.sig !== hidden) g.shellCache = { sig: hidden, lifted: new Map(), solids: new Map(), trimmed: new Map() };
+    const cache = g.shellCache;
+    let done = 0;
     timed('этажи: оболочка здания', () => {
       // Не дольше SHELL_BUDGET_MS: дальше грани остаются как есть (большие комплексы из сотен частей)
       const deadline = performance.now() + SHELL_BUDGET_MS;
-      const solids = new Map<Item, PreparedSolid>();
       // Висящие части (забытый min_height) — без столба от земли до низа охватывающей части
       const floating = floatingParts(g.items.filter((it) => !g.hidden.has(it.feature.key)).map((it) => it.feature));
       g.lift = new Map([...floating].map(([k, f]) => [k, f.lift]));
-      const lifted = new Map<Item, { positions: Float32Array; wallVertices: number }>();
+      const base = new Map<Item, { positions: Float32Array; wallVertices: number }>();
       for (const it of g.items) {
+        it.full ??= { positions: it.positions, wallVertices: it.wallVertices };
+        const full = it.full;
         const lift = g.lift.get(it.feature.key);
-        if (lift === undefined) continue;
-        const full = it.full ?? { positions: it.positions, wallVertices: it.wallVertices };
+        if (lift === undefined) { base.set(it, full); continue; }
+        const hit = cache.lifted.get(it);
+        if (hit && hit.src === full.positions && hit.lift === lift) { base.set(it, hit.out); continue; }
         const end = full.positions.length / 3 - it.floorVertices;
         const walls = clipAbove(full.positions, 0, full.wallVertices, lift), roof = clipAbove(full.positions, full.wallVertices, end, lift);
         const slabs = full.positions.slice(end * 3);
@@ -1916,14 +1932,19 @@ export class BuildingsLayer implements CustomLayerInterface {
         pos.set(walls, 0);
         pos.set(roof, walls.length);
         pos.set(slabs, walls.length + roof.length);
-        lifted.set(it, { positions: pos, wallVertices: walls.length / 3 });
+        const out = { positions: pos, wallVertices: walls.length / 3 };
+        cache.lifted.set(it, { src: full.positions, lift, out });
+        base.set(it, out);
       }
+      const solids = new Map<Item, PreparedSolid>();
       for (const it of g.items) {
-        const full = lifted.get(it) ?? it.full ?? { positions: it.positions, wallVertices: it.wallVertices };
         if (!shellSolid(g, it)) continue;
+        const full = base.get(it)!;
+        const hit = cache.solids.get(it);
+        if (hit && hit.base === full.positions) { solids.set(it, hit.solid); continue; }
         const h = computeHeights(it.tags);
         const end = full.positions.length / 3 - it.floorVertices;
-        solids.set(it, prepareSolid({
+        const solid = prepareSolid({
           polys: it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })),
           min: g.lift.get(it.feature.key) ?? h.min,
           // Неподдерживаемая крыша — стены до самого верха
@@ -1931,31 +1952,55 @@ export class BuildingsLayer implements CustomLayerInterface {
           roof: full.positions.subarray(full.wallVertices * 3, end * 3),
           glassWalls: glassEnabled && it.glassWalls,
           glassRoof: glassEnabled && it.glassRoof,
-        }));
+        });
+        cache.solids.set(it, { base: full.positions, solid });
+        solids.set(it, solid);
       }
       for (const it of g.items) {
-        it.full ??= { positions: it.positions, wallVertices: it.wallVertices };
-        const full = lifted.get(it) ?? it.full;
-        const others = [...solids].filter(([o]) => o !== it).map(([, s]) => s);
-        if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || !others.length) {
+        const full = base.get(it)!;
+        if (g.hidden.has(it.feature.key) || strokeOnly(g, it)) {
+          it.positions = full.positions;
+          it.wallVertices = full.wallVertices;
+          if (it.edges) it.edges = itemEdges(it);
+          continue;
+        }
+        // Соседи — объёмы, чей прямоугольник в плане задевает часть
+        const b = positionsBox(full.positions);
+        const deps = [...solids].filter(([o, sd]) => o !== it && sd.box[0] <= b[2] + 0.1 && sd.box[2] >= b[0] - 0.1 && sd.box[1] <= b[3] + 0.1 && sd.box[3] >= b[1] - 0.1).map(([, sd]) => sd);
+        const hit = cache.trimmed.get(it);
+        if (hit && hit.base === full.positions && hit.deps.length === deps.length && hit.deps.every((d, i) => d === deps[i])) {
+          if (it.positions !== hit.positions) {
+            it.positions = hit.positions;
+            it.wallVertices = hit.wallVertices;
+            if (it.edges) it.edges = itemEdges(it);
+          }
+          continue;
+        }
+        if (!deps.length) {
           it.positions = full.positions;
           it.wallVertices = full.wallVertices;
         } else {
           const n = full.positions.length / 3, end = n - it.floorVertices;
           const polys = it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
-          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, others, thinItem(it), deadline);
-          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, others, thinItem(it), deadline);
+          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, deps, thinItem(it), deadline);
+          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, deps, thinItem(it), deadline);
           const pos = new Float32Array(walls.length + roof.length + it.floorVertices * 3);
           pos.set(walls, 0);
           pos.set(roof, walls.length);
           pos.set(full.positions.subarray(end * 3), walls.length + roof.length);
           it.positions = pos;
           it.wallVertices = walls.length / 3;
+          done++;
         }
+        // Не досчитанное к дедлайну в кеш не идёт — досчитается при следующем обновлении
+        if (performance.now() <= deadline) cache.trimmed.set(it, { base: full.positions, deps, positions: it.positions, wallVertices: it.wallVertices });
         if (it.edges) it.edges = itemEdges(it);
       }
+      // Заменённые части (пришла крыша, правка) — из кеша вон
+      const live = new Set(g.items);
+      for (const m of [cache.lifted, cache.solids, cache.trimmed] as Map<Item, unknown>[]) for (const k of m.keys()) if (!live.has(k)) m.delete(k);
       if (performance.now() > deadline) console.warn(`[levels] оболочка здания не досчитана за ${SHELL_BUDGET_MS} мс — часть граней внутри частей осталась`);
-    }, () => `${g.items.length} объектов`);
+    }, () => `${g.items.length} объектов, пересчитано ${done}`);
     g.shellOf = { bases: g.items.map((it) => it.full!.positions), hidden };
   }
 
@@ -2719,6 +2764,18 @@ function glassRanges(it: Item): [number, number][] {
 const SHELL_BUDGET_MS = 5000;
 
 /** Объект закрывает собой грани соседей в оболочке: объём с высотой (не навес building:part=roof, не плоский след). */
+/** Прямоугольник треугольников в плане: [x0, y0, x1, y1]. */
+function positionsBox(pos: ArrayLike<number>): [number, number, number, number] {
+  const b: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let i = 0; i + 2 < pos.length; i += 3) {
+    if (pos[i] < b[0]) b[0] = pos[i];
+    if (pos[i] > b[2]) b[2] = pos[i];
+    if (pos[i + 1] < b[1]) b[1] = pos[i + 1];
+    if (pos[i + 1] > b[3]) b[3] = pos[i + 1];
+  }
+  return b;
+}
+
 function shellSolid(g: MeshGroup, it: Item): boolean {
   return !g.hidden.has(it.feature.key) && !strokeOnly(g, it) && !thinItem(it) && it.tags['building:part'] !== 'roof' && it.positions.length > 0;
 }

@@ -14,8 +14,11 @@ import { scatterTreesAsync, TreeGroup } from '../render/trees';
 export const OVERPASS_TILE_ZOOM = GRID_ZOOM;
 /** Сколько тайлов держать в кеше данных. */
 const CACHE_SIZE = 48;
-/** Сколько ближайших к центру тайлов загружать одновременно видимыми. */
+/** Сколько видимых тайлов показывать из готового кеша. */
 const MAX_VISIBLE = 12;
+/** Холодные тайлы грузим только рядом с камерой, даже если у горизонта видно полгорода. */
+const API_RADIUS_METERS = 1500;
+const MAX_NETWORK_VISIBLE = 4;
 /** Данные старше этого показываем из кеша, но перезапрашиваем в фоне. */
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** Пауза перед повторной попыткой фонового обновления после ошибки. */
@@ -31,7 +34,7 @@ type Entry =
   | { state: 'error'; retryAt: number; attempts: number };
 
 /**
- * full — видимые тайлы грузятся (память → IndexedDB → OSM API);
+ * full — видимый кеш показывается, API запрашивается только рядом с камерой;
  * cached — только то, что уже есть в кеше, без запросов к API (мелкие зумы);
  * off — слой выключен.
  */
@@ -43,7 +46,7 @@ export interface TileSource { api: string; db: string; josm?: boolean }
 /**
  * Подменяет тайловые здания данными OSM API по сетке тайлов z14.
  * Источники по порядку: память (LRU) → IndexedDB → OSM API (/map). Устаревшие тайлы показываются сразу,
- * а в фоне перезапрашиваются. Меши есть только у видимых тайлов.
+ * а рядом с камерой перезапрашиваются в фоне. Меши есть только у видимых тайлов.
  */
 /** Таймаут запроса четверти тайла к API: дольше — сервер считаем не отвечающим (повтор через 30 с). */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -51,6 +54,7 @@ const REQUEST_TIMEOUT_MS = 30_000;
 export class OverpassTiles {
   private readonly cache = new Map<string, Entry>(); // порядок вставки = LRU
   private wanted: string[] = [];
+  private networkWanted = new Set<string>();
   pool = new RequestPool([]);
   store = new TileStore();
   private source?: TileSource;
@@ -86,7 +90,7 @@ export class OverpassTiles {
     void store.keys().then((keys) => {
       if (store !== this.store) return; // источник успели сменить
       for (const k of keys) this.stored.add(k);
-      if (this.mode === 'cached') this.update();
+      this.update();
     });
   }
 
@@ -295,7 +299,9 @@ export class OverpassTiles {
 
   /** Пересчитать нужные тайлы после движения карты. */
   update() {
-    this.wanted = this.mode === 'full' ? this.visibleTiles() : this.mode === 'cached' ? this.cachedVisibleTiles() : [];
+    const near = this.mode === 'full' ? this.visibleTiles() : [];
+    this.networkWanted = new Set(near);
+    this.wanted = this.mode === 'off' ? [] : [...new Set([...near, ...this.cachedVisibleTiles()])];
     const wanted = new Set(this.wanted);
 
     // И показанные, и ещё собирающиеся (их сборку removeGroup отменит)
@@ -316,6 +322,7 @@ export class OverpassTiles {
     for (const key of this.wanted) {
       const e = this.cache.get(key);
       if (e?.state === 'ready') {
+        if (!this.networkWanted.has(key)) e.refreshing?.abort();
         this.touch(key, e);
         if (!this.layer.hasGroup(key) && !this.hiddenOutlines.has(key)) this.show(key);
       }
@@ -333,6 +340,10 @@ export class OverpassTiles {
     const refresh: string[] = [];
     for (const key of this.wanted) {
       const e = this.cache.get(key);
+      if (!this.networkWanted.has(key)) {
+        if (!e && this.mode !== 'off') void this.lookup(key);
+        continue;
+      }
       if (!e) { void this.lookup(key); continue; }
       if (e.state === 'lookup' || e.state === 'loading') continue;
       if (e.state === 'ready') {
@@ -373,8 +384,8 @@ export class OverpassTiles {
       this.cache.set(key, { state: 'ready', ...stored });
       this.evict();
       this.tileReady(key);
-    } else if (this.mode === 'cached') {
-      // Запись вытеснена или старого формата — в режиме cached такой тайл не нужен
+    } else if (!this.networkWanted.has(key)) {
+      // Дальняя запись вытеснена или старого формата — сеть для неё не включаем
       this.stored.delete(key);
       this.cache.delete(key);
     } else {
@@ -569,6 +580,7 @@ export class OverpassTiles {
   reloadVisible(): number {
     let n = 0;
     for (const key of this.wanted) {
+      if (!this.networkWanted.has(key)) continue;
       const e = this.cache.get(key);
       if (e?.state === 'ready') { e.fetchedAt = 0; e.refreshAfter = undefined; this.reloading.set(key, 0); this.reloadFailed.delete(key); n++; }
     }
@@ -717,21 +729,17 @@ export class OverpassTiles {
     }
   }
 
-  /** Мелкие зумы: ближайшие к центру тайлы из кеша, попадающие в экран. */
+  /** Видимый кеш на любом масштабе: ближайшие к камере тайлы без сетевых запросов. */
   private cachedVisibleTiles(): string[] {
     const b = this.map.getBounds();
-    const c = this.map.getCenter();
-    const [cx, cy] = lngLatToTile(c.lng, c.lat, OVERPASS_TILE_ZOOM, false);
+    const camera = cameraGroundPosition(this.map) ?? this.map.getCenter();
     const keys = new Set([...this.stored, ...[...this.cache].filter(([, e]) => e.state === 'ready').map(([k]) => k)]);
     return [...keys]
       .filter((k) => {
         const [w, s, e, n] = tileBbox(k);
         return e >= b.getWest() && w <= b.getEast() && n >= b.getSouth() && s <= b.getNorth();
       })
-      .map((key) => {
-        const [, x, y] = key.split('/').map(Number);
-        return { key, d: Math.hypot(x + 0.5 - cx, y + 0.5 - cy) };
-      })
+      .map((key) => ({ key, d: distanceToTileMeters(key, camera) }))
       .sort((a, b) => a.d - b.d)
       .slice(0, MAX_VISIBLE)
       .map((t) => t.key);
@@ -739,17 +747,24 @@ export class OverpassTiles {
 
   private visibleTiles(): string[] {
     const z = OVERPASS_TILE_ZOOM;
+    const camera = cameraGroundPosition(this.map);
+    if (!camera) return []; // без положения камеры не начинаем новые запросы
     const b = this.map.getBounds();
     const [x0, y1] = lngLatToTile(b.getWest(), b.getSouth(), z);
     const [x1, y0] = lngLatToTile(b.getEast(), b.getNorth(), z);
-    const c = this.map.getCenter();
-    const [cx, cy] = lngLatToTile(c.lng, c.lat, z, false);
+    // У горизонта getBounds() огромен: перебираем лишь несколько клеток вокруг камеры.
+    const [cx, cy] = lngLatToTile(camera.lng, camera.lat, z, false);
+    const tileMeters = 40_075_017 * Math.max(0.01, Math.cos(camera.lat * Math.PI / 180)) / 2 ** z;
+    const reach = Math.ceil(API_RADIUS_METERS / tileMeters) + 2;
     const tiles: { key: string; d: number }[] = [];
-    for (let x = x0; x <= x1; x++) {
-      for (let y = y0; y <= y1; y++) tiles.push({ key: `${z}/${x}/${y}`, d: Math.hypot(x + 0.5 - cx, y + 0.5 - cy) });
+    for (let x = Math.max(x0, Math.floor(cx) - reach); x <= Math.min(x1, Math.floor(cx) + reach); x++) {
+      for (let y = Math.max(y0, Math.floor(cy) - reach); y <= Math.min(y1, Math.floor(cy) + reach); y++) {
+        const key = `${z}/${x}/${y}`;
+        const d = distanceToTileMeters(key, camera);
+        if (d <= API_RADIUS_METERS) tiles.push({ key, d });
+      }
     }
-    // При сильном наклоне в bbox попадает горизонт — берём только ближайшие к центру
-    return tiles.sort((a, b) => a.d - b.d).slice(0, MAX_VISIBLE).map((t) => t.key);
+    return tiles.sort((a, b) => a.d - b.d).slice(0, MAX_NETWORK_VISIBLE).map((t) => t.key);
   }
 }
 
@@ -790,6 +805,24 @@ function lngLatToTile(lng: number, lat: number, z: number, floor = true): [numbe
   const r = (Math.max(-85, Math.min(85, lat)) * Math.PI) / 180;
   const y = ((1 - Math.asinh(Math.tan(r)) / Math.PI) / 2) * n;
   return floor ? [Math.floor(x), Math.floor(y)] : [x, y];
+}
+
+/** Горизонтальная позиция камеры: центр карты при сильном наклоне может быть далеко от неё. */
+function cameraGroundPosition(map: MlMap): { lng: number; lat: number } | undefined {
+  type CameraTransform = { getCameraLngLat(): { lng: number; lat: number } };
+  const m = map as unknown as { _camera?: { transform?: CameraTransform }; transform?: CameraTransform };
+  return (m._camera?.transform ?? m.transform)?.getCameraLngLat();
+}
+
+/** Расстояние от камеры до ближайшей точки ячейки, а не до её центра. */
+function distanceToTileMeters(key: string, camera: { lng: number; lat: number }): number {
+  const [w, s, e, n] = tileBbox(key);
+  const lat = Math.max(s, Math.min(n, camera.lat));
+  const lon = Math.max(w, Math.min(e, camera.lng));
+  const deltaLon = ((camera.lng - lon + 540) % 360) - 180;
+  const dx = deltaLon * Math.cos(camera.lat * Math.PI / 180) * 111_320;
+  const dy = (camera.lat - lat) * 111_320;
+  return Math.hypot(dx, dy);
 }
 
 export function tileBbox(key: string): Bbox {

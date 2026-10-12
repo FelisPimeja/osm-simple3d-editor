@@ -37,6 +37,8 @@ const DOOR_HEIGHT = 2.2;
 const DOOR_SNAP = 0.15;
 /** Насколько ниже потолка этажа проходит срез, м. */
 const CUT_BELOW_CEIL = 0.1;
+/** Части, начинающиеся не ниже этого под потолком этажа, считаются потолком (срез — под их днищем), м. */
+const CEIL_SNAP = 0.5;
 /** Стены, перегородки и колонны — белые, как здание; в полную высоту этажа (до среза). */
 const INDOOR_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 /** Выделенное помещение: заливка цветом выделения частей и контур. */
@@ -482,9 +484,29 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  /**
+   * Высота среза плана: чуть ниже потолка этажа. Части, начинающиеся чуть ниже потолка (ступени мавзолея с 2.8 м
+   * при этажах по 3 м, relation/3272772), — тоже потолок: срез под их днищем, иначе днища ложатся на план крышкой.
+   */
+  private levelCut?: number;
+
+  private cutZ(): number | undefined {
+    const lv = this.level;
+    if (!lv) return;
+    let cut = lv.cut - CUT_BELOW_CEIL;
+    const g = this.groups.get(FOCUS_GROUP);
+    for (const it of g?.items ?? []) {
+      if (!shellSolid(g!, it) || g!.flat.has(it.feature.key)) continue;
+      const min = g!.lift?.get(it.feature.key) ?? computeHeights(it.tags).min;
+      if (min < lv.cut && min >= lv.cut - CEIL_SNAP && min > lv.floor + CEIL_SNAP) cut = Math.min(cut, min - CUT_BELOW_CEIL);
+    }
+    return cut;
+  }
+
   private applyLevel() {
     // Чуть ниже потолка: днища частей, начинающихся на потолке, и крыши частей на этой высоте не накрывают план
-    const planes = this.level ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), this.level.cut - CUT_BELOW_CEIL)] : null;
+    const cut = this.levelCut = this.cutZ();
+    const planes = cut !== undefined ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), cut)] : null;
     for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL]) m.clippingPlanes = planes;
     if (this.indoorObj) {
       this.indoorObj.parent?.remove(this.indoorObj);
@@ -525,7 +547,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         root.add(mesh);
       }
     };
-    const top = this.level.cut - CUT_BELOW_CEIL;
+    const top = cut!;
     let shellCache: Shell | undefined;
     const shell = () => (shellCache ??= buildShell(g));
     // Внешний периметр этажа: объединение следов объектов здания, которые есть на высоте среза, — толстой линией
@@ -1086,7 +1108,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (let i = 0; i < pos.length; i += 9) {
         a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
         if (!ray.intersectTriangle(a, b, c, false, p)) continue;
-        if (this.level && p.z > this.level.cut - CUT_BELOW_CEIL + 1e-3) continue; // выше среза этажа — не видно
+        if (this.level && p.z > (this.levelCut ?? this.level.cut) + 1e-3) continue; // выше среза этажа — не видно
         n.subVectors(c, b).cross(a.clone().sub(b));
         if (n.lengthSq() < 1e-10) continue;
         n.normalize();
@@ -1102,7 +1124,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           const q = ray.at(t, new THREE.Vector3());
           const inside = it.feature.polygons.some((poly) => pointInLocalRing([q.x, q.y], poly.outer.map(g.toLocal))
             && !poly.inners.some((r) => pointInLocalRing([q.x, q.y], r.map(g.toLocal))));
-          if (inside && !(this.level && q.z > this.level.cut - CUT_BELOW_CEIL + 1e-3)) out.push({ key, t, local: q, face: 'bottom' });
+          if (inside && !(this.level && q.z > (this.levelCut ?? this.level.cut) + 1e-3)) out.push({ key, t, local: q, face: 'bottom' });
         }
       }
     }
@@ -1984,10 +2006,15 @@ export class BuildingsLayer implements CustomLayerInterface {
           const polys = it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
           const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, deps, thinItem(it), deadline);
           const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, deps, thinItem(it), deadline);
+          // Перекрытия (крыша под соседней частью) внутри непрозрачного соседа — внутренняя грань оболочки. Число вершин
+          // плит не меняется (floorVertices считается по исходным): убранное — вырожденными треугольниками
+          let floors: ArrayLike<number> = full.positions.subarray(end * 3);
+          const cut = trimTriangles(full.positions, end, n, polys, false, deps, true, deadline);
+          if (cut.length <= floors.length) { const f = new Float32Array(floors.length); f.set(cut); floors = f; }
           const pos = new Float32Array(walls.length + roof.length + it.floorVertices * 3);
           pos.set(walls, 0);
           pos.set(roof, walls.length);
-          pos.set(full.positions.subarray(end * 3), walls.length + roof.length);
+          pos.set(floors, walls.length + roof.length);
           it.positions = pos;
           it.wallVertices = walls.length / 3;
           done++;

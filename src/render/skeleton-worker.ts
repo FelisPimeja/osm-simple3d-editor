@@ -13,6 +13,8 @@ const ready: Promise<Builder> = import('straight-skeleton').then(async (m) => {
   await b.init();
   return b;
 });
+// Готовность — отдельным сообщением: сторожевой таймер главного потока не должен включать загрузку WASM
+void ready.then(() => self.postMessage({ ready: true }));
 
 self.onmessage = async (e: MessageEvent<{ id: number; rings: number[][][] }>) => {
   const b = await ready;

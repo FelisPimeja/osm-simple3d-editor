@@ -81,6 +81,8 @@ interface Job { id: number; key: string; rings: number[][][] }
 const queue: Job[] = [];
 const queued = new Set<string>();
 let worker: Worker | undefined;
+/** Воркер загрузил WASM: до этого контур не засекаем — инициализация бывает дольше TIMEOUT_MS. */
+let workerReady = false;
 let current: Job | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let nextId = 1;
@@ -88,7 +90,13 @@ const useWorker = typeof Worker !== 'undefined';
 
 function startWorker() {
   worker = new Worker(new URL('./skeleton-worker.ts', import.meta.url), { type: 'module' });
-  worker.onmessage = (e: MessageEvent<{ id: number; skeleton: Skeleton | null }>) => {
+  workerReady = false;
+  worker.onmessage = (e: MessageEvent<{ id: number; skeleton: Skeleton | null } | { ready: true }>) => {
+    if ('ready' in e.data) {
+      workerReady = true;
+      if (current) armTimer(current);
+      return;
+    }
     if (!current || e.data.id !== current.id) return;
     finish(current, e.data.skeleton);
   };
@@ -104,7 +112,8 @@ const size = (j: Job) => j.rings.reduce((n, r) => n + r.length, 0);
  * Контуры, на которых CGAL не уложился в таймаут, — помним между перезагрузками: иначе при каждом
  * открытии страницы ждём их заново (и перезапускаем воркер с инициализацией WASM).
  */
-const FAILED_KEY = 'osm3d.skeleton.timeouts';
+// v2: в старый список попадали контуры, на которых не успевал загрузиться WASM, — сбрасываем
+const FAILED_KEY = 'osm3d.skeleton.timeouts.v2';
 const FAILED_MAX = 500;
 const failed: string[] = (() => {
   try { return JSON.parse(localStorage.getItem(FAILED_KEY) ?? '[]') as string[]; } catch { return []; }
@@ -145,7 +154,12 @@ function pumpWorker() {
   let best = 0;
   for (let i = 1; i < queue.length; i++) if (size(queue[i]) < size(queue[best])) best = i;
   current = queue.splice(best, 1)[0];
-  const job = current;
+  if (workerReady) armTimer(current);
+  worker!.postMessage({ id: current.id, rings: current.rings });
+}
+
+function armTimer(job: Job) {
+  clearTimeout(timer);
   timer = setTimeout(() => {
     // Завис на этом контуре: убиваем воркер (WASM не прервать иначе), контур оставляем плоским
     console.warn(`straight skeleton: контур не посчитан за ${TIMEOUT_MS} мс (${job.rings[0].length - 1} вершин) — крыша будет плоской`);
@@ -154,7 +168,6 @@ function pumpWorker() {
     rememberTimeout(job.key);
     finish(job, null);
   }, TIMEOUT_MS);
-  worker!.postMessage({ id: job.id, rings: job.rings });
 }
 
 // ---- Синхронный режим (без Worker)

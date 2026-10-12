@@ -35,10 +35,14 @@
       </div>
     </form>
   </dialog>
-  <div id="loading-card" role="status" hidden><canvas class="loader" aria-hidden="true"></canvas><span class="text"></span></div>
-  <div id="op-indicator" hidden><span class="dot"></span><span class="label"></span><button type="button" class="retry" hidden>Повторить</button></div>
-  <!-- Статусная строка — внизу экрана, между колонками панелей -->
-  <p id="status">Приблизьте карту (z ≥ 15) и кликните по зданию.</p>
+  <!-- Строка состояния — внизу экрана, между колонками панелей: индикатор загрузки и статус -->
+  <div id="statusbar">
+    <div id="loading-card" role="status" hidden><canvas class="loader" aria-hidden="true"></canvas><span class="text"></span></div>
+    <div class="statusbar-row">
+    <div id="op-indicator" hidden><span class="dot"></span><span class="label"></span><button type="button" class="retry" hidden>Повторить</button></div>
+    <p id="status">Приблизьте карту (z ≥ 15) и кликните по зданию.</p>
+    </div>
+  </div>
   <div id="left-col" class="col">
   <aside id="panel" class="panel">
     <header class="panel-head"><h1>OSM Simple 3D</h1><button type="button" class="collapse-btn" title="Свернуть" aria-expanded="true"></button></header>

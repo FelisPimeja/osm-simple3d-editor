@@ -586,10 +586,14 @@ function refreshOverpassImpl() {
   overpass.update();
 }
 
+/** Сколько сообщение (setStatus) держится в строке состояния, мс. */
+const MESSAGE_MS = 6000, MESSAGE_ERROR_MS = 12000;
+let messageUntil = 0;
+let messageTimer: ReturnType<typeof setTimeout> | undefined;
 function showOverpassStatus() {
   updateOverpassIndicator();
   updateDraftStyle();
-  if (uploading) return;
+  if (uploading || Date.now() < messageUntil) return;
   const src = overpass.sourceLabel;
   if (!overpass.enabled) return panelStatus(tr('Здания из тайлов. С z ≥ {z} — из {src}.', { z: OVERPASS_MIN_ZOOM, src }));
   const { ready, total, loading, waiting } = overpass.status();
@@ -598,6 +602,8 @@ function showOverpassStatus() {
       ? trn(ready, 'Здания из тайлов, рядом с центром — из кеша {src} ({n} тайл). С z ≥ {z} — из {src}.|Здания из тайлов, рядом с центром — из кеша {src} ({n} тайла). С z ≥ {z} — из {src}.|Здания из тайлов, рядом с центром — из кеша {src} ({n} тайлов). С z ≥ {z} — из {src}.', { src, z: OVERPASS_MIN_ZOOM })
       : tr('Здания из тайлов. С z ≥ {z} — из {src}.', { z: OVERPASS_MIN_ZOOM, src }));
   }
+  // Всё загружено — строка не нужна (индикатор ещё немного показывает «Данные загружены»)
+  if (!loading && !waiting) return panelStatus('');
   panelStatus(tr('{src}: {ready}/{total} тайлов', { src, ready, total })
     + (loading ? tr(', загружается {n}', { n: loading }) : '')
     + (waiting ? tr(', ждут повтора {n} (лимит/ошибка, см. консоль)', { n: waiting }) : '') + '.');
@@ -911,7 +917,18 @@ const serverDown = () => overpass.pool.endpoints.some((e) => e.unreachable);
 /** Карточка по центру: что сейчас происходит (открытие здания по ссылке). undefined — убрать. */
 const loadingCard = document.getElementById('loading-card')!;
 const loadingAnim = new MorphLoader(loadingCard.querySelector('canvas')!, { shapes: CUBE_SHAPES, ...LOADER_TIMING });
+/** Лоадер виден не меньше этого от начала показа: при быстрой загрузке не мелькает, мс. */
+const LOADING_MIN_MS = 3000;
+let loadingHold: ReturnType<typeof setTimeout> | undefined;
+let loadingSince = 0;
 function showLoading(text: string | undefined, down = false) {
+  clearTimeout(loadingHold);
+  if (text !== undefined && loadingCard.hidden) loadingSince = performance.now();
+  const left = loadingSince + LOADING_MIN_MS - performance.now();
+  if (text === undefined && !loadingCard.hidden && left > 0) {
+    loadingHold = setTimeout(() => { loadingCard.hidden = true; loadingAnim.stop(); }, left);
+    return;
+  }
   loadingCard.hidden = text === undefined;
   if (text === undefined) loadingAnim.stop(); else loadingAnim.start();
   loadingCard.classList.toggle('down', down);
@@ -3183,14 +3200,23 @@ function clearTileHighlight() {
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], '']);
 }
 
-/** Минимальный индикатор загрузки данных в углу карты: точка цвета состояния + счётчик тайлов. */
+/** Сколько после окончания загрузки ещё видно «Данные загружены», мс. */
+const READY_HOLD_MS = 2000;
+let readyTimer: ReturnType<typeof setTimeout> | undefined;
+/** Минимальный индикатор загрузки данных в строке состояния: точка цвета состояния + счётчик тайлов. */
 function updateOverpassIndicator() {
   const { ready, total, loading, waiting } = overpass.status();
   // Сервер не отвечает (таймаут, обрыв): запросы до него не доходят — отдельное состояние, повторы идут сами
   const down = serverDown();
   const state = !overpass.enabled ? 'off' : down && (loading || waiting) ? 'down' : loading ? 'loading' : waiting ? 'waiting' : 'ready';
+  // «Данные загружены» — ещё READY_HOLD_MS, затем индикатор прячется (строка состояния без него и без текста — тоже)
+  const changed = state !== opIndicator.dataset.state;
+  if (changed) {
+    clearTimeout(readyTimer);
+    if (state === 'ready') readyTimer = setTimeout(() => { opIndicator.hidden = true; }, READY_HOLD_MS);
+  }
   opIndicator.dataset.state = state;
-  opIndicator.hidden = state === 'off';
+  opIndicator.hidden = state === 'off' || (state === 'ready' && !changed && opIndicator.hidden);
   const src = overpass.sourceLabel;
   opIndicator.querySelector('.label')!.textContent = {
     off: '',
@@ -3262,7 +3288,10 @@ function formatAge(ms: number): string {
 function setStatus(text: string, error = false, html = '') {
   panelStatus(text, error);
   if (html) statusEl.insertAdjacentHTML('beforeend', ` ${html}`);
-  toasts.show(text, error, html);
+  // Сообщение держится в строке состояния, фоновый статус загрузки его не затирает (подсказка инструмента — затирает)
+  clearTimeout(messageTimer);
+  messageUntil = Date.now() + (error ? MESSAGE_ERROR_MS : MESSAGE_MS);
+  messageTimer = setTimeout(() => { messageUntil = 0; showOverpassStatus(); }, messageUntil - Date.now());
 }
 
 /** Только строка состояния в панели (фоновое: загрузка тайлов) — без всплывающего сообщения. */
@@ -3271,9 +3300,9 @@ function panelStatus(text: string, error = false) {
   statusEl.classList.toggle('error', error);
 }
 
-/** Подсказка инструмента над картой; undefined — инструмент закончил. */
+/** Подсказка инструмента в строке состояния; undefined — инструмент закончил. */
 function toolHint(hint: string | undefined, error = false) {
-  toasts.hint(hint, error);
+  if (hint) messageUntil = 0;
   if (hint) panelStatus(hint, error); else showOverpassStatus();
 }
 
@@ -4983,7 +5012,7 @@ async function doUpload() {
         nodeMoves: c.nodeMoves, wayNodes: c.wayNodes, newNodes: c.newNodes, deleted: c.deleted, version: c.feature.version, polygons: c.feature.polygons,
         splitFrom: c.feature.splitFrom };
     });
-    const res = await uploadEdits(edits, uploadComment.trim(), (t) => { toasts.hint(t); panelStatus(t); });
+    const res = await uploadEdits(edits, uploadComment.trim(), (t) => panelStatus(t));
     // Временные id узлов и путей → настоящие: в геометрии, членах отношений и в отправленных полигонах
     const nodeIdMap = new Map<number, number>(), wayIdMap = new Map<number, number>();
     for (const [from, to] of res.newKeys) {
@@ -5031,12 +5060,10 @@ async function doUpload() {
     uploadComment = '';
     const link = `<a href="${s.web}/changeset/${res.changeset}" target="_blank" rel="noopener">changeset ${res.changeset}</a>`;
     uploading = false;
-    toasts.hint(undefined);
     setStatus(trn(saved.size + res.deleted.size, 'Сохранено: {n} объект.|Сохранено: {n} объекта.|Сохранено: {n} объектов.')
       + (res.rebased.size ? ' ' + tr('Поверх чужих правок других тегов перенесено: {n}.', { n: res.rebased.size }) : ''), false, link);
   } catch (err) {
     uploading = false;
-    toasts.hint(undefined);
     if (err instanceof ConflictError) {
       setStatus(tr('{error}. Эти теги уже изменил кто-то другой — перезагрузите тайлы, отмените свои правки этих объектов и повторите.', { error: err.message }), true);
     } else {
@@ -5372,6 +5399,11 @@ async function pollJosm() {
   } finally { setTimeout(pollJosm, 2000); }
 }
 if (josmMode) setTimeout(pollJosm, 2000);
+// Панели ввода инструментов (VCB) стоят над строкой состояния: её высоту пишем в --statusbar-h (style.css)
+const statusbar = document.getElementById('statusbar')!;
+// В одной системе координат со строкой состояния (контейнер карты бывает выше окна)
+statusbar.after(...map.getContainer().querySelectorAll<HTMLElement>(':scope > .vcb'));
+new ResizeObserver(() => document.body.style.setProperty('--statusbar-h', `${statusbar.offsetHeight}px`)).observe(statusbar);
 
 /** Источник тайлов для текущего сервера: его /map API (свой кеш; у боевого — прежняя база кеша). */
 function tileSource(): TileSource {
@@ -5536,6 +5568,21 @@ mobileQuery.addEventListener('change', applyMobile);
 function groupName(g: BuildingGroup): string {
   return g.tags.name ?? outlineTags(g)?.name ?? (session.get(g.members[0]) ?? overpass.findFeature(g.members[0]))?.tags.name ?? g.key;
 }
+
+// Мобильная версия: строка состояния — над всем, что прижато к низу (карточка здания, панели правой колонки);
+// отступ снизу пишем в --mobile-bottom (style.css)
+const rightCol = document.getElementById('right-col')!;
+const placeStatusbar = () => {
+  document.body.style.setProperty('--mobile-card-h', `${mobileCard.offsetHeight}px`);
+  const tops = [mobileCard, ...rightCol.children].filter((e) => e instanceof HTMLElement && e.offsetParent)
+    .map((e) => e.getBoundingClientRect().top);
+  document.body.style.setProperty('--mobile-bottom', `${Math.max(44, tops.length ? innerHeight - Math.min(...tops) : 0)}px`);
+};
+const statusbarObserver = new ResizeObserver(placeStatusbar);
+statusbarObserver.observe(mobileCard);
+statusbarObserver.observe(rightCol);
+for (const c of rightCol.children) statusbarObserver.observe(c);
+addEventListener('resize', placeStatusbar);
 
 function renderMobileCard() {
   if (!mobile) { mobileCard.hidden = true; return; }

@@ -36,7 +36,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .flyout-sep { height: 1px; margin: 2px 4px; background: #e5e7eb; }
 .toolbar-sep { height: 1px; margin: 2px 4px; background: #e5e7eb; }
 /* Ввод расстояния (как VCB в SketchUp) */
-.vcb { position: absolute; right: 346px; bottom: 36px; z-index: 3; display: flex; align-items: baseline; gap: 6px;
+.vcb { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(36px + var(--statusbar-h, 0px)); z-index: 3; display: flex; align-items: baseline; gap: 6px;
   padding: 6px 10px; background: rgba(255,255,255,.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.2); font-size: 13px; }
 .vcb[hidden] { display: none; }
 .vcb-label, .vcb-axis { color: #666; font-size: 12px; }
@@ -122,15 +122,25 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
   #right-col { width: auto; left: 12px; top: auto; bottom: 28px; max-height: 40%; justify-content: flex-end; }
   .maplibregl-ctrl-top-right { right: 0; }
 }
-#status {
-  position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 2; margin: 0;
-  max-width: calc(100% - 700px); padding: 4px 10px; border-radius: 6px; background: rgba(255,255,255,.9);
-  box-shadow: 0 1px 4px rgba(0,0,0,.15); color: #444; font-size: 12px; text-align: center; pointer-events: none;
+#statusbar {
+  position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 2;
+  display: flex; flex-direction: column; align-items: center; gap: 4px; box-sizing: border-box;
+  max-width: calc(100% - 700px); padding: 6px 14px; border-radius: 8px;
+  background: rgba(255,255,255,.96); box-shadow: 0 2px 8px rgba(0,0,0,.18); font-size: 14px; line-height: 1.35; pointer-events: none;
 }
+#statusbar:not(:has(#status:not(:empty), #op-indicator:not([hidden]), #loading-card:not([hidden]))) { display: none; }
+/* Вторая строка: индикатор тайлов и статус */
+.statusbar-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 10px; }
+.statusbar-row:not(:has(#status:not(:empty), #op-indicator:not([hidden]))) { display: none; }
+#status { margin: 0; color: #444; text-align: center; }
 #status:empty { display: none; }
 #status a, #status button { pointer-events: auto; }
 #status.error { color: #b91c1c; }
-@media (max-width: 1000px) { #status { max-width: calc(100% - 24px); bottom: 56px; } }
+@media (max-width: 1000px) { #statusbar { width: max-content; max-width: calc(100% - 24px); bottom: 56px; } .vcb { bottom: calc(64px + var(--statusbar-h, 0px)); } }
+/* Мобильная версия: над карточкой здания и панелями, прижатыми к низу (отступ считает main.ts) */
+body.mobile #statusbar { bottom: calc(var(--mobile-bottom, 44px) + 16px); }
+/* Правая колонка (панель «Этажи») — над карточкой здания, а не под ней */
+body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobile-card-h, 72px) + 20px + env(safe-area-inset-bottom)); }
 #info h2 { font-size: 14px; margin: 8px 0 4px; }
 #info a { color: #2563eb; }
 #info table { border-collapse: collapse; width: 100%; font-size: 12px; }
@@ -140,9 +150,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 #info pre { font-size: 12px; white-space: pre-wrap; margin: 0; }
 #info button { padding: 4px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
 #op-indicator {
-  position: absolute; left: 12px; bottom: 28px; display: flex; align-items: center; gap: 6px;
-  padding: 4px 8px; border-radius: 12px; background: rgba(255,255,255,.92);
-  box-shadow: 0 1px 4px rgba(0,0,0,.2); font-size: 12px; color: #333;
+  display: flex; align-items: center; gap: 6px; flex: none; padding: 2px 8px; border-radius: 10px; color: #333; pointer-events: auto;
 }
 #op-indicator[hidden] { display: none; }
 #op-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; }
@@ -437,12 +445,10 @@ body.mobile #right-col { bottom: calc(72px + env(safe-area-inset-bottom)); }
 body.mobile #date-panel { width: auto; left: 12px; right: 12px; transform: none; min-width: 0; }
 body.mobile .dp-opt { display: none; }
 
-/* Карточка загрузки по центру (открытие здания по ссылке): что сейчас происходит */
-#loading-card {
-  position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 4; max-width: calc(100% - 32px); box-sizing: border-box;
-  display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 10px;
-  background: rgba(255,255,255,.96); box-shadow: 0 2px 12px rgba(0,0,0,.2); font-size: 14px; color: #1f2937;
-}
+/* Загрузка здания (открытие по ссылке) — в строке состояния: что сейчас происходит */
+/* Отдельной строкой над индикатором тайлов и статусом */
+#loading-card { display: flex; align-items: center; justify-content: center; gap: 8px; max-width: 100%; color: #1f2937; }
+#loading-card .text { min-width: 0; overflow-wrap: anywhere; }
 #loading-card[hidden] { display: none; }
 #loading-card.down { color: #991b1b; }
 /* Индикатор: контурный объём здания, части которого перетекают из формы в форму (src/view/morph-loader.ts); цвет линий — color */

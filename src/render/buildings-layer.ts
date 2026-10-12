@@ -7,6 +7,7 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, type Heights } from '../osm/heights';
+import { prepareSolid, trimTriangles, type PreparedSolid } from './shell-trim';
 import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { timed } from '../perf';
@@ -160,6 +161,8 @@ interface Item {
   glassStart: number;
   /** Рёбра здания (отрезки xyz) — считаются один раз, когда контуры включены. */
   edges?: Float32Array;
+  /** Режим этажей: positions — оболочка (без граней внутри соседних частей), здесь — исходные треугольники. */
+  full?: { positions: Float32Array; wallVertices: number };
 }
 
 /**
@@ -186,6 +189,8 @@ class MeshGroup {
   contacts?: Contacts;
   /** Обводки контуров под частями (в просмотре вместо заливки). */
   strokes?: THREE.LineSegments;
+  /** Из чего посчитана оболочка (исходные треугольники, скрытые и плоские объекты, стекло) — не пересчитывать зря. */
+  shellOf?: { bases: Float32Array[]; hidden: string };
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
   // Цвет «земли» — посередине между белым и 0x8a8478: контраст неба и земли вдвое меньше
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
@@ -457,9 +462,11 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** doors — двери этажа (lon/lat): в стенах на их месте вырезаются проёмы. */
   setLevel(level: IndoorLevel | undefined) {
     const hadVoids = !!this.level?.voidCuts?.length, hasVoids = !!level?.voidCuts?.length;
+    const toggled = !this.level !== !level;
     this.level = level;
     const focus = this.groups.get(FOCUS_GROUP);
-    if (focus && (hadVoids || hasVoids)) this.rebuildGeometry(focus);
+    // Вход в этажи и выход — оболочка здания вместо частей и обратно
+    if (focus && (hadVoids || hasVoids || toggled)) this.rebuildGeometry(focus);
     timed('этажи: план этажа', () => this.applyLevel(), () => `${level?.items.length ?? 0} объектов`);
     this.applyIndoorSelection();
     this.map?.triggerRepaint();
@@ -1792,6 +1799,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Сливает здания группы в одну геометрию. */
   private rebuildGeometry(g: MeshGroup) {
     g.disposeMesh();
+    this.applyShell(g);
     let total = 0;
     for (const it of g.items) { it.start = total; total += it.positions.length / 3; }
     const positions = new Float32Array(total * 3);
@@ -1844,6 +1852,71 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.paintGroup(g);
     this.applyEdges(g);
     this.applyStrokes(g);
+  }
+
+  /**
+   * Режим этажей: здание рисуется оболочкой — грани частей, спрятанные внутри соседних частей (общие стены,
+   * крыша подиума внутри башни), вырезаны, чтобы на срезе этажа не торчали стенки «кубиков». Вне этажей —
+   * исходные треугольники (правка частей работает с ними).
+   */
+  private applyShell(g: MeshGroup) {
+    const on = !!this.level && g === this.groups.get(FOCUS_GROUP);
+    if (!on) {
+      if (!g.shellOf) return;
+      for (const it of g.items) {
+        if (!it.full) continue;
+        it.positions = it.full.positions;
+        it.wallVertices = it.full.wallVertices;
+        it.full = undefined;
+        if (it.edges) it.edges = itemEdges(it);
+      }
+      g.shellOf = undefined;
+      return;
+    }
+    const bases = g.items.map((it) => it.full?.positions ?? it.positions);
+    // Скрытые, голые контуры и стекло меняют, что чем закрыто
+    const hidden = `${[...g.hidden].sort().join(',')}|${[...g.flat].sort().join(',')}|${glassEnabled}`;
+    if (g.shellOf && g.shellOf.hidden === hidden && g.shellOf.bases.length === bases.length && g.shellOf.bases.every((b, i) => b === bases[i])) return;
+    timed('этажи: оболочка здания', () => {
+      const solids = new Map<Item, PreparedSolid>();
+      for (const it of g.items) {
+        const full = it.full ?? { positions: it.positions, wallVertices: it.wallVertices };
+        if (!shellSolid(g, it)) continue;
+        const h = computeHeights(it.tags);
+        const end = full.positions.length / 3 - it.floorVertices;
+        solids.set(it, prepareSolid({
+          polys: it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })),
+          min: h.min,
+          // Неподдерживаемая крыша — стены до самого верха
+          wallTop: it.roofApproximated ? h.top : h.wallTop,
+          roof: full.positions.subarray(full.wallVertices * 3, end * 3),
+          glassWalls: glassEnabled && it.glassWalls,
+          glassRoof: glassEnabled && it.glassRoof,
+        }));
+      }
+      for (const it of g.items) {
+        const full = it.full ?? { positions: it.positions, wallVertices: it.wallVertices };
+        it.full = full;
+        const others = [...solids].filter(([o]) => o !== it).map(([, s]) => s);
+        if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || !others.length) {
+          it.positions = full.positions;
+          it.wallVertices = full.wallVertices;
+        } else {
+          const n = full.positions.length / 3, end = n - it.floorVertices;
+          const polys = it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, others);
+          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, others);
+          const pos = new Float32Array(walls.length + roof.length + it.floorVertices * 3);
+          pos.set(walls, 0);
+          pos.set(roof, walls.length);
+          pos.set(full.positions.subarray(end * 3), walls.length + roof.length);
+          it.positions = pos;
+          it.wallVertices = walls.length / 3;
+        }
+        if (it.edges) it.edges = itemEdges(it);
+      }
+    }, () => `${g.items.length} объектов`);
+    g.shellOf = { bases: g.items.map((it) => it.full!.positions), hidden };
   }
 
   /**
@@ -2242,9 +2315,10 @@ function buildShell(g: MeshGroup): Shell {
     const idx = parts.push({ min: h.min, top: flat ? h.wallTop : h.top, flat, polys, box }) - 1;
     for (const p of polys) for (const r of [p.outer, ...p.inners]) for (let i = 0; i < r.length; i++) addSeg(...r[i], ...r[(i + 1) % r.length]);
     if (flat) continue;
-    // Скаты — треугольники крыши (между стенами и перекрытиями); вертикальные (торцы) не в счёт
-    const pos = it.positions;
-    for (let o = it.wallVertices * 3; o + 9 <= pos.length - it.floorVertices * 3; o += 9) {
+    // Скаты — треугольники крыши (между стенами и перекрытиями); вертикальные (торцы) не в счёт.
+    // Исходные, а не оболочка: скат под соседней частью — тоже крыша над этим местом
+    const pos = it.full?.positions ?? it.positions;
+    for (let o = (it.full?.wallVertices ?? it.wallVertices) * 3; o + 9 <= pos.length - it.floorVertices * 3; o += 9) {
       const [x0, y0, x1, y1, x2, y2] = [pos[o], pos[o + 1], pos[o + 3], pos[o + 4], pos[o + 6], pos[o + 7]];
       if (Math.abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)) < 1e-6) continue;
       const t = tris.length / 9;
@@ -2594,6 +2668,11 @@ function glassRanges(it: Item): [number, number][] {
   if (it.glassWalls && it.wallVertices) out.push([0, it.wallVertices]);
   if (it.glassRoof && n - it.floorVertices > it.wallVertices) out.push([it.wallVertices, n - it.floorVertices]);
   return out;
+}
+
+/** Объект закрывает собой грани соседей в оболочке: объём с высотой (не навес building:part=roof, не плоский след). */
+function shellSolid(g: MeshGroup, it: Item): boolean {
+  return !g.hidden.has(it.feature.key) && !strokeOnly(g, it) && !thinItem(it) && it.tags['building:part'] !== 'roof' && it.positions.length > 0;
 }
 
 /** Контур под частями (и голый контур в режиме здания): только обводка — заливку всё равно закрывают части. */

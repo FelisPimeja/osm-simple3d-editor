@@ -141,6 +141,8 @@ const RAMP_JOIN_DH_M = 1;
 /** Зазор над крышей здания под мостом, м. */
 /** Доля длины моста внутри здания, с которой здание — тело моста, а не препятствие под ним. */
 const BODY_SHARE = 0.6;
+/** Конец моста ближе этого к контуру здания — мост ведёт в здание (ко входу), здание ему не препятствие, м. */
+const ENTRANCE_TOL_M = 2;
 const OBSTACLE_CLEARANCE_M = 1;
 /** Здания выше этого мост не перелетает (идёт рядом), м. */
 const OBSTACLE_MAX_TOP_M = 40;
@@ -356,6 +358,23 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
     /** Путь моста → высота полотна по крыше его здания-тела. */
     const bodyTop = new Map<number, number>();
     for (const [w, l] of tops) if (l.length >= BODY_SHARE * wayLen.get(w)!) { l.sort((x, y) => x - y); bodyTop.set(w, l[l.length >> 1]); }
+    // Мостик ко входу (галерея, переход в здание) концом упирается в дом — это не мост над ним. Концы моста — концы
+    // его путей, не общие с другими путями того же моста
+    const endsOf = new Map<number, [number, number][]>();
+    {
+      const uses = new Map<number, number>();
+      ways.forEach((w, wi) => { if (raised(wi)) for (const nd of [w.nodes[0], w.nodes[w.nodes.length - 1]]) uses.set(nd, (uses.get(nd) ?? 0) + 1); });
+      ways.forEach((w, wi) => {
+        if (!raised(wi)) return;
+        for (const nd of [w.nodes[0], w.nodes[w.nodes.length - 1]]) {
+          const shared = ways.some((u, ui) => ui !== wi && raised(ui) && group[ui] === group[wi] && u.nodes.includes(nd));
+          if (shared) continue;
+          const v = vertexOf.get(nd)!;
+          const l = endsOf.get(group[wi]); if (l) l.push([xs[v], ys[v]]); else endsOf.set(group[wi], [[xs[v], ys[v]]]);
+        }
+      });
+    }
+    const touches = (o: typeof obs[number], p: [number, number]) => o.rings.some((r) => pointInRing(p, r) || r.some((a, i) => segDist(p, a, r[(i + 1) % r.length]) < ENTRANCE_TOL_M));
     edges.forEach((e, ei) => {
       // Только настоящие мосты: у проезда во дворе layer=1 без bridge — обычно над подземным гаражом, а не над домом
       if (!raised(e.way) || !isBridge(ways[e.way].tags)) return;
@@ -366,7 +385,7 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
         seen.add(oi);
         const o = obs[oi];
         const hit = o.rings.some((r) => pointInRing(p, r) || pointInRing(q, r) || r.some((a, i) => segmentsCross(p, q, a, r[(i + 1) % r.length])));
-        if (!hit) continue;
+        if (!hit || (endsOf.get(group[e.way]) ?? []).some((pt) => touches(o, pt))) continue;
         const bt = bodyTop.get(e.way);
         const c = crossAt.get(ei) ?? { r: 0, need: 0 };
         c.r = Math.max(c.r, 2);
@@ -1001,4 +1020,11 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
     ways: usedWays.size,
     cuts,
   };
+}
+
+/** Расстояние от точки до отрезка. */
+function segDist([px, py]: [number, number], [ax, ay]: [number, number], [bx, by]: [number, number]): number {
+  const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+  return Math.hypot(px - ax - t * dx, py - ay - t * dy);
 }

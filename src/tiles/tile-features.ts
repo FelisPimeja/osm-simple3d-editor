@@ -24,7 +24,8 @@ interface TileLike {
  * WeakMap: выгруженный MapLibre тайл уходит из кеша вместе с ним.
  */
 const clippedCache = new WeakMap<TileLike, Map<string, TileBuildingFeature[]>>();
-const idsCache = new WeakMap<TileLike, Map<string, Map<string, number[]>>>();
+/** На фичу — id и первая точка (lon, lat): для фильтра по областям (слой JOSM). */
+const idsCache = new WeakMap<TileLike, Map<string, Map<string, number[][]>>>();
 
 interface TileManagerLike {
   getRenderableIds(): string[];
@@ -120,7 +121,8 @@ export function gridKey(x: number, y: number, z: number): string {
 }
 
 /** id тайловых фич зданий по тайлам сетки z14: `14/x/y` → id (без обрезки, для фильтров). */
-export function tileFeatureIdsByTile(map: MlMap, sourceId: string, sourceLayer: string): Map<string, number[]> {
+/** keep — оставить только фичи, чья первая точка ему подходит. */
+export function tileFeatureIdsByTile(map: MlMap, sourceId: string, sourceLayer: string, keep?: (lon: number, lat: number) => boolean): Map<string, number[]> {
   const tm = (map as unknown as { style?: { tileManagers?: Record<string, TileManagerLike> } }).style?.tileManagers?.[sourceId];
   const out = new Map<string, number[]>();
   if (!tm?.getRenderableIds || !tm.getTileByID) return out;
@@ -140,15 +142,16 @@ export function tileFeatureIdsByTile(map: MlMap, sourceId: string, sourceLayer: 
       for (const f of features) {
         if (typeof f.id !== 'number') continue;
         // Тайл мельче сетки (z < 14) покрывает несколько её клеток — клетку берём по первой точке фичи
-        const key = z >= GRID_ZOOM ? gridKey(x, y, z) : gridKeyOfPoint(firstPoint(f.geometry));
-        if (!key) continue;
-        (byGrid.get(key) ?? byGrid.set(key, []).get(key)!).push(f.id);
+        const p = firstPoint(f.geometry);
+        const key = z >= GRID_ZOOM ? gridKey(x, y, z) : gridKeyOfPoint(p);
+        if (!key || !p) continue;
+        (byGrid.get(key) ?? byGrid.set(key, []).get(key)!).push([f.id, p[0], p[1]]);
       }
       perTile.set(sourceLayer, byGrid);
     }
     for (const [key, tileIds] of byGrid) {
       const ids = out.get(key) ?? out.set(key, []).get(key)!;
-      ids.push(...tileIds);
+      for (const [id, lon, lat] of tileIds) if (!keep || keep(lon, lat)) ids.push(id);
     }
   }
   for (const [key, ids] of out) out.set(key, [...new Set(ids)]);

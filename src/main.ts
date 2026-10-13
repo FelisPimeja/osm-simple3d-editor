@@ -672,6 +672,10 @@ map.on('idle', () => {
 function onTilesIdle() {
   // Склеенные фичи (суффикс 0) — только они нужны для разрезанного слоя; обрезка кешируется на тайле
   const merged = timed('тайлы: склеенные фичи', () => explodeMerged(queryTileBuildings(map, 'openmaptiles', 'building', isMergedId)), (r) => `${r.length} полигонов`);
+  mergedKeys = merged.map((f) => {
+    const [lon, lat] = String(f.properties!.key).split('@')[1].split(',').map(Number);
+    return { key: f.properties!.key, tile: f.properties!.tile, lon, lat };
+  });
   const mergedSig = merged.map((f) => f.properties!.key).join('|');
   if (mergedSig !== lastMergedSig) {
     // setData заставляет MapLibre заново обработать весь GeoJSON в воркере — только если состав изменился
@@ -723,6 +727,11 @@ function explodeMerged(features: TileBuildingFeature[]): GeoJSON.Feature<GeoJSON
 }
 
 let lastFilterSig = '';
+/** Области загрузки слоя JOSM: он скачан не по тайлам — тайловые здания прячем только внутри областей, иначе на
+ * краю слоя прогал до границы тайла. Пусто (JOSM не отдал <bounds>) — прячем тайлы целиком, как у Overpass. */
+let josmAreas: Bbox[] = [];
+let mergedKeys: { key: string; tile: string; lon: number; lat: number }[] = [];
+const inJosmAreas = (lon: number, lat: number) => josmAreas.some(([w, s, e, n]) => lon >= w && lon <= e && lat >= s && lat <= n);
 
 function updateTileFilter() {
   if (!map.getLayer(BUILDINGS_LAYER)) return; // сервер без тайловых зданий
@@ -730,17 +739,20 @@ function updateTileFilter() {
   const hiddenIds = [...userHidden].map(Number).filter(Number.isFinite);
   // Тайлы, здания которых уже нарисованы из данных API
   const overpassTiles = overpass.displayed();
-  const byTile = overpassTiles.length ? timed('тайлы: id по клеткам', () => tileFeatureIdsByTile(map, 'openmaptiles', 'building')) : new Map<string, number[]>();
+  const byAreas = josmMode && josmAreas.length > 0;
+  const byTile = overpassTiles.length ? timed('тайлы: id по клеткам', () => tileFeatureIdsByTile(map, 'openmaptiles', 'building', byAreas ? inJosmAreas : undefined)) : new Map<string, number[]>();
   const overpassIds = overpassTiles.flatMap((k) => byTile.get(k) ?? []);
   // setFilter перестраивает бакеты всех тайлов слоя — вызываем, только если набор скрытого изменился
-  const sig = [replacedIds.length, hiddenIds.join(), overpassTiles.sort().join(), overpassIds.length].join('|');
+  const tileSet = new Set(overpassTiles);
+  const hiddenMerged = byAreas ? mergedKeys.filter((m) => tileSet.has(m.tile) && inJosmAreas(m.lon, m.lat)).map((m) => m.key) : [];
+  const sig = [replacedIds.length, hiddenIds.join(), overpassTiles.sort().join(), overpassIds.length, byAreas, hiddenMerged.length].join('|');
   if (sig === lastFilterSig) return;
   lastFilterSig = sig;
   console.debug(`[perf] setFilter: скрыто ${overpassIds.length} фич тайлов под Overpass`);
   map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...hiddenIds, ...overpassIds])]);
   map.setFilter(REMAINDERS_LAYER, notIn(hiddenIds));
   map.setFilter(MERGED_LAYER, ['all',
-    ['!', ['in', ['get', 'tile'], ['literal', overpassTiles]]],
+    byAreas ? ['!', ['in', ['get', 'key'], ['literal', hiddenMerged]]] : ['!', ['in', ['get', 'tile'], ['literal', overpassTiles]]],
     ['!', ['in', ['get', 'key'], ['literal', [...userHidden]]]]]);
 }
 
@@ -5476,6 +5488,9 @@ async function loadJosm(retry = false) {
 /** Временные id редактора — ниже новых объектов JOSM (у тех тоже отрицательные). */
 function josmApplied(l: JosmLayer): JosmLayer {
   nextNewId = Math.min(nextNewId, minElementId(l.elements) - 1);
+  josmAreas = l.areas;
+  lastFilterSig = '';
+  updateTileFilter();
   return l;
 }
 

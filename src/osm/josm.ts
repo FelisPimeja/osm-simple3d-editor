@@ -22,7 +22,8 @@ export function writeJosmParam(on: boolean) {
   if (url.href !== location.href) history.replaceState(history.state, '', url);
 }
 
-export interface JosmLayer { elements: OsmElement[]; bbox?: Bbox; fetchedAt: number }
+/** areas — области загрузки слоя (<bounds> из JOSM): тайловые здания скрываются только внутри них. */
+export interface JosmLayer { elements: OsmElement[]; bbox?: Bbox; areas: Bbox[]; fetchedAt: number }
 
 let layer: Promise<JosmLayer> | undefined;
 /** Ответ /export последней загрузки — чтобы опрос перерисовывал только изменившийся слой. */
@@ -54,7 +55,7 @@ const exportXml = () => josmGet('/export').then((r) => r.text());
 function toLayer(xml: string): JosmLayer {
   const elements = parseOsmXml(xml);
   lastXml = xml;
-  return { elements, bbox: elementsBbox(elements), fetchedAt: Date.now() };
+  return { elements, bbox: elementsBbox(elements), areas: parseBounds(xml), fetchedAt: Date.now() };
 }
 
 /**
@@ -108,6 +109,17 @@ export function parseOsmXml(xml: string): OsmElement[] {
       }));
       out.push({ type: 'relation', id, version, members, ...withTags });
     }
+  }
+  return out;
+}
+
+/** Области загрузки: JOSM пишет <bounds> на каждую скачанную область слоя. */
+function parseBounds(xml: string): Bbox[] {
+  const out: Bbox[] = [];
+  for (const m of xml.matchAll(/<bounds\b[^>]*>/g)) {
+    const a = (k: string) => Number(new RegExp(`${k}=['"]([^'"]+)`).exec(m[0])?.[1]);
+    const b: Bbox = [a('minlon'), a('minlat'), a('maxlon'), a('maxlat')];
+    if (b.every(Number.isFinite)) out.push(b);
   }
   return out;
 }

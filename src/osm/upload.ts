@@ -1,4 +1,4 @@
-import { fetchElements, fetchNodes, fetchWayRelations, onApiWait, type OsmMember, type OsmNode, type OsmRelation, type OsmWay } from './api';
+import { fetchElements, fetchNodes, fetchWayRelations, onApiWait, type OsmMember, type OsmNode, type OsmRelation, type OsmWay, type VersionedNode } from './api';
 import { getToken } from './auth';
 import { server } from './servers';
 import { tr, trn } from '../i18n';
@@ -108,7 +108,7 @@ async function call(method: string, path: string, body?: string, accept = 'text/
  * Применяет нашу правку поверх свежей версии с сервера.
  * Можно, если параллельно не трогали те же теги (геометрию и прочие теги берём с сервера).
  */
-function rebase(edit: TagEdit, fresh: OsmWay | OsmRelation): { tags: Tags } | { conflict: string[] } {
+function rebase(edit: TagEdit, fresh: { tags?: Tags }): { tags: Tags } | { conflict: string[] } {
 
   const serverTags = fresh.tags ?? {};
   const touched = [...new Set([...Object.keys(edit.before), ...Object.keys(edit.after)])]
@@ -220,7 +220,7 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
     const r = rebase(edit, f);
     if ('conflict' in r) { conflicts.push({ key: edit.key, tags: r.conflict }); continue; }
     // Список узлов пути: на сервере он должен быть таким, с какого начиналась правка
-    let element: OsmWay | OsmRelation = f;
+    let element: OsmWay | OsmRelation | VersionedNode = f;
     if (edit.wayNodes && f.type === 'way') {
       const same = f.nodes.length === edit.wayNodes.before.length && f.nodes.every((id, i) => id === edit.wayNodes!.before[i]);
       if (!same) { conflicts.push({ key: edit.key, tags: [tr('список узлов изменён на сервере')] }); continue; }
@@ -265,7 +265,7 @@ type Payload = Parameters<typeof buildOsmChange>[0];
  *    никому не нужны (if-unused: занятые сервер оставит);
  * 4. новые узлы, на которые не ссылается ни один путь, не создаём.
  */
-async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<string, OsmWay | OsmRelation>, onStatus: (s: string) => void): Promise<Set<string>> {
+async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<string, OsmWay | OsmRelation | VersionedNode>, onStatus: (s: string) => void): Promise<Set<string>> {
   const dropped = new Set<string>();
   const editKeys = new Set(edits.map((e) => e.key));
   const splits = new Map<number, number[]>();

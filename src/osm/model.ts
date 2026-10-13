@@ -100,6 +100,14 @@ export function isIndoorPoi(tags?: Record<string, string>): boolean {
   return POI_KEYS.some((k) => tags[k] !== undefined && tags[k] !== 'no');
 }
 
+/** Indoor-объект с другими тегами (правка indoor/level в редакторе): вид и этажи — по новым тегам. */
+export function withIndoorTags(f: IndoorFeature, tags: Record<string, string>): IndoorFeature {
+  const levels = parseLevels(tags.level);
+  for (const l of parseLevels(tags.repeat_on)) if (!levels.includes(l)) levels.push(l);
+  const kind = f.kind === 'poi' ? 'poi' : indoorKind(tags) ?? f.kind;
+  return { ...f, tags, kind, levels: levels.length ? levels.sort((a, b) => a - b) : [0] };
+}
+
 function indoorKind(tags?: Record<string, string>): IndoorKind | undefined {
   const k = tags?.indoor;
   if (k === 'yes') return 'area'; // общее «внутреннее пространство» — как площадка

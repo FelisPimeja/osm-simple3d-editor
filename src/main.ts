@@ -17,7 +17,7 @@ import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { ViewCube } from './view/view-cube';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
 import { applyBasemap, applyGpsTraces, BasemapButton, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
-import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
+import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
@@ -3641,7 +3641,7 @@ let buildingIndoorCache: { sig: string; list: IndoorFeature[] } | undefined;
 
 function buildingIndoor(g: BuildingGroup): IndoorFeature[] {
   // Отбор по всем тайлам — дорогой, а панель этажей перерисовывается при каждом выделении: кешируем
-  const sig = `${g.key}|${overpass.revision}|${focusIndoor.get(g.key)?.length ?? -1}|${g.members.join(',')}`;
+  const sig = `${g.key}|${overpass.revision}|${focusIndoor.get(g.key)?.length ?? -1}|${g.members.join(',')}|${indoorEditRev}`;
   if (buildingIndoorCache?.sig === sig) return buildingIndoorCache.list;
   const list = timed('этажи: indoor здания', () => buildingIndoorImpl(g), (r) => `${r.length} объектов`);
   buildingIndoorCache = { sig, list };
@@ -3659,6 +3659,10 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   return [...all.values()].filter((f) => {
     const p = f.point ?? (f.line ? f.polygons[0].outer[0] : pointOnSurface(f.polygons[0]));
     return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer)));
+  }).map((f) => {
+    // Правки тегов в сессии (indoor, level, room) — поверх данных: вид и этажи по новым тегам
+    const e = indoorEdited.has(indoorKey(f.key)) ? session.get(indoorKey(f.key)) : undefined;
+    return e ? withIndoorTags(f, e.tags) : f;
   });
 }
 
@@ -3865,8 +3869,47 @@ function selectIndoor(f: IndoorFeature | undefined) {
   const levels = f.levels.map((n) => LEVEL_NAME(n)).join(', ');
   infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''} — `
     + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
-    + `<p class="hint">${tr('{levels} · только просмотр', { levels: esc(levels) })}</p>`
-    + `<table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table>`;
+    + `<p class="hint">${esc(levels)}</p>`
+    + indoorForm(key, t)
+    + `<details class="all-tags"><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
+  for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
+    input.addEventListener('change', () => setIndoorTag(key, f!.tags, input.dataset.indoorTag!, input.value));
+  }
+}
+
+/** Indoor-объект здания режима по ключу OSM (с правками сессии); недоступен — undefined. */
+function buildingIndoorFor(key: string): IndoorFeature | undefined {
+  return focus ? buildingIndoor(focus).find((f) => f.key === key) : undefined;
+}
+
+/** Ключи indoor-объектов, которые правились в сессии (их теги берутся из сессии). */
+const indoorEdited = new Set<string>();
+/** Меняется при правке indoor-тегов: кеш объектов здания пересчитывается. */
+let indoorEditRev = 0;
+/** Ключ объекта OSM у indoor-объекта (у значка помещения — #poi). */
+const indoorKey = (k: string) => k.replace('#poi', '');
+/** Теги indoor-объекта, которые можно править (без геометрии). */
+const INDOOR_EDIT_TAGS = ['indoor', 'level', 'room'] as const;
+const INDOOR_VALUES = ['room', 'corridor', 'area', 'level', 'wall', 'column', 'door', 'yes'];
+const ROOM_VALUES = ['shop', 'office', 'toilets', 'toilet', 'stairs', 'elevator', 'restaurant', 'technical', 'storage', 'class', 'conference', 'kitchen', 'waiting', 'entrance', 'auditorium', 'bedroom', 'living_room', 'bathroom', 'yes'];
+
+/** Поля правки indoor, level и room у выбранного indoor-объекта. */
+function indoorForm(key: string, t: Record<string, string>): string {
+  const list = (id: string, values: string[]) => `<datalist id="${id}">${values.map((v) => `<option value="${esc(v)}">`).join('')}</datalist>`;
+  const rows = INDOOR_EDIT_TAGS.map((k) => {
+    const changed = session.isChanged(key, k);
+    const lid = k === 'indoor' ? 'indoor-values' : k === 'room' ? 'room-values' : '';
+    return `<label class="tag-row${changed ? ' changed' : ''}"><span>${k}</span>`
+      + `<input type="text" data-indoor-tag="${k}" value="${esc(t[k] ?? '')}" placeholder="—"${lid ? ` list="${lid}"` : ''} spellcheck="false" autocomplete="off"></label>`;
+  }).join('');
+  return `<div class="tag-form">${rows}${list('indoor-values', INDOOR_VALUES)}${list('room-values', ROOM_VALUES)}</div>`;
+}
+
+/** Записать тег indoor-объекта в сессию правок (объект начинает отслеживаться при первой правке). */
+function setIndoorTag(key: string, tags: Record<string, string>, tag: string, value: string) {
+  if (!session.has(key)) session.track({ key, version: 0, tags: { ...tags } });
+  indoorEdited.add(key);
+  session.setTags(key, { [tag]: value });
 }
 
 /** Мост, тоннель или подход к ним: теги пути в панели свойств (только просмотр). */
@@ -4924,6 +4967,16 @@ function describeGroup(g: BuildingGroup): string {
 
 /** После правки тегов: пересобрать меши, обновить панель и список изменений. */
 function onSessionChange(keys: string[]) {
+  // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
+  if (keys.some((k) => indoorEdited.has(k))) {
+    indoorEditRev++;
+    const sel = selectedIndoor && indoorKey(selectedIndoor.key);
+    renderLevels();
+    const again = sel ? buildingIndoorFor(sel) : undefined;
+    if (again) selectIndoor(again);
+    renderChanges();
+    if (keys.every((k) => indoorEdited.has(k))) return;
+  }
   // Правка могла поменять объект на месте — проверки пересчитать (до перерисовки свойств, где они показаны)
   issueCache.clear();
   focusIssues = focus ? buildingIssues(focus) : [];
@@ -5023,7 +5076,7 @@ function renderChanges() {
   if (!show) { changesEl.innerHTML = ''; return; }
   const list = changes.map((c) => {
     const group = editGroups.has(c.key);
-    const icon = group ? ICON_GROUP : (c.feature as Feature3D).kind === 'part' ? ICON_PART : ICON_OUTLINE;
+    const icon = group ? ICON_GROUP : indoorEdited.has(c.key) ? ICON_PLAN : (c.feature as Feature3D).kind === 'part' ? ICON_PART : ICON_OUTLINE;
     const name = c.after.name ?? c.before.name;
     const diff = c.diff.map((d) => d.tag === '(члены)' ? membersDiff(c)
       : d.tag.startsWith('(')
@@ -5235,7 +5288,9 @@ changesEl.addEventListener('click', (e) => {
   const revert = t.closest<HTMLElement>('[data-revert-key]');
   if (revert) return void session.revert(revert.dataset.revertKey!);
   const row = t.closest<HTMLElement>('li[data-key]');
-  if (row) select(row.dataset.key);
+  const indoorRow = row && indoorEdited.has(row.dataset.key!) ? buildingIndoorFor(row.dataset.key!) : undefined;
+  if (indoorRow) selectIndoor(indoorRow);
+  else if (row) select(row.dataset.key);
 });
 // Наведение на строку — подсветка объекта на карте
 changesEl.addEventListener('mouseover', (e) => {
@@ -5374,6 +5429,7 @@ serverSelect.addEventListener('change', () => {
   if (server().style !== style) return void location.reload();
   // Данные — с выбранного сервера: правки прежнего к нему не относятся
   session = new EditSession([], onSessionChange);
+  indoorEdited.clear();
   editGroups = new Map();
   editMemberGroup = new Map();
   clearSelection();
@@ -5594,6 +5650,8 @@ document.addEventListener('keydown', (e) => {
  * (нарисованная или отрезанная часть) или само отношение не должны выводить на карту.
  */
 function selectAfterHistory(key: string | undefined) {
+  // Правка помещения — оно и остаётся выбранным (onSessionChange уже показал его с новыми тегами)
+  if (key && indoorEdited.has(key)) { const f = buildingIndoorFor(key); if (f) selectIndoor(f); return; }
   // Правка нескольких выделенных объектов — выделение не трогаем
   if (key && selection.length > 1 && selection.includes(key)) { renderSelected(); return; }
   if (focus && (!key || !focus.members.includes(key))) { select(undefined); return; }

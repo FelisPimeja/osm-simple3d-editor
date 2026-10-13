@@ -164,13 +164,14 @@ export async function fetchNodes(ids: number[], api = server().api): Promise<Map
 }
 
 /** Текущие версии путей и отношений (multi-fetch, пачками по 100). */
-export async function fetchElements(keys: string[], api = server().api): Promise<Map<string, OsmWay | OsmRelation>> {
-  const out = new Map<string, OsmWay | OsmRelation>();
-  for (const type of ['way', 'relation'] as const) {
+export type VersionedNode = OsmNode & { version: number };
+export async function fetchElements(keys: string[], api = server().api): Promise<Map<string, OsmWay | OsmRelation | VersionedNode>> {
+  const out = new Map<string, OsmWay | OsmRelation | VersionedNode>();
+  for (const type of ['node', 'way', 'relation'] as const) {
     const ids = keys.filter((k) => k.startsWith(`${type}/`)).map((k) => k.split('/')[1]);
     for (let i = 0; i < ids.length; i += 100) {
       const res = await getJson(`${api}/${type}s.json?${type}s=${ids.slice(i, i + 100).join(',')}`);
-      for (const e of ((await res.json()) as { elements: (OsmWay | OsmRelation)[] }).elements) out.set(`${e.type}/${e.id}`, e);
+      for (const e of ((await res.json()) as { elements: (OsmWay | OsmRelation | VersionedNode)[] }).elements) out.set(`${e.type}/${e.id}`, e);
     }
   }
   return out;

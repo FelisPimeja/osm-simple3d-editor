@@ -5,7 +5,7 @@
  */
 
 /** Новый узел id на стороне u–v (в любом направлении). */
-export interface Insert { id: number; u: number; v: number }
+export interface Insert { id: number; u: number; v: number; t?: number }
 
 /** Список узлов с вставленными узлами на сторонах (как есть: у замкнутого пути первый = последний). */
 export function insertInLine(ids: number[], ins: Insert[]): number[] | undefined {
@@ -14,9 +14,10 @@ export function insertInLine(ids: number[], ins: Insert[]): number[] | undefined
   let changed = false;
   for (let j = 1; j < ids.length; j++) {
     const a = ids[j - 1], b = ids[j];
-    for (const n of ins) {
-      if ((n.u === a && n.v === b) || (n.u === b && n.v === a)) { out.push(n.id); changed = true; }
-    }
+    const matches = ins.filter((n) => (n.u === a && n.v === b) || (n.u === b && n.v === a));
+    matches.sort((x, y) => ((x.u === a ? x.t : x.t === undefined ? undefined : 1 - x.t) ?? 0)
+      - ((y.u === a ? y.t : y.t === undefined ? undefined : 1 - y.t) ?? 0));
+    for (const n of matches) { out.push(n.id); changed = true; }
     out.push(b);
   }
   return changed ? out : undefined;

@@ -5,7 +5,7 @@ import { tr } from '../i18n';
 type Pt = [number, number];
 
 /** Точка разреза на контуре: сторона (i → i+1), положение на ней и, если попали в вершину, её номер. */
-export interface CutPoint { edge: number; p: Pt; vertex?: number }
+export interface CutPoint { poly: number; edge: number; p: Pt; vertex?: number }
 type Candidate = { key: string; z: number; start: CutPoint };
 
 /**
@@ -72,8 +72,10 @@ export class SplitTool {
         if (!box) continue;
         this.target = key;
         this.z = box.max.z;
-        const c = this.cutPointAt(point);
-        if (c) candidates.push({ key, z: this.z, start: c });
+        for (let poly = 0; poly < (this.layer.focusPolygons(key)?.length ?? 0); poly++) {
+          const c = this.cutPointAt(point, poly);
+          if (c) candidates.push({ key, z: this.z, start: c });
+        }
       }
       if (!candidates.length) {
         this.target = undefined;
@@ -81,7 +83,8 @@ export class SplitTool {
         this.onState(reason ?? tr('Кликните точно по ребру верхней грани (вершины и середины подсвечиваются).'), true);
         return true;
       }
-      this.candidates = preferred && candidates[0].key === preferred ? [] : candidates.length > 1 ? candidates : [];
+      this.candidates = preferred && candidates[0].key === preferred && candidates.filter((c) => c.key === preferred).length === 1
+        ? [] : candidates.length > 1 ? candidates : [];
       this.useCandidate(candidates[0]);
       this.bends = [];
       this.state = 'cut';
@@ -102,8 +105,9 @@ export class SplitTool {
       if (!c) {
         const raw = this.planePoint(point);
         const q = raw ? this.axisPoint(raw) : undefined;
-        const ring = this.layer.focusPolygons(this.target)?.[0]?.outer;
-        if (q && ring && insideRing(q, ring) && Math.hypot(q[0] - (this.bends.at(-1) ?? this.start.p)[0], q[1] - (this.bends.at(-1) ?? this.start.p)[1]) > 0.05) {
+        const polygon = this.layer.focusPolygons(this.target)?.[this.start.poly];
+        if (q && polygon && insideRing(q, polygon.outer) && !polygon.inners.some((hole) => insideRing(q, hole))
+          && Math.hypot(q[0] - (this.bends.at(-1) ?? this.start.p)[0], q[1] - (this.bends.at(-1) ?? this.start.p)[1]) > 0.05) {
           this.bends.push(q);
           this.axis = this.locked = undefined;
           this.guide(q);
@@ -136,7 +140,7 @@ export class SplitTool {
     this.target = candidate.key;
     this.z = candidate.z;
     this.start = candidate.start;
-    const ring = this.layer.focusPolygons(candidate.key)![0].outer;
+    const ring = this.layer.focusPolygons(candidate.key)![candidate.start.poly].outer;
     const a = ring[candidate.start.edge], b = ring[(candidate.start.edge + 1) % ring.length];
     const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
     this.axes = { x: [(b[0] - a[0]) / l, (b[1] - a[1]) / l], y: [-(b[1] - a[1]) / l, (b[0] - a[0]) / l] };
@@ -149,10 +153,10 @@ export class SplitTool {
     const matches = this.candidates.filter((candidate) => {
       this.z = candidate.z;
       const q = this.planePoint(point);
-      const ring = this.layer.focusPolygons(candidate.key)?.[0]?.outer;
-      if (!q || !ring || Math.hypot(q[0] - candidate.start.p[0], q[1] - candidate.start.p[1]) <= 0.05) return false;
+      const polygon = this.layer.focusPolygons(candidate.key)?.[candidate.start.poly];
+      if (!q || !polygon || Math.hypot(q[0] - candidate.start.p[0], q[1] - candidate.start.p[1]) <= 0.05) return false;
       const mid: Pt = [(q[0] + candidate.start.p[0]) / 2, (q[1] + candidate.start.p[1]) / 2];
-      return insideRing(mid, ring);
+      return insideRing(mid, polygon.outer) && !polygon.inners.some((hole) => insideRing(mid, hole));
     });
     this.z = previousZ;
     return matches.length === 1 ? matches[0] : undefined;
@@ -200,9 +204,9 @@ export class SplitTool {
   }
 
   /** Точка разреза на ребре: привязка к вершине/середине или ближайшая точка ребра в пределах допуска. */
-  private cutPointAt(point: [number, number]): CutPoint | undefined {
-    const ring = this.target ? this.layer.focusPolygons(this.target)?.[0]?.outer : undefined;
-    if (!ring) return;
+  private cutPointAt(point: [number, number], onlyPoly?: number): CutPoint | undefined {
+    const polygons = this.target ? this.layer.focusPolygons(this.target) : undefined;
+    if (!polygons) return;
     // Перпендикуляр к ребру строится от последней точки текущего сегмента.
     const previous = this.bends.at(-1) ?? this.start?.p;
     const from = previous && new THREE.Vector3(previous[0], previous[1], this.z);
@@ -214,17 +218,20 @@ export class SplitTool {
     const dist = ray ? ray.origin.distanceTo(new THREE.Vector3(q[0], q[1], this.z)) : 50;
     const tol = onTop ? 0.05 : Math.max(0.3, dist * 0.015);
     let best: CutPoint & { d: number } | undefined;
-    for (let i = 0; i < ring.length; i++) {
-      const a = ring[i], b = ring[(i + 1) % ring.length];
-      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
-      if (!l2) continue;
-      const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2));
-      const p: Pt = [a[0] + t * dx, a[1] + t * dy];
-      const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
-      if (d < tol && (!best || d < best.d)) {
-        // У самой вершины — сама вершина (без нового узла)
-        const vertex = t * Math.sqrt(l2) < 0.05 ? i : (1 - t) * Math.sqrt(l2) < 0.05 ? (i + 1) % ring.length : undefined;
-        best = { edge: i, p: vertex === undefined ? p : ring[vertex], vertex, d };
+    for (let poly = 0; poly < polygons.length; poly++) {
+      if ((this.start && poly !== this.start.poly) || (onlyPoly !== undefined && poly !== onlyPoly)) continue;
+      const ring = polygons[poly].outer;
+      for (let i = 0; i < ring.length; i++) {
+        const a = ring[i], b = ring[(i + 1) % ring.length];
+        const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+        if (!l2) continue;
+        const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2));
+        const p: Pt = [a[0] + t * dx, a[1] + t * dy];
+        const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        if (d < tol && (!best || d < best.d)) {
+          const vertex = t * Math.sqrt(l2) < 0.05 ? i : (1 - t) * Math.sqrt(l2) < 0.05 ? (i + 1) % ring.length : undefined;
+          best = { poly, edge: i, p: vertex === undefined ? p : ring[vertex], vertex, d };
+        }
       }
     }
     if (!best) return;

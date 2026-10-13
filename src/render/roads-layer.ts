@@ -3,7 +3,7 @@ import { MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodI
 import type { LonLat } from '../osm/model';
 import { isBridge, isTunnel, roadLevel, type RoadWay } from '../osm/roads';
 import { timed } from '../perf';
-import { buildRoadMesh, type Obstacle, type RoadPart } from './road-geometry';
+import { buildRoadMesh, type Obstacle, type RoadMeshData, type RoadPart } from './road-geometry';
 
 const SOLID = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
 const GLASS = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.45, depthWrite: false });
@@ -11,6 +11,37 @@ const GLASS = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.Do
 const HIGHLIGHT = new THREE.Color('#97beff');
 const MONO = new THREE.Color('#ffffff');
 const GLASS_MONO = new THREE.Color('#bfe3e6');
+
+let worker: Worker | undefined;
+let nextJob = 1;
+const jobs = new Map<number, (data: RoadMeshData) => void>();
+
+/** Сборка в воркере (без воркера или при его ошибке — в главном потоке). ox, oy — начало, m — метр (Меркатор). */
+function buildAsync(ways: RoadWay[], obstacles: Obstacle[], ox: number, oy: number, m: number): Promise<RoadMeshData> {
+  const local = () => buildRoadMesh(ways, ([lng, lat]: LonLat): [number, number] => {
+    const c = MercatorCoordinate.fromLngLat({ lng, lat }, 0);
+    return [(c.x - ox) / m, -(c.y - oy) / m];
+  }, obstacles);
+  if (typeof Worker === 'undefined') return Promise.resolve(local());
+  if (!worker) {
+    worker = new Worker(new URL('./road-geometry-worker.ts', import.meta.url), { type: 'module' });
+    worker.onmessage = (e: MessageEvent<{ id: number; data: RoadMeshData }>) => {
+      jobs.get(e.data.id)?.(e.data.data);
+      jobs.delete(e.data.id);
+    };
+    worker.onerror = (e) => {
+      console.warn('дороги: ошибка воркера — сборка в главном потоке:', e.message);
+      worker?.terminate();
+      worker = undefined;
+      jobs.clear();
+    };
+  }
+  const id = nextJob++;
+  return new Promise((resolve) => {
+    jobs.set(id, resolve);
+    worker!.postMessage({ id, ways, obstacles, ox, oy, m });
+  });
+}
 
 /**
  * Custom layer MapLibre: мосты, тоннели и развязки из дорог загруженных тайлов (эксперимент).
@@ -35,6 +66,12 @@ export class RoadsLayer implements CustomLayerInterface {
   private signature = '';
   /** Сколько путей нарисовано. */
   drawnWays = 0;
+  /** Полосы поднятого полотна в координатах Меркатора: ax, ay, bx, by, полуширина — для вырубки деревьев. */
+  treeCuts: Float64Array = new Float64Array(0);
+  /** Вызывается, когда собрана новая сеть (например, чтобы вырубить деревья под мостами). */
+  onBuilt?: () => void;
+  /** Скрыт ли слой сейчас (например, в режиме здания карта убрана): не рисуется и не кликается. */
+  hidden: () => boolean = () => false;
   private enabled = false;
   private bridges = true;
   private tunnels = true;
@@ -63,7 +100,7 @@ export class RoadsLayer implements CustomLayerInterface {
   }
 
   render(_gl: WebGL2RenderingContext, options: CustomRenderMethodInput) {
-    if (!this.enabled || !this.renderer || !this.meshes.length) return;
+    if (!this.enabled || !this.renderer || !this.meshes.length || this.hidden()) return;
     const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
     this.camera.projectionMatrix = main.multiply(this.model);
     this.renderer.resetState();
@@ -134,23 +171,29 @@ export class RoadsLayer implements CustomLayerInterface {
     const signature = `${+this.bridges}${+this.tunnels}:${obstacles.length}:` + keys.join(',');
     const ways = [...byId.values()];
     if (signature === this.signature) return;
-    this.clear();
     this.signature = signature;
-    if (!ways.length) return;
+    if (!ways.length) { this.clearMeshes(); this.onBuilt?.(); return; }
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
     for (const r of ways) for (const [x, y] of r.coords) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
     const origin = MercatorCoordinate.fromLngLat({ lng: (w + e) / 2, lat: (s + n) / 2 }, 0);
     const m = origin.meterInMercatorCoordinateUnits();
+    const started = performance.now();
+    // Сборка — в воркере; старые мосты остаются на экране, пока не придут новые
+    void buildAsync(ways, obstacles, origin.x, origin.y, m).then((data) => {
+      if (this.signature !== signature || !this.enabled) return; // за это время набор путей сменился
+      timed('дороги: сборка (воркер)', () => this.install(ways, data, origin, m), () => `${data.ways} путей из ${ways.length}, ${Math.round(performance.now() - started)} мс всего`);
+    });
+  }
+
+  /** Поставить собранные меши (вместо прежних). */
+  private install(ways: RoadWay[], data: RoadMeshData, origin: MercatorCoordinate, m: number) {
+    this.clearMeshes();
     this.origin = origin;
     this.metre = m;
     // Локальная система в метрах: x — восток, y — север, z — вверх (как у групп BuildingsLayer)
     this.model = new THREE.Matrix4().makeTranslation(origin.x, origin.y, 0).scale(new THREE.Vector3(m, -m, m));
-    const toLocal = ([lng, lat]: LonLat): [number, number] => {
-      const c = MercatorCoordinate.fromLngLat({ lng, lat }, 0);
-      return [(c.x - origin.x) / m, -(c.y - origin.y) / m];
-    };
-    const data = timed('дороги: сборка', () => buildRoadMesh(ways, toLocal, obstacles), (d) => `${d.ways} путей из ${ways.length}`);
     this.drawnWays = data.ways;
+    this.treeCuts = Float64Array.from(data.cuts, (v, i) => (i % 5 === 0 || i % 5 === 2 ? origin.x + v * m : i % 5 === 1 || i % 5 === 3 ? origin.y - v * m : v * m));
     this.ways = ways;
     this.parts = [data.solid, data.glass];
     for (const [part, material, order] of [[data.solid, SOLID, 0], [data.glass, GLASS, 1]] as const) {
@@ -168,11 +211,12 @@ export class RoadsLayer implements CustomLayerInterface {
       this.scene.add(mesh);
     }
     this.paint();
+    this.onBuilt?.();
   }
 
   /** Путь под курсором (ближайший треугольник) и глубина попадания в clip space — для сравнения со зданиями. */
   pick(px: number, py: number): { way: RoadWay; depth: number } | undefined {
-    if (!this.enabled || !this.map || !this.parts.length) return;
+    if (!this.enabled || !this.map || !this.parts.length || this.hidden()) return;
     const canvas = this.map.getCanvas();
     const x = (px / canvas.clientWidth) * 2 - 1;
     const y = 1 - (py / canvas.clientHeight) * 2;
@@ -204,11 +248,16 @@ export class RoadsLayer implements CustomLayerInterface {
   }
 
   clear() {
+    this.clearMeshes();
+    this.signature = '';
+  }
+
+  private clearMeshes() {
     for (const mesh of this.meshes) { mesh.geometry.dispose(); this.scene.remove(mesh); }
     this.meshes = [];
     this.parts = [];
     this.ways = [];
-    this.signature = '';
     this.drawnWays = 0;
+    this.treeCuts = new Float64Array(0);
   }
 }

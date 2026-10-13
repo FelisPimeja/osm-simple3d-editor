@@ -33,6 +33,11 @@ const DECK_M = 1.2;
 const PARAPET_M = 1.0;
 const PIER_STEP_M = 30;
 const PIER_THICK_M = 1.2;
+/** Шаг опор подбирается в этих пределах (одинаковый в пределах моста), м. */
+const PIER_STEP_MIN_M = 18;
+const PIER_STEP_MAX_M = 45;
+/** Опору, всё же вставшую на путь внизу, можно подвинуть на столько, м. */
+const PIER_NUDGE_M = 3;
 const TUNNEL_CLEARANCE_M = 5;
 const RAIL_CLEARANCE_M = 6.5;
 const ROAD_CLEARANCE_M = 5;
@@ -111,10 +116,13 @@ export function bridgeHeights(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
         if (j === i || level[j] >= l || (out[j] ?? 0) < 0 || !crosses(i, j)) continue;
         h = Math.max(h ?? 0, (out[j] ?? 0) + clearance(ways[j].tags) + DECK_M);
       }
+      // layer > 0 без bridge и без путей под ним — только порядок слоёв (проезд над подземным гаражом и т. п.):
+      // остаётся на земле, если не входит в цепочку настоящего моста
+      if (h === undefined && !isBridge(ways[i].tags)) continue;
       out[i] = h ?? (l === 0 ? LOW_BRIDGE_M : l * LEVEL_STEP_M);
       top.set(find(i), Math.max(top.get(find(i)) ?? 0, out[i]!));
     }
-    for (const i of same) if (raised(i)) out[i] = top.get(find(i));
+    for (const i of same) if (raised(i) && top.has(find(i))) out[i] = top.get(find(i));
   }
   return { heights: out, group: ways.map((_, i) => find(i)) };
 }
@@ -132,6 +140,10 @@ const RAMP_JOIN_DH_M = 1;
 const OBSTACLE_CLEARANCE_M = 1;
 /** Здания выше этого мост не перелетает (идёт рядом), м. */
 const OBSTACLE_MAX_TOP_M = 40;
+/** Полотно выше этого над землёй вырубает деревья под собой, м. */
+const TREE_CUT_MIN_M = 1;
+/** Откос насыпи железной дороги: заложение на метр высоты (1 : 1,5). */
+const SLOPE_RUN = 1.5;
 /** Сглаживание ширины вдоль линий (переход ~ √N × 8 м). */
 const WIDTH_SMOOTH_ITERATIONS = 20;
 /** Заполнение провалов полотна между пересечениями (проходы подъёма к среднему соседей). */
@@ -166,6 +178,17 @@ export function sideBySide(p: [number, number][], q: [number, number][], tol: nu
   return total;
 }
 
+/** Расстояние между отрезками pq и rs. */
+function segmentDistance(p: [number, number], q: [number, number], r: [number, number], t: [number, number]): number {
+  if (segmentsCross(p, q, r, t)) return 0;
+  const toSeg = ([x, y]: [number, number], [ax, ay]: [number, number], [bx, by]: [number, number]) => {
+    const ex = bx - ax, ey = by - ay, l2 = ex * ex + ey * ey || 1e-12;
+    const u = Math.max(0, Math.min(1, ((x - ax) * ex + (y - ay) * ey) / l2));
+    return Math.hypot(ax + ex * u - x, ay + ey * u - y);
+  };
+  return Math.min(toSeg(p, r, t), toSeg(q, r, t), toSeg(r, p, q), toSeg(t, p, q));
+}
+
 function segmentsCross([ax, ay]: [number, number], [bx, by]: [number, number], [cx, cy]: [number, number], [dx, dy]: [number, number]): boolean {
   const d1 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx);
   const d2 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx);
@@ -181,6 +204,8 @@ export interface RoadMeshData {
   glass: RoadPart;
   /** Сколько путей нарисовано. */
   ways: number;
+  /** Полосы поднятого полотна для вырубки деревьев: по 5 чисел — ax, ay, bx, by (локальные м), полуширина. */
+  cuts: number[];
 }
 
 export interface RoadPart { positions: Float32Array; colors: Float32Array; ways: Int32Array }
@@ -190,6 +215,9 @@ const hex = (h: number): Rgb => [(h >> 16 & 255) / 255, (h >> 8 & 255) / 255, (h
 const ASPHALT = hex(0x6f7378);
 /** Балласт рельсового пути. */
 const BALLAST = hex(0x8c8378);
+/** Рельсы. */
+const RAIL = hex(0x4a4642);
+const RAIL_H_M = 0.15;
 const PATH_TOP = hex(0xb9a98f);
 const CONCRETE = hex(0xcfcac0);
 const PARAPET = hex(0xe4e0d8);
@@ -302,7 +330,8 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
       }
     });
     edges.forEach((e, ei) => {
-      if (!raised(e.way)) return;
+      // Только настоящие мосты: у проезда во дворе layer=1 без bridge — обычно над подземным гаражом, а не над домом
+      if (!raised(e.way) || !isBridge(ways[e.way].tags)) return;
       const p: [number, number] = [xs[e.a], ys[e.a]], q: [number, number] = [xs[e.b], ys[e.b]];
       const seen = new Set<number>();
       for (const k of cells(ei)) for (const oi of ogrid.get(k) ?? []) {
@@ -594,11 +623,42 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
     }
   });
 
+  /** Полотно с настилом (мост): под ним пусто. */
+  const isDeck = (ei: number) => isBridge(ways[edges[ei].way].tags) || (wayHeight[edges[ei].way] ?? 0) > 0;
+  /**
+   * Свободное место сбоку от края полотна (точка, направление наружу) до края ближайшего другого пути, м. Пути
+   * над откосом (мост выше top) не мешают.
+   */
+  const freeSide = (x: number, y: number, nx: number, ny: number, wi: number, top = Infinity) => {
+    const reach = 25;
+    let best = reach;
+    const gx0 = Math.floor((x - reach) / CELL), gx1 = Math.floor((x + reach) / CELL);
+    const gy0 = Math.floor((y - reach) / CELL), gy1 = Math.floor((y + reach) / CELL);
+    const seen = new Set<number>();
+    for (let gx = gx0; gx <= gx1; gx++) for (let gy = gy0; gy <= gy1; gy++) for (const fj of grid.get(`${gx},${gy}`) ?? []) {
+      if (seen.has(fj)) continue;
+      seen.add(fj);
+      const f = edges[fj];
+      if (f.way === wi || Math.min(height[f.a], height[f.b]) > top + 1) continue;
+      // Пересечение луча наружу с осью f; свободно до края f (полуширина) с запасом 0,5 м
+      const ex = xs[f.b] - xs[f.a], ey = ys[f.b] - ys[f.a], den = nx * ey - ny * ex;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = ((xs[f.a] - x) * ey - (ys[f.a] - y) * ex) / den, u = ((xs[f.a] - x) * ny - (ys[f.a] - y) * nx) / den;
+      if (t <= 0 || t > reach || u < 0 || u > 1) continue;
+      const along = t - edgeWidth(fj) / 2 - 0.5;
+      best = Math.min(best, Math.max(0, along));
+    }
+    return best;
+  };
+
   const usedWays = new Set<number>();
+  const cuts: number[] = [];
   edges.forEach((e, ei) => {
     if (!drawn[ei]) return;
     usedWays.add(e.way);
     cur = e.way;
+    // Полотно над землёй (мост, насыпь) — деревья под ним и сквозь него не растут
+    if (Math.min(height[e.a], height[e.b]) > TREE_CUT_MIN_M) cuts.push(xs[e.a], ys[e.a], xs[e.b], ys[e.b], edgeWidth(ei) / 2);
     const tags = ways[e.way].tags;
     const [lax, lay] = leftAt(ei, e.a), [lbx, lby] = leftAt(ei, e.b);
     const ax = xs[e.a], ay = ys[e.a], bx = xs[e.b], by = ys[e.b];
@@ -620,10 +680,25 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
       return;
     }
     quad(solid, solidC, top, at(La, ha), at(Ra, ha), at(Rb, hb), at(Lb, hb));
+    if (isRailTags(tags)) {
+      // Два рельса по оси пути: колея 1520 мм (узкоколейка — 750), рельс 0,1 × 0,15 м
+      const l = len(e) || 1, nx = -(by - ay) / l, ny = (bx - ax) / l;
+      const g = tags.railway === 'narrow_gauge' ? 0.375 : 0.76;
+      for (const off of [g, -g]) {
+        const box = (d: number) => [[ax + nx * (off + d), ay + ny * (off + d)], [bx + nx * (off + d), by + ny * (off + d)]];
+        const [a1, b1] = box(0.05), [a2, b2] = box(-0.05);
+        quad(solid, solidC, RAIL, at(a1, ha + RAIL_H_M), at(b1, hb + RAIL_H_M), at(b2, hb + RAIL_H_M), at(a2, ha + RAIL_H_M));
+        quad(solid, solidC, RAIL, at(a1, ha), at(b1, hb), at(b1, hb + RAIL_H_M), at(a1, ha + RAIL_H_M));
+        quad(solid, solidC, RAIL, at(a2, ha), at(b2, hb), at(b2, hb + RAIL_H_M), at(a2, ha + RAIL_H_M));
+      }
+    }
     if (isBridge(tags) || (wayHeight[e.way] ?? 0) > 0) {
       // Настил: низ и боковины, парапеты по краям
       const da = ha - DECK_M, db = hb - DECK_M;
       quad(solid, solidC, CONCRETE, at(La, da), at(Ra, da), at(Rb, db), at(Lb, db));
+      // Торец настила, где полотно обрывается
+      if (drawnAdj[e.a].length === 1) quad(solid, solidC, CONCRETE, at(La, ha), at(Ra, ha), at(Ra, da), at(La, da));
+      if (drawnAdj[e.b].length === 1) quad(solid, solidC, CONCRETE, at(Lb, hb), at(Rb, hb), at(Rb, db), at(Lb, db));
       // Сторона, обращённая к соседу по общему полотну, — без боковины и парапета
       if (!onTop[0][ei] && !joined[0][ei]) quad(solid, solidC, CONCRETE, at(La, ha), at(Lb, hb), at(Lb, db), at(La, da));
       if (!onTop[1][ei] && !joined[1][ei]) quad(solid, solidC, CONCRETE, at(Ra, ha), at(Rb, hb), at(Rb, db), at(Ra, da));
@@ -632,31 +707,83 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
         if (!onTop[1][ei] && !joined[1][ei]) quad(solid, solidC, PARAPET, at(Ra, ha), at(Rb, hb), at(Rb, hb + PARAPET_M), at(Ra, ha + PARAPET_M));
       }
     } else {
-      // Подход на насыпи: подпорные стенки до земли
-      if (!onTop[0][ei] && !joined[0][ei]) quad(solid, solidC, EMBANKMENT, at(La, ha), at(Lb, hb), at(Lb, 0), at(La, 0));
-      if (!onTop[1][ei] && !joined[1][ei]) quad(solid, solidC, EMBANKMENT, at(Ra, ha), at(Rb, hb), at(Rb, 0), at(Ra, 0));
+      // Подход на насыпи: подпорные стенки до земли; у железной дороги — откосы 1 : 1,5, насколько позволяет место
+      // до соседних путей (остаток высоты — стенка у подножия)
+      const rail = isRailTags(tags);
+      // Торец насыпи там, где она переходит в мост (под настилом пусто) или лента обрывается над землёй: у дороги —
+      // стенка, у железной дороги — откос вперёд по ходу пути (под мост) с клиньями к боковым откосам
+      for (const [v, L, R, h, out] of [[e.a, La, Ra, ha, -1], [e.b, Lb, Rb, hb, 1]] as const) {
+        if (h <= GROUND_EPS) continue;
+        if (drawnAdj[v].length !== 1 && !drawnAdj[v].some((ej) => ej !== ei && isDeck(ej))) continue;
+        if (!rail) { quad(solid, solidC, EMBANKMENT, at(L, h), at(R, h), at(R, 0), at(L, 0)); continue; }
+        const l = len(e) || 1, dx = (bx - ax) / l * out, dy = (by - ay) / l * out;
+        const w = Math.min(h * SLOPE_RUN, freeSide(xs[v], ys[v], dx, dy, e.way, h));
+        const z = Math.max(0, h - w / SLOPE_RUN);
+        const Lf = [L[0] + dx * w, L[1] + dy * w], Rf = [R[0] + dx * w, R[1] + dy * w];
+        quad(solid, solidC, EMBANKMENT, at(L, h), at(R, h), at(Rf, z), at(Lf, z));
+        if (z > 0.05) quad(solid, solidC, EMBANKMENT, at(Lf, z), at(Rf, z), at(Rf, 0), at(Lf, 0));
+        // Клинья на углах: между торцевым и боковым откосом
+        const nx = -dy * out, ny = dx * out; // левая нормаль по ходу a→b
+        for (const [P, sgn] of [[L, 1], [R, -1]] as const) {
+          const sx = nx * sgn, sy = ny * sgn;
+          const ws = Math.min(h * SLOPE_RUN, freeSide(P[0], P[1], sx, sy, e.way, h));
+          const side = [P[0] + sx * ws, P[1] + sy * ws], zs = Math.max(0, h - ws / SLOPE_RUN);
+          const end = P === L ? Lf : Rf;
+          tri(solid, solidC, EMBANKMENT, P[0], P[1], h, side[0], side[1], zs, end[0], end[1], z);
+        }
+      }
+      for (const [k, A, B, sign] of [[0, La, Lb, 1], [1, Ra, Rb, -1]] as const) {
+        if (onTop[k][ei] || joined[k][ei]) continue;
+        if (!rail) { quad(solid, solidC, EMBANKMENT, at(A, ha), at(B, hb), at(B, 0), at(A, 0)); continue; }
+        const l = len(e) || 1, nx = -(by - ay) / l * sign, ny = (bx - ax) / l * sign;
+        const foot = (p: number[], h: number) => {
+          const w = Math.min(h * SLOPE_RUN, freeSide(p[0], p[1], nx, ny, e.way, h));
+          return { p: [p[0] + nx * w, p[1] + ny * w], z: Math.max(0, h - w / SLOPE_RUN) };
+        };
+        const fa = foot(A, ha), fb = foot(B, hb);
+        quad(solid, solidC, EMBANKMENT, at(A, ha), at(B, hb), at(fb.p, fb.z), at(fa.p, fa.z));
+        if (fa.z > 0.05 || fb.z > 0.05) quad(solid, solidC, EMBANKMENT, at(fa.p, fa.z), at(fb.p, fb.z), at(fb.p, 0), at(fa.p, 0));
+      }
     }
   });
 
-  // Настил в зазоре между лентами общего полотна: от края e (со стороны соседа) до края f, по проекциям концов e
+  // Настил в зазоре между лентами общего полотна: от края e (со стороны соседа) до края соседнего пути. Точка на
+  // соседе — одна на вершину e и по всему соседнему пути (ближайшая точка его оси), иначе у соседних отрезков края
+  // заплатки не совпадают и остаются щели
+  const edgesOf = new Map<number, number[]>();
+  edges.forEach((e, ei) => { const l = edgesOf.get(e.way); if (l) l.push(ei); else edgesOf.set(e.way, [ei]); });
+  const edgeCache = new Map<string, [number, number, number]>();
+  /** Край пути fw, обращённый к вершине v: точка и высота. */
+  const facing = (v: number, fw: number): [number, number, number] => {
+    const key = `${v}:${fw}`;
+    const hit = edgeCache.get(key);
+    if (hit) return hit;
+    const x = xs[v], y = ys[v];
+    let best: { d: number; px: number; py: number; h: number; fj: number } | undefined;
+    for (const fj of edgesOf.get(fw) ?? []) {
+      const f = edges[fj], ex = xs[f.b] - xs[f.a], ey = ys[f.b] - ys[f.a], l2 = ex * ex + ey * ey || 1e-12;
+      const u = Math.max(0, Math.min(1, ((x - xs[f.a]) * ex + (y - ys[f.a]) * ey) / l2));
+      const px = xs[f.a] + ex * u, py = ys[f.a] + ey * u, d = Math.hypot(px - x, py - y);
+      if (!best || d < best.d) best = { d, px, py, h: height[f.a] + (height[f.b] - height[f.a]) * u, fj };
+    }
+    if (!best) return [x, y, height[v]];
+    // От оси соседа назад к вершине — на его полуширину
+    const k = best.d ? edgeWidth(best.fj) / 2 / best.d : 0;
+    const out: [number, number, number] = [best.px + (x - best.px) * k, best.py + (y - best.py) * k, best.h];
+    edgeCache.set(key, out);
+    return out;
+  };
   for (const { ei, fj, s: sOff } of fillers) {
     const e = edges[ei], f = edges[fj];
     cur = e.way;
     const sign = sOff > 0 ? 1 : -1;
     const [lax, lay] = leftAt(ei, e.a), [lbx, lby] = leftAt(ei, e.b);
-    const lf = len(f) || 1, vx = (xs[f.b] - xs[f.a]) / lf, vy = (ys[f.b] - ys[f.a]) / lf;
-    const l = len(e) || 1, nx = -(ys[e.b] - ys[e.a]) / l, ny = (xs[e.b] - xs[e.a]) / l;
-    const halfF = edgeWidth(fj) / 2;
-    const onF = (x: number, y: number): [number, number, number] => {
-      const t = Math.max(0, Math.min(lf, (x - xs[f.a]) * vx + (y - ys[f.a]) * vy));
-      const h = height[f.a] + (height[f.b] - height[f.a]) * (t / lf);
-      // Край f, обращённый к e: от оси f назад к e
-      return [xs[f.a] + vx * t - nx * sign * halfF, ys[f.a] + vy * t - ny * sign * halfF, h];
-    };
     const pa = [xs[e.a] + sign * lax, ys[e.a] + sign * lay, height[e.a]];
     const pb = [xs[e.b] + sign * lbx, ys[e.b] + sign * lby, height[e.b]];
-    const qa = onF(xs[e.a], ys[e.a]), qb = onF(xs[e.b], ys[e.b]);
-    const top = PATHS.has(ways[e.way].tags.highway) && PATHS.has(ways[f.way].tags.highway) ? PATH_TOP : ASPHALT;
+    const qa = facing(e.a, f.way), qb = facing(e.b, f.way);
+    const te = ways[e.way].tags, tf = ways[f.way].tags;
+    // Между путями — балласт, между тротуарами — их покрытие, иначе асфальт
+    const top = isRailTags(te) && isRailTags(tf) ? BALLAST : PATHS.has(te.highway) && PATHS.has(tf.highway) ? PATH_TOP : ASPHALT;
     quad(solid, solidC, top, pa, pb, qb, qa);
     // Между подходами — насыпь до земли, под ней не видно; между мостами — низ настила
     if ((wayHeight[e.way] ?? 0) > 0) quad(solid, solidC, CONCRETE, [pa[0], pa[1], pa[2] - DECK_M], [qa[0], qa[1], qa[2] - DECK_M], [qb[0], qb[1], qb[2] - DECK_M], [pb[0], pb[1], pb[2] - DECK_M]);
@@ -697,27 +824,98 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
     }
   });
 
-  // --- Опоры мостов: через PIER_STEP_M вдоль каждого моста, от земли до низа настила
-  const walked = new Map<number, number>(); // путь → пройдено от последней опоры
+  // --- Опоры мостов: равный шаг вдоль каждого моста, подобранный под пути внизу (см. ниже), — опоры не встают
+  // на проезжую часть и рельсы, где это возможно
+  const pierWays = new Map<number, number[]>();
   edges.forEach((e, ei) => {
     if (!drawn[ei]) return;
     const tags = ways[e.way].tags;
     if (!isBridge(tags) && !((wayHeight[e.way] ?? 0) > 0)) return;
     // Тротуар на общем полотне с проезжей частью держится на её опорах
     if (PATHS.has(tags.highway) && [0, 1].some((k) => neighbour[k][ei] >= 0 && !PATHS.has(ways[edges[neighbour[k][ei]].way].tags.highway))) return;
-    const d = (walked.get(e.way) ?? PIER_STEP_M / 2) + len(e);
-    if (d < PIER_STEP_M) { walked.set(e.way, d); return; }
-    walked.set(e.way, 0);
-    cur = e.way;
-    const z = height[e.b] - DECK_M;
-    if (z < 0.5) return;
-    const l = len(e) || 1;
-    pierBox(xs[e.b], ys[e.b], (xs[e.b] - xs[e.a]) / l, (ys[e.b] - ys[e.a]) / l, PIER_THICK_M, widths[e.way] * 0.6, z);
+    const l = pierWays.get(e.way); if (l) l.push(ei); else pierWays.set(e.way, [ei]);
   });
+  /** Запас от опоры до края пути внизу: < 0 — задевает. Рельсы — по ширине шпал. */
+  const pierClearance = (cx: number, cy: number, nx: number, ny: number, half: number, top: number, wi: number) => {
+    // Опора — отрезок поперёк моста (центр ± half по нормали), толщина PIER_THICK_M
+    const p: [number, number] = [cx + nx * half, cy + ny * half], q: [number, number] = [cx - nx * half, cy - ny * half];
+    let best = Infinity;
+    const gx0 = Math.floor((Math.min(p[0], q[0]) - 15) / CELL), gx1 = Math.floor((Math.max(p[0], q[0]) + 15) / CELL);
+    const gy0 = Math.floor((Math.min(p[1], q[1]) - 15) / CELL), gy1 = Math.floor((Math.max(p[1], q[1]) + 15) / CELL);
+    const seen = new Set<number>();
+    for (let gx = gx0; gx <= gx1; gx++) for (let gy = gy0; gy <= gy1; gy++) for (const fj of grid.get(`${gx},${gy}`) ?? []) {
+      if (seen.has(fj)) continue;
+      seen.add(fj);
+      const f = edges[fj];
+      if (group[f.way] === group[wi] || Math.max(height[f.a], height[f.b]) > top - 2) continue;
+      const tags = ways[f.way].tags;
+      const halfF = isRailTags(tags) ? 1.6 : widths[f.way] / 2;
+      const d = segmentDistance(p, q, [xs[f.a], ys[f.a]], [xs[f.b], ys[f.b]]) - halfF - PIER_THICK_M / 2 - 0.5;
+      best = Math.min(best, d);
+    }
+    return best;
+  };
+  for (const [wi, list] of pierWays) {
+    // Длина вдоль пути до начала каждого отрезка
+    const starts: number[] = [];
+    let total = 0;
+    for (const ei of list) { starts.push(total); total += len(edges[ei]); }
+    const at = (sAlong: number) => {
+      let k = 0;
+      while (k < list.length - 1 && starts[k + 1] <= sAlong) k++;
+      const e = edges[list[k]], l = len(e) || 1, t = Math.max(0, Math.min(1, (sAlong - starts[k]) / l));
+      return { ei: list[k], x: xs[e.a] + (xs[e.b] - xs[e.a]) * t, y: ys[e.a] + (ys[e.b] - ys[e.a]) * t, h: height[e.a] + (height[e.b] - height[e.a]) * t, dx: (xs[e.b] - xs[e.a]) / l, dy: (ys[e.b] - ys[e.a]) / l };
+    };
+    cur = wi;
+    // Запас до путей внизу в каждом метре вдоль моста (NaN — полотно слишком низко, опора не нужна)
+    const n1 = Math.floor(total) + 1;
+    const clr = new Float64Array(n1);
+    for (let i = 0; i < n1; i++) {
+      const c = at(i);
+      clr[i] = c.h - DECK_M < 0.5 ? NaN : pierClearance(c.x, c.y, -c.dy, c.dx, widths[wi] * 0.3, c.h - DECK_M, wi);
+    }
+    // Шаг (одинаковый в пределах моста) и сдвиг первой опоры — с наименьшим числом опор на путях внизу; при
+    // равенстве — шаг ближе к PIER_STEP_M, затем больший наименьший запас
+    let best: { step: number; phase: number; bad: number; dev: number; min: number } | undefined;
+    for (let step = PIER_STEP_MIN_M; step <= PIER_STEP_MAX_M; step++) {
+      for (let phase = 0; phase < step; phase++) {
+        let bad = 0, min = Infinity;
+        for (let i = phase; i < n1; i += step) {
+          if (Number.isNaN(clr[i])) continue;
+          if (clr[i] < 0) bad++;
+          min = Math.min(min, clr[i]);
+        }
+        const dev = Math.abs(step - PIER_STEP_M);
+        if (!best || bad < best.bad || (bad === best.bad && (dev < best.dev || (dev === best.dev && min > best.min)))) best = { step, phase, bad, dev, min };
+      }
+    }
+    if (!best) continue;
+    for (let i = best.phase; i < n1; i += best.step) {
+      if (Number.isNaN(clr[i])) continue;
+      // Опора на пути внизу — подвинуть на пару метров, если рядом свободнее
+      let j = i;
+      for (let d = 1; d <= PIER_NUDGE_M && clr[j] < 0; d++) for (const k of [i - d, i + d]) if (k >= 0 && k < n1 && !Number.isNaN(clr[k]) && clr[k] > clr[j]) j = k;
+      const c = at(j);
+      if (clr[j] >= 0) { pierBox(c.x, c.y, c.dx, c.dy, PIER_THICK_M, widths[wi] * 0.6, c.h - DECK_M); continue; }
+      // Всё же на пути внизу (обычно путь идёт вдоль моста под ним) — опора делится на куски по сторонам от пути
+      const half = widths[wi] * 0.3, nx = -c.dy, ny = c.dx, STEP = 0.5;
+      let run: number | undefined;
+      for (let u = -half; u <= half + STEP / 2; u += STEP) {
+        const free = u <= half && pierClearance(c.x + nx * u, c.y + ny * u, nx, ny, 0, c.h - DECK_M, wi) >= 0;
+        if (free) { run ??= u; continue; }
+        if (run !== undefined && u - STEP - run >= 1) {
+          const m = (run + u - STEP) / 2;
+          pierBox(c.x + nx * m, c.y + ny * m, c.dx, c.dy, PIER_THICK_M, u - STEP - run, c.h - DECK_M);
+        }
+        run = undefined;
+      }
+    }
+  }
 
   return {
     solid: { positions: new Float32Array(solid), colors: new Float32Array(solidC), ways: new Int32Array(solidW) },
     glass: { positions: new Float32Array(glass), colors: new Float32Array(glassC), ways: new Int32Array(glassW) },
     ways: usedWays.size,
+    cuts,
   };
 }

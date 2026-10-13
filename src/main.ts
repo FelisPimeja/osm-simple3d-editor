@@ -398,6 +398,9 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
   tileBorders.setTiles(overpass.tiles());
   scheduleRoads();
 }, (f) => (session.isDeleted(f.key) ? { ...f, polygons: [] } : (session.get(f.key) as Feature3D | undefined) ?? f));
+roadsLayer.onBuilt = () => overpass.setTreeCuts(roadsLayer.treeCuts);
+// В режиме здания карта вокруг убрана — мосты и тоннели тоже
+roadsLayer.hidden = () => focusScene();
 overpass.setExtras(() => session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length) as Feature3D[]);
 let selectedKey: string | undefined;
 /** Все выделенные объекты (Shift+клик добавляет); selectedKey — последний из них. */
@@ -558,6 +561,7 @@ function applyGraphics() {
   scheduleRoads();
   if (roadsLayer.isEnabled !== roadsOn) {
     roadsLayer.setEnabled(roadsOn);
+    if (!roadsOn) overpass.setTreeCuts(new Float64Array(0));
     overpass.roadsWanted = roadsOn;
     // Тайлы из кеша без дорог перезапросятся в фоне
     if (mapLoaded) refreshOverpass();

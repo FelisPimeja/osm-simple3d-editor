@@ -11,6 +11,7 @@ import { timed } from '../perf';
 import { josmLayer } from '../osm/josm';
 import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type WoodArea } from '../osm/trees';
 import { scatterTreesAsync, TreeGroup } from '../render/trees';
+import { TREE_STRIDE, TreeField } from '../render/tree-scatter';
 import { parseRoads, type RoadWay } from '../osm/roads';
 
 export const OVERPASS_TILE_ZOOM = GRID_ZOOM;
@@ -687,7 +688,7 @@ export class OverpassTiles {
     const own = e.trees ?? NO_TREES;
     const bbox = tileBbox(key);
     const woods = this.woodsIn(bbox);
-    const signature = `${e.fetchedAt}:${own.points.length}:${own.rows.length}:${e.features.length}|${woods.map((w) => w.key).sort().join(',')}`;
+    const signature = `${e.fetchedAt}:${own.points.length}:${own.rows.length}:${e.features.length}:${this.treeCutsVersion}|${woods.map((w) => w.key).sort().join(',')}`;
     if (this.layer.treeSignature(key) === signature || this.treesPending.get(key) === signature) return;
     if (!own.points.length && !own.rows.length && !woods.length) { this.treesPending.delete(key); this.layer.setTrees(key, undefined); return; }
     const buildings = e.features.flatMap((f) => f.polygons.map((p) => p.outer));
@@ -697,12 +698,53 @@ export class OverpassTiles {
       if (this.treesPending.get(key) !== signature) return; // за это время тайл пересобрали заново или убрали
       this.treesPending.delete(key);
       if (!this.wanted.includes(key)) return;
-      this.layer.setTrees(key, timed('деревья: инстансы', () => new TreeGroup(bbox, trees, signature), (g) => `${key}, ${g.count}`));
+      const kept = this.cutTrees(trees, bbox);
+      this.layer.setTrees(key, timed('деревья: инстансы', () => new TreeGroup(bbox, kept, signature), (g) => `${key}, ${g.count}`));
     });
   }
 
   /** Деревья, которые сейчас считает воркер: тайл → подпись. */
   private readonly treesPending = new Map<string, string>();
+  /** Полосы поднятого полотна мостов (Меркатор: ax, ay, bx, by, полуширина): деревья под ними не растут. */
+  private treeCuts: Float64Array = new Float64Array(0);
+  private treeCutsVersion = 0;
+
+  setTreeCuts(cuts: Float64Array) {
+    if (cuts === this.treeCuts || (!cuts.length && !this.treeCuts.length)) return;
+    this.treeCuts = cuts;
+    this.treeCutsVersion++;
+    for (const k of this.wanted) this.showTrees(k);
+  }
+
+  /** Без деревьев, чья крона задевает поднятое полотно (массив TREE_STRIDE на дерево, как из scatter). */
+  private cutTrees(trees: Float64Array, [w, s, e, n]: Bbox): Float64Array {
+    const c = this.treeCuts;
+    if (!c.length) return trees;
+    const mx0 = (w + 180) / 360, mx1 = (e + 180) / 360;
+    const my = (lat: number) => (180 - (180 / Math.PI) * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360))) / 360;
+    const my0 = my(n), my1 = my(s);
+    // Метр в Меркаторе на широте тайла; крона в метрах
+    const meter = 1 / 40075016.686 / Math.cos(((s + n) / 2) * Math.PI / 180);
+    const segs: number[] = [];
+    for (let i = 0; i < c.length; i += 5) {
+      const pad = c[i + 4] + 20 * meter;
+      if (Math.max(c[i], c[i + 2]) + pad < mx0 || Math.min(c[i], c[i + 2]) - pad > mx1) continue;
+      if (Math.max(c[i + 1], c[i + 3]) + pad < my0 || Math.min(c[i + 1], c[i + 3]) - pad > my1) continue;
+      segs.push(i);
+    }
+    if (!segs.length) return trees;
+    const keep: number[] = [];
+    for (let t = 0; t < trees.length; t += TREE_STRIDE) {
+      const x = trees[t + TreeField.MX], y = trees[t + TreeField.MY], r = trees[t + TreeField.CROWN] * meter;
+      const hit = segs.some((i) => {
+        const ax = c[i], ay = c[i + 1], ex = c[i + 2] - ax, ey = c[i + 3] - ay, l2 = ex * ex + ey * ey || 1e-30;
+        const u = Math.max(0, Math.min(1, ((x - ax) * ex + (y - ay) * ey) / l2));
+        return Math.hypot(ax + ex * u - x, ay + ey * u - y) < c[i + 4] + r;
+      });
+      if (!hit) for (let k = 0; k < TREE_STRIDE; k++) keep.push(trees[t + k]);
+    }
+    return keep.length === trees.length ? trees : Float64Array.from(keep);
+  }
 
   /**
    * Здания, принадлежащие тайлу: Overpass отдаёт всё, что задевает bbox, поэтому здание на границе приходит

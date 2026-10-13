@@ -165,7 +165,7 @@ const ISSUE_XRAY_WIDTH_PX = 1.5;
  * (глубина больше записанной). Линии чуть подвинуты к камере — видимые рёбра не мерцают пунктиром.
  */
 const HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
-  color: 0xd2401e, dashSize: 0.6, gapSize: 0.4, transparent: true, opacity: 0.9,
+  color: 0xd2401e, dashSize: 0.25, gapSize: 0.15, transparent: true, opacity: 0.9,
   depthFunc: THREE.GreaterDepth, depthWrite: false,
 });
 HIDDEN_EDGE_MATERIAL.onBeforeCompile = (sh) => {
@@ -1666,7 +1666,7 @@ export class BuildingsLayer implements CustomLayerInterface {
    * (цветом оси, если движение по оси). undefined — убрать.
    */
   /** Значок осей в точке захвата и пунктир к курсору; axes — свои оси вместо осей здания (например, по ребру). */
-  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2; axes?: { x: Pt; y: Pt } } | undefined) {
+  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; path?: THREE.Vector3[]; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2; axes?: { x: Pt; y: Pt }; dashSize?: number; gapSize?: number } | undefined) {
     const g = this.groups.get(FOCUS_GROUP);
     if (this.moveGuide) {
       this.moveGuide.parent?.remove(this.moveGuide);
@@ -1681,8 +1681,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       root.add(gizmo);
       if (guide.to) {
         const line = new THREE.Line(
-          new THREE.BufferGeometry().setFromPoints([guide.from, guide.to]),
-          new THREE.LineDashedMaterial({ color: guide.axis === undefined ? 0x333333 : AXIS_COLOURS[guide.axis], dashSize: 0.5, gapSize: 0.3,
+          new THREE.BufferGeometry().setFromPoints([guide.from, ...(guide.path ?? []), guide.to]),
+          new THREE.LineDashedMaterial({ color: guide.axis === undefined ? 0x333333 : AXIS_COLOURS[guide.axis], dashSize: guide.dashSize ?? 0.5, gapSize: guide.gapSize ?? 0.3,
             depthTest: false, depthWrite: false, transparent: true }),
         );
         line.computeLineDistances();

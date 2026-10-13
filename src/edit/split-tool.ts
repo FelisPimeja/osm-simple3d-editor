@@ -4,24 +4,24 @@ import { tr } from '../i18n';
 
 type Pt = [number, number];
 
-/** Направление разреза ближе этого угла к оси (вдоль начального ребра или перпендикулярно) — точно по оси, градусы. */
-const AXIS_LOCK_DEG = 3;
-
 /** Точка разреза на контуре: сторона (i → i+1), положение на ней и, если попали в вершину, её номер. */
 export interface CutPoint { edge: number; p: Pt; vertex?: number }
+type Candidate = { key: string; z: number; start: CutPoint };
 
 /**
- * Инструмент «Рассечь»: прямой разрез верхней грани от ребра к ребру делит контур на два.
+ * Инструмент «Рассечь»: ломаная от ребра к ребру делит верхнюю грань на две.
  * 1. клик по ребру верхней грани (вершины и середины — с привязкой) — начало разреза;
- * 2. второй клик по другому ребру той же грани — конец; разрез должен целиком идти внутри контура.
- *    От начала — свои оси: вдоль начального ребра и перпендикулярно ему; рядом с осью разрез прилипает к ней,
- *    Shift держит ось — конец разреза там, где прямая по оси встречает контур (перпендикуляр к ребру).
+ * 2. клики внутри грани добавляют изгибы, клик по ребру завершает разрез.
+ *    Shift привязывает следующую точку к оси вдоль начального ребра или перпендикулярно ему.
  * Что можно резать и как делить данные — решают eligible и split снаружи. Esc — отмена.
  */
 export class SplitTool {
   state: 'off' | 'pick' | 'cut' = 'off';
   private target?: string;
   private start?: CutPoint;
+  /** Несколько частей на начальном ребре: ждём направления первого сегмента. */
+  private candidates: Candidate[] = [];
+  private bends: Pt[] = [];
   /** Привязка последнего пересчёта точки разреза — для маркера. */
   snap?: SnapHit;
   private z = 0;
@@ -35,9 +35,12 @@ export class SplitTool {
 
   constructor(
     private readonly layer: BuildingsLayer,
+    /** Выделенная часть имеет приоритет на общей границе. */
+    private readonly selected: () => string | undefined,
+    private readonly members: () => string[],
     /** Почему объект нельзя резать (undefined — можно). */
     private readonly eligible: (key: string) => string | undefined,
-    private readonly split: (key: string, a: CutPoint, b: CutPoint) => string | undefined,
+    private readonly split: (key: string, a: CutPoint, b: CutPoint, bends: Pt[]) => string | undefined,
     private readonly onState: (hint: string, error?: boolean) => void,
   ) {}
 
@@ -56,31 +59,59 @@ export class SplitTool {
 
   click(point: [number, number]): boolean {
     if (this.state === 'pick') {
-      const hit = this.layer.focusRayHits(point)[0];
-      if (!hit) return false;
-      const why = this.eligible(hit.key);
-      if (why) { this.onState(why, true); return true; }
-      const box = this.layer.focusItemBox(hit.key);
-      if (!box) return true;
-      this.target = hit.key;
-      this.z = box.max.z;
-      const c = this.cutPointAt(point);
-      if (!c) { this.target = undefined; this.onState(tr('Кликните точно по ребру верхней грани (вершины и середины подсвечиваются).'), true); return true; }
-      this.start = c;
-      const ring = this.layer.focusPolygons(hit.key)![0].outer;
-      const a = ring[c.edge], b = ring[(c.edge + 1) % ring.length];
-      const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
-      this.axes = { x: [(b[0] - a[0]) / l, (b[1] - a[1]) / l], y: [-(b[1] - a[1]) / l, (b[0] - a[0]) / l] };
-      this.axis = this.locked = undefined;
+      const hits = this.layer.focusRayHits(point);
+      const preferred = this.selected();
+      const keys = [...new Set([...(preferred ? [preferred] : []), ...hits.map((h) => h.key), ...this.members()])];
+      if (!keys.length) return false;
+      const candidates: Candidate[] = [];
+      let reason: string | undefined;
+      for (const key of keys) {
+        const why = this.eligible(key);
+        if (why) { if (hits.some((h) => h.key === key)) reason ??= why; continue; }
+        const box = this.layer.focusItemBox(key);
+        if (!box) continue;
+        this.target = key;
+        this.z = box.max.z;
+        const c = this.cutPointAt(point);
+        if (c) candidates.push({ key, z: this.z, start: c });
+      }
+      if (!candidates.length) {
+        this.target = undefined;
+        if (!hits.length) return false;
+        this.onState(reason ?? tr('Кликните точно по ребру верхней грани (вершины и середины подсвечиваются).'), true);
+        return true;
+      }
+      this.candidates = preferred && candidates[0].key === preferred ? [] : candidates.length > 1 ? candidates : [];
+      this.useCandidate(candidates[0]);
+      this.bends = [];
       this.state = 'cut';
-      this.guide(c.p);
-      this.onState(tr('Ведите разрез ко второму ребру этой грани и кликните. Оси — по начальному ребру и перпендикулярно (Shift — держать ось). Esc — отмена.'));
+      this.guide(this.start!.p);
+      this.onState(this.candidates.length
+        ? tr('Общее ребро: кликните внутри нужной грани, чтобы выбрать направление разреза.')
+        : tr('Кликайте внутри грани для изгибов разреза; клик по другому ребру завершит его. Shift — держать ось. Esc — отмена.'));
       return true;
     }
     if (this.state === 'cut' && this.target && this.start) {
-      const c = this.endAt(point);
-      if (!c) { this.onState(tr('Конец разреза — на ребре верхней грани.'), true); return true; }
-      const err = this.split(this.target, this.start, c);
+      if (this.candidates.length) {
+        const candidate = this.candidateAt(point);
+        if (!candidate) { this.onState(tr('Общее ребро: кликните внутри нужной грани, чтобы выбрать направление разреза.'), true); return true; }
+        this.useCandidate(candidate);
+        this.candidates = [];
+      }
+      const c = this.cutPointAt(point);
+      if (!c) {
+        const raw = this.planePoint(point);
+        const q = raw ? this.axisPoint(raw) : undefined;
+        const ring = this.layer.focusPolygons(this.target)?.[0]?.outer;
+        if (q && ring && insideRing(q, ring) && Math.hypot(q[0] - (this.bends.at(-1) ?? this.start.p)[0], q[1] - (this.bends.at(-1) ?? this.start.p)[1]) > 0.05) {
+          this.bends.push(q);
+          this.axis = this.locked = undefined;
+          this.guide(q);
+          this.onState(tr('Добавлена точка разреза. Продолжайте внутри грани или кликните по ребру для завершения.'));
+        } else this.onState(tr('Точка разреза должна быть внутри верхней грани.'), true);
+        return true;
+      }
+      const err = this.split(this.target, this.start, c, this.bends);
       if (err) { this.onState(err, true); return true; }
       this.cancel();
       this.begin();
@@ -92,76 +123,65 @@ export class SplitTool {
   move(point: [number, number]) {
     this.lastPoint = point;
     if (this.state !== 'cut' || !this.start) return;
-    const c = this.endAt(point);
-    this.guide(c?.p ?? this.planePoint(point));
+    if (this.candidates.length) {
+      const candidate = this.candidateAt(point);
+      if (candidate) this.useCandidate(candidate);
+    }
+    const c = this.cutPointAt(point);
+    const raw = c?.p ?? this.planePoint(point);
+    this.guide(c?.p ?? (raw ? this.axisPoint(raw) : undefined));
   }
 
-  /**
-   * Конец разреза: по оси (прилипание или Shift) — точка, где прямая по оси от начала встречает контур;
-   * иначе — точка на ребре под курсором.
-   */
-  private endAt(point: [number, number]): CutPoint | undefined {
-    const free = this.cutPointAt(point);
-    const s = this.start!, ax = this.axes;
+  private useCandidate(candidate: Candidate) {
+    this.target = candidate.key;
+    this.z = candidate.z;
+    this.start = candidate.start;
+    const ring = this.layer.focusPolygons(candidate.key)![0].outer;
+    const a = ring[candidate.start.edge], b = ring[(candidate.start.edge + 1) % ring.length];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    this.axes = { x: [(b[0] - a[0]) / l, (b[1] - a[1]) / l], y: [-(b[1] - a[1]) / l, (b[0] - a[0]) / l] };
+    this.axis = this.locked = undefined;
+  }
+
+  /** Направление следующего сегмента определяет прилегающую грань, даже если клик пришёлся на её ребро. */
+  private candidateAt(point: [number, number]): Candidate | undefined {
+    const previousZ = this.z;
+    const matches = this.candidates.filter((candidate) => {
+      this.z = candidate.z;
+      const q = this.planePoint(point);
+      const ring = this.layer.focusPolygons(candidate.key)?.[0]?.outer;
+      if (!q || !ring || Math.hypot(q[0] - candidate.start.p[0], q[1] - candidate.start.p[1]) <= 0.05) return false;
+      const mid: Pt = [(q[0] + candidate.start.p[0]) / 2, (q[1] + candidate.start.p[1]) / 2];
+      return insideRing(mid, ring);
+    });
+    this.z = previousZ;
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  /** Привязать промежуточную точку к выбранной Shift оси от предыдущей точки. */
+  private axisPoint(q: Pt): Pt {
+    const s = this.bends.at(-1) ?? this.start?.p, ax = this.axes;
     this.axis = undefined;
-    if (!ax) return free;
-    const q = free && this.snap ? free.p : this.planePoint(point);
-    if (!q) return free;
-    const d: Pt = [q[0] - s.p[0], q[1] - s.p[1]];
+    if (!this.shift || !s || !ax) return q;
+    const d: Pt = [q[0] - s[0], q[1] - s[1]];
     const len = Math.hypot(d[0], d[1]);
     let axis = this.locked;
-    // Shift без прилипшей оси — ближайшая по направлению
-    if (axis === undefined && this.shift && len > 1e-6) {
+    if (axis === undefined && len > 1e-6) {
       axis = this.locked = Math.abs(d[0] * ax.y[0] + d[1] * ax.y[1]) > Math.abs(d[0] * ax.x[0] + d[1] * ax.x[1]) ? 1 : 0;
     }
-    if (axis === undefined && len > 1e-6 && !this.snap) {
-      for (const i of [0, 1] as const) {
-        const u = i ? ax.y : ax.x;
-        if (Math.abs(d[0] * u[0] + d[1] * u[1]) / len > Math.cos((AXIS_LOCK_DEG * Math.PI) / 180)) axis = i;
-      }
-    }
-    if (axis === undefined) return free;
+    if (axis === undefined) return q;
     const u = axis ? ax.y : ax.x;
-    const sign = d[0] * u[0] + d[1] * u[1] < 0 ? -1 : 1;
-    const hit = this.rayToRing([u[0] * sign, u[1] * sign]);
-    if (!hit) return free;
     this.axis = axis;
-    return hit;
-  }
-
-  /** Первая точка контура на луче от начала разреза в направлении dir (не на начальном ребре). */
-  private rayToRing(dir: Pt): CutPoint | undefined {
-    const ring = this.target ? this.layer.focusPolygons(this.target)?.[0]?.outer : undefined;
-    if (!ring || !this.start) return;
-    const o = this.start.p;
-    let best: CutPoint & { t: number } | undefined;
-    for (let i = 0; i < ring.length; i++) {
-      if (i === this.start.edge) continue;
-      const a = ring[i], b = ring[(i + 1) % ring.length];
-      const e: Pt = [b[0] - a[0], b[1] - a[1]];
-      const den = dir[0] * e[1] - dir[1] * e[0];
-      if (Math.abs(den) < 1e-9) continue;
-      const t = ((a[0] - o[0]) * e[1] - (a[1] - o[1]) * e[0]) / den;
-      const s = ((a[0] - o[0]) * dir[1] - (a[1] - o[1]) * dir[0]) / den;
-      if (t <= 0.01 || s < -1e-9 || s > 1 + 1e-9) continue;
-      if (!best || t < best.t) {
-        const l = Math.hypot(e[0], e[1]);
-        const vertex = s * l < 0.05 ? i : (1 - s) * l < 0.05 ? (i + 1) % ring.length : undefined;
-        best = { edge: i, p: vertex === undefined ? [o[0] + dir[0] * t, o[1] + dir[1] * t] : ring[vertex], vertex, t };
-      }
-    }
-    if (!best) return;
-    const { t: _t, ...c } = best;
-    void _t;
-    return c;
+    const length = d[0] * u[0] + d[1] * u[1];
+    return [s[0] + u[0] * length, s[1] + u[1] * length];
   }
 
   key(e: KeyboardEvent): boolean {
     if (!this.active) return false;
-    if (e.key === 'Shift' && this.state === 'cut') {
+    if (e.key === 'Shift') {
       this.shift = e.type === 'keydown';
-      this.locked = this.shift ? this.axis ?? this.locked : undefined;
-      if (this.lastPoint) this.move(this.lastPoint);
+      this.locked = this.shift && this.state === 'cut' ? this.axis ?? this.locked : undefined;
+      if (this.state === 'cut' && this.lastPoint) this.move(this.lastPoint);
       return true;
     }
     if (e.type !== 'keydown' || e.key !== 'Escape') return false;
@@ -183,8 +203,9 @@ export class SplitTool {
   private cutPointAt(point: [number, number]): CutPoint | undefined {
     const ring = this.target ? this.layer.focusPolygons(this.target)?.[0]?.outer : undefined;
     if (!ring) return;
-    // Второй конец разреза — и перпендикуляр из первого на рёбра
-    const from = this.start && new THREE.Vector3(this.start.p[0], this.start.p[1], this.z);
+    // Перпендикуляр к ребру строится от последней точки текущего сегмента.
+    const previous = this.bends.at(-1) ?? this.start?.p;
+    const from = previous && new THREE.Vector3(previous[0], previous[1], this.z);
     const snap = this.snap = this.layer.snapAt(point, (k) => k === this.target, undefined, { from });
     const onTop = snap && Math.abs(snap.local.z - this.z) < 0.05 && snap.kind !== 'center';
     const q: Pt | undefined = onTop ? [snap.local.x, snap.local.y] : this.planePoint(point);
@@ -215,13 +236,27 @@ export class SplitTool {
   private guide(to: Pt | undefined) {
     if (!this.start) return;
     const from = new THREE.Vector3(this.start.p[0], this.start.p[1], this.z);
-    this.layer.setMoveGuide({ from, to: to ? new THREE.Vector3(to[0], to[1], this.z) : undefined, axis: this.axis, locked: this.locked, axes: this.axes });
+    this.layer.setMoveGuide({ from, to: to ? new THREE.Vector3(to[0], to[1], this.z) : undefined, path: this.bends.map((p) => new THREE.Vector3(p[0], p[1], this.z)), axis: this.axis, locked: this.locked, axes: this.axes, dashSize: 0.2, gapSize: 0.12 });
   }
 
   private cancel() {
     this.layer.setMoveGuide(undefined);
     this.target = undefined;
     this.start = undefined;
+    this.candidates = [];
+    this.bends = [];
     this.axes = this.axis = this.locked = undefined;
+    this.shift = false;
+    this.lastPoint = undefined;
+    this.snap = undefined;
   }
+}
+
+function insideRing([x, y]: Pt, ring: Pt[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }

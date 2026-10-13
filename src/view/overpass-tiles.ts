@@ -247,6 +247,15 @@ export class OverpassTiles {
 
   private readonly featureIndex = new WeakMap<Feature3D[], Map<string, Feature3D>>();
 
+  /** Исходные данные тайла без несохранённых правок сессии и без нарисованного overlay. */
+  cachedFeature(key: string): Feature3D | undefined {
+    for (const e of this.cache.values()) {
+      if (e.state !== 'ready') continue;
+      const feature = e.features.find((f) => f.key === key);
+      if (feature) return feature;
+    }
+  }
+
   /** Объект из загруженных данных, даже если ещё не нарисован (контур в соседнем тайле и т. п.). */
   findFeature(key: string): Feature3D | undefined {
     const r = this.rendered.get(key);

@@ -529,3 +529,7 @@ body.mobile #issues-panel { display: none !important; }
   background: none; color: #111; font: 600 15px/22px system-ui, sans-serif; cursor: pointer;
 }
 .view-cube .vc-proj:hover { background: rgba(0, 0, 0, 0.06); }
+.levels .lv-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; color: #555; font-size: 11px; line-height: 1.4; cursor: default; border-top: 1px solid #eee; margin-top: 4px; padding-top: 6px; }
+.levels .lv-legend:hover { background: transparent; }
+.levels .lv-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.levels .lv-legend-item i { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #c8c6c2; flex: none; }

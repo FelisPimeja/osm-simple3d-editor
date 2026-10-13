@@ -23,7 +23,7 @@ const HIGHLIGHT = new THREE.Color('#97beff'); // #2f7cff, смешанный с 
 const MONOCHROME = new THREE.Color('#ffffff');
 
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
-export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number }
+export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Заливка по назначению (иначе — по виду). */ colour?: number }
 
 /** Заливка пола по виду indoor-объекта. */
 const INDOOR_COLOURS: Record<IndoorKind, number> = { level: 0xe7e5e4, area: 0xffffff, corridor: 0xffffff, room: 0xf6ead2, wall: 0xffffff, column: 0xffffff, poi: 0xffffff };
@@ -40,7 +40,10 @@ const CUT_BELOW_CEIL = 0.1;
 /** Части, начинающиеся не ниже этого под потолком этажа, считаются потолком (срез — под их днищем), м. */
 const CEIL_SNAP = 0.5;
 /** Стены, перегородки и колонны — белые, как здание; в полную высоту этажа (до среза). */
-const INDOOR_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+/** Стены помещений: каждая стена — две грани (по одной на сторону) с цветом помещения со своей стороны. */
+const INDOOR_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.FrontSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+/** Насколько в сторону от стены смотреть, в каком она помещении, м. */
+const WALL_SIDE_PROBE = 0.05;
 /** Выделенное помещение: заливка цветом выделения частей и контур. */
 const INDOOR_SELECT_MATERIAL = new THREE.MeshBasicMaterial({ color: HIGHLIGHT, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 const INDOOR_SELECT_LINE = new THREE.LineBasicMaterial({ color: 0x2563eb });
@@ -713,6 +716,24 @@ export class BuildingsLayer implements CustomLayerInterface {
     const order: IndoorKind[] = ['level', 'area', 'corridor', 'room', 'column', 'wall'];
     const lines: number[] = [];
     const walls: number[] = [];
+    /** Цвета вершин стен: каждая сторона — цветом помещения, в которое смотрит. */
+    const wallCols: number[] = [];
+    // Полы с цветом назначения (локальные кольца, габарит; помещения раньше коридоров и площадок — меньшие сверху)
+    const tinted = items.filter((it) => it.colour !== undefined && !it.line).sort((a, b) => order.indexOf(b.kind) - order.indexOf(a.kind))
+      .flatMap((it) => it.polygons.map((p) => {
+        const outer = p.outer.map(g.toLocal), holes = p.inners.map((h) => h.map(g.toLocal));
+        const box = outer.reduce((b, [x, y]) => [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)], [Infinity, Infinity, -Infinity, -Infinity]);
+        return { outer, holes, box, colour: new THREE.Color(it.colour!) };
+      }));
+    const WHITE_WALL = new THREE.Color(0xffffff);
+    /** Цвет стены со стороны точки (x, y): пол помещения под ней, иначе белый. */
+    const sideColour = (x: number, y: number): THREE.Color => {
+      for (const t of tinted) {
+        if (x < t.box[0] || x > t.box[2] || y < t.box[1] || y > t.box[3]) continue;
+        if (pointInLocalRing([x, y], t.outer) && !t.holes.some((h) => pointInLocalRing([x, y], h))) return t.colour;
+      }
+      return WHITE_WALL;
+    };
     // Рёбра стен (опция «рёбра»): низ и вертикали в концах и на изломах — по направлениям стен в каждой точке
     const edges: number[] = [];
     const ends = new Map<string, { x: number; y: number; z0: number; z1: number; dirs: [number, number][] }>();
@@ -725,7 +746,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     /** Кусок стены; верх — z1a в начале, z1b в конце (под скатом крыши — наклонный). */
     const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, ends = true) => {
+      // Две грани: лицевая смотрит вправо от a→b, обратная — влево; у каждой цвет помещения со своей стороны
       walls.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
+      walls.push(ax, ay, z0, bx, by, z1b, bx, by, z0, ax, ay, z0, ax, ay, z1a, bx, by, z1b);
+      const l0 = Math.hypot(bx - ax, by - ay) || 1, nx = (by - ay) / l0 * WALL_SIDE_PROBE, ny = -(bx - ax) / l0 * WALL_SIDE_PROBE;
+      const mx = (ax + bx) / 2, my = (ay + by) / 2;
+      for (const c of [sideColour(mx + nx, my + ny), sideColour(mx - nx, my - ny)]) for (let k = 0; k < 6; k++) wallCols.push(c.r, c.g, c.b);
       lines.push(ax, ay, z1a, bx, by, z1b);
       if (!this.graphics.edges) return;
       edges.push(ax, ay, z0, bx, by, z0);
@@ -862,7 +888,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (it.line) continue; // нарисованы выше
         // У колонны и стены-полигона — крышка сечения, у остальных — пол своего цвета
         if (solid) cap(p.outer.map(g.toLocal), p.inners.map((h) => h.map(g.toLocal)), it.z);
-        else fill(p.outer.map(g.toLocal), p.inners.map((h) => h.map(g.toLocal)), z, INDOOR_COLOURS[it.kind]);
+        else fill(p.outer.map(g.toLocal), p.inners.map((h) => h.map(g.toLocal)), z, it.colour ?? INDOOR_COLOURS[it.kind]);
         for (const r of [p.outer, ...p.inners]) {
           const rp = r.map(g.toLocal);
           for (let i = 0; i < rp.length; i++) {
@@ -880,6 +906,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (walls.length) {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(walls, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(wallCols, 3));
       geo.computeVertexNormals();
       const mesh = new THREE.Mesh(geo, pale ? INDOOR_PALE_WALL : INDOOR_WALL_MATERIAL);
       mesh.frustumCulled = false;

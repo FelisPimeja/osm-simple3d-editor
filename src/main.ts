@@ -14,6 +14,7 @@ import { SERVERS, SERVER_LIST, apiBlockedHere, server, setServer, type ServerId 
 import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
+import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type IndoorCategory } from './osm/indoor-categories';
 import { ViewCube } from './view/view-cube';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
 import { applyBasemap, applyGpsTraces, BasemapButton, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
@@ -3877,6 +3878,28 @@ function selectIndoor(f: IndoorFeature | undefined) {
   }
 }
 
+/** Помещение, коридор или площадка — пол, который красим по назначению. */
+const isFloorKind = (f: IndoorFeature) => !f.line && (f.kind === 'room' || f.kind === 'corridor' || f.kind === 'area');
+
+/** Назначение помещения: по его тегам и по точечным объектам (узлам) этажа внутри него. */
+function categoryOf(f: IndoorFeature, onLevel: IndoorFeature[]): IndoorCategory {
+  const inside = onLevel.filter((p) => p.kind === 'poi' && p.point && !p.key.endsWith('#poi')
+    && f.polygons.some((q) => pointInRing(p.point!, q.outer) && !q.inners.some((h) => pointInRing(p.point!, h))));
+  return indoorCategory(f, inside);
+}
+
+/** Легенда раскраски: только категории, которые есть на этаже (закрытые и технические — одним пунктом). */
+function indoorLegend(onLevel: IndoorFeature[]): string {
+  const present = new Set<IndoorCategory>(onLevel.filter(isFloorKind).map((f) => {
+    const c = categoryOf(f, onLevel);
+    return c === 'technical' ? 'private' : c;
+  }));
+  const items = CATEGORY_ORDER.filter((c) => present.has(c));
+  if (!items.length) return '';
+  const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
+  return `<li class="lv-legend">${items.map((c) => `<span class="lv-legend-item"><i style="background:${hex(CATEGORY_COLOURS[c])}"></i>${esc(CATEGORY_LABELS[c])}</span>`).join('')}</li>`;
+}
+
 /** Indoor-объект здания режима по ключу OSM (с правками сессии); недоступен — undefined. */
 function buildingIndoorFor(key: string): IndoorFeature | undefined {
   return focus ? buildingIndoor(focus).find((f) => f.key === key) : undefined;
@@ -4026,12 +4049,14 @@ function renderLevelsImpl() {
       // Объект на нескольких этажах (эскалатор, лестница, зал в два света) — рисуем на его нижнем этаже,
       // выше он — пустота (стены-линии — на всех: они и выше стоят)
       items: fs.filter((f) => f.kind !== 'poi' && (f.line || floorLevels(f).includes(l.n)))
-        .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor })),
+        .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor,
+          ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}) })),
       // Двери этажа — проёмы в стенах
       doors: fs.filter((f) => f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!),
     };
   };
   const plan = level && planOf(level);
+  if (level) levelsEl.insertAdjacentHTML('beforeend', indoorLegend(onLevel));
   // Второй свет: пустоты в перекрытии и этажи под ними
   const voids = level ? levelVoids(focus, levels, indoor, level.n) : [];
   // Пустоты здания посчитались или поменялись (пришли indoor-данные) — перекрытия стеклянных частей пересобрать

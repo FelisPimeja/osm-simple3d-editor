@@ -229,7 +229,10 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
     // Сдвинуты только узлы — сам путь не трогаем
     if (sameTags(r.tags, f.tags ?? {}) && !edit.members && !edit.wayNodes) continue;
     if (edit.members && f.type === 'relation') element = { ...f, members: mergeMembers(f.members, edit.membersBefore ?? [], edit.members) };
-    payload.push({ element, tags: r.tags });
+    // Узел уже в пакете (сдвинут — дверь перетащили) — теги туда же, иначе вторая копия вернула бы его на место
+    const moved = f.type === 'node' ? payload.find((p) => p.element.type === 'node' && p.element.id === f.id && !p.created && !p.deleted) : undefined;
+    if (moved) moved.tags = r.tags;
+    else payload.push({ element, tags: r.tags });
     written.set(edit.key, r.tags);
     if (!sameTags(r.tags, edit.after)) rebased.add(edit.key);
   }

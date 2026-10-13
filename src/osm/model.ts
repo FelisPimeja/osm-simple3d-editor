@@ -45,13 +45,22 @@ const INDOOR_KINDS = new Set<string>(['room', 'area', 'corridor', 'level', 'wall
 /**
  * Этажи, на которых у объекта пол. Объект на нескольких этажах в level (эскалатор, лестница, зал в два света:
  * level=-1;0 или 1-3) — вертикальное пространство: пол только на нижнем, выше — пустота. repeat_on — то же
- * помещение на каждом этаже: пол на каждом.
+ * помещение на каждом этаже: пол на каждом; лифт и лестничная клетка — тоже на каждом этаже из level.
  */
 export function floorLevels(f: IndoorFeature): number[] {
   const own = parseLevels(f.tags.level);
   const out = new Set(parseLevels(f.tags.repeat_on));
+  // Лифтовая шахта, лестничная клетка — площадка на каждом этаже из level (как repeat_on), а не пустота
+  if (own.length > 1 && isShaft(f.tags)) for (const l of own) out.add(l);
   out.add(own.length ? Math.min(...own) : f.levels[0] ?? 0);
   return [...out];
+}
+
+/** Лифт или лестничная клетка (не эскалатор): на каждом этаже своя площадка. */
+function isShaft(t: Record<string, string>): boolean {
+  if (t.conveying) return false;
+  return t.highway === 'elevator' || t.elevator === 'yes' || t.stairs === 'yes' || t.highway === 'steps'
+    || t.room === 'elevator' || t.room === 'stairs';
 }
 
 export interface IndoorFeature {

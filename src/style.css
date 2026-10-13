@@ -533,3 +533,13 @@ body.mobile #issues-panel { display: none !important; }
 .levels .lv-legend:hover { background: transparent; }
 .levels .lv-legend-item { display: inline-flex; align-items: center; gap: 4px; }
 .levels .lv-legend-item i { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #c8c6c2; flex: none; }
+.levels .lv-group { display: block; color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; cursor: default; padding-top: 6px; }
+.levels .lv-group:hover { background: transparent; }
+.level-hint-wrap { position: relative; display: block; }
+.level-hint { position: absolute; left: 0; top: 0; bottom: 0; display: flex; align-items: center; padding: 0 6px; color: #9ca3af; pointer-events: none; white-space: pre; overflow: hidden; font: inherit; }
+.level-hint-pad { visibility: hidden; }
+.level-picker { position: absolute; left: 0; right: 0; top: calc(100% + 2px); z-index: 20; background: #fff; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.12); padding: 4px 0; max-height: 280px; overflow: auto; }
+.level-picker-row { display: flex; align-items: center; gap: 8px; padding: 3px 10px; cursor: pointer; font-size: 13px; }
+.level-picker-row:hover { background: #f3f4f6; }
+.level-picker-row.current { font-weight: 600; }
+.level-picker-n { margin-left: auto; color: #9ca3af; font-size: 11px; }

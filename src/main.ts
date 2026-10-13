@@ -1191,7 +1191,7 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number) {
     const features = parsed.features.filter((f) => freshGroup.members.includes(f.key));
     if (features.length !== freshGroup.members.length) throw new Error(`OSM: не удалось загрузить все части ${g.key}`);
     const changed = features.filter((f) => {
-      const old = overpass.findFeature(f.key);
+      const old = overpass.cachedFeature(f.key);
       return !old || old.version !== f.version || JSON.stringify(old.polygons) !== JSON.stringify(f.polygons) ||
         JSON.stringify(old.tags) !== JSON.stringify(f.tags) || JSON.stringify(old.ways) !== JSON.stringify(f.ways);
     });
@@ -1597,6 +1597,7 @@ function squareSelected() {
 const pushBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="push"]')!;
 const pushTool = new PushTool(overpassLayer, map.getContainer(),
   (key) => !!focus?.members.includes(key) && !hiddenInFocus(key),
+  () => selection,
   allowPushSide, clampPush, previewPush, commitPush,
   (hint) => {
     pushBtn.classList.toggle('active', pushTool.active);

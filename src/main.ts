@@ -576,7 +576,11 @@ function scheduleRoads() {
   roadsTimer = setTimeout(() => {
     roadsTimer = undefined;
     // Здания — для подъёма мостов над крышами (контур с частями не рисуется — берём части)
-    const obstacles = overpass.allFeatures().filter((f) => !f.hasParts).map((f) => {
+    const obstacles = overpass.allFeatures()
+      // building=bridge / man_made=bridge / bridge:support — сам мост или его опора, не препятствие
+      // Подземные (location=underground, layer<0 — ТЦ под площадью) — тоже нет: мост над ними на земле
+      .filter((f) => !f.hasParts && f.tags.building !== 'bridge' && f.tags.man_made !== 'bridge' && !f.tags['bridge:support']
+        && f.tags.location !== 'underground' && !(Number(f.tags.layer) < 0)).map((f) => {
       const h = computeHeights(f.tags);
       return { rings: f.polygons.map((p) => p.outer), min: h.min, top: h.top };
     });

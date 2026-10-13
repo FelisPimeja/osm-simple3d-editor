@@ -24,6 +24,8 @@ const RAIL_GRADE = 0.05;
 const STEPS_GRADE = Math.tan(30 * Math.PI / 180);
 /** Мост с layer=0 (через ручей и т. п.) — чуть над землёй, м. */
 const LOW_BRIDGE_M = 1.5;
+/** Пешеходный мост, под которым ничего нет, — середина не выше, м. */
+const HUMP_PATH_MAX_M = 2;
 /** Шаг сгущения линий, м: высота меняется плавно и между далёкими узлами. */
 const DENSIFY_M = 8;
 const SMOOTH_ITERATIONS = 40;
@@ -137,6 +139,8 @@ const DIVIDER_H_M = 0.8;
 /** Подходы рядом сливаются в одно полотно, если их высоты различаются не больше, м. */
 const RAMP_JOIN_DH_M = 1;
 /** Зазор над крышей здания под мостом, м. */
+/** Доля длины моста внутри здания, с которой здание — тело моста, а не препятствие под ним. */
+const BODY_SHARE = 0.6;
 const OBSTACLE_CLEARANCE_M = 1;
 /** Здания выше этого мост не перелетает (идёт рядом), м. */
 const OBSTACLE_MAX_TOP_M = 40;
@@ -268,7 +272,8 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
       const a = ids[k - 1], b = ids[k];
       if (a === b) continue;
       const len = Math.hypot(xs[b] - xs[a], ys[b] - ys[a]);
-      const steps = Math.max(1, Math.ceil(len / DENSIFY_M));
+      // Мост — хотя бы с точкой посередине: короткому без пересечений есть где подняться горбом
+      const steps = Math.max(isBridge(w.tags) ? 2 : 1, Math.ceil(len / DENSIFY_M));
       let prev = a;
       for (let s = 1; s < steps; s++) {
         const t = s / steps;
@@ -329,6 +334,28 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
         const k = `${gx},${gy}`; const l = ogrid.get(k); if (l) l.push(oi); else ogrid.set(k, [oi]);
       }
     });
+    // Здание — само тело моста (крепостной мост, крытая галерея без indoor): путь моста большей частью лежит внутри
+    // контура. Тогда это не препятствие, а опора: полотно — по крыше здания, а не над ней
+    // Здание бывает из многих частей (type=building), поэтому считаем покрытие любыми зданиями вместе. Высота полотна
+    // тела — медиана крыш над точками пути (зубцы и башни не задирают)
+    const wayLen = new Map<number, number>(), tops = new Map<number, number[]>();
+    const STEP = 2;
+    edges.forEach((e, ei) => {
+      if (!raised(e.way) || !isBridge(ways[e.way].tags)) return;
+      const L = len(e), cnt = Math.max(1, Math.ceil(L / STEP));
+      wayLen.set(e.way, (wayLen.get(e.way) ?? 0) + cnt);
+      const near = new Set<number>();
+      for (const k of cells(ei)) for (const oi of ogrid.get(k) ?? []) near.add(oi);
+      for (let i = 0; i < cnt; i++) {
+        const t = (i + 0.5) / cnt, pt: [number, number] = [xs[e.a] + (xs[e.b] - xs[e.a]) * t, ys[e.a] + (ys[e.b] - ys[e.a]) * t];
+        let top = -Infinity;
+        for (const oi of near) if (obs[oi].rings.some((r) => pointInRing(pt, r))) top = Math.max(top, obs[oi].top);
+        if (top > -Infinity) { const l = tops.get(e.way); if (l) l.push(top); else tops.set(e.way, [top]); }
+      }
+    });
+    /** Путь моста → высота полотна по крыше его здания-тела. */
+    const bodyTop = new Map<number, number>();
+    for (const [w, l] of tops) if (l.length >= BODY_SHARE * wayLen.get(w)!) { l.sort((x, y) => x - y); bodyTop.set(w, l[l.length >> 1]); }
     edges.forEach((e, ei) => {
       // Только настоящие мосты: у проезда во дворе layer=1 без bridge — обычно над подземным гаражом, а не над домом
       if (!raised(e.way) || !isBridge(ways[e.way].tags)) return;
@@ -340,9 +367,10 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
         const o = obs[oi];
         const hit = o.rings.some((r) => pointInRing(p, r) || pointInRing(q, r) || r.some((a, i) => segmentsCross(p, q, a, r[(i + 1) % r.length])));
         if (!hit) continue;
+        const bt = bodyTop.get(e.way);
         const c = crossAt.get(ei) ?? { r: 0, need: 0 };
         c.r = Math.max(c.r, 2);
-        c.need = Math.max(c.need, o.top + OBSTACLE_CLEARANCE_M + DECK_M);
+        c.need = Math.max(c.need, bt !== undefined ? bt : o.top + OBSTACLE_CLEARANCE_M + DECK_M);
         crossAt.set(ei, c);
       }
     });
@@ -351,8 +379,62 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
   // Мост без найденных пересечений (и тоннели) — ровный целиком на своей высоте. Мост с пересечениями держит
   // высоту только над ними: у каждого пересечения своя (над дорогой на земле ниже, чем над путём на мосту),
   // с запасом вдоль моста; остальное полотно — по подъёмам и спускам от этих точек (как подходы)
+  // Мост, под которым ничего нет (ручей, канава), между путями на земле — горбом: середина не выше уклона подходов
+  // от концов (короткий — почти вровень с землёй), пешеходный — не выше пары метров. Концы — на земле, соседи не
+  // задираются. Если конец упирается в другой мост — по-старому, ровно
+  const humpHeight = new Map<number, number>();
+  {
+    const gEdges = new Map<number, number[]>();
+    edges.forEach((e, ei) => {
+      if (!raised(e.way) || crossedGroups.has(group[e.way])) return;
+      const l = gEdges.get(group[e.way]); if (l) l.push(ei); else gEdges.set(group[e.way], [ei]);
+    });
+    const incident = new Map<number, number[]>();
+    edges.forEach((e, ei) => { for (const v of [e.a, e.b]) { const l = incident.get(v); if (l) l.push(ei); else incident.set(v, [ei]); } });
+    for (const ges of gEdges.values()) {
+      const inG = new Set(ges);
+      const ends: number[] = [];
+      let ok = true;
+      const wayLen = new Map<number, number>();
+      for (const ei of ges) {
+        wayLen.set(edges[ei].way, (wayLen.get(edges[ei].way) ?? 0) + len(edges[ei]));
+        for (const v of [edges[ei].a, edges[ei].b]) {
+          const inc = incident.get(v)!;
+          const out = inc.filter((ej) => !inG.has(ej));
+          if (out.some((ej) => raised(edges[ej].way))) ok = false;
+          if (out.length || inc.length === 1) ends.push(v);
+        }
+      }
+      if (!ok || !ends.length) continue;
+      const tags = ways[edges[ges[0]].way].tags;
+      const g0 = isRailTags(tags) ? RAIL_GRADE : PATHS.has(tags.highway) ? PATH_GRADE : ROAD_GRADE;
+      const span = Math.max(...wayLen.values());
+      const cap = Math.min(wayHeight[edges[ges[0]].way]!, PATHS.has(tags.highway) ? HUMP_PATH_MAX_M : Infinity, (g0 * span) / 2);
+      // Расстояние по полотну до ближайшего конца
+      const dist = new Map<number, number>(ends.map((v) => [v, 0]));
+      const heap = new MinHeap();
+      for (const v of ends) heap.push(v, 0);
+      const gAdj = new Map<number, number[]>();
+      for (const ei of ges) for (const v of [edges[ei].a, edges[ei].b]) { const l = gAdj.get(v); if (l) l.push(ei); else gAdj.set(v, [ei]); }
+      while (heap.size) {
+        const [v, d] = heap.pop();
+        if (d > dist.get(v)!) continue;
+        for (const ei of gAdj.get(v) ?? []) {
+          const u = other(edges[ei], v), nd = d + len(edges[ei]);
+          if (nd >= (dist.get(u) ?? Infinity)) continue;
+          dist.set(u, nd);
+          heap.push(u, nd);
+        }
+      }
+      for (const [v, d] of dist) humpHeight.set(v, Math.min(cap, g0 * d));
+    }
+  }
   const pinnedEdge = new Uint8Array(edges.length);
-  edges.forEach((e, ei) => { if (wayHeight[e.way] !== undefined && !(raised(e.way) && crossedGroups.has(group[e.way]))) pinnedEdge[ei] = 1; });
+  edges.forEach((e, ei) => {
+    if (wayHeight[e.way] === undefined || (raised(e.way) && crossedGroups.has(group[e.way]))) return;
+    if (humpHeight.has(e.a) && humpHeight.has(e.b)) return;
+    pinnedEdge[ei] = 1;
+  });
   const deckAdj = new Map<number, number[]>();
   edges.forEach((e, ei) => {
     if (!raised(e.way) || !crossedGroups.has(group[e.way])) return;
@@ -382,6 +464,7 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
     for (const v of [e.a, e.b]) { pinSum[v] += wayHeight[e.way]!; pinCount[v]++; }
   });
   for (let v = 0; v < n; v++) if (pinCount[v]) { pinned[v] = 1; height[v] = pinSum[v] / pinCount[v]; }
+  for (const [v, h] of humpHeight) { pinned[v] = 1; height[v] = h; }
   for (const [v, h] of coreHeight) { pinned[v] = 1; height[v] = Math.max(pinCount[v] ? height[v] : 0, h); }
 
   const adj: number[][] = Array.from({ length: n }, () => []);

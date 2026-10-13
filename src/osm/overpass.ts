@@ -1,4 +1,5 @@
 import type { Bbox, OsmElement } from './api';
+import { RAILWAYS } from './roads';
 
 /**
  * Overpass — первая линия загрузки тайлов боевого OSM: в отличие от /map отдаёт только нужное (здания, помещения,
@@ -20,16 +21,18 @@ export const overpassFree = () => !active && Date.now() >= coolUntil;
 /**
  * Здания, части, помещения, точки этажей, деревья и леса в bbox — в том же виде, что /map (с версиями, узлы путей).
  * Отношения-леса — без членов: большие леса (сотни путей) догружает completeRelations, только небольшие.
+ * roads — ещё дороги и рельсовые пути (для объёмных мостов и тоннелей; без галок не качаем — ответ заметно больше).
  */
-export async function fetchOverpassTile([w, s, e, n]: Bbox, signal: AbortSignal): Promise<OsmElement[]> {
+export async function fetchOverpassTile([w, s, e, n]: Bbox, signal: AbortSignal, roads = false): Promise<OsmElement[]> {
   const b = `${s},${w},${n},${e}`;
+  const roadSets = roads ? `\n  way["highway"](${b}); way["railway"~"^(${[...RAILWAYS].join('|')})$"](${b});` : '';
   const query = `[out:json][timeout:25];
 (
   way["building"](${b}); way["building:part"](${b});
   relation["building"](${b}); relation["building:part"](${b}); relation["type"="building"](${b});
   way["indoor"](${b}); relation["indoor"](${b}); node["level"](${b}); node["repeat_on"](${b});
   node["natural"="tree"](${b}); way["natural"="tree_row"](${b});
-  way["natural"="wood"](${b}); way["landuse"="forest"](${b});
+  way["natural"="wood"](${b}); way["landuse"="forest"](${b});${roadSets}
 )->.a;
 .a out meta;
 .a >;

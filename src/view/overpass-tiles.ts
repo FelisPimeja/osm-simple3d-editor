@@ -442,12 +442,14 @@ export class OverpassTiles {
         return;
       }
       let via: TileVia = 'api';
+      // Дороги в ответе Overpass — только если их просили (у /map они есть всегда)
+      const withRoads = this.roadsWanted;
       const seen = new Map<string, OsmElement>();
       // Боевой OSM — сначала Overpass: ответ в разы меньше и не тратит лимит скачивания API (509).
       // Отказ, таймаут или неполный ответ — тот же тайл через /map
       if (this.source.api === SERVERS.prod.api && overpassFree()) {
         try {
-          for (const el of await fetchOverpassTile(tileBbox(key), abort.signal)) {
+          for (const el of await fetchOverpassTile(tileBbox(key), abort.signal, withRoads)) {
             const id = `${el.type}/${el.id}`;
             // Голая копия пути (out skel после рекурсии) не затирает путь с тегами
             if (!(seen.get(id) as { tags?: unknown } | undefined)?.tags || el.tags) seen.set(id, el);
@@ -490,7 +492,8 @@ export class OverpassTiles {
       catch (err) { if (abort.signal.aborted) throw err; console.warn('[tiles] леса: догрузка не удалась', err); }
       const { features, groups, indoor } = timed('тайлы: разбор ответа API', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const trees = timed('тайлы: разбор деревьев', () => parseTrees(elements), (r) => `${key}, ${r.points.length} деревьев, ${r.woods.length} лесов`);
-      const roads = timed('тайлы: дороги', () => parseRoads(elements), (r) => `${key}, ${r.length} путей`);
+      // Без дорог в запросе — undefined, а не []: при включении галок тайл перекачается (isStale)
+      const roads = via === 'overpass' && !withRoads ? undefined : timed('тайлы: дороги', () => parseRoads(elements), (r) => `${key}, ${r.length} путей`);
       const fetchedAt = Date.now();
       this.cache.set(key, { state: 'ready', features, groups, indoor, trees, roads, fetchedAt, via });
       this.reloading.delete(key);

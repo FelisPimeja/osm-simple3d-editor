@@ -8,7 +8,7 @@ import { Toasts } from './view/toasts';
 import { validateBuilding, validateGeometry, validateTags, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
-import { completeRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
+import { completeRelations, fetchBuildingElements, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, SERVER_LIST, apiBlockedHere, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
@@ -1178,6 +1178,58 @@ function hideMapLayers() {
   syncBasemapLayers();
 }
 
+let focusRefreshId = 0;
+
+async function refreshFocusedBuilding(g: BuildingGroup, requestId: number) {
+  const api = server().api;
+  try {
+    const root = isSolo(g) ? g.members[0] : g.key;
+    const parsed = parseBuildings(await fetchBuildingElements(root, api));
+    if (api !== server().api) return;
+    const freshGroup = isSolo(g) ? { ...g } : parsed.groups.find((item) => item.key === g.key);
+    if (!freshGroup) throw new Error(`OSM: ${g.key} отсутствует в ответе API`);
+    const features = parsed.features.filter((f) => freshGroup.members.includes(f.key));
+    if (features.length !== freshGroup.members.length) throw new Error(`OSM: не удалось загрузить все части ${g.key}`);
+    const changed = features.filter((f) => {
+      const old = overpass.findFeature(f.key);
+      return !old || old.version !== f.version || JSON.stringify(old.polygons) !== JSON.stringify(f.polygons) ||
+        JSON.stringify(old.tags) !== JSON.stringify(f.tags) || JSON.stringify(old.ways) !== JSON.stringify(f.ways);
+    });
+    const oldGroup = overpass.groupOf(g.key);
+    const groupChanged = !isSolo(g) && JSON.stringify(oldGroup) !== JSON.stringify(freshGroup);
+    if (!changed.length && !groupChanged) return;
+    const stillFocused = requestId === focusRefreshId && focus?.key === g.key;
+    const touched = stillFocused && ([...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.has(key) && session.isChanged(key)) || session.hasDataHistory());
+    if (touched) {
+      setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
+      return;
+    }
+    const saved = new Map(changed.map((f) => [f.key, { version: f.version, tags: f.tags, polygons: f.polygons, ways: f.ways }]));
+    await overpass.applySaved(saved, isSolo(g) ? [] : [freshGroup], changed);
+    if (!stillFocused || requestId !== focusRefreshId || focus?.key !== g.key) return;
+    if (session.hasDataHistory() || [...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.has(key) && session.isChanged(key))) {
+      setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
+      return;
+    }
+    for (const f of features) if (session.has(f.key)) session.refresh({ ...f, tags: { ...f.tags },
+      ...(f.ways ? { relMembers: f.ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } : {}) });
+    if (!isSolo(g)) {
+      const copy = { ...freshGroup, tags: { ...freshGroup.tags }, members: [...freshGroup.members], roles: [...freshGroup.roles],
+        relMembers: freshGroup.members.map((key, i) => { const [type, ref] = key.split('/'); return { type: type as 'way' | 'relation', ref: Number(ref), role: freshGroup.roles[i] ?? '' }; }) };
+      if (session.has(g.key)) session.refresh(copy);
+      if (editGroups.has(g.key)) { editGroups.set(g.key, copy); rebuildGroupIndex(); }
+    }
+    drill = focus = freshGroup;
+    overpassLayer.setFocus(groupFeatures(freshGroup), bareOutlines(freshGroup));
+    syncFocusHidden();
+    paintSelection();
+    renderSelected();
+    setStatus(tr('Данные здания обновлены до актуальной версии OSM.'));
+  } catch (err) {
+    if (requestId === focusRefreshId && focus?.key === g.key) setStatus(tr('Не удалось проверить актуальность здания: {error}', { error: (err as Error).message }), true);
+  }
+}
+
 function enterFocus(g: BuildingGroup, flyIn = true) {
   // Вход в здание посреди наброска на карте (двойной клик при включённом R / L): набросок закрыть сейчас —
   // иначе его закрытие позже (пробел, Esc) снимет сцену режима здания вместе с собой
@@ -1207,6 +1259,7 @@ function enterFocus(g: BuildingGroup, flyIn = true) {
   paintSelection();
   renderSelected();
   setEditParam(isSolo(g) ? g.members[0] : g.key);
+  void refreshFocusedBuilding(g, ++focusRefreshId);
 }
 
 /** Доля экрана, которую занимает здание после подлёта. */

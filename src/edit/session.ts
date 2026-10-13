@@ -108,6 +108,20 @@ export class EditSession {
     return entity;
   }
 
+  /** Обновить исходное состояние объекта, если его ещё не затрагивали правки или история. */
+  refresh(entity: Tagged): boolean {
+    const key = entity.key;
+    if (this.created.has(key) || this.deleted.has(key) || (this.has(key) && this.isChanged(key)) ||
+      [...this.undoStack, ...this.redoStack].some((step) => !isView(step) && step.some((entry) => entry.key === key))) return false;
+    this.features.delete(key);
+    this.original.delete(key);
+    this.originalMembers.delete(key);
+    this.originalGeometry.delete(key);
+    this.originalLine.delete(key);
+    this.track(entity);
+    return true;
+  }
+
   /** Отслеживается ли объект (созданный и отменённый — тоже). */
   has(key: string): boolean {
     return this.features.has(key);

@@ -104,6 +104,39 @@ const AO_FADE_SHARE = 0.5;
 const AO_MIN = 0.55;
 /** Порог угла между гранями для контуров, градусы: швы триангуляции на плоских гранях не рисуем. */
 const EDGE_ANGLE = 25;
+/** Пунктир подземной части здания: виден только не закрытый зданием участок (земля карты глубину не пишет). */
+const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, dashSize: 0.8, gapSize: 0.5, depthWrite: false, transparent: true, opacity: 0.85 });
+/** Выбранный контур подземной части — целиком, сквозь здание. */
+const UNDERGROUND_SELECTED = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.8, gapSize: 0.5, depthTest: false, depthWrite: false, transparent: true });
+/** Насколько близко к пунктиру подземной части выбирает клик, px. */
+const UNDERGROUND_PICK_PX = 6;
+/** Вершина контура на прямой (поворот меньше этого, рад) — не угол: ни вертикали, ни разрыва пунктира. */
+const CORNER_MIN_TURN = 0.05;
+
+/** Вертикаль контура подземной части — в углах с поворотом не меньше этого, рад. */
+const UNDERGROUND_POST_TURN = 0.35;
+/** Вертикали контура подземной части — не ближе этого друг к другу, м. */
+const UNDERGROUND_POST_GAP_M = 4;
+
+/** Поворот контура в вершине i, рад (0 — прямая). */
+function turnAt(pts: Pt[], i: number): number {
+  const p = pts[(i + pts.length - 1) % pts.length], c = pts[i], n = pts[(i + 1) % pts.length];
+  const a1 = Math.atan2(c[1] - p[1], c[0] - p[0]), a2 = Math.atan2(n[1] - c[1], n[0] - c[0]);
+  return Math.abs(Math.atan2(Math.sin(a2 - a1), Math.cos(a2 - a1)));
+}
+
+/** Кольцо без вершин на прямых участках и без замыкающего повтора первой точки. */
+function cornersOnly(ring: Pt[]): Pt[] {
+  const pts = ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1] ? ring.slice(0, -1) : ring.slice();
+  for (let changed = true; changed && pts.length > 3;) {
+    changed = false;
+    for (let i = 0; i < pts.length && pts.length > 3; i++) {
+      const p = pts[(i + pts.length - 1) % pts.length], c = pts[i];
+      if (turnAt(pts, i) < CORNER_MIN_TURN || Math.hypot(c[0] - p[0], c[1] - p[1]) < 1e-3) { pts.splice(i, 1); changed = true; i--; }
+    }
+  }
+  return pts;
+}
 const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: 0.55 });
 /** Рёбра объёмов с проблемами проверки («Подсветить все»): ошибки — красные, предупреждения — оранжевые; толщина, px. */
 const ISSUE_COLOUR = { error: 0xff1a1a, warning: 0xff8a00 };
@@ -166,6 +199,11 @@ interface Item {
   glassRoof: boolean;
   /** Первая вершина в стеклянной геометрии группы. */
   glassStart: number;
+  /**
+   * Стеклянные стены без участков, закрытых соседней частью (общая стена): вне оболочки этажей они совпадают
+   * с соседней гранью и дают рябь. src — из каких positions посчитано; число вершин отличается от исходных стен.
+   */
+  glassTrim?: { src: Float32Array; walls: Float32Array };
   /** Рёбра здания (отрезки xyz) — считаются один раз, когда контуры включены. */
   edges?: Float32Array;
   /** Режим этажей: positions — оболочка (без граней внутри соседних частей), здесь — исходные треугольники. */
@@ -1218,13 +1256,11 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Стекло — в своём буфере, в общем его диапазоны нулевые
       const gattr = g.glass?.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
       let go = it.glassStart * 3;
-      for (const [a, b] of glassRanges(it)) {
-        pos.fill(0, o + a * 3, o + b * 3);
-        if (gattr && it.glassStart >= 0) {
-          const gp = gattr.array as Float32Array;
-          for (let i = a * 3; i < b * 3; i += 3, go += 3) tx(base, i, gp, go);
-          gattr.needsUpdate = true;
-        }
+      for (const [a, b] of glassRanges(it)) pos.fill(0, o + a * 3, o + b * 3);
+      if (gattr && it.glassStart >= 0) {
+        const gp = gattr.array as Float32Array;
+        for (const src of glassParts(it)) for (let i = 0; i < src.length; i += 3, go += 3) tx(src, i, gp, go);
+        gattr.needsUpdate = true;
       }
     }
     attr.needsUpdate = true;
@@ -1315,6 +1351,98 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   private snapLine?: THREE.Line;
+  private underground?: THREE.LineSegments;
+  private undergroundSpec?: { rings: LonLat[][]; depth: number };
+  /** Отрезки пунктира подземной части (локальные метры здания режима) — для выбора кликом. */
+  private undergroundSegs: [THREE.Vector3, THREE.Vector3][] = [];
+  private undergroundSelected = false;
+
+  /**
+   * Контур подземной части здания в режиме здания: пунктир — кольца на глубине depth (м, < 0) и на земле,
+   * вертикали в заметных углах. Виден только не закрытый зданием участок;
+   * выбранный — синий и целиком, сквозь здание. undefined — убрать.
+   */
+  setUnderground(spec: { rings: LonLat[][]; depth: number } | undefined) {
+    const same = (a?: typeof spec, b?: typeof spec) => a === b || (!!a && !!b && a.depth === b.depth && JSON.stringify(a.rings) === JSON.stringify(b.rings));
+    if (same(spec, this.undergroundSpec)) return;
+    this.undergroundSpec = spec;
+    if (!spec) this.undergroundSelected = false;
+    if (this.underground) {
+      this.underground.parent?.remove(this.underground);
+      this.underground.geometry.dispose();
+      this.underground = undefined;
+    }
+    this.undergroundSegs = [];
+    this.attachUnderground();
+    this.map?.triggerRepaint();
+  }
+
+  /** Выделить контур подземной части (подсветка сквозь здание). */
+  selectUnderground(on: boolean) {
+    if (this.undergroundSelected === on) return;
+    this.undergroundSelected = on;
+    if (this.underground) this.underground.material = on ? UNDERGROUND_SELECTED : UNDERGROUND_MATERIAL;
+    this.map?.triggerRepaint();
+  }
+
+  /**
+   * Клик по контуру подземной части: ближе UNDERGROUND_PICK_PX к видимому участку пунктира (не за гранью здания).
+   */
+  pickUnderground(point: PointLike): boolean {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g || !this.underground || !this.map) return false;
+    const [px, py] = Array.isArray(point) ? point : [point.x, point.y];
+    const canvas = this.map.getCanvas();
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const m = g.camera.projectionMatrix;
+    const scr = (v: THREE.Vector3) => { const q = v.clone().applyMatrix4(m); return [(q.x + 1) / 2 * w, (1 - q.y) / 2 * h, q.z] as const; };
+    let best: { d: number; z: number } | undefined;
+    for (const [a, b] of this.undergroundSegs) {
+      const [ax, ay, az] = scr(a), [bx, by, bz] = scr(b);
+      const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+      const t = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+      const d = Math.hypot(ax + t * dx - px, ay + t * dy - py);
+      if (d <= UNDERGROUND_PICK_PX && (!best || d < best.d)) best = { d, z: az + t * (bz - az) };
+    }
+    if (!best) return false;
+    // Здание перед пунктиром — клик по зданию
+    const hit = this.pickHitImpl(point);
+    if (!hit) return true;
+    // Плоский след (контур под частями, голый контур подземного здания) не закрывает: заливки у него не видно
+    const hitItem = g.byKey.get(hit.key);
+    if (hitItem && (strokeOnly(g, hitItem) || thinItem(hitItem))) return true;
+    const [lx, ly] = g.toLocal([hit.lngLat.lng, hit.lngLat.lat]);
+    return best.z <= new THREE.Vector3(lx, ly, hit.altitude).applyMatrix4(m).z + 1e-4;
+  }
+
+  /** Пунктир подземной части — в сцену здания режима (её группа пересоздаётся). */
+  private attachUnderground() {
+    const g = this.groups.get(FOCUS_GROUP), spec = this.undergroundSpec;
+    if (!g || !spec) return;
+    if (!this.underground) {
+      const segs: [THREE.Vector3, THREE.Vector3][] = [];
+      for (const ring of spec.rings) {
+        const loc = cornersOnly(ring.map(g.toLocal));
+        let last: Pt | undefined;
+        for (let i = 0; i < loc.length; i++) {
+          const [x0, y0] = loc[i], [x1, y1] = loc[(i + 1) % loc.length];
+          // Кольца на глубине и на земле (контур подземного здания на земле сам не обведён)
+          for (const z of [spec.depth, 0]) segs.push([new THREE.Vector3(x0, y0, z), new THREE.Vector3(x1, y1, z)]);
+          // Вертикали — только в заметных углах и не теснее UNDERGROUND_POST_GAP_M (зубцы контура — без частокола)
+          if (turnAt(loc, i) < UNDERGROUND_POST_TURN || (last && Math.hypot(x0 - last[0], y0 - last[1]) < UNDERGROUND_POST_GAP_M)) continue;
+          segs.push([new THREE.Vector3(x0, y0, spec.depth), new THREE.Vector3(x0, y0, 0)]);
+          last = loc[i];
+        }
+      }
+      this.undergroundSegs = segs;
+      this.underground = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(segs.flat()), this.undergroundSelected ? UNDERGROUND_SELECTED : UNDERGROUND_MATERIAL);
+      this.underground.computeLineDistances();
+      this.underground.frustumCulled = false;
+      this.underground.renderOrder = 998;
+      this.underground.raycast = () => {};
+    }
+    if (this.underground.parent !== g.scene) g.scene.add(this.underground);
+  }
 
   /** Пунктир продолжения ребра: от конца ребра до точки привязки. undefined — убрать. */
   setSnapLine(line: [THREE.Vector3, THREE.Vector3] | undefined) {
@@ -1856,13 +1984,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Скрытые остаются нулями — вырожденные треугольники не видны. Контуры под частями в просмотре — тоже:
     // их рисует обводка, а выбор кликом идёт по треугольникам здания (pickHit), так что выделить можно
     let glassTotal = 0;
+    this.hideCoveredGlass(g);
     for (const it of g.items) {
       it.glassStart = -1;
       if (g.hidden.has(it.feature.key) || strokeOnly(g, it)) continue;
       positions.set(it.positions, it.start * 3);
       // Стеклянные диапазоны — в отдельный буфер, в общем остаются нулями
       it.glassStart = glassTotal;
-      for (const [a, b] of glassRanges(it)) { positions.fill(0, (it.start + a) * 3, (it.start + b) * 3); glassTotal += b - a; }
+      for (const [a, b] of glassRanges(it)) positions.fill(0, (it.start + a) * 3, (it.start + b) * 3);
+      for (const src of glassParts(it)) glassTotal += src.length / 3;
     }
     this.cutVoids(g, positions);
     const geom = new THREE.BufferGeometry();
@@ -1887,7 +2017,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const it of g.items) {
         if (g.hidden.has(it.feature.key) || strokeOnly(g, it)) continue;
         let o = it.glassStart;
-        for (const [a, b] of glassRanges(it)) { gp.set(it.positions.subarray(a * 3, b * 3), o * 3); o += b - a; }
+        for (const src of glassParts(it)) { gp.set(src, o * 3); o += src.length / 3; }
       }
       this.cutVoids(g, gp);
       const gg = new THREE.BufferGeometry();
@@ -1901,6 +2031,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     this.paintGroup(g);
     this.applyEdges(g);
+    if (g === this.groups.get(FOCUS_GROUP)) this.attachUnderground();
     this.applyStrokes(g);
   }
 
@@ -2033,6 +2164,44 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (performance.now() > deadline) console.warn(`[levels] оболочка здания не досчитана за ${SHELL_BUDGET_MS} мс — часть граней внутри частей осталась`);
     }, () => `${g.items.length} объектов, пересчитано ${done}`);
     g.shellOf = { bases: g.items.map((it) => it.full!.positions), hidden };
+  }
+
+  /**
+   * Стеклянные стены, совпадающие с непрозрачной соседней частью того же слоя (стеклянная пристройка к стене),
+   * — вырезаются (glassTrim): две грани в одной плоскости дают рябь. Общая стена двух стеклянных частей остаётся
+   * у одной из них (с меньшим ключом). В оболочке этажей всё это уже вырезал applyShell.
+   */
+  private hideCoveredGlass(g: MeshGroup) {
+    const glassy = g.items.filter((it) => glassEnabled && it.glassWalls && it.wallVertices && !g.hidden.has(it.feature.key) && !strokeOnly(g, it));
+    for (const it of g.items) if (!glassy.includes(it)) it.glassTrim = undefined;
+    if (!glassy.length) return;
+    if (g.shellOf) { for (const it of glassy) it.glassTrim = undefined; return; }
+    let others: { it: Item; box: [number, number, number, number]; solid?: PreparedSolid }[] | undefined;
+    for (const it of glassy) {
+      if (it.glassTrim?.src === it.positions) continue;
+      others ??= g.items.filter((o) => shellSolid(g, o)).map((o) => ({ it: o, box: positionsBox(o.positions) }));
+      const b = positionsBox(it.positions.subarray(0, it.wallVertices * 3));
+      const key = it.feature.key;
+      const deps = others.filter((o) => (!(glassEnabled && o.it.glassWalls) || o.it.feature.key < key) && o.it !== it && o.box[0] <= b[2] + 0.1 && o.box[2] >= b[0] - 0.1 && o.box[1] <= b[3] + 0.1 && o.box[3] >= b[1] - 0.1).map((o) => {
+        if (!o.solid) {
+          const h = computeHeights(o.it.tags);
+          const n = o.it.positions.length / 3;
+          o.solid = prepareSolid({
+            polys: o.it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })),
+            min: h.min, wallTop: o.it.roofApproximated ? h.top : h.wallTop,
+            roof: o.it.positions.subarray(o.it.wallVertices * 3, (n - o.it.floorVertices) * 3),
+            glassWalls: false, glassRoof: glassEnabled && o.it.glassRoof,
+          });
+        }
+        return o.solid;
+      });
+      let walls = it.positions.subarray(0, it.wallVertices * 3);
+      if (deps.length) {
+        const polys = it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+        walls = new Float32Array(trimTriangles(it.positions, 0, it.wallVertices, polys, true, deps));
+      }
+      it.glassTrim = { src: it.positions, walls };
+    }
   }
 
   /**
@@ -2297,7 +2466,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const gc = glassAttr.array as Float32Array;
     const c = selected ? HIGHLIGHT : this.monochrome ? GLASS_MONO : GLASS;
     let o = it.glassStart * 3;
-    for (const [a, b] of glassRanges(it)) for (let v = a; v < b; v++, o += 3) { gc[o] = c.r; gc[o + 1] = c.g; gc[o + 2] = c.b; }
+    for (const src of glassParts(it)) for (let v = 0; v < src.length; v += 3, o += 3) { gc[o] = c.r; gc[o + 1] = c.g; gc[o + 2] = c.b; }
   }
 }
 
@@ -2874,6 +3043,11 @@ const isGlass = (v: string | undefined) => !!v && v.split(';')[0].trim().toLower
 let glassEnabled = true;
 
 /** Диапазоны вершин здания, рисуемые стеклом: [от, до). */
+/** Вершины стеклянного буфера части по порядку: стены (подрезанные соседями, если посчитано) и крыша. */
+function glassParts(it: Item): Float32Array[] {
+  return glassRanges(it).map(([a, b]) => (a === 0 && it.glassTrim?.src === it.positions ? it.glassTrim.walls : it.positions.subarray(a * 3, b * 3)));
+}
+
 function glassRanges(it: Item): [number, number][] {
   const n = it.positions.length / 3, out: [number, number][] = [];
   if (!glassEnabled) return out;

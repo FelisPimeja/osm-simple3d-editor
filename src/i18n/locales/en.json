@@ -252,6 +252,7 @@
   "есть поэтажный план": "floor plan available",
   "высота этажа {h} м — вне {min}–{max} м": "level height {h} m is outside {min}–{max} m",
   "пол на {z} м — для этого этажа ожидается {lo}–{hi} м": "floor at {z} m; expected {lo}–{hi} m for this level",
+  "Подземная часть здания: до {d} м под землёй.": "Underground part of the building: down to {d} m below ground.",
   "{floor}–{ceil} м": "{floor}–{ceil} m",
   "Нет этажности (building:levels) и indoor-данных": "No levels (building:levels) or indoor data",
   "ошибок {n}": "errors: {n}",

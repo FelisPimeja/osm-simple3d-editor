@@ -884,6 +884,15 @@ map.on('click', (e) => {
     if (room) { selectIndoor(room); return; }
   }
   if (selectedIndoor) selectIndoor(undefined);
+  // Контур подземной части (режим здания, всё здание): только подсветка, объекта OSM за ним нет
+  const under = !!focus && !shownLevel && !addingTo && !e.originalEvent.shiftKey && overpassLayer.pickUnderground(e.point);
+  overpassLayer.selectUnderground(under);
+  if (under) {
+    select(undefined);
+    const depth = Math.min(0, ...withIndoorLevels(focusLevels(focus!), buildingIndoor(focus!)).filter((l) => l.n < 0).map((l) => l.floor));
+    setStatus(tr('Подземная часть здания: до {d} м под землёй.', { d: (-depth).toFixed(1) }));
+    return;
+  }
   const key = e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point);
   if (addingTo) {
     if (e.originalEvent.shiftKey) { if (key) toggleAddPending(key); return; }
@@ -3909,6 +3918,20 @@ function levelIssue(l: Level): string | undefined {
   return undefined;
 }
 
+/**
+ * Подземная часть здания для пунктира в общем виде: глубина — пол нижнего подземного этажа; контур — части
+ * с building:levels:underground, а если подвал известен только из indoor-данных — контур здания (или все части).
+ */
+function undergroundOutline(g: BuildingGroup, levels: Level[]): { rings: LonLat[][]; depth: number } | undefined {
+  const depth = Math.min(0, ...levels.filter((l) => l.n < 0).map((l) => l.floor));
+  if (depth > -0.5) return undefined;
+  const feats = groupFeatures(g);
+  let src = feats.filter((f) => Number(f.tags['building:levels:underground']) > 0);
+  if (!src.length) src = feats.filter((f) => f.kind === 'building');
+  if (!src.length) src = feats;
+  return { rings: src.flatMap((f) => f.polygons.flatMap((p) => [p.outer, ...p.inners])), depth };
+}
+
 function renderLevels() {
   scheduleIndoorBadges(); timed('этажи: панель', renderLevelsImpl); }
 
@@ -3916,6 +3939,7 @@ function renderLevelsImpl() {
   levelsPanel.hidden = !focus;
   if (!focus) {
     levelsEl.innerHTML = '';
+    overpassLayer.setUnderground(undefined);
     indoorPois.set([], 0);
     shownLevel = undefined;
     shownIndoor = [];
@@ -3945,6 +3969,7 @@ function renderLevelsImpl() {
       + `<span class="lv-name"><span class="lv-plan">${planned.has(l.n) ? ICON_PLAN : ''}</span>${LEVEL_NAME(l.n)}</span>`
       + `<span class="lv-meta">${levelIssue(l) ? `<span class="lv-warn" title="${esc(levelIssue(l)!)}">!</span>` : ''}${tr('{floor}–{ceil} м', { floor: l.floor.toFixed(1), ceil: l.ceil.toFixed(1) })}</span></li>`).join('') + levelSources(levels)
     : `<li class="lv-empty">${tr('Нет этажности (building:levels) и indoor-данных')}</li>`;
+  overpassLayer.setUnderground(currentLevel === undefined ? undergroundOutline(focus, levels) : undefined);
   const level = levels.find((l) => l.n === currentLevel);
   const onLevel = level ? indoor.filter((f) => f.levels.includes(level.n)) : [];
   shownLevel = level;

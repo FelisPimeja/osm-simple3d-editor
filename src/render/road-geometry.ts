@@ -28,6 +28,8 @@ const LOW_BRIDGE_M = 1.5;
 const HUMP_PATH_MAX_M = 2;
 /** Шаг сгущения линий, м: высота меняется плавно и между далёкими узлами. */
 const DENSIFY_M = 8;
+/** Подход smoothstep: во столько раз длиннее прямого с тем же наибольшим уклоном. */
+const RAMP_EASE = 1.5;
 const SMOOTH_ITERATIONS = 40;
 /** Ниже этого |высоты| подход считается лежащим на земле и не рисуется, м. */
 const GROUND_EPS = 0.05;
@@ -551,22 +553,28 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
     for (const v of deckAdj.keys()) if (height[v] > 0) pinned[v] = 1;
   }
 
+  // Подход — S-образный (smoothstep): полого у земли, круче посередине, полого у полотна, без изломов. Наибольший
+  // уклон smoothstep — в 1,5 раза больше среднего, поэтому конус идёт с уклоном / 1,5 (подход длиннее), а высота —
+  // по доле пройденного спуска от вершины, откуда он начат
   const cone = (sign: 1 | -1) => {
-    const best = new Float64Array(n);
+    const best = new Float64Array(n), src = new Float64Array(n);
     const heap = new MinHeap();
-    for (let v = 0; v < n; v++) if (pinned[v] && height[v] * sign > 0) { best[v] = height[v] * sign; heap.push(v, -best[v]); }
+    for (let v = 0; v < n; v++) if (pinned[v] && height[v] * sign > 0) { best[v] = src[v] = height[v] * sign; heap.push(v, -best[v]); }
     while (heap.size) {
       const [v, k] = heap.pop();
       if (-k < best[v]) continue;
       for (const ei of adj[v]) {
         const u = other(edges[ei], v);
         if (pinned[u]) continue;
-        const cand = best[v] - grade[ei] * len(edges[ei]);
+        // Лестница — своим крутым уклоном, без растяжки
+        const cand = best[v] - (steps[ei] ? grade[ei] : grade[ei] / RAMP_EASE) * len(edges[ei]);
         if (cand <= best[u]) continue;
         best[u] = cand;
+        src[u] = src[v];
         heap.push(u, -cand);
       }
     }
+    for (let v = 0; v < n; v++) if (!pinned[v] && best[v] > 0) { const t = best[v] / src[v]; best[v] = src[v] * t * t * (3 - 2 * t); }
     return best;
   };
   const up = cone(1), down = cone(-1);
@@ -687,14 +695,16 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
       seen.add(fj);
       const f = edges[fj];
       if (f.way === e.way || !drawn[fj]) continue;
-      if (bridge ? group[f.way] !== group[e.way] : (wayHeight[f.way] ?? 0) > 0) continue;
+      // Мост с подходом соседней проезжей части (концы мостов встречных полос не напротив) — тоже, если вровень
+      const fBridge = (wayHeight[f.way] ?? 0) > 0;
+      if (bridge && fBridge && group[f.way] !== group[e.way]) continue;
       const lf = len(f) || 1, vx = (xs[f.b] - xs[f.a]) / lf, vy = (ys[f.b] - ys[f.a]) / lf;
       if (Math.abs(ux * vx + uy * vy) < SIDE_BY_SIDE_COS) continue;
       // Середина отрезка e проецируется на отрезок f; поперечное смещение — по нормали e (+ — слева)
       const t = (mx - xs[f.a]) * vx + (my - ys[f.a]) * vy;
       if (t < 0 || t > lf) continue;
       const px = xs[f.a] + vx * t, py = ys[f.a] + vy * t;
-      if (!bridge && Math.abs((height[f.a] + (height[f.b] - height[f.a]) * (t / lf)) - (height[e.a] + height[e.b]) / 2) > RAMP_JOIN_DH_M) continue;
+      if (!(bridge && fBridge) && Math.abs((height[f.a] + (height[f.b] - height[f.a]) * (t / lf)) - (height[e.a] + height[e.b]) / 2) > RAMP_JOIN_DH_M) continue;
       const sOff = (px - mx) * -uy + (py - my) * ux;
       const tol = (widths[e.way] + widths[f.way]) / 2 + SIDE_BY_SIDE_TOL_M;
       if (Math.abs(sOff) > tol) continue;
@@ -888,7 +898,7 @@ export function buildRoadMesh(ways: RoadWay[], toLocal: (p: LonLat) => [number, 
     const top = isRailTags(te) && isRailTags(tf) ? BALLAST : PATHS.has(te.highway) && PATHS.has(tf.highway) ? PATH_TOP : ASPHALT;
     quad(solid, solidC, top, pa, pb, qb, qa);
     // Между подходами — насыпь до земли, под ней не видно; между мостами — низ настила
-    if ((wayHeight[e.way] ?? 0) > 0) quad(solid, solidC, CONCRETE, [pa[0], pa[1], pa[2] - DECK_M], [qa[0], qa[1], qa[2] - DECK_M], [qb[0], qb[1], qb[2] - DECK_M], [pb[0], pb[1], pb[2] - DECK_M]);
+    if ((wayHeight[e.way] ?? 0) > 0 || (wayHeight[f.way] ?? 0) > 0) quad(solid, solidC, CONCRETE, [pa[0], pa[1], pa[2] - DECK_M], [qa[0], qa[1], qa[2] - DECK_M], [qb[0], qb[1], qb[2] - DECK_M], [pb[0], pb[1], pb[2] - DECK_M]);
   }
 
   // Разделитель посередине между встречными проезжими частями общего полотна: невысокий бортик по стыку лент

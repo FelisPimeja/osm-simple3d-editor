@@ -8,6 +8,8 @@ import { hash, NEEDLE_FLAG, scatterTrees, TREE_STRIDE, TreeField as F, WOOD_FLAG
 /** Дерево в 15 м ниже этого на экране (во всём тайле) — упрощённые модели, px. */
 const FAR_PX = 30;
 const PROBE_HEIGHT = 15;
+/** Стволы леса — только если 15-метровое дерево где-то в тайле крупнее этого, px (ближе, чем подробные кроны). */
+const WOOD_TRUNK_PX = 90;
 
 let worker: Worker | undefined;
 let nextJob = 1;
@@ -141,6 +143,8 @@ export class TreeGroup {
   readonly model: THREE.Matrix4;
   readonly count: number;
   private readonly trunks: THREE.InstancedMesh;
+  /** Стволы деревьев леса: их много и под пологом их не видно издалека — только совсем вблизи (WOOD_TRUNK_PX). */
+  private readonly woodTrunks: THREE.InstancedMesh;
   private readonly broad: THREE.InstancedMesh;
   private readonly broadSeeds: Float32Array;
   private readonly lat: number;
@@ -167,13 +171,15 @@ export class TreeGroup {
 
     const total = trees.length / TREE_STRIDE;
     this.count = total;
-    let needles = 0, trunked = 0;
+    let needles = 0, trunked = 0, woodTrunked = 0;
     for (let i = 0; i < total; i++) {
       const flags = trees[i * TREE_STRIDE + F.FLAGS];
       if (flags & NEEDLE_FLAG) needles++;
       if (!(flags & WOOD_FLAG)) trunked++;
+      else if (trees[i * TREE_STRIDE + F.TRUNK] > 0) woodTrunked++;
     }
     const trunks = new THREE.InstancedMesh(TRUNK_GEO, TRUNK_MATERIAL, trunked);
+    const woodTrunks = new THREE.InstancedMesh(TRUNK_GEO, TRUNK_MATERIAL, woodTrunked);
     const broad = new THREE.InstancedMesh(BROAD_GEO, BROAD_MATERIAL, total - needles);
     const needle = new THREE.InstancedMesh(NEEDLE_GEO, NEEDLE_MATERIAL, needles);
     const m = new THREE.Matrix4();
@@ -182,7 +188,7 @@ export class TreeGroup {
     const pos = new THREE.Vector3();
     const scale = new THREE.Vector3();
     const colour = new THREE.Color();
-    let b = 0, nd = 0, tr = 0;
+    let b = 0, nd = 0, tr = 0, wtr = 0;
     this.broadSeeds = new Float32Array(total - needles);
     this.lat = (s + n) / 2;
     for (let i = 0; i < total; i++) {
@@ -193,10 +199,11 @@ export class TreeGroup {
       // Крона: у лиственного — верхние 65 % высоты, у хвойного — от 15 % до верха; ствол уходит в крону
       const base = height * (isNeedle ? 0.15 : 0.35);
       q.setFromAxisAngle(zAxis, seed * Math.PI * 2);
-      if (!(flags & WOOD_FLAG)) {
-        const trunk = trees[o + F.TRUNK];
+      const trunk = trees[o + F.TRUNK];
+      if (trunk > 0) {
         m.compose(pos.set(x, y, 0), q, scale.set(trunk, trunk, base + (height - base) * 0.3));
-        trunks.setMatrixAt(tr++, m);
+        if (!(flags & WOOD_FLAG)) trunks.setMatrixAt(tr++, m);
+        else woodTrunks.setMatrixAt(wtr++, m);
       }
       m.compose(pos.set(x, y, base), q, scale.set(crown / 2, crown / 2, height - base));
       // Разброс оттенка: светлее/темнее и чуть теплее/холоднее — множитель к цвету материала
@@ -214,11 +221,12 @@ export class TreeGroup {
     };
     // Стволы — только у отдельных деревьев и рядов, их немного: остаются и на дальнем плане (иначе кроны висят в воздухе)
     this.trunks = trunks;
+    this.woodTrunks = woodTrunks;
     this.broad = broad;
     this.recolour();
     this.near.push(broad, needle);
     this.far.push(farOf(broad, BROAD_FAR_GEO), farOf(needle, NEEDLE_FAR_GEO));
-    for (const mesh of [trunks, ...this.near, ...this.far]) {
+    for (const mesh of [trunks, woodTrunks, ...this.near, ...this.far]) {
       mesh.frustumCulled = false;
       if (mesh.count) this.scene.add(mesh);
     }
@@ -261,7 +269,7 @@ export class TreeGroup {
    */
   prepare(viewportHeight: number): boolean {
     const pm = this.camera.projectionMatrix;
-    let far = true;
+    let far = true, trunks = false;
     // Отсечение: все углы тайла (на земле и на высоте деревьев) по одну сторону одной плоскости кадра
     let left = 0, right = 0, below = 0, above = 0, behind = 0;
     for (const p of this.probes) {
@@ -275,12 +283,16 @@ export class TreeGroup {
         if (v.w <= 0) behind++;
       }
       // Точка за камерой — тайл тянется прямо под неё, значит рядом
-      if (this.a.w <= 0 || this.b.w <= 0) far = false;
-      else if (Math.abs(this.b.y / this.b.w - this.a.y / this.a.w) * viewportHeight / 2 > FAR_PX) far = false;
+      if (this.a.w <= 0 || this.b.w <= 0) { far = false; trunks = true; } else {
+        const px = Math.abs(this.b.y / this.b.w - this.a.y / this.a.w) * viewportHeight / 2;
+        if (px > FAR_PX) far = false;
+        if (px > WOOD_TRUNK_PX) trunks = true;
+      }
     }
     const all = this.probes.length * 2;
     if (left === all || right === all || below === all || above === all || behind === all) return false;
     this.setFar(far);
+    this.woodTrunks.visible = trunks;
     return true;
   }
 
@@ -293,6 +305,7 @@ export class TreeGroup {
 
   dispose() {
     this.trunks.dispose();
+    this.woodTrunks.dispose();
     for (const mesh of this.near) mesh.dispose();
     for (const mesh of this.far) mesh.dispose();
     this.scene.clear();

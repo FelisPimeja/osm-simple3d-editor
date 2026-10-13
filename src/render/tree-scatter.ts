@@ -16,7 +16,7 @@ const BUILDING_CELL = 40;
 /** Дерево в мировых координатах Меркатора: размеры в метрах, seed — для разброса цвета и поворота. */
 interface TreeInstance { mx: number; my: number; needle: boolean; wood?: boolean; height: number; crown: number; trunk: number; seed: number }
 
-/** Поля дерева в упакованном массиве; FLAGS: 1 — хвойное, 2 — лесное (ствол под пологом не рисуется). */
+/** Поля дерева в упакованном массиве; FLAGS: 1 — хвойное, 2 — лесное (ствол под пологом — только вблизи). */
 export const TreeField = { MX: 0, MY: 1, HEIGHT: 2, CROWN: 3, TRUNK: 4, SEED: 5, FLAGS: 6 } as const;
 export const TREE_STRIDE = 7;
 export const NEEDLE_FLAG = 1;
@@ -174,7 +174,7 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
           const height = (needle ? 19 : 16) * (0.8 + 0.4 * r);
           // Кроны — по шагу сетки: полог почти сомкнут, сколько бы деревьев ни уместилось в тайл
           const crown = needle ? Math.min(height * 0.45, Math.max(height * 0.25, stepM * 0.95)) : Math.min(height * 0.8, Math.max(height * 0.4, stepM * 1.2));
-          out.push({ mx: x, my: y, needle, wood: true, height, crown, trunk: 0, seed: hash(i, j, 5) });
+          out.push({ mx: x, my: y, needle, wood: true, height, crown, trunk: Math.min(0.6, Math.max(0.12, height * 0.022)), seed: hash(i, j, 5) });
         }
       }
     }

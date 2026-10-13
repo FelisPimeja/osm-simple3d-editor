@@ -3565,6 +3565,9 @@ let currentLevel: number | undefined;
 let levelsFocusKey: string | undefined;
 let levelSignature = '';
 
+/** Правдоподобный шаг этажа, м: часть с шагом вне этих границ в сетку этажей не попадает. */
+const MIN_LEVEL_STEP = 2, MAX_LEVEL_STEP = 10;
+
 /**
  * Этажи здания по этажности частей и контура: у каждого объекта с building:levels — этажи от building:min_level
  * до верхнего (высота этажа — стены поровну на этажи) и подземные из building:levels:underground. Номер этажа
@@ -3576,10 +3579,14 @@ function focusLevels(g: BuildingGroup): Level[] {
     const t = f.tags;
     const levels = Number(t['building:levels']);
     if (!Number.isFinite(levels) || levels <= 0) continue;
-    const minLevel = Number(t['building:min_level']) || 0;
     const under = Math.max(0, Math.round(Number(t['building:levels:underground']) || 0));
     const h = computeHeights(t);
+    // Без building:min_level у поднятой части (надстройка на крыше) нижний этаж — по min_height, а не нулевой
+    const minLevel = t['building:min_level'] !== undefined ? Number(t['building:min_level']) || 0
+      : h.min > 0 ? Math.round(h.min / LEVEL_HEIGHT) : 0;
     const step = levels > minLevel ? (h.wallTop - h.min) / (levels - minLevel) : LEVEL_HEIGHT;
+    // Противоречивые теги (23 этажа в 3 м и т. п.) — такую часть в сетку этажей не берём
+    if (step < MIN_LEVEL_STEP || step > MAX_LEVEL_STEP) continue;
     // Этаж, который описывают несколько объектов, берём у самого надёжного: часть точнее контура (контур
     // под частями — обычно общая этажность с высотой по умолчанию), явная высота точнее этажей × 3 м;
     // при равенстве — у объекта с большим числом этажей. Шаг у каждой части свой: первые этажи бывают выше
@@ -3890,6 +3897,18 @@ function selectRoad(w: RoadWay, add = false) {
 const LEVEL_NAME = (n: number) => (n < 0 ? tr('Подземный {n}', { n: -n }) : tr('{n} этаж', { n: n + 1 }));
 
 /** Панель этажей режима здания: список по этажности и indoor-данным, клик — срез здания выше этажа. */
+/**
+ * Почему этаж выбивается из ожидаемых высот (для «!» в панели): высота этажа вне MIN/MAX_LEVEL_STEP
+ * или пол не там, где этаж с таким номером может быть при правдоподобных этажах (1 м допуска).
+ */
+function levelIssue(l: Level): string | undefined {
+  const h = l.ceil - l.floor;
+  if (h < MIN_LEVEL_STEP || h > MAX_LEVEL_STEP) return tr('высота этажа {h} м — вне {min}–{max} м', { h: h.toFixed(1), min: MIN_LEVEL_STEP, max: MAX_LEVEL_STEP });
+  const [lo, hi] = l.n >= 0 ? [l.n * MIN_LEVEL_STEP, l.n * MAX_LEVEL_STEP] : [l.n * MAX_LEVEL_STEP, l.n * MIN_LEVEL_STEP];
+  if (l.floor < lo - 1 || l.floor > hi + 1) return tr('пол на {z} м — для этого этажа ожидается {lo}–{hi} м', { z: l.floor.toFixed(1), lo, hi });
+  return undefined;
+}
+
 function renderLevels() {
   scheduleIndoorBadges(); timed('этажи: панель', renderLevelsImpl); }
 
@@ -3924,7 +3943,7 @@ function renderLevelsImpl() {
     ? `<li class="${currentLevel === undefined ? 'selected' : ''}" data-level=""><span class="lv-name"><span class="lv-plan"></span>${tr('Всё здание')}</span></li>` + levels.map((l) =>
       `<li class="${l.n === currentLevel ? 'selected' : ''}" data-level="${l.n}" title="level=${l.n} · ${l.src ? tr('по тегам {link}', { link: l.src }) : tr('из indoor-данных')}${planned.has(l.n) ? ' · ' + tr('есть поэтажный план') : ''}">`
       + `<span class="lv-name"><span class="lv-plan">${planned.has(l.n) ? ICON_PLAN : ''}</span>${LEVEL_NAME(l.n)}</span>`
-      + `<span class="lv-meta">${tr('{floor}–{ceil} м', { floor: l.floor.toFixed(1), ceil: l.ceil.toFixed(1) })}</span></li>`).join('') + levelSources(levels)
+      + `<span class="lv-meta">${levelIssue(l) ? `<span class="lv-warn" title="${esc(levelIssue(l)!)}">!</span>` : ''}${tr('{floor}–{ceil} м', { floor: l.floor.toFixed(1), ceil: l.ceil.toFixed(1) })}</span></li>`).join('') + levelSources(levels)
     : `<li class="lv-empty">${tr('Нет этажности (building:levels) и indoor-данных')}</li>`;
   const level = levels.find((l) => l.n === currentLevel);
   const onLevel = level ? indoor.filter((f) => f.levels.includes(level.n)) : [];

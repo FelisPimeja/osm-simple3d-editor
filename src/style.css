@@ -83,6 +83,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .levels li.selected .lv-plan { color: #2563eb; }
 .levels .lv-plan svg { width: 16px; height: 16px; display: block; }
 .levels .lv-meta { color: #888; font-size: 11px; white-space: nowrap; }
+.levels .lv-warn { display: inline-block; width: 14px; height: 14px; margin-right: 4px; border-radius: 50%; background: #f59e0b; color: #fff; font-weight: 700; font-size: 10px; line-height: 14px; text-align: center; cursor: help; }
 .levels .lv-empty { color: #888; cursor: default; }
 .levels .lv-empty:hover { background: transparent; }
 #outliner-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }

@@ -272,6 +272,10 @@ export class OverpassTiles {
 
   private indexGroups(groups: BuildingGroup[]) {
     for (const g of groups) {
+      const previous = this.groups.get(g.key);
+      if (previous) for (const member of previous.members) {
+        if (!g.members.includes(member) && this.memberGroup.get(member) === g.key) this.memberGroup.delete(member);
+      }
       this.groups.set(g.key, g);
       for (const m of g.members) {
         const cur = this.memberGroup.get(m);

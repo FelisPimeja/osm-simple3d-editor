@@ -177,6 +177,30 @@ export async function fetchElements(keys: string[], api = server().api): Promise
   return out;
 }
 
+/** Актуальное здание: отношение, все вложенные отношения и пути, затем все их узлы. */
+export async function fetchBuildingElements(root: string, api = server().api): Promise<OsmElement[]> {
+  const elements = new Map<string, OsmWay | OsmRelation | VersionedNode>();
+  let pending = [root];
+  while (pending.length) {
+    const keys = [...new Set(pending)].filter((key) => !elements.has(key));
+    if (!keys.length) break;
+    const batch = await fetchElements(keys, api);
+    for (const key of keys) if (!batch.has(key)) throw new Error(`OSM: ${key} отсутствует на сервере`);
+    pending = [];
+    for (const [key, element] of batch) {
+      elements.set(key, element);
+      if (element.type === 'relation') {
+        for (const member of element.members) if (member.type !== 'node') pending.push(`${member.type}/${member.ref}`);
+      }
+    }
+  }
+  const nodeIds = new Set<number>();
+  for (const element of elements.values()) if (element.type === 'way') for (const id of element.nodes) nodeIds.add(id);
+  const nodes = await fetchNodes([...nodeIds], api);
+  for (const id of nodeIds) if (!nodes.has(id)) throw new Error(`OSM: node/${id} отсутствует на сервере`);
+  return [...elements.values(), ...nodes.values()];
+}
+
 /** Отношения, в которые входит путь (текущие версии). */
 export async function fetchWayRelations(id: number, api = server().api): Promise<OsmRelation[]> {
   const res = await getJson(`${api}/way/${id}/relations.json`);

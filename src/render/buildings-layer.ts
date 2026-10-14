@@ -923,6 +923,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       const boxDepth = 0.7;
       const edge = (p: ReturnType<typeof at>, sign: number, z = p.z): [number, number, number] =>
         [p.x + sign * halfWidth * p.nx, p.y + sign * halfWidth * p.ny, z];
+      const stepEdge = (p: ReturnType<typeof at>, sign: number, z: number): [number, number, number] =>
+        [p.x + sign * (halfWidth - 0.1) * p.nx, p.y + sign * (halfWidth - 0.1) * p.ny, z];
       const quad = (out: number[], a: number[], b: number[], c: number[], d: number[]) =>
         out.push(...a, ...b, ...c, ...a, ...c, ...d);
       let previousTreadZ: number | undefined;
@@ -930,14 +932,15 @@ export class BuildingsLayer implements CustomLayerInterface {
         const a = at(distances[i - 1]), b = at(distances[i]);
         // На склоне проступь лежит на высоте верхнего конца отрезка.
         const z = i === 1 || i === distances.length - 1 ? a.z : ascending ? b.z : a.z;
-        quad(treads, edge(a, -1, z), edge(b, -1, z), edge(b, 1, z), edge(a, 1, z));
+        quad(treads, stepEdge(a, -1, z), stepEdge(b, -1, z), stepEdge(b, 1, z), stepEdge(a, 1, z));
         quad(body, edge(a, 1, a.z - boxDepth), edge(b, 1, b.z - boxDepth), edge(b, -1, b.z - boxDepth), edge(a, -1, a.z - boxDepth));
         for (const sign of [-1, 1]) {
           quad(body, edge(a, sign, a.z - boxDepth), edge(b, sign, b.z - boxDepth), edge(b, sign, z), edge(a, sign, z));
+          quad(body, stepEdge(a, sign, z), stepEdge(b, sign, z), edge(b, sign, z), edge(a, sign, z));
         }
         if (previousTreadZ !== undefined && Math.abs(z - previousTreadZ) > 1e-4) {
           const low = Math.min(z, previousTreadZ), high = Math.max(z, previousTreadZ);
-          quad(risers, edge(a, -1, low), edge(a, -1, high), edge(a, 1, high), edge(a, 1, low));
+          quad(risers, stepEdge(a, -1, low), stepEdge(a, -1, high), stepEdge(a, 1, high), stepEdge(a, 1, low));
         }
         previousTreadZ = z;
       }
@@ -959,7 +962,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         ...Array.from({ length: 9 }, (_, i) => length - landing - bend * i / 8)].filter(
           (d) => d >= landing && d <= length - landing).sort((a, b) => a - b))];
       const sideEdge = (p: ReturnType<typeof at>, sign: number, z: number): [number, number, number] =>
-        [p.x + sign * (halfWidth + 0.08) * p.nx, p.y + sign * (halfWidth + 0.08) * p.ny, z];
+        [p.x + sign * (halfWidth - 0.02) * p.nx, p.y + sign * (halfWidth - 0.02) * p.ny, z];
       const canvas = this.map!.getCanvas();
       const dpr = canvas.width / Math.max(1, canvas.clientWidth);
       ESCALATOR_HANDRAIL.linewidth = 5 * dpr;

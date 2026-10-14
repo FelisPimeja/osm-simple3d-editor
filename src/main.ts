@@ -4741,6 +4741,11 @@ function visibleMapIssues(): Issue[] {
   return issues;
 }
 
+/** Принадлежность проблемы зданию для группировки в режиме карты. */
+function issueBuildingKey(issue: Issue): string {
+  return groupOf(issue.key)?.key ?? issue.fix?.removeFromGroup ?? issue.key;
+}
+
 function scheduleMapIssues() {
   if (focus || mapIssuesTimer) return;
   mapIssuesDirty = true;
@@ -4774,9 +4779,14 @@ function renderIssues() {
   const warnings = currentIssues.length - errors;
   issuesCount.textContent = `(${[errors ? tr('ошибок {n}', { n: errors }) : '', warnings || !errors ? tr('предупреждений {n}', { n: warnings }) : ''].filter(Boolean).join(', ')})`;
   const sorted = (list: Issue[]) => [...list].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
-  shownIssues = focus ? [...sorted(simpleIssues), ...sorted(indoorIssues)] : sorted(mapIssues);
-  const group = (title: string, list: Issue[], start: number) => list.length ? `<section class="issue-group">
-    <h2>${title} <span class="hint">(${list.length})</span></h2>
+  const mapGroups = new Map<string, Issue[]>();
+  if (!focus) for (const issue of mapIssues) {
+    const key = issueBuildingKey(issue);
+    (mapGroups.get(key) ?? mapGroups.set(key, []).get(key)!).push(issue);
+  }
+  shownIssues = focus ? [...sorted(simpleIssues), ...sorted(indoorIssues)] : [...mapGroups.values()].flatMap(sorted);
+  const group = (title: string, list: Issue[], start: number, buildingKey?: string) => list.length ? `<section class="issue-group${buildingKey ? ' issue-building' : ''}${buildingKey && selection.includes(buildingKey) ? ' selected' : ''}"${buildingKey ? ` data-building-key="${esc(buildingKey)}"` : ''}>
+    <h2>${esc(title)} <span class="hint">(${list.length})</span></h2>
     <ul class="issue-list">${list.map((i, offset) => {
       const n = start + offset;
       return `<li class="${i.level}${selection.includes(i.key) || (i.other && selection.includes(i.other)) ? ' selected' : ''}" data-i="${n}" data-key="${esc(i.key)}"${i.other ? ` data-other="${esc(i.other)}"` : ''}>
@@ -4785,20 +4795,21 @@ function renderIssues() {
         ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</li>`;
     }).join('')}</ul></section>` : '';
   issuesEl.innerHTML = focus ? group('Simple 3D', shownIssues.slice(0, simpleIssues.length), 0)
-    + group('Indoor', shownIssues.slice(simpleIssues.length), simpleIssues.length) : group('Simple 3D', shownIssues, 0);
+    + group('Indoor', shownIssues.slice(simpleIssues.length), simpleIssues.length)
+    : [...mapGroups].map(([key, list], i, all) => group(key, sorted(list), all.slice(0, i).reduce((n, [, prev]) => n + prev.length, 0), key)).join('');
   const fixable = shownIssues.filter((i) => i.fix).length;
   issuesFixAll.hidden = !focus || !fixable;
   issuesFixAll.textContent = tr('Применить все исправления ({n})', { n: fixable });
 }
 
-/** При выборе одной части показать её первую проблему, включая проблему пары частей. */
+/** В здании прокрутить к проблеме части, на карте — к секции выбранного здания. */
 function scrollToSelectedIssues() {
-  if (!focus || selection.length !== 1 || issuesPanel.hidden) return;
+  if (selection.length !== 1 || issuesPanel.hidden) return;
   const key = selection[0];
-  if (!focus.members.some((member, i) => member === key && focus!.roles[i] === 'part')) return;
-  const index = shownIssues.findIndex((issue) => issue.key === key || issue.other === key);
-  if (index < 0) return;
-  const row = issuesEl.querySelector<HTMLElement>(`li[data-i="${index}"]`);
+  if (focus && !focus.members.some((member, i) => member === key && focus!.roles[i] === 'part')) return;
+  const index = focus ? shownIssues.findIndex((issue) => issue.key === key || issue.other === key) : -1;
+  const row = focus ? issuesEl.querySelector<HTMLElement>(`li[data-i="${index}"]`)
+    : [...issuesEl.querySelectorAll<HTMLElement>('.issue-building')].find((section) => section.dataset.buildingKey === key);
   const body = issuesPanel.querySelector<HTMLElement>('.panel-body');
   if (!row || !body) return;
   if (issuesPanel.classList.contains('collapsed')) setCollapsed(issuesPanel, false);
@@ -4850,6 +4861,20 @@ function applyFixes(list: Issue[]) {
 
 issuesFixAll.addEventListener('click', () => applyFixes(shownIssues.filter((i) => i.fix)));
 
+/** Пролёт к зданию проблемы без перехода в режим отдельного здания. */
+function flyToIssueBuilding(issue: Issue) {
+  const key = issueBuildingKey(issue);
+  const group = groupOf(key);
+  const features = group ? groupFeatures(group) : [entity(key) as Feature3D | undefined];
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const f of features) for (const poly of f?.polygons ?? []) for (const [lon, lat] of poly.outer) {
+    w = Math.min(w, lon); s = Math.min(s, lat); e = Math.max(e, lon); n = Math.max(n, lat);
+  }
+  if (!Number.isFinite(w)) return;
+  const camera = map.cameraForBounds([[w, s], [e, n]], { padding: 90, maxZoom: 19 });
+  if (camera) map.flyTo({ center: camera.center, zoom: camera.zoom, duration: 900, essential: true });
+}
+
 issuesEl.addEventListener('click', (e) => {
   const fix = (e.target as HTMLElement).closest<HTMLElement>('.issue-fix');
   if (fix) { applyFixes([shownIssues[Number(fix.dataset.i)]]); return; }
@@ -4862,6 +4887,12 @@ issuesEl.addEventListener('click', (e) => {
     return;
   }
   if (!entity(li.dataset.key!)) return;
+  const issue = shownIssues[Number(li.dataset.i)];
+  if (!focus && issue) {
+    select(issueBuildingKey(issue), false);
+    flyToIssueBuilding(issue);
+    return;
+  }
   select(li.dataset.key, false);
   if (li.dataset.other && entity(li.dataset.other)) toggleSelection(li.dataset.other);
 });

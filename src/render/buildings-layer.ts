@@ -481,6 +481,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Выбранный indoor-объект этажа: пол залит цветом выделения, скрытые рёбра — пунктиром (как у частей). */
   private indoorSelected: string[] = [];
   private indoorSelObj?: THREE.Group;
+  /** Точные рёбра вырезанных проёмов, собранные при построении стен текущего этажа. */
+  private doorOpeningEdges = new Map<string, Map<string, number[]>>();
 
   /** Точки дверей этажа (узлы OSM): маркеры на линии основания стены в проёме. */
   private doors: { key: string; at: LonLat; z: number }[] = [];
@@ -579,11 +581,22 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     const g = this.groups.get(FOCUS_GROUP);
     const items = this.level?.items.filter((i) => this.indoorSelected.includes(i.key)) ?? [];
-    if (!g || !items.length) return;
+    if (!g || (!items.length && !this.indoorSelected.some((key) => this.doorOpeningEdges.has(key)))) return;
     const root = new THREE.Group();
     this.indoorSelObj = root;
     g.scene.add(root);
     for (const it of items) this.addIndoorHighlight(root, g, it);
+    for (const key of this.indoorSelected) {
+      const edges = [...(this.doorOpeningEdges.get(key)?.values() ?? [])].flat();
+      if (!edges.length) continue;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(edges, 3));
+      const visible = new THREE.LineSegments(geo, INDOOR_SELECT_LINE);
+      const hidden = new THREE.LineSegments(geo.clone(), HIDDEN_EDGE_MATERIAL);
+      hidden.computeLineDistances();
+      hidden.renderOrder = 999;
+      for (const line of [visible, hidden]) { line.frustumCulled = false; root.add(line); }
+    }
   }
 
   /** Подсветка одного выбранного indoor-объекта: пол с контуром или (стена, колонна) вертикальные грани. */
@@ -672,6 +685,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   private applyLevel() {
+    this.doorOpeningEdges.clear();
     // Чуть ниже потолка: днища частей, начинающихся на потолке, и крыши частей на этой высоте не накрывают план
     const cut = this.levelCut = this.cutZ();
     const planes = cut !== undefined ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), cut)] : null;
@@ -885,17 +899,22 @@ export class BuildingsLayer implements CustomLayerInterface {
       end(bx, by, z0, Math.min(z1b, jambB), (ax - bx) / l, (ay - by) / l);
     };
     const doors = doorList.map(g.toLocal);
+    const namedDoors = pale ? [] : this.doors.map((d) => ({ key: d.key, at: g.toLocal(this.doorPreview?.key === d.key ? this.doorPreview.at : d.at) }));
     /** Стена с дверными проёмами (DOOR_WIDTH × DOOR_HEIGHT) там, где на ней стоит дверь. */
     const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number) => {
       const len = Math.hypot(bx - ax, by - ay);
       const gaps: [number, number][] = [];
+      const namedGaps: { key: string; lo: number; hi: number }[] = [];
       if (len > 1e-6) {
         const dx = (bx - ax) / len, dy = (by - ay) / len;
         for (const [px, py] of doors) {
           if (Math.abs((px - ax) * dy - (py - ay) * dx) > DOOR_SNAP) continue;
           const t = (px - ax) * dx + (py - ay) * dy;
           if (t < -DOOR_SNAP || t > len + DOOR_SNAP) continue;
-          gaps.push([Math.max(0, t - DOOR_WIDTH / 2) / len, Math.min(len, t + DOOR_WIDTH / 2) / len]);
+          const lo = Math.max(0, t - DOOR_WIDTH / 2) / len, hi = Math.min(len, t + DOOR_WIDTH / 2) / len;
+          gaps.push([lo, hi]);
+          const named = namedDoors.find((d) => Math.hypot(d.at[0] - px, d.at[1] - py) < 0.01);
+          if (named) namedGaps.push({ key: named.key, lo, hi });
         }
       }
       if (!gaps.length) { slab(ax, ay, bx, by, z0, z1a, z1b); return; }
@@ -903,6 +922,17 @@ export class BuildingsLayer implements CustomLayerInterface {
       const at = (t: number): [number, number] => [ax + (bx - ax) * t, ay + (by - ay) * t];
       const z1 = (t: number) => z1a + (z1b - z1a) * t;
       const lintel = z0 + DOOR_HEIGHT;
+      for (const { key, lo, hi } of namedGaps) {
+        const [lx, ly] = at(lo), [hx, hy] = at(hi);
+        const zl = Math.min(lintel, z1(lo)), zh = Math.min(lintel, z1(hi));
+        if (zl <= z0 || zh <= z0) continue;
+        const signature = [lx, ly, hx, hy, z0].map((n) => Math.round(n * 100)).join(',');
+        const edges = [lx, ly, z0, hx, hy, z0, lx, ly, z0, lx, ly, zl,
+          hx, hy, z0, hx, hy, zh, lx, ly, zl, hx, hy, zh];
+        const bySegment = this.doorOpeningEdges.get(key) ?? new Map<string, number[]>();
+        bySegment.set(signature, edges);
+        this.doorOpeningEdges.set(key, bySegment);
+      }
       let from = 0;
       const pieces: [number, number][] = [];
       for (const [lo, hi] of gaps) {

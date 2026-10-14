@@ -20,8 +20,6 @@ const MIN_VOID_AREA = 15;
 const MIN_COVERAGE = 0.5;
 /** Этажи ниже (вместе) закрывают пустоту разметкой не меньше чем на эту долю — там пол, видный сквозь неё. */
 const FLOOR_BELOW = 0.6;
-/** Глубже стольких этажей пустоту не продолжаем. */
-const MAX_DEPTH = 4;
 
 export interface LevelPlan {
   /** Контур этажа: следы объектов здания, которые есть на этом этаже (или полигоны indoor=level). */
@@ -73,6 +71,7 @@ function opening(m: MultiPolygon, w: number): MultiPolygon {
 export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[] {
   const plan = plans.get(n);
   if (!plan || !plan.floor.length || !plan.mapped.length) return [];
+  const lowerLevels = [...plans.keys()].filter((k) => k < n).sort((a, b) => b - a);
   const floorArea = multiArea(plan.floor);
   if (!floorArea) return [];
   const covered = multiArea(safe(() => polygonClipping.intersection(plan.floor, plan.mapped)));
@@ -83,8 +82,7 @@ export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[]
       const p = plans.get(k), a = p ? multiArea(p.floor) : 0;
       return !!p && a > 0 && multiArea(safe(() => polygonClipping.intersection(p.floor, p.mapped))) / a >= MIN_COVERAGE;
     };
-    let found = false;
-    for (let k = n - 1; k >= n - MAX_DEPTH && !found; k--) found = wellMapped(k);
+    const found = lowerLevels.some(wellMapped);
     if (covered <= 0 || !found) return [];
   }
   const free = opening(safe(() => polygonClipping.difference(plan.floor, plan.mapped)), OPEN_WIDTH);
@@ -98,9 +96,8 @@ export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[]
     const through: number[] = [];
     let seen: MultiPolygon = [];
     let ok = false;
-    for (let k = n - 1; k >= n - MAX_DEPTH; k--) {
-      const below = plans.get(k);
-      if (!below) break;
+    for (const k of lowerLevels) {
+      const below = plans.get(k)!;
       through.push(k);
       seen = safe(() => polygonClipping.union(seen, polygonClipping.intersection(piece, below.mapped)));
       if (multiArea(seen) / area >= FLOOR_BELOW) { ok = true; break; }

@@ -72,9 +72,9 @@ const VOID_FACE_DZ = 0.1;
 /** Перекрытие этажа со вторым светом (плита с дырами под полом) и край пустоты. */
 const INDOOR_SLAB_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 const INDOOR_VOID_EDGE = new THREE.LineBasicMaterial({ color: 0x57534e });
-const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0x888f94, side: THREE.DoubleSide });
+const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0xb0b6ba, side: THREE.DoubleSide });
 const ESCALATOR_SIDE = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-const ESCALATOR_STEP = new THREE.MeshLambertMaterial({ color: 0x747c82, side: THREE.DoubleSide });
+const ESCALATOR_STEP = new THREE.MeshLambertMaterial({ color: 0x9da5aa, side: THREE.DoubleSide });
 const ESCALATOR_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xb9d3dc, side: THREE.DoubleSide,
   transparent: true, opacity: 0.4, depthWrite: false });
 const ESCALATOR_HANDRAIL = new LineMaterial({ color: 0x656d73, linewidth: 5 });
@@ -2399,9 +2399,9 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   setMonochrome(on: boolean) {
     this.monochrome = on;
-    ESCALATOR_BELT.color.setHex(on ? 0xffffff : 0x888f94);
+    ESCALATOR_BELT.color.setHex(on ? 0xffffff : 0xb0b6ba);
     ESCALATOR_SIDE.color.setHex(0xffffff);
-    ESCALATOR_STEP.color.setHex(on ? 0xffffff : 0x747c82);
+    ESCALATOR_STEP.color.setHex(on ? 0xffffff : 0x9da5aa);
     ESCALATOR_BALUSTRADE.color.setHex(on ? 0xffffff : 0xb9d3dc);
     ESCALATOR_HANDRAIL.color.setHex(on ? 0x57534e : 0x656d73);
     setTreesMonochrome(on);

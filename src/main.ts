@@ -4696,19 +4696,26 @@ function renderLevelsImpl() {
     };
   };
   const plan = level && planOf(level);
+  // Видимые сквозь второй свет эскалаторы нижних этажей тоже нужны в сцене.
+  const voids = level ? levelVoids(focus, levels, visibleIndoor, level.n) : [];
   const escalators = visibleIndoor.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2
       && (f.tags.incline === 'up' || f.tags.incline === 'down'))
-    .filter((f) => level && f.levels.includes(level.n))
     .map((f) => {
       const low = levels.find((l) => l.n === Math.min(...f.levels));
       const high = levels.find((l) => l.n === Math.max(...f.levels));
-      return low && high ? { key: f.key, line: f.polygons[0].outer, bottom: low.floor, top: high.floor,
+      if (!level || !low || !high) return;
+      const line = f.polygons[0].outer;
+      const visibleBelow = voids.some((v) => v.through.includes(high.n) && line.slice(1).some((b, i) => {
+        const a = line[i], mid: LonLat = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        return [a, mid, b].some((p) => v.polygon.some(([outer, ...holes]) =>
+          pointInRing(p, outer) && !holes.some((hole) => pointInRing(p, hole))));
+      }));
+      return f.levels.includes(level.n) || visibleBelow ? { key: f.key, line, bottom: low.floor, top: high.floor,
         width: Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2)), incline: f.tags.incline } : undefined;
     }).filter((f): f is NonNullable<typeof f> => !!f);
   if (level) levelsEl.insertAdjacentHTML('beforeend', indoorLegend(onLevel));
   overpassLayer.setDoors(level ? onLevel.filter(isDoor).map((f) => ({ key: f.key, at: f.point!, z: level.floor })) : []);
   // Второй свет: пустоты в перекрытии и этажи под ними
-  const voids = level ? levelVoids(focus, levels, visibleIndoor, level.n) : [];
   // Пустоты здания посчитались или поменялись (пришли indoor-данные) — перекрытия стеклянных частей пересобрать
   const allVoids = buildingVoids(focus, levels, visibleIndoor);
   const vsig = `${focus.key}|${visibleIndoor.map((f) => f.key).join(',')}|${[...allVoids].map(([n, l]) => `${n}:${l.length}`).join(',')}`;

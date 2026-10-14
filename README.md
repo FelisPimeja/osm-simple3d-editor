@@ -5,6 +5,8 @@
 A browser-based 3D building editor for OpenStreetMap, following the [Simple 3D Buildings](https://wiki.openstreetmap.org/wiki/Simple_3D_Buildings) tagging scheme.
 It also works with OpenHistoricalMap and OpenGeofiction.
 
+OpenGeofiction's API may return 403 to Chrome, Safari, or Edge requests from this editor. Its server currently exempts IPs recognized as having edited OGF; if access is refused, try Firefox or contact the OGF administrators. The editor shows the server's response when this happens.
+
 Open the editor: https://felispimeja.github.io/osm-simple3d-editor/
 
 ## Features

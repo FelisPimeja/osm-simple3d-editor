@@ -73,6 +73,7 @@ export class OverpassTiles {
   private readonly memberGroup = new Map<string, string>();
   /** Тайлы, перезапрошенные кнопкой: до прихода ответа считаются загружающимися в индикаторе. */
   private readonly reloading = new Map<string, number>(); // ключ → число неудачных попыток
+  lastApiError?: string;
   /** Перезапрос не удался после всех попыток — в индикаторе это «ждут повтора». */
   private readonly reloadFailed = new Set<string>();
   mode: OverpassMode = 'off';
@@ -102,6 +103,7 @@ export class OverpassTiles {
   /** Сменить источник данных: всё загруженное сбрасывается, кеш — свой у каждого источника. */
   setSource(source: TileSource) {
     this.source = source;
+    this.lastApiError = undefined;
     for (const e of this.cache.values()) {
       if (e.state === 'loading') e.abort.abort();
       if (e.state === 'ready') e.refreshing?.abort();
@@ -520,6 +522,7 @@ export class OverpassTiles {
       const roads = via === 'overpass' && !withRoads ? undefined : timed('тайлы: дороги', () => parseRoads(elements), (r) => `${key}, ${r.length} путей`);
       const fetchedAt = Date.now();
       this.cache.set(key, { state: 'ready', features, groups, indoor, trees, roads, fetchedAt, via });
+      this.lastApiError = undefined;
       this.reloading.delete(key);
       this.reloadFailed.delete(key);
       void this.store.put(key, { features, groups, indoor, trees, roads, fetchedAt, via });
@@ -542,7 +545,8 @@ export class OverpassTiles {
       result = busy ? 'busy' : 'error';
       // Лимит скачивания (509): сервер сам говорит, когда можно снова, — до тех пор к нему не ходим
       if (err instanceof ApiError) cooldown = err.retryAfter;
-      console.warn(`OSM API ${key}${refreshing ? ' (обновление)' : ''}:`, (err as Error).message);
+      this.lastApiError = (err as Error).message;
+      console.warn(`OSM API ${key}${refreshing ? ' (обновление)' : ''}:`, this.lastApiError);
       if (refreshing) {
         refreshing.refreshing = undefined;
         const tries = this.reloading.get(key);

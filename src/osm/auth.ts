@@ -121,8 +121,8 @@ export async function fetchUser(s: OsmServer = server()): Promise<OsmUser | unde
   const token = getToken(s);
   if (!token) return;
   const res = await fetch(`${s.api}/user/details.json`, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 401 || res.status === 403) { logout(s); return; }
-  if (!res.ok) throw new Error(`OSM API ${res.status}`);
+  if (res.status === 401) { logout(s); return; }
+  if (!res.ok) throw new Error(`OSM API ${res.status}: ${(await res.text()).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) || res.statusText}`);
   const { user } = (await res.json()) as { user: { id: number; display_name: string } };
   return { id: user.id, name: user.display_name };
 }

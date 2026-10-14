@@ -10,7 +10,7 @@ import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
-import { SERVERS, SERVER_LIST, apiBlockedHere, server, setServer, type ServerId } from './osm/servers';
+import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
@@ -75,8 +75,6 @@ const MAX_API_AREA = 0.0004;
 // Склеенные фичи (id с суффиксом 0) рисуем отдельным слоем, разрезанными на полигоны
 /** id тайлов в кодировке OpenFreeMap (у OGF — imposm/OpenMapTiles: без склеенных фич, тип — 0/1). */
 const OFM_IDS = server().tileIds !== 'openmaptiles';
-// Без Referer — до первых запросов карты (спрайт OGF с чужого сайта отдаётся с 403)
-if (server().noReferrer) document.head.append(Object.assign(document.createElement('meta'), { name: 'referrer', content: 'no-referrer' }));
 const BASE_FILTER: ExpressionSpecification = OFM_IDS
   ? ['all', ['!=', ['get', 'hide_3d'], true], ['!=', ['%', ['id'], 10], 0]]
   : ['!=', ['get', 'hide_3d'], true];
@@ -158,6 +156,9 @@ const map = new maplibregl.Map({
   // MSAA задаётся только при создании контекста — переключение требует перезагрузки
   canvasContextAttributes: { antialias: gfx.antialias },
   style: server().style, // подложка — своя у каждого сервера; смена сервера с другой подложкой перезагружает страницу
+  transformRequest: (url) => new URL(url, location.href).host === server().noReferrerHost
+    ? { url, referrerPolicy: 'no-referrer' }
+    : { url },
   // Shift+клик — множественное выделение; зум рамкой с Shift перехватывал бы клик
   boxZoom: false,
   center: savedCamera?.center ?? [0, 0],
@@ -526,8 +527,6 @@ map.on('load', () => {
   map.addLayer(overpassLayer);
   tileBorders.addLayer();
   tileBorders.setEnabled(gfx.tileBorders);
-  const blocked = apiBlockedHere();
-  if (blocked) setStatus(blocked, true);
   // Подземные здания без объёма — пунктирный контур на поверхности (поверх объёмов не прячется: рисуется после)
   map.addSource('underground-outlines', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
@@ -1103,7 +1102,7 @@ async function openEditLink() {
     if (!map.getLayer(overpassLayer.id)) return showLoading(tr('{what}: загружаю карту…', { what })); // стиль и слой зданий ещё не готовы
     const { ready, total, loading, waiting } = overpass.status();
     loadedSince = total && !loading && !waiting ? loadedSince ?? Date.now() : undefined;
-    if (serverDown()) showLoading(apiBlockedHere() ?? tr('Сервер {server} не отвечает — повторяю…', { server: server().short }), true);
+    if (serverDown()) showLoading(tr('Сервер {server} не отвечает — повторяю…', { server: server().short }), true);
     else if (loadedSince !== undefined) showLoading(tr('{what}: собираю здание из частей…', { what }));
     else showLoading(total
       ? tr('{what}: загружаю данные здания ({ready} из {total} участков карты)…', { what, ready, total })
@@ -3590,9 +3589,9 @@ function updateOverpassIndicator() {
   const src = overpass.sourceLabel;
   opIndicator.querySelector('.label')!.textContent = {
     off: '',
-    down: apiBlockedHere() ? tr('{server}: откройте в Firefox', { server: server().short }) : tr('Сервер {server} не отвечает — повторяю…', { server: server().short }),
+    down: tr('Сервер {server} не отвечает — повторяю…', { server: server().short }),
     loading: tr('Загружаю данные зданий: {ready} из {total} участков карты…', { ready, total }),
-    waiting: tr('Не удалось загрузить {failed} из {total} участков карты', { failed: total - ready, total }),
+    waiting: overpass.lastApiError?.includes('API 403') ? overpass.lastApiError : tr('Не удалось загрузить {failed} из {total} участков карты', { failed: total - ready, total }),
     ready: tr('Данные загружены ({ready} из {total})', { ready, total }),
   }[state];
   opIndicator.querySelector<HTMLButtonElement>('.retry')!.hidden = state !== 'waiting';
@@ -3601,9 +3600,9 @@ function updateOverpassIndicator() {
     .join('\n');
   opIndicator.title = {
     off: '',
-    down: apiBlockedHere() ?? tr('{server} не отвечает (таймаут или обрыв соединения); запросы повторяются раз в 30 с', { server: server().web }),
+    down: tr('{server} не отвечает (таймаут или обрыв соединения); запросы повторяются раз в 30 с', { server: server().web }),
     loading: tr('Пока данные не пришли, здания — черновик из векторных тайлов. Загружается тайлов ({src}): {n}', { src, n: loading }),
-    waiting: tr('Ждут повтора: {n} (лимит или ошибка API {server}, подробности в консоли)', { n: waiting, server: server().short }),
+    waiting: overpass.lastApiError ?? tr('Ждут повтора: {n} (лимит или ошибка API {server}, подробности в консоли)', { n: waiting, server: server().short }),
     ready: tr('Все видимые тайлы загружены'),
   }[state] + (state === 'off' ? '' : `\n${describeFreshness()}\n\n${servers}`);
 }
@@ -6055,8 +6054,6 @@ function renderUpload(count: number): string {
 }
 
 async function doLogin() {
-  const blocked = apiBlockedHere();
-  if (blocked) return setStatus(blocked, true);
   try {
     await login();
     osmUser = await fetchUser();

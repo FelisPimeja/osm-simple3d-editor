@@ -36,7 +36,7 @@ export async function fetchMap(bbox: Bbox, api = server().api, signal?: AbortSig
     contentLength = res.headers.get('content-length');
     if (!res.ok) {
       const text = await res.text();
-      throw new ApiError(res.status, `OSM API ${res.status}: ${text || res.statusText}`, retryAfterMs(res, text));
+      throw new ApiError(res.status, apiErrorMessage(res, text), retryAfterMs(res, text));
     }
     const data = (await res.json()) as { elements: OsmElement[] };
     count = data.elements.length;
@@ -52,6 +52,14 @@ export async function fetchMap(bbox: Bbox, api = server().api, signal?: AbortSig
 /** retryAfter — через сколько мс сервер разрешил повторить (Retry-After или «try again in N seconds» у 509). */
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly retryAfter?: number) { super(message); }
+}
+
+function apiErrorMessage(res: Response, body: string): string {
+  const detail = body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) || res.statusText;
+  const hint = res.status === 403 && server().id === 'ogf'
+    ? `${tr('Для доступа к API OpenGeofiction из этого браузера ваш IP-адрес должен быть в списке известных редакторов с правками. Если доступ отклонён, попробуйте Firefox.')} `
+    : '';
+  return `${hint}OSM API ${res.status}: ${detail}`;
 }
 
 function retryAfterMs(res: Response, text: string): number | undefined {
@@ -90,7 +98,7 @@ export async function fetchRelationFull(id: number, api = server().api, signal?:
     const res = await fetch(`${api}/relation/${id}/full.json`, { signal });
     status = res.status;
     contentLength = res.headers.get('content-length');
-    if (!res.ok) throw new Error(tr('OSM API {status} для relation/{id}', { status: res.status, id }));
+    if (!res.ok) throw new ApiError(res.status, apiErrorMessage(res, await res.text()));
     const elements = ((await res.json()) as { elements: OsmElement[] }).elements;
     count = elements.length;
     return elements;
@@ -145,7 +153,7 @@ async function getJson(url: string): Promise<Response> {
       await new Promise((r) => setTimeout(r, wait + 1000));
       continue;
     }
-    throw new ApiError(res.status, `OSM API ${res.status}: ${text || res.statusText}`, wait);
+    throw new ApiError(res.status, apiErrorMessage(res, text), wait);
   }
 }
 

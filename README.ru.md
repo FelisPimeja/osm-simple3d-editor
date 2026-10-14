@@ -5,6 +5,8 @@
 Браузерный 3D-редактор зданий для OpenStreetMap по схеме [Simple 3D Buildings](https://wiki.openstreetmap.org/wiki/Simple_3D_Buildings).
 Также работает с OpenHistoricalMap и OpenGeofiction.
 
+API OpenGeofiction может отвечать 403 на запросы из Chrome, Safari или Edge. Сейчас сервер делает исключение для IP-адресов, с которых уже редактировали OGF. Если доступ отклонён, попробуйте Firefox или обратитесь к администраторам OGF. Редактор покажет ответ сервера.
+
 Открыть редактор: https://felispimeja.github.io/osm-simple3d-editor/
 
 ## Языки интерфейса

@@ -373,7 +373,7 @@ const issuesEl = document.getElementById('issues')!;
 const issuesCount = document.getElementById('issues-count')!;
 const issuesAll = document.getElementById('issues-all') as HTMLInputElement;
 const issuesFixAll = document.getElementById('issues-fix-all') as HTMLButtonElement;
-try { issuesAll.checked = localStorage.getItem('osm3d.issues-all') !== '0'; } catch { issuesAll.checked = true; }
+try { issuesAll.checked = localStorage.getItem('osm3d.issues-all') === '1'; } catch { issuesAll.checked = false; }
 const outlinerEl = document.getElementById('outliner')!;
 const outlinerCount = document.getElementById('outliner-count')!;
 /** Скрытые глазиком части в режиме здания — только показ, на данные не влияет. */
@@ -4703,6 +4703,8 @@ let mapIssuesTimer: ReturnType<typeof setTimeout> | undefined;
 let shownIssues: Issue[] = [];
 /** Проблема, исправление которой показано каркасом (наведение на строку «Проверки»). */
 let fixPreviewed: Issue | undefined;
+/** Временная подсветка частей ошибки под курсором, независимо от «Подсветить все». */
+let hoveredIssue: Issue | undefined;
 
 /** Последние проверки по зданиям: пересчёт, только когда сменились объекты (правка даёт новый объект). */
 const issueCache = new Map<string, { feats: Feature3D[]; roles: string; issues: Issue[] }>();
@@ -4772,6 +4774,7 @@ function renderIssues() {
   const currentIssues = focus ? focusIssues : mapIssues;
   // Список пересобирается — строки под курсором уже нет, превью исправления снимаем
   if (fixPreviewed) { fixPreviewed = undefined; overpassLayer.setFixPreview(undefined); }
+  hoveredIssue = undefined;
   highlightIssues();
   issuesPanel.hidden = !currentIssues.length;
   if (issuesPanel.hidden) { issuesEl.innerHTML = ''; return; }
@@ -4823,6 +4826,9 @@ function highlightIssues() {
   const levels = new Map<string, 'error' | 'warning'>();
   if (issuesAll.checked) for (const issue of focus ? focusIssues : mapIssues) {
     for (const key of [issue.key, issue.other]) if (key && levels.get(key) !== 'error') levels.set(key, issue.level);
+  }
+  if (hoveredIssue) for (const key of [hoveredIssue.key, hoveredIssue.other]) {
+    if (key && levels.get(key) !== 'error') levels.set(key, hoveredIssue.level);
   }
   if (levels.size === highlightedIssueLevels.size && [...levels].every(([key, level]) => highlightedIssueLevels.get(key) === level)) return;
   highlightedIssueLevels = levels;
@@ -4901,6 +4907,7 @@ issuesEl.addEventListener('mouseover', (e) => {
   overpassLayer.setHover(li?.dataset.key);
   // С автоисправлением — ещё и каркас объёма после него (если геометрия изменится)
   const issue = li ? shownIssues[Number(li.dataset.i)] : undefined;
+  if (hoveredIssue !== issue) { hoveredIssue = issue; highlightIssues(); }
   if (issue === fixPreviewed) return;
   fixPreviewed = issue;
   const f = issue?.fix ? liveFeatures().find((x) => x.key === issue.key) : undefined;
@@ -4909,8 +4916,17 @@ issuesEl.addEventListener('mouseover', (e) => {
   for (const [k, v] of Object.entries(issue.fix.tags)) if (v === undefined) delete tags[k]; else tags[k] = v;
   overpassLayer.setFixPreview({ ...f, tags });
 });
+issuesEl.addEventListener('mouseout', (e) => {
+  const row = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
+  if (!row || (e.relatedTarget instanceof Node && row.contains(e.relatedTarget))) return;
+  hoveredIssue = undefined;
+  highlightIssues();
+  overpassLayer.setHover(undefined);
+});
 issuesEl.addEventListener('mouseleave', () => {
   overpassLayer.setHover(undefined);
+  hoveredIssue = undefined;
+  highlightIssues();
   fixPreviewed = undefined;
   overpassLayer.setFixPreview(undefined);
 });

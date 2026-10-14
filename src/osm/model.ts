@@ -238,10 +238,10 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     } else if (ik === 'wall') {
       // Стена — ломаная (у замкнутой последняя точка повторяет первую — оставляем, чтобы стена замкнулась)
       const pts = w.nodes.map((id) => nodes.get(id)).filter((n): n is OsmNode => !!n).map((n): LonLat => [n.lon, n.lat]);
-      if (pts.length >= 2) addIndoor(`way/${w.id}`, w.tags!, ik, [{ outer: pts, inners: [] }], true);
+      if (pts.length >= 2 && pts.length === w.nodes.length) addIndoor(`way/${w.id}`, w.tags!, ik, [{ outer: pts, inners: [], outerIds: w.nodes.slice() }], true);
     } else if (ik && w.nodes[0] === w.nodes[w.nodes.length - 1]) {
       const outer = toCoords(w.nodes);
-      if (outer) addIndoor(`way/${w.id}`, w.tags!, ik, [{ outer, inners: [] }]);
+      if (outer) addIndoor(`way/${w.id}`, w.tags!, ik, [{ outer, inners: [], outerIds: w.nodes.slice(0, -1), innerIds: [] }]);
     }
     if (!kind) continue;
     const key = `way/${w.id}`;

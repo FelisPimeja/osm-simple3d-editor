@@ -841,5 +841,19 @@
   "Данные здания обновлены до актуальной версии OSM.": "Building data updated to the current OSM version.",
   "Не удалось проверить актуальность здания: {error}": "Could not check whether the building data is current: {error}",
   "Не удалось построить контур здания.": "Could not build the building outline.",
-  "Для доступа к API OpenGeofiction из этого браузера ваш IP-адрес должен быть в списке известных редакторов с правками. Если доступ отклонён, попробуйте Firefox.": "To access the OpenGeofiction API from this browser, your IP address must be on its list of known editors with edits. If access is refused, try Firefox."
+  "Для доступа к API OpenGeofiction из этого браузера ваш IP-адрес должен быть в списке известных редакторов с правками. Если доступ отклонён, попробуйте Firefox.": "To access the OpenGeofiction API from this browser, your IP address must be on its list of known editors with edits. If access is refused, try Firefox.",
+  "Стены помещения": "Room walls",
+  "Удаление преобразует помещение в indoor=area и сохранит остальные стены. Изменение действует на всех этажах объекта.": "Deleting converts the room to indoor=area and preserves its other walls. The change affects every level of the object.",
+  "Удалить стены": "Delete walls",
+  "Для удаления выберите только стены.": "Select only walls to delete them.",
+  "Стены, заданные отношениями, пока удалить нельзя.": "Walls defined by relations cannot be deleted yet.",
+  "Общая стена принадлежит помещению-отношению. Такое удаление пока не поддерживается.": "The shared wall belongs to a room defined by a relation. This deletion is not supported yet.",
+  "Проверка стен и отношений…": "Checking walls and relations…",
+  "Выбор или данные изменились. Повторите удаление стен.": "The selection or data changed. Try deleting the walls again.",
+  "Для преобразования требуется помещение-way с одним внешним контуром.": "Conversion requires a room way with one outer ring.",
+  "Геометрия помещения изменилась или недоступна. Перезагрузите данные.": "The room geometry has changed or is unavailable. Reload the data.",
+  "Стена больше не доступна на сервере. Перезагрузите данные.": "The wall is no longer available on the server. Reload the data.",
+  "Стены удалены. Отменить — Ctrl+Z.": "Walls deleted. Undo with Ctrl+Z.",
+  "Не удалось удалить стены: {error}": "Could not delete walls: {error}",
+  "Эскалатор": "Escalator"
 }

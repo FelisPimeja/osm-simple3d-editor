@@ -8,7 +8,8 @@ import { Toasts } from './view/toasts';
 import { validateBuilding, validateGeometry, validateIndoor, validateTags, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
-import { completeRelations, fetchBuildingElements, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
+import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
+import { materializeRoomWalls, roomTouchesWall, roomWallSpan, type RoomWall, type WallSpan } from './edit/indoor-walls';
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
@@ -925,14 +926,16 @@ map.on('click', (e) => {
   }
   // План этажа: клик по полу помещения — его теги в свойствах
   // Shift+клик при выбранном indoor-объекте — добавить к выбранным или убрать (иначе Shift — части здания)
-  const indoorAdd = e.originalEvent.shiftKey && indoorSelection.length > 0;
+  const indoorAdd = e.originalEvent.shiftKey && (indoorSelection.length > 0 || selectedRoomWalls.length > 0);
   if (focus && shownLevel && !addingTo && (!e.originalEvent.shiftKey || indoorAdd) && !e.originalEvent.altKey) {
+    const wall = roomWallAt([e.point.x, e.point.y]);
+    if (wall) { selectRoomWall(wall, e.originalEvent.shiftKey); return; }
     // На этаже приоритет у помещений: части здания — Shift/Alt-кликом или при «Всё здание»
     const room = indoorAt([e.point.x, e.point.y]);
     if (room) { selectIndoor(room, indoorAdd); return; }
     if (indoorAdd) return; // Shift+клик мимо — выбор не сбрасываем
   }
-  if (selectedIndoor) selectIndoor(undefined);
+  if (selectedIndoor || selectedRoomWalls.length) selectIndoor(undefined);
   // Контур подземной части (режим здания, всё здание): только подсветка, объекта OSM за ним нет
   const under = !!focus && !shownLevel && !addingTo && !e.originalEvent.shiftKey && overpassLayer.pickUnderground(e.point);
   overpassLayer.selectUnderground(under);
@@ -3474,6 +3477,11 @@ document.addEventListener('keydown', (e) => {
     deleteDoors(indoorSelection);
     return;
   }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && (selectedRoomWalls.length || indoorSelection.some((f) => f.kind === 'wall'))) {
+    e.preventDefault();
+    void deleteIndoorWalls();
+    return;
+  }
   if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && selection.length) {
     e.preventDefault();
     closeCtxMenu();
@@ -3685,7 +3693,7 @@ function select(key: string | undefined, scrollIssues = true): boolean {
   clearTreeSelection();
   roadsLayer.select([]);
   roadSelection = [];
-  if (key && selectedIndoor) selectIndoor(undefined);
+  if (key && (selectedIndoor || selectedRoomWalls.length)) selectIndoor(undefined);
   addingTo = undefined;
   addPending = [];
   // Переход из списка правок или undo к объекту вне текущей группы — выходим из неё
@@ -3958,10 +3966,11 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   // Свои данные здания (без стыков тайлов) — поверх данных тайлов
   const all = new Map(overpass.indoorIn([w, s, e, n]).map((f) => [f.key, f]));
   for (const f of focusIndoor.get(g.key) ?? []) all.set(f.key, f);
+  for (const [key, f] of indoorCreated) if (session.get(key)) all.set(key, { ...f, tags: session.get(key)!.tags, polygons: session.get(key)!.polygons ?? f.polygons });
   const list = [...all.values()].filter((f) => {
     const p = f.point ?? (f.line ? f.polygons[0].outer[0] : pointOnSurface(f.polygons[0]));
     return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer)));
-  }).filter((f) => !session.isDeleted(indoorKey(f.key))).map((f) => {
+  }).filter((f) => !session.isDeleted(indoorKey(f.key)) && (!indoorCreated.has(f.key) || !!session.get(f.key))).map((f) => {
     // Правки тегов в сессии (indoor, level, room) — поверх данных: вид и этажи по новым тегам; у двери — и место
     const e = indoorEdited.has(indoorKey(f.key)) ? session.get(indoorKey(f.key)) : undefined;
     if (!e) return f;
@@ -3969,8 +3978,9 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
     const at = f.point && !f.key.endsWith('#poi') ? e.polygons?.[0]?.outer[0] : undefined;
     return at ? { ...g, point: at } : g;
   });
-  const axes = list.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
-  return list.map((f) => {
+  const visible = list.filter((f) => f.kind === 'poi' || !indoorEdited.has(indoorKey(f.key)) || !!f.tags.indoor || (f.escalator && f.tags.highway === 'steps' && !!f.tags.conveying && f.tags.conveying !== 'no'));
+  const axes = visible.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
+  return visible.map((f) => {
     if (f.line || !f.polygons.length || !(f.tags.room === 'stairs' || f.tags.stairs === 'yes' || f.tags.conveying)) return f;
     const matched = axes.some((axis) => axis.levels.some((n) => f.levels.includes(n)) && axis.polygons[0].outer.slice(1).some((p, i) => {
       const a = axis.polygons[0].outer[i], mid: LonLat = [(a[0] + p[0]) / 2, (a[1] + p[1]) / 2];
@@ -4183,8 +4193,12 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
   const door = overpassLayer.pickDoor(point);
   const doorF = door ? shownIndoor.find((x) => x.key === door) : undefined;
   if (doorF) return doorF;
-  // Стена или колонна перед полом (или пол мимо) — она
+  const escalator = overpassLayer.pickEscalator(point);
   const solid = overpassLayer.pickIndoorSolid(point);
+  if (escalator && (!solid || escalator.t <= solid.t + 0.02)) {
+    const axis = focus && buildingIndoor(focus).find((f) => f.escalator && f.key === escalator.key);
+    if (axis) return axis;
+  }
   if (solid && (!hit || solid.t <= hit.distanceTo(ray!.origin))) {
     const f = shownIndoor.find((x) => x.key === solid.key);
     if (f) return f;
@@ -4193,18 +4207,49 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
   if (!ll) return;
   const inside = (p: Polygon) => pointInRing(ll, p.outer) && !p.inners.some((r) => pointInRing(ll, r));
   return shownIndoor
-    .filter((f) => !f.line && f.kind !== 'poi' && f.kind !== 'wall' && f.kind !== 'column' && f.polygons.some(inside))
+    .filter((f) => !f.line && !f.escalatorArea && f.kind !== 'poi' && f.kind !== 'wall' && f.kind !== 'column' && f.polygons.some(inside))
     .sort((a, b) => a.polygons.reduce((s, p) => s + polyArea(p), 0) - b.polygons.reduce((s, p) => s + polyArea(p), 0))[0];
 }
 
 /** Выбранные indoor-объекты (Shift+клик добавляет и убирает); selectedIndoor — первый из них. */
 let indoorSelection: IndoorFeature[] = [];
+let selectedRoomWalls: RoomWall[] = [];
+let deletingIndoorWalls = false;
+
+function roomWallAt(point: [number, number]): RoomWall | undefined {
+  if (!shownLevel || overpassLayer.pickDoor(point)) return;
+  const solid = overpassLayer.pickIndoorSolid(point, true);
+  if (!solid?.side) return;
+  const escalator = overpassLayer.pickEscalator(point);
+  if (escalator && escalator.t <= solid.t + 0.02) return;
+  const ray = overpassLayer.focusRay(point);
+  const floor = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -shownLevel.floor), new THREE.Vector3());
+  if (floor && solid.t > floor.distanceTo(ray!.origin)) return;
+  return { key: solid.key, ...solid.side };
+}
+
+function selectRoomWall(wall: RoomWall, add = false) {
+  const f = shownIndoor.find((f) => f.key === wall.key);
+  if (!f || !shownLevel) return;
+  const old = selectedRoomWalls;
+  selectIndoor(undefined);
+  if (selection.length) select(undefined);
+  clearTreeSelection();
+  const spanKey = (w: RoomWall) => `${w.key}:${JSON.stringify(roomWallSpan(shownIndoor.find((f) => f.key === w.key)!.polygons, w))}`;
+  selectedRoomWalls = add ? old.some((w) => spanKey(w) === spanKey(wall)) ? old.filter((w) => spanKey(w) !== spanKey(wall)) : [...old, wall] : [wall];
+  overpassLayer.setRoomWallSelection(selectedRoomWalls.map((w) => ({ key: w.key, kind: 'wall', line: true, z: shownLevel!.floor,
+    polygons: [{ outer: roomWallSpan(shownIndoor.find((f) => f.key === w.key)!.polygons, w), inners: [] }] })));
+  infoEl.innerHTML = selectedRoomWalls.length ? `<h2>${tr('Стены помещения')}</h2><p class="hint">${tr('Удаление преобразует помещение в indoor=area и сохранит остальные стены. Изменение действует на всех этажах объекта.')}</p><button type="button" data-delete-walls>${tr('Удалить стены')}</button>` : '';
+  infoEl.querySelector('[data-delete-walls]')?.addEventListener('click', () => { void deleteIndoorWalls(); });
+}
 
 /**
  * Выбрать indoor-объект: его теги в панели свойств, контур подсвечен. undefined — снять. add — Shift: добавить
  * к выбранным или убрать из них (несколько — общая форма: одинаковые значения, у разных — «разные значения»).
  */
 function selectIndoor(f: IndoorFeature | undefined, add = false, scrollIssues = true) {
+  selectedRoomWalls = [];
+  overpassLayer.setRoomWallSelection([]);
   if (f) clearTreeSelection();
   // Значок помещения-магазина — показываем само помещение
   if (f?.key.endsWith('#poi')) f = shownIndoor.find((x) => x.key === f!.key.replace('#poi', '')) ?? f;
@@ -4222,7 +4267,7 @@ function selectIndoor(f: IndoorFeature | undefined, add = false, scrollIssues = 
   const key = indoorKey(f.key);
   const [type, id] = key.split('/');
   const t = f.tags;
-  const kind = isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
+  const kind = f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
   const levels = f.levels.map((n) => LEVEL_NAME(n)).join(', ');
   infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''} — `
     + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
@@ -4236,14 +4281,14 @@ function selectIndoor(f: IndoorFeature | undefined, add = false, scrollIssues = 
 
 /** Несколько indoor-объектов: число и виды, общая форма. */
 function renderIndoorMulti(fs: IndoorFeature[]) {
-  const kinds = [...new Set(fs.map((f) => (isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind])))].join(', ');
+  const kinds = [...new Set(fs.map((f) => (f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind])))].join(', ');
   infoEl.innerHTML = `<h2>${trn(fs.length, 'Выбран {n} объект|Выбрано {n} объекта|Выбрано {n} объектов')}</h2><p class="hint">${esc(kinds)}</p>`
     + `<p><button type="button" data-hide-indoor>${tr('Скрыть объекты')}</button></p>` + indoorForm(fs);
   bindIndoorForm(fs);
 }
 
 /** Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет. */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.every(isDoor) ? ['door', 'level']
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width'] : fs.every(isDoor) ? ['door', 'level']
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level'] : [...INDOOR_EDIT_TAGS]);
 
 /** Дверь плана этажа: узел с door, indoor=door или entrance (точка на линии стены в проёме). */
@@ -4254,6 +4299,7 @@ const isDoor = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && !f.key.end
 function bindIndoorForm(fs: IndoorFeature[]) {
   infoEl.querySelector('[data-hide-indoor]')?.addEventListener('click', () => hideSelectedIndoor());
   infoEl.querySelector('[data-delete-doors]')?.addEventListener('click', () => deleteDoors(fs));
+  infoEl.querySelector('[data-delete-walls]')?.addEventListener('click', () => { void deleteIndoorWalls(); });
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
     input.addEventListener('change', () => setIndoorTags(fs.map((f) => ({ key: indoorKey(f.key), tags: { ...f.tags, [input.dataset.indoorTag!]: input.value } }))));
   }
@@ -4311,6 +4357,8 @@ function buildingIndoorFor(key: string): IndoorFeature | undefined {
 
 /** Ключи indoor-объектов, которые правились в сессии (их теги берутся из сессии). */
 const indoorEdited = new Set<string>();
+/** Новые стены: видимость и теги берутся из сессии для undo/redo. */
+const indoorCreated = new Map<string, IndoorFeature>();
 /** Меняется при правке indoor-тегов: кеш объектов здания пересчитывается. */
 let indoorEditRev = 0;
 /** Ключ объекта OSM у indoor-объекта (у значка помещения — #poi). */
@@ -4334,7 +4382,8 @@ function indoorForm(fs: IndoorFeature[]): string {
   }).join('');
   const del = fs.every(isDoor)
     ? `<button type="button" class="link-btn" data-delete-doors>${trn(fs.length, 'Удалить дверь|Удалить {n} двери|Удалить {n} дверей')}</button>
-      <p class="hint">${tr('Дверь можно перетащить вдоль стены.')}</p>` : '';
+      <p class="hint">${tr('Дверь можно перетащить вдоль стены.')}</p>`
+    : fs.every((f) => f.kind === 'wall') ? `<button type="button" class="link-btn" data-delete-walls>${tr('Удалить стены')}</button>` : '';
   return `<div class="tag-form">${rows}${list('indoor-values', INDOOR_VALUES)}${list('room-values', ROOM_VALUES)}</div>${del}`;
 }
 
@@ -4456,6 +4505,113 @@ function deleteDoors(fs: IndoorFeature[]) {
   infoEl.innerHTML = '';
   session.editMany(edits);
   setStatus(trn(fs.length, 'Удалена {n} дверь.|Удалено {n} двери.|Удалено {n} дверей.'));
+}
+
+/** Удаление стены и материализация остальных сторон помещений — один шаг истории. */
+async function deleteIndoorWalls() {
+  if (deletingIndoorWalls || uploading || !focus || !shownLevel) return;
+  const walls = indoorSelection.filter((f) => f.kind === 'wall');
+  const roomSides = [...selectedRoomWalls];
+  if (!walls.length && !roomSides.length) return;
+  if (indoorSelection.some((f) => f.kind !== 'wall')) return setStatus(tr('Для удаления выберите только стены.'), true);
+  if ([...walls.map((f) => f.key), ...roomSides.map((w) => w.key)].some((k) => !k.startsWith('way/'))) {
+    return setStatus(tr('Стены, заданные отношениями, пока удалить нельзя.'), true);
+  }
+  const api = server().api, group = focus.key, level = currentLevel, revision = indoorEditRev;
+  const editsStamp = JSON.stringify(session.changes());
+  const selectionStamp = () => JSON.stringify([indoorSelection.map((f) => f.key), selectedRoomWalls]);
+  const stamp = selectionStamp();
+  const indoor = buildingIndoor(focus);
+  const targets: { span: WallSpan; levels: number[] }[] = [];
+  for (const w of roomSides) {
+    const f = indoor.find((f) => f.key === w.key)!;
+    targets.push({ span: roomWallSpan(f.polygons, w), levels: f.levels });
+  }
+  for (const f of walls) for (const p of f.polygons) for (const r of f.line ? [p.outer] : [p.outer, ...p.inners]) {
+    const n = f.line ? r.length - 1 : r.length;
+    for (let i = 0; i < n; i++) targets.push({ span: [r[i], r[(i + 1) % r.length]], levels: f.levels });
+  }
+  const spansFor = (f: IndoorFeature) => targets.filter((t) => t.levels.some((l) => f.levels.includes(l))).map((t) => t.span);
+  const rooms = indoor.filter((f) => f.kind === 'room' && floorLevels(f).some((l) => targets.some((t) => t.levels.includes(l))) && roomTouchesWall(f.polygons, spansFor(f)));
+  if (rooms.some((f) => !f.key.startsWith('way/'))) return setStatus(tr('Общая стена принадлежит помещению-отношению. Такое удаление пока не поддерживается.'), true);
+  deletingIndoorWalls = true;
+  setStatus(tr('Проверка стен и отношений…'));
+  try {
+    const existing = [...new Set([...walls, ...rooms].map((f) => f.key))].filter((k) => Number(k.split('/')[1]) > 0);
+    const [elements, parents] = await Promise.all([
+      fetchElements(existing, api),
+      Promise.all(walls.map(async (f) => ({ key: f.key, relations: Number(f.key.split('/')[1]) > 0 ? await fetchWayRelations(Number(f.key.split('/')[1]), api) : [] }))),
+    ]);
+    const nodeIds = [...rooms, ...walls].flatMap((f) => {
+      const way = elements.get(f.key);
+      return way?.type === 'way' ? way.nodes : [];
+    });
+    const nodes = nodeIds.length ? await fetchNodes([...new Set(nodeIds)], api) : new Map<number, OsmNode>();
+    // Асинхронная проверка не должна удалять уже другой выбор или объекты другого сервера.
+    if (focus?.key !== group || currentLevel !== level || server().api !== api || indoorEditRev !== revision || selectionStamp() !== stamp || JSON.stringify(session.changes()) !== editsStamp) {
+      setStatus(tr('Выбор или данные изменились. Повторите удаление стен.'));
+      return;
+    }
+    const edits: ObjectEdit[] = [];
+    const nodeKeys = new Map<string, number>();
+    const coordKey = (p: LonLat) => `${p[0].toFixed(9)},${p[1].toFixed(9)}`;
+    for (const f of [...rooms, ...walls]) {
+      if (f.polygons.length !== 1 || f.polygons[0].inners.length) throw new Error(tr('Для преобразования требуется помещение-way с одним внешним контуром.'));
+      const ring = f.polygons[0].outer, way = elements.get(f.key);
+      if (Number(f.key.split('/')[1]) > 0 && way?.type !== 'way') throw new Error(tr('Геометрия помещения изменилась или недоступна. Перезагрузите данные.'));
+      const ids = way?.type === 'way' ? f.line ? way.nodes : way.nodes.slice(0, -1) : f.polygons[0].outerIds;
+      if (!ids || ids.length !== ring.length) throw new Error(tr('Геометрия помещения изменилась или недоступна. Перезагрузите данные.'));
+      ids.forEach((id, i) => {
+        const node = nodes.get(id);
+        if (way && (!node || Math.abs(node.lon - ring[i][0]) > 1e-8 || Math.abs(node.lat - ring[i][1]) > 1e-8)) {
+          throw new Error(tr('Геометрия помещения изменилась или недоступна. Перезагрузите данные.'));
+        }
+        nodeKeys.set(coordKey(ring[i]), id);
+      });
+    }
+    const nodeAt = (p: LonLat) => {
+      const k = coordKey(p);
+      if (!nodeKeys.has(k)) nodeKeys.set(k, nextNewId--);
+      return nodeKeys.get(k)!;
+    };
+    const created: IndoorFeature[] = [];
+    const createWall = (line: { ids: number[]; coords: LonLat[] }, tags: Record<string, string>) => {
+      const key = `way/${nextNewId--}`, polygons = [{ outer: line.coords, outerIds: line.ids, inners: [] }];
+      edits.push({ key, create: { key, version: 0, tags, line, polygons } });
+      created.push({ key, kind: 'wall', line: true, polygons, tags, levels: [...new Set([...parseLevels(tags.level), ...parseLevels(tags.repeat_on)])] });
+    };
+    for (const f of walls) {
+      const el = elements.get(f.key);
+      if (Number(f.key.split('/')[1]) > 0 && !el) throw new Error(tr('Стена больше не доступна на сервере. Перезагрузите данные.'));
+      trackIndoor(f.key, f);
+      const referenced = parents.find((p) => p.key === f.key)!.relations.some((r) => {
+        const key = `relation/${r.id}`;
+        if (session.isDeleted(key)) return false;
+        const members = session.get(key)?.relMembers ?? r.members;
+        return members.some((m) => m.type === 'way' && m.ref === Number(f.key.split('/')[1]));
+      }) || [...editGroups.values(), ...session.createdAlive()].some((r) => r.relMembers?.some((m) => m.type === 'way' && m.ref === Number(f.key.split('/')[1])));
+      if (referenced) {
+        const tags = { ...session.get(f.key)!.tags };
+        delete tags.indoor;
+        delete tags.level;
+        edits.push({ key: f.key, tags });
+      } else edits.push({ key: f.key, delete: true });
+    }
+    for (const f of rooms) {
+      trackIndoor(f.key, f);
+      edits.push({ key: f.key, tags: { ...session.get(f.key)!.tags, indoor: 'area' } });
+      for (const { line, tags } of materializeRoomWalls(f.polygons, f.tags, f.levels, targets, nodeAt)) createWall(line, tags);
+    }
+    for (const f of created) { indoorCreated.set(f.key, f); indoorEdited.add(f.key); }
+    selectIndoor(undefined);
+    infoEl.innerHTML = '';
+    session.editMany(edits);
+    setStatus(tr('Стены удалены. Отменить — Ctrl+Z.'));
+  } catch (err) {
+    setStatus(tr('Не удалось удалить стены: {error}', { error: (err as Error).message }), true);
+  } finally {
+    deletingIndoorWalls = false;
+  }
 }
 
 /**
@@ -4639,6 +4795,8 @@ function renderLevelsImpl() {
     shownIndoor = [];
     selectedIndoor = undefined;
     indoorSelection = [];
+    selectedRoomWalls = [];
+    overpassLayer.setRoomWallSelection([]);
     indoorPois.setSelection([]);
     if (levelsFocusKey !== undefined) { linkLevel = undefined; setLevelParam(undefined); } // вышли из режима здания
     currentLevel = levelsFocusKey = undefined;
@@ -4672,14 +4830,15 @@ function renderLevelsImpl() {
   const level = levels.find((l) => l.n === currentLevel);
   const onLevel = level ? indoor.filter((f) => f.levels.includes(level.n) && !indoorHidden.has(indoorKey(f.key))) : [];
   const visibleIndoor = indoor.filter((f) => !indoorHidden.has(indoorKey(f.key)));
+  if (selectedRoomWalls.length && (shownLevel?.n !== level?.n || shownLevel?.floor !== level?.floor)) {
+    selectIndoor(undefined);
+    infoEl.innerHTML = '';
+  }
   shownLevel = level;
   shownIndoor = onLevel;
-  // Выбранные, которых на этаже больше нет (сменили level или этаж) — из выбора вон
-  if (indoorSelection.some((s) => !onLevel.some((f) => f.key === s.key))) {
-    const keep = indoorSelection.filter((s) => onLevel.some((f) => f.key === s.key));
-    indoorSelection = [];
-    if (!keep.length) selectIndoor(undefined);
-    for (const f of keep) selectIndoor(f, keep.length > 1);
+  if (selectedRoomWalls.length && (!level || selectedRoomWalls.some((w) => !onLevel.some((f) => f.key === w.key && f.kind === 'room')))) {
+    selectIndoor(undefined);
+    infoEl.innerHTML = '';
   }
   const planOf = (l: Level) => {
     const fs = visibleIndoor.filter((f) => f.levels.includes(l.n));
@@ -4690,7 +4849,7 @@ function renderLevelsImpl() {
       items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea
         && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
         && (f.line || floorLevels(f).includes(l.n)))
-        .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor,
+        .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor, areaLedge: f.tags.indoor === 'area',
           ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}) })),
       // Двери этажа — проёмы в стенах
       doors: fs.filter((f) => f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!),
@@ -4715,6 +4874,14 @@ function renderLevelsImpl() {
         width: Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2)), incline: f.tags.incline,
         pale: !f.levels.includes(level.n) } : undefined;
     }).filter((f): f is NonNullable<typeof f> => !!f);
+  const selectable = new Set([...onLevel.map((f) => f.key), ...escalators.map((e) => e.key)]);
+  // Выбранные, которых на этаже больше нет (сменили level или этаж) — из выбора вон
+  if (indoorSelection.some((s) => !selectable.has(s.key))) {
+    const keep = indoorSelection.filter((s) => selectable.has(s.key));
+    indoorSelection = [];
+    if (!keep.length) selectIndoor(undefined);
+    for (const f of keep) selectIndoor(f, keep.length > 1);
+  }
   const escalatorIconPositions = new Map<string, { at: LonLat; z: number }>();
   for (const area of onLevel.filter((f) => f.escalatorArea)) {
     const axis = escalators.find((e) => e.line.slice(1).some((b, i) => {
@@ -4753,7 +4920,8 @@ function renderLevelsImpl() {
       polygon: v.polygon,
       zs: [level!.floor, ...v.through.slice(0, -1).map((n) => levels.find((l) => l.n === n)?.floor).filter((z): z is number => z !== undefined)],
     })),
-    below: through.map((n) => levels.find((l) => l.n === n)).filter((l): l is Level => !!l).map(planOf),
+    below: through.map((n) => levels.find((l) => l.n === n)).filter((l): l is Level => !!l)
+      .map((l) => ({ ...planOf(l), voids: (allVoids.get(l.n) ?? []).flatMap((v) => v.polygon) })),
   });
 }
 
@@ -5971,6 +6139,7 @@ function onSessionChange(keys: string[]) {
   mapIssuesDirty = true;
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
+    if (selectedRoomWalls.length) { selectIndoor(undefined); infoEl.innerHTML = ''; }
     indoorEditRev++;
     const sel = indoorSelection.map((f) => indoorKey(f.key));
     renderLevels();
@@ -6197,7 +6366,7 @@ async function refreshUser() {
 }
 
 async function doUpload() {
-  if (uploading) return;
+  if (uploading || deletingIndoorWalls) return;
   const changes = session.changes();
   const s = server();
   uploading = true;
@@ -6241,6 +6410,12 @@ async function doUpload() {
         if (g) { editGroups.delete(e.key); g.id = Number(newKey.split('/')[1]); editGroups.set(newKey, g); }
         selection = selection.map((k) => (k === e.key ? newKey : k));
         if (selectedKey === e.key) selectedKey = newKey;
+        if (indoorEdited.delete(e.key)) indoorEdited.add(newKey);
+        const indoor = indoorCreated.get(e.key);
+        if (indoor) {
+          indoorCreated.delete(e.key);
+          indoorCreated.set(newKey, { ...indoor, key: newKey, tags, polygons: e.polygons ?? indoor.polygons });
+        }
       }
       saved.set(e.key, { version, tags, newKey, polygons: e.polygons });
     }
@@ -6249,6 +6424,7 @@ async function doUpload() {
     const createdWays: Feature3D[] = [];
     for (const [k, v] of saved) {
       if (!v.newKey?.startsWith('way/')) continue;
+      if (indoorEdited.has(v.newKey)) continue;
       const f = session.get(v.newKey) as Feature3D | undefined;
       if (f?.polygons) { f.id = Number(v.newKey.split('/')[1]); createdWays.push(f); }
       void k;
@@ -6431,6 +6607,7 @@ serverSelect.addEventListener('change', () => {
   // Данные — с выбранного сервера: правки прежнего к нему не относятся
   session = new EditSession([], onSessionChange);
   indoorEdited.clear();
+  indoorCreated.clear();
   editGroups = new Map();
   editMemberGroup = new Map();
   clearSelection();
@@ -6632,7 +6809,8 @@ onSkeletons(() => {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !focus || toolActive() || popupEl.childElementCount || (e.target as HTMLElement).closest('input, select, textarea')) return;
   // Esc: сначала снять выделение части, затем выйти из режима здания
-  if (selection.length) select(undefined);
+  if (selectedRoomWalls.length || indoorSelection.length) { selectIndoor(undefined); infoEl.innerHTML = ''; }
+  else if (selection.length) select(undefined);
   else closeFocus();
 });
 

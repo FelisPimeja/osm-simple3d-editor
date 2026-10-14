@@ -110,6 +110,57 @@ export function trimTriangles(pos: ArrayLike<number>, from: number, to: number, 
 
 type V3 = [number, number, number];
 
+/** Стеклянные стены без совпадающих граней indoor-плана: у этих стен нет объёма для trimTriangles. */
+export function trimCoplanarWalls(pos: ArrayLike<number>, walls: ArrayLike<number>): number[] {
+  const blockers: { vs: V3[]; box: Box; min: number; max: number }[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i + 8 < walls.length; i += 9) {
+    const vs: V3[] = [[walls[i], walls[i + 1], walls[i + 2]], [walls[i + 3], walls[i + 4], walls[i + 5]], [walls[i + 6], walls[i + 7], walls[i + 8]]];
+    const n = normal(vs[0], vs[1], vs[2]), len = Math.hypot(...n);
+    if (len < MIN_AREA || Math.abs(n[2]) > len * 1e-6) continue;
+    // drawPlan строит обе стороны стены — для вычитания это одна поверхность.
+    const key = vs.map((v) => v.map((c) => Math.round(c * SNAP)).join(',')).sort().join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    blockers.push({ vs, box: [Math.min(...vs.map((v) => v[0])), Math.min(...vs.map((v) => v[1])), Math.max(...vs.map((v) => v[0])), Math.max(...vs.map((v) => v[1]))],
+      min: Math.min(...vs.map((v) => v[2])), max: Math.max(...vs.map((v) => v[2])) });
+  }
+  const out: number[] = [];
+  for (let i = 0; i + 8 < pos.length; i += 9) {
+    const a: V3 = [pos[i], pos[i + 1], pos[i + 2]], b: V3 = [pos[i + 3], pos[i + 4], pos[i + 5]], c: V3 = [pos[i + 6], pos[i + 7], pos[i + 8]];
+    const n = normal(a, b, c), len = Math.hypot(...n);
+    if (len < MIN_AREA || Math.abs(n[2]) > len * 1e-6) { out.push(...a, ...b, ...c); continue; }
+    const nx = n[0] / len, ny = n[1] / len, ux = -ny, uy = nx;
+    const project = (v: V3): Pt => [(v[0] - a[0]) * ux + (v[1] - a[1]) * uy, v[2]];
+    // Float32 фасада и double стен отличаются на микроны. В стыках плит и стен используем сетку 0.1 мм:
+    // микронная сетка оставляет почти совпадающие пересечения, на которых polygon-clipping не собирает кольцо.
+    const tri = [a, b, c].map((v) => project(v).map((c) => Math.round(c * 1e4) / 1e4) as Pt);
+    const box: Box = [Math.min(a[0], b[0], c[0]), Math.min(a[1], b[1], c[1]), Math.max(a[0], b[0], c[0]), Math.max(a[1], b[1], c[1])];
+    const z0 = Math.min(a[2], b[2], c[2]), z1 = Math.max(a[2], b[2], c[2]);
+    const covered: ClipPolygon[] = [];
+    let pieces: V3[][] | undefined;
+    try {
+      for (const wall of blockers) {
+        if (wall.box[0] > box[2] + FACE_EPS || wall.box[2] < box[0] - FACE_EPS || wall.box[1] > box[3] + FACE_EPS || wall.box[3] < box[1] - FACE_EPS || wall.min >= z1 || wall.max <= z0) continue;
+        if (!wall.vs.every((v) => Math.abs((v[0] - a[0]) * nx + (v[1] - a[1]) * ny) <= FACE_EPS)) continue;
+        const intersection = polygonClipping.intersection(snapAt([ring(tri)], 1e4), snapAt([ring(wall.vs.map(project))], 1e4));
+        for (const p of intersection) if (multiArea([p]) >= MIN_AREA) covered.push(p);
+      }
+      if (covered.length) {
+        const hidden = polygonClipping.union(snapAt(covered[0], 1e4), ...covered.slice(1).map((p) => snapAt(p, 1e4)));
+        pieces = rest(tri, hidden, ([s, z]) => [a[0] + ux * s, a[1] + uy * s, z]);
+      }
+    } catch { /* вырожденный стык — сохраняем исходную грань */ }
+    if (!pieces) { out.push(...a, ...b, ...c); continue; }
+    for (const [p, q, r] of pieces) {
+      const m = normal(p, q, r);
+      if (m[0] * n[0] + m[1] * n[1] + m[2] * n[2] < 0) out.push(...p, ...r, ...q);
+      else out.push(...p, ...q, ...r);
+    }
+  }
+  return out;
+}
+
 function nearby(solids: PreparedSolid[], a: V3, b: V3, c: V3): PreparedSolid[] {
   const x0 = Math.min(a[0], b[0], c[0]) - PROBE, x1 = Math.max(a[0], b[0], c[0]) + PROBE;
   const y0 = Math.min(a[1], b[1], c[1]) - PROBE, y1 = Math.max(a[1], b[1], c[1]) + PROBE;
@@ -251,7 +302,11 @@ function rest(tri: Pt[], hidden: ClipMulti, lift: (v: Pt) => V3): V3[][] | undef
  * polygon-clipping зацикливается внутри одного вызова; после округления те же входы считаются за миллисекунды.
  */
 function snap<T extends ClipPolygon | ClipMulti>(g: T): T {
-  const r = (v: number) => Math.round(v * SNAP) / SNAP;
+  return snapAt(g, SNAP);
+}
+
+function snapAt<T extends ClipPolygon | ClipMulti>(g: T, precision: number): T {
+  const r = (v: number) => Math.round(v * precision) / precision;
   const deep = (x: unknown): unknown => (typeof x === 'number' ? r(x) : (x as unknown[]).map(deep));
   return deep(g) as T;
 }

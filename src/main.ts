@@ -866,6 +866,7 @@ function highlightKeys(key: string | undefined): string[] {
 }
 
 map.on('click', (e) => {
+  if (e.originalEvent.button !== 0) return;
   if (suppressClick) return;
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
@@ -4251,18 +4252,34 @@ const isDoor = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && !f.key.end
 
 /** Обработчики формы: правка поля — у всех выбранных одним шагом истории. */
 function bindIndoorForm(fs: IndoorFeature[]) {
-  infoEl.querySelector('[data-hide-indoor]')?.addEventListener('click', () => {
-    for (const f of fs) indoorHidden.add(indoorKey(f.key));
-    selectIndoor(undefined);
-    infoEl.innerHTML = '';
-    renderLevels();
-  });
+  infoEl.querySelector('[data-hide-indoor]')?.addEventListener('click', () => hideSelectedIndoor());
   infoEl.querySelector('[data-delete-doors]')?.addEventListener('click', () => deleteDoors(fs));
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
     input.addEventListener('change', () => setIndoorTags(fs.map((f) => ({ key: indoorKey(f.key), tags: { ...f.tags, [input.dataset.indoorTag!]: input.value } }))));
   }
   const levelInput = infoEl.querySelector<HTMLInputElement>('[data-indoor-tag="level"]');
   if (levelInput) { bindLevelHint(levelInput); bindLevelPicker(levelInput, fs); }
+}
+
+function changeIndoorHidden(next: Set<string>) {
+  const prev = new Set(indoorHidden);
+  if (prev.size === next.size && [...next].every((key) => prev.has(key))) return;
+  const apply = (keys: Set<string>) => {
+    indoorHidden.clear();
+    for (const key of keys) indoorHidden.add(key);
+    if (indoorSelection.some((f) => indoorHidden.has(indoorKey(f.key)))) {
+      selectIndoor(undefined);
+      infoEl.innerHTML = '';
+    }
+    renderLevels();
+  };
+  apply(next);
+  session.pushView({ undo: () => apply(prev), redo: () => apply(next) });
+}
+
+function hideSelectedIndoor() {
+  if (!indoorSelection.length) return;
+  changeIndoorHidden(new Set([...indoorHidden, ...indoorSelection.map((f) => indoorKey(f.key))]));
 }
 
 /** Помещение, коридор или площадка — пол, который красим по назначению. */
@@ -4797,8 +4814,8 @@ function levelVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[], 
 
 levelsEl.addEventListener('click', (e) => {
   const show = (e.target as HTMLElement).closest<HTMLElement>('[data-show-indoor-key]');
-  if (show) { indoorHidden.delete(show.dataset.showIndoorKey!); renderLevels(); return; }
-  if ((e.target as HTMLElement).closest('[data-show-indoor]')) { indoorHidden.clear(); renderLevels(); return; }
+  if (show) { changeIndoorHidden(new Set([...indoorHidden].filter((key) => key !== show.dataset.showIndoorKey))); return; }
+  if ((e.target as HTMLElement).closest('[data-show-indoor]')) { changeIndoorHidden(new Set()); return; }
   const link = (e.target as HTMLElement).closest<HTMLElement>('[data-select]');
   if (link) { e.preventDefault(); select(link.dataset.select); return; }
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-level]');
@@ -5245,6 +5262,13 @@ window.addEventListener('pointerup', (e) => {
   if (!focus || moved || moveTool.state === 'move' || pushTool.state === 'push') return;
   const rect = map.getCanvas().getBoundingClientRect();
   const key = overpassLayer.pickHit([e.clientX - rect.left, e.clientY - rect.top])?.key;
+  if (shownLevel) {
+    const room = indoorAt([e.clientX - rect.left, e.clientY - rect.top]);
+    if (room) {
+      if (!indoorSelection.some((f) => indoorKey(f.key) === indoorKey(room.key))) selectIndoor(room);
+      return openCtxMenu(e.clientX, e.clientY, 'indoor');
+    }
+  }
   // Мимо здания — меню режима: показать всё и выход
   if (!key || !focus.members.includes(key)) return openCtxMenu(e.clientX, e.clientY, 'empty');
   if (!selection.includes(key)) select(key);
@@ -5255,8 +5279,18 @@ window.addEventListener('pointerup', (e) => {
  * Меню частей. В сцене скрытые не выбрать — вместо «Показать» там «Показать всё скрытое»;
  * 'empty' — клик мимо здания: только «Показать всё» и выход.
  */
-function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty') {
+function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | 'indoor') {
   if (!focus) return;
+  if (where === 'indoor') {
+    const n = indoorSelection.length > 1 ? ` (${indoorSelection.length})` : '';
+    ctxMenu.innerHTML = `<li><button type="button" data-ctx="indoor-hide">${tr('Скрыть объекты')}${n}<kbd>H</kbd></button></li>`
+      + `<li><button type="button" data-ctx="indoor-show-all"${indoorHidden.size ? '' : ' disabled'}>${tr('Показать всё скрытое')}${indoorHidden.size ? ` (${indoorHidden.size})` : ''}</button></li>`;
+    ctxMenu.hidden = false;
+    const { width, height } = ctxMenu.getBoundingClientRect();
+    ctxMenu.style.left = `${Math.min(x, innerWidth - width - 4)}px`;
+    ctxMenu.style.top = `${Math.min(y, innerHeight - height - 4)}px`;
+    return;
+  }
   const inScene = where !== 'list';
   const kbd = (k: string) => `<kbd>${k}</kbd>`;
   const snaps = `<li class="ctx-sep"></li><li><button type="button" data-ctx="snaps">${overpassLayer.snapsEnabled ? tr('Выключить привязки') : tr('Включить привязки')}${kbd('S')}</button></li>`;
@@ -5284,6 +5318,8 @@ ctxMenu.addEventListener('click', (e) => {
   const action = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ctx]:not(:disabled)')?.dataset.ctx;
   if (!action || !focus) return;
   closeCtxMenu();
+  if (action === 'indoor-hide') return hideSelectedIndoor();
+  if (action === 'indoor-show-all') { changeIndoorHidden(new Set()); return; }
   focusAction(action);
 });
 
@@ -5465,6 +5501,8 @@ function toggleSnaps() {
 /** Действие над выделенными частями (меню и шорткаты): hide, show, show-all, isolate, exclude, exit. */
 function focusAction(action: string) {
   if (!focus) return;
+  if (indoorSelection.length && action === 'hide') { hideSelectedIndoor(); return; }
+  if (indoorHidden.size && action === 'show-all' && !selection.length) { changeIndoorHidden(new Set()); return; }
   const keys = selection.filter(inFocus);
   if (action === 'exclude') { if (keys.length) excludeFromGroup(); return; }
   if (action === 'delete') { if (keys.length) deleteSelected(); return; }

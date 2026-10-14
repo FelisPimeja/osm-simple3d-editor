@@ -396,6 +396,8 @@ const outlinerEl = document.getElementById('outliner')!;
 const outlinerCount = document.getElementById('outliner-count')!;
 /** Скрытые глазиком части в режиме здания — только показ, на данные не влияет. */
 const focusHidden = new Set<string>();
+/** Indoor-объекты, временно скрытые для осмотра этажа. */
+const indoorHidden = new Set<string>();
 /** Части здания, которых нет в году слайдера времени (OHM), — скрыты в сцене, как глазиком; на данные не влияет. */
 let focusDated = new Set<string>();
 /** Часть скрыта в режиме здания: глазиком или по дате — её не выделить и не править в сцене. */
@@ -1284,6 +1286,7 @@ function enterFocus(g: BuildingGroup, flyIn = true) {
     // Голые контуры (без высоты, всё здание — части) по умолчанию выключены, включаются глазиком
     session.dropViewActions(); // шаги скрытия — о прежнем здании
     focusHidden.clear();
+    indoorHidden.clear();
     for (const k of bareOutlines(g)) focusHidden.add(k);
   }
   drill = focus = g;
@@ -1407,6 +1410,7 @@ function exitFocus() {
   setEditParam(undefined);
   if (tilesStale) { tilesStale = false; overpass.rerenderFeatures(staleKeys); staleKeys.clear(); }
   focusHidden.clear();
+  indoorHidden.clear();
   focusDated.clear();
   session.dropViewActions();
   overpassLayer.setHover(undefined);
@@ -4222,6 +4226,7 @@ function selectIndoor(f: IndoorFeature | undefined, add = false, scrollIssues = 
   infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''} — `
     + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
     + `<p class="hint">${esc(levels)}</p>`
+    + `<p><button type="button" data-hide-indoor>${tr('Скрыть')}</button></p>`
     + indoorForm([f])
     + `<details class="all-tags"><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
   bindIndoorForm([f]);
@@ -4231,7 +4236,8 @@ function selectIndoor(f: IndoorFeature | undefined, add = false, scrollIssues = 
 /** Несколько indoor-объектов: число и виды, общая форма. */
 function renderIndoorMulti(fs: IndoorFeature[]) {
   const kinds = [...new Set(fs.map((f) => (isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind])))].join(', ');
-  infoEl.innerHTML = `<h2>${trn(fs.length, 'Выбран {n} объект|Выбрано {n} объекта|Выбрано {n} объектов')}</h2><p class="hint">${esc(kinds)}</p>` + indoorForm(fs);
+  infoEl.innerHTML = `<h2>${trn(fs.length, 'Выбран {n} объект|Выбрано {n} объекта|Выбрано {n} объектов')}</h2><p class="hint">${esc(kinds)}</p>`
+    + `<p><button type="button" data-hide-indoor>${tr('Скрыть объекты')}</button></p>` + indoorForm(fs);
   bindIndoorForm(fs);
 }
 
@@ -4245,6 +4251,12 @@ const isDoor = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && !f.key.end
 
 /** Обработчики формы: правка поля — у всех выбранных одним шагом истории. */
 function bindIndoorForm(fs: IndoorFeature[]) {
+  infoEl.querySelector('[data-hide-indoor]')?.addEventListener('click', () => {
+    for (const f of fs) indoorHidden.add(indoorKey(f.key));
+    selectIndoor(undefined);
+    infoEl.innerHTML = '';
+    renderLevels();
+  });
   infoEl.querySelector('[data-delete-doors]')?.addEventListener('click', () => deleteDoors(fs));
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
     input.addEventListener('change', () => setIndoorTags(fs.map((f) => ({ key: indoorKey(f.key), tags: { ...f.tags, [input.dataset.indoorTag!]: input.value } }))));
@@ -4631,17 +4643,22 @@ function renderLevelsImpl() {
   setLevelParam(currentLevel ?? linkLevel);
   levelsCount.textContent = levels.length ? `(${levels.length})` : '';
   const planned = plannedLevels(focus, levels, indoor);
-  levelsEl.innerHTML = levels.length
+  const hiddenRows = [...indoorHidden].map((key) => {
+    const f = indoor.find((item) => indoorKey(item.key) === key);
+    return `<li class="lv-restore"><button type="button" data-show-indoor-key="${esc(key)}">${tr('Показать')} ${esc(f?.tags.name ?? f?.tags.ref ?? key)}</button></li>`;
+  }).join('');
+  levelsEl.innerHTML = (indoorHidden.size ? `<li class="lv-restore"><button type="button" data-show-indoor>${tr('Показать всё скрытое')} (${indoorHidden.size})</button></li>${hiddenRows}` : '') + (levels.length
     ? `<li class="${currentLevel === undefined ? 'selected' : ''}" data-level=""><span class="lv-name"><span class="lv-plan"></span>${tr('Всё здание')}</span></li>` + levels.map((l, i) =>
       // Заголовки групп: перед первым надземным и первым подземным этажом (список — сверху вниз)
       (i === 0 || (levels[i - 1].n >= 0) !== (l.n >= 0) ? `<li class="lv-group">${l.n >= 0 ? tr('Надземные этажи') : tr('Подземные этажи')}</li>` : '')
       + `<li class="${l.n === currentLevel ? 'selected' : ''}" data-level="${l.n}" title="level=${l.n} · ${l.src ? tr('по тегам {link}', { link: l.src }) : tr('из indoor-данных')}${planned.has(l.n) ? ' · ' + tr('есть поэтажный план') : ''}">`
       + `<span class="lv-name"><span class="lv-plan">${planned.has(l.n) ? ICON_PLAN : ''}</span>${LEVEL_NAME(l.n)}</span>`
       + `<span class="lv-meta">${levelIssue(l) ? `<span class="lv-warn" title="${esc(levelIssue(l)!)}">!</span>` : ''}${tr('{floor}–{ceil} м', { floor: l.floor.toFixed(1), ceil: l.ceil.toFixed(1) })}</span></li>`).join('') + levelSources(levels)
-    : `<li class="lv-empty">${tr('Нет этажности (building:levels) и indoor-данных')}</li>`;
+    : `<li class="lv-empty">${tr('Нет этажности (building:levels) и indoor-данных')}</li>`);
   overpassLayer.setUnderground(currentLevel === undefined ? undergroundOutline(focus, levels) : undefined);
   const level = levels.find((l) => l.n === currentLevel);
-  const onLevel = level ? indoor.filter((f) => f.levels.includes(level.n)) : [];
+  const onLevel = level ? indoor.filter((f) => f.levels.includes(level.n) && !indoorHidden.has(indoorKey(f.key))) : [];
+  const visibleIndoor = indoor.filter((f) => !indoorHidden.has(indoorKey(f.key)));
   shownLevel = level;
   shownIndoor = onLevel;
   // Выбранные, которых на этаже больше нет (сменили level или этаж) — из выбора вон
@@ -4653,7 +4670,7 @@ function renderLevelsImpl() {
   }
   indoorPois.set(onLevel.filter((f) => f.kind === 'poi'), level?.floor ?? 0);
   const planOf = (l: Level) => {
-    const fs = indoor.filter((f) => f.levels.includes(l.n));
+    const fs = visibleIndoor.filter((f) => f.levels.includes(l.n));
     return {
       cut: l.ceil,
       // Объект на нескольких этажах (эскалатор, лестница, зал в два света) — рисуем на его нижнем этаже,
@@ -4666,7 +4683,7 @@ function renderLevelsImpl() {
     };
   };
   const plan = level && planOf(level);
-  const escalators = indoor.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2
+  const escalators = visibleIndoor.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2
       && (f.tags.incline === 'up' || f.tags.incline === 'down'))
     .filter((f) => level && f.levels.includes(level.n))
     .map((f) => {
@@ -4678,10 +4695,10 @@ function renderLevelsImpl() {
   if (level) levelsEl.insertAdjacentHTML('beforeend', indoorLegend(onLevel));
   overpassLayer.setDoors(level ? onLevel.filter(isDoor).map((f) => ({ key: f.key, at: f.point!, z: level.floor })) : []);
   // Второй свет: пустоты в перекрытии и этажи под ними
-  const voids = level ? levelVoids(focus, levels, indoor, level.n) : [];
+  const voids = level ? levelVoids(focus, levels, visibleIndoor, level.n) : [];
   // Пустоты здания посчитались или поменялись (пришли indoor-данные) — перекрытия стеклянных частей пересобрать
-  const allVoids = buildingVoids(focus, levels, indoor);
-  const vsig = `${focus.key}|${indoor.length}|${[...allVoids].map(([n, l]) => `${n}:${l.length}`).join(',')}`;
+  const allVoids = buildingVoids(focus, levels, visibleIndoor);
+  const vsig = `${focus.key}|${visibleIndoor.map((f) => f.key).join(',')}|${[...allVoids].map(([n, l]) => `${n}:${l.length}`).join(',')}`;
   if (vsig !== glassVoidsSig) {
     glassVoidsSig = vsig;
     const members = new Set(focus.members);
@@ -4689,7 +4706,7 @@ function renderLevelsImpl() {
     void overpassLayer.rebuildWhere((f) => members.has(f.key));
   }
   const through = [...new Set(voids.flatMap((v) => v.through))];
-  const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${escalators.map((e) => `${e.key}:${e.bottom}:${e.top}`).join(',')}|${indoorEditRev}` : '';
+  const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${escalators.map((e) => `${e.key}:${e.bottom}:${e.top}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}` : '';
   if (sig === levelSignature) return;
   levelSignature = sig;
   overpassLayer.setLevel(plan && {
@@ -4712,7 +4729,7 @@ type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[] }[]> & 
 /** Пустоты (второй свет) всех этажей здания, lon/lat; кеш — по зданию и данным. */
 const voidsCache = new Map<string, { sig: string; map: LevelVoids }>();
 function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
-  const sig = `${overpass.revision}|${focusIndoor.get(g.key)?.length ?? -1}|${indoorEditRev}|${indoor.length}|${levels.map((l) => `${l.n}:${l.floor}:${l.ceil}`).join(',')}|${g.members.length}`;
+  const sig = `${overpass.revision}|${focusIndoor.get(g.key)?.length ?? -1}|${indoorEditRev}|${indoor.map((f) => f.key).join(',')}|${levels.map((l) => `${l.n}:${l.floor}:${l.ceil}`).join(',')}|${g.members.length}`;
   const hit = voidsCache.get(g.key);
   if (hit?.sig === sig) return hit.map;
   const map: LevelVoids = timed('этажи: второй свет', () => {
@@ -4779,6 +4796,9 @@ function levelVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[], 
 }
 
 levelsEl.addEventListener('click', (e) => {
+  const show = (e.target as HTMLElement).closest<HTMLElement>('[data-show-indoor-key]');
+  if (show) { indoorHidden.delete(show.dataset.showIndoorKey!); renderLevels(); return; }
+  if ((e.target as HTMLElement).closest('[data-show-indoor]')) { indoorHidden.clear(); renderLevels(); return; }
   const link = (e.target as HTMLElement).closest<HTMLElement>('[data-select]');
   if (link) { e.preventDefault(); select(link.dataset.select); return; }
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-level]');

@@ -74,7 +74,7 @@ const INDOOR_SLAB_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, si
 const INDOOR_VOID_EDGE = new THREE.LineBasicMaterial({ color: 0x57534e });
 const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0x64748b, side: THREE.DoubleSide });
 const ESCALATOR_SIDE = new THREE.MeshLambertMaterial({ color: 0x334155, side: THREE.DoubleSide });
-const ESCALATOR_STEP = new THREE.LineBasicMaterial({ color: 0xcbd5e1 });
+const ESCALATOR_STEP = new THREE.MeshLambertMaterial({ color: 0x94a3b8, side: THREE.DoubleSide });
 const ESCALATOR_HANDRAIL = new THREE.LineBasicMaterial({ color: 0x2563eb });
 
 /** План этажа для слоя. below — этажи под вторым светом (видны сквозь пустоты voids в перекрытии). */
@@ -891,7 +891,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.drawEscalators(root, g);
   }
 
-  /** Эскалатор — наклонная лента по оси highway=steps; у обоих концов короткие горизонтальные площадки. */
+  /** Эскалатор с горизонтальными ступенями, подступенками и закрытым корпусом. */
   private drawEscalators(root: THREE.Group, g: MeshGroup) {
     for (const item of this.level?.escalators ?? []) {
       const pts = item.line.map(g.toLocal);
@@ -913,23 +913,35 @@ export class BuildingsLayer implements CustomLayerInterface {
         const z = item.bottom + (item.top - item.bottom) * (item.incline === 'down' ? 1 - rise : rise) + 0.05;
         return { x: ax + (bx - ax) * t, y: ay + (by - ay) * t, nx: -dy, ny: dx, z };
       };
-      const samples = [...new Set([0, landing, ...cumulative.slice(1, -1), length - landing, length].sort((a, b) => a - b))];
-      const surface: number[] = [], sides: number[] = [], steps: number[] = [], rails: number[] = [];
-      const edge = (p: ReturnType<typeof at>, sign: number, up = 0): [number, number, number] =>
-        [p.x + sign * halfWidth * p.nx, p.y + sign * halfWidth * p.ny, p.z + up];
+      const ascending = item.incline === 'up';
+      const ramp = length - 2 * landing;
+      const count = Math.max(1, Math.round(ramp / 0.42));
+      const distances = [0, landing, ...Array.from({ length: count - 1 }, (_, i) => landing + ramp * (i + 1) / count), length - landing, length];
+      const treads: number[] = [], risers: number[] = [], body: number[] = [], rails: number[] = [];
+      const edge = (p: ReturnType<typeof at>, sign: number, z = p.z): [number, number, number] =>
+        [p.x + sign * halfWidth * p.nx, p.y + sign * halfWidth * p.ny, z];
       const quad = (out: number[], a: number[], b: number[], c: number[], d: number[]) =>
         out.push(...a, ...b, ...c, ...a, ...c, ...d);
-      for (let i = 1; i < samples.length; i++) {
-        const a = at(samples[i - 1]), b = at(samples[i]);
-        quad(surface, edge(a, -1), edge(b, -1), edge(b, 1), edge(a, 1));
+      let previousTreadZ: number | undefined;
+      for (let i = 1; i < distances.length; i++) {
+        const a = at(distances[i - 1]), b = at(distances[i]);
+        // На склоне проступь лежит на высоте верхнего конца отрезка.
+        const z = i === 1 || i === distances.length - 1 ? a.z : ascending ? b.z : a.z;
+        quad(treads, edge(a, -1, z), edge(b, -1, z), edge(b, 1, z), edge(a, 1, z));
+        quad(body, edge(a, 1, a.z - 0.3), edge(b, 1, b.z - 0.3), edge(b, -1, b.z - 0.3), edge(a, -1, a.z - 0.3));
         for (const sign of [-1, 1]) {
-          quad(sides, edge(a, sign, -0.25), edge(b, sign, -0.25), edge(b, sign), edge(a, sign));
-          rails.push(...edge(a, sign, 0.9), ...edge(b, sign, 0.9));
+          quad(body, edge(a, sign, a.z - 0.3), edge(b, sign, b.z - 0.3), edge(b, sign, z), edge(a, sign, z));
+          rails.push(...edge(a, sign, a.z + 0.9), ...edge(b, sign, b.z + 0.9));
         }
+        if (previousTreadZ !== undefined && Math.abs(z - previousTreadZ) > 1e-4) {
+          const low = Math.min(z, previousTreadZ), high = Math.max(z, previousTreadZ);
+          quad(risers, edge(a, -1, low), edge(a, -1, high), edge(a, 1, high), edge(a, 1, low));
+        }
+        previousTreadZ = z;
       }
-      for (let d = landing + 0.35; d < length - landing; d += 0.45) {
+      for (const d of [0, length]) {
         const p = at(d);
-        steps.push(...edge(p, -1, 0.012), ...edge(p, 1, 0.012));
+        quad(body, edge(p, -1, p.z - 0.3), edge(p, 1, p.z - 0.3), edge(p, 1), edge(p, -1));
       }
       const mesh = (positions: number[], material: THREE.Material) => {
         if (!positions.length) return;
@@ -947,9 +959,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         object.frustumCulled = false;
         root.add(object);
       };
-      mesh(surface, ESCALATOR_BELT);
-      mesh(sides, ESCALATOR_SIDE);
-      lines(steps, ESCALATOR_STEP);
+      mesh(treads, ESCALATOR_BELT);
+      mesh(risers, ESCALATOR_STEP);
+      mesh(body, ESCALATOR_SIDE);
       lines(rails, ESCALATOR_HANDRAIL);
     }
   }

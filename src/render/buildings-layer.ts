@@ -945,7 +945,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const p = at(d);
         quad(body, edge(p, -1, p.z - boxDepth), edge(p, 1, p.z - boxDepth), edge(p, 1), edge(p, -1));
       }
-      // Поручень идёт горизонтально над площадками; закруглён только переход к уклону.
+      // Поручень идёт горизонтально над площадками и огибает торцы стеклянных опор.
       const bend = Math.min(0.6, ramp / 4);
       const railZ = (d: number) => {
         const u = Math.max(0, Math.min(ramp, d - landing));
@@ -956,7 +956,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       };
       const railDistances = [...new Set([...distances,
         ...Array.from({ length: 9 }, (_, i) => landing + bend * i / 8),
-        ...Array.from({ length: 9 }, (_, i) => length - landing - bend * i / 8)].sort((a, b) => a - b))];
+        ...Array.from({ length: 9 }, (_, i) => length - landing - bend * i / 8)].filter(
+          (d) => d >= landing && d <= length - landing).sort((a, b) => a - b))];
       const sideEdge = (p: ReturnType<typeof at>, sign: number, z: number): [number, number, number] =>
         [p.x + sign * (halfWidth + 0.08) * p.nx, p.y + sign * (halfWidth + 0.08) * p.ny, z];
       const canvas = this.map!.getCanvas();
@@ -965,15 +966,33 @@ export class BuildingsLayer implements CustomLayerInterface {
       ESCALATOR_HANDRAIL.resolution.set(canvas.width, canvas.height);
       for (const sign of [-1, 1]) {
         const rail: number[] = [];
+        const roundedEnd = (d: number, direction: number, reverse: boolean) => {
+          const p = at(d);
+          const low = p.z + 0.08, high = railZ(d) - 0.045;
+          const mid = (low + high) / 2, halfHeight = (high - low) / 2;
+          const radius = Math.min(0.6, landing * 0.8);
+          const centre = sideEdge(p, sign, mid);
+          let previous: [number, number, number] | undefined;
+          for (let i = 0; i <= 12; i++) {
+            const angle = Math.PI * (reverse ? 1 - i / 12 : i / 12);
+            const curvedDistance = d + direction * radius * Math.sin(angle);
+            const point = sideEdge(at(curvedDistance), sign, mid + halfHeight * Math.cos(angle));
+            rail.push(...point);
+            if (previous) balustrades.push(...centre, ...previous, ...point);
+            previous = point;
+          }
+        };
+        roundedEnd(landing, -1, true);
         for (let i = 0; i < railDistances.length; i++) {
           const d = railDistances[i], p = at(d), z = railZ(d);
-          rail.push(...sideEdge(p, sign, z - 0.045));
+          if (i) rail.push(...sideEdge(p, sign, z - 0.045));
           if (i) {
             const pd = railDistances[i - 1], prev = at(pd);
             quad(balustrades, sideEdge(prev, sign, prev.z + 0.08), sideEdge(p, sign, p.z + 0.08),
               sideEdge(p, sign, z - 0.045), sideEdge(prev, sign, railZ(pd) - 0.045));
           }
         }
+        roundedEnd(length - landing, 1, false);
         const geometry = new LineGeometry();
         geometry.setPositions(rail);
         const line = new Line2(geometry, ESCALATOR_HANDRAIL);

@@ -373,7 +373,16 @@ const issuesEl = document.getElementById('issues')!;
 const issuesCount = document.getElementById('issues-count')!;
 const issuesAll = document.getElementById('issues-all') as HTMLInputElement;
 const issuesFixAll = document.getElementById('issues-fix-all') as HTMLButtonElement;
-try { issuesAll.checked = localStorage.getItem('osm3d.issues-all') === '1'; } catch { issuesAll.checked = false; }
+const issuesAllMapKey = 'osm3d.issues-all.map';
+const issuesAllBuildingKey = 'osm3d.issues-all.building';
+function storedIssuesAll(building: boolean): boolean {
+  try {
+    const value = localStorage.getItem(building ? issuesAllBuildingKey : issuesAllMapKey)
+      ?? (building ? localStorage.getItem('osm3d.issues-all') : null);
+    return value === '1';
+  } catch { return false; }
+}
+issuesAll.checked = storedIssuesAll(false);
 const outlinerEl = document.getElementById('outliner')!;
 const outlinerCount = document.getElementById('outliner-count')!;
 /** Скрытые глазиком части в режиме здания — только показ, на данные не влияет. */
@@ -428,6 +437,7 @@ let editMemberGroup = new Map<string, string>();
 let drill: BuildingGroup | undefined;
 /** Режим одного здания (группа, в которую вошли двойным кликом): окружение скрыто. */
 let focus: BuildingGroup | undefined;
+function syncIssuesAllSetting() { issuesAll.checked = storedIssuesAll(!!focus); }
 /** Видимость слоёв стиля до входа в режим одного здания. */
 let focusHiddenLayers: { id: string; visibility: string }[] = [];
 /** Слои зданий тайлов, ждущие возврата после выхода из режима здания. */
@@ -1264,6 +1274,7 @@ function enterFocus(g: BuildingGroup, flyIn = true) {
     for (const k of bareOutlines(g)) focusHidden.add(k);
   }
   drill = focus = g;
+  syncIssuesAllSetting();
   syncBasemapLayers(); // область снимков — вокруг этого здания
   focusToolbar.hidden = false;
   syncMapTools();
@@ -1378,6 +1389,7 @@ const staleKeys = new Set<string>();
 function exitFocus() {
   if (!focus) return;
   focus = undefined;
+  syncIssuesAllSetting();
   mapIssuesDirty = true;
   setEditParam(undefined);
   if (tilesStale) { tilesStale = false; overpass.rerenderFeatures(staleKeys); staleKeys.clear(); }
@@ -4836,7 +4848,7 @@ function highlightIssues() {
 }
 
 issuesAll.addEventListener('change', () => {
-  try { localStorage.setItem('osm3d.issues-all', issuesAll.checked ? '1' : '0'); } catch { /* не запомним */ }
+  try { localStorage.setItem(focus ? issuesAllBuildingKey : issuesAllMapKey, issuesAll.checked ? '1' : '0'); } catch { /* не запомним */ }
   highlightIssues();
 });
 

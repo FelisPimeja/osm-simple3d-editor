@@ -4686,9 +4686,11 @@ function renderLevelsImpl() {
     const fs = visibleIndoor.filter((f) => f.levels.includes(l.n));
     return {
       cut: l.ceil,
-      // Объект на нескольких этажах (эскалатор, лестница, зал в два света) — рисуем на его нижнем этаже,
-      // выше он — пустота (стены-линии — на всех: они и выше стоят)
-      items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && (f.line || floorLevels(f).includes(l.n)))
+      // Площадь эскалатора задаёт его след и проём, но не сплошной пол под ступенями.
+      // Остальные многоэтажные объекты рисуем на нижнем этаже (стены-линии — на всех).
+      items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea
+        && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
+        && (f.line || floorLevels(f).includes(l.n)))
         .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor,
           ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}) })),
       // Двери этажа — проёмы в стенах

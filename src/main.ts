@@ -8,7 +8,7 @@ import { Toasts } from './view/toasts';
 import { validateBuilding, validateGeometry, validateTags, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
-import { completeRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
+import { completeRelations, fetchBuildingElements, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, SERVER_LIST, apiBlockedHere, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
@@ -16,6 +16,7 @@ import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type IndoorCategory } from './osm/indoor-categories';
 import { ViewCube } from './view/view-cube';
+import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
 import { applyBasemap, applyGpsTraces, BasemapButton, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
@@ -147,6 +148,9 @@ if (import.meta.env.PROD) maplibregl.setWorkerUrl(new URL('maplibre/maplibre-gl-
 /** Хэш карты из адреса до создания карты: в режиме здания наклон бывает больше, чем MapLibre примет вне его. */
 const startHash = location.hash.slice(1).split('/').map(Number);
 const startHashValid = startHash.length >= 3 && startHash.every(Number.isFinite);
+const savedCamera = startHashValid ? undefined : await loadCamera();
+const mapContainer = document.getElementById('map')!;
+const worldZoom = Math.min(0, Math.log2(Math.min(mapContainer.clientWidth, mapContainer.clientHeight) / 512));
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -155,10 +159,11 @@ const map = new maplibregl.Map({
   style: server().style, // подложка — своя у каждого сервера; смена сервера с другой подложкой перезагружает страницу
   // Shift+клик — множественное выделение; зум рамкой с Shift перехватывал бы клик
   boxZoom: false,
-  center: [37.6205, 55.7535],
-  zoom: 16,
-  pitch: 60,
-  bearing: -20,
+  center: savedCamera?.center ?? [0, 0],
+  zoom: savedCamera?.zoom ?? Math.max(-2, worldZoom),
+  minZoom: -2,
+  pitch: savedCamera?.pitch ?? 0,
+  bearing: savedCamera?.bearing ?? 0,
   hash: true,
   maxPitch: 175, // хэш из ссылки на здание (наклон до 175°) не должен отбрасываться; потом ограничит orbit
   // Без «прилипания к северу»: после сдвига или зума при азимуте в ±7° MapLibre сам плавно доворачивал камеру на север
@@ -177,6 +182,8 @@ const viewCube = new ViewCube({
 });
 map.addControl(viewCube, 'top-right');
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
+// Браузер запросит доступ к местоположению при нажатии штатной кнопки MapLibre.
+map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: false }));
 // В режиме здания вместо компаса — кнопка куба вида (показать / скрыть), выбор запоминается
 const cubeBtn = document.createElement('button');
 cubeBtn.type = 'button';
@@ -519,7 +526,15 @@ map.on('load', () => {
   if (josmMode) void loadJosm();
 });
 
-map.on('moveend', () => { refreshOverpass(); scheduleIndoorBadges(); });
+let cameraWrite = Promise.resolve();
+map.on('moveend', () => {
+  refreshOverpass(); scheduleIndoorBadges(); showOverpassStatus();
+  if (!focus && !new URLSearchParams(location.search).has('edit')) {
+    const c = map.getCenter();
+    const camera = { center: [c.lng, c.lat] as [number, number], zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+    cameraWrite = cameraWrite.then(() => saveCamera(camera));
+  }
+});
 
 // Все здания белым — тайловые и так белые, переключаем только слои с данными OSM
 monoToggle.checked = gfx.monochrome;
@@ -650,6 +665,7 @@ function showOverpassStatus() {
   updateOverpassIndicator();
   updateDraftStyle();
   if (uploading || Date.now() < messageUntil) return;
+  if (!focus && map.getZoom() < CACHED_MIN_ZOOM) return panelStatus(tr('Приблизьте карту для просмотра и редактирования.'));
   const src = overpass.sourceLabel;
   if (!overpass.enabled) return panelStatus(tr('Здания из тайлов. С z ≥ {z} — из {src}.', { z: OVERPASS_MIN_ZOOM, src }));
   const { ready, total, loading, waiting } = overpass.status();
@@ -1178,6 +1194,58 @@ function hideMapLayers() {
   syncBasemapLayers();
 }
 
+let focusRefreshId = 0;
+
+async function refreshFocusedBuilding(g: BuildingGroup, requestId: number) {
+  const api = server().api;
+  try {
+    const root = isSolo(g) ? g.members[0] : g.key;
+    const parsed = parseBuildings(await fetchBuildingElements(root, api));
+    if (api !== server().api) return;
+    const freshGroup = isSolo(g) ? { ...g } : parsed.groups.find((item) => item.key === g.key);
+    if (!freshGroup) throw new Error(`OSM: ${g.key} отсутствует в ответе API`);
+    const features = parsed.features.filter((f) => freshGroup.members.includes(f.key));
+    if (features.length !== freshGroup.members.length) throw new Error(`OSM: не удалось загрузить все части ${g.key}`);
+    const changed = features.filter((f) => {
+      const old = overpass.cachedFeature(f.key);
+      return !old || old.version !== f.version || JSON.stringify(old.polygons) !== JSON.stringify(f.polygons) ||
+        JSON.stringify(old.tags) !== JSON.stringify(f.tags) || JSON.stringify(old.ways) !== JSON.stringify(f.ways);
+    });
+    const oldGroup = overpass.groupOf(g.key);
+    const groupChanged = !isSolo(g) && JSON.stringify(oldGroup) !== JSON.stringify(freshGroup);
+    if (!changed.length && !groupChanged) return;
+    const stillFocused = requestId === focusRefreshId && focus?.key === g.key;
+    const touched = stillFocused && ([...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.has(key) && session.isChanged(key)) || session.hasDataHistory());
+    if (touched) {
+      setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
+      return;
+    }
+    const saved = new Map(changed.map((f) => [f.key, { version: f.version, tags: f.tags, polygons: f.polygons, ways: f.ways }]));
+    await overpass.applySaved(saved, isSolo(g) ? [] : [freshGroup], changed);
+    if (!stillFocused || requestId !== focusRefreshId || focus?.key !== g.key) return;
+    if (session.hasDataHistory() || [...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.has(key) && session.isChanged(key))) {
+      setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
+      return;
+    }
+    for (const f of features) if (session.has(f.key)) session.refresh({ ...f, tags: { ...f.tags },
+      ...(f.ways ? { relMembers: f.ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } : {}) });
+    if (!isSolo(g)) {
+      const copy = { ...freshGroup, tags: { ...freshGroup.tags }, members: [...freshGroup.members], roles: [...freshGroup.roles],
+        relMembers: freshGroup.members.map((key, i) => { const [type, ref] = key.split('/'); return { type: type as 'way' | 'relation', ref: Number(ref), role: freshGroup.roles[i] ?? '' }; }) };
+      if (session.has(g.key)) session.refresh(copy);
+      if (editGroups.has(g.key)) { editGroups.set(g.key, copy); rebuildGroupIndex(); }
+    }
+    drill = focus = freshGroup;
+    overpassLayer.setFocus(groupFeatures(freshGroup), bareOutlines(freshGroup));
+    syncFocusHidden();
+    paintSelection();
+    renderSelected();
+    setStatus(tr('Данные здания обновлены до актуальной версии OSM.'));
+  } catch (err) {
+    if (requestId === focusRefreshId && focus?.key === g.key) setStatus(tr('Не удалось проверить актуальность здания: {error}', { error: (err as Error).message }), true);
+  }
+}
+
 function enterFocus(g: BuildingGroup, flyIn = true) {
   // Вход в здание посреди наброска на карте (двойной клик при включённом R / L): набросок закрыть сейчас —
   // иначе его закрытие позже (пробел, Esc) снимет сцену режима здания вместе с собой
@@ -1207,6 +1275,7 @@ function enterFocus(g: BuildingGroup, flyIn = true) {
   paintSelection();
   renderSelected();
   setEditParam(isSolo(g) ? g.members[0] : g.key);
+  void refreshFocusedBuilding(g, ++focusRefreshId);
 }
 
 /** Доля экрана, которую занимает здание после подлёта. */
@@ -1544,6 +1613,7 @@ function squareSelected() {
 const pushBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="push"]')!;
 const pushTool = new PushTool(overpassLayer, map.getContainer(),
   (key) => !!focus?.members.includes(key) && !hiddenInFocus(key),
+  () => selection,
   allowPushSide, clampPush, previewPush, commitPush,
   (hint) => {
     pushBtn.classList.toggle('active', pushTool.active);
@@ -1586,7 +1656,7 @@ function startPush() {
 
 // Инструмент «Рассечь»: прямой разрез верхней грани делит путь на два (больший сохраняет историю)
 const splitBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="split"]')!;
-const splitTool = new SplitTool(overpassLayer, splitReason, splitFeature, (hint, error) => {
+const splitTool = new SplitTool(overpassLayer, () => selectedKey, () => focus?.members ?? [], splitReason, splitFeature, (hint, error) => {
   splitBtn.classList.toggle('active', splitTool.active);
   syncCursor();
   toolHint(hint, error);
@@ -2215,8 +2285,7 @@ function splitReason(key: string): string | undefined {
   if (!focus?.members.includes(key) || hiddenInFocus(key)) return tr('Резать можно только части этого здания.');
   const f = entity(key) as Feature3D | undefined;
   if (!f?.polygons) return tr('Объект не найден.');
-  if (!key.startsWith('way/')) return tr('Пока режутся только простые контуры (линии), не мультиполигоны.');
-  if (f.polygons.length !== 1 || f.polygons[0].inners.length) return tr('Пока режутся только контуры без дыр.');
+  if (f.type === 'relation' && (f.tags.type !== 'multipolygon' || !relWays(f))) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
   const role = focus.roles[focus.members.indexOf(key)];
   if (role === 'outline') return tr('Контур здания (outline) не режем — только части.');
   const shape = f.tags['roof:shape'];
@@ -2261,28 +2330,43 @@ function inLocalRing([x, y]: [number, number], ring: [number, number][]): boolea
  * с тем же отрезком (без Т-стыков). Больший кусок остаётся исходным путём, меньший — новый путь с копией тегов,
  * добавляется в отношение здания с ролью part. Всё одним шагом истории. Возвращает текст ошибки или undefined.
  */
-function splitFeature(key: string, a: CutPoint, b: CutPoint): string | undefined {
+function splitFeature(key: string, a: CutPoint, b: CutPoint, bends: [number, number][]): string | undefined {
   const f = entity(key) as Feature3D | undefined;
   const solo = isSolo(focus);
   const g = focus && !solo ? (entity(focus.key) as EditGroup | undefined) : undefined;
   if (!f || (!g && !solo)) return tr('Объект не найден.');
-  const poly = f.polygons[0];
+  if (a.poly !== b.poly) return tr('Начало и конец разреза должны быть на одной грани.');
+  const poly = f.polygons[a.poly];
+  if (!poly) return tr('Грань не найдена.');
   const ids = poly.outerIds!;
   const local = poly.outer.map((c) => overpassLayer.focusToLocal(c)!);
   const n = local.length;
   if (a.vertex !== undefined && b.vertex !== undefined && a.vertex === b.vertex) return tr('Начало и конец разреза совпадают.');
-  if (a.edge === b.edge && a.vertex === undefined && b.vertex === undefined) return tr('Начало и конец разреза — на одном ребре.');
-  // Отрезок внутри контура: середина внутри, и он не пересекает стороны
-  const mid: [number, number] = [(a.p[0] + b.p[0]) / 2, (a.p[1] + b.p[1]) / 2];
-  if (!inLocalRing(mid, local)) return tr('Разрез проходит снаружи контура.');
-  for (let i = 0; i < n; i++) if (segCross(a.p, b.p, local[i], local[(i + 1) % n])) return tr('Разрез пересекает стороны контура.');
+  if (a.edge === b.edge && a.vertex === undefined && b.vertex === undefined && !bends.length) return tr('Разрез идёт по стороне контура — делить нечего.');
+  const path = [a.p, ...bends, b.p];
+  for (let j = 0; j < path.length - 1; j++) {
+    const u = path[j], v = path[j + 1];
+    if (Math.hypot(u[0] - v[0], u[1] - v[1]) < 0.05) return tr('Соседние точки разреза совпадают.');
+    const mid: [number, number] = [(u[0] + v[0]) / 2, (u[1] + v[1]) / 2];
+    if (!inLocalRing(mid, local)) return tr('Разрез проходит снаружи контура.');
+    for (let i = 0; i < n; i++) if (segCross(u, v, local[i], local[(i + 1) % n])) return tr('Разрез пересекает стороны контура.');
+    for (const hole of poly.inners) {
+      const h = hole.map((c) => overpassLayer.focusToLocal(c)!);
+      if (inLocalRing(mid, h) || h.some((p, i) => segCross(u, v, p, h[(i + 1) % h.length])
+        || segDist2(p, u, v) < 0.05 || segDist2(u, p, h[(i + 1) % h.length]) < 0.05
+        || segDist2(v, p, h[(i + 1) % h.length]) < 0.05)) return tr('Разрез пересекает внутреннее кольцо.');
+    }
+    for (let i = 0; i < j - 1; i++) if (segCross(u, v, path[i], path[i + 1])) return tr('Разрез пересекает сам себя.');
+  }
 
   // Кольцо с новыми узлами: вставляем с конца, чтобы номера сторон не съезжали
   type V = { p: [number, number]; id: number };
   const ring: V[] = local.map((p, i) => ({ p, id: ids[i] }));
   const fresh: { id: number; p: [number, number]; u: number; v: number }[] = [];
   const cuts = [a, b].map((c) => ({ c, id: c.vertex !== undefined ? ids[c.vertex] : nextNewId-- }));
-  for (const { c, id } of [...cuts].sort((x, y) => y.c.edge - x.c.edge)) {
+  for (const { c, id } of [...cuts].sort((x, y) => y.c.edge - x.c.edge ||
+    Math.hypot(y.c.p[0] - local[y.c.edge][0], y.c.p[1] - local[y.c.edge][1]) -
+    Math.hypot(x.c.p[0] - local[x.c.edge][0], x.c.p[1] - local[x.c.edge][1]))) {
     if (c.vertex !== undefined) continue;
     ring.splice(c.edge + 1, 0, { p: c.p, id });
     fresh.push({ id, p: c.p, u: ids[c.edge], v: ids[(c.edge + 1) % n] });
@@ -2293,23 +2377,45 @@ function splitFeature(key: string, a: CutPoint, b: CutPoint): string | undefined
     for (let i = from; ; i = (i + 1) % ring.length) { out.push(ring[i]); if (i === to) break; }
     return out;
   };
-  const r1 = walk(ia, ib), r2 = walk(ib, ia);
+  const interior: V[] = bends.map((p) => ({ p, id: nextNewId-- }));
+  const r1 = [...walk(ia, ib), ...interior.slice().reverse()];
+  const r2 = [...walk(ib, ia), ...interior];
   if (r1.length < 3 || r2.length < 3) return tr('Разрез идёт по стороне контура — делить нечего.');
   const [keep, part] = ringArea(r1.map((v) => v.p)) >= ringArea(r2.map((v) => v.p)) ? [r1, r2] : [r2, r1];
   const lngLat = (p: [number, number]) => overpassLayer.focusToLngLat(p[0], p[1])!;
   const coord = new Map<number, LonLat>(ids.map((id, i) => [id, poly.outer[i]]));
+  for (const polygon of f.polygons) {
+    polygon.outerIds?.forEach((id, i) => coord.set(id, polygon.outer[i]));
+    polygon.innerIds?.forEach((ring, j) => ring.forEach((id, i) => coord.set(id, polygon.inners[j][i])));
+  }
   for (const x of fresh) coord.set(x.id, lngLat(x.p));
-  const toPoly = (vs: V[]) => ({ outer: vs.map((v) => coord.get(v.id)!), inners: [], outerIds: vs.map((v) => v.id), innerIds: [] });
+  for (const x of interior) coord.set(x.id, lngLat(x.p));
+  const toPoly = (vs: V[]): Polygon => ({ outer: vs.map((v) => coord.get(v.id)!), inners: [], outerIds: vs.map((v) => v.id), innerIds: [] });
+  let keepPoly = toPoly(keep), partPoly = toPoly(part);
+  for (let j = 0; j < poly.inners.length; j++) {
+    const h = poly.inners[j], hp = overpassLayer.focusToLocal(h[0])!;
+    const dst = inLocalRing(hp, keep.map((v) => v.p)) ? keepPoly : inLocalRing(hp, part.map((v) => v.p)) ? partPoly : undefined;
+    if (!dst) return tr('Внутреннее кольцо пересекает разрез.');
+    dst.inners.push(h);
+    dst.innerIds!.push(poly.innerIds![j]);
+  }
+  const netArea = (p: Polygon) => ringArea(p.outer.map((c) => overpassLayer.focusToLocal(c)!))
+    - p.inners.reduce((sum, h) => sum + ringArea(h.map((c) => overpassLayer.focusToLocal(c)!)), 0);
+  if (netArea(partPoly) > netArea(keepPoly)) {
+    [keepPoly, partPoly] = [partPoly, keepPoly];
+  }
 
-  if (solo) return splitSolo(f, toPoly(ring), toPoly(keep), toPoly(part), fresh, coord);
+  if (f.type === 'relation') return splitMultipolygon(f, g, a.poly, keepPoly, partPoly, fresh, coord, solo);
+
+  if (solo) return splitSolo(f, toPoly(ring), keepPoly, partPoly, fresh, coord);
   const wayId = nextNewId--;
-  const created: Feature3D = { key: `way/${wayId}`, type: 'way', id: wayId, version: 0, kind: f.kind, tags: copyTags(f), polygons: [toPoly(part)], hasParts: false };
+  const created: Feature3D = { key: `way/${wayId}`, type: 'way', id: wayId, version: 0, kind: f.kind, tags: copyTags(f), polygons: [partPoly], hasParts: false };
 
   const neighbours = insertIntoNeighbours(key, fresh, coord);
   if (typeof neighbours === 'string') return neighbours;
   const members = [...g!.relMembers, { type: 'way' as const, ref: wayId, role: 'part' }];
   session.editMany([
-    { key, polygons: [toPoly(keep)] },
+    { key, polygons: [keepPoly] },
     { key: created.key, create: created },
     ...[...neighbours].map(([k, polygons]) => ({ key: k, polygons })),
     { key: g!.key, members },
@@ -2321,40 +2427,176 @@ function splitFeature(key: string, a: CutPoint, b: CutPoint): string | undefined
   return;
 }
 
+/** Разделить часть-мультиполигон, сохранив её прочие внешние кольца и пути отверстий. */
+function splitMultipolygon(f: Feature3D, group: EditGroup | undefined, polyIndex: number, keep: Polygon, part: Polygon,
+  fresh: FreshNode[], coord: Map<number, LonLat>, solo: boolean): string | undefined {
+  const members = session.get(f.key)?.relMembers;
+  if (!members) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+  const lineNodes = new Map((f.ways ?? []).map((w) => [w.id, w.nodes] as const));
+  for (const line of session.lineEntities()) lineNodes.set(Number(line.key.split('/')[1]), line.line!.ids);
+  const original = f.polygons[polyIndex];
+  const onRing = (ids: number[] | undefined, role: string) => {
+    const ring = new Set(ids);
+    return members.filter((m) => m.type === 'way' && (role === 'outer' ? m.role !== 'inner' : m.role === 'inner')
+      && lineNodes.get(m.ref)?.every((id) => ring.has(id)));
+  };
+  const oldOuter = onRing(original.outerIds, 'outer');
+  if (!oldOuter.length) return tr('Не удалось определить внешние пути мультиполигона для разреза.');
+  const innerWays = (poly: Polygon) => poly.innerIds!.map((ids) => onRing(ids, 'inner'));
+  const partInnerGroups = innerWays(part), keepInnerGroups = innerWays(keep);
+  if ([...partInnerGroups, ...keepInnerGroups, ...(solo ? f.polygons.flatMap((p, i) => i === polyIndex ? [] : innerWays(p)) : [])]
+    .some((ways) => !ways.length)) return tr('Не удалось определить внутренние пути мультиполигона для разреза.');
+  const partInner = partInnerGroups.flat();
+  const at = (id: number) => coord.get(id)!;
+  const insertions: Insert[] = fresh.map((x) => {
+    const u = overpassLayer.focusToLocal(at(x.u))!, v = overpassLayer.focusToLocal(at(x.v))!;
+    const dx = v[0] - u[0], dy = v[1] - u[1];
+    return { id: x.id, u: x.u, v: x.v, t: ((x.p[0] - u[0]) * dx + (x.p[1] - u[1]) * dy) / (dx * dx + dy * dy) };
+  });
+  const propagated = topologyEdits([], insertions, coord);
+  if (typeof propagated === 'string') return propagated;
+  const edits = new Map(propagated.map((e) => [e.key, e] as const));
+  const put = (e: ObjectEdit) => edits.set(e.key, { ...edits.get(e.key), ...e });
+  const newOuter = (poly: Polygon) => {
+    const id = nextNewId--;
+    const ids = [...poly.outerIds!, poly.outerIds![0]];
+    lineNodes.set(id, ids);
+    put({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line: { ids, coords: ids.map(at) } } });
+    return { type: 'way' as const, ref: id, role: 'outer' };
+  };
+  const createPart = (poly: Polygon, inners: OsmMember[], outers?: OsmMember[]) => {
+    const outer = outers ?? [newOuter(poly)];
+    const id = nextNewId--;
+    const key = `relation/${id}`;
+    const relMembers = [...outer, ...inners];
+    const partTags: Record<string, string> = solo ? { 'building:part': 'yes' } : copyTags(f);
+    if (solo) for (const [tag, value] of Object.entries(f.tags)) if (PART_TAGS.test(tag)) partTags[tag] = value;
+    const created: Feature3D & { relMembers: OsmMember[] } = { key, type: 'relation', id, version: 0, kind: solo ? 'part' : f.kind,
+      tags: { ...partTags, type: 'multipolygon' }, polygons: [poly], hasParts: false,
+      ways: relMembers.map((m) => ({ id: m.ref, role: m.role, nodes: lineNodes.get(m.ref)! })), relMembers };
+    put({ key, create: created });
+    return created;
+  };
+
+  if (solo) {
+    // Отдельное здание остаётся контуром; две новые части получают собственные отношения.
+    const inserted = insertInRing(original.outerIds!, original.outer, insertions, at);
+    const whole = inserted ? { ...original, outer: inserted.coords, outerIds: inserted.ids } : original;
+    put({ key: f.key, polygons: f.polygons.map((p, i) => i === polyIndex ? whole : p) });
+    const first = createPart(keep, keepInnerGroups.flat());
+    const second = createPart(part, partInner);
+    const unchanged = f.polygons.flatMap((p, i) => i === polyIndex ? [] : [createPart(p, innerWays(p).flat())]);
+    const id = nextNewId--;
+    const relMembers: OsmMember[] = [{ type: 'relation', ref: f.id, role: 'outline' },
+      ...[first, second, ...unchanged].map((p) => ({ type: 'relation' as const, ref: p.id, role: 'part' }))];
+    const building: EditGroup = { key: `relation/${id}`, type: 'relation', id, version: 0, tags: { type: 'building' },
+      members: relMembers.map((m) => `${m.type}/${m.ref}`), roles: relMembers.map((m) => m.role), relMembers };
+    put({ key: building.key, create: building });
+    session.editMany([...edits.values()]);
+    editGroups.set(building.key, building);
+    enterFocus(building);
+    select(first.key);
+    setStatus(tr('Создано здание {key}: контур {outline} и части {parts}.', { key: building.key, outline: f.key,
+      parts: [first, second, ...unchanged].map((p) => p.key).join(', ') }));
+    return;
+  }
+
+  const sourceWays: RingWay[] = oldOuter.map((m) => ({ id: m.ref, role: m.role,
+    nodes: insertInLine(lineNodes.get(m.ref)!, insertions) ?? lineNodes.get(m.ref)!,
+    tags: session.get(`way/${m.ref}`)?.tags ?? f.ways?.find((w) => w.id === m.ref)?.tags }));
+  for (const w of sourceWays) lineNodes.set(w.id, w.nodes);
+  const keepWays = restructureRing(sourceWays, keep.outerIds!, 'outer', () => nextNewId--);
+  const afterKeep = sourceWays.map((w) => ({ ...w, nodes: keepWays.lines.get(w.id) ?? w.nodes }));
+  afterKeep.push(...keepWays.created.map((w) => ({ id: w.id, role: 'outer', nodes: w.nodes, tags: w.tags })));
+  const partWays = restructureRing(afterKeep, part.outerIds!, 'outer', () => nextNewId--);
+  const createdWays = [...keepWays.created, ...partWays.created];
+  const finalLines = new Map([...keepWays.lines, ...partWays.lines]);
+  const pieces = new Map<number, number[]>();
+  for (const result of [keepWays, partWays]) for (const [id, ids] of result.pieces) {
+    if (id > 0) pieces.set(id, [...(pieces.get(id) ?? []), ...ids]);
+  }
+  for (const w of createdWays) {
+    const nodes = finalLines.get(w.id) ?? w.nodes;
+    lineNodes.set(w.id, nodes);
+    put({ key: `way/${w.id}`, create: { key: `way/${w.id}`, version: 0, tags: { ...(w.tags ?? {}) },
+      line: { ids: nodes, coords: nodes.map(at) }, ...(w.splitFrom !== undefined && w.splitFrom > 0 ? { splitFrom: w.splitFrom } : {}) } });
+  }
+  for (const w of sourceWays) {
+    const nodes = finalLines.get(w.id);
+    if (!nodes) continue;
+    lineNodes.set(w.id, nodes);
+    const key = `way/${w.id}`;
+    if (!session.has(key)) {
+      const originalNodes = f.ways?.find((source) => source.id === w.id)?.nodes ?? w.nodes;
+      session.track({ key, version: 0, tags: { ...(w.tags ?? {}) },
+        line: { ids: originalNodes, coords: originalNodes.map(at) } });
+    }
+    put({ key, line: { ids: nodes, coords: nodes.map(at) } });
+  }
+  const edges = (ids: number[]) => ids.slice(1).map((id, i) => [ids[i], id].sort((a, b) => a - b).join(','));
+  const validRing = (poly: Polygon, ringMembers: { id: number }[]) => {
+    const expected = new Set(edges([...poly.outerIds!, poly.outerIds![0]]));
+    const actual = ringMembers.flatMap((m) => edges(lineNodes.get(m.id) ?? []));
+    return actual.length === expected.size && actual.every((edge) => expected.has(edge));
+  };
+  if (!validRing(keep, keepWays.members) || !validRing(part, partWays.members))
+    return tr('Не удалось собрать пути разрезанного мультиполигона.');
+  const created = createPart(part, partInner, partWays.members.map((m) => ({ type: 'way' as const, ref: m.id, role: m.role })));
+  const removed = new Set([...oldOuter, ...partInner].map((m) => m.ref));
+  const nextMembers = [...members.filter((m) => m.type !== 'way' || !removed.has(m.ref)),
+    ...keepWays.members.map((m) => ({ type: 'way' as const, ref: m.id, role: m.role }))];
+  put({ key: f.key, polygons: f.polygons.map((p, i) => i === polyIndex ? keep : p), members: nextMembers });
+  // Если исходный путь участвует в других загруженных отношениях, добавляем рядом с ним его новые куски.
+  for (const other of liveFeatures()) {
+    if (other.key === f.key || other.type !== 'relation' || !relWays(other)?.some((w) => pieces.has(w.id))) continue;
+    const current = entity(other.key)?.relMembers;
+    if (!current) return tr('Для соседнего отношения нужны пути-члены — перезагрузите видимые тайлы.');
+    put({ key: other.key, members: current.flatMap((m) => m.type === 'way' && pieces.has(m.ref)
+      ? [m, ...pieces.get(m.ref)!.map((ref) => ({ type: 'way' as const, ref, role: m.role }))] : [m]) });
+  }
+  const groupMembers = [...group!.relMembers, { type: 'relation' as const, ref: created.id, role: 'part' }];
+  put({ key: group!.key, members: groupMembers });
+  session.editMany([...edits.values()]);
+  select(created.key);
+  setStatus(tr('Рассечено: {key} и новая часть {part}.', { key: f.key, part: created.key }));
+}
+
 type FreshNode = { id: number; p: [number, number]; u: number; v: number };
 
 /** Соседи с тем же отрезком u–v: вставить в них новые узлы разреза. Строка — ошибка. */
 function insertIntoNeighbours(key: string, fresh: FreshNode[], coord: Map<number, LonLat>): Map<string, Feature3D['polygons']> | string {
   const neighbours = new Map<string, Feature3D['polygons']>();
-  for (const x of fresh) {
-    // Новые пути сессии (нарисованные, отрезанные) — тоже соседи
-    for (const o of [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)]) {
-      if (o.key === key) continue;
-      const cur = neighbours.get(o.key) ?? (session.has(o.key) ? (session.get(o.key) as Feature3D | undefined)?.polygons : o.polygons);
-      if (!cur) continue;
-      let changed = false;
-      const insert = (r: LonLat[], rid: number[] | undefined): [LonLat[], number[] | undefined] => {
-        if (!rid) return [r, rid];
-        for (let i = 0; i < rid.length; i++) {
-          const j = (i + 1) % rid.length;
-          if ((rid[i] === x.u && rid[j] === x.v) || (rid[i] === x.v && rid[j] === x.u)) {
-            changed = true;
-            return [[...r.slice(0, i + 1), coord.get(x.id)!, ...r.slice(i + 1)], [...rid.slice(0, i + 1), x.id, ...rid.slice(i + 1)]];
-          }
-        }
-        return [r, rid];
-      };
-      const next = cur.map((p) => {
-        const [outer, outerIds] = insert(p.outer, p.outerIds);
-        const inn = p.inners.map((r, k) => insert(r, p.innerIds?.[k]));
-        return { ...p, outer, outerIds, inners: inn.map((x2) => x2[0]), innerIds: p.innerIds ? inn.map((x2) => x2[1]!) : p.innerIds };
-      });
-      if (!changed) continue;
-      // Узлы мультиполигона живут в его путях-членах, которых у нас нет отдельно — такое ребро не трогаем
-      if (!o.key.startsWith('way/')) return tr('Ребро общее с мультиполигоном {key} — резать через него пока нельзя.', { key: o.key });
-      entity(o.key);
-      neighbours.set(o.key, next);
-    }
+  // Новые пути сессии (нарисованные, отрезанные) — тоже соседи.
+  for (const o of [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)]) {
+    if (o.key === key) continue;
+    const cur = session.has(o.key) ? (session.get(o.key) as Feature3D | undefined)?.polygons : o.polygons;
+    if (!cur) continue;
+    let changed = false;
+    const insert = (r: LonLat[], rid: number[] | undefined): [LonLat[], number[] | undefined] => {
+      if (!rid) return [r, rid];
+      const out = r.slice(), outIds = rid.slice();
+      for (let i = rid.length - 1; i >= 0; i--) {
+        const j = (i + 1) % rid.length;
+        const matches = fresh.filter((x) => (rid[i] === x.u && rid[j] === x.v) || (rid[i] === x.v && rid[j] === x.u));
+        if (!matches.length) continue;
+        const origin = overpassLayer.focusToLocal(r[i])!;
+        matches.sort((x, y) => Math.hypot(x.p[0] - origin[0], x.p[1] - origin[1]) - Math.hypot(y.p[0] - origin[0], y.p[1] - origin[1]));
+        out.splice(i + 1, 0, ...matches.map((x) => coord.get(x.id)!));
+        outIds.splice(i + 1, 0, ...matches.map((x) => x.id));
+        changed = true;
+      }
+      return [out, outIds];
+    };
+    const next = cur.map((p) => {
+      const [outer, outerIds] = insert(p.outer, p.outerIds);
+      const inn = p.inners.map((r, k) => insert(r, p.innerIds?.[k]));
+      return { ...p, outer, outerIds, inners: inn.map((x2) => x2[0]), innerIds: p.innerIds ? inn.map((x2) => x2[1]!) : p.innerIds };
+    });
+    if (!changed) continue;
+    // Узлы мультиполигона живут в его путях-членах, которых у нас нет отдельно — такое ребро не трогаем
+    if (!o.key.startsWith('way/')) return tr('Ребро общее с мультиполигоном {key} — резать через него пока нельзя.', { key: o.key });
+    entity(o.key);
+    neighbours.set(o.key, next);
   }
 
   return neighbours;

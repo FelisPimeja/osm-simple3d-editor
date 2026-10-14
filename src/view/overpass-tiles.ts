@@ -247,6 +247,15 @@ export class OverpassTiles {
 
   private readonly featureIndex = new WeakMap<Feature3D[], Map<string, Feature3D>>();
 
+  /** Исходные данные тайла без несохранённых правок сессии и без нарисованного overlay. */
+  cachedFeature(key: string): Feature3D | undefined {
+    for (const e of this.cache.values()) {
+      if (e.state !== 'ready') continue;
+      const feature = e.features.find((f) => f.key === key);
+      if (feature) return feature;
+    }
+  }
+
   /** Объект из загруженных данных, даже если ещё не нарисован (контур в соседнем тайле и т. п.). */
   findFeature(key: string): Feature3D | undefined {
     const r = this.rendered.get(key);
@@ -272,6 +281,10 @@ export class OverpassTiles {
 
   private indexGroups(groups: BuildingGroup[]) {
     for (const g of groups) {
+      const previous = this.groups.get(g.key);
+      if (previous) for (const member of previous.members) {
+        if (!g.members.includes(member) && this.memberGroup.get(member) === g.key) this.memberGroup.delete(member);
+      }
       this.groups.set(g.key, g);
       for (const m of g.members) {
         const cur = this.memberGroup.get(m);

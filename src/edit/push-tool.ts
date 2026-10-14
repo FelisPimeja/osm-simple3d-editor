@@ -58,6 +58,8 @@ export class PushTool {
     container: HTMLElement,
     /** Можно ли тянуть объект (член здания, не скрыт). */
     private readonly allowed: (key: string) => boolean,
+    /** Выделенные объекты имеют приоритет среди граней под курсором. */
+    private readonly selected: () => readonly string[],
     /** Можно ли тянуть эту стену (нет общих узлов с другими объектами); сам объясняет, если нельзя. */
     private readonly allowSide: (t: PushTarget) => boolean,
     /** Ограничить сдвиг допустимым для грани. */
@@ -130,7 +132,8 @@ export class PushTool {
   faceAt(point: [number, number], back = false): PushTarget | undefined {
     const hits = this.layer.focusRayHits(point, this.allowed);
     if (!hits.length) return;
-    const key = hits[0].key;
+    const selected = new Set(this.selected());
+    const key = hits.find((h) => selected.has(h.key))?.key ?? hits[0].key;
     const own = hits.filter((h) => h.key === key);
     const h = back ? own[own.length - 1] : own[0];
     const box = this.layer.focusItemBox(key);

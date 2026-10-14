@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MercatorCoordinate } from 'maplibre-gl';
 import type { LonLat } from '../osm/model';
-import type { TreeData } from '../osm/trees';
+import type { TreeData, TreePoint } from '../osm/trees';
 import { hash, NEEDLE_FLAG, scatterTrees, TREE_STRIDE, TreeField as F, WOOD_FLAG } from './tree-scatter';
 
 /** Дерево в 15 м ниже этого на экране (во всём тайле) — упрощённые модели, px. */
@@ -146,6 +146,10 @@ export class TreeGroup {
   /** Стволы деревьев леса: их много и под пологом их не видно издалека — только совсем вблизи (WOOD_TRUNK_PX). */
   private readonly woodTrunks: THREE.InstancedMesh;
   private readonly broad: THREE.InstancedMesh;
+  private readonly pointByCrown = new Map<THREE.InstancedMesh, (string | undefined)[]>();
+  private readonly pointByTrunk: (string | undefined)[] = [];
+  private readonly selectedInstances = new Map<string, { crown: THREE.InstancedMesh; crownIndex: number; trunkIndex?: number; x: number; y: number }>();
+  private selectedOverlay?: THREE.Group;
   private readonly broadSeeds: Float32Array;
   private readonly lat: number;
   private readonly near: THREE.InstancedMesh[] = [];
@@ -158,7 +162,7 @@ export class TreeGroup {
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
 
   /** signature — подпись набора лесов и данных тайла: пересобираем, только если она поменялась. */
-  constructor(bbox: [number, number, number, number], trees: Float64Array, readonly signature: string) {
+  constructor(bbox: [number, number, number, number], trees: Float64Array, readonly signature: string, points: TreePoint[] = []) {
     const [w, s, e, n] = bbox;
     const origin = MercatorCoordinate.fromLngLat({ lng: (w + e) / 2, lat: (s + n) / 2 }, 0);
     const unit = origin.meterInMercatorCoordinateUnits();
@@ -182,6 +186,13 @@ export class TreeGroup {
     const woodTrunks = new THREE.InstancedMesh(TRUNK_GEO, TRUNK_MATERIAL, woodTrunked);
     const broad = new THREE.InstancedMesh(BROAD_GEO, BROAD_MATERIAL, total - needles);
     const needle = new THREE.InstancedMesh(NEEDLE_GEO, NEEDLE_MATERIAL, needles);
+    const pointKeys = new Map<string, string>();
+    const coordKey = (x: number, y: number) => `${Math.round(x * 1e12)}:${Math.round(y * 1e12)}`;
+    for (const point of points) if (point.key) {
+      const c = MercatorCoordinate.fromLngLat({ lng: point.p[0], lat: point.p[1] }, 0);
+      pointKeys.set(coordKey(c.x, c.y), point.key);
+    }
+    const broadKeys: (string | undefined)[] = [], needleKeys: (string | undefined)[] = [];
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const zAxis = new THREE.Vector3(0, 0, 1);
@@ -196,21 +207,29 @@ export class TreeGroup {
       const height = trees[o + F.HEIGHT], crown = trees[o + F.CROWN], seed = trees[o + F.SEED], flags = trees[o + F.FLAGS];
       const isNeedle = (flags & NEEDLE_FLAG) !== 0;
       const x = (trees[o + F.MX] - origin.x) / unit, y = -(trees[o + F.MY] - origin.y) / unit;
+      const key = pointKeys.get(coordKey(trees[o + F.MX], trees[o + F.MY]));
       // Крона: у лиственного — верхние 65 % высоты, у хвойного — от 15 % до верха; ствол уходит в крону
       const base = height * (isNeedle ? 0.15 : 0.35);
       q.setFromAxisAngle(zAxis, seed * Math.PI * 2);
       const trunk = trees[o + F.TRUNK];
       if (trunk > 0) {
         m.compose(pos.set(x, y, 0), q, scale.set(trunk, trunk, base + (height - base) * 0.3));
-        if (!(flags & WOOD_FLAG)) trunks.setMatrixAt(tr++, m);
+        if (!(flags & WOOD_FLAG)) { trunks.setMatrixAt(tr, m); this.pointByTrunk[tr] = key; tr++; }
         else woodTrunks.setMatrixAt(wtr++, m);
       }
       m.compose(pos.set(x, y, base), q, scale.set(crown / 2, crown / 2, height - base));
       // Разброс оттенка: светлее/темнее и чуть теплее/холоднее — множитель к цвету материала
       const l = 0.85 + 0.3 * seed, warm = 0.06 * (hash(i, Math.round(seed * 1e6)) - 0.5);
       colour.setRGB(l * (1 + warm), l, l * (1 - warm));
-      if (isNeedle) { needle.setMatrixAt(nd, m); needle.setColorAt(nd++, colour); }
-      else { broad.setMatrixAt(b, m); broad.setColorAt(b, colour); this.broadSeeds[b++] = seed; }
+      if (isNeedle) {
+        needle.setMatrixAt(nd, m); needle.setColorAt(nd, colour); needleKeys[nd] = key;
+        if (key) this.selectedInstances.set(key, { crown: needle, crownIndex: nd, trunkIndex: trunk > 0 && !(flags & WOOD_FLAG) ? tr - 1 : undefined, x, y });
+        nd++;
+      } else {
+        broad.setMatrixAt(b, m); broad.setColorAt(b, colour); broadKeys[b] = key; this.broadSeeds[b] = seed;
+        if (key) this.selectedInstances.set(key, { crown: broad, crownIndex: b, trunkIndex: trunk > 0 && !(flags & WOOD_FLAG) ? tr - 1 : undefined, x, y });
+        b++;
+      }
     }
     // Дальний план — те же матрицы и цвета (общие буферы), другие модели
     const farOf = (mesh: THREE.InstancedMesh, geo: THREE.BufferGeometry) => {
@@ -226,6 +245,10 @@ export class TreeGroup {
     this.recolour();
     this.near.push(broad, needle);
     this.far.push(farOf(broad, BROAD_FAR_GEO), farOf(needle, NEEDLE_FAR_GEO));
+    this.pointByCrown.set(broad, broadKeys);
+    this.pointByCrown.set(needle, needleKeys);
+    this.pointByCrown.set(this.far[0], broadKeys);
+    this.pointByCrown.set(this.far[1], needleKeys);
     for (const mesh of [trunks, woodTrunks, ...this.near, ...this.far]) {
       mesh.frustumCulled = false;
       if (mesh.count) this.scene.add(mesh);
@@ -303,7 +326,65 @@ export class TreeGroup {
     for (const mesh of this.far) mesh.visible = far;
   }
 
+  /** Точное попадание в видимую геометрию отдельного OSM-дерева. */
+  pick(x: number, y: number, width: number, height: number, projection: THREE.Matrix4): { key: string; depth: number } | undefined {
+    const inv = projection.clone().invert();
+    const near = new THREE.Vector3(2 * x / width - 1, 1 - 2 * y / height, -1).applyMatrix4(inv);
+    const far = new THREE.Vector3(2 * x / width - 1, 1 - 2 * y / height, 1).applyMatrix4(inv);
+    const ray = new THREE.Raycaster(near, far.sub(near).normalize());
+    this.scene.updateMatrixWorld(true);
+    let best: { key: string; depth: number } | undefined;
+    for (const mesh of [this.trunks, ...this.near, ...this.far]) {
+      if (!mesh.visible || !mesh.count) continue;
+      const keys = mesh === this.trunks ? this.pointByTrunk : this.pointByCrown.get(mesh)!;
+      for (const hit of ray.intersectObject(mesh, false)) {
+        const key = keys[hit.instanceId ?? -1];
+        if (key && (!best || hit.distance < best.depth)) best = { key, depth: hit.distance };
+      }
+    }
+    return best;
+  }
+
+  /** Подсветка кроны и ствола, плюс кружок на земле в исходной точке. */
+  select(key: string | undefined) {
+    this.clearSelection();
+    const selected = key && this.selectedInstances.get(key);
+    if (!selected) return;
+    const group = new THREE.Group();
+    const material = new THREE.MeshBasicMaterial({ color: 0x2563eb, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
+    const addMesh = (source: THREE.InstancedMesh, index: number) => {
+      const mesh = new THREE.Mesh(source.geometry, material);
+      source.getMatrixAt(index, mesh.matrix);
+      mesh.matrixAutoUpdate = false;
+      mesh.renderOrder = 1000;
+      group.add(mesh);
+    };
+    addMesh(selected.crown, selected.crownIndex);
+    if (selected.trunkIndex !== undefined) addMesh(this.trunks, selected.trunkIndex);
+    const circle = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.48, 32), new THREE.MeshBasicMaterial({ color: 0x2563eb, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
+    circle.position.set(selected.x, selected.y, 0.08);
+    circle.renderOrder = 1001;
+    group.add(circle);
+    this.scene.add(group);
+    this.selectedOverlay = group;
+  }
+
+  private clearSelection() {
+    if (!this.selectedOverlay) return;
+    this.scene.remove(this.selectedOverlay);
+    const materials = new Set<THREE.Material>();
+    this.selectedOverlay.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        materials.add(object.material);
+        if (object.geometry instanceof THREE.RingGeometry) object.geometry.dispose();
+      }
+    });
+    for (const material of materials) material.dispose();
+    this.selectedOverlay = undefined;
+  }
+
   dispose() {
+    this.clearSelection();
     this.trunks.dispose();
     this.woodTrunks.dispose();
     for (const mesh of this.near) mesh.dispose();

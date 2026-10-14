@@ -339,6 +339,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private focused = false;
   /** Матрица проекции MapLibre из последнего кадра — чтобы проецировать сцену режима здания до её первой отрисовки. */
   private lastMain?: THREE.Matrix4;
+  private selectedTreeKey?: string;
   /** Локальная система координат здания в режиме одного здания (в метрах сцены режима). */
   focusAxes?: LocalFrame;
   /** Точки привязки режима одного здания (в метрах сцены режима); undefined — пересчитать. */
@@ -603,13 +604,16 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const key of keys) {
       const edges = [...(this.doorOpeningEdges.get(key)?.values() ?? [])].flat();
       if (!edges.length) continue;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(edges, 3));
-      const visible = new THREE.LineSegments(geo, INDOOR_SELECT_LINE);
-      const hidden = new THREE.LineSegments(geo.clone(), HIDDEN_EDGE_MATERIAL);
-      hidden.computeLineDistances();
-      hidden.renderOrder = 999;
-      for (const line of [visible, hidden]) { line.frustumCulled = false; root.add(line); }
+      const canvas = this.map!.getCanvas();
+      const dpr = canvas.width / canvas.clientWidth;
+      const geo = new LineSegmentsGeometry();
+      geo.setPositions(edges);
+      const material = new LineMaterial({ color: 0x2563eb, linewidth: 7 * dpr, depthTest: false, depthWrite: false });
+      material.resolution.set(canvas.width, canvas.height);
+      const line = new LineSegments2(geo, material);
+      line.renderOrder = 1000;
+      line.frustumCulled = false;
+      root.add(line);
     }
   }
 
@@ -2096,7 +2100,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const old = this.trees.get(key);
     if (old === trees) return;
     old?.dispose();
-    if (trees) { trees.applyLighting(this.graphics.hemisphere); this.trees.set(key, trees); } else this.trees.delete(key);
+    if (trees) { trees.applyLighting(this.graphics.hemisphere); trees.select(this.selectedTreeKey); this.trees.set(key, trees); } else this.trees.delete(key);
     this.map?.triggerRepaint();
   }
 
@@ -2107,6 +2111,26 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   treeKeys(): string[] {
     return [...this.trees.keys()];
+  }
+
+  setTreeSelection(key: string | undefined) {
+    if (this.selectedTreeKey === key) return;
+    this.selectedTreeKey = key;
+    for (const group of this.trees.values()) group.select(key);
+    this.map?.triggerRepaint();
+  }
+
+  pickTree(point: PointLike): string | undefined {
+    if (!this.visible || this.focused || this.graphics.trees === false || !this.map || !this.lastMain) return undefined;
+    const [x, y] = Array.isArray(point) ? point : [point.x, point.y];
+    const canvas = this.map.getCanvas();
+    let best: { key: string; depth: number } | undefined;
+    for (const group of this.trees.values()) {
+      const projection = this.lastMain.clone().multiply(group.model);
+      const hit = group.pick(x, y, canvas.clientWidth, canvas.clientHeight, projection);
+      if (hit && (!best || hit.depth < best.depth)) best = hit;
+    }
+    return best?.key;
   }
 
   setVisible(visible: boolean) {

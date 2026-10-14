@@ -729,7 +729,7 @@ export class OverpassTiles {
       this.treesPending.delete(key);
       if (!this.wanted.includes(key)) return;
       const kept = this.cutTrees(trees, bbox);
-      this.layer.setTrees(key, timed('деревья: инстансы', () => new TreeGroup(bbox, kept, signature), (g) => `${key}, ${g.count}`));
+      this.layer.setTrees(key, timed('деревья: инстансы', () => new TreeGroup(bbox, kept, signature, own.points), (g) => `${key}, ${g.count}`));
     });
   }
 

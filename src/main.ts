@@ -951,7 +951,8 @@ map.on('click', (e) => {
     if (k) toggleSelection(k);
     return;
   }
-  const tree = !focus && gfx.trees ? overpass.treePoints().map((point) => {
+  const treeKey = !focus && gfx.trees ? overpassLayer.pickTree(e.point) : undefined;
+  const tree = treeKey ? overpass.treePoints().find((point) => point.key === treeKey) : !focus && gfx.trees ? overpass.treePoints().map((point) => {
     const screen = map.project({ lng: point.p[0], lat: point.p[1] });
     return { point, distance: Math.hypot(screen.x - e.point.x, screen.y - e.point.y) };
   }).filter((hit) => hit.distance <= 14).sort((a, b) => a.distance - b.distance)[0]?.point : undefined;
@@ -4514,18 +4515,14 @@ function setIndoorTags(edits: { key: string; tags: Record<string, string> }[]) {
 /** Мост, тоннель или подход к ним: теги пути в панели свойств (только просмотр). */
 /** Выделенные мосты, тоннели и подходы (Shift+клик добавляет и убирает). */
 let roadSelection: RoadWay[] = [];
-let treeMarker: maplibregl.Marker | undefined;
-
-function clearTreeSelection() { treeMarker?.remove(); treeMarker = undefined; }
+function clearTreeSelection() { overpassLayer.setTreeSelection(undefined); }
 
 /** Отдельное дерево: теги доступны для просмотра, синее кольцо отмечает выбранный узел. */
 function selectTree(tree: TreePoint) {
   if (!tree.key) return;
   select(undefined);
   clearTileHighlight();
-  const marker = document.createElement('div');
-  marker.className = 'tree-selection-marker';
-  treeMarker = new maplibregl.Marker({ element: marker }).setLngLat(tree.p).addTo(map);
+  overpassLayer.setTreeSelection(tree.key);
   infoEl.innerHTML = `<h2>${tr('Дерево')} — <a href="${server().web}/${tree.key}" target="_blank" rel="noopener">${esc(tree.key)}</a></h2>`
     + `<p class="hint">${tr('только просмотр')}</p><details class="all-tags" open><summary>${tr('Все теги')}</summary>${tagTable(tree.tags ?? {})}</details>`;
 }

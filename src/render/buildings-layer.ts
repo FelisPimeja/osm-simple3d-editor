@@ -2347,6 +2347,10 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   setMonochrome(on: boolean) {
     this.monochrome = on;
+    ESCALATOR_BELT.color.setHex(on ? 0xffffff : 0x64748b);
+    ESCALATOR_SIDE.color.setHex(on ? 0xffffff : 0x334155);
+    ESCALATOR_STEP.color.setHex(on ? 0xffffff : 0x94a3b8);
+    ESCALATOR_HANDRAIL.color.setHex(on ? 0x57534e : 0x2563eb);
     setTreesMonochrome(on);
     for (const t of this.trees.values()) t.recolour();
     for (const g of this.groups.values()) this.paintGroup(g);

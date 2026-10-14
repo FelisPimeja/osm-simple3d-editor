@@ -487,6 +487,9 @@ body.mobile #toasts { top: 72px; max-width: calc(100% - 112px); }
 /* Проверка здания: панель, значки в списке частей, список в «Правках» */
 #issues-panel { max-height: 25%; }
 #issues-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
+.issue-group + .issue-group { margin-top: 8px; padding-top: 7px; border-top: 1px solid #e5e7eb; }
+.issue-group h2 { margin: 0 4px 4px; font-size: 12px; font-weight: 600; color: #555; }
+.issue-group h2 .hint { font-weight: normal; }
 .issue-list { list-style: none; margin: 0 0 8px; padding: 0; font-size: 12px; }
 .issue-list li { display: flex; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; line-height: 1.35; }
 .issue-list li:hover { background: #f0f2f5; }

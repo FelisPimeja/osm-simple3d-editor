@@ -591,17 +591,19 @@ export class OverpassTiles {
     };
     const touched = (t: { features: Feature3D[]; groups: BuildingGroup[] }) =>
       t.features.some((f) => saved.has(f.key) || gone.has(f.key)) || t.groups.some((g) => saved.has(g.key)) || groupFor(t).length > 0;
-    const patch = (features: Feature3D[]): Feature3D[] => {
+    const patch = (features: Feature3D[], groups: BuildingGroup[]): Feature3D[] => {
       if (!features.some((f) => saved.has(f.key) || gone.has(f.key))) return features;
       const out: Feature3D[] = [];
       for (const f of features) {
         if (gone.has(f.key)) continue; // удалён в OSM
         const s = saved.get(f.key);
         if (!s) { out.push(f); continue; }
-        const kind = kindOf(s.tags);
+        const group = groups.find((g) => g.members.includes(f.key));
+        const role = group?.roles[group.members.indexOf(f.key)];
+        const kind = role === 'part' ? 'part' : role === 'outline' ? 'building' : kindOf(s.tags);
         if (kind) out.push({ ...f, kind, version: s.version, tags: s.tags, polygons: s.polygons ?? f.polygons, hasParts: false, ...(s.ways ? { ways: s.ways } : {}) });
       }
-      markOutlinesWithParts(out);
+      markOutlinesWithParts(out, out, groups);
       return out;
     };
     const inMemory = new Set<string>();
@@ -610,7 +612,7 @@ export class OverpassTiles {
       inMemory.add(key);
       if (!touched(e)) continue;
       e.groups = patchGroups(e);
-      e.features = patch(e.features);
+      e.features = patch(e.features, e.groups);
       this.indexGroups(e.groups);
       if (!e.partial) void this.store.put(key, e);
       if (this.layer.groupKeys().includes(key)) this.show(key);
@@ -619,7 +621,8 @@ export class OverpassTiles {
       if (inMemory.has(key)) continue;
       const stored = await this.store.get(key);
       if (stored && touched(stored)) {
-        await this.store.put(key, { ...stored, groups: patchGroups(stored), features: patch(stored.features) });
+        const groups = patchGroups(stored);
+        await this.store.put(key, { ...stored, groups, features: patch(stored.features, groups) });
       }
     }
   }
@@ -779,7 +782,8 @@ export class OverpassTiles {
       if (e?.state === 'ready') for (const f of e.features) if (!union.has(f.key)) { const o = this.overlay(f); if (o.polygons.length && this.visible(o)) union.set(f.key, o); }
     }
     // Пересчитываем только свои здания — части берём из всех девяти тайлов
-    timed('overpass: части у контуров', () => markOutlinesWithParts([...union.values()], ownFeatures), () => `${key}, ${union.size} объектов`);
+    const groups = [...new Set(ownFeatures.map((f) => this.groupOf(f.key)).filter((g): g is BuildingGroup => !!g))];
+    timed('overpass: части у контуров', () => markOutlinesWithParts([...union.values()], ownFeatures, groups), () => `${key}, ${union.size} объектов`);
     const [w, s, e, n] = tileBbox(key);
     const features = ownFeatures.filter((f) => {
       const [x, y] = centroid(f.polygons[0].outer);
@@ -796,7 +800,7 @@ export class OverpassTiles {
   private bareOutline(f: Feature3D): boolean {
     if (!isBareOutlineTags(f.tags)) return false;
     const g = this.groups.get(this.memberGroup.get(f.key) ?? '');
-    return !!g && g.roles[g.members.indexOf(f.key)] === 'outline';
+    return !!g && g.roles[g.members.indexOf(f.key)] === 'outline' && !f.renderPolygons;
   }
 
   private show(key: string) {

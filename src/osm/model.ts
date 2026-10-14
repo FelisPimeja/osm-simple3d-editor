@@ -1,4 +1,5 @@
 import { computeHeights } from './heights';
+import polygonClipping, { type MultiPolygon as ClipMulti } from 'polygon-clipping';
 import type { OsmElement, OsmNode, OsmRelation, OsmWay } from './api';
 
 export type LonLat = [number, number];
@@ -17,6 +18,8 @@ export interface Feature3D {
   polygons: Polygon[];
   /** Контур здания, у которого есть building:part — сам не рендерится. */
   hasParts: boolean;
+  /** Только для рендера: непокрытый частями участок, плоский сигнал о недостающей части. */
+  renderPolygons?: Polygon[];
   /** У мультиполигона — его пути-члены (для правки топологии); в старом кеше нет. */
   ways?: MemberWay[];
 }
@@ -179,6 +182,14 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     else if (e.type === 'way') { if (!ways.get(e.id)?.tags || e.tags) ways.set(e.id, e); }
     else relations.push(e);
   }
+  const memberKind = new Map<string, Feature3D['kind']>();
+  for (const r of relations) if (r.tags?.type === 'building') {
+    for (const m of r.members) {
+      if (m.type === 'node') continue;
+      if (m.role === 'outline') memberKind.set(`${m.type}/${m.ref}`, 'building');
+      if (m.role === 'part') memberKind.set(`${m.type}/${m.ref}`, 'part');
+    }
+  }
 
   const features: Feature3D[] = [];
   const groups: BuildingGroup[] = [];
@@ -212,7 +223,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
   };
 
   for (const w of ways.values()) {
-    const kind = kindOf(w.tags);
+    const kind = memberKind.get(`way/${w.id}`) ?? kindOf(w.tags);
     const ik = kind ? undefined : indoorKind(w.tags);
     if (ik === 'wall') {
       // Стена — ломаная (у замкнутой последняя точка повторяет первую — оставляем, чтобы стена замкнулась)
@@ -227,7 +238,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     if (w.nodes[0] !== w.nodes[w.nodes.length - 1]) { skipped.push({ key, reason: 'незамкнутый путь' }); continue; }
     const outer = toCoords(w.nodes);
     if (!outer) { skipped.push({ key, reason: 'нет узлов' }); continue; }
-    features.push({ key, type: 'way', id: w.id, version: w.version, tags: w.tags!, kind, polygons: [{ outer, inners: [], outerIds: w.nodes.slice(0, -1), innerIds: [] }], hasParts: false });
+    features.push({ key, type: 'way', id: w.id, version: w.version, tags: w.tags ?? {}, kind, polygons: [{ outer, inners: [], outerIds: w.nodes.slice(0, -1), innerIds: [] }], hasParts: false });
   }
 
   for (const r of relations) {
@@ -239,7 +250,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
       });
       continue;
     }
-    const kind = kindOf(r.tags);
+    const kind = memberKind.get(`relation/${r.id}`) ?? kindOf(r.tags);
     const ik = kind ? undefined : indoorKind(r.tags);
     if ((!kind && !ik) || r.tags?.type !== 'multipolygon') continue;
     const key = `relation/${r.id}`;
@@ -270,10 +281,10 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     }
     if (ik) { if (polygons.length) addIndoor(key, r.tags!, ik, polygons); continue; }
     if (!polygons.length) { skipped.push({ key, reason: 'нет узлов' }); continue; }
-    features.push({ key, type: 'relation', id: r.id, version: r.version, tags: r.tags!, kind: kind!, polygons, hasParts: false, ways: memberWays });
+    features.push({ key, type: 'relation', id: r.id, version: r.version, tags: r.tags ?? {}, kind: kind!, polygons, hasParts: false, ways: memberWays });
   }
 
-  markOutlinesWithParts(features);
+  markOutlinesWithParts(features, features, groups);
   return { features, groups, indoor, skipped };
 }
 
@@ -355,43 +366,70 @@ export function pointOnSurface(p: Polygon): LonLat {
 /** Запас по высоте (м): часть, начинающаяся не ниже «верх контура − запас», стоит на контуре, а не внутри него. */
 const ON_TOP_TOLERANCE = 1;
 
-/** Доля площади контура, при которой части считаются его заменой. */
-const PARTS_COVERAGE = 0.5;
-
 /**
- * Simple 3D: контур здания не рисуется, если внутри него есть building:part.
- * Но часто частями размечены только надстройки (пентхаусы, башенки), а объём здания задан контуром
- * (например, relation/3756395) — поэтому скрываем контур, только если части покрывают заметную долю площади.
- * Считаем только части внутри объёма контура (начинаются ниже его верха). Части поверх контура —
- * надстройка (relation/2142333: контур 12 этажей, части с 12-го), объём под ними рисует контур.
- * Нижних этажей среди частей может и не быть (лежат в незагруженном соседнем тайле) — это не повод
- * рисовать контур коробкой поверх остальных частей (relation/3271452, Троицкая башня).
+ * Контур с частями не достраиваем по общей высоте: участок без части показываем плоским,
+ * чтобы маппер увидел пробел в модели. Приподнятые части не вычитаем из основания.
  */
-export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[] = features) {
+export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[] = features, groups: BuildingGroup[] = []) {
+  const byKey = new Map(features.map((f) => [f.key, f]));
+  const groupByOutline = new Map<string, BuildingGroup>();
+  const assignedParts = new Set<string>();
+  for (const group of groups) {
+    for (let i = 0; i < group.members.length; i++) {
+      if (group.roles[i] === 'outline') groupByOutline.set(group.members[i], group);
+      if (group.roles[i] === 'part') assignedParts.add(group.members[i]);
+    }
+  }
   // Части раскладываем по сетке ~0.0005° (≈50 м): здание смотрит только ячейки под своими габаритами
   const CELL = 0.0005;
-  const grid = new Map<string, { c: LonLat; area: number; min: number }[]>();
+  const grid = new Map<string, { key: string; c: LonLat; min: number }[]>();
   for (const f of features) {
     if (f.kind !== 'part') continue;
     const min = computeHeights(f.tags).min;
     for (const p of f.polygons) {
       const c = pointOnSurface(p);
       const k = `${Math.floor(c[0] / CELL)},${Math.floor(c[1] / CELL)}`;
-      (grid.get(k) ?? grid.set(k, []).get(k)!).push({ c, area: area(p), min });
+      (grid.get(k) ?? grid.set(k, []).get(k)!).push({ key: f.key, c, min });
     }
   }
   for (const b of targets) {
     if (b.kind !== 'building') continue;
-    const top = computeHeights(b.tags).top;
+    delete b.renderPolygons;
+    const heights = computeHeights(b.tags);
+    const top = heights.top;
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
     for (const p of b.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
     const inside = (c: LonLat) => b.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
-    let covered = 0;
+    const explicit = groupByOutline.get(b.key);
+    const candidates = new Set<string>();
+    const explicitParts = explicit && new Set(explicit.members.filter((_, i) => explicit.roles[i] === 'part'));
     for (let i = Math.floor(w / CELL); i <= Math.floor(e / CELL); i++) {
       for (let j = Math.floor(s / CELL); j <= Math.floor(n / CELL); j++) {
-        for (const part of grid.get(`${i},${j}`) ?? []) if (part.min < top - ON_TOP_TOLERANCE && inside(part.c)) covered += part.area;
+        for (const part of grid.get(`${i},${j}`) ?? []) {
+          if (explicit ? !explicitParts!.has(part.key) : assignedParts.has(part.key)) continue;
+          // Вычитание 2D-контура проходит через всю высоту. Приподнятая часть
+          // (ярус, навес) не должна проделывать сквозную дыру в нижнем объёме.
+          if (part.min <= heights.min + 0.5 && part.min < top - ON_TOP_TOLERANCE && inside(part.c)) candidates.add(part.key);
+        }
       }
     }
-    b.hasParts = covered >= PARTS_COVERAGE * b.polygons.reduce((sum, p) => sum + area(p), 0);
+    const parts = [...candidates].map((key) => byKey.get(key)).filter((f): f is Feature3D => !!f && f.kind === 'part');
+    const toClip = (polygons: Polygon[]): ClipMulti => polygons.map((p) => [p.outer, ...p.inners].map((ring) => [...ring, ring[0]]));
+    try {
+      const outline = toClip(b.polygons);
+      const partShapes = parts.flatMap((p) => toClip(p.polygons));
+      if (!partShapes.length) { b.hasParts = false; continue; }
+      const mergedParts = polygonClipping.union(partShapes[0], ...partShapes.slice(1));
+      const covered = polygonClipping.intersection(outline, mergedParts);
+      const coveredArea = covered.reduce((sum, [outer, ...holes]) => sum + area({ outer: outer.slice(0, -1), inners: holes.map((r) => r.slice(0, -1)) }), 0);
+      if (coveredArea <= 0) { b.hasParts = false; continue; }
+      const rest = polygonClipping.difference(outline, covered);
+      if (!rest.length) { b.hasParts = true; continue; }
+      b.renderPolygons = rest.map(([outer, ...inners]) => ({ outer: outer.slice(0, -1) as LonLat[], inners: inners.map((r) => r.slice(0, -1) as LonLat[]) }));
+      b.hasParts = true;
+    } catch {
+      // Некорректная геометрия: оставляем исходный контур видимым.
+      b.hasParts = false;
+    }
   }
 }

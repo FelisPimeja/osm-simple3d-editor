@@ -5,7 +5,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
-import { validateBuilding, validateGeometry, validateTags, type Issue } from './edit/validate';
+import { validateBuilding, validateGeometry, validateIndoor, validateTags, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -403,7 +403,7 @@ const indoorPois = new IndoorPois(map, overpassLayer, (f) => selectIndoor(f));
 const overpass = new OverpassTiles(map, overpassLayer, () => {
   updateTileFilter();
   showOverpassStatus();
-  if (focus) renderLevels(); // пришли indoor-объекты здания
+  if (focus) { renderLevels(); renderIssues(); } // пришли indoor-объекты здания
   scheduleIndoorBadges();
   tileBorders.setTiles(overpass.tiles());
   scheduleRoads();
@@ -1133,7 +1133,11 @@ function soloGroup(key: string): BuildingGroup | undefined {
 /** Члены группы для отрисовки: из сессии (с правками) или из тайлов. */
 function groupFeatures(g: BuildingGroup): Feature3D[] {
   // Не нарисованные объёмом (подземные) — из загруженных данных
-  return g.members.map((k) => (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature ?? overpass.findFeature(k)).filter((f): f is Feature3D => !!f);
+  return g.members.map((k, i) => {
+    const f = (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature ?? overpass.findFeature(k);
+    const kind = g.roles[i] === 'part' ? 'part' : g.roles[i] === 'outline' ? 'building' : undefined;
+    return f && kind && f.kind !== kind ? { ...f, kind } : f;
+  }).filter((f): f is Feature3D => !!f);
 }
 
 /** Контуры отношения без своей высоты — в режиме здания рисуются плоским полигоном. */
@@ -3501,6 +3505,7 @@ infoEl.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('button');
   if (!btn) return;
   if (btn.dataset.merge !== undefined) return mergeIntoBuilding();
+  if (btn.dataset.addSelectedParts !== undefined) return addSelectedPartsToGroup();
   if (btn.dataset.focusExit !== undefined) return closeFocus();
   if (btn.dataset.outlineFix !== undefined) return fixOutline();
   if (btn.dataset.exclude !== undefined) return excludeFromGroup();
@@ -3642,7 +3647,7 @@ function toolHint(hint: string | undefined, error = false) {
 }
 
 /** Выделить объект (или группу); false — выделять нечего. */
-function select(key: string | undefined): boolean {
+function select(key: string | undefined, scrollIssues = true): boolean {
   roadsLayer.select([]);
   roadSelection = [];
   if (key && selectedIndoor) selectIndoor(undefined);
@@ -3659,6 +3664,7 @@ function select(key: string | undefined): boolean {
   if (key) clearTileHighlight();
   paintSelection();
   renderSelected();
+  if (scrollIssues) scrollToSelectedIssues();
   return !!key;
 }
 
@@ -3669,6 +3675,7 @@ function toggleSelection(key: string) {
   selectedKey = selection.at(-1);
   paintSelection();
   renderSelected();
+  scrollToSelectedIssues();
 }
 
 /** Добавить к выделению несколько объектов (рамкой). */
@@ -3680,6 +3687,7 @@ function addToSelection(keys: string[]) {
   selectedKey = selection.at(-1);
   paintSelection();
   renderSelected();
+  scrollToSelectedIssues();
 }
 
 // Выделение рамкой: Shift + перетаскивание. Объект попадает в рамку, если в неё попал центр его основания.
@@ -3889,7 +3897,7 @@ function loadFocusIndoor(g: BuildingGroup) {
     .then((els) => {
       focusIndoor.set(g.key, parseBuildings(els).indoor);
       while (focusIndoor.size > 8) focusIndoor.delete(focusIndoor.keys().next().value!);
-      if (focus?.key === g.key) renderLevels();
+      if (focus?.key === g.key) { renderLevels(); renderIssues(); }
     })
     .catch((err) => console.warn('[levels] indoor здания не загрузился', err))
     .finally(() => focusIndoorLoading.delete(g.key));
@@ -4714,7 +4722,9 @@ function issueMark(list: Issue[] | undefined): string {
 
 /** Панель «Проверка»: проблемы здания режима здания, клик — выделить объект (Shift — оба пересекающихся). */
 function renderIssues() {
-  focusIssues = focus ? buildingIssues(focus) : [];
+  const simpleIssues = focus ? buildingIssues(focus) : [];
+  const indoorIssues = focus ? buildingIndoor(focus).flatMap(validateIndoor) : [];
+  focusIssues = [...simpleIssues, ...indoorIssues];
   // Список пересобирается — строки под курсором уже нет, превью исправления снимаем
   if (fixPreviewed) { fixPreviewed = undefined; overpassLayer.setFixPreview(undefined); }
   highlightIssues();
@@ -4723,14 +4733,37 @@ function renderIssues() {
   const errors = focusIssues.filter((i) => i.level === 'error').length;
   const warnings = focusIssues.length - errors;
   issuesCount.textContent = `(${[errors ? tr('ошибок {n}', { n: errors }) : '', warnings || !errors ? tr('предупреждений {n}', { n: warnings }) : ''].filter(Boolean).join(', ')})`;
-  shownIssues = [...focusIssues].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
-  issuesEl.innerHTML = shownIssues.map((i, n) => `<li class="${i.level}${selection.includes(i.key) ? ' selected' : ''}" data-key="${esc(i.key)}"${i.other ? ` data-other="${esc(i.other)}"` : ''}>
-    <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span>
-    <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span>
-    ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</li>`).join('');
+  const sorted = (list: Issue[]) => [...list].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
+  shownIssues = [...sorted(simpleIssues), ...sorted(indoorIssues)];
+  const group = (title: string, list: Issue[], start: number) => list.length ? `<section class="issue-group">
+    <h2>${title} <span class="hint">(${list.length})</span></h2>
+    <ul class="issue-list">${list.map((i, offset) => {
+      const n = start + offset;
+      return `<li class="${i.level}${selection.includes(i.key) || (i.other && selection.includes(i.other)) ? ' selected' : ''}" data-i="${n}" data-key="${esc(i.key)}"${i.other ? ` data-other="${esc(i.other)}"` : ''}>
+        <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span>
+        <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span>
+        ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</li>`;
+    }).join('')}</ul></section>` : '';
+  issuesEl.innerHTML = group('Simple 3D', shownIssues.slice(0, simpleIssues.length), 0)
+    + group('Indoor', shownIssues.slice(simpleIssues.length), simpleIssues.length);
   const fixable = shownIssues.filter((i) => i.fix).length;
   issuesFixAll.hidden = !fixable;
   issuesFixAll.textContent = tr('Применить все исправления ({n})', { n: fixable });
+}
+
+/** При выборе одной части показать её первую проблему, включая проблему пары частей. */
+function scrollToSelectedIssues() {
+  if (!focus || selection.length !== 1 || issuesPanel.hidden) return;
+  const key = selection[0];
+  if (!focus.members.some((member, i) => member === key && focus!.roles[i] === 'part')) return;
+  const index = shownIssues.findIndex((issue) => issue.key === key || issue.other === key);
+  if (index < 0) return;
+  const row = issuesEl.querySelector<HTMLElement>(`li[data-i="${index}"]`);
+  const body = issuesPanel.querySelector<HTMLElement>('.panel-body');
+  if (!row || !body) return;
+  if (issuesPanel.classList.contains('collapsed')) setCollapsed(issuesPanel, false);
+  const top = body.scrollTop + row.getBoundingClientRect().top - body.getBoundingClientRect().top - 8;
+  body.scrollTo({ top, behavior: 'smooth' });
 }
 
 /** «Подсветить все»: рёбра объёмов с проблемами (ошибка важнее предупреждения). */
@@ -4748,14 +4781,25 @@ issuesAll.addEventListener('change', () => {
 /** Применить исправления одним шагом истории; исправления одного объекта накладываются по очереди. */
 function applyFixes(list: Issue[]) {
   const tags = new Map<string, Record<string, string>>();
+  const removals = new Map<string, Set<string>>();
   for (const i of list) {
     const f = entity(i.key);
     if (!i.fix || !f) continue;
     const t = tags.get(i.key) ?? tags.set(i.key, { ...f.tags }).get(i.key)!;
     for (const [k, v] of Object.entries(i.fix.tags)) if (v === undefined) delete t[k]; else t[k] = v;
+    if (i.fix.removeFromGroup) {
+      const keys = removals.get(i.fix.removeFromGroup) ?? new Set<string>();
+      keys.add(i.key);
+      removals.set(i.fix.removeFromGroup, keys);
+    }
   }
   if (!tags.size) return;
-  session.editMany([...tags].map(([key, t]) => ({ key, tags: t })));
+  const edits: ObjectEdit[] = [...tags].map(([key, t]) => ({ key, tags: t }));
+  for (const [key, keys] of removals) {
+    const group = editGroups.get(key);
+    if (group) edits.push({ key, tags: { ...group.tags }, members: group.relMembers.filter((m) => !keys.has(`${m.type}/${m.ref}`)) });
+  }
+  session.editMany(edits);
   setStatus(list.length > 1 ? tr('Применено исправлений: {n} (объектов: {objects}).', { n: list.length, objects: tags.size }) : tr('Исправлено: {fix}.', { fix: list[0].fix!.label }));
 }
 
@@ -4765,15 +4809,22 @@ issuesEl.addEventListener('click', (e) => {
   const fix = (e.target as HTMLElement).closest<HTMLElement>('.issue-fix');
   if (fix) { applyFixes([shownIssues[Number(fix.dataset.i)]]); return; }
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
-  if (!li || !entity(li.dataset.key!)) return;
-  select(li.dataset.key);
+  if (!li) return;
+  const indoor = buildingIndoorFor(li.dataset.key!);
+  if (indoor) {
+    if (!shownIndoor.some((f) => f.key === indoor.key)) { currentLevel = indoor.levels[0]; renderLevels(); }
+    selectIndoor(indoor);
+    return;
+  }
+  if (!entity(li.dataset.key!)) return;
+  select(li.dataset.key, false);
   if (li.dataset.other && entity(li.dataset.other)) toggleSelection(li.dataset.other);
 });
 issuesEl.addEventListener('mouseover', (e) => {
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
   overpassLayer.setHover(li?.dataset.key);
   // С автоисправлением — ещё и каркас объёма после него (если геометрия изменится)
-  const issue = li ? shownIssues[[...issuesEl.children].indexOf(li)] : undefined;
+  const issue = li ? shownIssues[Number(li.dataset.i)] : undefined;
   if (issue === fixPreviewed) return;
   fixPreviewed = issue;
   const f = issue?.fix ? liveFeatures().find((x) => x.key === issue.key) : undefined;
@@ -4792,6 +4843,11 @@ issuesEl.addEventListener('mouseleave', () => {
 function changeIssues(keys: string[]): Issue[] {
   const changed = new Set(keys), seen = new Set<string>(), out: Issue[] = [];
   for (const k of keys) {
+    if (indoorEdited.has(k)) {
+      const f = session.get(k);
+      if (f) out.push(...validateIndoor({ key: k, tags: f.tags }));
+      continue;
+    }
     const g = groupOf(k) ?? soloGroup(k);
     if (!g || seen.has(g.key)) continue;
     seen.add(g.key);
@@ -5221,12 +5277,12 @@ function outlinerUnhover() {
 }
 
 /** Почему объект нельзя добавить в группу (undefined — можно). */
-function addReason(key: string): string | undefined {
+function addReason(key: string, target = addingTo): string | undefined {
   const f = entity(key);
   if (!f || !('polygons' in f)) return tr('это не здание и не часть');
   if (!f.tags['building:part'] || f.tags['building:part'] === 'no') return tr('нет тега building:part');
   const g = groupOf(key);
-  if (g) return g.key === addingTo?.key ? tr('уже в этом здании') : tr('уже входит в {key}', { key: g.key });
+  if (g) return g.key === target?.key ? tr('уже в этом здании') : tr('уже входит в {key}', { key: g.key });
 }
 
 let addMessage = '';
@@ -5269,6 +5325,32 @@ function confirmAdding() {
   select(g.key);
 }
 
+/** Отношение и отдельные части выбраны вместе в режиме карты. */
+function selectedPartsForGroup(): { group: EditGroup; parts: string[] } | { reason: string } | undefined {
+  const groups = selection.filter((k) => editGroups.has(k));
+  if (!groups.length) return undefined;
+  if (groups.length !== 1) return { reason: tr('Выберите одно отношение type=building и части для добавления.') };
+  const group = editGroups.get(groups[0])!;
+  const parts = selection.filter((k) => k !== group.key);
+  if (!parts.length) return undefined;
+  for (const key of parts) {
+    const reason = addReason(key, group);
+    if (reason) return { reason: tr('{key}: {reason}.', { key, reason }) };
+  }
+  return { group, parts };
+}
+
+function addSelectedPartsToGroup() {
+  const plan = selectedPartsForGroup();
+  if (!plan || 'reason' in plan) return;
+  const extra = plan.parts.map((key) => {
+    const [type, ref] = key.split('/');
+    return { type: type as 'way' | 'relation', ref: Number(ref), role: 'part' };
+  });
+  session.setMembers(plan.group.key, [...plan.group.relMembers, ...extra]);
+  select(plan.group.key);
+}
+
 function renderAdding() {
   const g = addingTo!;
   const list = addPending.map((k) => `<li>${esc(k)}</li>`).join('');
@@ -5282,7 +5364,8 @@ function renderAdding() {
 }
 
 /** candidates — кандидаты в контур, если их несколько (для выбора в панели). */
-type MergePlan = { members: { key: string; role: 'outline' | 'part' }[]; candidates?: Feature3D[] } | { reason: string; candidates?: Feature3D[] };
+type MergePlan = { members: { key: string; role: 'outline' | 'part' }[]; candidates?: Feature3D[];
+  convert?: Feature3D[]; address?: Record<string, string>; syntheticOutline?: boolean } | { reason: string; candidates?: Feature3D[] };
 
 /** Контур, выбранный вручную, когда кандидатов несколько. */
 let chosenOutline: string | undefined;
@@ -5292,11 +5375,21 @@ function mergePlan(keys: string[]): MergePlan {
   if (keys.some((k) => editGroups.has(k))) return { reason: tr('В выделении есть здание type=building — объединять можно только отдельные объекты.') };
   if (keys.some((k) => groupOf(k))) return { reason: tr('Часть объектов уже входит в здание type=building.') };
   const feats = keys.map(entity).filter((f): f is Feature3D => !!f && 'polygons' in f);
+  if (feats.length !== keys.length) return { reason: tr('В выделении есть объект без контура здания.') };
   // Контур — всё с тегом building, даже если на нём же стоит building:part (так часто размечают)
   const isBuilding = (f: Feature3D) => !!f.tags.building && f.tags.building !== 'no';
   const outlines = new Set(feats.filter(isBuilding));
   const parts = feats.filter((f) => f.kind === 'part' && !(outlines.has(f) && f.kind !== 'part'));
-  if (!parts.length) return { reason: tr('Выделите части здания (building:part).') };
+  const selectedBuildings = feats.filter(isBuilding);
+  if (!parts.length && selectedBuildings.length < 2) return { reason: tr('Выделите части здания (building:part).') };
+  if (selectedBuildings.length > 1) {
+    const address = selectedBuildings.map((f) => Object.fromEntries(Object.entries(f.tags).filter(([k]) => k.startsWith('addr:'))));
+    const filled = address.filter((a) => Object.keys(a).length);
+    if (filled.some((a) => JSON.stringify(Object.entries(a).sort()) !== JSON.stringify(Object.entries(filled[0]).sort())))
+      return { reason: tr('У выбранных зданий разные адресные теги. Проверьте адреса перед объединением.') };
+    const members = [...new Set([...selectedBuildings, ...parts].map((f) => f.key))].map((key) => ({ key, role: 'part' as const }));
+    return { members, convert: selectedBuildings, address: filled[0] ?? {}, syntheticOutline: true };
+  }
   // Контур под частями часто не выделить: закрыт ими (не рисуется) или нулевой высоты — ищем его сами,
   // если явно не выделен. Годится любое здание (тег building), внутри которого лежат центры частей.
   if (!outlines.size) {
@@ -5334,6 +5427,45 @@ function mergePlan(keys: string[]): MergePlan {
 function mergeIntoBuilding() {
   const plan = mergePlan(selection);
   if ('reason' in plan) return;
+  const edits: ObjectEdit[] = [];
+  if (plan.syntheticOutline) {
+    const features = plan.members.map((m) => entity(m.key) as Feature3D);
+    const shapes = features.flatMap((f) => f.polygons.map((poly) => [poly.outer, ...poly.inners].map((ring) => [...ring, ring[0]])));
+    if (!shapes.length) return setStatus(tr('Не удалось построить контур здания.'), true);
+    let union: ReturnType<typeof polygonClipping.union>;
+    try { union = polygonClipping.union(shapes[0], ...shapes.slice(1)); }
+    catch { return setStatus(tr('Не удалось построить контур здания.'), true); }
+    if (!union.length) return setStatus(tr('Не удалось построить контур здания.'), true);
+    const outlineId = nextNewId--;
+    const outlineKey = `relation/${outlineId}`;
+    const ways: MemberWay[] = [];
+    const polygons: Polygon[] = [];
+    for (const [outer, ...inners] of union) {
+      const rings = [outer, ...inners].map((ring) => {
+        const coords = ring.slice(0, -1) as LonLat[];
+        const ids = coords.map(() => nextNewId--);
+        const id = nextNewId--;
+        const role = ring === outer ? 'outer' : 'inner';
+        edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line: { ids: [...ids, ids[0]], coords: [...coords, coords[0]] } } });
+        ways.push({ id, role, nodes: [...ids, ids[0]] });
+        return { coords, ids };
+      });
+      polygons.push({ outer: rings[0].coords, inners: rings.slice(1).map((r) => r.coords),
+        outerIds: rings[0].ids, innerIds: rings.slice(1).map((r) => r.ids) });
+    }
+    const values = new Set(plan.convert?.map((f) => f.tags.building));
+    const building = values.size === 1 ? [...values][0] : 'yes';
+    const outline: Feature3D = { key: outlineKey, type: 'relation', id: outlineId, version: 0, kind: 'building',
+      tags: { type: 'multipolygon', building, ...plan.address }, polygons, hasParts: true, ways };
+    edits.push({ key: outlineKey, create: { ...outline, relMembers: ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } });
+    for (const f of plan.convert ?? []) {
+      const tags: Record<string, string> = { ...f.tags, 'building:part': f.tags['building:part'] ?? f.tags.building };
+      delete tags.building;
+      for (const k of Object.keys(plan.address ?? {})) delete tags[k];
+      edits.push({ key: f.key, tags });
+    }
+    plan.members.unshift({ key: outlineKey, role: 'outline' });
+  }
   const id = nextNewId--;
   const key = `relation/${id}`;
   const group: EditGroup = {
@@ -5345,7 +5477,7 @@ function mergeIntoBuilding() {
     }),
   };
   editGroups.set(key, group);
-  session.create(group);
+  session.editMany([...edits, { key, create: group }]);
   leaveDrill();
   select(key);
 }
@@ -5400,16 +5532,17 @@ infoEl.addEventListener('mouseout', (e) => {
 
 function renderMulti() {
   const plan = mergePlan(selection);
+  const addPlan = selectedPartsForGroup();
   const list = selection.map((k) => `<li data-hover-key="${esc(k)}"><a href="#" data-select="${esc(k)}">${esc(k)}</a>${
     editGroups.has(k) ? ' (type=building)' : ''}</li>`).join('');
   infoEl.innerHTML = `
     <h2>${tr('Выделено: {n}', { n: selection.length })}</h2>
     <ul class="change-list">${list}</ul>
     ${renderMultiTagForm(selection.filter((k) => session.get(k)?.tags.type !== 'building'), session)}
-    ${drill ? excludeButton() : `<p><button type="button" data-merge ${'reason' in plan ? 'disabled' : ''}>${tr('Объединить в здание')}</button></p>`}
-    ${drill ? '' : 'reason' in plan ? `<p class="hint">${esc(plan.reason)}</p>` : `<p class="hint">${tr('Будет создано отношение type=building: контур {outline} и частей {n}.', {
+    ${drill ? excludeButton() : addPlan ? `<p><button type="button" data-add-selected-parts ${'reason' in addPlan ? 'disabled' : ''}>${tr('Добавить выбранные части в отношение')}</button></p>` : `<p><button type="button" data-merge ${'reason' in plan ? 'disabled' : ''}>${tr('Объединить в здание')}</button></p>`}
+    ${drill ? '' : addPlan ? 'reason' in addPlan ? `<p class="hint">${esc(addPlan.reason)}</p>` : `<p class="hint">${tr('В {key} будут добавлены части: {n}.', { key: esc(addPlan.group.key), n: addPlan.parts.length })}</p>` : 'reason' in plan ? `<p class="hint">${esc(plan.reason)}</p>` : plan.syntheticOutline ? `<p class="hint">${tr('Будет создан общий контур по выбранным зданиям; объёмы станут частями: {n}.', { n: plan.members.length })}</p>` : `<p class="hint">${tr('Будет создано отношение type=building: контур {outline} и частей {n}.', {
       outline: esc(plan.members[0].key), n: plan.members.filter((m) => m.role === 'part').length })}</p>`}
-    ${drill ? '' : outlineChooser(plan)}
+    ${drill || addPlan ? '' : outlineChooser(plan)}
     <p class="hint">${tr('Shift+клик — добавить или убрать объект.')}</p>`;
 }
 
@@ -5533,7 +5666,7 @@ function onSessionChange(keys: string[]) {
     indoorSelection = [];
     for (const f of again) selectIndoor(f, again.length > 1);
     renderChanges();
-    if (keys.every((k) => indoorEdited.has(k))) return;
+    if (keys.every((k) => indoorEdited.has(k))) { renderIssues(); return; }
   }
   // Правка могла поменять объект на месте — проверки пересчитать (до перерисовки свойств, где они показаны)
   issueCache.clear();

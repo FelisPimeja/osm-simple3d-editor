@@ -53,7 +53,7 @@ export function computeHeights(tags: Record<string, string>): Heights {
   let roofHeight = roofShape === 'flat'
     ? 0
     : parseLength(tags['roof:height']) ?? (roofLevels !== undefined ? roofLevels * LEVEL_HEIGHT : DEFAULT_ROOF_HEIGHT);
-  const min = parseLength(tags.min_height) ?? (minLevel !== undefined ? minLevel * LEVEL_HEIGHT : 0);
+  let min = parseLength(tags.min_height) ?? (minLevel !== undefined ? minLevel * LEVEL_HEIGHT : 0);
 
   const height = parseLength(tags.height);
   let top: number;
@@ -63,10 +63,13 @@ export function computeHeights(tags: Record<string, string>): Heights {
   else { top = Math.max(min, DEFAULT_WALL_HEIGHT) + roofHeight; source = 'default'; }
 
   top = Math.max(top, min);
-  // Навес/крыша на опорах (building:part=roof, building=roof) без roof:height и roof:levels: стен у него нет —
-  // крыша занимает всю высоту от min_height до верха (иначе под ней вырастал бы фасад высотой top − min − 3 м)
+  // У части-кровли без указанного низа оставляем короткую стенку под крышей.
   const roofOnly = tags['building:part'] === 'roof' || tags.building === 'roof';
-  if (roofOnly && roofShape !== 'flat' && tags['roof:height'] === undefined && roofLevels === undefined && height !== undefined && min > 0) {
+  if (roofOnly && tags.min_height === undefined && minLevel === undefined) {
+    min = Math.max(0, top - roofHeight - 0.3);
+  }
+  if (roofOnly && roofShape !== 'flat' && tags['roof:height'] === undefined && roofLevels === undefined
+      && height !== undefined && (tags.min_height !== undefined || minLevel !== undefined) && min > 0) {
     roofHeight = top - min;
   }
   roofHeight = Math.min(roofHeight, top - min);

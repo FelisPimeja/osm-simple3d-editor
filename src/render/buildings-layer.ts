@@ -3279,7 +3279,19 @@ function positionsBox(pos: ArrayLike<number>): [number, number, number, number] 
 }
 
 function shellSolid(g: MeshGroup, it: Item): boolean {
-  return !g.hidden.has(it.feature.key) && !strokeOnly(g, it) && !thinItem(it) && it.tags['building:part'] !== 'roof' && it.positions.length > 0;
+  return !g.hidden.has(it.feature.key) && !strokeOnly(g, it) && !thinItem(it) && !isRoofPart(it.tags) && it.positions.length > 0;
+}
+
+function isRoofPart(tags: Record<string, string>): boolean {
+  return tags['building:part'] === 'roof' || tags.building === 'roof';
+}
+
+function roofPartWallMaterial(tags: Record<string, string>): string | undefined {
+  return tags['building:material'] ?? tags.material ?? (isRoofPart(tags) ? tags['roof:material'] : undefined);
+}
+
+function roofPartBottomless(tags: Record<string, string>): boolean {
+  return isRoofPart(tags) && (tags.wall === 'no' || isGlass(roofPartWallMaterial(tags)) || isGlass(tags['roof:material']));
 }
 
 /** Контур под частями (и голый контур в режиме здания): только обводка — заливку всё равно закрывают части. */
@@ -3313,7 +3325,7 @@ function prepItem(g: MeshGroup, f: Feature3D) {
   // Свои теги главнее унаследованных; в данных объекта ничего не меняется — только для рисования
   const inherited = inheritFor(f);
   const tags = inherited && Object.keys(inherited).length ? { ...inherited, ...f.tags } : f.tags;
-  const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+  const polys = (f.renderPolygons ?? f.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
   let heights = computeHeights(tags);
   // Контур под частями и здания нулевой высоты — плоский след на земле: видно и можно выделить;
   // без высоты и этажей — тоже, если высоту по умолчанию выключили в настройках
@@ -3335,7 +3347,7 @@ interface Contacts { tops: Map<number, ContactFace[]>; bottoms: Map<number, Cont
 
 function hasBottom(prep: ReturnType<typeof prepItem>): boolean {
   const { tags, heights, flat } = prep;
-  return !flat && tags['building:part'] !== 'roof' && heights.min > 0.01 && heights.top - heights.min >= MIN_THICKNESS;
+  return !flat && !roofPartBottomless(tags) && heights.min > 0.01 && heights.top - heights.min >= MIN_THICKNESS;
 }
 function hasFlatTop(prep: ReturnType<typeof prepItem>): boolean {
   return !prep.flat && prep.heights.roofShape === 'flat';
@@ -3424,26 +3436,26 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     const rest = subtractFaces(polys, faces), covered = rest && coveredBy(polys, faces);
     if (rest && covered) { tri.roof = bottomTriangles(rest, heights.wallTop); joint = bottomTriangles(covered, heights.wallTop); }
   }
-  // building:part=roof принято рисовать одной крышей: без фасада и дна (навесы, крыши над пустотой);
-  // фронтоны (торцы двускатной) — часть крыши, их оставляем
-  const roofOnly = !flat && tags['building:part'] === 'roof' && tri.roof.length > 0;
-  if (roofOnly) tri.walls = tri.gableStart === undefined ? [] : tri.walls.slice(tri.gableStart);
+  // Часть-кровля сохраняет короткую боковую стенку и дно. wall=no убирает стенку;
+  // прозрачная кровля остаётся без дна. Явные height/min_height задают толщину.
+  const roofOnly = !flat && isRoofPart(tags) && tri.roof.length > 0;
+  if (roofOnly && tags.wall === 'no') tri.walls = [];
   // Дно — у объектов с объёмом над землёй (видно снизу); на земле его не видно — треугольники не тратим. Цвет — как у стен.
   // Участки, лежащие на плоских крышах других частей, вырезаем: совпадающие грани мерцают, а дно стеклянной части
   // просвечивает поверх крыши. Крышу оставляем — она и есть перекрытие между частями (видна сквозь стекло)
-  else if (hasBottom(prep)) {
+  if (hasBottom(prep)) {
     const rest = g.contacts && subtractFaces(polys, contactFaces(g.contacts.tops, f.key, heights.min, box2));
     tri.walls.push(...bottomTriangles(rest ?? polys, heights.min));
   }
   // Стеклянный фасад: внутри видны перекрытия — плиты на границах этажей (непрозрачные, после крыши)
-  const glassWalls = isGlass(tags['building:material'] ?? tags.material);
+  const glassWalls = isGlass(roofPartWallMaterial(tags));
   const floors = [...joint, ...(glassWalls && !flat && !roofOnly ? floorSlabs(polys, heights, tags, levelGridFor(f)?.map((l) => ({ z: l.z, holes: l.holes.map((p) => p.map((r) => r.map(g.toLocal))), mask: l.mask?.map((p) => p.map((r) => r.map(g.toLocal))) }))) : [])];
   const positions = new Float32Array(tri.walls.length + tri.roof.length + floors.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);
   positions.set(floors, tri.walls.length + tri.roof.length);
   const wall = tags['building:colour'] ?? tags.colour ?? DEFAULT_WALL;
-  const roof = tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
+  const roof = f.hasParts && f.renderPolygons ? '#e9a24a' : tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
   const box = new THREE.Box3();
   if (positions.length) box.setFromArray(positions);
   return {

@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from 'polygon-clipping';
-import { pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type LonLat, type Polygon } from '../osm/model';
+import { parseLevels, pointInRing, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type Polygon } from '../osm/model';
 import { computeHeights, parseLength, roofShapeOf } from '../osm/heights';
 import { ROOF_SHAPES } from './tag-form';
 import { tr, trn } from '../i18n';
@@ -29,6 +29,8 @@ export interface Fix {
   /** Что сделает кнопка — для подсказки. */
   label: string;
   tags: Record<string, string | undefined>;
+  /** Исключить объект из указанного отношения type=building. */
+  removeFromGroup?: string;
 }
 
 /** Высота этажа, ниже и выше которой этажность и высота противоречат друг другу, м. */
@@ -44,6 +46,8 @@ const MIN_WIDTH = 0.05;
 /** Части за контуром: допуск по площади, м² и доля части (погрешности обрисовки). */
 const OUTSIDE_AREA = 1;
 const OUTSIDE_SHARE = 0.03;
+/** Разрыв между отдельными корпусами, после которого предлагаем проверить принадлежность, м. */
+const REMOTE_PART_GAP = 20;
 /**
  * Дубликат объёма: две части совпадают по высоте (общий интервал — от этой доли большего) и в плане (DUPLICATE_PLAN). Просто пересечения не ищем: башня с min_height=0 внутри основания —
  * обычная практика обрисовки, это не ошибка.
@@ -51,8 +55,6 @@ const OUTSIDE_SHARE = 0.03;
 const DUPLICATE_SHARE = 0.8;
 /** …а в плане — от этой доли каждой (вложенные ярусы кокошников отличаются на 15% — это не дубли). */
 const DUPLICATE_PLAN = 0.9;
-/** Части покрывают контур меньше чем наполовину — рендеры (и наш) рисуют контур сам по себе. */
-const PARTS_COVERAGE = 0.5;
 
 const KNOWN_ROOFS = new Set(ROOF_SHAPES);
 const LENGTH_TAGS = ['height', 'min_height', 'roof:height'];
@@ -70,6 +72,7 @@ const WRONG_KEYS: Record<string, string> = {
   'building:lateral:material': 'building:material', 'building:facade:material': 'building:material', 'facade:material': 'building:material',
   'building:roof': 'roof:material', 'building:roof:material': 'roof:material',
   buildingpart: 'building:part', building_part: 'building:part', 'roof:level': 'roof:levels', 'building:min_levels': 'building:min_level',
+  'building:max_level': 'max_level',
 };
 /** Значения roof:shape из «Values with problems» без однозначной замены (у остальных — ROOF_SYNONYMS в heights). */
 const ROOF_UNCLEAR: Record<string, string> = { gabled_row: tr('неясное значение — возможно, sawtooth или ряд gabled-частей') };
@@ -109,7 +112,15 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
   }
   if (t.building === 'part') add('warning', 'key', tr('building=part — ошибка: части размечают building:part=yes.'),
     t['building:part'] === undefined ? set({ building: undefined, 'building:part': 'yes' }) : undefined);
+  if (t.building === 'entrance') add('warning', 'key', tr('building=entrance — вход обозначают узлом entrance=* на контуре здания.'));
   if (t['building:part'] !== undefined && /^\d+$/.test(t['building:part'])) add('warning', 'key', tr('{tag} — число вместо вида части (yes, roof, column…).', { tag: `building:part=${t['building:part']}` }));
+  if (t.building !== undefined || t['building:part'] !== undefined) {
+    for (const tag of ['min_level', 'max_level'] as const) if (t[tag] !== undefined && !Number.isFinite(Number(t[tag])))
+      add('error', 'indoor-level', tr('{tag}={value} — номер этажа должен быть числом.', { tag, value: t[tag] }));
+    const minIndoor = Number(t.min_level), maxIndoor = Number(t.max_level);
+    if (t.min_level !== undefined && t.max_level !== undefined && Number.isFinite(minIndoor) && Number.isFinite(maxIndoor) && minIndoor > maxIndoor)
+      add('error', 'indoor-level', tr('min_level={min} выше max_level={max} — проверьте границы этажей здания.', { min: t.min_level, max: t.max_level }));
+  }
   for (const k of LENGTH_TAGS) {
     const v = t[k];
     if (v === undefined) continue;
@@ -196,6 +207,45 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
     if (v === undefined) continue;
     if (v.startsWith('#') && !/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) add('warning', 'colour', tr('{tag} — неверный hex-цвет (нужно #RGB или #RRGGBB).', { tag: `${k}=${v}` }));
     else if (/^gray$/i.test(v)) add('warning', 'colour', tr('{tag} — в OSM британское написание: grey.', { tag: `${k}=${v}` }), set({ [k]: 'grey' }));
+  }
+  return out;
+}
+
+/** Ошибки Simple Indoor Tagging и страниц его ключей. Проверяем только загруженные indoor-объекты. */
+export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>): Issue[] {
+  if (f.key.endsWith('#poi')) return []; // значок уже представлен площадным объектом
+  const { key, tags: t } = f;
+  const out: Issue[] = [];
+  const add = (level: IssueLevel, code: string, text: string) => out.push({ key, level, code, text });
+  const space = ['room', 'area', 'corridor', 'wall', 'level', 'column'].includes(t.indoor);
+
+  if (t.inside !== undefined) add('warning', 'indoor-key', tr('inside=* — неустоявшийся ключ; проверьте, нужен ли здесь indoor=*.'));
+  if (t.indoor === 'highway' || t.indoor === 'stairs') add('warning', 'indoor-key',
+    tr('indoor={value} — тип объекта указывают отдельным тегом; для общего признака используют indoor=yes.', { value: t.indoor }));
+  if (space && t.level === undefined) add('error', 'indoor-level', tr('У indoor-объекта нет level=* — этаж обязателен для поэтажного плана.'));
+  if (t.room !== undefined && t.indoor !== 'room' && t.indoor !== 'area') add('warning', 'indoor-room',
+    tr('room=* описывает назначение помещения; проверьте indoor=room или indoor=area.'));
+  if (t['building:part'] !== undefined && space) add('warning', 'indoor-key',
+    tr('building:part=* описывает объём здания, а не помещение indoor=*.'));
+  if (t.indoor === 'door' && t.door === undefined) add('warning', 'indoor-door',
+    tr('Для внутренней двери indoor=door укажите также door=* (door=no для открытого прохода).'));
+  if (t.door === 'loadingdock') add('warning', 'indoor-door', tr('door=loadingdock — погрузочную платформу обозначают amenity=loading_dock.'));
+  if (t.entrance === 'gate') add('warning', 'indoor-door', tr('entrance=gate — для ворот проверьте barrier=gate.'));
+  if (t['addr:entrance'] === 'yes') add('warning', 'indoor-door', tr('addr:entrance=yes — вход обозначают тегом entrance=*.'));
+
+  for (const tag of ['level', 'repeat_on'] as const) {
+    const value = t[tag];
+    if (value === undefined) continue;
+    const parts = value.split(';').map((s) => s.trim());
+    if (parts.some((part) => !/^-?\d+(?:\.\d+)?(?:\s*-\s*-?\d+(?:\.\d+)?)?$/.test(part)) || !parseLevels(value).length)
+      add('error', 'indoor-level', tr('{tag}={value} — нужны номера этажей через «;» или диапазон, например -1;0;1 либо -1-1.', { tag, value }));
+  }
+  if (t.repeat_on !== undefined && t.level === undefined) add('warning', 'indoor-level',
+    tr('repeat_on=* задаёт повторения; исходный этаж укажите в level=*.'));
+  if (t.repeat_on !== undefined && t.level !== undefined) {
+    const base = new Set(parseLevels(t.level));
+    if (parseLevels(t.repeat_on).some((n) => base.has(n))) add('warning', 'indoor-level',
+      tr('repeat_on=* повторяет этаж из level=* — исходный этаж в список повторений не включают.'));
   }
   return out;
 }
@@ -301,6 +351,48 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
     }
   }
 
+  // Ищем корпуса, удалённые от основного скопления частей. Сравниваем именно части:
+  // общий outline может охватывать ошибочно добавленный далёкий объект и скрыть разрыв.
+  const solidParts = parts.filter((f) => !broken.has(f.key) && f.polygons.length);
+  if (g.type === 'relation' && solidParts.length > 1) {
+    const boxes = solidParts.map((f) => {
+      let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+      for (const poly of f.polygons) for (const c of poly.outer) {
+        const [x, y] = p(c);
+        w = Math.min(w, x); s = Math.min(s, y); e = Math.max(e, x); n = Math.max(n, y);
+      }
+      return { w, s, e, n, area: multiArea(multi(f)) };
+    });
+    const gap = (a: typeof boxes[number], b: typeof boxes[number]) =>
+      Math.hypot(Math.max(0, a.w - b.e, b.w - a.e), Math.max(0, a.s - b.n, b.s - a.n));
+    const seen = new Set<number>();
+    const clusters: number[][] = [];
+    for (let i = 0; i < solidParts.length; i++) {
+      if (seen.has(i)) continue;
+      const cluster = [i];
+      seen.add(i);
+      for (let j = 0; j < cluster.length; j++) for (let k = 0; k < solidParts.length; k++) {
+        if (!seen.has(k) && gap(boxes[cluster[j]], boxes[k]) <= REMOTE_PART_GAP) { seen.add(k); cluster.push(k); }
+      }
+      clusters.push(cluster);
+    }
+    if (clusters.length > 1) {
+      const main = clusters.reduce((best, cluster) => cluster.reduce((sum, i) => sum + boxes[i].area, 0) > best.reduce((sum, i) => sum + boxes[i].area, 0) ? cluster : best);
+      for (const cluster of clusters) {
+        if (cluster === main) continue;
+        for (const i of cluster) {
+          const f = solidParts[i];
+          const distance = Math.min(...main.map((j) => gap(boxes[i], boxes[j])));
+          const standalone = !g.members.some((key, j) => key === f.key && g.roles[j] === 'outline');
+          out.push({ key: f.key, level: 'warning', code: 'remote-part',
+            text: tr('Часть находится отдельно от основного объёма здания (не менее {distance} м). Проверьте, относится ли она к этому зданию.', { distance: fmt(distance) }),
+            ...(standalone ? { fix: { label: tr('Исключить из отношения и сделать отдельным зданием'),
+              tags: { 'building:part': undefined, building: f.tags.building ?? f.tags['building:part'] ?? 'yes' }, removeFromGroup: g.key } } : {}) });
+        }
+      }
+    }
+  }
+
   if (outline && !broken.has(outline.key)) {
     const o = multi(outline);
     const outlineArea = multiArea(o);
@@ -315,18 +407,16 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
         out.push({ key: f.key, level: 'warning', code: 'outside', text: tr('Часть выходит за контур здания на {area} м² — контур должен охватывать все части.', { area: fmt(rest) }) });
       }
     }
-    // Покрытие — как в рендере (markOutlinesWithParts): сумма площадей частей, чья точка внутри контура
-    // и которые начинаются ниже его верха (надстройки поверх контура не в счёт)
-    const top = computeHeights(outline.tags).top;
-    let covered = 0;
-    for (const f of parts) {
-      if (computeHeights(f.tags).min >= top - 1) continue;
-      for (const q of f.polygons) if (inOutline(pointOnSurface(q))) covered += multiArea(toMulti([q], p));
-    }
-    if (parts.length && outlineArea > 0 && covered < outlineArea * PARTS_COVERAGE) {
-      out.push({ key: outline.key, level: 'warning', code: 'coverage', text: tr('Части покрывают {pct}% контура — '
-        + 'меньше половины: контур рисуется отдельным объёмом вместе с частями. Обрисуйте частями всё здание или уберите лишнее.',
-      { pct: Math.floor((covered / outlineArea) * 100) }) });
+    // Проверяем геометрический пробел между частями у основания, без достраивания объёма по высоте контура.
+    const outlineHeights = computeHeights(outline.tags);
+    const baseParts = parts.filter((f) => !broken.has(f.key) && computeHeights(f.tags).min <= outlineHeights.min + 0.5
+      && computeHeights(f.tags).min < outlineHeights.top - 1);
+    if (baseParts.length && outlineArea > 0) {
+      const missing = safe(() => multiArea(polygonClipping.difference(o, polygonClipping.union(multi(baseParts[0]), ...baseParts.slice(1).map(multi)))));
+      if (missing !== undefined && missing > 1 && missing > outlineArea * 0.001) {
+        out.push({ key: outline.key, level: 'warning', code: 'coverage', text: tr('Части не покрывают {pct}% контура — этот участок показан плоским. Добавьте недостающую часть или проверьте роли в отношении.',
+          { pct: Math.round((missing / outlineArea) * 100) }) });
+      }
     }
     // Высота контура — максимум по частям (Key:building:part)
     const oh = parseLength(outline.tags.height);

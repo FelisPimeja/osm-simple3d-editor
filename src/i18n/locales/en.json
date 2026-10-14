@@ -838,5 +838,6 @@
   "Исключить из отношения и сделать отдельным зданием": "Remove from relation and make a separate building",
   "У выбранных зданий разные адресные теги. Проверьте адреса перед объединением.": "The selected buildings have different address tags. Check their addresses before merging.",
   "Будет создан общий контур по выбранным зданиям; объёмы станут частями: {n}.": "A shared outline will be created from the selected buildings; volumes becoming parts: {n}.",
-  "В выделении есть объект без контура здания.": "The selection contains an object without a building outline."
+  "В выделении есть объект без контура здания.": "The selection contains an object without a building outline.",
+  "roof:shape=many описывает несколько форм крыши; задайте формы на отдельных частях и удалите этот ключ.": "roof:shape=many describes multiple roof shapes; tag the individual parts and remove this key."
 }

@@ -171,6 +171,7 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
   if (shape !== undefined) {
     const main = roofShapeOf(t);
     if (/^\d+(\.\d+)?$/.test(shape)) add('warning', 'roof', tr('roof:shape={value} — число вместо формы; число этажей в крыше — roof:levels.', { value: raw! }));
+    else if (shape === 'many') add('warning', 'roof', tr('roof:shape=many описывает несколько форм крыши; задайте формы на отдельных частях и удалите этот ключ.'), set({ 'roof:shape': undefined }));
     else if (ROOF_UNCLEAR[shape]) add('warning', 'roof', tr('roof:shape={value} — {hint}.', { value: raw!, hint: ROOF_UNCLEAR[shape] }));
     else if (!KNOWN_ROOFS.has(main)) add('warning', 'roof', tr('roof:shape={value} — неизвестная форма крыши (рисуется плоской).', { value: raw! }));
     else if (shape !== main && !ROOF_DOCUMENTED.has(shape)) add('warning', 'roof', tr('roof:shape={value} — значение с проблемами, основное — {main}.', { value: raw!, main }), set({ 'roof:shape': main }));

@@ -5274,16 +5274,12 @@ window.addEventListener('pointerup', (e) => {
  */
 function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | 'indoor') {
   if (!focus) return;
-  const hiddenIndoorMenu = () => {
-    if (!indoorHidden.size) return '';
-    const byKey = new Map(buildingIndoor(focus!).map((f) => [indoorKey(f.key), f]));
-    return `<li><button type="button" data-ctx="indoor-show-all">${tr('Показать скрытые indoor-объекты')} (${indoorHidden.size})</button></li>`
-      + [...indoorHidden].map((key) => `<li><button type="button" data-ctx="indoor-show-key" data-key="${esc(key)}">${tr('Показать')} ${esc(byKey.get(key)?.tags.name ?? byKey.get(key)?.tags.ref ?? key)}</button></li>`).join('');
-  };
+  const hiddenCount = focusHidden.size + indoorHidden.size;
+  const showAll = `<li><button type="button" data-ctx="show-all"${hiddenCount ? '' : ' disabled'}>${tr('Показать всё')}${hiddenCount ? ` (${hiddenCount})` : ''}<kbd>⇧H</kbd></button></li>`;
   if (where === 'indoor') {
     const n = indoorSelection.length > 1 ? ` (${indoorSelection.length})` : '';
     ctxMenu.innerHTML = `<li><button type="button" data-ctx="indoor-hide">${tr('Скрыть объекты')}${n}<kbd>H</kbd></button></li>`
-      + hiddenIndoorMenu();
+      + showAll;
     ctxMenu.hidden = false;
     const { width, height } = ctxMenu.getBoundingClientRect();
     ctxMenu.style.left = `${Math.min(x, innerWidth - width - 4)}px`;
@@ -5297,16 +5293,15 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
   const keys = selection.filter((k) => focus!.members.includes(k));
   const anyShown = keys.some((k) => !focusHidden.has(k)), anyHidden = keys.some((k) => focusHidden.has(k));
   const n = keys.length > 1 ? ` (${keys.length})` : '';
-  const showIndoor = hiddenIndoorMenu();
   ctxMenu.innerHTML = where === 'empty' ? `
-    <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>${tr('Показать всё')}${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>${showIndoor}${snaps}${exit}` : `
+    ${showAll}${snaps}${exit}` : `
     <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>${tr('Скрыть объекты')}${n}${kbd('H')}</button></li>
     <li><button type="button" data-ctx="isolate"${keys.length && focus.members.some((k) => !keys.includes(k) && !focusHidden.has(k)) ? '' : ' disabled'}>${tr('Изолировать')}${n}</button></li>
     ${inScene
-      ? `<li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>${tr('Показать всё скрытое')}${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>`
+      ? showAll
       : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>${tr('Показать объекты')}${n}</button></li>`}
     <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>${tr('Исключить из модели')}${n}</button></li>
-    <li><button type="button" data-ctx="delete"${keys.length ? '' : ' disabled'}>${tr('Удалить')}${n}${kbd('Del')}</button></li>${showIndoor}${snaps}${exit}`;
+    <li><button type="button" data-ctx="delete"${keys.length ? '' : ' disabled'}>${tr('Удалить')}${n}${kbd('Del')}</button></li>${inScene ? '' : showAll}${snaps}${exit}`;
   ctxMenu.hidden = false;
   // Не выходим за край окна
   const { width, height } = ctxMenu.getBoundingClientRect();
@@ -5320,8 +5315,6 @@ ctxMenu.addEventListener('click', (e) => {
   if (!action || !focus) return;
   closeCtxMenu();
   if (action === 'indoor-hide') return hideSelectedIndoor();
-  if (action === 'indoor-show-all') { changeIndoorHidden(new Set()); return; }
-  if (action === 'indoor-show-key') { changeIndoorHidden(new Set([...indoorHidden].filter((key) => key !== button!.dataset.key))); return; }
   focusAction(action);
 });
 
@@ -5504,7 +5497,11 @@ function toggleSnaps() {
 function focusAction(action: string) {
   if (!focus) return;
   if (indoorSelection.length && action === 'hide') { hideSelectedIndoor(); return; }
-  if (indoorHidden.size && action === 'show-all' && !selection.length) { changeIndoorHidden(new Set()); return; }
+  if (action === 'show-all') {
+    changeFocusHidden(new Set());
+    changeIndoorHidden(new Set());
+    return;
+  }
   const keys = selection.filter(inFocus);
   if (action === 'exclude') { if (keys.length) excludeFromGroup(); return; }
   if (action === 'delete') { if (keys.length) deleteSelected(); return; }
@@ -5515,8 +5512,8 @@ function focusAction(action: string) {
     if (keys.length) changeFocusHidden(new Set(focus.members.filter((k) => !keys.includes(k))));
     return;
   }
-  const next = new Set(action === 'show-all' ? [] : focusHidden);
-  if (action !== 'show-all') for (const k of keys) if (action === 'hide') next.add(k); else next.delete(k);
+  const next = new Set(focusHidden);
+  for (const k of keys) if (action === 'hide') next.add(k); else next.delete(k);
   changeFocusHidden(next);
 }
 

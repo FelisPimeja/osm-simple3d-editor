@@ -24,7 +24,7 @@ const MONOCHROME = new THREE.Color('#ffffff');
 
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
 export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Заливка по назначению (иначе — по виду). */ colour?: number }
-export interface EscalatorItem { key: string; line: LonLat[]; bottom: number; top: number; width: number; incline?: string }
+export interface EscalatorItem { key: string; line: LonLat[]; bottom: number; top: number; width: number; incline?: string; pale?: boolean }
 
 /** Заливка пола по виду indoor-объекта. */
 const INDOOR_COLOURS: Record<IndoorKind, number> = { level: 0xe7e5e4, area: 0xffffff, corridor: 0xffffff, room: 0xf6ead2, wall: 0xffffff, column: 0xffffff, poi: 0xffffff };
@@ -78,6 +78,12 @@ const ESCALATOR_STEP = new THREE.MeshLambertMaterial({ color: 0x9da5aa, side: TH
 const ESCALATOR_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xb9d3dc, side: THREE.DoubleSide,
   transparent: true, opacity: 0.4, depthWrite: false });
 const ESCALATOR_HANDRAIL = new LineMaterial({ color: 0x656d73, linewidth: 5 });
+const ESCALATOR_PALE_BELT = new THREE.MeshLambertMaterial({ color: 0xd8dbdd, side: THREE.DoubleSide });
+const ESCALATOR_PALE_SIDE = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x777777, side: THREE.DoubleSide });
+const ESCALATOR_PALE_STEP = new THREE.MeshLambertMaterial({ color: 0xced2d4, side: THREE.DoubleSide });
+const ESCALATOR_PALE_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xdce9ed, side: THREE.DoubleSide,
+  transparent: true, opacity: 0.4, depthWrite: false });
+const ESCALATOR_PALE_HANDRAIL = new LineMaterial({ color: 0xc4c0bb, linewidth: 5 });
 
 /** План этажа для слоя. below — этажи под вторым светом (видны сквозь пустоты voids в перекрытии). */
 export interface IndoorLevel {
@@ -765,12 +771,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     const cut = this.levelCut = this.cutZ();
     const planes = cut !== undefined ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), cut)] : null;
     for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL]) m.clippingPlanes = planes;
-    for (const m of [ESCALATOR_BELT, ESCALATOR_SIDE, ESCALATOR_STEP, ESCALATOR_BALUSTRADE, ESCALATOR_HANDRAIL]) m.clippingPlanes = planes;
+    for (const m of [ESCALATOR_BELT, ESCALATOR_SIDE, ESCALATOR_STEP, ESCALATOR_BALUSTRADE, ESCALATOR_HANDRAIL,
+      ESCALATOR_PALE_BELT, ESCALATOR_PALE_SIDE, ESCALATOR_PALE_STEP, ESCALATOR_PALE_BALUSTRADE, ESCALATOR_PALE_HANDRAIL]) m.clippingPlanes = planes;
     if (this.indoorObj) {
       this.indoorObj.parent?.remove(this.indoorObj);
       this.indoorObj.traverse((o) => {
         if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments || o instanceof Line2) o.geometry.dispose();
-        if (o instanceof Line2 && o.material !== ESCALATOR_HANDRAIL) o.material.dispose();
+        if (o instanceof Line2 && o.material !== ESCALATOR_HANDRAIL && o.material !== ESCALATOR_PALE_HANDRAIL) o.material.dispose();
       });
       this.indoorObj = undefined;
     }
@@ -965,8 +972,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         [p.x + sign * (halfWidth - 0.02) * p.nx, p.y + sign * (halfWidth - 0.02) * p.ny, z];
       const canvas = this.map!.getCanvas();
       const dpr = canvas.width / Math.max(1, canvas.clientWidth);
-      ESCALATOR_HANDRAIL.linewidth = 5 * dpr;
-      ESCALATOR_HANDRAIL.resolution.set(canvas.width, canvas.height);
+      const handrail = item.pale ? ESCALATOR_PALE_HANDRAIL : ESCALATOR_HANDRAIL;
+      handrail.linewidth = 5 * dpr;
+      handrail.resolution.set(canvas.width, canvas.height);
       for (const sign of [-1, 1]) {
         const rail: number[] = [];
         const roundedEnd = (d: number, direction: number, reverse: boolean) => {
@@ -998,7 +1006,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         roundedEnd(length - landing, 1, false);
         const geometry = new LineGeometry();
         geometry.setPositions(rail);
-        const line = new Line2(geometry, ESCALATOR_HANDRAIL);
+        const line = new Line2(geometry, handrail);
         line.frustumCulled = false;
         root.add(line);
       }
@@ -1011,10 +1019,10 @@ export class BuildingsLayer implements CustomLayerInterface {
         object.frustumCulled = false;
         root.add(object);
       };
-      mesh(treads, ESCALATOR_BELT);
-      mesh(risers, ESCALATOR_STEP);
-      mesh(body, ESCALATOR_SIDE);
-      mesh(balustrades, ESCALATOR_BALUSTRADE);
+      mesh(treads, item.pale ? ESCALATOR_PALE_BELT : ESCALATOR_BELT);
+      mesh(risers, item.pale ? ESCALATOR_PALE_STEP : ESCALATOR_STEP);
+      mesh(body, item.pale ? ESCALATOR_PALE_SIDE : ESCALATOR_SIDE);
+      mesh(balustrades, item.pale ? ESCALATOR_PALE_BALUSTRADE : ESCALATOR_BALUSTRADE);
     }
   }
 
@@ -2404,6 +2412,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     ESCALATOR_STEP.color.setHex(on ? 0xffffff : 0x9da5aa);
     ESCALATOR_BALUSTRADE.color.setHex(on ? 0xffffff : 0xb9d3dc);
     ESCALATOR_HANDRAIL.color.setHex(on ? 0x57534e : 0x656d73);
+    ESCALATOR_PALE_BELT.color.setHex(on ? 0xffffff : 0xd8dbdd);
+    ESCALATOR_PALE_STEP.color.setHex(on ? 0xffffff : 0xced2d4);
+    ESCALATOR_PALE_BALUSTRADE.color.setHex(on ? 0xffffff : 0xdce9ed);
     setTreesMonochrome(on);
     for (const t of this.trees.values()) t.recolour();
     for (const g of this.groups.values()) this.paintGroup(g);

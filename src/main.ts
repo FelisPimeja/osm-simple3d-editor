@@ -4712,7 +4712,8 @@ function renderLevelsImpl() {
           pointInRing(p, outer) && !holes.some((hole) => pointInRing(p, hole))));
       }));
       return f.levels.includes(level.n) || visibleBelow ? { key: f.key, line, bottom: low.floor, top: high.floor,
-        width: Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2)), incline: f.tags.incline } : undefined;
+        width: Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2)), incline: f.tags.incline,
+        pale: !f.levels.includes(level.n) } : undefined;
     }).filter((f): f is NonNullable<typeof f> => !!f);
   const escalatorIconPositions = new Map<string, { at: LonLat; z: number }>();
   for (const area of onLevel.filter((f) => f.escalatorArea)) {

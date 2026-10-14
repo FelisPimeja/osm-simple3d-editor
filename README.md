@@ -26,10 +26,12 @@ Russian and English. The language is chosen in the settings panel; on first laun
 (Russian for `ru`, English otherwise).
 
 UI strings are written in Russian in the code via `tr('…')` / `trn(n, '…')` (see `src/i18n/index.ts`) and serve as
-translation keys. Dictionaries are flat JSON files in `src/i18n/locales/`: `ru.json` is the source file (extracted from the code
-with `npm run i18n:extract`), `en.json` is the translation. `npm run i18n:check` verifies that the English translation is
+translation keys. Dictionaries are flat JSON files in `src/i18n/locales/`: `ru.json` is generated from the code
+with `npm run i18n:extract`, while `en.json` contains the English text. `npm run i18n:check` verifies that the English text is
 complete, has no extra strings, and that `{…}` placeholders match. Strings with a number contain plural forms separated by `|`
 (Russian: forms for 1, 2, 5; English: forms for 1 and other).
+
+The [Transifex project](https://app.transifex.com/osm-simple3d-editor/osm-simple3d-editor-en/) uses English as its source language and Russian, German, and French as target languages. Russian phrases remain the JSON keys; their English values in `en.json` are the Transifex source text. [`.tx/config`](.tx/config) maps the `Editor interface` resource to these files. Install the [Transifex CLI](https://developers.transifex.com/docs/cli) and load `TX_TOKEN` from the ignored `.env.local` into your shell (`set -a; . ./.env.local; set +a`). After changing UI strings, run `npm run i18n:extract`, add the English text for any new keys to `en.json`, and check with `npm run i18n:check`. Then run `tx push -s` to upload English source text and `tx push -t -l ru` to upload the generated Russian translations. To review community translations, run `tx pull -t -l de,fr`, inspect the changed JSON files, and run `npm run i18n:check`. Never commit the token. To offer German or French in the app, also add the downloaded dictionary to `src/i18n/index.ts` and update its language list and locale handling.
 
 ## Development
 

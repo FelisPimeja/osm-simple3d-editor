@@ -1,5 +1,5 @@
 // Проверка словарей src/i18n/locales: у каждой строки интерфейса — tr('…'), trn(n, '…') в src и текста index.html —
-// есть английский перевод, в словарях нет строк, которых больше нет в коде, ru.json (исходник) актуален.
+// есть английский текст, в словарях нет строк, которых больше нет в коде, ru.json актуален.
 // npm run i18n:check — проверка; npm run i18n:extract (--write) — пересобрать ru.json из кода.
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -58,7 +58,7 @@ for (const m of html.matchAll(/>([^<]+)</g)) { const k = decode(m[1].trim()); if
 for (const m of html.matchAll(/\s(?:title|aria-label|placeholder)="([^"]*)"/g)) { const k = decode(m[1]); if (CY.test(k)) used.set(k, 'index.html'); }
 
 const dir = join(root, 'src/i18n/locales');
-// ru.json — исходный файл для сервисов перевода: те же строки, что в коде, «ключ → ключ»
+// ru.json — русский перевод для Transifex: те же строки, что в коде, «ключ → ключ»
 const source = Object.fromEntries([...used.keys()].map((k) => [k, k]));
 const sourceText = JSON.stringify(source, null, 2) + '\n';
 if (process.argv.includes('--write')) writeFileSync(join(dir, 'ru.json'), sourceText);

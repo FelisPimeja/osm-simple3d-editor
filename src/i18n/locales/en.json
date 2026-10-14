@@ -26,6 +26,7 @@
   "Перезагрузить видимые тайлы": "Reload visible tiles",
   "Отладка: заново запросить из OSM API тайлы на экране": "Debug: request the tiles on screen from the OSM API again",
   "FPS: — · треугольников: —": "FPS: — · triangles: —",
+  "Приблизьте карту для просмотра и редактирования.": "Zoom in to view and edit the map.",
   "Приблизьте карту (z ≥ 15) и кликните по зданию.": "Zoom in (z ≥ 15) and click a building.",
   "Шаг назад": "Step back",
   "Воспроизвести": "Play",

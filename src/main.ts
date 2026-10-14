@@ -16,6 +16,7 @@ import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type IndoorCategory } from './osm/indoor-categories';
 import { ViewCube } from './view/view-cube';
+import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
 import { applyBasemap, applyGpsTraces, BasemapButton, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
@@ -147,6 +148,9 @@ if (import.meta.env.PROD) maplibregl.setWorkerUrl(new URL('maplibre/maplibre-gl-
 /** Хэш карты из адреса до создания карты: в режиме здания наклон бывает больше, чем MapLibre примет вне его. */
 const startHash = location.hash.slice(1).split('/').map(Number);
 const startHashValid = startHash.length >= 3 && startHash.every(Number.isFinite);
+const savedCamera = startHashValid ? undefined : await loadCamera();
+const mapContainer = document.getElementById('map')!;
+const worldZoom = Math.min(0, Math.log2(Math.min(mapContainer.clientWidth, mapContainer.clientHeight) / 512));
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -155,10 +159,11 @@ const map = new maplibregl.Map({
   style: server().style, // подложка — своя у каждого сервера; смена сервера с другой подложкой перезагружает страницу
   // Shift+клик — множественное выделение; зум рамкой с Shift перехватывал бы клик
   boxZoom: false,
-  center: [37.6205, 55.7535],
-  zoom: 16,
-  pitch: 60,
-  bearing: -20,
+  center: savedCamera?.center ?? [0, 0],
+  zoom: savedCamera?.zoom ?? Math.max(-2, worldZoom),
+  minZoom: -2,
+  pitch: savedCamera?.pitch ?? 0,
+  bearing: savedCamera?.bearing ?? 0,
   hash: true,
   maxPitch: 175, // хэш из ссылки на здание (наклон до 175°) не должен отбрасываться; потом ограничит orbit
   // Без «прилипания к северу»: после сдвига или зума при азимуте в ±7° MapLibre сам плавно доворачивал камеру на север
@@ -177,6 +182,8 @@ const viewCube = new ViewCube({
 });
 map.addControl(viewCube, 'top-right');
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
+// Браузер запросит доступ к местоположению при нажатии штатной кнопки MapLibre.
+map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: false }));
 // В режиме здания вместо компаса — кнопка куба вида (показать / скрыть), выбор запоминается
 const cubeBtn = document.createElement('button');
 cubeBtn.type = 'button';
@@ -519,7 +526,15 @@ map.on('load', () => {
   if (josmMode) void loadJosm();
 });
 
-map.on('moveend', () => { refreshOverpass(); scheduleIndoorBadges(); });
+let cameraWrite = Promise.resolve();
+map.on('moveend', () => {
+  refreshOverpass(); scheduleIndoorBadges(); showOverpassStatus();
+  if (!focus && !new URLSearchParams(location.search).has('edit')) {
+    const c = map.getCenter();
+    const camera = { center: [c.lng, c.lat] as [number, number], zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+    cameraWrite = cameraWrite.then(() => saveCamera(camera));
+  }
+});
 
 // Все здания белым — тайловые и так белые, переключаем только слои с данными OSM
 monoToggle.checked = gfx.monochrome;
@@ -650,6 +665,7 @@ function showOverpassStatus() {
   updateOverpassIndicator();
   updateDraftStyle();
   if (uploading || Date.now() < messageUntil) return;
+  if (!focus && map.getZoom() < CACHED_MIN_ZOOM) return panelStatus(tr('Приблизьте карту для просмотра и редактирования.'));
   const src = overpass.sourceLabel;
   if (!overpass.enabled) return panelStatus(tr('Здания из тайлов. С z ≥ {z} — из {src}.', { z: OVERPASS_MIN_ZOOM, src }));
   const { ready, total, loading, waiting } = overpass.status();

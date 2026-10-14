@@ -130,8 +130,8 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
   background: rgba(255,255,255,.96); box-shadow: 0 2px 8px rgba(0,0,0,.18); font-size: 14px; line-height: 1.35; pointer-events: none;
 }
 #statusbar:not(:has(#status:not(:empty), #op-indicator:not([hidden]), #loading-card:not([hidden]))) { display: none; }
-/* Вторая строка: индикатор тайлов и статус */
-.statusbar-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 10px; }
+/* Индикатор загрузки и подробный статус — каждый на своей строке. */
+.statusbar-row { display: flex; flex-direction: column; align-items: center; gap: 2px; max-width: 100%; }
 .statusbar-row:not(:has(#status:not(:empty), #op-indicator:not([hidden]))) { display: none; }
 #status { margin: 0; color: #444; text-align: center; }
 #status:empty { display: none; }
@@ -151,8 +151,9 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 #info pre { font-size: 12px; white-space: pre-wrap; margin: 0; }
 #info button { padding: 4px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
 #op-indicator {
-  display: flex; align-items: center; gap: 6px; flex: none; padding: 2px 8px; border-radius: 10px; color: #333; pointer-events: auto;
+  display: flex; align-items: center; justify-content: center; gap: 6px; max-width: 100%; padding: 2px 8px; border-radius: 10px; color: #333; text-align: center; pointer-events: auto;
 }
+#op-indicator .label { min-width: 0; overflow-wrap: anywhere; }
 #op-indicator[hidden] { display: none; }
 #op-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; }
 #op-indicator[data-state="ready"] .dot { background: #16a34a; }
@@ -298,6 +299,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .maplibregl-ctrl-cube.active { color: #2f7cff; }
 .vc-mode .maplibregl-ctrl-group button.maplibregl-ctrl-cube { display: block; }
 .vc-mode .maplibregl-ctrl-group button.maplibregl-ctrl-compass { display: none; }
+.vc-mode .maplibregl-ctrl-geolocate { display: none; }
 /* Кнопка подложки и список (карта / снимки) */
 .maplibregl-ctrl-group.basemap-group { position: relative; }
 .maplibregl-ctrl-group button.maplibregl-ctrl-basemap { color: #333; }

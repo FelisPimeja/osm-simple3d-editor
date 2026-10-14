@@ -373,7 +373,7 @@ const issuesEl = document.getElementById('issues')!;
 const issuesCount = document.getElementById('issues-count')!;
 const issuesAll = document.getElementById('issues-all') as HTMLInputElement;
 const issuesFixAll = document.getElementById('issues-fix-all') as HTMLButtonElement;
-try { issuesAll.checked = localStorage.getItem('osm3d.issues-all') === '1'; } catch { /* без хранилища — выключено */ }
+try { issuesAll.checked = localStorage.getItem('osm3d.issues-all') !== '0'; } catch { issuesAll.checked = true; }
 const outlinerEl = document.getElementById('outliner')!;
 const outlinerCount = document.getElementById('outliner-count')!;
 /** Скрытые глазиком части в режиме здания — только показ, на данные не влияет. */
@@ -403,7 +403,8 @@ const indoorPois = new IndoorPois(map, overpassLayer, (f) => selectIndoor(f));
 const overpass = new OverpassTiles(map, overpassLayer, () => {
   updateTileFilter();
   showOverpassStatus();
-  if (focus) { renderLevels(); renderIssues(); } // пришли indoor-объекты здания
+  if (focus) { renderLevels(); renderIssues(); }
+  else scheduleMapIssues(); // пришли здания видимых тайлов
   scheduleIndoorBadges();
   tileBorders.setTiles(overpass.tiles());
   scheduleRoads();
@@ -1377,6 +1378,7 @@ const staleKeys = new Set<string>();
 function exitFocus() {
   if (!focus) return;
   focus = undefined;
+  mapIssuesDirty = true;
   setEditParam(undefined);
   if (tilesStale) { tilesStale = false; overpass.rerenderFeatures(staleKeys); staleKeys.clear(); }
   focusHidden.clear();
@@ -1393,6 +1395,7 @@ function exitFocus() {
   updateSnap(undefined);
   orbit.setUnderground(false);
   overpassLayer.setFocus(undefined);
+  scheduleMapIssues();
   const restore = (ls: typeof focusHiddenLayers) => {
     for (const { id, visibility } of ls) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility as 'visible' | 'none');
   };
@@ -4693,6 +4696,9 @@ let outlinerGroups = new Map<string, string[]>();
  */
 /** Проблемы здания режима здания — пересчитываются вместе со списком частей. */
 let focusIssues: Issue[] = [];
+let mapIssues: Issue[] = [];
+let mapIssuesDirty = true;
+let mapIssuesTimer: ReturnType<typeof setTimeout> | undefined;
 /** Проблемы в порядке списка панели (кнопки «Исправить» ссылаются по номеру). */
 let shownIssues: Issue[] = [];
 /** Проблема, исправление которой показано каркасом (наведение на строку «Проверки»). */
@@ -4713,6 +4719,38 @@ function buildingIssues(g: BuildingGroup): Issue[] {
   return issues;
 }
 
+/** Проверки объектов, реально показанных в режиме карты; неполные отношения проверяем по загруженным членам. */
+function visibleMapIssues(): Issue[] {
+  const rendered = overpass.renderedFeatures().map((r) => r.feature);
+  const seen = new Set<string>();
+  const groups = new Map<string, BuildingGroup>();
+  const singles: Feature3D[] = [];
+  for (const f of rendered) {
+    if (seen.has(f.key) || session.isDeleted(f.key)) continue;
+    seen.add(f.key);
+    const group = groupOf(f.key);
+    if (group) groups.set(group.key, group);
+    else singles.push(f);
+  }
+  const issues = singles.flatMap((f) => [...validateTags(f.key, f.tags), ...validateGeometry(f)]);
+  for (const group of groups.values()) {
+    const available = groupFeatures(group).filter((f) => !session.isDeleted(f.key));
+    if (available.length === group.members.length) issues.push(...buildingIssues(group));
+    else for (const f of available) issues.push(...validateTags(f.key, f.tags), ...validateGeometry(f));
+  }
+  return issues;
+}
+
+function scheduleMapIssues() {
+  if (focus || mapIssuesTimer) return;
+  mapIssuesDirty = true;
+  mapIssuesTimer = setTimeout(() => {
+    mapIssuesTimer = undefined;
+    if (!focus) renderIssues();
+  }, 150);
+}
+map.on('moveend', scheduleMapIssues);
+
 /** Значок проблем в строке списка: ошибка — красный, предупреждение — жёлтый; текст — во всплывающей подсказке. */
 function issueMark(list: Issue[] | undefined): string {
   if (!list?.length) return '';
@@ -4725,16 +4763,18 @@ function renderIssues() {
   const simpleIssues = focus ? buildingIssues(focus) : [];
   const indoorIssues = focus ? buildingIndoor(focus).flatMap(validateIndoor) : [];
   focusIssues = [...simpleIssues, ...indoorIssues];
+  if (!focus && mapIssuesDirty) { mapIssues = visibleMapIssues(); mapIssuesDirty = false; }
+  const currentIssues = focus ? focusIssues : mapIssues;
   // Список пересобирается — строки под курсором уже нет, превью исправления снимаем
   if (fixPreviewed) { fixPreviewed = undefined; overpassLayer.setFixPreview(undefined); }
   highlightIssues();
-  issuesPanel.hidden = !focus || !focusIssues.length;
+  issuesPanel.hidden = !currentIssues.length;
   if (issuesPanel.hidden) { issuesEl.innerHTML = ''; return; }
-  const errors = focusIssues.filter((i) => i.level === 'error').length;
-  const warnings = focusIssues.length - errors;
+  const errors = currentIssues.filter((i) => i.level === 'error').length;
+  const warnings = currentIssues.length - errors;
   issuesCount.textContent = `(${[errors ? tr('ошибок {n}', { n: errors }) : '', warnings || !errors ? tr('предупреждений {n}', { n: warnings }) : ''].filter(Boolean).join(', ')})`;
   const sorted = (list: Issue[]) => [...list].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
-  shownIssues = [...sorted(simpleIssues), ...sorted(indoorIssues)];
+  shownIssues = focus ? [...sorted(simpleIssues), ...sorted(indoorIssues)] : sorted(mapIssues);
   const group = (title: string, list: Issue[], start: number) => list.length ? `<section class="issue-group">
     <h2>${title} <span class="hint">(${list.length})</span></h2>
     <ul class="issue-list">${list.map((i, offset) => {
@@ -4744,10 +4784,10 @@ function renderIssues() {
         <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span>
         ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</li>`;
     }).join('')}</ul></section>` : '';
-  issuesEl.innerHTML = group('Simple 3D', shownIssues.slice(0, simpleIssues.length), 0)
-    + group('Indoor', shownIssues.slice(simpleIssues.length), simpleIssues.length);
+  issuesEl.innerHTML = focus ? group('Simple 3D', shownIssues.slice(0, simpleIssues.length), 0)
+    + group('Indoor', shownIssues.slice(simpleIssues.length), simpleIssues.length) : group('Simple 3D', shownIssues, 0);
   const fixable = shownIssues.filter((i) => i.fix).length;
-  issuesFixAll.hidden = !fixable;
+  issuesFixAll.hidden = !focus || !fixable;
   issuesFixAll.textContent = tr('Применить все исправления ({n})', { n: fixable });
 }
 
@@ -4767,9 +4807,14 @@ function scrollToSelectedIssues() {
 }
 
 /** «Подсветить все»: рёбра объёмов с проблемами (ошибка важнее предупреждения). */
+let highlightedIssueLevels = new Map<string, 'error' | 'warning'>();
 function highlightIssues() {
   const levels = new Map<string, 'error' | 'warning'>();
-  if (issuesAll.checked && focus) for (const i of focusIssues) if (levels.get(i.key) !== 'error') levels.set(i.key, i.level);
+  if (issuesAll.checked) for (const issue of focus ? focusIssues : mapIssues) {
+    for (const key of [issue.key, issue.other]) if (key && levels.get(key) !== 'error') levels.set(key, issue.level);
+  }
+  if (levels.size === highlightedIssueLevels.size && [...levels].every(([key, level]) => highlightedIssueLevels.get(key) === level)) return;
+  highlightedIssueLevels = levels;
   overpassLayer.setIssueHighlight(levels);
 }
 
@@ -4796,7 +4841,7 @@ function applyFixes(list: Issue[]) {
   if (!tags.size) return;
   const edits: ObjectEdit[] = [...tags].map(([key, t]) => ({ key, tags: t }));
   for (const [key, keys] of removals) {
-    const group = editGroups.get(key);
+    const group = entity(key) as EditGroup | undefined;
     if (group) edits.push({ key, tags: { ...group.tags }, members: group.relMembers.filter((m) => !keys.has(`${m.type}/${m.ref}`)) });
   }
   session.editMany(edits);
@@ -5657,6 +5702,7 @@ function describeGroup(g: BuildingGroup): string {
 
 /** После правки тегов: пересобрать меши, обновить панель и список изменений. */
 function onSessionChange(keys: string[]) {
+  mapIssuesDirty = true;
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
     indoorEditRev++;

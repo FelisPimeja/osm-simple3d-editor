@@ -4184,6 +4184,7 @@ function selectIndoor(f: IndoorFeature | undefined, add = false) {
   } else indoorSelection = f ? [f] : [];
   selectedIndoor = indoorSelection[0];
   overpassLayer.setIndoorSelection(indoorSelection.map((x) => x.key));
+  indoorPois.setSelection(indoorSelection.map((x) => x.key));
   if (!indoorSelection.length) { if (add) infoEl.innerHTML = ''; return; }
   if (selection.length) select(undefined);
   if (indoorSelection.length > 1) { renderIndoorMulti(indoorSelection); return; }
@@ -4572,6 +4573,7 @@ function renderLevelsImpl() {
     shownIndoor = [];
     selectedIndoor = undefined;
     indoorSelection = [];
+    indoorPois.setSelection([]);
     if (levelsFocusKey !== undefined) { linkLevel = undefined; setLevelParam(undefined); } // вышли из режима здания
     currentLevel = levelsFocusKey = undefined;
     levelSignature = '';

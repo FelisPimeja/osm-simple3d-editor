@@ -529,6 +529,13 @@ export class BuildingsLayer implements CustomLayerInterface {
       dot.renderOrder = 5;
       dot.frustumCulled = false;
       root.add(dot);
+      if (sel) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.045, 8, 24), DOOR_SELECTED_MATERIAL);
+        ring.position.set(x, y, d.z + 0.08);
+        ring.renderOrder = 6;
+        ring.frustumCulled = false;
+        root.add(ring);
+      }
     }
     this.doorObj = root;
     g.scene.add(root);

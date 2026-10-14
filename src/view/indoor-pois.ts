@@ -65,7 +65,8 @@ export function poiIcon(t: Record<string, string>): string | undefined {
 
 export class IndoorPois {
   private readonly root: HTMLDivElement;
-  private items: { el: HTMLElement; local: THREE.Vector3 }[] = [];
+  private items: { key: string; el: HTMLElement; local: THREE.Vector3 }[] = [];
+  private selected = new Set<string>();
   private signature = '';
   private byEl = new Map<HTMLElement, IndoorFeature>();
 
@@ -84,6 +85,12 @@ export class IndoorPois {
     }, { passive: false });
     map.getContainer().appendChild(this.root);
     map.on('render', () => this.place());
+  }
+
+  /** Подсветка выбранных точек; #poi у значка помещения совпадает с ключом самого помещения. */
+  setSelection(keys: string[]) {
+    this.selected = new Set(keys.map((key) => key.replace(/#poi$/, '')));
+    for (const { key, el } of this.items) el.classList.toggle('selected', this.selected.has(key.replace(/#poi$/, '')));
   }
 
   /** Значки этажа: объекты kind=poi с точкой, z — высота пола, м. Пустой список — убрать. */
@@ -106,8 +113,9 @@ export class IndoorPois {
       el.title = [t.name ?? t.ref, t.shop ?? t.amenity ?? t.office ?? t.door ?? t.entrance, f.key.replace('#poi', '')].filter(Boolean).join(' · ');
       this.root.appendChild(el);
       this.byEl.set(el, f);
-      this.items.push({ el, local: new THREE.Vector3(local[0], local[1], z + 0.3) });
+      this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], z + 0.3) });
     }
+    this.setSelection([...this.selected]);
     this.place();
   }
 

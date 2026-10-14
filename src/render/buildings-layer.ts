@@ -77,7 +77,7 @@ const ESCALATOR_SIDE = new THREE.MeshLambertMaterial({ color: 0xffffff, side: TH
 const ESCALATOR_STEP = new THREE.MeshLambertMaterial({ color: 0x747c82, side: THREE.DoubleSide });
 const ESCALATOR_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xb9d3dc, side: THREE.DoubleSide,
   transparent: true, opacity: 0.4, depthWrite: false });
-const ESCALATOR_HANDRAIL = new THREE.MeshLambertMaterial({ color: 0x656d73 });
+const ESCALATOR_HANDRAIL = new LineMaterial({ color: 0x656d73, linewidth: 5 });
 
 /** План этажа для слоя. below — этажи под вторым светом (видны сквозь пустоты voids в перекрытии). */
 export interface IndoorLevel {
@@ -770,7 +770,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.indoorObj.parent?.remove(this.indoorObj);
       this.indoorObj.traverse((o) => {
         if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments || o instanceof Line2) o.geometry.dispose();
-        if (o instanceof Line2) o.material.dispose();
+        if (o instanceof Line2 && o.material !== ESCALATOR_HANDRAIL) o.material.dispose();
       });
       this.indoorObj = undefined;
     }
@@ -959,27 +959,26 @@ export class BuildingsLayer implements CustomLayerInterface {
         ...Array.from({ length: 9 }, (_, i) => length - landing - bend * i / 8)].sort((a, b) => a - b))];
       const sideEdge = (p: ReturnType<typeof at>, sign: number, z: number): [number, number, number] =>
         [p.x + sign * (halfWidth + 0.08) * p.nx, p.y + sign * (halfWidth + 0.08) * p.ny, z];
+      const canvas = this.map!.getCanvas();
+      const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+      ESCALATOR_HANDRAIL.linewidth = 5 * dpr;
+      ESCALATOR_HANDRAIL.resolution.set(canvas.width, canvas.height);
       for (const sign of [-1, 1]) {
-        const path: THREE.Vector3[] = [];
+        const rail: number[] = [];
         for (let i = 0; i < railDistances.length; i++) {
           const d = railDistances[i], p = at(d), z = railZ(d);
-          const [x, y] = sideEdge(p, sign, z);
-          path.push(new THREE.Vector3(x, y, z));
+          rail.push(...sideEdge(p, sign, z - 0.045));
           if (i) {
             const pd = railDistances[i - 1], prev = at(pd);
             quad(balustrades, sideEdge(prev, sign, prev.z + 0.08), sideEdge(p, sign, p.z + 0.08),
               sideEdge(p, sign, z - 0.045), sideEdge(prev, sign, railZ(pd) - 0.045));
           }
         }
-        const curve = new THREE.CatmullRomCurve3(path, false, 'centripetal');
-        const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(12, path.length * 3), 0.065, 8, false), ESCALATOR_HANDRAIL);
-        tube.frustumCulled = false;
-        root.add(tube);
-        for (const end of [path[0], path.at(-1)!]) {
-          const cap = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 6), ESCALATOR_HANDRAIL);
-          cap.position.copy(end);
-          root.add(cap);
-        }
+        const geometry = new LineGeometry();
+        geometry.setPositions(rail);
+        const line = new Line2(geometry, ESCALATOR_HANDRAIL);
+        line.frustumCulled = false;
+        root.add(line);
       }
       const mesh = (positions: number[], material: THREE.Material) => {
         if (!positions.length) return;

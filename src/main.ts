@@ -3951,6 +3951,23 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   });
 }
 
+/** Узел двери внутри контура здания, достаточно далеко от наружной стены для безопасного автофикса entrance=yes. */
+function isInteriorDoor(f: IndoorFeature, g: BuildingGroup): boolean {
+  if (!f.point || f.kind !== 'poi' || f.tags.entrance !== 'yes') return false;
+  const [x, y] = f.point;
+  const metresPerLon = 111_320 * Math.cos(y * Math.PI / 180);
+  const farFromEdge = (ring: LonLat[]) => ring.every((a, i) => {
+    const b = ring[(i + 1) % ring.length];
+    const dx = (b[0] - a[0]) * metresPerLon, dy = (b[1] - a[1]) * 111_320;
+    const px = (x - a[0]) * metresPerLon, py = (y - a[1]) * 111_320;
+    const t = Math.max(0, Math.min(1, (px * dx + py * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(px - t * dx, py - t * dy) > 0.5;
+  });
+  return groupFeatures(g).filter((b) => b.kind === 'building').some((b) => b.polygons.some((p) =>
+    pointInRing(f.point!, p.outer) && !p.inners.some((hole) => pointInRing(f.point!, hole))
+    && farFromEdge(p.outer) && p.inners.every(farFromEdge)));
+}
+
 /**
  * Дополнить этажи по этажности целыми этажами из indoor-данных (подвал без building:levels:underground и т. п.):
  * высота этажа — как у ближайшего известного, без этажности — LEVEL_HEIGHT от земли.
@@ -4780,7 +4797,8 @@ function issueMark(list: Issue[] | undefined): string {
 /** Панель «Проверка»: проблемы здания режима здания, клик — выделить объект (Shift — оба пересекающихся). */
 function renderIssues() {
   const simpleIssues = focus ? buildingIssues(focus) : [];
-  const indoorIssues = focus ? buildingIndoor(focus).flatMap(validateIndoor) : [];
+  const focusedBuilding = focus;
+  const indoorIssues = focusedBuilding ? buildingIndoor(focusedBuilding).flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding))) : [];
   focusIssues = [...simpleIssues, ...indoorIssues];
   if (!focus && mapIssuesDirty) { mapIssues = visibleMapIssues(); mapIssuesDirty = false; }
   const currentIssues = focus ? focusIssues : mapIssues;
@@ -4949,7 +4967,10 @@ function changeIssues(keys: string[]): Issue[] {
   for (const k of keys) {
     if (indoorEdited.has(k)) {
       const f = session.get(k);
-      if (f) out.push(...validateIndoor({ key: k, tags: f.tags }));
+      if (f) {
+        const indoor = buildingIndoorFor(k);
+        out.push(...validateIndoor({ key: k, tags: f.tags }, !!indoor && !!focus && isInteriorDoor(indoor, focus)));
+      }
       continue;
     }
     const g = groupOf(k) ?? soloGroup(k);

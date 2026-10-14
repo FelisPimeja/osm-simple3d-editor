@@ -213,11 +213,11 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
 }
 
 /** Ошибки Simple Indoor Tagging и страниц его ключей. Проверяем только загруженные indoor-объекты. */
-export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>): Issue[] {
+export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorDoor = false): Issue[] {
   if (f.key.endsWith('#poi')) return []; // значок уже представлен площадным объектом
   const { key, tags: t } = f;
   const out: Issue[] = [];
-  const add = (level: IssueLevel, code: string, text: string) => out.push({ key, level, code, text });
+  const add = (level: IssueLevel, code: string, text: string, fix?: Fix) => out.push({ key, level, code, text, ...(fix ? { fix } : {}) });
   const space = ['room', 'area', 'corridor', 'wall', 'level', 'column'].includes(t.indoor);
 
   if (t.inside !== undefined) add('warning', 'indoor-key', tr('inside=* — неустоявшийся ключ; проверьте, нужен ли здесь indoor=*.'));
@@ -228,7 +228,11 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>): Issue[] 
     tr('room=* описывает назначение помещения; проверьте indoor=room или indoor=area.'));
   if (t['building:part'] !== undefined && space) add('warning', 'indoor-key',
     tr('building:part=* описывает объём здания, а не помещение indoor=*.'));
-  if (t.indoor === 'door' && t.door === undefined) add('warning', 'indoor-door',
+  if (t.entrance === 'yes' && (t.indoor === 'door' || interiorDoor)) add('warning', 'indoor-door',
+    tr('Внутренняя дверь: entrance=yes обозначает вход в здание; используйте indoor=door и door=*.'),
+    { label: t.door === undefined ? tr('удалить entrance, добавить door=yes') : tr('удалить entrance'),
+      tags: { entrance: undefined, indoor: 'door', ...(t.door === undefined ? { door: 'yes' } : {}) } });
+  if (t.indoor === 'door' && t.door === undefined && t.entrance !== 'yes') add('warning', 'indoor-door',
     tr('Для внутренней двери indoor=door укажите также door=* (door=no для открытого прохода).'));
   if (t.door === 'loadingdock') add('warning', 'indoor-door', tr('door=loadingdock — погрузочную платформу обозначают amenity=loading_dock.'));
   if (t.entrance === 'gate') add('warning', 'indoor-door', tr('entrance=gate — для ворот проверьте barrier=gate.'));

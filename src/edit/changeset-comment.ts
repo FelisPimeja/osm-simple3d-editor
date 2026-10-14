@@ -25,6 +25,16 @@ interface BuildingEdits {
   deleted?: boolean;
   /** Исправлены ошибки, найденные проверкой. */
   fixed?: boolean;
+  indoorTags?: boolean;
+}
+
+/** Однозначное исправление входа, ошибочно поставленного на внутренней двери. */
+function fixesIndoorDoor(c: TagChange): boolean {
+  return !c.created && !c.deleted && !c.members && !c.nodeMoves?.length && !c.wayNodes
+    && (c.before.indoor === undefined || c.before.indoor === 'door') && c.after.indoor === 'door'
+    && c.before.entrance === 'yes' && c.after.entrance === undefined
+    && c.after.door !== undefined
+    && c.diff.every((d) => d.tag === 'entrance' || d.tag === 'door' || d.tag === 'indoor');
 }
 
 /**
@@ -33,6 +43,7 @@ interface BuildingEdits {
  * Логику пунктов будем ветвить по мере появления новых инструментов.
  */
 export function suggestComment(changes: TagChange[], ctx: CommentContext): string {
+  if (changes.length && changes.every(fixesIndoorDoor)) return tr('Исправление тегов indoor');
   const buildings = new Map<string, BuildingEdits>();
   const loose: BuildingEdits = { added: 0, removed: 0, attributes: false, moved: false };
   const edits = (key: string | undefined) => {
@@ -61,6 +72,7 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
     // Удалённая часть уже учтена как изменение состава её отношения
     if (c.deleted) { if (!removedFromGroups.has(c.key)) e.deleted = true; continue; }
     if (c.diff.some((d) => !d.tag.startsWith('('))) e.attributes = true;
+    if (fixesIndoorDoor(c)) e.indoorTags = true;
     if (c.nodeMoves?.length) e.moved = true;
     if (!c.created && ctx.fixedIssues?.(c.key)) e.fixed = true;
   }
@@ -85,7 +97,7 @@ export function suggestComment(changes: TagChange[], ctx: CommentContext): strin
   const all: BuildingEdits = { added: 0, removed: 0, attributes: false, moved: false };
   for (const e of buildings.values()) {
     all.added += e.added; all.removed += e.removed;
-    all.attributes ||= e.attributes; all.moved ||= e.moved; all.deleted ||= e.deleted; all.fixed ||= e.fixed;
+    all.attributes ||= e.attributes; all.moved ||= e.moved; all.deleted ||= e.deleted; all.fixed ||= e.fixed; all.indoorTags ||= e.indoorTags;
   }
   const allNew = [...buildings.keys()].every((k) => created.has(k));
   const head = (list: string) => allNew
@@ -117,5 +129,6 @@ function points(e: BuildingEdits, parts: boolean): string[] {
   if (e.deleted) out.push(parts ? tr('* удалены отдельные части') : tr('* удалены отдельные здания'));
   if (e.moved) out.push(parts ? tr('* перемещены отдельные части') : tr('* перемещены отдельные здания'));
   if (e.fixed) out.push(tr('* исправление ошибок'));
+  if (e.indoorTags) out.push(tr('* исправление тегов indoor'));
   return out;
 }

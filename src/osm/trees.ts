@@ -5,7 +5,7 @@ import { joinRings, pointInRing, type LonLat } from './model';
 export type LeafType = 'broadleaved' | 'needleleaved' | 'mixed';
 
 /** Отдельное дерево (natural=tree): размеры — из тегов, если указаны, м. */
-export interface TreePoint { p: LonLat; leaf?: LeafType; height?: number; crown?: number; trunk?: number }
+export interface TreePoint { key?: string; tags?: Record<string, string>; p: LonLat; leaf?: LeafType; height?: number; crown?: number; trunk?: number }
 /** Ряд деревьев (natural=tree_row) — ломаная. */
 export interface TreeRow { key: string; line: LonLat[]; leaf?: LeafType; height?: number; crown?: number }
 /** Лес (natural=wood, landuse=forest): кольца без повторённой замыкающей точки. */
@@ -68,7 +68,7 @@ export function parseTrees(elements: OsmElement[]): TreeData {
     if (n.tags?.natural !== 'tree') continue;
     const circ = meters(n.tags.circumference, 30);
     points.push({
-      p: [n.lon, n.lat], leaf: leafOf(n.tags), height: meters(n.tags.height ?? n.tags.est_height, 150),
+      key: `node/${n.id}`, tags: n.tags, p: [n.lon, n.lat], leaf: leafOf(n.tags), height: meters(n.tags.height ?? n.tags.est_height, 150),
       crown: meters(n.tags.diameter_crown, 60), ...(circ ? { trunk: circ / (2 * Math.PI) } : {}),
     });
   }

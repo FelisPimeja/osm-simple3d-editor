@@ -52,9 +52,9 @@ const REMOTE_PART_GAP = 20;
  * Дубликат объёма: две части совпадают по высоте (общий интервал — от этой доли большего) и в плане (DUPLICATE_PLAN). Просто пересечения не ищем: башня с min_height=0 внутри основания —
  * обычная практика обрисовки, это не ошибка.
  */
-const DUPLICATE_SHARE = 0.8;
-/** …а в плане — от этой доли каждой (вложенные ярусы кокошников отличаются на 15% — это не дубли). */
-const DUPLICATE_PLAN = 0.9;
+const DUPLICATE_SHARE = 0.98;
+/** …а в плане — от этой доли каждой: схожие, но разные ярусы не считаем дублями. */
+const DUPLICATE_PLAN = 0.99;
 
 const KNOWN_ROOFS = new Set(ROOF_SHAPES);
 const LENGTH_TAGS = ['height', 'min_height', 'roof:height'];
@@ -444,9 +444,8 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
   // Висящая часть: без min_height внутри части, начинающейся выше земли, — столб от земли сквозь неё
   for (const [key, fl] of floatingParts(parts.filter((f) => !broken.has(f.key)))) {
     out.push({ key, other: fl.on, level: 'warning', code: 'floating',
-      text: tr('Нет min_height, а в плане часть целиком внутри частей, которые начинаются выше земли (с {min} м): выходит столб от земли. Похоже, часть стоит на {other} (верх {seat} м).',
-        { other: fl.on, min: fmt(fl.lift), seat: fmt(fl.seat) }),
-      fix: { label: `min_height=${fmt(fl.seat)}`, tags: { min_height: fmt(fl.seat) } } });
+      text: tr('Часть без min_height вложена в приподнятые части (низ с {min} м). Проверьте, должна ли она доходить до земли.',
+        { min: fmt(fl.lift) }) });
   }
 
   // Две части в одном объёме: почти совпадают в плане и по высоте (копия, наложенная поверх)
@@ -461,6 +460,7 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
     for (let j = i + 1; j < boxes.length; j++) {
       const b = boxes[j];
       if (a.e <= b.w || b.e <= a.w || a.n <= b.s || b.n <= a.s) continue;
+      if (Math.abs(a.min - b.min) > 0.1 || Math.abs(a.top - b.top) > 0.1) continue;
       const dz = Math.min(a.top, b.top) - Math.max(a.min, b.min);
       if (dz < 0.5 || dz < Math.max(a.top - a.min, b.top - b.min) * DUPLICATE_SHARE) continue;
       const x = safe(() => multiArea(polygonClipping.intersection(multi(a.f), multi(b.f))));

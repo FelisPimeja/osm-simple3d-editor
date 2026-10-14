@@ -480,9 +480,11 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Выбрать этаж: cut — высота среза, items — помещения этажа; undefined — всё здание без среза. */
   /** Выбранный indoor-объект этажа: пол залит цветом выделения, скрытые рёбра — пунктиром (как у частей). */
   private indoorSelected: string[] = [];
+  private indoorIssueHighlighted: string[] = [];
   private indoorSelObj?: THREE.Group;
   /** Точные рёбра вырезанных проёмов, собранные при построении стен текущего этажа. */
   private doorOpeningEdges = new Map<string, Map<string, number[]>>();
+  private wallTopSegments: { ax: number; ay: number; bx: number; by: number; za: number; zb: number }[] = [];
 
   /** Точки дверей этажа (узлы OSM): маркеры на линии основания стены в проёме. */
   private doors: { key: string; at: LonLat; z: number }[] = [];
@@ -525,7 +527,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const d of this.doors) {
       const at = this.doorPreview?.key === d.key ? this.doorPreview.at : d.at;
       const [x, y] = g.toLocal(at);
-      const sel = this.indoorSelected.includes(d.key);
+      const sel = this.indoorSelected.includes(d.key) || this.indoorIssueHighlighted.includes(d.key);
       const dot = new THREE.Mesh(DOOR_GEO, sel ? DOOR_SELECTED_MATERIAL : DOOR_MATERIAL);
       dot.position.set(x, y, d.z + 0.04);
       dot.renderOrder = 5;
@@ -573,20 +575,32 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  setIndoorIssueHighlight(keys: string[]) {
+    if (keys.length === this.indoorIssueHighlighted.length && keys.every((key) => this.indoorIssueHighlighted.includes(key))) return;
+    this.indoorIssueHighlighted = keys;
+    this.applyDoors();
+    this.applyIndoorSelection();
+    this.map?.triggerRepaint();
+  }
+
   private applyIndoorSelection() {
     if (this.indoorSelObj) {
       this.indoorSelObj.parent?.remove(this.indoorSelObj);
-      this.indoorSelObj.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose(); });
+      this.indoorSelObj.traverse((o) => {
+        if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments || o instanceof LineSegments2) o.geometry.dispose();
+        if (o instanceof LineSegments2) o.material.dispose();
+      });
       this.indoorSelObj = undefined;
     }
     const g = this.groups.get(FOCUS_GROUP);
-    const items = this.level?.items.filter((i) => this.indoorSelected.includes(i.key)) ?? [];
-    if (!g || (!items.length && !this.indoorSelected.some((key) => this.doorOpeningEdges.has(key)))) return;
+    const keys = new Set([...this.indoorSelected, ...this.indoorIssueHighlighted]);
+    const items = this.level?.items.filter((i) => keys.has(i.key)) ?? [];
+    if (!g || (!items.length && ![...keys].some((key) => this.doorOpeningEdges.has(key)))) return;
     const root = new THREE.Group();
     this.indoorSelObj = root;
     g.scene.add(root);
     for (const it of items) this.addIndoorHighlight(root, g, it);
-    for (const key of this.indoorSelected) {
+    for (const key of keys) {
       const edges = [...(this.doorOpeningEdges.get(key)?.values() ?? [])].flat();
       if (!edges.length) continue;
       const geo = new THREE.BufferGeometry();
@@ -639,16 +653,64 @@ export class BuildingsLayer implements CustomLayerInterface {
       root.add(fill);
       for (const r of [p.outer, ...p.inners]) {
         const rp = r.map(g.toLocal);
-        for (let i = 0; i < rp.length; i++) lines.push(rp[i][0], rp[i][1], z, rp[(i + 1) % rp.length][0], rp[(i + 1) % rp.length][1], z);
+        for (let i = 0; i < rp.length; i++) {
+          const a = rp[i], b = rp[(i + 1) % rp.length];
+          if (it.kind === 'room' || it.kind === 'corridor' || it.kind === 'area') this.pushIndoorPerimeter(lines, a, b, z);
+          else lines.push(a[0], a[1], z, b[0], b[1], z);
+        }
       }
     }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
-    const visible = new THREE.LineSegments(geo, INDOOR_SELECT_LINE);
-    const hidden = new THREE.LineSegments(geo.clone(), HIDDEN_EDGE_MATERIAL);
-    hidden.computeLineDistances();
-    hidden.renderOrder = 999; // после стен: глубина уже записана
-    for (const o of [visible, hidden]) { o.frustumCulled = false; root.add(o); }
+    if (it.kind === 'room' || it.kind === 'corridor' || it.kind === 'area') {
+      const canvas = this.map!.getCanvas(), dpr = canvas.width / Math.max(1, canvas.clientWidth);
+      const geo = new LineSegmentsGeometry();
+      geo.setPositions(lines);
+      const material = new LineMaterial({ color: 0x2563eb, linewidth: 4 * dpr, depthTest: false, depthWrite: false });
+      material.resolution.set(canvas.width, canvas.height);
+      const line = new LineSegments2(geo, material);
+      line.renderOrder = 999;
+      line.frustumCulled = false;
+      root.add(line);
+    } else {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+      const visible = new THREE.LineSegments(geo, INDOOR_SELECT_LINE);
+      const hidden = new THREE.LineSegments(geo.clone(), HIDDEN_EDGE_MATERIAL);
+      hidden.computeLineDistances();
+      hidden.renderOrder = 999;
+      for (const o of [visible, hidden]) { o.frustumCulled = false; root.add(o); }
+    }
+  }
+
+  /** Периметр выбранной комнаты: над стеной — верхнее ребро, без стены — край пола. */
+  private pushIndoorPerimeter(out: number[], a: Pt, b: Pt, floor: number) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx * dx + dy * dy;
+    if (len2 < 1e-8) return;
+    const spans: { lo: number; hi: number; wall: { ax: number; ay: number; bx: number; by: number; za: number; zb: number } }[] = [];
+    const breaks = [0, 1];
+    for (const wall of this.wallTopSegments) {
+      const t0 = ((wall.ax - a[0]) * dx + (wall.ay - a[1]) * dy) / len2;
+      const t1 = ((wall.bx - a[0]) * dx + (wall.by - a[1]) * dy) / len2;
+      const lo = Math.max(0, Math.min(t0, t1)), hi = Math.min(1, Math.max(t0, t1));
+      if (hi - lo < 1e-4) continue;
+      const cross0 = Math.abs((wall.ax - a[0]) * dy - (wall.ay - a[1]) * dx) / Math.sqrt(len2);
+      const cross1 = Math.abs((wall.bx - a[0]) * dy - (wall.by - a[1]) * dx) / Math.sqrt(len2);
+      if (cross0 > WALL_MERGE_DIST || cross1 > WALL_MERGE_DIST) continue;
+      spans.push({ lo, hi, wall }); breaks.push(lo, hi);
+    }
+    breaks.sort((x, y) => x - y);
+    for (let i = 1; i < breaks.length; i++) {
+      const lo = breaks[i - 1], hi = breaks[i];
+      if (hi - lo < 1e-4) continue;
+      const wall = spans.find((s) => s.lo <= (lo + hi) / 2 && s.hi >= (lo + hi) / 2)?.wall;
+      const point = (t: number): [number, number, number] => {
+        const x = a[0] + dx * t, y = a[1] + dy * t;
+        if (!wall) return [x, y, floor];
+        const wx = wall.bx - wall.ax, wy = wall.by - wall.ay;
+        const u = Math.max(0, Math.min(1, ((x - wall.ax) * wx + (y - wall.ay) * wy) / (wx * wx + wy * wy || 1)));
+        return [x, y, wall.za + (wall.zb - wall.za) * u + 0.02];
+      };
+      out.push(...point(lo), ...point(hi));
+    }
   }
 
   /** doors — двери этажа (lon/lat): в стенах на их месте вырезаются проёмы. */
@@ -686,6 +748,7 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   private applyLevel() {
     this.doorOpeningEdges.clear();
+    this.wallTopSegments = [];
     // Чуть ниже потолка: днища частей, начинающихся на потолке, и крыши частей на этой высоте не накрывают план
     const cut = this.levelCut = this.cutZ();
     const planes = cut !== undefined ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), cut)] : null;
@@ -902,6 +965,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const namedDoors = pale ? [] : this.doors.map((d) => ({ key: d.key, at: g.toLocal(this.doorPreview?.key === d.key ? this.doorPreview.at : d.at) }));
     /** Стена с дверными проёмами (DOOR_WIDTH × DOOR_HEIGHT) там, где на ней стоит дверь. */
     const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number) => {
+      if (!pale) this.wallTopSegments.push({ ax, ay, bx, by, za: z1a, zb: z1b });
       const len = Math.hypot(bx - ax, by - ay);
       const gaps: [number, number][] = [];
       const namedGaps: { key: string; lo: number; hi: number }[] = [];
@@ -970,9 +1034,20 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     for (const bi of g.items) {
       if (g.hidden.has(bi.feature.key)) continue;
+      const h = computeHeights(bi.tags);
+      const wallOnFloor = !pale && bi.tags['building:part'] !== 'roof'
+        && (g.lift?.get(bi.feature.key) ?? h.min) <= this.level!.floor + 0.1 && h.wallTop > this.level!.floor + 0.1;
       for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
         const rp = r.map(g.toLocal);
-        for (let i = 0; i < rp.length; i++) taken.push([...rp[i], ...rp[(i + 1) % rp.length]]);
+        for (let i = 0; i < rp.length; i++) {
+          const a = rp[i], b = rp[(i + 1) % rp.length];
+          taken.push([...a, ...b]);
+          if (wallOnFloor) {
+            const za = Math.min(top, h.wallTop, shell?.at(a[0], a[1], this.level!.floor) ?? top);
+            const zb = Math.min(top, h.wallTop, shell?.at(b[0], b[1], this.level!.floor) ?? top);
+            this.wallTopSegments.push({ ax: a[0], ay: a[1], bx: b[0], by: b[1], za, zb });
+          }
+        }
       }
     }
     /** Участки ребра a→b (доли 0…1), не закрытые уже стоящими стенами, — стена ставится только на них. */

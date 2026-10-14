@@ -9,7 +9,7 @@ import { GRID_ZOOM } from '../tiles/tile-features';
 import { TileStore, type TileVia } from './tile-store';
 import { timed } from '../perf';
 import { josmLayer } from '../osm/josm';
-import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type WoodArea } from '../osm/trees';
+import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type TreePoint, type WoodArea } from '../osm/trees';
 import { scatterTreesAsync, TreeGroup } from '../render/trees';
 import { TREE_STRIDE, TreeField } from '../render/tree-scatter';
 import { parseRoads, type RoadWay } from '../osm/roads';
@@ -163,6 +163,17 @@ export class OverpassTiles {
     const out: RoadWay[] = [];
     for (const k of this.wanted) { const e = this.cache.get(k); if (e?.state === 'ready' && e.roads) out.push(...e.roads); }
     return out;
+  }
+
+  /** Отдельные деревья видимых тайлов; старые записи кеша без id ещё нельзя выбрать. */
+  treePoints(): TreePoint[] {
+    const out = new Map<string, TreePoint>();
+    for (const k of this.wanted) {
+      const e = this.cache.get(k);
+      if (e?.state !== 'ready') continue;
+      for (const tree of e.trees?.points ?? []) if (tree.key) out.set(tree.key, tree);
+    }
+    return [...out.values()];
   }
 
   /** Indoor-объекты загруженных тайлов (без повторов), хотя бы одной вершиной внутри bbox [w, s, e, n]. */

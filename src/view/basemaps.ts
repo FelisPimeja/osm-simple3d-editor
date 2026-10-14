@@ -27,8 +27,8 @@ export const IMAGERY: Imagery[] = [
   {
     id: 'esri',
     name: 'Esri World Imagery',
-    tiles: ['https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      'https://server.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+    tiles: ['https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?blankTile=false',
+      'https://server.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?blankTile=false'],
     tileSize: 256,
     maxzoom: 19,
     attribution: ESRI_ATTRIBUTION,
@@ -36,7 +36,7 @@ export const IMAGERY: Imagery[] = [
   {
     id: 'esri-clarity',
     name: 'Esri World Imagery (Clarity) Beta',
-    tiles: ['https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+    tiles: ['https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?blankTile=false'],
     tileSize: 256,
     maxzoom: 19,
     attribution: ESRI_ATTRIBUTION,

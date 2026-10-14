@@ -67,6 +67,7 @@ export class IndoorPois {
   private readonly root: HTMLDivElement;
   private items: { key: string; el: HTMLElement; local: THREE.Vector3 }[] = [];
   private selected = new Set<string>();
+  private issueHighlighted = new Set<string>();
   private signature = '';
   private byEl = new Map<HTMLElement, IndoorFeature>();
 
@@ -90,7 +91,19 @@ export class IndoorPois {
   /** Подсветка выбранных точек; #poi у значка помещения совпадает с ключом самого помещения. */
   setSelection(keys: string[]) {
     this.selected = new Set(keys.map((key) => key.replace(/#poi$/, '')));
-    for (const { key, el } of this.items) el.classList.toggle('selected', this.selected.has(key.replace(/#poi$/, '')));
+    this.updateHighlight();
+  }
+
+  setIssueHighlight(keys: string[]) {
+    this.issueHighlighted = new Set(keys.map((key) => key.replace(/#poi$/, '')));
+    this.updateHighlight();
+  }
+
+  private updateHighlight() {
+    for (const { key, el } of this.items) {
+      const k = key.replace(/#poi$/, '');
+      el.classList.toggle('selected', this.selected.has(k) || this.issueHighlighted.has(k));
+    }
   }
 
   /** Значки этажа: объекты kind=poi с точкой, z — высота пола, м. Пустой список — убрать. */

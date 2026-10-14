@@ -72,10 +72,11 @@ const VOID_FACE_DZ = 0.1;
 /** Перекрытие этажа со вторым светом (плита с дырами под полом) и край пустоты. */
 const INDOOR_SLAB_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 const INDOOR_VOID_EDGE = new THREE.LineBasicMaterial({ color: 0x57534e });
-const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0x64748b, side: THREE.DoubleSide });
-const ESCALATOR_SIDE = new THREE.MeshLambertMaterial({ color: 0x334155, side: THREE.DoubleSide });
-const ESCALATOR_STEP = new THREE.MeshLambertMaterial({ color: 0x94a3b8, side: THREE.DoubleSide });
-const ESCALATOR_HANDRAIL = new THREE.LineBasicMaterial({ color: 0x2563eb });
+const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0x888f94, side: THREE.DoubleSide });
+const ESCALATOR_SIDE = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+const ESCALATOR_STEP = new THREE.MeshLambertMaterial({ color: 0x747c82, side: THREE.DoubleSide });
+const ESCALATOR_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xb5bec3, side: THREE.DoubleSide });
+const ESCALATOR_HANDRAIL = new THREE.MeshLambertMaterial({ color: 0x656d73 });
 
 /** План этажа для слоя. below — этажи под вторым светом (видны сквозь пустоты voids в перекрытии). */
 export interface IndoorLevel {
@@ -763,7 +764,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const cut = this.levelCut = this.cutZ();
     const planes = cut !== undefined ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), cut)] : null;
     for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL]) m.clippingPlanes = planes;
-    for (const m of [ESCALATOR_BELT, ESCALATOR_SIDE, ESCALATOR_STEP, ESCALATOR_HANDRAIL]) m.clippingPlanes = planes;
+    for (const m of [ESCALATOR_BELT, ESCALATOR_SIDE, ESCALATOR_STEP, ESCALATOR_BALUSTRADE, ESCALATOR_HANDRAIL]) m.clippingPlanes = planes;
     if (this.indoorObj) {
       this.indoorObj.parent?.remove(this.indoorObj);
       this.indoorObj.traverse((o) => {
@@ -917,7 +918,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       const ramp = length - 2 * landing;
       const count = Math.max(1, Math.round(ramp / 0.42));
       const distances = [0, landing, ...Array.from({ length: count - 1 }, (_, i) => landing + ramp * (i + 1) / count), length - landing, length];
-      const treads: number[] = [], risers: number[] = [], body: number[] = [], rails: number[] = [];
+      const treads: number[] = [], risers: number[] = [], body: number[] = [], balustrades: number[] = [];
+      const boxDepth = 0.7;
       const edge = (p: ReturnType<typeof at>, sign: number, z = p.z): [number, number, number] =>
         [p.x + sign * halfWidth * p.nx, p.y + sign * halfWidth * p.ny, z];
       const quad = (out: number[], a: number[], b: number[], c: number[], d: number[]) =>
@@ -928,10 +930,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         // На склоне проступь лежит на высоте верхнего конца отрезка.
         const z = i === 1 || i === distances.length - 1 ? a.z : ascending ? b.z : a.z;
         quad(treads, edge(a, -1, z), edge(b, -1, z), edge(b, 1, z), edge(a, 1, z));
-        quad(body, edge(a, 1, a.z - 0.3), edge(b, 1, b.z - 0.3), edge(b, -1, b.z - 0.3), edge(a, -1, a.z - 0.3));
+        quad(body, edge(a, 1, a.z - boxDepth), edge(b, 1, b.z - boxDepth), edge(b, -1, b.z - boxDepth), edge(a, -1, a.z - boxDepth));
         for (const sign of [-1, 1]) {
-          quad(body, edge(a, sign, a.z - 0.3), edge(b, sign, b.z - 0.3), edge(b, sign, z), edge(a, sign, z));
-          rails.push(...edge(a, sign, a.z + 0.9), ...edge(b, sign, b.z + 0.9));
+          quad(body, edge(a, sign, a.z - boxDepth), edge(b, sign, b.z - boxDepth), edge(b, sign, z), edge(a, sign, z));
         }
         if (previousTreadZ !== undefined && Math.abs(z - previousTreadZ) > 1e-4) {
           const low = Math.min(z, previousTreadZ), high = Math.max(z, previousTreadZ);
@@ -941,7 +942,38 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
       for (const d of [0, length]) {
         const p = at(d);
-        quad(body, edge(p, -1, p.z - 0.3), edge(p, 1, p.z - 0.3), edge(p, 1), edge(p, -1));
+        quad(body, edge(p, -1, p.z - boxDepth), edge(p, 1, p.z - boxDepth), edge(p, 1), edge(p, -1));
+      }
+      // Плавные переходы балюстрады к горизонтальным площадкам на обоих концах.
+      const endCurve = Math.min(0.75, landing);
+      const railHeight = (d: number) => {
+        const t = Math.min(1, d / endCurve, (length - d) / endCurve);
+        const smooth = t * t * (3 - 2 * t);
+        return 0.36 + 0.54 * smooth;
+      };
+      const railDistances = [...new Set([...distances, ...Array.from({ length: 7 }, (_, i) => endCurve * i / 6),
+        ...Array.from({ length: 7 }, (_, i) => length - endCurve * i / 6)].sort((a, b) => a - b))];
+      for (const sign of [-1, 1]) {
+        const path: THREE.Vector3[] = [];
+        for (let i = 0; i < railDistances.length; i++) {
+          const d = railDistances[i], p = at(d), h = railHeight(d);
+          const [x, y] = edge(p, sign);
+          path.push(new THREE.Vector3(x, y, p.z + h));
+          if (i) {
+            const prev = at(railDistances[i - 1]), hp = railHeight(railDistances[i - 1]);
+            quad(balustrades, edge(prev, sign, prev.z + 0.06), edge(p, sign, p.z + 0.06),
+              edge(p, sign, p.z + h - 0.045), edge(prev, sign, prev.z + hp - 0.045));
+          }
+        }
+        const curve = new THREE.CatmullRomCurve3(path, false, 'centripetal');
+        const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(12, path.length * 3), 0.065, 8, false), ESCALATOR_HANDRAIL);
+        tube.frustumCulled = false;
+        root.add(tube);
+        for (const end of [path[0], path.at(-1)!]) {
+          const cap = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 6), ESCALATOR_HANDRAIL);
+          cap.position.copy(end);
+          root.add(cap);
+        }
       }
       const mesh = (positions: number[], material: THREE.Material) => {
         if (!positions.length) return;
@@ -952,17 +984,10 @@ export class BuildingsLayer implements CustomLayerInterface {
         object.frustumCulled = false;
         root.add(object);
       };
-      const lines = (positions: number[], material: THREE.LineBasicMaterial) => {
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        const object = new THREE.LineSegments(geo, material);
-        object.frustumCulled = false;
-        root.add(object);
-      };
       mesh(treads, ESCALATOR_BELT);
       mesh(risers, ESCALATOR_STEP);
       mesh(body, ESCALATOR_SIDE);
-      lines(rails, ESCALATOR_HANDRAIL);
+      mesh(balustrades, ESCALATOR_BALUSTRADE);
     }
   }
 
@@ -2347,10 +2372,11 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   setMonochrome(on: boolean) {
     this.monochrome = on;
-    ESCALATOR_BELT.color.setHex(on ? 0xffffff : 0x64748b);
-    ESCALATOR_SIDE.color.setHex(on ? 0xffffff : 0x334155);
-    ESCALATOR_STEP.color.setHex(on ? 0xffffff : 0x94a3b8);
-    ESCALATOR_HANDRAIL.color.setHex(on ? 0x57534e : 0x2563eb);
+    ESCALATOR_BELT.color.setHex(on ? 0xffffff : 0x888f94);
+    ESCALATOR_SIDE.color.setHex(0xffffff);
+    ESCALATOR_STEP.color.setHex(on ? 0xffffff : 0x747c82);
+    ESCALATOR_BALUSTRADE.color.setHex(on ? 0xffffff : 0xb5bec3);
+    ESCALATOR_HANDRAIL.color.setHex(on ? 0x57534e : 0x656d73);
     setTreesMonochrome(on);
     for (const t of this.trees.values()) t.recolour();
     for (const g of this.groups.values()) this.paintGroup(g);

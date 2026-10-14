@@ -4660,18 +4660,14 @@ function renderLevelsImpl() {
   setLevelParam(currentLevel ?? linkLevel);
   levelsCount.textContent = levels.length ? `(${levels.length})` : '';
   const planned = plannedLevels(focus, levels, indoor);
-  const hiddenRows = [...indoorHidden].map((key) => {
-    const f = indoor.find((item) => indoorKey(item.key) === key);
-    return `<li class="lv-restore"><button type="button" data-show-indoor-key="${esc(key)}">${tr('Показать')} ${esc(f?.tags.name ?? f?.tags.ref ?? key)}</button></li>`;
-  }).join('');
-  levelsEl.innerHTML = (indoorHidden.size ? `<li class="lv-restore"><button type="button" data-show-indoor>${tr('Показать всё скрытое')} (${indoorHidden.size})</button></li>${hiddenRows}` : '') + (levels.length
+  levelsEl.innerHTML = levels.length
     ? `<li class="${currentLevel === undefined ? 'selected' : ''}" data-level=""><span class="lv-name"><span class="lv-plan"></span>${tr('Всё здание')}</span></li>` + levels.map((l, i) =>
       // Заголовки групп: перед первым надземным и первым подземным этажом (список — сверху вниз)
       (i === 0 || (levels[i - 1].n >= 0) !== (l.n >= 0) ? `<li class="lv-group">${l.n >= 0 ? tr('Надземные этажи') : tr('Подземные этажи')}</li>` : '')
       + `<li class="${l.n === currentLevel ? 'selected' : ''}" data-level="${l.n}" title="level=${l.n} · ${l.src ? tr('по тегам {link}', { link: l.src }) : tr('из indoor-данных')}${planned.has(l.n) ? ' · ' + tr('есть поэтажный план') : ''}">`
       + `<span class="lv-name"><span class="lv-plan">${planned.has(l.n) ? ICON_PLAN : ''}</span>${LEVEL_NAME(l.n)}</span>`
       + `<span class="lv-meta">${levelIssue(l) ? `<span class="lv-warn" title="${esc(levelIssue(l)!)}">!</span>` : ''}${tr('{floor}–{ceil} м', { floor: l.floor.toFixed(1), ceil: l.ceil.toFixed(1) })}</span></li>`).join('') + levelSources(levels)
-    : `<li class="lv-empty">${tr('Нет этажности (building:levels) и indoor-данных')}</li>`);
+    : `<li class="lv-empty">${tr('Нет этажности (building:levels) и indoor-данных')}</li>`;
   overpassLayer.setUnderground(currentLevel === undefined ? undergroundOutline(focus, levels) : undefined);
   const level = levels.find((l) => l.n === currentLevel);
   const onLevel = level ? indoor.filter((f) => f.levels.includes(level.n) && !indoorHidden.has(indoorKey(f.key))) : [];
@@ -4813,9 +4809,6 @@ function levelVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[], 
 }
 
 levelsEl.addEventListener('click', (e) => {
-  const show = (e.target as HTMLElement).closest<HTMLElement>('[data-show-indoor-key]');
-  if (show) { changeIndoorHidden(new Set([...indoorHidden].filter((key) => key !== show.dataset.showIndoorKey))); return; }
-  if ((e.target as HTMLElement).closest('[data-show-indoor]')) { changeIndoorHidden(new Set()); return; }
   const link = (e.target as HTMLElement).closest<HTMLElement>('[data-select]');
   if (link) { e.preventDefault(); select(link.dataset.select); return; }
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-level]');
@@ -5281,10 +5274,16 @@ window.addEventListener('pointerup', (e) => {
  */
 function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | 'indoor') {
   if (!focus) return;
+  const hiddenIndoorMenu = () => {
+    if (!indoorHidden.size) return '';
+    const byKey = new Map(buildingIndoor(focus!).map((f) => [indoorKey(f.key), f]));
+    return `<li><button type="button" data-ctx="indoor-show-all">${tr('Показать скрытые indoor-объекты')} (${indoorHidden.size})</button></li>`
+      + [...indoorHidden].map((key) => `<li><button type="button" data-ctx="indoor-show-key" data-key="${esc(key)}">${tr('Показать')} ${esc(byKey.get(key)?.tags.name ?? byKey.get(key)?.tags.ref ?? key)}</button></li>`).join('');
+  };
   if (where === 'indoor') {
     const n = indoorSelection.length > 1 ? ` (${indoorSelection.length})` : '';
     ctxMenu.innerHTML = `<li><button type="button" data-ctx="indoor-hide">${tr('Скрыть объекты')}${n}<kbd>H</kbd></button></li>`
-      + `<li><button type="button" data-ctx="indoor-show-all"${indoorHidden.size ? '' : ' disabled'}>${tr('Показать всё скрытое')}${indoorHidden.size ? ` (${indoorHidden.size})` : ''}</button></li>`;
+      + hiddenIndoorMenu();
     ctxMenu.hidden = false;
     const { width, height } = ctxMenu.getBoundingClientRect();
     ctxMenu.style.left = `${Math.min(x, innerWidth - width - 4)}px`;
@@ -5298,15 +5297,16 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
   const keys = selection.filter((k) => focus!.members.includes(k));
   const anyShown = keys.some((k) => !focusHidden.has(k)), anyHidden = keys.some((k) => focusHidden.has(k));
   const n = keys.length > 1 ? ` (${keys.length})` : '';
+  const showIndoor = hiddenIndoorMenu();
   ctxMenu.innerHTML = where === 'empty' ? `
-    <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>${tr('Показать всё')}${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>${snaps}${exit}` : `
+    <li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>${tr('Показать всё')}${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>${showIndoor}${snaps}${exit}` : `
     <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>${tr('Скрыть объекты')}${n}${kbd('H')}</button></li>
     <li><button type="button" data-ctx="isolate"${keys.length && focus.members.some((k) => !keys.includes(k) && !focusHidden.has(k)) ? '' : ' disabled'}>${tr('Изолировать')}${n}</button></li>
     ${inScene
       ? `<li><button type="button" data-ctx="show-all"${focusHidden.size ? '' : ' disabled'}>${tr('Показать всё скрытое')}${focusHidden.size ? ` (${focusHidden.size})` : ''}${kbd('⇧H')}</button></li>`
       : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>${tr('Показать объекты')}${n}</button></li>`}
     <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>${tr('Исключить из модели')}${n}</button></li>
-    <li><button type="button" data-ctx="delete"${keys.length ? '' : ' disabled'}>${tr('Удалить')}${n}${kbd('Del')}</button></li>${snaps}${exit}`;
+    <li><button type="button" data-ctx="delete"${keys.length ? '' : ' disabled'}>${tr('Удалить')}${n}${kbd('Del')}</button></li>${showIndoor}${snaps}${exit}`;
   ctxMenu.hidden = false;
   // Не выходим за край окна
   const { width, height } = ctxMenu.getBoundingClientRect();
@@ -5315,11 +5315,13 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
 }
 
 ctxMenu.addEventListener('click', (e) => {
-  const action = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ctx]:not(:disabled)')?.dataset.ctx;
+  const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ctx]:not(:disabled)');
+  const action = button?.dataset.ctx;
   if (!action || !focus) return;
   closeCtxMenu();
   if (action === 'indoor-hide') return hideSelectedIndoor();
   if (action === 'indoor-show-all') { changeIndoorHidden(new Set()); return; }
+  if (action === 'indoor-show-key') { changeIndoorHidden(new Set([...indoorHidden].filter((key) => key !== button!.dataset.key))); return; }
   focusAction(action);
 });
 

@@ -40,7 +40,9 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   // roof:orientation=across скелет не умеет (у него конёк всегда вдоль) — для неё допускаем контуры кривее:
   // изогнутая полоса (арка, крыло вдоль дуги) заполняет описанный прямоугольник заметно хуже 85%
   const across = tags['roof:orientation'] === 'across';
-  const axis = single && AXIS_SHAPES.has(shape) ? rectAxis(single.outer, across ? RECT_FILL_ACROSS : RECT_FILL) : undefined;
+  const axis = single && AXIS_SHAPES.has(shape)
+    ? rectAxis(single.outer, across ? RECT_FILL_ACROSS : shape === 'crosspitched' ? RECT_FILL_CROSSPITCHED : RECT_FILL)
+    : undefined;
   // Скатные крыши на остальных контурах (в т.ч. с дырами и из нескольких полигонов) — по straight skeleton;
   // вальмовые варианты (side_hipped, hipped-and-gabled…) там — упрощённо вальмовой. crosspitched, sawtooth
   // и butterfly — только на почти прямоугольных контурах, иначе плоская крыша (как неподдерживаемая)
@@ -294,6 +296,8 @@ interface RectAxis { dir: Pt; center: Pt; length: number; width: number }
 
 /** Доля площади описанного прямоугольника, начиная с которой контур считаем «почти прямоугольным». */
 const RECT_FILL = 0.85;
+/** Крестовые крыши часто имеют небольшие выступы на углах: оба корпуса relation/21653288 заполняют ~84%. */
+const RECT_FILL_CROSSPITCHED = 0.83;
 /**
  * То же для roof:orientation=across: иначе контур уходит в скелет и конёк ложится вдоль. Изогнутые узкие
  * полосы (рёбра арок, way/1245604260) заполняют описанный прямоугольник меньше чем на 60%.

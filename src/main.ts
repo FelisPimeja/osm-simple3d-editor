@@ -13,7 +13,7 @@ import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } fro
 import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
-import { computeHeights, LEVEL_HEIGHT } from './osm/heights';
+import { computeHeights, LEVEL_HEIGHT, parseLength } from './osm/heights';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type IndoorCategory } from './osm/indoor-categories';
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
@@ -3953,7 +3953,7 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   // Свои данные здания (без стыков тайлов) — поверх данных тайлов
   const all = new Map(overpass.indoorIn([w, s, e, n]).map((f) => [f.key, f]));
   for (const f of focusIndoor.get(g.key) ?? []) all.set(f.key, f);
-  return [...all.values()].filter((f) => {
+  const list = [...all.values()].filter((f) => {
     const p = f.point ?? (f.line ? f.polygons[0].outer[0] : pointOnSurface(f.polygons[0]));
     return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer)));
   }).filter((f) => !session.isDeleted(indoorKey(f.key))).map((f) => {
@@ -3963,6 +3963,15 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
     const g = withIndoorTags(f, e.tags);
     const at = f.point && !f.key.endsWith('#poi') ? e.polygons?.[0]?.outer[0] : undefined;
     return at ? { ...g, point: at } : g;
+  });
+  const axes = list.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
+  return list.map((f) => {
+    if (f.line || !f.polygons.length || !(f.tags.room === 'stairs' || f.tags.stairs === 'yes' || f.tags.conveying)) return f;
+    const matched = axes.some((axis) => axis.levels.some((n) => f.levels.includes(n)) && axis.polygons[0].outer.slice(1).some((p, i) => {
+      const a = axis.polygons[0].outer[i], mid: LonLat = [(a[0] + p[0]) / 2, (a[1] + p[1]) / 2];
+      return f.polygons.some((poly) => pointInRing(mid, poly.outer) && !poly.inners.some((hole) => pointInRing(mid, hole)));
+    }));
+    return matched ? { ...f, escalatorArea: true } : f;
   });
 }
 
@@ -4649,7 +4658,7 @@ function renderLevelsImpl() {
       cut: l.ceil,
       // Объект на нескольких этажах (эскалатор, лестница, зал в два света) — рисуем на его нижнем этаже,
       // выше он — пустота (стены-линии — на всех: они и выше стоят)
-      items: fs.filter((f) => f.kind !== 'poi' && (f.line || floorLevels(f).includes(l.n)))
+      items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && (f.line || floorLevels(f).includes(l.n)))
         .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor,
           ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}) })),
       // Двери этажа — проёмы в стенах
@@ -4657,6 +4666,15 @@ function renderLevelsImpl() {
     };
   };
   const plan = level && planOf(level);
+  const escalators = indoor.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2
+      && (f.tags.incline === 'up' || f.tags.incline === 'down'))
+    .filter((f) => level && f.levels.includes(level.n))
+    .map((f) => {
+      const low = levels.find((l) => l.n === Math.min(...f.levels));
+      const high = levels.find((l) => l.n === Math.max(...f.levels));
+      return low && high ? { key: f.key, line: f.polygons[0].outer, bottom: low.floor, top: high.floor,
+        width: Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2)), incline: f.tags.incline } : undefined;
+    }).filter((f): f is NonNullable<typeof f> => !!f);
   if (level) levelsEl.insertAdjacentHTML('beforeend', indoorLegend(onLevel));
   overpassLayer.setDoors(level ? onLevel.filter(isDoor).map((f) => ({ key: f.key, at: f.point!, z: level.floor })) : []);
   // Второй свет: пустоты в перекрытии и этажи под ними
@@ -4671,11 +4689,12 @@ function renderLevelsImpl() {
     void overpassLayer.rebuildWhere((f) => members.has(f.key));
   }
   const through = [...new Set(voids.flatMap((v) => v.through))];
-  const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${indoorEditRev}` : '';
+  const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${escalators.map((e) => `${e.key}:${e.bottom}:${e.top}`).join(',')}|${indoorEditRev}` : '';
   if (sig === levelSignature) return;
   levelSignature = sig;
   overpassLayer.setLevel(plan && {
     ...plan, floor: level!.floor,
+    escalators,
     voids: voids.map((v) => v.polygon).flat(),
     // Пустота прорезает пол этажа и полы промежуточных этажей (у самого нижнего — пол атриума)
     voidCuts: voids.map((v) => ({
@@ -4693,7 +4712,7 @@ type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[] }[]> & 
 /** Пустоты (второй свет) всех этажей здания, lon/lat; кеш — по зданию и данным. */
 const voidsCache = new Map<string, { sig: string; map: LevelVoids }>();
 function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
-  const sig = `${overpass.revision}|${indoor.length}|${levels.map((l) => `${l.n}:${l.floor}:${l.ceil}`).join(',')}|${g.members.length}`;
+  const sig = `${overpass.revision}|${focusIndoor.get(g.key)?.length ?? -1}|${indoorEditRev}|${indoor.length}|${levels.map((l) => `${l.n}:${l.floor}:${l.ceil}`).join(',')}|${g.members.length}`;
   const hit = voidsCache.get(g.key);
   if (hit?.sig === sig) return hit.map;
   const map: LevelVoids = timed('этажи: второй свет', () => {
@@ -4721,6 +4740,30 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
     out.mapped = new Map([...plans].map(([n, p]) => [n, p.mapped.map((poly) => poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number]))))]));
     for (const l of levels) {
       const list = findVoids(l.n, plans).map((v) => ({ polygon: v.polygon.map((p) => p.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))), through: v.through }));
+      // Узкие проёмы эскалаторов не проходят порог площади для общего поиска второго света.
+      for (const f of indoor.filter((f) => f.escalatorArea && f.levels.includes(l.n) && l.n > Math.min(...f.levels))) {
+        const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
+        if (through.length) list.push({ polygon: f.polygons.map((p) => [p.outer, ...p.inners]), through });
+      }
+      for (const f of indoor.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down')
+        && f.levels.includes(l.n) && l.n > Math.min(...f.levels))) {
+        const line = f.polygons[0]?.outer;
+        if (!line || line.length < 2 || indoor.some((area) => area.escalatorArea && area.levels.includes(l.n)
+          && line.slice(1).some((p, i) => {
+            const a = line[i], mid: LonLat = [(a[0] + p[0]) / 2, (a[1] + p[1]) / 2];
+            return area.polygons.some((q) => pointInRing(mid, q.outer));
+          }))) continue;
+        const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
+        const width = Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2));
+        for (let i = 1; i < line.length; i++) {
+          const a = loc(line[i - 1]), b = loc(line[i]);
+          const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+          if (len < 0.1) continue;
+          const nx = -(b[1] - a[1]) / len * width * 0.55, ny = (b[0] - a[0]) / len * width * 0.55;
+          const ring: [number, number][] = [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]];
+          list.push({ polygon: [[ring.map(geo)]], through });
+        }
+      }
       if (list.length) out.set(l.n, list);
     }
     return out;

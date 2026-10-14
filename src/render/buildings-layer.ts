@@ -24,6 +24,7 @@ const MONOCHROME = new THREE.Color('#ffffff');
 
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
 export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Заливка по назначению (иначе — по виду). */ colour?: number }
+export interface EscalatorItem { key: string; line: LonLat[]; bottom: number; top: number; width: number; incline?: string }
 
 /** Заливка пола по виду indoor-объекта. */
 const INDOOR_COLOURS: Record<IndoorKind, number> = { level: 0xe7e5e4, area: 0xffffff, corridor: 0xffffff, room: 0xf6ead2, wall: 0xffffff, column: 0xffffff, poi: 0xffffff };
@@ -71,6 +72,10 @@ const VOID_FACE_DZ = 0.1;
 /** Перекрытие этажа со вторым светом (плита с дырами под полом) и край пустоты. */
 const INDOOR_SLAB_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 const INDOOR_VOID_EDGE = new THREE.LineBasicMaterial({ color: 0x57534e });
+const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0x64748b, side: THREE.DoubleSide });
+const ESCALATOR_SIDE = new THREE.MeshLambertMaterial({ color: 0x334155, side: THREE.DoubleSide });
+const ESCALATOR_STEP = new THREE.LineBasicMaterial({ color: 0xcbd5e1 });
+const ESCALATOR_HANDRAIL = new THREE.LineBasicMaterial({ color: 0x2563eb });
 
 /** План этажа для слоя. below — этажи под вторым светом (видны сквозь пустоты voids в перекрытии). */
 export interface IndoorLevel {
@@ -78,6 +83,7 @@ export interface IndoorLevel {
   /** Высота пола этажа, м. */
   floor: number;
   items: IndoorItem[];
+  escalators?: EscalatorItem[];
   doors?: LonLat[];
   /** Пустоты в перекрытии этажа: многоугольники lon/lat ([внешнее кольцо, ...дыры]). */
   voids?: LonLat[][][];
@@ -757,6 +763,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const cut = this.levelCut = this.cutZ();
     const planes = cut !== undefined ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), cut)] : null;
     for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL]) m.clippingPlanes = planes;
+    for (const m of [ESCALATOR_BELT, ESCALATOR_SIDE, ESCALATOR_STEP, ESCALATOR_HANDRAIL]) m.clippingPlanes = planes;
     if (this.indoorObj) {
       this.indoorObj.parent?.remove(this.indoorObj);
       this.indoorObj.traverse((o) => {
@@ -881,6 +888,70 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const b of this.level.below) this.drawPlan(root, g, b.items, b.doors ?? [], b.cut - CUT_BELOW_CEIL, true, shell());
     }
     this.drawPlan(root, g, this.level.items, this.previewDoors(this.level.doors ?? []), top, false, shell());
+    this.drawEscalators(root, g);
+  }
+
+  /** Эскалатор — наклонная лента по оси highway=steps; у обоих концов короткие горизонтальные площадки. */
+  private drawEscalators(root: THREE.Group, g: MeshGroup) {
+    for (const item of this.level?.escalators ?? []) {
+      const pts = item.line.map(g.toLocal);
+      if (pts.length < 2 || item.top <= item.bottom) continue;
+      const cumulative = [0];
+      for (let i = 1; i < pts.length; i++) cumulative.push(cumulative[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+      const length = cumulative.at(-1)!;
+      if (length < 2) continue;
+      const landing = Math.min(1, length * 0.12);
+      const halfWidth = Math.max(0.35, Math.min(2.5, item.width / 2));
+      const at = (distance: number) => {
+        let i = 1;
+        while (i < cumulative.length - 1 && cumulative[i] < distance) i++;
+        const span = cumulative[i] - cumulative[i - 1] || 1;
+        const t = Math.max(0, Math.min(1, (distance - cumulative[i - 1]) / span));
+        const [ax, ay] = pts[i - 1], [bx, by] = pts[i];
+        const dx = (bx - ax) / span, dy = (by - ay) / span;
+        const rise = Math.max(0, Math.min(1, (distance - landing) / (length - 2 * landing)));
+        const z = item.bottom + (item.top - item.bottom) * (item.incline === 'down' ? 1 - rise : rise) + 0.05;
+        return { x: ax + (bx - ax) * t, y: ay + (by - ay) * t, nx: -dy, ny: dx, z };
+      };
+      const samples = [...new Set([0, landing, ...cumulative.slice(1, -1), length - landing, length].sort((a, b) => a - b))];
+      const surface: number[] = [], sides: number[] = [], steps: number[] = [], rails: number[] = [];
+      const edge = (p: ReturnType<typeof at>, sign: number, up = 0): [number, number, number] =>
+        [p.x + sign * halfWidth * p.nx, p.y + sign * halfWidth * p.ny, p.z + up];
+      const quad = (out: number[], a: number[], b: number[], c: number[], d: number[]) =>
+        out.push(...a, ...b, ...c, ...a, ...c, ...d);
+      for (let i = 1; i < samples.length; i++) {
+        const a = at(samples[i - 1]), b = at(samples[i]);
+        quad(surface, edge(a, -1), edge(b, -1), edge(b, 1), edge(a, 1));
+        for (const sign of [-1, 1]) {
+          quad(sides, edge(a, sign, -0.25), edge(b, sign, -0.25), edge(b, sign), edge(a, sign));
+          rails.push(...edge(a, sign, 0.9), ...edge(b, sign, 0.9));
+        }
+      }
+      for (let d = landing + 0.35; d < length - landing; d += 0.45) {
+        const p = at(d);
+        steps.push(...edge(p, -1, 0.012), ...edge(p, 1, 0.012));
+      }
+      const mesh = (positions: number[], material: THREE.Material) => {
+        if (!positions.length) return;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geo.computeVertexNormals();
+        const object = new THREE.Mesh(geo, material);
+        object.frustumCulled = false;
+        root.add(object);
+      };
+      const lines = (positions: number[], material: THREE.LineBasicMaterial) => {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        const object = new THREE.LineSegments(geo, material);
+        object.frustumCulled = false;
+        root.add(object);
+      };
+      mesh(surface, ESCALATOR_BELT);
+      mesh(sides, ESCALATOR_SIDE);
+      lines(steps, ESCALATOR_STEP);
+      lines(rails, ESCALATOR_HANDRAIL);
+    }
   }
 
   /**

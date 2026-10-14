@@ -49,12 +49,13 @@ const INDOOR_KINDS = new Set<string>(['room', 'area', 'corridor', 'level', 'wall
  * Этажи, на которых у объекта пол. Объект на нескольких этажах в level (эскалатор, лестница, зал в два света:
  * level=-1;0 или 1-3) — вертикальное пространство: пол только на нижнем, выше — пустота. repeat_on — то же
  * помещение на каждом этаже: пол на каждом; лифт и лестничная клетка — тоже на каждом этаже из level.
+ * Площадь лестницы с осью эскалатора — исключение: её пол только внизу, выше остаётся проём.
  */
 export function floorLevels(f: IndoorFeature): number[] {
   const own = parseLevels(f.tags.level);
   const out = new Set(parseLevels(f.tags.repeat_on));
   // Лифтовая шахта, лестничная клетка — площадка на каждом этаже из level (как repeat_on), а не пустота
-  if (own.length > 1 && isShaft(f.tags)) for (const l of own) out.add(l);
+  if (own.length > 1 && !f.escalatorArea && isShaft(f.tags)) for (const l of own) out.add(l);
   out.add(own.length ? Math.min(...own) : f.levels[0] ?? 0);
   return [...out];
 }
@@ -75,6 +76,9 @@ export interface IndoorFeature {
   point?: LonLat;
   /** Стена-линия (indoor=wall на незамкнутом или замкнутом пути): outer — ломаная, не кольцо. */
   line?: boolean;
+  /** Ось эскалатора (highway=steps + conveying=*), либо площадь вокруг такой оси. */
+  escalator?: boolean;
+  escalatorArea?: boolean;
   /** Номера этажей из level (+ repeat_on); без level — [0]. */
   levels: number[];
 }
@@ -225,7 +229,13 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
   for (const w of ways.values()) {
     const kind = memberKind.get(`way/${w.id}`) ?? kindOf(w.tags);
     const ik = kind ? undefined : indoorKind(w.tags);
-    if (ik === 'wall') {
+    if (!kind && w.tags?.highway === 'steps' && w.tags.conveying && w.tags.conveying !== 'no' && w.nodes[0] !== w.nodes[w.nodes.length - 1]) {
+      const pts = w.nodes.map((id) => nodes.get(id)).filter((n): n is OsmNode => !!n).map((n): LonLat => [n.lon, n.lat]);
+      if (pts.length >= 2) {
+        addIndoor(`way/${w.id}`, w.tags, 'area', [{ outer: pts, inners: [] }], true);
+        indoor[indoor.length - 1].escalator = true;
+      }
+    } else if (ik === 'wall') {
       // Стена — ломаная (у замкнутой последняя точка повторяет первую — оставляем, чтобы стена замкнулась)
       const pts = w.nodes.map((id) => nodes.get(id)).filter((n): n is OsmNode => !!n).map((n): LonLat => [n.lon, n.lat]);
       if (pts.length >= 2) addIndoor(`way/${w.id}`, w.tags!, ik, [{ outer: pts, inners: [] }], true);

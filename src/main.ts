@@ -4681,7 +4681,6 @@ function renderLevelsImpl() {
     if (!keep.length) selectIndoor(undefined);
     for (const f of keep) selectIndoor(f, keep.length > 1);
   }
-  indoorPois.set(onLevel.filter((f) => f.kind === 'poi'), level?.floor ?? 0);
   const planOf = (l: Level) => {
     const fs = visibleIndoor.filter((f) => f.levels.includes(l.n));
     return {
@@ -4715,6 +4714,19 @@ function renderLevelsImpl() {
       return f.levels.includes(level.n) || visibleBelow ? { key: f.key, line, bottom: low.floor, top: high.floor,
         width: Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2)), incline: f.tags.incline } : undefined;
     }).filter((f): f is NonNullable<typeof f> => !!f);
+  const escalatorIconPositions = new Map<string, { at: LonLat; z: number }>();
+  for (const area of onLevel.filter((f) => f.escalatorArea)) {
+    const axis = escalators.find((e) => e.line.slice(1).some((b, i) => {
+      const a = e.line[i], mid: LonLat = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      return area.polygons.some((p) => pointInRing(mid, p.outer) && !p.inners.some((hole) => pointInRing(mid, hole)));
+    }));
+    if (!axis) continue;
+    const a = axis.line[0], b = axis.line.at(-1)!;
+    escalatorIconPositions.set(`${area.key}#poi`, {
+      at: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], z: (axis.bottom + axis.top) / 2 + 0.35,
+    });
+  }
+  indoorPois.set(onLevel.filter((f) => f.kind === 'poi'), level?.floor ?? 0, escalatorIconPositions);
   if (level) levelsEl.insertAdjacentHTML('beforeend', indoorLegend(onLevel));
   overpassLayer.setDoors(level ? onLevel.filter(isDoor).map((f) => ({ key: f.key, at: f.point!, z: level.floor })) : []);
   // Второй свет: пустоты в перекрытии и этажи под ними

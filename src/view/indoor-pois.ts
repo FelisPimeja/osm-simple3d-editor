@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Map as MlMap } from 'maplibre-gl';
-import type { IndoorFeature } from '../osm/model';
+import type { IndoorFeature, LonLat } from '../osm/model';
 import type { BuildingsLayer } from '../render/buildings-layer';
 
 /**
@@ -107,16 +107,20 @@ export class IndoorPois {
   }
 
   /** Значки этажа: объекты kind=poi с точкой, z — высота пола, м. Пустой список — убрать. */
-  set(pois: IndoorFeature[], z: number) {
+  set(pois: IndoorFeature[], z: number, positions: ReadonlyMap<string, { at: LonLat; z: number }> = new Map()) {
     const shown = pois.filter((f) => f.point && poiIcon(f.tags));
-    const sig = `${z}|${shown.map((f) => f.key).join(',')}`;
+    const sig = `${z}|${shown.map((f) => {
+      const p = positions.get(f.key);
+      return `${f.key}:${p ? `${p.at.join(',')}:${p.z}` : ''}`;
+    }).join(',')}`;
     if (sig === this.signature) return;
     this.signature = sig;
     this.root.innerHTML = '';
     this.items = [];
     this.byEl.clear();
     for (const f of shown) {
-      const local = this.layer.focusToLocal(f.point!);
+      const position = positions.get(f.key);
+      const local = this.layer.focusToLocal(position?.at ?? f.point!);
       const svg = icon(poiIcon(f.tags)!);
       if (!local || !svg) continue;
       const el = document.createElement('div');
@@ -126,7 +130,7 @@ export class IndoorPois {
       el.title = [t.name ?? t.ref, t.shop ?? t.amenity ?? t.office ?? t.door ?? t.entrance, f.key.replace('#poi', '')].filter(Boolean).join(' · ');
       this.root.appendChild(el);
       this.byEl.set(el, f);
-      this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], z + 0.3) });
+      this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], position?.z ?? z + 0.3) });
     }
     this.setSelection([...this.selected]);
     this.place();

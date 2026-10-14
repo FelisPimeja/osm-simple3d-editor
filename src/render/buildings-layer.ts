@@ -75,7 +75,8 @@ const INDOOR_VOID_EDGE = new THREE.LineBasicMaterial({ color: 0x57534e });
 const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0x888f94, side: THREE.DoubleSide });
 const ESCALATOR_SIDE = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 const ESCALATOR_STEP = new THREE.MeshLambertMaterial({ color: 0x747c82, side: THREE.DoubleSide });
-const ESCALATOR_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xb5bec3, side: THREE.DoubleSide });
+const ESCALATOR_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xb9d3dc, side: THREE.DoubleSide,
+  transparent: true, opacity: 0.4, depthWrite: false });
 const ESCALATOR_HANDRAIL = new THREE.MeshLambertMaterial({ color: 0x656d73 });
 
 /** План этажа для слоя. below — этажи под вторым светом (видны сквозь пустоты voids в перекрытии). */
@@ -944,25 +945,30 @@ export class BuildingsLayer implements CustomLayerInterface {
         const p = at(d);
         quad(body, edge(p, -1, p.z - boxDepth), edge(p, 1, p.z - boxDepth), edge(p, 1), edge(p, -1));
       }
-      // Плавные переходы балюстрады к горизонтальным площадкам на обоих концах.
-      const endCurve = Math.min(0.75, landing);
-      const railHeight = (d: number) => {
-        const t = Math.min(1, d / endCurve, (length - d) / endCurve);
-        const smooth = t * t * (3 - 2 * t);
-        return 0.36 + 0.54 * smooth;
+      // Поручень идёт горизонтально над площадками; закруглён только переход к уклону.
+      const bend = Math.min(0.6, ramp / 4);
+      const railZ = (d: number) => {
+        const u = Math.max(0, Math.min(ramp, d - landing));
+        const rise = u < bend ? u * u / (2 * bend * (ramp - bend))
+          : u > ramp - bend ? 1 - (ramp - u) ** 2 / (2 * bend * (ramp - bend))
+          : (u - bend / 2) / (ramp - bend);
+        return item.bottom + (item.top - item.bottom) * (ascending ? rise : 1 - rise) + 0.95;
       };
-      const railDistances = [...new Set([...distances, ...Array.from({ length: 7 }, (_, i) => endCurve * i / 6),
-        ...Array.from({ length: 7 }, (_, i) => length - endCurve * i / 6)].sort((a, b) => a - b))];
+      const railDistances = [...new Set([...distances,
+        ...Array.from({ length: 9 }, (_, i) => landing + bend * i / 8),
+        ...Array.from({ length: 9 }, (_, i) => length - landing - bend * i / 8)].sort((a, b) => a - b))];
+      const sideEdge = (p: ReturnType<typeof at>, sign: number, z: number): [number, number, number] =>
+        [p.x + sign * (halfWidth + 0.08) * p.nx, p.y + sign * (halfWidth + 0.08) * p.ny, z];
       for (const sign of [-1, 1]) {
         const path: THREE.Vector3[] = [];
         for (let i = 0; i < railDistances.length; i++) {
-          const d = railDistances[i], p = at(d), h = railHeight(d);
-          const [x, y] = edge(p, sign);
-          path.push(new THREE.Vector3(x, y, p.z + h));
+          const d = railDistances[i], p = at(d), z = railZ(d);
+          const [x, y] = sideEdge(p, sign, z);
+          path.push(new THREE.Vector3(x, y, z));
           if (i) {
-            const prev = at(railDistances[i - 1]), hp = railHeight(railDistances[i - 1]);
-            quad(balustrades, edge(prev, sign, prev.z + 0.06), edge(p, sign, p.z + 0.06),
-              edge(p, sign, p.z + h - 0.045), edge(prev, sign, prev.z + hp - 0.045));
+            const pd = railDistances[i - 1], prev = at(pd);
+            quad(balustrades, sideEdge(prev, sign, prev.z + 0.08), sideEdge(p, sign, p.z + 0.08),
+              sideEdge(p, sign, z - 0.045), sideEdge(prev, sign, railZ(pd) - 0.045));
           }
         }
         const curve = new THREE.CatmullRomCurve3(path, false, 'centripetal');
@@ -2375,7 +2381,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     ESCALATOR_BELT.color.setHex(on ? 0xffffff : 0x888f94);
     ESCALATOR_SIDE.color.setHex(0xffffff);
     ESCALATOR_STEP.color.setHex(on ? 0xffffff : 0x747c82);
-    ESCALATOR_BALUSTRADE.color.setHex(on ? 0xffffff : 0xb5bec3);
+    ESCALATOR_BALUSTRADE.color.setHex(on ? 0xffffff : 0xb9d3dc);
     ESCALATOR_HANDRAIL.color.setHex(on ? 0x57534e : 0x656d73);
     setTreesMonochrome(on);
     for (const t of this.trees.values()) t.recolour();

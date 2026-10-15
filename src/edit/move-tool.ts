@@ -53,7 +53,10 @@ export class MoveTool {
 
   get active() { return this.state !== 'off'; }
 
-  start(keys: string[]) {
+  private horizontalOnly = false;
+
+  start(keys: string[], horizontalOnly = false) {
+    this.horizontalOnly = horizontalOnly;
     this.keys = new Set(keys);
     if (!keys.length) {
       this.state = 'select';
@@ -68,6 +71,7 @@ export class MoveTool {
   drag(keys: string[], from: THREE.Vector3, hint: string, done: () => void, cancel: () => void) {
     this.stop();
     this.keys = new Set(keys);
+    this.horizontalOnly = false;
     this.from.copy(from);
     this.offset.set(0, 0, 0);
     this.axis = this.locked = undefined;
@@ -98,7 +102,8 @@ export class MoveTool {
     if (this.state === 'pick') {
       const s = this.layer.snapAt(point, this.pickFilter);
       const hit = s ? undefined : this.layer.pickHit(point);
-      const p = s?.local ?? (hit && this.keys.has(hit.key) ? hit.local : undefined);
+      const doorKey = this.layer.pickDoor(point);
+      const p = s?.local ?? (doorKey && this.keys.has(doorKey) ? this.layer.doorAnchor(doorKey) : undefined) ?? (hit && this.keys.has(hit.key) ? hit.local : undefined);
       if (!p) return this.onState(tr('Кликните по точке на выбранном объекте (подсвеченные привязки — вершины, середины, центр).'));
       this.from.copy(p);
       this.offset.set(0, 0, 0);
@@ -137,6 +142,7 @@ export class MoveTool {
         if (hit) offset.subVectors(hit, this.from).setZ(0);
       }
     }
+    if (this.horizontalOnly) offset.z = 0;
     this.axis = axis;
     if (this.shiftLock && this.locked === undefined && axis !== undefined) this.locked = axis;
     this.offset.copy(offset);
@@ -150,7 +156,7 @@ export class MoveTool {
     if (!this.active) return false;
     if (e.key === 'Escape') {
       if (this.oneShot) { this.stop(); return true; }
-      if (this.state === 'move') { this.cancelMove(); this.state = 'pick'; this.start([...this.keys]); }
+      if (this.state === 'move') { this.cancelMove(); this.state = 'pick'; this.start([...this.keys], this.horizontalOnly); }
       else this.stop();
       return true;
     }
@@ -169,6 +175,7 @@ export class MoveTool {
     const arrows: Record<string, Axis | null> = { ArrowRight: 0, ArrowLeft: 1, ArrowUp: 2, ArrowDown: null };
     if (e.key in arrows) {
       const a = arrows[e.key];
+      if (this.horizontalOnly && a === 2) return true;
       this.locked = a === null || this.locked === a ? undefined : a;
       this.arrowLock = this.locked !== undefined;
       this.refresh();
@@ -210,7 +217,7 @@ export class MoveTool {
     }
     this.state = 'pick';
     if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone());
-    this.start(keys);
+    this.start(keys, this.horizontalOnly);
   }
 
   private cancelMove() {
@@ -238,6 +245,7 @@ export class MoveTool {
     if (len < MIN_DRAG_PX) return;
     let best: { axis: Axis; angle: number } | undefined;
     axes.forEach((a, i) => {
+      if (this.horizontalOnly && i === 2) return;
       const s1 = this.layer.focusProject(this.from.clone().addScaledVector(a, 5));
       if (!s1) return;
       const dx = s1[0] - s0[0], dy = s1[1] - s0[1];

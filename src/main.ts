@@ -44,7 +44,7 @@ import { OffsetTool, type OffsetTarget } from './edit/offset-tool';
 import { setToolCursor, type ToolCursor } from './view/cursors';
 import { PAINT_TAGS, PaintTool } from './edit/paint-tool';
 import { CIRCLE_LABELS, CIRCLE_MODES, CIRCLE_TITLES, DrawTool, RECT_LABELS, RECT_MODES, RECT_TITLES, type CircleMode, type DrawShape, type RectMode } from './edit/draw-tool';
-import { suggestComment } from './edit/changeset-comment';
+import { suggestComment, isIndoorChange } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
@@ -893,6 +893,9 @@ map.on('click', (e) => {
     return;
   }
   if (moveTool.state === 'select') {
+    const doorKey = overpassLayer.pickDoor([e.point.x, e.point.y]);
+    const door = shownIndoor.find(f => f.key === doorKey && isDoor(f));
+    if (door) { selectIndoor(door); startMove(); moveSelectedByClick = true; updateSnap([e.point.x, e.point.y]); return; }
     // Инструмент включён без выделения: клик выбирает объект, дальше — точка захвата на нём
     const key = resolveClick(e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point));
     if (!key) { moveTool.stop(); select(undefined); updateSnap(undefined); return; }
@@ -902,7 +905,7 @@ map.on('click', (e) => {
     updateSnap([e.point.x, e.point.y]);
     return;
   }
-  if (moveTool.state === 'pick' && moveSelectedByClick && !overpassLayer.snapAt([e.point.x, e.point.y], moveTool.pickFilter)) {
+  if (moveTool.state === 'pick' && moveSelectedByClick && !moveTool.keys.has(overpassLayer.pickDoor([e.point.x, e.point.y]) ?? '') && !overpassLayer.snapAt([e.point.x, e.point.y], moveTool.pickFilter)) {
     // Объект выбран самим инструментом — клик по другому объекту здания выбирает его вместо прежнего
     const key = resolveClick(e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point));
     if (key && !moveTool.keys.has(key)) {
@@ -915,7 +918,7 @@ map.on('click', (e) => {
   }
   if (moveTool.active) {
     // Перемещение не начато, клик мимо всех объектов — выключаем инструмент и снимаем выделение
-    if (moveTool.state === 'pick' && !overpassLayer.snapAt([e.point.x, e.point.y], moveTool.pickFilter) && !overpassLayer.pickHit(e.point)) {
+    if (moveTool.state === 'pick' && !overpassLayer.snapAt([e.point.x, e.point.y], moveTool.pickFilter) && !overpassLayer.pickHit(e.point) && !overpassLayer.pickDoor([e.point.x, e.point.y])) {
       moveTool.stop();
       select(undefined);
       updateSnap(undefined);
@@ -3318,20 +3321,32 @@ function nodeIds(f: Feature3D): number[] | undefined {
 function startMove() {
   if (!focus) return;
   moveSelectedByClick = false;
-  const keys = selection.filter((k) => focus!.members.includes(k));
+  const doors = indoorSelection.filter(isDoor);
+  for (const door of doors) trackIndoor(indoorKey(door.key), door);
+  const keys = doors.length ? doors.map(d => d.key) : selection.filter((k) => focus!.members.includes(k));
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
-  if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
+  if (!doors.length && features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
     return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
   }
   pushTool.stop();
   splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   // Без выделения инструмент сначала ждёт клика по объекту (см. обработчик клика)
-  moveTool.start(keys);
+  moveTool.start(keys, doors.length > 0);
 }
 
 /** Применить сдвиг: x/y — координаты узлов, z — высоты (теги). */
 function commitMove(keys: string[], offset: THREE.Vector3) {
+  const doors = keys.map(key => buildingIndoorFor(key)).filter((f): f is IndoorFeature => !!f && isDoor(f));
+  if (doors.length) {
+    session.editMany(doors.map(f => {
+      trackIndoor(indoorKey(f.key), f);
+      const [x, y] = overpassLayer.focusFromLngLat(f.point!)!;
+      const at = overpassLayer.focusToLngLat(x + offset.x, y + offset.y)!;
+      return { key: indoorKey(f.key), polygons: [{ outer: [at], inners: [], outerIds: [Number(indoorKey(f.key).split('/')[1])], innerIds: [] }] };
+    }));
+    return;
+  }
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   // Ниже земли не опускаем
   const minBase = Math.min(...features.map((f) => computeHeights(f.tags).min));
@@ -4312,7 +4327,7 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
 }
 
 /** Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет. */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width'] : fs.every(isDoor) ? ['door', 'level']
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width'] : fs.every(isDoor) ? ['door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level'] : [...INDOOR_EDIT_TAGS]);
 
 /** Дверь плана этажа: узел с door, indoor=door или entrance (точка на линии стены в проёме). */
@@ -4399,9 +4414,9 @@ function indoorForm(fs: IndoorFeature[]): string {
     const changed = fs.some((f) => session.isChanged(indoorKey(f.key), k));
     const lid = k === 'indoor' ? 'indoor-values' : k === 'room' ? 'room-values' : '';
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${k}</span>`
-      + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : '—'}"${lid ? ` list="${lid}"` : ''} spellcheck="false" autocomplete="off"></label>`;
+      + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : k === 'diameter' ? '2.4 m' : '—'}"${lid ? ` list="${lid}"` : ''} spellcheck="false" autocomplete="off"></label>`;
   }).join('');
-  const hint = fs.every(isDoor) ? `<p class="hint">${tr('Дверь можно перетащить вдоль стены.')}</p>` : '';
+  const hint = fs.every(isDoor) ? `<p class="hint">${fs.every((f) => f.tags.door === 'revolving') ? tr('Дверь можно свободно перемещать по горизонтали.') : tr('Дверь можно перетащить вдоль стены.')}</p>` : '';
   return `<div class="tag-form">${rows}${list('indoor-values', INDOOR_VALUES)}${list('room-values', ROOM_VALUES)}</div>${hint}`;
 }
 
@@ -4645,7 +4660,7 @@ async function deleteIndoorWalls() {
 }
 
 /**
- * Перетаскивание двери вдоль стены: точка скользит по отрезкам контуров (помещения, стены), на которых дверь
+ * Перетаскивание вращающейся двери — свободно по горизонтали; обычной — вдоль стены: точка скользит по отрезкам контуров (помещения, стены), на которых дверь
  * стоит; отпускание — сдвиг узла (шаг истории).
  */
 let doorDrag: { f: IndoorFeature; segs: [Pt, Pt][]; x: number; y: number; moved: boolean; at?: LonLat } | undefined;
@@ -4691,7 +4706,16 @@ mapCanvas.addEventListener('pointermove', (e) => {
   doorDrag.moved = true;
   const r = map.getCanvas().getBoundingClientRect();
   const hit = overpassLayer.focusRay([e.clientX - r.left, e.clientY - r.top])?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -shownLevel.floor), new THREE.Vector3());
-  if (!hit || !doorDrag.segs.length) return;
+  if (!hit) return;
+  if (doorDrag.f.tags.door === 'revolving') {
+    const at = overpassLayer.focusToLngLat(hit.x, hit.y);
+    if (at) {
+      doorDrag.at = at;
+      overpassLayer.previewDoor({ key: doorDrag.f.key, at });
+    }
+    return;
+  }
+  if (!doorDrag.segs.length) return;
   // Ближайшая точка на отрезках стены
   let best: { p: Pt; d: number } | undefined;
   for (const [a, b] of doorDrag.segs) {
@@ -4928,7 +4952,7 @@ function renderLevelsImpl() {
   }
   indoorPois.set(onLevel.filter((f) => f.kind === 'poi'), level?.floor ?? 0, escalatorIconPositions);
   if (level) levelsEl.insertAdjacentHTML('beforeend', indoorLegend(onLevel));
-  overpassLayer.setDoors(level ? onLevel.filter(isDoor).map((f) => ({ key: f.key, at: f.point!, z: level.floor })) : []);
+  overpassLayer.setDoors(level ? onLevel.filter(isDoor).map((f) => ({ key: f.key, at: f.point!, z: level.floor, tags: f.tags })) : []);
   // Второй свет: пустоты в перекрытии и этажи под ними
   // Пустоты здания посчитались или поменялись (пришли indoor-данные) — перекрытия стеклянных частей пересобрать
   const allVoids = buildingVoids(focus, levels, visibleIndoor);
@@ -6276,7 +6300,7 @@ const ICON_REVERT = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" 
 function renderChanges() {
   renderAccount();
   // Пути-члены мультиполигонов (разрезание при правке контуров) — служебные: отправляются, но в списке не видны
-  const changes = session.changes().filter((c) => !c.feature.line);
+  const changes = session.changes().filter((c) => !c.feature.line || isIndoorChange(c));
   // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
   // Шаги скрытия частей — тоже в истории, но панель ради них не раскрываем
   const show = changes.length > 0 || session.hasDataHistory();
@@ -6340,7 +6364,7 @@ let insertedSuggestion: string | undefined;
 
 function commentSuggestion(): string {
   const groupKey = (key: string) => editGroups.get(key)?.key ?? groupOf(key)?.key;
-  return suggestComment(session.changes().filter((c) => !c.feature.line), {
+  return suggestComment(session.changes().filter((c) => !c.feature.line || isIndoorChange(c)), {
     groupOf: (key) => { const g = groupKey(key); return g && g !== key ? g : undefined; },
     isGroup: (key) => editGroups.has(key),
     buildingName: (key) => {

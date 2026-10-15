@@ -1,7 +1,16 @@
 import { trimCoplanarWalls } from './shell-trim';
 
+/** Half of the drum/wall intersection chord; ordinary doors still snap to the wall. */
+export function doorOpeningHalfWidth(distance: number, diameter: number | undefined, width = 1, snap = 0.15): number {
+  if (diameter !== undefined) {
+    const radius = diameter / 2;
+    return Math.abs(distance) < radius ? Math.sqrt(radius * radius - distance * distance) : 0;
+  }
+  return Math.abs(distance) <= snap ? width / 2 : 0;
+}
+
 /** Вырезать проёмы из вертикальных треугольников оболочки, сохранив скаты и перекрытия. */
-export function cutDoorOpenings(positions: Float32Array, doors: { x: number; y: number; z: number }[], width = 1, height = 2.2, snap = 0.15): Float32Array {
+export function cutDoorOpenings(positions: Float32Array, doors: { x: number; y: number; z: number; width?: number; diameter?: number }[], width = 1, height = 2.2, snap = 0.15): Float32Array {
   if (!doors.length) return positions;
   const holes: number[] = [];
   for (let i = 0; i + 8 < positions.length; i += 9) {
@@ -15,10 +24,11 @@ export function cutDoorOpenings(positions: Float32Array, doors: { x: number; y: 
     const ts = vs.map(p => (p[0]-a[0])*dx+(p[1]-a[1])*dy);
     for (const d of doors) {
       const distance = ((d.x-a[0])*nx+(d.y-a[1])*ny)/n;
-      if (Math.abs(distance) > snap || d.z >= Math.max(...vs.map(p=>p[2])) || d.z+height <= Math.min(...vs.map(p=>p[2]))) continue;
+      const halfWidth = doorOpeningHalfWidth(distance, d.diameter, d.width ?? width, snap);
+      if (!halfWidth || d.z >= Math.max(...vs.map(p=>p[2])) || d.z+height <= Math.min(...vs.map(p=>p[2]))) continue;
       const t = (d.x-a[0])*dx+(d.y-a[1])*dy;
-      if (t+width/2 <= Math.min(...ts) || t-width/2 >= Math.max(...ts)) continue;
-      const x = a[0]+dx*(t-width/2), y = a[1]+dy*(t-width/2), X=x+dx*width, Y=y+dy*width, z=d.z, Z=z+height;
+      if (t+halfWidth <= Math.min(...ts) || t-halfWidth >= Math.max(...ts)) continue;
+      const x = a[0]+dx*(t-halfWidth), y = a[1]+dy*(t-halfWidth), X=x+dx*halfWidth*2, Y=y+dy*halfWidth*2, z=d.z, Z=z+height;
       holes.push(x,y,z,X,Y,z,X,Y,Z,x,y,z,X,Y,Z,x,y,Z);
     }
   }

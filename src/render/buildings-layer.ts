@@ -1,4 +1,5 @@
-import { cutDoorOpenings } from './door-openings';
+import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
+import { cutDoorOpenings, doorOpeningHalfWidth } from './door-openings';
 import * as THREE from 'three';
 import polygonClipping, { type MultiPolygon as ClipMulti } from 'polygon-clipping';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
@@ -512,12 +513,29 @@ export class BuildingsLayer implements CustomLayerInterface {
   private doorOpeningEdges = new Map<string, Map<string, number[]>>();
 
   /** Точки дверей этажа (узлы OSM): маркеры на линии основания стены в проёме. */
-  private doors: { key: string; at: LonLat; z: number }[] = [];
+  private doors: { key: string; at: LonLat; z: number; tags?: Record<string, string> }[] = [];
   private doorObj?: THREE.Group;
+  private indoorSnaps?: { points: SnapPoint[]; edges: SnapEdge[] };
+  private doorMoveOffsets = new Map<string, THREE.Vector3>();
+
+  private doorAt(d: { key: string; at: LonLat }): LonLat {
+    if (this.doorPreview?.key === d.key) return this.doorPreview.at;
+    const offset = this.doorMoveOffsets.get(d.key), g = this.groups.get(FOCUS_GROUP);
+    if (!offset || !g) return d.at;
+    const [x, y] = g.toLocal(d.at);
+    return this.focusToLngLat(x + offset.x, y + offset.y) ?? d.at;
+  }
+
+  doorAnchor(key: string): THREE.Vector3 | undefined {
+    const d = this.doors.find(d => d.key === key), g = this.groups.get(FOCUS_GROUP);
+    if (!d || !g) return;
+    const [x, y] = g.toLocal(this.doorAt(d));
+    return new THREE.Vector3(x, y, d.z + 0.04);
+  }
   /** Перетаскиваемая дверь — её маркер в этой точке. */
   private doorPreview?: { key: string; at: LonLat };
 
-  setDoors(doors: { key: string; at: LonLat; z: number }[]) {
+  setDoors(doors: { key: string; at: LonLat; z: number; tags?: Record<string, string> }[]) {
     this.doors = doors;
     this.applyDoors();
   }
@@ -536,8 +554,11 @@ export class BuildingsLayer implements CustomLayerInterface {
   private previewDoors(doors: LonLat[]): LonLat[] {
     const p = this.doorPreview;
     const from = p && this.doors.find((d) => d.key === p.key)?.at;
-    if (!p || !from) return doors;
-    return doors.map((d) => (Math.abs(d[0] - from[0]) < 1e-10 && Math.abs(d[1] - from[1]) < 1e-10 ? p.at : d));
+    return doors.map(at => {
+      if (p && from && Math.abs(at[0] - from[0]) < 1e-10 && Math.abs(at[1] - from[1]) < 1e-10) return p.at;
+      const door = this.doors.find(d => Math.abs(at[0] - d.at[0]) < 1e-10 && Math.abs(at[1] - d.at[1]) < 1e-10);
+      return door ? this.doorAt(door) : at;
+    });
   }
 
   private applyDoors() {
@@ -550,9 +571,27 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!g || !this.level || !this.doors.length) return;
     const root = new THREE.Group();
     for (const d of this.doors) {
-      const at = this.doorPreview?.key === d.key ? this.doorPreview.at : d.at;
+      const at = this.doorAt(d);
       const [x, y] = g.toLocal(at);
       const sel = this.indoorSelected.includes(d.key) || this.indoorIssueHighlighted.includes(d.key);
+      const diameter = revolvingDoorDiameter(d.tags);
+      if (diameter !== undefined) {
+        const model = revolvingDoorModel(diameter, Math.max(0.1, Math.min(DOOR_HEIGHT, this.level.cut - d.z)), sel);
+        model.position.set(x, y, d.z + 0.04);
+        // Align the drum entrances with the nearest wall, including room boundaries.
+        let nearest = Infinity;
+        for (const item of this.level.items) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
+          for (let i = 1; i < ring.length; i++) {
+            const a = g.toLocal(ring[i - 1]), b = g.toLocal(ring[i]);
+            const dx = b[0] - a[0], dy = b[1] - a[1], length2 = dx * dx + dy * dy;
+            if (!length2) continue;
+            const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / length2));
+            const distance = Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy);
+            if (distance < nearest) { nearest = distance; model.rotation.z = Math.atan2(dy, dx); }
+          }
+        }
+        root.add(model);
+      }
       const dot = new THREE.Mesh(DOOR_GEO, sel ? DOOR_SELECTED_MATERIAL : DOOR_MATERIAL);
       dot.position.set(x, y, d.z + 0.04);
       dot.renderOrder = 5;
@@ -734,6 +773,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const hadVoids = !!this.level?.voidCuts?.length, hasVoids = !!level?.voidCuts?.length;
     const toggled = !this.level !== !level;
     this.level = level;
+    this.indoorSnaps = undefined;
     const focus = this.groups.get(FOCUS_GROUP);
     // Вход в этажи и выход — оболочка здания вместо частей и обратно
     if (focus && (hadVoids || hasVoids || toggled)) this.rebuildGeometry(focus);
@@ -1169,7 +1209,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       end(bx, by, z0, Math.min(z1b, jambB), (ax - bx) / l, (ay - by) / l);
     };
     const doors = doorList.map(g.toLocal);
-    const namedDoors = pale ? [] : this.doors.map((d) => ({ key: d.key, at: g.toLocal(this.doorPreview?.key === d.key ? this.doorPreview.at : d.at) }));
+    const namedDoors = pale ? [] : this.doors.map((d) => ({ key: d.key, at: g.toLocal(this.doorAt(d)) }));
     /** Стена с дверными проёмами (DOOR_WIDTH × DOOR_HEIGHT) там, где на ней стоит дверь. */
     const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number) => {
       const len = Math.hypot(bx - ax, by - ay);
@@ -1178,10 +1218,14 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (len > 1e-6) {
         const dx = (bx - ax) / len, dy = (by - ay) / len;
         for (const [px, py] of doors) {
-          if (Math.abs((px - ax) * dy - (py - ay) * dx) > DOOR_SNAP) continue;
+          const distance = (px - ax) * dy - (py - ay) * dx;
           const t = (px - ax) * dx + (py - ay) * dy;
-          if (t < -DOOR_SNAP || t > len + DOOR_SNAP) continue;
-          const lo = Math.max(0, t - DOOR_WIDTH / 2) / len, hi = Math.min(len, t + DOOR_WIDTH / 2) / len;
+          const door = this.doors.find((d) => { const p = g.toLocal(this.doorAt(d)); return Math.hypot(p[0] - px, p[1] - py) < 0.01 && Math.abs(d.z - z0) < 0.1; });
+          const diameter = revolvingDoorDiameter(door?.tags);
+          const halfWidth = doorOpeningHalfWidth(distance, diameter, DOOR_WIDTH, DOOR_SNAP);
+          if (!halfWidth || t + halfWidth <= 0 || t - halfWidth >= len) continue;
+          if (diameter === undefined && (t < -DOOR_SNAP || t > len + DOOR_SNAP)) continue;
+          const lo = Math.max(0, t - halfWidth) / len, hi = Math.min(len, t + halfWidth) / len;
           gaps.push([lo, hi]);
           const named = namedDoors.find((d) => Math.hypot(d.at[0] - px, d.at[1] - py) < 0.01);
           if (named) namedGaps.push({ key: named.key, lo, hi });
@@ -1492,7 +1536,27 @@ export class BuildingsLayer implements CustomLayerInterface {
     let best: { s: SnapPoint; d: number; px: [number, number]; along?: THREE.Vector3 } | undefined;
     const near: { s: SnapPoint; d: number; px: [number, number]; along?: THREE.Vector3 }[] = [];
     const off = this.snapKindsOff;
-    for (const s of this.snaps.points) {
+    this.indoorSnaps ??= (() => {
+      const points: SnapPoint[] = [], edges: SnapEdge[] = [];
+      for (const item of this.level?.items ?? []) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
+        const pts = ring.map(at => { const [x, y] = g.toLocal(at); return new THREE.Vector3(x, y, item.z + 0.04); });
+        for (const p of pts) points.push({ key: item.key, kind: 'vertex', p });
+        for (let i = 0; i < pts.length - (item.line ? 1 : 0); i++) {
+          const a = pts[i], b = pts[(i + 1) % pts.length];
+          if (a.distanceToSquared(b) < 1e-10) continue;
+          edges.push({ key: item.key, a, b });
+          points.push({ key: item.key, kind: 'midpoint', p: a.clone().add(b).multiplyScalar(0.5) });
+        }
+      }
+      return { points, edges };
+    })();
+    const doorPoints: SnapPoint[] = this.level ? this.doors.flatMap(d => {
+      const p = this.doorAnchor(d.key)!;
+      const radius = (revolvingDoorDiameter(d.tags) ?? 0) / 2;
+      return [{ kind: 'center' as SnapKind, key: d.key, p }, ...[0, 1, 2, 3].flatMap(i => radius ? [{ kind: 'vertex' as SnapKind, key: d.key,
+        p: p.clone().add(new THREE.Vector3(Math.cos(i * Math.PI / 2) * radius, Math.sin(i * Math.PI / 2) * radius, 0)) }] : [])];
+    }) : [];
+    for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...doorPoints]) {
       if (off.has(s.kind) || !filter(s.key)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;
@@ -1516,7 +1580,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (this.edgeHover && now - this.edgeHover.since >= EXTENSION_ARM_MS) this.armedEdges.set(this.edgeHover.id, now + EXTENSION_TTL_MS);
     for (const [id, until] of this.armedEdges) if (until < now) this.armedEdges.delete(id);
     let hovered: { id: string; d: number } | undefined;
-    if (ray) for (const e of this.snaps.edges) {
+    if (ray) for (const e of [...this.snaps.edges, ...this.indoorSnaps.edges]) {
       if (!filter(e.key)) continue;
       if (opts.from && !off.has('perpendicular')) {
         ab.subVectors(e.b, e.a);
@@ -1803,7 +1867,15 @@ export class BuildingsLayer implements CustomLayerInterface {
    * offset undefined — вернуть на место.
    */
   setMovePreview(keys: string[], offset: THREE.Vector3 | undefined) {
-    this.setTransformPreview(keys, offset && new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z));
+    const doors = keys.filter(key => this.doors.some(d => d.key === key));
+    for (const key of doors) {
+      if (offset) this.doorMoveOffsets.set(key, offset.clone());
+      else this.doorMoveOffsets.delete(key);
+    }
+    if (doors.length) { this.applyDoors(); this.applyLevel(); this.applyIndoorSelection(); this.map?.triggerRepaint(); }
+    const buildings = keys.filter(key => !doors.includes(key));
+    if (!buildings.length) return;
+    this.setTransformPreview(buildings, offset && new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z));
   }
 
   /** Предпросмотр поворота keys на angle (радианы, против часовой) вокруг вертикали через pivot; undefined — сбросить. */
@@ -2616,7 +2688,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       const levels = [{ items: this.level.items, doors: this.previewDoors(this.level.doors ?? []), z: this.level.floor },
         ...(this.level.below ?? []).map(b => ({ items: b.items, doors: b.doors ?? [], z: b.items[0]?.z }))];
       const doors = levels.flatMap(l => l.z === undefined ? [] : l.doors.map(at => {
-        const [x, y] = g.toLocal(at); return { x, y, z: l.z! };
+        const [x, y] = g.toLocal(at); const door = this.doors.find(d => Math.abs(d.z - l.z!) < 0.1 && Math.hypot(...g.toLocal(this.doorAt(d)).map((v, i) => v - [x, y][i])) < 0.01);
+        return { x, y, z: l.z!, diameter: revolvingDoorDiameter(door?.tags) };
       }));
       for (const it of g.items) {
         if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || !it.wallVertices) continue;

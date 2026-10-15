@@ -185,7 +185,8 @@ export class OverpassTiles {
       if (t.state !== 'ready') continue;
       for (const f of t.indoor ?? []) {
         if (out.has(f.key)) continue;
-        if (f.polygons.some((p) => p.outer.some(([x, y]) => x >= w && x <= e && y >= s && y <= n))) out.set(f.key, f);
+        if ((f.point && f.point[0] >= w && f.point[0] <= e && f.point[1] >= s && f.point[1] <= n)
+          || f.polygons.some((p) => p.outer.some(([x, y]) => x >= w && x <= e && y >= s && y <= n))) out.set(f.key, f);
       }
     }
     return [...out.values()];

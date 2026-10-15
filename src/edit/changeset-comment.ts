@@ -37,12 +37,75 @@ function fixesIndoorDoor(c: TagChange): boolean {
     && c.diff.every((d) => d.tag === 'entrance' || d.tag === 'door' || d.tag === 'indoor');
 }
 
+type IndoorComponent = 'door' | 'wall' | 'room' | 'corridor' | 'column' | 'stairs' | 'elevator' | 'escalator' | 'other';
+
+/** Prefer the original kind so deletion or removal of identifying tags remains an indoor edit. */
+function indoorComponent(c: TagChange): IndoorComponent | undefined {
+  if (c.before.building || c.before['building:part'] || c.after.building || c.after['building:part']) return;
+  for (const t of [c.before, c.after]) {
+    if (t.door || t.indoor === 'door' || (c.key.startsWith('node/') && t.entrance && t.level !== undefined)) return 'door';
+    if ((t.highway === 'steps' || t.stairs === 'yes') && t.conveying && t.conveying !== 'no') return 'escalator';
+    if (t.highway === 'elevator' || t.elevator === 'yes') return 'elevator';
+    if (t.indoor === 'stairs' || t.highway === 'steps' || t.stairs === 'yes') return 'stairs';
+    if (t.indoor === 'wall' || t.indoor === 'room' || t.indoor === 'corridor' || t.indoor === 'column') return t.indoor;
+    if (t.room && t.level !== undefined) return 'room';
+  }
+  if ([c.before, c.after].some(t => t.indoor || t.level !== undefined && (t.shop || t.amenity || t.office))) return 'other';
+}
+
+export function isIndoorChange(c: TagChange): boolean { return indoorComponent(c) !== undefined; }
+
+type IndoorAction = 'created' | 'deleted' | 'tags' | 'geometry';
+
+/** Indoor changes use their own component names, including deleted objects and open wall ways. */
+export function suggestComment(changes: TagChange[], ctx: CommentContext): string {
+  if (changes.length && changes.every(fixesIndoorDoor)) return tr('Исправление тегов indoor');
+  const indoor = changes.filter(isIndoorChange);
+  const building = changes.filter(c => !isIndoorChange(c));
+  if (!indoor.length) return suggestBuildingComment(building, ctx);
+  const counts = new Map<IndoorAction, Map<IndoorComponent, number>>();
+  const add = (action: IndoorAction, kind: IndoorComponent) => {
+    let kinds = counts.get(action);
+    if (!kinds) counts.set(action, kinds = new Map());
+    kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+  };
+  for (const c of indoor) {
+    const kind = indoorComponent(c)!;
+    if (c.deleted) add('deleted', kind);
+    else if (c.created) add('created', kind);
+    else {
+      if (c.diff.some(d => !d.tag.startsWith('('))) add('tags', kind);
+      if (c.nodeMoves?.length || c.wayNodes || c.members) add('geometry', kind);
+    }
+  }
+  const components: Record<IndoorComponent, string> = {
+    door: tr('двери'), wall: tr('стены'), room: tr('помещения'), corridor: tr('коридоры'), column: tr('колонны'),
+    stairs: tr('лестницы'), elevator: tr('лифты'), escalator: tr('эскалаторы'), other: tr('объекты плана'),
+  };
+  const actions: Record<IndoorAction, string> = {
+    created: tr('добавлены'), deleted: tr('удалены'), tags: tr('изменены теги'), geometry: tr('изменена геометрия'),
+  };
+  const lines = (compact: boolean) => [...counts].map(([action, kinds]) => {
+    const detail = compact ? String([...kinds.values()].reduce((sum, n) => sum + n, 0))
+      : [...kinds].map(([kind, n]) => `${components[kind]} (${n})`).join(', ');
+    return `${actions[action]}: ${detail}`;
+  });
+  const format = (compact: boolean) => `${tr('Поэтажные планы:')} ${lines(compact).join('; ')}`;
+  let text = format(false);
+  if (text.length > MAX_LENGTH) text = format(true);
+  if (!building.length) return text;
+  const buildings = suggestBuildingComment(building, ctx);
+  if (text.length + buildings.length + 2 <= MAX_LENGTH) return `${text}\n\n${buildings}`;
+  const combined = `${text}; ${tr('правки зданий')}`;
+  return combined.length <= MAX_LENGTH ? combined : `${format(true)}; ${tr('правки зданий')}`;
+}
+
 /**
  * Предлагаемый комментарий к пакету правок. Правки раскладываются по зданиям (отношениям type=building),
  * для каждого — заголовок с названием и пункты по видам правок. Объекты вне отношений — отдельным блоком.
  * Логику пунктов будем ветвить по мере появления новых инструментов.
  */
-export function suggestComment(changes: TagChange[], ctx: CommentContext): string {
+function suggestBuildingComment(changes: TagChange[], ctx: CommentContext): string {
   if (changes.length && changes.every(fixesIndoorDoor)) return tr('Исправление тегов indoor');
   const buildings = new Map<string, BuildingEdits>();
   const loose: BuildingEdits = { added: 0, removed: 0, attributes: false, moved: false };

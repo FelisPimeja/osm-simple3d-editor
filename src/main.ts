@@ -4907,6 +4907,9 @@ function renderLevelsImpl() {
         && (f.line || f.kind === 'wall' || f.kind === 'column' || floorLevels(f).includes(l.n)))
         .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor, areaLedge: f.tags.indoor === 'area',
           ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}) })),
+      // Модели нижних этажей видны сквозь второй свет; маркеры остаются на активном этаже.
+      doorModels: fs.filter((f) => isDoor(f) && f.tags.door === 'revolving')
+        .map((f) => ({ key: f.key, at: f.point!, z: l.floor, tags: f.tags })),
       // Двери этажа — проёмы в стенах
       doors: fs.filter((f) => f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!),
     };

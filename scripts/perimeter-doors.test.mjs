@@ -140,3 +140,78 @@ test('Move supports door anchors with snaps off, horizontal snaps, numeric dista
   assert.equal(tool.state,'pick');
  } finally {globalThis.document=previous;}
 });
+test('wall door metadata is projected once instead of once per wall/door pair',()=>{
+ const ll=(x,y)=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ const layer=new BuildingsLayer('test');
+ layer.setFocus([{key:'way/1',type:'way',id:1,version:1,kind:'part',hasParts:false,tags:{'building:part':'yes',height:'6'},polygons:[{outer:[[0,0],[100,0],[100,100],[0,100]].map(p=>ll(...p)),inners:[]}]}]);
+ const doors=Array.from({length:60},(_,i)=>({key:`node/${i+1}`,at:ll(10+i,2.6),z:0,tags:{door:'yes'}}));
+ layer.setDoors(doors);
+ const g=layer.groups.get('@focus'),toLocal=g.toLocal;
+ let projections=0;
+ g.toLocal=(at)=>{projections++;return toLocal(at);};
+ layer.setLevel({floor:0,cut:3,items:Array.from({length:100},(_,i)=>({key:`way/${i+2}`,kind:'wall',line:true,z:0,polygons:[{outer:[ll(1,i+1),ll(99,i+1)],inners:[]}]})),doors:doors.map(d=>d.at)});
+ // This was hundreds of thousands of projections with the nested lookup.
+ assert.ok(projections<5000,`unexpected repeated coordinate projections: ${projections}`);
+});
+test('entering a floor merges the building geometry only once',()=>{
+ const layer=new BuildingsLayer('test');
+ layer.setFocus([{key:'way/1',type:'way',id:1,version:1,kind:'part',hasParts:false,tags:{'building:part':'yes',height:'6'},polygons:[{outer:[[37,55],[37.0001,55],[37.0001,55.0001],[37,55.0001]],inners:[]}]}]);
+ let merges=0;const original=layer.rebuildGeometry;
+ layer.rebuildGeometry=function(...args){merges++;return original.apply(this,args);};
+ layer.setLevel({floor:0,cut:3,items:[],doors:[]});
+ assert.equal(merges,1);
+ layer.setLevel(undefined);
+ assert.equal(merges,2);
+});
+test('returning to a floor reuses door-cut geometry and edges; diameter edits invalidate it',()=>{
+ const ll=(x,y)=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ const layer=new BuildingsLayer('test');
+ layer.graphics.edges=true;
+ layer.setFocus([{key:'way/1',type:'way',id:1,version:1,kind:'part',hasParts:false,tags:{'building:part':'yes',height:'6'},polygons:[{outer:[[0,0],[6,0],[6,5],[0,5]].map(p=>ll(...p)),inners:[]}]}]);
+ const at=ll(3,0),door={key:'node/1',at,z:0,tags:{door:'revolving',diameter:'2'}};
+ const level={floor:0,cut:3,items:[],doors:[at]};
+ layer.setDoors([door]);layer.setLevel(level);
+ const item=layer.groups.get('@focus').items[0];
+ const positions=item.positions,edges=item.edges;
+ assert.ok(edges?.length);
+ layer.setDoors([]);layer.setLevel({floor:3,cut:6,items:[],doors:[]});
+ assert.notEqual(item.positions,positions);
+ layer.setDoors([door]);layer.setLevel(level);
+ assert.equal(item.positions,positions);
+ assert.equal(item.edges,edges);
+ layer.setDoors([{...door,tags:{door:'revolving',diameter:'3'}}]);layer.setLevel(level);
+ assert.notEqual(item.positions,positions);
+ assert.notEqual(item.edges,edges);
+ assert.ok(area(item.positions)<area(positions));
+ for(const diameter of ['1','1.2','1.4','1.6']) {
+  layer.setDoors([{...door,tags:{door:'revolving',diameter}}]);layer.setLevel(level);
+ }
+ assert.equal(layer.doorCuts.get(item).entries.size,3);
+});
+test('revolving doors below an atrium are drawn at their own height and retain their diameter',()=>{
+ const ll=(x,y)=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ const layer=new BuildingsLayer('test');
+ layer.setFocus([{key:'way/1',type:'way',id:1,version:1,kind:'part',hasParts:false,tags:{'building:part':'yes',height:'6'},polygons:[{outer:[[0,0],[6,0],[6,5],[0,5]].map(p=>ll(...p)),inners:[]}]}]);
+ const door={key:'node/1',at:ll(3,0),z:0,tags:{door:'revolving',diameter:'2'}};
+ const below={cut:3,items:[{key:'way/2',kind:'area',z:0,polygons:[{outer:[[0,0],[6,0],[6,5],[0,5]].map(p=>ll(...p)),inners:[]}]}],doors:[door.at],doorModels:[door]};
+ layer.setDoors([]);
+ const level={floor:3,cut:6,items:[],below:[below]};
+ layer.setLevel(level);
+ const group=layer.groups.get('@focus');
+ const models=()=>{const a=[];group.scene.traverse(o=>{if(o.name==='revolving-door')a.push(o);});return a;};
+ assert.equal(models().length,1);
+ assert.ok(Math.abs(models()[0].position.z-.04)<1e-9);
+ assert.equal(models()[0].userData.pale,true);
+ assert.equal(layer.doorAnchor(door.key),undefined,'lower floor doors are not active editing targets');
+ const wideArea=area(group.items[0].positions);
+ layer.setLevel({...level,below:[{...below,doorModels:[]}]});
+ assert.equal(models().length,0);
+ assert.ok(Math.abs(area(group.items[0].positions)-wideArea-2.2)<.01,'lower facade opening uses the drum diameter');
+ layer.setDoors([{...door,z:3}]);layer.setLevel(level);
+ assert.equal(models().length,2,'repeated door nodes can have a model on both floors');
+ assert.deepEqual(models().map(m=>m.position.z).sort((a,b)=>a-b),[.04,3.04]);
+ layer.setLevel({floor:0,cut:3,items:[],doors:[door.at]});
+ assert.equal(models().length,1);
+ layer.setLevel(undefined);
+ assert.equal(models().length,0);
+});

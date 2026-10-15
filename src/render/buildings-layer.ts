@@ -89,6 +89,8 @@ const ESCALATOR_PALE_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xdce9e
   transparent: true, opacity: 0.4, depthWrite: false });
 const ESCALATOR_PALE_HANDRAIL = new LineMaterial({ color: 0xc4c0bb, linewidth: 5 });
 
+export interface DoorItem { key: string; at: LonLat; z: number; tags?: Record<string, string> }
+
 /** План этажа для слоя. below — этажи под вторым светом (видны сквозь пустоты voids в перекрытии). */
 export interface IndoorLevel {
   cut: number;
@@ -101,7 +103,7 @@ export interface IndoorLevel {
   voids?: LonLat[][][];
   /** Высоты, на которых пустота прорезает перекрытия (пол этажа и полы промежуточных этажей), — по пустотам. */
   voidCuts?: { polygon: LonLat[][][]; zs: number[] }[];
-  below?: { cut: number; items: IndoorItem[]; doors?: LonLat[]; /** Собственные проёмы этого этажа. */ voids?: LonLat[][][] }[];
+  below?: { cut: number; items: IndoorItem[]; doors?: LonLat[]; doorModels?: DoorItem[]; /** Собственные проёмы этого этажа. */ voids?: LonLat[][][] }[];
 }
 
 export interface RenderedFeature { feature: Feature3D; roofApproximated: boolean }
@@ -513,7 +515,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private doorOpeningEdges = new Map<string, Map<string, number[]>>();
 
   /** Точки дверей этажа (узлы OSM): маркеры на линии основания стены в проёме. */
-  private doors: { key: string; at: LonLat; z: number; tags?: Record<string, string> }[] = [];
+  private doors: DoorItem[] = [];
   private doorObj?: THREE.Group;
   private indoorSnaps?: { points: SnapPoint[]; edges: SnapEdge[] };
   private doorMoveOffsets = new Map<string, THREE.Vector3>();
@@ -535,7 +537,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Перетаскиваемая дверь — её маркер в этой точке. */
   private doorPreview?: { key: string; at: LonLat };
 
-  setDoors(doors: { key: string; at: LonLat; z: number; tags?: Record<string, string> }[]) {
+  setDoors(doors: DoorItem[]) {
     this.doors = doors;
     this.applyDoors();
   }
@@ -568,19 +570,25 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.doorObj = undefined;
     }
     const g = this.groups.get(FOCUS_GROUP);
-    if (!g || !this.level || !this.doors.length) return;
+    if (!g || !this.level) return;
     const root = new THREE.Group();
-    for (const d of this.doors) {
+    const visible = [
+      ...this.doors.map(d => ({ d, pale: false, items: this.level!.items, cut: this.level!.cut })),
+      ...(this.level.below ?? []).flatMap(b => (b.doorModels ?? []).map(d => ({ d, pale: true, items: b.items, cut: b.cut }))),
+    ];
+    for (const { d, pale, items, cut } of visible) {
       const at = this.doorAt(d);
       const [x, y] = g.toLocal(at);
       const sel = this.indoorSelected.includes(d.key) || this.indoorIssueHighlighted.includes(d.key);
       const diameter = revolvingDoorDiameter(d.tags);
       if (diameter !== undefined) {
-        const model = revolvingDoorModel(diameter, Math.max(0.1, Math.min(DOOR_HEIGHT, this.level.cut - d.z)), sel);
+        const model = revolvingDoorModel(diameter, Math.max(0.1, Math.min(DOOR_HEIGHT, cut - d.z)), !pale && sel, pale);
+        model.userData.doorKey = d.key;
+        model.userData.pale = pale;
         model.position.set(x, y, d.z + 0.04);
         // Align the drum entrances with the nearest wall, including room boundaries.
         let nearest = Infinity;
-        for (const item of this.level.items) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
+        for (const item of items) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
           for (let i = 1; i < ring.length; i++) {
             const a = g.toLocal(ring[i - 1]), b = g.toLocal(ring[i]);
             const dx = b[0] - a[0], dy = b[1] - a[1], length2 = dx * dx + dy * dy;
@@ -592,6 +600,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
         root.add(model);
       }
+      if (pale) continue;
       const dot = new THREE.Mesh(DOOR_GEO, sel ? DOOR_SELECTED_MATERIAL : DOOR_MATERIAL);
       dot.position.set(x, y, d.z + 0.04);
       dot.renderOrder = 5;
@@ -776,7 +785,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.indoorSnaps = undefined;
     const focus = this.groups.get(FOCUS_GROUP);
     // Вход в этажи и выход — оболочка здания вместо частей и обратно
-    if (focus && (hadVoids || hasVoids || toggled)) this.rebuildGeometry(focus);
+    if (focus && (hadVoids || hasVoids || toggled)) {
+      // drawPlan needs the shell, but applyLevel merges the meshes after building the plan.
+      // Avoid merging and trimming glass twice when entering a floor or changing atrium cuts.
+      if (level) this.applyShell(focus);
+      else this.rebuildGeometry(focus);
+    }
     timed('этажи: план этажа', () => this.applyLevel(), () => `${level?.items.length ?? 0} объектов`);
     this.applyIndoorSelection();
     this.applyDoors();
@@ -1208,8 +1222,13 @@ export class BuildingsLayer implements CustomLayerInterface {
       end(ax, ay, z0, Math.min(z1a, jambA), (bx - ax) / l, (by - ay) / l);
       end(bx, by, z0, Math.min(z1b, jambB), (ax - bx) / l, (ay - by) / l);
     };
-    const doors = doorList.map(g.toLocal);
-    const namedDoors = pale ? [] : this.doors.map((d) => ({ key: d.key, at: g.toLocal(this.doorAt(d)) }));
+    // Resolve metadata and local coordinates once, rather than scanning every door for each wall/door pair.
+    const metadata = [...this.doors, ...(this.level?.below ?? []).flatMap(b => b.doorModels ?? [])].map(d => ({ key: d.key, at: g.toLocal(this.doorAt(d)), z: d.z, diameter: revolvingDoorDiameter(d.tags) }));
+    const doors = doorList.map(at => {
+      const p = g.toLocal(at);
+      const door = metadata.find(d => Math.abs(d.z - items[0].z) < 0.1 && Math.hypot(d.at[0] - p[0], d.at[1] - p[1]) < 0.01);
+      return { at: p, key: pale ? undefined : door?.key, z: door?.z, diameter: door?.diameter };
+    });
     /** Стена с дверными проёмами (DOOR_WIDTH × DOOR_HEIGHT) там, где на ней стоит дверь. */
     const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number) => {
       const len = Math.hypot(bx - ax, by - ay);
@@ -1217,18 +1236,17 @@ export class BuildingsLayer implements CustomLayerInterface {
       const namedGaps: { key: string; lo: number; hi: number }[] = [];
       if (len > 1e-6) {
         const dx = (bx - ax) / len, dy = (by - ay) / len;
-        for (const [px, py] of doors) {
+        for (const door of doors) {
+          const [px, py] = door.at;
           const distance = (px - ax) * dy - (py - ay) * dx;
           const t = (px - ax) * dx + (py - ay) * dy;
-          const door = this.doors.find((d) => { const p = g.toLocal(this.doorAt(d)); return Math.hypot(p[0] - px, p[1] - py) < 0.01 && Math.abs(d.z - z0) < 0.1; });
-          const diameter = revolvingDoorDiameter(door?.tags);
+          const diameter = door.z !== undefined && Math.abs(door.z - z0) < 0.1 ? door.diameter : undefined;
           const halfWidth = doorOpeningHalfWidth(distance, diameter, DOOR_WIDTH, DOOR_SNAP);
           if (!halfWidth || t + halfWidth <= 0 || t - halfWidth >= len) continue;
           if (diameter === undefined && (t < -DOOR_SNAP || t > len + DOOR_SNAP)) continue;
           const lo = Math.max(0, t - halfWidth) / len, hi = Math.min(len, t + halfWidth) / len;
           gaps.push([lo, hi]);
-          const named = namedDoors.find((d) => Math.hypot(d.at[0] - px, d.at[1] - py) < 0.01);
-          if (named) namedGaps.push({ key: named.key, lo, hi });
+          if (door.key) namedGaps.push({ key: door.key, lo, hi });
         }
       }
       if (!gaps.length) { slab(ax, ay, bx, by, z0, z1a, z1b); return; }
@@ -2671,6 +2689,8 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   /** Сливает здания группы в одну геометрию. */
   private doorCutSources = new WeakMap<Item, { positions: Float32Array; wallVertices: number; cut: Float32Array }>();
+  /** A few recent floor configurations per part; edits replace the source array and invalidate the cache. */
+  private doorCuts = new WeakMap<Item, { source: Float32Array; wallVertices: number; entries: Map<string, { positions: Float32Array; wallVertices: number }> }>();
 
   private rebuildGeometry(g: MeshGroup) {
     g.disposeMesh();
@@ -2686,20 +2706,36 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.applyShell(g);
     if (this.level && g === this.groups.get(FOCUS_GROUP)) {
       const levels = [{ items: this.level.items, doors: this.previewDoors(this.level.doors ?? []), z: this.level.floor },
-        ...(this.level.below ?? []).map(b => ({ items: b.items, doors: b.doors ?? [], z: b.items[0]?.z }))];
+        ...(this.level.below ?? []).map(b => ({ items: b.items, doors: b.doors ?? [], z: b.items[0]?.z ?? b.doorModels?.[0]?.z }))];
+      const knownDoors = [...this.doors, ...(this.level.below ?? []).flatMap(b => b.doorModels ?? [])];
       const doors = levels.flatMap(l => l.z === undefined ? [] : l.doors.map(at => {
-        const [x, y] = g.toLocal(at); const door = this.doors.find(d => Math.abs(d.z - l.z!) < 0.1 && Math.hypot(...g.toLocal(this.doorAt(d)).map((v, i) => v - [x, y][i])) < 0.01);
+        const [x, y] = g.toLocal(at); const door = knownDoors.find(d => Math.abs(d.z - l.z!) < 0.1 && Math.hypot(...g.toLocal(this.doorAt(d)).map((v, i) => v - [x, y][i])) < 0.01);
         return { x, y, z: l.z!, diameter: revolvingDoorDiameter(door?.tags) };
       }));
+      const doorSignature = doors.map(d => [d.x, d.y, d.z, d.diameter ?? ''].join(',')).join(';');
       for (const it of g.items) {
         if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || !it.wallVertices) continue;
-        const walls = cutDoorOpenings(it.positions.subarray(0, it.wallVertices * 3), doors, DOOR_WIDTH, DOOR_HEIGHT, DOOR_SNAP);
-        if (walls.length === it.wallVertices * 3 && walls.every((v, i) => v === it.positions[i])) continue;
         const source = { positions: it.positions, wallVertices: it.wallVertices };
-        const cut = new Float32Array(walls.length + it.positions.length - it.wallVertices * 3);
-        cut.set(walls); cut.set(it.positions.subarray(it.wallVertices * 3), walls.length);
-        this.doorCutSources.set(it, { ...source, cut });
-        it.positions = cut; it.wallVertices = walls.length / 3;
+        let cache = this.doorCuts.get(it);
+        if (!cache || cache.source !== source.positions || cache.wallVertices !== source.wallVertices) {
+          cache = { source: source.positions, wallVertices: source.wallVertices, entries: new Map() };
+          this.doorCuts.set(it, cache);
+        }
+        let result = cache.entries.get(doorSignature);
+        if (!result) {
+          const walls = cutDoorOpenings(source.positions.subarray(0, source.wallVertices * 3), doors, DOOR_WIDTH, DOOR_HEIGHT, DOOR_SNAP);
+          if (walls.length === source.wallVertices * 3 && walls.every((v, i) => v === source.positions[i])) result = source;
+          else {
+            const cut = new Float32Array(walls.length + source.positions.length - source.wallVertices * 3);
+            cut.set(walls); cut.set(source.positions.subarray(source.wallVertices * 3), walls.length);
+            result = { positions: cut, wallVertices: walls.length / 3 };
+          }
+          if (cache.entries.size >= 3) cache.entries.delete(cache.entries.keys().next().value!);
+          cache.entries.set(doorSignature, result);
+        }
+        if (result.positions === source.positions) continue;
+        this.doorCutSources.set(it, { ...source, cut: result.positions });
+        it.positions = result.positions; it.wallVertices = result.wallVertices;
         it.edges = undefined;
       }
     }
@@ -2732,9 +2768,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.mesh = new THREE.Mesh(geom, [MATERIAL, THIN_MATERIAL]);
     g.mesh.frustumCulled = false; // своя матрица проекции — штатный culling не годится
     g.scene.add(g.mesh);
-    this.rebuildGlass(g);
+    timed('геометрия: стекло', () => this.rebuildGlass(g));
     this.paintGroup(g);
-    this.applyEdges(g);
+    timed('геометрия: рёбра', () => this.applyEdges(g));
     if (g === this.groups.get(FOCUS_GROUP)) this.attachUnderground();
     this.applyStrokes(g);
   }
@@ -3270,7 +3306,18 @@ function matchSegments(a: Float32Array, b: Float32Array): [Float32Array, Float32
   return [outA, outB];
 }
 
+/** Buffers are immutable here; moving previews modify only the merged mesh. */
+const edgeCache = new WeakMap<Float32Array, { wallVertices: number; roofShape: string; edges: Float32Array }>();
 function itemEdges(it: Item): Float32Array {
+  const roofShape = it.tags['roof:shape'] ?? 'flat';
+  const hit = edgeCache.get(it.positions);
+  if (hit && hit.wallVertices === it.wallVertices && hit.roofShape === roofShape) return hit.edges;
+  const edges = computeItemEdges(it);
+  edgeCache.set(it.positions, { wallVertices: it.wallVertices, roofShape, edges });
+  return edges;
+}
+
+function computeItemEdges(it: Item): Float32Array {
   const all = edgeSegments(it.positions, EDGE_ANGLE);
   if (it.wallVertices * 3 >= it.positions.length) return all;
   // Отдельно стены: их верхний край — граница (одна грань), EdgesGeometry отдаёт её при любом угле
@@ -3319,10 +3366,15 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
   // противоположный порядок вершин, и EdgesGeometry оставляет плоский стык.
   const shared = new Map<string, number[]>();
   const normals = new Float32Array(tris * 3);
+  const triangleBounds = new Float64Array(tris * 6);
   // Вырожденные треугольники (у фронтонов над карнизом — нулевой высоты) не в счёт: нормаль у них случайная
   const degenerate = new Uint8Array(tris);
   for (let t = 0; t < tris; t++) {
     const o = t * 9;
+    for (let k = 0; k < 3; k++) {
+      triangleBounds[t * 6 + k] = Math.min(P[o + k], P[o + 3 + k], P[o + 6 + k]);
+      triangleBounds[t * 6 + 3 + k] = Math.max(P[o + k], P[o + 3 + k], P[o + 6 + k]);
+    }
     const ux = P[o + 3] - P[o], uy = P[o + 4] - P[o + 1], uz = P[o + 5] - P[o + 2];
     const vx = P[o + 6] - P[o], vy = P[o + 7] - P[o + 1], vz = P[o + 8] - P[o + 2];
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
@@ -3350,7 +3402,10 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
     const len = Math.hypot(...d);
     if (len < EPS) continue;
     const cuts = [0, 1];
+    const low = p.map((v, k) => Math.min(v, v + d[k]) - 0.001);
+    const high = p.map((v, k) => Math.max(v, v + d[k]) + 0.001);
     for (const o of vertices.values()) {
+      if (P[o] < low[0] || P[o] > high[0] || P[o + 1] < low[1] || P[o + 1] > high[1] || P[o + 2] < low[2] || P[o + 2] > high[2]) continue;
       const t = d.reduce((s, v, k) => s + v * (P[o + k] - p[k]), 0) / (len * len);
       if (t * len < EPS || (1 - t) * len < EPS) continue;
       if (Math.hypot(...d.map((v, k) => P[o + k] - p[k] - t * v)) < 0.001) cuts.push(t);
@@ -3384,8 +3439,13 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
     const along = (o: number) => (P[o] - px) * dx + (P[o + 1] - py) * dy + (P[o + 2] - pz) * dz;
     const tm = len / 2;
     let first = -1, flat = true, count = 0;
+    const mx = px + dx * tm, my = py + dy * tm, mz = pz + dz * tm;
     for (let t = 0; t < tris && flat; t++) {
       if (degenerate[t]) continue;
+      const b = t * 6, margin = 2 * EPS;
+      if (mx < triangleBounds[b] - margin || mx > triangleBounds[b + 3] + margin
+        || my < triangleBounds[b + 1] - margin || my > triangleBounds[b + 4] + margin
+        || mz < triangleBounds[b + 2] - margin || mz > triangleBounds[b + 5] + margin) continue;
       for (let k = 0; k < 3; k++) {
         const oa = t * 9 + k * 3, ob = t * 9 + ((k + 1) % 3) * 3;
         if (off(oa) > EPS || off(ob) > EPS) continue;
@@ -3453,6 +3513,7 @@ function buildShell(g: MeshGroup): Shell {
   const parts: Part[] = [];
   /** Треугольники скатов (x, y, z × 3) и номер части; сетка — номера треугольников и отрезки контуров/рёбер. */
   const tris: number[] = [], triPart: number[] = [];
+  const partGrid = new Map<string, number[]>();
   const triGrid = new Map<string, number[]>(), segGrid = new Map<string, number[][]>();
   const cellsOf = (x0: number, y0: number, x1: number, y1: number) => {
     const out: string[] = [];
@@ -3475,6 +3536,8 @@ function buildShell(g: MeshGroup): Shell {
     if (!(box[0] <= box[2])) continue;
     const flat = h.roofShape === 'flat' || h.roofHeight <= 0;
     const idx = parts.push({ min: g.lift?.get(it.feature.key) ?? h.min, top: flat ? h.wallTop : h.top, flat, polys, box }) - 1;
+    for (const cell of cellsOf(box[0] - SHELL_EDGE_TOL, box[1] - SHELL_EDGE_TOL, box[2] + SHELL_EDGE_TOL, box[3] + SHELL_EDGE_TOL))
+      (partGrid.get(cell) ?? partGrid.set(cell, []).get(cell)!).push(idx);
     for (const p of polys) for (const r of [p.outer, ...p.inners]) for (let i = 0; i < r.length; i++) addSeg(...r[i], ...r[(i + 1) % r.length]);
     if (flat) continue;
     // Скаты — треугольники крыши (между стенами и перекрытиями); вертикальные (торцы) не в счёт.
@@ -3517,11 +3580,12 @@ function buildShell(g: MeshGroup): Shell {
         if (!cur || score > cur.score + 1e-9 || (score >= cur.score - 1e-9 && z > cur.z)) roof.set(p, { score, z });
       }
       let best: number | undefined;
-      parts.forEach((p, i) => {
-        if (p.min > z0 + SHELL_LEVEL_TOL || !inside(p, x, y)) return;
+      for (const i of partGrid.get(`${Math.floor(x / SHELL_CELL)},${Math.floor(y / SHELL_CELL)}`) ?? []) {
+        const p = parts[i];
+        if (p.min > z0 + SHELL_LEVEL_TOL || !inside(p, x, y)) continue;
         const z = p.flat ? p.top : roof.get(i)?.z ?? p.top;
         best = best === undefined ? z : Math.max(best, z);
-      });
+      }
       return best;
     },
     breaks(ax, ay, bx, by) {

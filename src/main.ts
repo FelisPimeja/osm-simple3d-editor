@@ -1,3 +1,4 @@
+import { escalatorAreaMatches, syncEscalatorLevels } from './edit/escalator-levels';
 import polygonClipping from 'polygon-clipping';
 import * as maplibregl from 'maplibre-gl';
 import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJSONFeature } from 'maplibre-gl';
@@ -3472,14 +3473,10 @@ document.addEventListener('keydown', (e) => {
   }
   // Del / Backspace — удалить выделенное (на карте — отдельные здания, в режиме здания — части)
   // На Mac клавиша Delete — это Backspace
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && indoorSelection.length && indoorSelection.every(isDoor)) {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && canDeleteIndoorSelection()) {
     e.preventDefault();
-    deleteDoors(indoorSelection);
-    return;
-  }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && (selectedRoomWalls.length || indoorSelection.some((f) => f.kind === 'wall'))) {
-    e.preventDefault();
-    void deleteIndoorWalls();
+    closeCtxMenu();
+    deleteIndoorSelection();
     return;
   }
   if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && selection.length) {
@@ -3770,6 +3767,32 @@ window.addEventListener('mouseup', (e) => {
   const x = e.clientX - r.left, y = e.clientY - r.top;
   const [x0, x1] = [Math.min(x, start.x), Math.max(x, start.x)];
   const [y0, y1] = [Math.min(y, start.y), Math.max(y, start.y)];
+  if (focus && shownLevel && !addingTo && !e.altKey) {
+    const inside = shownIndoor.filter((f) => {
+      if (f.escalatorArea || indoorHidden.has(indoorKey(f.key))) return false;
+      const at = f.point ?? (f.polygons[0]?.outer.length ? centroid(f.polygons[0].outer) : undefined);
+      if (!at) return false;
+      const p = overpassLayer.focusScreenPoint(at, shownLevel!.floor + 0.06);
+      return p && p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1;
+    });
+    const selected = new Set(indoorSelection.map((f) => indoorKey(f.key)));
+    const add = inside.filter((f) => {
+      const key = indoorKey(f.key);
+      if (selected.has(key)) return false;
+      selected.add(key);
+      return true;
+    });
+    if (add.length) {
+      selectedRoomWalls = [];
+      overpassLayer.setRoomWallSelection([]);
+      clearTreeSelection();
+      indoorSelection = [...indoorSelection, ...add];
+      renderIndoorSelection();
+    }
+    suppressClick = true;
+    setTimeout(() => (suppressClick = false), 0);
+    return;
+  }
   const keys = new Set<string>();
   // В режиме здания тайлы не пересобираются до выхода (нет новых частей, старая геометрия) — берём само здание
   const candidates = focus
@@ -3982,10 +4005,7 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   const axes = visible.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
   return visible.map((f) => {
     if (f.line || !f.polygons.length || !(f.tags.room === 'stairs' || f.tags.stairs === 'yes' || f.tags.conveying)) return f;
-    const matched = axes.some((axis) => axis.levels.some((n) => f.levels.includes(n)) && axis.polygons[0].outer.slice(1).some((p, i) => {
-      const a = axis.polygons[0].outer[i], mid: LonLat = [(a[0] + p[0]) / 2, (a[1] + p[1]) / 2];
-      return f.polygons.some((poly) => pointInRing(mid, poly.outer) && !poly.inners.some((hole) => pointInRing(mid, hole)));
-    }));
+    const matched = axes.some((axis) => escalatorAreaMatches(axis, f));
     return matched ? { ...f, escalatorArea: true } : f;
   });
 }
@@ -4239,8 +4259,7 @@ function selectRoomWall(wall: RoomWall, add = false) {
   selectedRoomWalls = add ? old.some((w) => spanKey(w) === spanKey(wall)) ? old.filter((w) => spanKey(w) !== spanKey(wall)) : [...old, wall] : [wall];
   overpassLayer.setRoomWallSelection(selectedRoomWalls.map((w) => ({ key: w.key, kind: 'wall', line: true, z: shownLevel!.floor,
     polygons: [{ outer: roomWallSpan(shownIndoor.find((f) => f.key === w.key)!.polygons, w), inners: [] }] })));
-  infoEl.innerHTML = selectedRoomWalls.length ? `<h2>${tr('Стены помещения')}</h2><p class="hint">${tr('Удаление преобразует помещение в indoor=area и сохранит остальные стены. Изменение действует на всех этажах объекта.')}</p><button type="button" data-delete-walls>${tr('Удалить стены')}</button>` : '';
-  infoEl.querySelector('[data-delete-walls]')?.addEventListener('click', () => { void deleteIndoorWalls(); });
+  infoEl.innerHTML = selectedRoomWalls.length ? `<h2>${tr('Стены помещения')}</h2><p class="hint">${tr('Удаление преобразует помещение в indoor=area и сохранит остальные стены. Изменение действует на всех этажах объекта.')}</p>` : '';
 }
 
 /**
@@ -4257,6 +4276,12 @@ function selectIndoor(f: IndoorFeature | undefined, add = false, scrollIssues = 
     const k = indoorKey(f.key);
     indoorSelection = indoorSelection.some((x) => indoorKey(x.key) === k) ? indoorSelection.filter((x) => indoorKey(x.key) !== k) : [...indoorSelection, f];
   } else indoorSelection = f ? [f] : [];
+  renderIndoorSelection(add, scrollIssues);
+}
+
+/** Обновить подсветку и общую форму после изменения набора выбранных indoor-объектов. */
+function renderIndoorSelection(add = false, scrollIssues = true) {
+  let f: IndoorFeature;
   selectedIndoor = indoorSelection[0];
   overpassLayer.setIndoorSelection(indoorSelection.map((x) => x.key));
   indoorPois.setSelection(indoorSelection.map((x) => x.key));
@@ -4272,7 +4297,6 @@ function selectIndoor(f: IndoorFeature | undefined, add = false, scrollIssues = 
   infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''} — `
     + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
     + `<p class="hint">${esc(levels)}</p>`
-    + `<p><button type="button" data-hide-indoor>${tr('Скрыть')}</button></p>`
     + indoorForm([f])
     + `<details class="all-tags"><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
   bindIndoorForm([f]);
@@ -4283,7 +4307,7 @@ function selectIndoor(f: IndoorFeature | undefined, add = false, scrollIssues = 
 function renderIndoorMulti(fs: IndoorFeature[]) {
   const kinds = [...new Set(fs.map((f) => (f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind])))].join(', ');
   infoEl.innerHTML = `<h2>${trn(fs.length, 'Выбран {n} объект|Выбрано {n} объекта|Выбрано {n} объектов')}</h2><p class="hint">${esc(kinds)}</p>`
-    + `<p><button type="button" data-hide-indoor>${tr('Скрыть объекты')}</button></p>` + indoorForm(fs);
+    + indoorForm(fs);
   bindIndoorForm(fs);
 }
 
@@ -4297,11 +4321,8 @@ const isDoor = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && !f.key.end
 
 /** Обработчики формы: правка поля — у всех выбранных одним шагом истории. */
 function bindIndoorForm(fs: IndoorFeature[]) {
-  infoEl.querySelector('[data-hide-indoor]')?.addEventListener('click', () => hideSelectedIndoor());
-  infoEl.querySelector('[data-delete-doors]')?.addEventListener('click', () => deleteDoors(fs));
-  infoEl.querySelector('[data-delete-walls]')?.addEventListener('click', () => { void deleteIndoorWalls(); });
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
-    input.addEventListener('change', () => setIndoorTags(fs.map((f) => ({ key: indoorKey(f.key), tags: { ...f.tags, [input.dataset.indoorTag!]: input.value } }))));
+    input.addEventListener('change', () => setIndoorTags(fs.map((f) => ({ key: indoorKey(f.key), tags: { ...f.tags, [input.dataset.indoorTag!]: input.value } })), input.dataset.indoorTag));
   }
   const levelInput = infoEl.querySelector<HTMLInputElement>('[data-indoor-tag="level"]');
   if (levelInput) { bindLevelHint(levelInput); bindLevelPicker(levelInput, fs); }
@@ -4380,11 +4401,8 @@ function indoorForm(fs: IndoorFeature[]): string {
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${k}</span>`
       + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : '—'}"${lid ? ` list="${lid}"` : ''} spellcheck="false" autocomplete="off"></label>`;
   }).join('');
-  const del = fs.every(isDoor)
-    ? `<button type="button" class="link-btn" data-delete-doors>${trn(fs.length, 'Удалить дверь|Удалить {n} двери|Удалить {n} дверей')}</button>
-      <p class="hint">${tr('Дверь можно перетащить вдоль стены.')}</p>`
-    : fs.every((f) => f.kind === 'wall') ? `<button type="button" class="link-btn" data-delete-walls>${tr('Удалить стены')}</button>` : '';
-  return `<div class="tag-form">${rows}${list('indoor-values', INDOOR_VALUES)}${list('room-values', ROOM_VALUES)}</div>${del}`;
+  const hint = fs.every(isDoor) ? `<p class="hint">${tr('Дверь можно перетащить вдоль стены.')}</p>` : '';
+  return `<div class="tag-form">${rows}${list('indoor-values', INDOOR_VALUES)}${list('room-values', ROOM_VALUES)}</div>${hint}`;
 }
 
 /**
@@ -4454,7 +4472,7 @@ function bindLevelPicker(input: HTMLInputElement, fs: IndoorFeature[]) {
       const set = new Set(all[i]);
       if (cb.checked) set.add(n); else set.delete(n);
       return { key: indoorKey(f.key), tags: { ...f.tags, level: [...set].sort((a, b) => a - b).join(';') } };
-    }));
+    }), 'level');
   });
   if (levelPickerOpen === key) { open(); document.addEventListener('pointerdown', outside, true); }
 }
@@ -4505,6 +4523,18 @@ function deleteDoors(fs: IndoorFeature[]) {
   infoEl.innerHTML = '';
   session.editMany(edits);
   setStatus(trn(fs.length, 'Удалена {n} дверь.|Удалено {n} двери.|Удалено {n} дверей.'));
+}
+
+/** Одинаковое действие для Del и контекстного меню. */
+function canDeleteIndoorSelection(): boolean {
+  return selectedRoomWalls.length > 0 || (indoorSelection.length > 0
+    && (indoorSelection.every(isDoor) || indoorSelection.some((f) => f.kind === 'wall')));
+}
+
+function deleteIndoorSelection() {
+  if (uploading || deletingIndoorWalls || !canDeleteIndoorSelection()) return;
+  if (indoorSelection.length && indoorSelection.every(isDoor)) deleteDoors(indoorSelection);
+  else void deleteIndoorWalls();
 }
 
 /** Удаление стены и материализация остальных сторон помещений — один шаг истории. */
@@ -4693,10 +4723,12 @@ mapCanvas.addEventListener('pointercancel', endDoorDrag);
  * Записать теги indoor-объектов в сессию правок одним шагом истории (объект начинает отслеживаться при первой
  * правке). Пустое значение — тег удалить.
  */
-function setIndoorTags(edits: { key: string; tags: Record<string, string> }[]) {
+function setIndoorTags(edits: { key: string; tags: Record<string, string> }[], changedTag?: string) {
+  const all = focus ? buildingIndoor(focus) : shownIndoor;
+  edits = syncEscalatorLevels(edits, all, changedTag === 'level');
   const out: { key: string; tags: Record<string, string> }[] = [];
   for (const e of edits) {
-    const f = shownIndoor.find((x) => indoorKey(x.key) === e.key) ?? indoorSelection.find((x) => indoorKey(x.key) === e.key);
+    const f = all.find((x) => indoorKey(x.key) === e.key) ?? indoorSelection.find((x) => indoorKey(x.key) === e.key);
     trackIndoor(e.key, f);
     const tags: Record<string, string> = {};
     for (const [k, v] of Object.entries(e.tags)) if (v?.trim()) tags[k] = v.trim();
@@ -4845,10 +4877,10 @@ function renderLevelsImpl() {
     return {
       cut: l.ceil,
       // Площадь эскалатора задаёт его след и проём, но не сплошной пол под ступенями.
-      // Остальные многоэтажные объекты рисуем на нижнем этаже (стены-линии — на всех).
+      // Многоэтажные помещения имеют пол только внизу; стены и колонны есть на всех указанных уровнях.
       items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea
         && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
-        && (f.line || floorLevels(f).includes(l.n)))
+        && (f.line || f.kind === 'wall' || f.kind === 'column' || floorLevels(f).includes(l.n)))
         .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor, areaLedge: f.tags.indoor === 'area',
           ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}) })),
       // Двери этажа — проёмы в стенах
@@ -5446,7 +5478,15 @@ window.addEventListener('pointerup', (e) => {
   const rect = map.getCanvas().getBoundingClientRect();
   const key = overpassLayer.pickHit([e.clientX - rect.left, e.clientY - rect.top])?.key;
   if (shownLevel) {
-    const room = indoorAt([e.clientX - rect.left, e.clientY - rect.top]);
+    const point: [number, number] = [e.clientX - rect.left, e.clientY - rect.top];
+    const wall = roomWallAt(point);
+    if (wall) {
+      const span = JSON.stringify(roomWallSpan(shownIndoor.find((f) => f.key === wall.key)!.polygons, wall));
+      if (!selectedRoomWalls.some((w) => w.key === wall.key
+        && JSON.stringify(roomWallSpan(shownIndoor.find((f) => f.key === w.key)!.polygons, w)) === span)) selectRoomWall(wall);
+      return openCtxMenu(e.clientX, e.clientY, 'indoor');
+    }
+    const room = indoorAt(point);
     if (room) {
       if (!indoorSelection.some((f) => indoorKey(f.key) === indoorKey(room.key))) selectIndoor(room);
       return openCtxMenu(e.clientX, e.clientY, 'indoor');
@@ -5467,9 +5507,11 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
   const hiddenCount = focusHidden.size + indoorHidden.size;
   const showAll = `<li><button type="button" data-ctx="show-all"${hiddenCount ? '' : ' disabled'}>${tr('Показать всё')}${hiddenCount ? ` (${hiddenCount})` : ''}<kbd>⇧H</kbd></button></li>`;
   if (where === 'indoor') {
-    const n = indoorSelection.length > 1 ? ` (${indoorSelection.length})` : '';
-    ctxMenu.innerHTML = `<li><button type="button" data-ctx="indoor-hide">${tr('Скрыть объекты')}${n}<kbd>H</kbd></button></li>`
-      + showAll;
+    const count = indoorSelection.length + selectedRoomWalls.length;
+    const n = count > 1 ? ` (${count})` : '';
+    ctxMenu.innerHTML = `<li><button type="button" data-ctx="indoor-hide"${indoorSelection.length ? '' : ' disabled'}>${tr('Скрыть объекты')}${n}<kbd>H</kbd></button></li>`
+      + showAll
+      + `<li><button type="button" data-ctx="indoor-delete"${canDeleteIndoorSelection() && !uploading && !deletingIndoorWalls ? '' : ' disabled'}>${tr('Удалить')}${n}<kbd>Del</kbd></button></li>`;
     ctxMenu.hidden = false;
     const { width, height } = ctxMenu.getBoundingClientRect();
     ctxMenu.style.left = `${Math.min(x, innerWidth - width - 4)}px`;
@@ -5505,6 +5547,7 @@ ctxMenu.addEventListener('click', (e) => {
   if (!action || !focus) return;
   closeCtxMenu();
   if (action === 'indoor-hide') return hideSelectedIndoor();
+  if (action === 'indoor-delete') return deleteIndoorSelection();
   focusAction(action);
 });
 

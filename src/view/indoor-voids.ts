@@ -26,6 +26,8 @@ export interface LevelPlan {
   floor: MultiPolygon;
   /** Всё размеченное на этаже: помещения, коридоры, зоны, колонны и стены. */
   mapped: MultiPolygon;
+  /** Явные свободные внутренние кольца помещений: не требуют разметки пола снизу. */
+  explicitVoids?: MultiPolygon;
 }
 
 export interface LevelVoid {
@@ -74,6 +76,19 @@ export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[]
   const lowerLevels = [...plans.keys()].filter((k) => k < n).sort((a, b) => b - a);
   const floorArea = multiArea(plan.floor);
   if (!floorArea) return [];
+  const explicit: LevelVoid[] = [];
+  for (const poly of plan.explicitVoids ?? []) {
+    const piece: MultiPolygon = [poly], area = multiArea(piece);
+    if (area < MIN_VOID_AREA || !lowerLevels.length) continue;
+    const through: number[] = [];
+    let seen: MultiPolygon = [];
+    for (const k of lowerLevels) {
+      through.push(k);
+      seen = safe(() => polygonClipping.union(seen, polygonClipping.intersection(piece, plans.get(k)!.mapped)));
+      if (multiArea(seen) / area >= FLOOR_BELOW) break;
+    }
+    explicit.push({ polygon: piece, through });
+  }
   const covered = multiArea(safe(() => polygonClipping.intersection(plan.floor, plan.mapped)));
   // Этаж размечен мало: пустоты ищем, только если на нём хоть что-то есть, а один из этажей ниже (свет бывает на
   // несколько этажей) размечен хорошо — галереи вокруг атриума: разметка узкая, остальное — второй свет
@@ -83,10 +98,11 @@ export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[]
       return !!p && a > 0 && multiArea(safe(() => polygonClipping.intersection(p.floor, p.mapped))) / a >= MIN_COVERAGE;
     };
     const found = lowerLevels.some(wellMapped);
-    if (covered <= 0 || !found) return [];
+    if (covered <= 0 || !found) return explicit;
   }
-  const free = opening(safe(() => polygonClipping.difference(plan.floor, plan.mapped)), OPEN_WIDTH);
-  const out: LevelVoid[] = [];
+  const occupied = plan.explicitVoids?.length ? safe(() => polygonClipping.union(plan.mapped, plan.explicitVoids!)) : plan.mapped;
+  const free = opening(safe(() => polygonClipping.difference(plan.floor, occupied)), OPEN_WIDTH);
+  const out: LevelVoid[] = [...explicit];
   for (const poly of free) {
     const piece: MultiPolygon = [poly];
     const area = multiArea(piece);
@@ -134,7 +150,10 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
       const outlines = mappedPolys.map((p) => [p[0]]);
       floor = unionOf([...parts.flatMap((p) => p.polygons.map((q) => q.map(open))), ...outlines]);
     }
-    plans.set(l.n, { floor, mapped });
+    const holes = onLevel.filter((f) => ['room', 'corridor', 'area', 'level'].includes(f.kind)
+      && (f.floors ?? f.levels).includes(l.n)).flatMap((f) => f.polygons.flatMap((p) => p.slice(1).map((r) => [open(r)])));
+    const explicitVoids = holes.length ? safe(() => polygonClipping.difference(unionOf(holes), mapped)) : [];
+    plans.set(l.n, { floor, mapped, explicitVoids });
   }
   return plans;
 }

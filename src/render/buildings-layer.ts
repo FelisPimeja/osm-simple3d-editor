@@ -2141,6 +2141,17 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  /** Экранная точка indoor-объекта с учётом высоты этажа и наклона камеры. */
+  focusScreenPoint(at: LonLat, altitude: number): [number, number] | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g || !this.map) return;
+    const [x, y] = g.toLocal(at);
+    const p = new THREE.Vector4(x, y, altitude, 1).applyMatrix4(g.camera.projectionMatrix);
+    if (p.w <= 0 || p.z < -p.w || p.z > p.w) return;
+    const canvas = this.map.getCanvas();
+    return [(p.x / p.w + 1) / 2 * canvas.clientWidth, (1 - p.y / p.w) / 2 * canvas.clientHeight];
+  }
+
   /** Центр здания в режиме одного здания: координаты, высота (середина) и положение на экране. */
   focusCenter(): { lngLat: LngLat; altitude: number; point: [number, number] } | undefined {
     const g = this.groups.get(FOCUS_GROUP);

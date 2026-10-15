@@ -3163,7 +3163,8 @@ function edgeLines(items: Item[], material: THREE.LineBasicMaterial): THREE.Line
  */
 /** Крыши с кривыми поверхностями (купол, луковица, бочка): их грани — аппроксимация, изломы не рисуем. */
 const CURVED_ROOFS = new Set(['dome', 'onion', 'round', 'cone', 'conical', 'spherical']);
-const PLANAR_ROOF_EDGE_ANGLE = 1;
+const PLANAR_ROOF_EDGE_ANGLE = 6;
+const WALL_ROOF_EDGE_ANGLE = 1;
 
 /**
  * Пары рёбер «до» и «после» для морфинга превью исправления: порядок рёбер в двух сборках разный, поэтому
@@ -3201,8 +3202,8 @@ function itemEdges(it: Item): Float32Array {
   if (it.wallVertices * 3 >= it.positions.length) return all;
   // Отдельно стены: их верхний край — граница (одна грань), EdgesGeometry отдаёт её при любом угле
   const walls = edgeSegments(it.positions.subarray(0, it.wallVertices * 3), EDGE_ANGLE);
-  // Плоские скаты пологой крыши (hipped с roof:height 1 м) сходятся под малым углом — у всех крыш, кроме
-  // кривых (купол, луковица, бочка), берём все изломы; у кривых — нет, иначе прорисуется каждая грань аппроксимации
+  // У плоских скатов скрываем лишь почти плоские стыки, сохраняя изломы мансарды. У кривых
+  // (купол, луковица, бочка) не добавляем рёбра аппроксимации.
   const roof = !CURVED_ROOFS.has(it.tags['roof:shape'] ?? 'flat')
     ? edgeSegments(it.positions.subarray(it.wallVertices * 3), PLANAR_ROOF_EDGE_ANGLE) : new Float32Array();
   const key = (a: Float32Array, i: number) => {
@@ -3213,7 +3214,7 @@ function itemEdges(it: Item): Float32Array {
   // Стык стены с крышей и изломы скатов — только где грани не в одной плоскости: у вальмы и полувальмы
   // на неправильном контуре скат бывает вертикальным и продолжает стену — там ребра нет
   const creases = new Set<string>();
-  const sharp = edgeSegments(it.positions, PLANAR_ROOF_EDGE_ANGLE);
+  const sharp = edgeSegments(it.positions, WALL_ROOF_EDGE_ANGLE);
   for (let i = 0; i < sharp.length; i += 6) creases.add(key(sharp, i));
   const seen = new Set<string>();
   for (let i = 0; i < all.length; i += 6) seen.add(key(all, i));
@@ -3241,8 +3242,9 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
   const P = positions;
   const vkey = (arr: ArrayLike<number>, o: number) => `${arr[o].toFixed(2)},${arr[o + 1].toFixed(2)},${arr[o + 2].toFixed(2)}`;
   const ekey = (k1: string, k2: string) => (k1 < k2 ? k1 + '|' + k2 : k2 + '|' + k1);
-  // Сколько треугольников делят сторону точно (по вершинам): у настоящего излома — два, такие не проверяем
-  const shared = new Map<string, number>();
+  // Точные стыки проверяем по нормалям тоже: стена и фронтон могут иметь
+  // противоположный порядок вершин, и EdgesGeometry оставляет плоский стык.
+  const shared = new Map<string, number[]>();
   const normals = new Float32Array(tris * 3);
   // Вырожденные треугольники (у фронтонов над карнизом — нулевой высоты) не в счёт: нормаль у них случайная
   const degenerate = new Uint8Array(tris);
@@ -3257,17 +3259,49 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
     normals[t * 3] = nx / l; normals[t * 3 + 1] = ny / l; normals[t * 3 + 2] = nz / l;
     for (let k = 0; k < 3; k++) {
       const key = ekey(vkey(P, o + k * 3), vkey(P, o + ((k + 1) % 3) * 3));
-      shared.set(key, (shared.get(key) ?? 0) + 1);
+      const list = shared.get(key) ?? [];
+      list.push(t);
+      shared.set(key, list);
     }
   }
   const EPS = 0.02;
+  // Триангулятор может снова склеить коллинеарные стороны. Разделяем
+  // кандидаты на рёбра в Т-узлах: на одной части может быть излом,
+  // а на продолжении — две почти совпадающие плоскости.
+  const split: number[] = [];
+  const vertices = new Map<string, number>();
+  for (let o = 0; o < P.length; o += 3) vertices.set(vkey(P, o), o);
+  for (let i = 0; i < segs.length; i += 6) {
+    const p = [segs[i], segs[i + 1], segs[i + 2]];
+    const d = [segs[i + 3] - p[0], segs[i + 4] - p[1], segs[i + 5] - p[2]];
+    const len = Math.hypot(...d);
+    if (len < EPS) continue;
+    const cuts = [0, 1];
+    for (const o of vertices.values()) {
+      const t = d.reduce((s, v, k) => s + v * (P[o + k] - p[k]), 0) / (len * len);
+      if (t * len < EPS || (1 - t) * len < EPS) continue;
+      if (Math.hypot(...d.map((v, k) => P[o + k] - p[k] - t * v)) < 0.001) cuts.push(t);
+    }
+    cuts.sort((a, b) => a - b);
+    for (let k = 1; k < cuts.length; k++) {
+      if ((cuts[k] - cuts[k - 1]) * len < EPS) continue;
+      for (const t of [cuts[k - 1], cuts[k]]) for (let j = 0; j < 3; j++) split.push(p[j] + t * d[j]);
+    }
+  }
+  segs = new Float32Array(split);
   const keep: number[] = [];
   for (let i = 0; i < segs.length; i += 6) {
     const px = segs[i], py = segs[i + 1], pz = segs[i + 2];
     let dx = segs[i + 3] - px, dy = segs[i + 4] - py, dz = segs[i + 5] - pz;
     const len = Math.hypot(dx, dy, dz);
     if (len < EPS) continue;
-    if ((shared.get(ekey(vkey(segs, i), vkey(segs, i + 3))) ?? 0) >= 2) { for (let j = 0; j < 6; j++) keep.push(segs[i + j]); continue; }
+    const exact = shared.get(ekey(vkey(segs, i), vkey(segs, i + 3)));
+    if (exact && exact.length >= 2) {
+      const first = exact[0];
+      const flat = exact.every((t) => Math.abs(normals[t * 3] * normals[first * 3] + normals[t * 3 + 1] * normals[first * 3 + 1] + normals[t * 3 + 2] * normals[first * 3 + 2]) >= FLAT_COS);
+      if (!flat) for (let j = 0; j < 6; j++) keep.push(segs[i + j]);
+      continue;
+    }
     dx /= len; dy /= len; dz /= len;
     // Расстояние точки до прямой отрезка и её положение вдоль него
     const off = (o: number) => {

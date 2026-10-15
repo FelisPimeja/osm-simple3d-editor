@@ -7,6 +7,7 @@
  * Без Worker (node, тесты) — считаем в том же потоке, как раньше.
  */
 import type { Pt } from './building-geometry';
+import { buildStableSkeleton } from './skeleton-stabilize';
 
 export interface Skeleton {
   /** x, y и «время» — расстояние до ближайшей стороны контура. */
@@ -77,7 +78,7 @@ function notify() {
 
 // ---- Воркер с очередью и сторожевым таймером
 
-interface Job { id: number; key: string; rings: number[][][] }
+interface Job { id: number; key: string; rings: number[][][]; stabilize: boolean }
 const queue: Job[] = [];
 const queued = new Set<string>();
 let worker: Worker | undefined;
@@ -155,7 +156,7 @@ function pumpWorker() {
   for (let i = 1; i < queue.length; i++) if (size(queue[i]) < size(queue[best])) best = i;
   current = queue.splice(best, 1)[0];
   if (workerReady) armTimer(current);
-  worker!.postMessage({ id: current.id, rings: current.rings });
+  worker!.postMessage({ id: current.id, rings: current.rings, stabilize: current.stabilize });
 }
 
 function armTimer(job: Job) {
@@ -187,22 +188,22 @@ export const skeletonReady: Promise<boolean> = useWorker
  * Скелет полигона (внешнее кольцо + дыры, без повторённой точки):
  * готовый скелет, null — посчитать не удалось, 'pending' — считается, крыша пока упрощённая.
  */
-export function skeletonOf(outer: Pt[], inners: Pt[][]): Skeleton | null | 'pending' {
+export function skeletonOf(outer: Pt[], inners: Pt[][], stabilize = false): Skeleton | null | 'pending' {
   const rings = toRings(outer, inners);
-  const key = keyOf(rings);
+  const key = `${stabilize ? 'g:' : 's:'}${keyOf(rings)}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
   if (!useWorker) {
     if (!builder) return null;
     let s: Skeleton | null = null;
-    try { s = builder.buildFromPolygon(rings); } catch { /* плоская */ }
+    try { s = stabilize ? buildStableSkeleton(builder, rings) : builder.buildFromPolygon(rings); } catch { /* плоская */ }
     remember(key, s);
     return s;
   }
   if (failedSet.has(hashKey(key))) { remember(key, null); return null; }
   if (!queued.has(key)) {
     queued.add(key);
-    queue.push({ id: nextId++, key, rings });
+    queue.push({ id: nextId++, key, rings, stabilize });
     pumpWorker();
   }
   return 'pending';

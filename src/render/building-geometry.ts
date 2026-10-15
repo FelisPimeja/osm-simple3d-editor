@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Heights } from '../osm/heights';
 import { skeletonOf, type Skeleton } from './skeleton';
 import { tr } from '../i18n';
+import { extendGables, weldRoofSkeleton } from './roof-gables';
 
 /** Локальная точка в метрах: x — восток, y — север. */
 export type Pt = [number, number];
@@ -46,7 +47,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   // Скатные крыши на остальных контурах (в т.ч. с дырами и из нескольких полигонов) — по straight skeleton;
   // вальмовые варианты (side_hipped, hipped-and-gabled…) там — упрощённо вальмовой. crosspitched, sawtooth
   // и butterfly — только на почти прямоугольных контурах, иначе плоская крыша (как неподдерживаемая)
-  const skeletons = !quadRoof && !axis && SKELETON_SHAPES.has(shape) ? polygons.map((p) => skeletonOf(dropCollinear(p.outer), p.inners.map(dropCollinear))) : undefined;
+  const skeletons = !quadRoof && !axis && SKELETON_SHAPES.has(shape) ? polygons.map((p) => skeletonOf(dropCollinear(p.outer), p.inners.map(dropCollinear), GABLED_SHAPES.has(shape))) : undefined;
   const pending = !!skeletons?.some((sk) => sk === 'pending');
   const skeletonRoof = !!skeletons?.length && skeletons.every((sk) => sk && sk !== 'pending');
   const supported =
@@ -222,40 +223,16 @@ function addSkeletonRoof(
   roof: number[], walls: number[], sk: Skeleton,
   z0: number, roofHeight: number, gabled: boolean, profile: Profile = LINEAR,
 ) {
-  const verts = sk.vertices.map(([x, y, t]) => [x, y, t] as V3);
+  sk = weldRoofSkeleton(sk);
+  const { vertices: verts, polygons, gables } = gabled
+    ? extendGables(sk) : { vertices: sk.vertices, polygons: sk.polygons, gables: new Set<number[]>() };
   const maxT = Math.max(...verts.map((v) => v[2])) || 1;
-  const isContour = (i: number) => sk.vertices[i][2] < 1e-9;
-  const gables = new Set<number[]>();
-
-  if (gabled) {
-    const moved = new Set<number>();
-    // Сначала короткие торцы: на квадратоподобных формах вершину делят несколько треугольников
-    const ends = sk.polygons
-      .filter((f) => f.length === 3 && f.filter(isContour).length === 2)
-      .map((f) => {
-        const [a, b] = [f[f.length - 1], f[0]].map((i) => sk.vertices[i]);
-        return { f, len: Math.hypot(b[0] - a[0], b[1] - a[1]) };
-      })
-      .sort((p, q) => p.len - q.len);
-    for (const { f } of ends) {
-      const apex = f.find((i) => !isContour(i))!;
-      if (moved.has(apex)) continue;
-      const [a, b] = [f[f.length - 1], f[0]].map((i) => sk.vertices[i]);
-      const dx = b[0] - a[0], dy = b[1] - a[1];
-      const len2 = dx * dx + dy * dy || 1;
-      const v = verts[apex];
-      const t = ((v[0] - a[0]) * dx + (v[1] - a[1]) * dy) / len2;
-      verts[apex] = [a[0] + dx * t, a[1] + dy * t, v[2]];
-      moved.add(apex);
-      gables.add(f);
-    }
-  }
 
   const z = (t: number) => z0 + roofHeight * profile.z(Math.min(1, t / maxT));
   const levels = [0, ...profile.breaks, 1].map((l) => l * maxT);
   levels[0] = -Infinity;
   levels[levels.length - 1] = Infinity;
-  for (const f of sk.polygons) {
+  for (const f of polygons) {
     const out = gables.has(f) ? walls : roof;
     const poly = f.map((i) => verts[i]);
     // Полосы по «времени» (расстоянию до контура): внутри полосы высота линейна, по полосам — по профилю

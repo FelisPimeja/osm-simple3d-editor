@@ -241,7 +241,15 @@ function addSkeletonRoof(
     for (let b = 0; b + 1 < levels.length; b++) {
       const band = levels.length === 2 ? poly : clipT(clipT(poly, levels[b], 1), levels[b + 1], -1);
       if (band.length < 3) continue;
-      for (const [p, q, r] of triangulate3(band)) tri(out, [p[0], p[1], z(p[2])], [q[0], q[1], z(q[2])], [r[0], r[1], z(r[2])]);
+      for (const [p, q, r] of triangulate3(band)) {
+        const a: V3 = [p[0], p[1], z(p[2])], b: V3 = [q[0], q[1], z(q[2])], c: V3 = [r[0], r[1], z(r[2])];
+        // A gable is vertical. Restoring a bent eave can turn part of its
+        // simplified face into a slope (not just a horizontal infill).
+        const u = b.map((v, i) => v - a[i]), v = c.map((v, i) => v - a[i]);
+        const nx = u[1] * v[2] - u[2] * v[1], ny = u[2] * v[0] - u[0] * v[2], nz = u[0] * v[1] - u[1] * v[0];
+        const vertical = Math.abs(nz) <= Math.hypot(nx, ny, nz) * 1e-4;
+        tri(gables.has(f) && !vertical ? roof : out, a, b, c);
+      }
     }
   }
 }

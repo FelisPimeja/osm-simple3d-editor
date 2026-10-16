@@ -22,6 +22,21 @@ for (const shape of ['gabled', 'hipped', 'round', 'gambrel', 'mansard']) {
       { min: 0, wallTop: 7.5, top: 10.5, roofHeight: 3, roofShape: shape, source: 'levels' }, {});
     assert.equal(result.roofApproximated, false);
     const surface = [...result.roof, ...result.walls.slice(result.gableStart)];
+    const gables = result.walls.slice(result.gableStart);
+    if (shape === 'gabled') {
+      assert.ok(Array.from({ length: result.roof.length / 9 }, (_, i) => i * 9)
+        .some(i => [2, 5, 8].every(j => Math.abs(result.roof[i + j] - 7.5) < 1e-6)),
+      'the restored horizontal eave infill is present in the roof');
+    }
+    for (let i = 0; i < gables.length; i += 9) {
+      assert.ok([2, 5, 8].some(j => Math.abs(gables[i + j] - 7.5) > 1e-6),
+        'horizontal eave infill must use the roof material, not the facade material');
+      const a = gables.slice(i, i + 3), b = gables.slice(i + 3, i + 6), c = gables.slice(i + 6, i + 9);
+      const u = b.map((v, k) => v - a[k]), v = c.map((v, k) => v - a[k]);
+      const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+      assert.ok(Math.abs(n[2]) <= Math.hypot(...n) * 1e-4,
+        'inclined eave infill must also use the roof material');
+    }
     assert.ok(surface.every(Number.isFinite));
     const edges = [];
     for (let i = 0; i < surface.length; i += 9) for (let j = 0; j < 3; j++) {

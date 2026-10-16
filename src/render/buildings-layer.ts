@@ -82,6 +82,8 @@ const INDOOR_CAP_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, sid
 const WALL_MERGE_DIST = 0.3;
 /** То же для граней колонн и стен-полигонов: тоньше любой стены. */
 const SOLID_MERGE_DIST = 0.03;
+/** Внутренний контур помещения тоньше этого, м, — стена (объём с крышкой), а не проём. */
+const THIN_HOLE_WIDTH = 0.6;
 /** Подъём нижнего ребра стены над уровнем этажа: выше верхнего слоя пола (помещения, +0.05). */
 const FLOOR_EDGE_LIFT = 0.055;
 const WALL_MERGE_COS = Math.cos(THREE.MathUtils.degToRad(10));
@@ -1437,6 +1439,16 @@ export class BuildingsLayer implements CustomLayerInterface {
         return out;
       },
     };
+    // Общая граница двух частей — стык, а не фасад: стены там нет, стену помещения (колонны) она не заменяет
+    const edgeSig = (a: LonLat, b: LonLat) => [a, b].map((q) => `${q[0].toFixed(8)},${q[1].toFixed(8)}`).sort().join('|');
+    const partEdges = new Map<string, number>();
+    for (const bi of g.items) {
+      if (g.hidden.has(bi.feature.key)) continue;
+      for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) for (let i = 0; i < r.length; i++) {
+        const sig = edgeSig(r[i], r[(i + 1) % r.length]);
+        partEdges.set(sig, (partEdges.get(sig) ?? 0) + 1);
+      }
+    }
     for (const bi of g.items) {
       if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi) || (glassEnabled && bi.glassWalls)) continue;
       // Контур крыши или части над/под этажом не заменяет стену помещения.
@@ -1446,6 +1458,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
         const rp = r.map(g.toLocal);
         for (let i = 0; i < rp.length; i++) {
+          if ((partEdges.get(edgeSig(r[i], r[(i + 1) % r.length])) ?? 0) > 1) continue;
           const a = rp[i], b = rp[(i + 1) % rp.length];
           taken.push([...a, ...b]);
         }
@@ -1533,12 +1546,21 @@ export class BuildingsLayer implements CustomLayerInterface {
         else for (const piece of floorPieces.get(p) ?? []) fill(piece.outer, piece.inners, z, it.colour ?? INDOOR_COLOURS[it.kind]);
         for (const r of [p.outer, ...p.inners]) {
           const rp = r.map(g.toLocal);
+          // Узкий внутренний контур помещения (стена, размеченная только дыркой, — её путь на других этажах):
+          // объём стены с обеими гранями и крышкой. Толщина ~ 2·площадь/периметр
+          let area = 0, perim = 0;
+          for (let i = 0; i < rp.length; i++) {
+            const [ax, ay] = rp[i], [bx, by] = rp[(i + 1) % rp.length];
+            area += ax * by - bx * ay; perim += Math.hypot(bx - ax, by - ay);
+          }
+          const thin = it.kind === 'room' && r !== p.outer && perim > 0 && Math.abs(area) / perim < THIN_HOLE_WIDTH;
+          if (thin) cap(rp, [], it.z);
           for (let i = 0; i < rp.length; i++) {
             const [ax, ay] = rp[i], [bx, by] = rp[(i + 1) % rp.length];
             if (solid) wallFree(ax, ay, bx, by, it.z, true);
             else if (it.kind === 'room') {
               // Стена помещения — там, где её ещё нет (периметр, indoor=wall с проёмами, соседнее помещение)
-              wallFree(ax, ay, bx, by, it.z);
+              wallFree(ax, ay, bx, by, it.z, thin);
             }
             if (!solid) lines.push(ax, ay, z + 0.005, bx, by, z + 0.005);
           }

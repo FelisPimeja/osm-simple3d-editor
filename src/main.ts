@@ -4587,13 +4587,66 @@ function deleteDoors(fs: IndoorFeature[]) {
 /** Одинаковое действие для Del и контекстного меню. */
 function canDeleteIndoorSelection(): boolean {
   return selectedRoomWalls.length > 0 || (indoorSelection.length > 0
-    && (indoorSelection.every(isDoor) || indoorSelection.some((f) => f.kind === 'wall')));
+    && (indoorSelection.every(isDoor) || indoorSelection.every(isDeletableSpace) || indoorSelection.some((f) => f.kind === 'wall')));
 }
+
+/** Помещение, коридор или зона — удаляется целиком. */
+const isDeletableSpace = (f: IndoorFeature) => !f.line && !f.escalator && !f.key.endsWith('#poi')
+  && (f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor');
 
 function deleteIndoorSelection() {
   if (uploading || deletingIndoorWalls || !canDeleteIndoorSelection()) return;
   if (indoorSelection.length && indoorSelection.every(isDoor)) deleteDoors(indoorSelection);
+  else if (!selectedRoomWalls.length && indoorSelection.length && indoorSelection.every(isDeletableSpace)) void deleteIndoorSpaces(indoorSelection);
   else void deleteIndoorWalls();
+}
+
+/**
+ * Удалить помещения одним шагом истории. Отношение удаляется (его пути без тегов при отправке — тоже, если больше
+ * нигде не нужны). Путь, входящий в отношения (контур мультиполигона, здание), теряет только теги; иначе удаляется.
+ */
+async function deleteIndoorSpaces(fs: IndoorFeature[]) {
+  if (!focus) return;
+  const api = server().api, group = focus.key, stamp = JSON.stringify(session.changes());
+  deletingIndoorWalls = true;
+  setStatus(tr('Проверка отношений…'));
+  try {
+    const ways = fs.filter((f) => f.key.startsWith('way/'));
+    const parents = await Promise.all(ways.map(async (f) => {
+      const id = Number(f.key.split('/')[1]);
+      return { key: f.key, relations: id > 0 ? await fetchWayRelations(id, api) : [] };
+    }));
+    if (focus?.key !== group || server().api !== api || JSON.stringify(session.changes()) !== stamp) {
+      setStatus(tr('Выбор или данные изменились. Повторите удаление.'));
+      return;
+    }
+    const edits: ObjectEdit[] = [];
+    let stripped = 0;
+    for (const f of fs) {
+      const key = indoorKey(f.key);
+      trackIndoor(key, f);
+      if (key.startsWith('relation/')) { edits.push({ key, delete: true }); continue; }
+      const id = Number(key.split('/')[1]);
+      // Членство — по текущему составу в сессии (отношения могли уже правиться или быть созданы в ней)
+      const referenced = parents.find((p) => p.key === key)!.relations.some((r) => {
+        const rk = `relation/${r.id}`;
+        if (session.isDeleted(rk) || fs.some((o) => indoorKey(o.key) === rk)) return false;
+        const members = session.get(rk)?.relMembers ?? r.members;
+        return members.some((m) => m.type === 'way' && m.ref === id);
+      }) || [...editGroups.values(), ...session.createdAlive()].some((r) => r.relMembers?.some((m) => m.type === 'way' && m.ref === id));
+      if (referenced) { edits.push({ key, tags: {} }); stripped++; } else edits.push({ key, delete: true });
+    }
+    selectIndoor(undefined);
+    infoEl.innerHTML = '';
+    session.editMany(edits);
+    setStatus(stripped
+      ? tr('Удалено помещений: {n}; у путей в составе отношений сняты только теги: {m}. Отменить — Ctrl+Z.', { n: fs.length, m: stripped })
+      : tr('Удалено помещений: {n}. Отменить — Ctrl+Z.', { n: fs.length }));
+  } catch (err) {
+    setStatus(tr('Не удалось удалить помещения: {error}', { error: (err as Error).message }), true);
+  } finally {
+    deletingIndoorWalls = false;
+  }
 }
 
 /** Удаление стены и материализация остальных сторон помещений — один шаг истории. */
@@ -4992,6 +5045,11 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
     out.mapped = new Map([...plans].map(([n, p]) => [n, p.mapped.map((poly) => poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number]))))]));
     for (const l of levels) {
       const list = findVoids(l.n, plans).map((v) => ({ polygon: v.polygon.map((p) => p.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))), through: v.through }));
+      // Лифтовая шахта — сквозной проём до нижней остановки (через этажи без остановок тоже)
+      for (const f of indoor.filter((f) => f.levels.length && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels) && isElevatorRoom(f, indoor))) {
+        const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
+        if (through.length) list.push({ polygon: f.polygons.map((p) => [p.outer, ...p.inners]), through });
+      }
       // Узкие проёмы эскалаторов не проходят порог площади для общего поиска второго света.
       for (const f of indoor.filter((f) => f.escalatorArea && f.levels.includes(l.n) && l.n > Math.min(...f.levels))) {
         const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);

@@ -894,5 +894,10 @@
   "Геометрия {key} недоступна. Перезагрузите данные.": "Geometry of {key} is unavailable. Reload the data.",
   "level={value} у эскалатора — похоже на несколько эскалаторов друг над другом; каждый соединяет два соседних этажа.": "level={value} on an escalator — looks like several escalators stacked; each one connects two neighbouring levels.",
   "разделить: {levels}": "split: {levels}",
-  "Разделено по этажам: {n} копий. Отменить — Ctrl+Z.": "Split by level: {n} copies. Undo with Ctrl+Z."
+  "Разделено по этажам: {n} копий. Отменить — Ctrl+Z.": "Split by level: {n} copies. Undo with Ctrl+Z.",
+  "Проверка отношений…": "Checking relations…",
+  "Выбор или данные изменились. Повторите удаление.": "Selection or data changed. Try deleting again.",
+  "Удалено помещений: {n}; у путей в составе отношений сняты только теги: {m}. Отменить — Ctrl+Z.": "Rooms deleted: {n}; ways that belong to relations only lost their tags: {m}. Undo with Ctrl+Z.",
+  "Удалено помещений: {n}. Отменить — Ctrl+Z.": "Rooms deleted: {n}. Undo with Ctrl+Z.",
+  "Не удалось удалить помещения: {error}": "Could not delete rooms: {error}"
 }

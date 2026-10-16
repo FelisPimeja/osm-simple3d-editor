@@ -269,7 +269,14 @@ function trimFace(a: V3, b: V3, c: V3, glass: boolean, near: PreparedSolid[], fl
   for (const s of near) {
     if (s.opaqueWalls || glass) {
       const piece = clipAll(tri, [(v) => zf(v) - s.min - floor, (v) => s.wallTop - FACE_EPS - zf(v)]);
-      if (piece) for (const poly of polygonClipping.intersection(snap([ring(piece)]), s.clip)) hidden.push(poly);
+      if (piece) {
+        // Контур соседа не заходит внутрь куска (соседние части касаются по общему ребру) — кусок целиком
+        // внутри или снаружи соседа: решает одна точка, без polygon-clipping
+        if (!ringsEnter(s.polys, piece)) {
+          const cx = piece.reduce((t, v) => t + v[0], 0) / piece.length, cy = piece.reduce((t, v) => t + v[1], 0) / piece.length;
+          if (insidePolys(s.polys, cx, cy)) hidden.push(snap([ring(piece)]));
+        } else for (const poly of polygonClipping.intersection(snap([ring(piece)]), s.clip)) hidden.push(poly);
+      }
     }
     for (const r of s.roof) {
       if (!(r.opaque || glass) || r.box[0] > tb[2] || r.box[2] < tb[0] || r.box[1] > tb[3] || r.box[3] < tb[1]) continue;
@@ -406,6 +413,40 @@ function coveredAlong(l: WallLine, rings: Pt[][], inside: (x: number, y: number)
     else out.push([t0, t1]);
   }
   return out;
+}
+
+/** Отступ от краёв куска для ringsEnter, м: ребро, идущее по краю куска (общий контур), внутрь не заходит. */
+const ENTER_EPS = 1e-4;
+
+/** Заходит ли какое-нибудь ребро контуров polys внутрь выпуклого многоугольника piece (сжатого на ENTER_EPS). */
+function ringsEnter(polys: LocalPolygon[], piece: Pt[]): boolean {
+  const o = Math.sign(signedArea(piece)) || 1;
+  // Полуплоскости куска: расстояние до ребра внутрь минус отступ
+  const hp = piece.map((p, i) => {
+    const q = piece[(i + 1) % piece.length];
+    const l = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1;
+    return { p, nx: -o * (q[1] - p[1]) / l, ny: o * (q[0] - p[0]) / l };
+  });
+  const b: Box = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const [x, y] of piece) grow(b, x, y);
+  for (const poly of polys) for (const r of [poly.outer, ...poly.inners]) {
+    for (let i = 0; i < r.length; i++) {
+      const a = r[i], c = r[(i + 1) % r.length];
+      if (Math.max(a[0], c[0]) < b[0] || Math.min(a[0], c[0]) > b[2] || Math.max(a[1], c[1]) < b[1] || Math.min(a[1], c[1]) > b[3]) continue;
+      // Отрезок a→c, обрезанный полуплоскостями (Кирус — Бек)
+      let t0 = 0, t1 = 1;
+      for (const h of hp) {
+        const da = (a[0] - h.p[0]) * h.nx + (a[1] - h.p[1]) * h.ny - ENTER_EPS;
+        const dc = (c[0] - h.p[0]) * h.nx + (c[1] - h.p[1]) * h.ny - ENTER_EPS;
+        if (da < 0 && dc < 0) { t1 = -1; break; }
+        if (da < 0) t0 = Math.max(t0, da / (da - dc));
+        else if (dc < 0) t1 = Math.min(t1, da / (da - dc));
+        if (t0 >= t1) break;
+      }
+      if (t1 - t0 > 1e-9) return true;
+    }
+  }
+  return false;
 }
 
 function insidePolys(polys: LocalPolygon[], x: number, y: number): boolean {

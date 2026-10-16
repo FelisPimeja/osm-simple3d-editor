@@ -193,3 +193,23 @@ test('door move preview reuses models without rebuilding the floor, openings or 
   assert.equal(selections,2);
   assert.equal(outline.position.length(),0);
 });
+
+test('solid indoor walls below an atrium do not duplicate the opaque facade', async () => {
+  const THREE=await import('three');
+  const layer=new BuildingsLayer('test');
+  const polygon={outer:[[0,0],[4,0],[4,1],[0,1]],inners:[]};
+  const tags={'building:part':'yes',height:'9'};
+  const g={toLocal:p=>p,hidden:new Set(),flat:new Set(),items:[{feature:{key:'facade',hasParts:false,polygons:[polygon]},tags,
+    box:new THREE.Box3(new THREE.Vector3(0,0,0),new THREE.Vector3(4,1,9)),glassWalls:false}]};
+  const item={key:'column',kind:'column',z:0,polygons:[polygon]};
+  layer.level={floor:3,cut:6,items:[]};
+  const root=new THREE.Group();
+  layer.drawPlan(root,g,[item],[],3,true);
+  let verticalTriangles=0;
+  root.traverse(o=>{
+    if(o.type!=='Mesh')return;
+    const p=o.geometry.getAttribute('position').array;
+    for(let i=0;i<p.length;i+=9)if(Math.max(p[i+2],p[i+5],p[i+8])-Math.min(p[i+2],p[i+5],p[i+8])>.01)verticalTriangles++;
+  });
+  assert.equal(verticalTriangles,0);
+});

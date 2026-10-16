@@ -1,3 +1,5 @@
+import { cutEscalatorOpenings, escalatorOpeningMasks } from './escalator-openings';
+import { partitionFloors } from './floor-overlap';
 import { occludedByTriangles } from './ray-occlusion';
 import { trimIndoorBuildingEdges } from './indoor-building-edges';
 import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
@@ -1209,6 +1211,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Сначала этажи целиком, затем площадки, коридоры и помещения — каждый следующий чуть выше
     const order: IndoorKind[] = ['level', 'area', 'corridor', 'room', 'column', 'wall'];
     const floorZ = (it: IndoorItem) => it.z + 0.02 + Math.min(order.indexOf(it.kind), 3) * 0.01;
+    const floorPolygons = items.filter(it => !it.line && it.kind !== 'wall' && it.kind !== 'column')
+      .flatMap(it => it.polygons.map(p => ({ it, p, outer: p.outer.map(g.toLocal), inners: p.inners.map(r => r.map(g.toLocal)), z: floorZ(it) })));
+    const visibleFloors = partitionFloors(floorPolygons);
+    const floorPieces = new Map(floorPolygons.map((entry,i) => [entry.p, visibleFloors[i]]));
     const lines: number[] = [];
     const walls: number[] = [];
     /** Цвета вершин стен: каждая сторона — цветом помещения, в которое смотрит. */
@@ -1230,6 +1236,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       return WHITE_WALL;
     };
     // Рёбра стен (опция «рёбра»): низ и вертикали в концах и на изломах — по направлениям стен в каждой точке
+    const escalatorCuts = (this.level?.escalators ?? []).map(e => ({ ...e, line: e.line.map(g.toLocal) }));
+    const openingMasks: number[] = [];
     const edges: number[] = [];
     const edgeSurfaces = new Map<string, number[][]>();
     let edgeOcclusionOnly = false;
@@ -1250,11 +1258,21 @@ export class BuildingsLayer implements CustomLayerInterface {
         return;
       }
       // Две грани: лицевая смотрит вправо от a→b, обратная — влево; у каждой цвет помещения со своей стороны
-      walls.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
-      walls.push(ax, ay, z0, bx, by, z1b, bx, by, z0, ax, ay, z0, ax, ay, z1a, bx, by, z1b);
+      const faces = [
+        [ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a],
+        [ax, ay, z0, bx, by, z1b, bx, by, z0, ax, ay, z0, ax, ay, z1a, bx, by, z1b],
+      ];
       const l0 = Math.hypot(bx - ax, by - ay) || 1, nx = (by - ay) / l0 * WALL_SIDE_PROBE, ny = -(bx - ax) / l0 * WALL_SIDE_PROBE;
       const mx = (ax + bx) / 2, my = (ay + by) / 2;
-      for (const c of [sideColour(mx + nx, my + ny), sideColour(mx - nx, my - ny)]) for (let k = 0; k < 6; k++) wallCols.push(c.r, c.g, c.b);
+      const colours = [sideColour(mx + nx, my + ny), sideColour(mx - nx, my - ny)];
+      const masks = escalatorOpeningMasks(faces[0], escalatorCuts);
+      for (const value of masks) openingMasks.push(value);
+      for (let side = 0; side < 2; side++) {
+        const face = masks.length ? trimCoplanarWalls(faces[side], masks) : faces[side];
+        for (const value of face) walls.push(value);
+        const c = colours[side];
+        for (let k = 0; k < face.length / 3; k++) wallCols.push(c.r, c.g, c.b);
+      }
       lines.push(ax, ay, z1a, bx, by, z1b);
       if (!this.graphics.edges) return;
       // Реальные грани после вырезания дверей: конец соседней стены внутри
@@ -1361,7 +1379,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       },
     };
     for (const bi of g.items) {
-      if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi)) continue;
+      if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi) || (glassEnabled && bi.glassWalls)) continue;
       // Контур крыши или части над/под этажом не заменяет стену помещения.
       // Подавляем её только там, где фасад закрывает всю высоту от пола до среза.
       const h = computeHeights(bi.tags);
@@ -1451,12 +1469,12 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (it.line) continue; // нарисованы выше
         // У колонны и стены-полигона — крышка сечения, у остальных — пол своего цвета
         if (solid) cap(p.outer.map(g.toLocal), p.inners.map((h) => h.map(g.toLocal)), it.z);
-        else fill(p.outer.map(g.toLocal), p.inners.map((h) => h.map(g.toLocal)), z, it.colour ?? INDOOR_COLOURS[it.kind]);
+        else for (const piece of floorPieces.get(p) ?? []) fill(piece.outer, piece.inners, z, it.colour ?? INDOOR_COLOURS[it.kind]);
         for (const r of [p.outer, ...p.inners]) {
           const rp = r.map(g.toLocal);
           for (let i = 0; i < rp.length; i++) {
             const [ax, ay] = rp[i], [bx, by] = rp[(i + 1) % rp.length];
-            if (solid) { shellWall(ax, ay, bx, by, it.z); taken.push([ax, ay, bx, by]); }
+            if (solid) wallFree(ax, ay, bx, by, it.z);
             else if (it.kind === 'room') {
               // Стена помещения — там, где её ещё нет (периметр, indoor=wall с проёмами, соседнее помещение)
               wallFree(ax, ay, bx, by, it.z);
@@ -1579,13 +1597,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     if (edges.length) {
       const eg = new THREE.BufferGeometry();
-      eg.setAttribute('position', new THREE.Float32BufferAttribute(edges, 3));
+      eg.setAttribute('position', new THREE.BufferAttribute(trimIndoorBuildingEdges(new Float32Array(edges), openingMasks), 3));
       const es = new THREE.LineSegments(eg, pale ? INDOOR_PALE_LINE : EDGE_MATERIAL);
       es.frustumCulled = false;
       root.add(es);
     }
     const lineGeo = new THREE.BufferGeometry();
-    lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+    lineGeo.setAttribute('position', new THREE.BufferAttribute(trimIndoorBuildingEdges(new Float32Array(lines), openingMasks), 3));
     const seg = new THREE.LineSegments(lineGeo, pale ? INDOOR_PALE_LINE : INDOOR_LINE_MATERIAL);
     seg.frustumCulled = false;
     root.add(seg);
@@ -2847,6 +2865,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         const [x, y] = g.toLocal(at); const door = knownDoors.find(d => Math.abs(d.z - l.z!) < 0.1 && Math.hypot(...g.toLocal(this.doorAt(d)).map((v, i) => v - [x, y][i])) < 0.01);
         return { x, y, z: l.z!, diameter: revolvingDoorDiameter(door?.tags) };
       }));
+      const escalators = (this.level.escalators ?? []).map(e => ({ ...e, line: e.line.map(g.toLocal) }));
+      const escalatorSignature = JSON.stringify(escalators);
       for (const it of g.items) {
         if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || !it.wallVertices) continue;
         // Кеш части зависит только от проёмов, которые могут пересечь её объём.
@@ -2857,8 +2877,8 @@ export class BuildingsLayer implements CustomLayerInterface {
             && d.y + pad >= it.box.min.y && d.y - pad <= it.box.max.y
             && d.z < it.box.max.z && d.z + DOOR_HEIGHT > it.box.min.z;
         });
-        if (!nearbyDoors.length) continue;
-        const doorSignature = nearbyDoors.map(d => [d.x, d.y, d.z, d.diameter ?? ''].join(',')).join(';');
+        if (!nearbyDoors.length && !escalators.length) continue;
+        const doorSignature = nearbyDoors.map(d => [d.x, d.y, d.z, d.diameter ?? ''].join(',')).join(';') + escalatorSignature;
         const source = { positions: it.positions, wallVertices: it.wallVertices };
         let cache = this.doorCuts.get(it);
         if (!cache || cache.source !== source.positions || cache.wallVertices !== source.wallVertices) {
@@ -2867,7 +2887,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
         let result = cache.entries.get(doorSignature);
         if (!result) {
-          const walls = cutDoorOpenings(source.positions.subarray(0, source.wallVertices * 3), nearbyDoors, DOOR_WIDTH, DOOR_HEIGHT, DOOR_SNAP);
+          const walls = cutEscalatorOpenings(cutDoorOpenings(source.positions.subarray(0, source.wallVertices * 3), nearbyDoors, DOOR_WIDTH, DOOR_HEIGHT, DOOR_SNAP), escalators);
           if (walls.length === source.wallVertices * 3 && walls.every((v, i) => v === source.positions[i])) result = source;
           else {
             const cut = new Float32Array(walls.length + source.positions.length - source.wallVertices * 3);

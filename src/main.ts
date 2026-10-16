@@ -1235,6 +1235,8 @@ function hideMapLayers() {
 let focusRefreshId = 0;
 
 async function refreshFocusedBuilding(g: BuildingGroup, requestId: number) {
+  // В слое JOSM есть неопубликованные правки: API сервера не может его обновлять.
+  if (josmMode) return;
   const api = server().api;
   try {
     const root = isSolo(g) ? g.members[0] : g.key;
@@ -3966,6 +3968,8 @@ const focusIndoor = new Map<string, IndoorFeature[]>();
 const focusIndoorLoading = new Set<string>();
 
 function loadFocusIndoor(g: BuildingGroup) {
+  // Indoor уже загружен из активного слоя JOSM и обновляется вместе с ним.
+  if (josmMode) return;
   if (focusIndoor.has(g.key) || focusIndoorLoading.has(g.key)) return;
   let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
   for (const f of groupFeatures(g)) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
@@ -6760,6 +6764,22 @@ async function loadJosm(retry = false) {
 
 /** Временные id редактора — ниже новых объектов JOSM (у тех тоже отрицательные). */
 function josmApplied(l: JosmLayer): JosmLayer {
+  // Выделенные объекты хранятся копиями в сессии и перекрывают данные тайлов.
+  // Обновляем и эти копии; refresh сохраняет объекты с местными правками и историей.
+  const parsed = parseBuildings(l.elements);
+  for (const f of parsed.features) if (session.has(f.key)) {
+    session.refresh({ ...f, tags: { ...f.tags },
+      ...(f.ways ? { relMembers: f.ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } : {}) });
+  }
+  for (const g of parsed.groups) if (session.has(g.key)) {
+    const copy: EditGroup = { ...g, tags: { ...g.tags }, members: [...g.members], roles: [...g.roles],
+      relMembers: g.members.map((key, i) => {
+        const [type, ref] = key.split('/');
+        return { type: type as 'way' | 'relation', ref: Number(ref), role: g.roles[i] ?? '' };
+      }) };
+    if (session.refresh(copy) && editGroups.has(g.key)) editGroups.set(g.key, copy);
+  }
+  rebuildGroupIndex();
   nextNewId = Math.min(nextNewId, minElementId(l.elements) - 1);
   josmAreas = l.areas;
   lastFilterSig = '';
@@ -6774,7 +6794,24 @@ async function pollJosm() {
     if (document.hidden || toolActive()) return;
     if (!josmReady) { await loadJosm(true); return; }
     const next = await pollJosmLayer();
-    if (next) { josmApplied(next); await overpass.refreshJosm(); }
+    if (next) {
+      josmApplied(next);
+      await overpass.refreshJosm();
+      issueCache.clear();
+      if (focus) {
+        const fresh = isSolo(focus) ? focus : groupOf(focus.key);
+        if (fresh) {
+          drill = focus = fresh;
+          overpassLayer.setFocus(groupFeatures(fresh), bareOutlines(fresh));
+          syncFocusHidden();
+          levelSignature = '';
+          renderLevels();
+          renderIssues();
+        }
+      }
+      paintSelection();
+      renderSelected();
+    }
   } finally { setTimeout(pollJosm, 2000); }
 }
 if (josmMode) setTimeout(pollJosm, 2000);

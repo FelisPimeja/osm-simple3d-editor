@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Map as MlMap } from 'maplibre-gl';
-import type { IndoorFeature, LonLat } from '../osm/model';
+import { pointOnSurface, type IndoorFeature, type LonLat } from '../osm/model';
 import type { BuildingsLayer } from '../render/buildings-layer';
 
 /**
@@ -65,7 +65,7 @@ export function poiIcon(t: Record<string, string>): string | undefined {
 
 export class IndoorPois {
   private readonly root: HTMLDivElement;
-  private items: { key: string; el: HTMLElement; local: THREE.Vector3 }[] = [];
+  private items: { key: string; el: HTMLElement; local: THREE.Vector3; shift?: string }[] = [];
   private selected = new Set<string>();
   private issueHighlighted = new Set<string>();
   private signature = '';
@@ -106,13 +106,17 @@ export class IndoorPois {
     }
   }
 
-  /** Значки этажа: объекты kind=poi с точкой, z — высота пола, м. Пустой список — убрать. */
-  set(pois: IndoorFeature[], z: number, positions: ReadonlyMap<string, { at: LonLat; z: number }> = new Map()) {
+  /**
+   * Значки этажа: объекты kind=poi с точкой, z — высота пола, м. Пустой список — убрать. refs — помещения и зоны:
+   * с ref=* или name=* — подпись в середине (номер жирным, затем название; у помещения со значком — под значком).
+   */
+  set(pois: IndoorFeature[], z: number, positions: ReadonlyMap<string, { at: LonLat; z: number }> = new Map(), refs: IndoorFeature[] = []) {
     const shown = pois.filter((f) => f.point && poiIcon(f.tags));
+    const labelled = refs.filter((f) => (f.tags.ref || f.tags.name) && !f.line && f.polygons.length);
     const sig = `${z}|${shown.map((f) => {
       const p = positions.get(f.key);
       return `${f.key}:${p ? `${p.at.join(',')}:${p.z}` : ''}`;
-    }).join(',')}`;
+    }).join(',')}|${labelled.map((f) => `${f.key}:${f.tags.ref}:${f.tags.name}:${f.polygons[0].outer.length}:${f.polygons[0].outer[0]}`).join(',')}`;
     if (sig === this.signature) return;
     this.signature = sig;
     this.root.innerHTML = '';
@@ -132,6 +136,21 @@ export class IndoorPois {
       this.byEl.set(el, f);
       this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], position?.z ?? z + 0.3) });
     }
+    const iconAt = new Map(shown.map((f) => [f.key.replace(/#poi$/, ''), f.point!]));
+    for (const f of labelled) {
+      const under = iconAt.get(f.key);
+      const local = this.layer.focusToLocal(under ?? pointOnSurface(f.polygons[0]));
+      if (!local) continue;
+      const el = document.createElement('div');
+      el.className = 'indoor-poi indoor-ref';
+      if (f.tags.ref) el.append(Object.assign(document.createElement('b'), { textContent: f.tags.ref }));
+      if (f.tags.ref && f.tags.name) el.append(' ');
+      if (f.tags.name) el.append(f.tags.name);
+      el.title = [f.tags.name, f.tags.ref && `ref=${f.tags.ref}`, f.key].filter(Boolean).join(' · ');
+      this.root.appendChild(el);
+      this.byEl.set(el, f);
+      this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], z + 0.3), shift: under ? 'translate(-50%, 12px)' : 'translate(-50%, -50%)' });
+    }
     this.setSelection([...this.selected]);
     this.place();
   }
@@ -140,11 +159,11 @@ export class IndoorPois {
     if (!this.items.length) return;
     const w = this.map.getCanvas().clientWidth, h = this.map.getCanvas().clientHeight;
     const project = this.layer.focusProjector();
-    for (const { el, local } of this.items) {
+    for (const { el, local, shift } of this.items) {
       const p = project?.(local);
       const visible = !!p && p[0] > -20 && p[1] > -20 && p[0] < w + 20 && p[1] < h + 20;
       el.hidden = !visible;
-      if (visible) el.style.transform = `translate(${p![0]}px, ${p![1]}px)`;
+      if (visible) el.style.transform = `translate(${p![0]}px, ${p![1]}px)${shift ? ' ' + shift : ''}`;
     }
   }
 }

@@ -4444,24 +4444,35 @@ const DOOR_LABELS: Record<string, string> = {
   revolving: tr('Вращающаяся'), folding: tr('Складная'), trapdoor: tr('Люк'),
   overhead: tr('Подъёмная'), no: tr('Открытый проём (без двери)'),
 };
+const INDOOR_LABELS: Record<string, string> = {
+  room: tr('Помещение'), corridor: tr('Коридор'), area: tr('Зона без стен'), level: tr('Этаж'), wall: tr('Стена'),
+  column: tr('Колонна'), door: tr('Дверь'), yes: tr('Не указано'),
+};
 const ROOM_VALUES = ['shop', 'office', 'toilets', 'toilet', 'stairs', 'elevator', 'restaurant', 'technical', 'storage', 'class', 'conference', 'kitchen', 'waiting', 'entrance', 'auditorium', 'bedroom', 'living_room', 'bathroom', 'yes'];
+const ROOM_LABELS: Record<string, string> = {
+  shop: tr('Магазин'), office: tr('Офис'), toilets: tr('Туалеты'), toilet: tr('Туалет'), stairs: tr('Лестница'),
+  elevator: tr('Лифт'), restaurant: tr('Ресторан'), technical: tr('Техническое помещение'), storage: tr('Кладовая'),
+  class: tr('Учебный класс'), conference: tr('Переговорная'), kitchen: tr('Кухня'), waiting: tr('Зал ожидания'),
+  entrance: tr('Вход'), auditorium: tr('Аудитория'), bedroom: tr('Спальня'), living_room: tr('Гостиная'),
+  bathroom: tr('Ванная'), yes: tr('Не указано'),
+};
 
 /** Поля правки indoor, level и room у выбранного indoor-объекта. */
 function indoorForm(fs: IndoorFeature[]): string {
-  const list = (id: string, values: string[]) => `<datalist id="${id}">${values.map((v) => `<option value="${esc(v)}">`).join('')}</datalist>`;
   const rows = indoorFormTags(fs).map((k) => {
     const values = new Set(fs.map((f) => f.tags[k] ?? ''));
     const mixed = values.size > 1;
     const value = mixed ? '' : [...values][0];
     const changed = fs.some((f) => session.isChanged(indoorKey(f.key), k));
-    if (k === 'door') return `<label class="tag-row${changed ? ' changed' : ''}"><span>door</span>`
-      + renderValueCombo(DOOR_VALUES, 'data-indoor-tag="door"', value, mixed ? tr('разные значения') : '—', DOOR_LABELS) + '</label>';
-    const lid = k === 'indoor' ? 'indoor-values' : k === 'room' ? 'room-values' : '';
+    // Свой список, а не datalist: тот показывает только варианты, совпадающие с уже введённым значением
+    const options = k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : undefined;
+    if (options) return `<label class="tag-row${changed ? ' changed' : ''}"><span>${k}</span>`
+      + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : '—', k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : ROOM_LABELS) + '</label>';
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${k}</span>`
-      + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : k === 'diameter' ? '2.4 m' : '—'}"${lid ? ` list="${lid}"` : ''} spellcheck="false" autocomplete="off"></label>`;
+      + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : k === 'diameter' ? '2.4 m' : '—'}" spellcheck="false" autocomplete="off"></label>`;
   }).join('');
   const hint = fs.every(isDoor) ? `<p class="hint">${tr('Для перемещения дверей используйте инструмент «Переместить» (M).')}</p>` : '';
-  return `<div class="tag-form">${rows}${list('indoor-values', INDOOR_VALUES)}${list('room-values', ROOM_VALUES)}</div>${hint}`;
+  return `<div class="tag-form">${rows}</div>${hint}`;
 }
 
 /**

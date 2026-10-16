@@ -20,6 +20,12 @@ test('multi-level room with doors on several of its levels gets a split fix', ()
   assert.deepEqual(issue.fix.tags, { level: '0' });
   assert.deepEqual(issue.fix.splitLevels, ['1', '2']);
 });
+test('multi-level corridor with doors on several of its levels gets a split fix too', () => {
+  const corridor = { ...room({ indoor: 'corridor' }), kind: 'corridor' };
+  const [issue] = validateRepeatedRooms([corridor, door(1, { level: '0' }), { ...door(2, { level: '1' }), point: [0.0001, 0.0001] }]);
+  assert.deepEqual(issue.fix.splitLevels, ['1', '2']);
+  assert.equal(validateRepeatedRooms([corridor, door(1, { level: '0' })]).length, 0);
+});
 test('door with repeat_on counts on each level; doors off the outline do not', () => {
   assert.equal(validateRepeatedRooms([room(), door(1, { level: '0', repeat_on: '1' })]).length, 1);
   assert.equal(validateRepeatedRooms([room(), door(1, { level: '0', repeat_on: '1' }, [0.00005, 0.00005])]).length, 0);

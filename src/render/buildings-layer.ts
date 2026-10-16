@@ -1586,26 +1586,50 @@ export class BuildingsLayer implements CustomLayerInterface {
         return out;
       },
     };
-    // Общая граница двух частей — стык, а не фасад: стены там нет, стену помещения (колонны) она не заменяет
+    // Общая граница двух непрозрачных частей рядом (перекрываются по высоте) — стык, а не фасад: стены там нет, стену помещения
+    // (колонны) она не заменяет. Части друг над другом с тем же контуром (фасад поясами) — фасад: высоту этажа
+    // закрывают вместе
     const edgeSig = (a: LonLat, b: LonLat) => [a, b].map((q) => `${q[0].toFixed(8)},${q[1].toFixed(8)}`).sort().join('|');
-    const partEdges = new Map<string, number>();
+    const span = (bi: Item) => { const h = computeHeights(bi.tags); return [g.lift?.get(bi.feature.key) ?? h.min, h.wallTop] as const; };
+    const partEdges = new Map<string, { lo: number; hi: number; facade: boolean }[]>();
     for (const bi of g.items) {
       if (g.hidden.has(bi.feature.key)) continue;
+      const [lo, hi] = span(bi);
+      // Контур, тонкий объект и стекло стену помещения не заменяют; стыка с ними тоже нет: оболочка такой сосед
+      // не режет — непрозрачная стена за стеклом остаётся, и стена помещения легла бы в её плоскость
+      const facade = !strokeOnly(g, bi) && !thinItem(bi) && !(glassEnabled && bi.glassWalls);
       for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) for (let i = 0; i < r.length; i++) {
         const sig = edgeSig(r[i], r[(i + 1) % r.length]);
-        partEdges.set(sig, (partEdges.get(sig) ?? 0) + 1);
+        (partEdges.get(sig) ?? partEdges.set(sig, []).get(sig)!).push({ lo, hi, facade });
       }
     }
+    const z0 = items[0].z;
+    /**
+     * Фасад по ребру закрывает этаж от пола до среза. Где на ребре две непрозрачные части перекрываются по высоте
+     * (соседи рядом, козырёк у стены), оболочка срезает обе стены — там стены здания нет. Не закрыто не больше
+     * FACADE_GAP (козырёк, пояс) — стена помещения всё равно не нужна: иначе она легла бы в плоскость фасада.
+     */
+    const facadeCovers = (sig: string) => {
+      const list = (partEdges.get(sig) ?? []).filter((e) => e.facade && e.hi > z0 + 0.01 && e.lo < top - 0.01);
+      const cuts = [...new Set([z0, top, ...list.flatMap((e) => [e.lo, e.hi]).filter((z) => z > z0 && z < top)])].sort((x, y) => x - y);
+      let open = 0;
+      for (let i = 0; i + 1 < cuts.length; i++) {
+        const m = (cuts[i] + cuts[i + 1]) / 2;
+        if (list.filter((e) => e.lo <= m && e.hi >= m).length !== 1) open += cuts[i + 1] - cuts[i];
+      }
+      return open <= FACADE_GAP;
+    };
+    const facadeDone = new Set<string>();
     for (const bi of g.items) {
       if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi) || (glassEnabled && bi.glassWalls)) continue;
-      // Контур крыши или части над/под этажом не заменяет стену помещения.
-      // Подавляем её только там, где фасад закрывает всю высоту от пола до среза.
-      const h = computeHeights(bi.tags);
-      if ((g.lift?.get(bi.feature.key) ?? h.min) > items[0].z + 0.01 || h.wallTop < top - 0.01) continue;
+      const [lo, hi] = span(bi);
+      if (hi <= z0 + 0.01 || lo >= top - 0.01) continue;
       for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
         const rp = r.map(g.toLocal);
         for (let i = 0; i < rp.length; i++) {
-          if ((partEdges.get(edgeSig(r[i], r[(i + 1) % r.length])) ?? 0) > 1) continue;
+          const sig = edgeSig(r[i], r[(i + 1) % r.length]);
+          if (facadeDone.has(sig) || !facadeCovers(sig)) continue;
+          facadeDone.add(sig);
           const a = rp[i], b = rp[(i + 1) % rp.length];
           taken.push([...a, ...b]);
         }
@@ -4050,6 +4074,9 @@ function uncoveredSpans(ax: number, ay: number, bx: number, by: number, segments
   if (1 - at > minGap) out.push([at, 1]);
   return out;
 }
+
+/** Сколько высоты этажа (м) на ребре может быть без стены здания, чтобы оно всё же считалось фасадом. */
+const FACADE_GAP = 0.5;
 
 /** Порядок слоёв пола плана: этаж целиком, площадки, коридоры, помещения — каждый следующий чуть выше. */
 const PLAN_ORDER: IndoorKind[] = ['level', 'area', 'corridor', 'room', 'column', 'wall'];

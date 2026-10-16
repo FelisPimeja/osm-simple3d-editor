@@ -273,7 +273,7 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
 }
 
 /**
- * Помещение или зона с несколькими level, у которых двери на разных этажах, — скорее всего одинаковые помещения
+ * Помещение, коридор или зона с несколькими level, у которых двери на разных этажах, — скорее всего одинаковые помещения
  * типовых этажей, записанные одним объектом (а не зал в несколько светов). Предлагаем копию на каждый этаж.
  * Лестницы, лифты и эскалаторы проходят сквозь этажи — их не трогаем.
  */
@@ -285,7 +285,7 @@ export function validateRepeatedRooms(features: IndoorFeature[]): Issue[] {
   const out: Issue[] = [];
   for (const f of features) {
     const t = f.tags;
-    if (f.line || f.escalator || f.escalatorArea || (t.indoor !== 'room' && t.indoor !== 'area')) continue;
+    if (f.line || f.escalator || f.escalatorArea || !['room', 'area', 'corridor'].includes(t.indoor)) continue;
     if (t.stairs === 'yes' || t.room === 'stairs' || t.highway === 'steps' || t.conveying !== undefined
       || t.room === 'elevator' || t.highway === 'elevator') continue;
     const levels = [...new Set(parseLevels(t.level))].sort((a, b) => a - b);

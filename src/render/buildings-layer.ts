@@ -1606,19 +1606,31 @@ export class BuildingsLayer implements CustomLayerInterface {
     const z0 = items[0].z;
     /**
      * Фасад по ребру закрывает этаж от пола до среза. Где на ребре две непрозрачные части перекрываются по высоте
-     * (соседи рядом, козырёк у стены), оболочка срезает обе стены — там стены здания нет. Не закрыто не больше
-     * FACADE_GAP (козырёк, пояс) — стена помещения всё равно не нужна: иначе она легла бы в плоскость фасада.
+     * (соседи рядом, козырёк у стены), оболочка срезает обе стены — там стены здания нет: такие полосы высоты
+     * возвращаются в junctions, их закрывает своя стена по ребру (стена помещения во всю высоту легла бы в плоскость
+     * фасада выше и ниже козырька — relation/17943950, козырёк 1 м). Не закрыто ничем не больше FACADE_GAP — фасад.
+     * undefined — не фасад: стена помещения нужна.
      */
-    const facadeCovers = (sig: string) => {
+    const facadeCovers = (sig: string): [number, number][] | undefined => {
       const list = (partEdges.get(sig) ?? []).filter((e) => e.facade && e.hi > z0 + 0.01 && e.lo < top - 0.01);
       const cuts = [...new Set([z0, top, ...list.flatMap((e) => [e.lo, e.hi]).filter((z) => z > z0 && z < top)])].sort((x, y) => x - y);
       let open = 0;
+      const junctions: [number, number][] = [];
       for (let i = 0; i + 1 < cuts.length; i++) {
         const m = (cuts[i] + cuts[i + 1]) / 2;
-        if (list.filter((e) => e.lo <= m && e.hi >= m).length !== 1) open += cuts[i + 1] - cuts[i];
+        const n = list.filter((e) => e.lo <= m && e.hi >= m).length;
+        if (n === 0) open += cuts[i + 1] - cuts[i];
+        else if (n > 1) {
+          const last = junctions[junctions.length - 1];
+          if (last && Math.abs(last[1] - cuts[i]) < 1e-6) last[1] = cuts[i + 1]; else junctions.push([cuts[i], cuts[i + 1]]);
+        }
       }
-      return open <= FACADE_GAP;
+      // Ребро целиком — стык (соседние части во всю высоту этажа): не фасад, стена помещения нужна как была
+      if (!list.length || junctions.reduce((a, [lo, hi]) => a + hi - lo, 0) > top - z0 - FACADE_GAP) return undefined;
+      return open <= FACADE_GAP ? junctions : undefined;
     };
+    /** Полосы стыков на фасадных рёбрах: стена по ребру только на эту высоту (после объявления wall/slab). */
+    const junctionPatches: [number, number, number, number, number, number][] = [];
     const facadeDone = new Set<string>();
     for (const bi of g.items) {
       if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi) || (glassEnabled && bi.glassWalls)) continue;
@@ -1628,10 +1640,13 @@ export class BuildingsLayer implements CustomLayerInterface {
         const rp = r.map(g.toLocal);
         for (let i = 0; i < rp.length; i++) {
           const sig = edgeSig(r[i], r[(i + 1) % r.length]);
-          if (facadeDone.has(sig) || !facadeCovers(sig)) continue;
+          if (facadeDone.has(sig)) continue;
+          const junctions = facadeCovers(sig);
+          if (!junctions) continue;
           facadeDone.add(sig);
           const a = rp[i], b = rp[(i + 1) % rp.length];
           taken.push([...a, ...b]);
+          for (const [jlo, jhi] of junctions) if (jhi - jlo > 0.05) junctionPatches.push([...a, ...b, jlo, jhi]);
         }
       }
     }
@@ -1667,6 +1682,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         taken.push([x0, y0, x1, y1]);
       }
     };
+    // Стыки на фасаде (козырёк у стены): стены здания там нет — закрываем полосу стыка по ребру части
+    for (const [ax, ay, bx, by, lo, hi] of junctionPatches) slab(ax, ay, bx, by, lo, hi, hi, false);
     // Сначала стены-линии (точная геометрия стен, без повторов между собой и с периметром), потом помещения
     for (const it of items) {
       if (!it.line) continue;

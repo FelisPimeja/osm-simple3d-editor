@@ -4366,11 +4366,11 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
   bindIndoorForm(fs);
 }
 
-/** Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref — только у помещений и зон. */
+/** Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений и зон. */
 const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width'] : fs.every(isDoor) ? ['door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
-  // ref (номер помещения) — у помещений и зон, у коридоров — нет
-  : [...INDOOR_EDIT_TAGS].filter((k) => k !== 'ref' || fs.every((f) => f.kind === 'room' || f.kind === 'area')));
+  // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
+  : [...INDOOR_EDIT_TAGS].filter((k) => (k !== 'ref' && k !== 'name') || fs.every((f) => f.kind === 'room' || f.kind === 'area')));
 
 /** Дверь плана этажа: узел с door, indoor=door или entrance (точка на линии стены в проёме). */
 /** Лифт: помещение room=elevator (highway=elevator) или помещение с точкой highway=elevator внутри. */
@@ -4455,7 +4455,7 @@ let indoorEditRev = 0;
 /** Ключ объекта OSM у indoor-объекта (у значка помещения — #poi). */
 const indoorKey = (k: string) => k.replace('#poi', '');
 /** Теги indoor-объекта, которые можно править (без геометрии). */
-const INDOOR_EDIT_TAGS = ['indoor', 'level', 'room', 'ref'] as const;
+const INDOOR_EDIT_TAGS = ['indoor', 'level', 'room', 'ref', 'name'] as const;
 const INDOOR_VALUES = ['room', 'corridor', 'area', 'level', 'wall', 'column', 'door', 'yes'];
 // https://wiki.openstreetmap.org/wiki/Key:door — свободный ввод сохраняется.
 const DOOR_VALUES = ['yes', 'hinged', 'sliding', 'revolving', 'folding', 'trapdoor', 'overhead', 'no'];

@@ -1,3 +1,4 @@
+import { trimIndoorBuildingEdges } from './indoor-building-edges';
 import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth } from './door-openings';
 import * as THREE from 'three';
@@ -509,6 +510,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private indoorSelObj?: THREE.Group;
   private roomWallSelection: IndoorItem[] = [];
   private indoorWallPositions: number[] = [];
+  private indoorEdgeOccluders: number[] = [];
   private indoorGlassBlockers: number[] = [];
   private escalatorObjects = new Map<string, THREE.Group>();
   /** Точные рёбра вырезанных проёмов, собранные при построении стен текущего этажа. */
@@ -819,6 +821,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private applyLevel() {
     this.doorOpeningEdges.clear();
     this.indoorWallPositions = [];
+    this.indoorEdgeOccluders = [];
     this.indoorGlassBlockers = [];
     this.escalatorObjects.clear();
     // Чуть ниже потолка: днища частей, начинающихся на потолке, и крыши частей на этой высоте не накрывают план
@@ -1196,18 +1199,24 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     // Рёбра стен (опция «рёбра»): низ и вертикали в концах и на изломах — по направлениям стен в каждой точке
     const edges: number[] = [];
-    const ends = new Map<string, { x: number; y: number; z0: number; z1: number; dirs: [number, number][] }>();
-    const end = (x: number, y: number, z0: number, z1: number, dx: number, dy: number) => {
+    const edgeSurfaces = new Map<string, number[][]>();
+    let edgeOcclusionOnly = false;
+    const ends = new Map<string, { x: number; y: number; z0: number; z1: number; dirs: [number, number, number][] }>();
+    const end = (x: number, y: number, z0: number, z1: number, dx: number, dy: number, length: number) => {
       const k = `${Math.round(x * 1000)},${Math.round(y * 1000)}`;
       const e = ends.get(k) ?? { x, y, z0, z1, dirs: [] };
       e.z1 = Math.max(e.z1, z1);
       // Совпадающие стороны соседних полигонов дают одно направление, а не дополнительный излом.
-      if (!e.dirs.some(([ex, ey]) => ex * dx + ey * dy > Math.cos(INDOOR_EDGE_TURN))) e.dirs.push([dx, dy]);
+      if (!e.dirs.some(([ex, ey]) => ex * dx + ey * dy > Math.cos(INDOOR_EDGE_TURN))) e.dirs.push([dx, dy, length]);
       ends.set(k, e);
     };
     /** Кусок стены; верх — z1a в начале, z1b в конце (под скатом крыши — наклонный). */
     /** jambA/jambB — у конца откос проёма: вертикаль только до перемычки (выше стена сплошная, без шва). */
     const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, ends = true, jambA = Infinity, jambB = Infinity) => {
+      if (edgeOcclusionOnly) {
+        this.indoorEdgeOccluders.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
+        return;
+      }
       // Две грани: лицевая смотрит вправо от a→b, обратная — влево; у каждой цвет помещения со своей стороны
       walls.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
       walls.push(ax, ay, z0, bx, by, z1b, bx, by, z0, ax, ay, z0, ax, ay, z1a, bx, by, z1b);
@@ -1216,11 +1225,18 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const c of [sideColour(mx + nx, my + ny), sideColour(mx - nx, my - ny)]) for (let k = 0; k < 6; k++) wallCols.push(c.r, c.g, c.b);
       lines.push(ax, ay, z1a, bx, by, z1b);
       if (!this.graphics.edges) return;
+      // Реальные грани после вырезания дверей: конец соседней стены внутри
+      // сплошной грани не должен оставлять вертикальный шов.
+      for (let x = Math.floor(Math.min(ax, bx) / 4); x <= Math.floor(Math.max(ax, bx) / 4); x++)
+        for (let y = Math.floor(Math.min(ay, by) / 4); y <= Math.floor(Math.max(ay, by) / 4); y++) {
+          const key = `${x},${y}`;
+          (edgeSurfaces.get(key) ?? edgeSurfaces.set(key, []).get(key)!).push([ax, ay, bx, by, z0, z1a, z1b]);
+        }
       edges.push(ax, ay, z0, bx, by, z0);
       if (!ends) return; // перемычка над проёмом: вертикали дают откосы соседних кусков
       const l = Math.hypot(bx - ax, by - ay) || 1;
-      end(ax, ay, z0, Math.min(z1a, jambA), (bx - ax) / l, (by - ay) / l);
-      end(bx, by, z0, Math.min(z1b, jambB), (ax - bx) / l, (ay - by) / l);
+      end(ax, ay, z0, Math.min(z1a, jambA), (bx - ax) / l, (by - ay) / l, l);
+      end(bx, by, z0, Math.min(z1b, jambB), (ax - bx) / l, (ay - by) / l, l);
     };
     // Resolve metadata and local coordinates once, rather than scanning every door for each wall/door pair.
     const metadata = [...this.doors, ...(this.level?.below ?? []).flatMap(b => b.doorModels ?? [])].map(d => ({ key: d.key, at: g.toLocal(this.doorAt(d)), z: d.z, diameter: revolvingDoorDiameter(d.tags) }));
@@ -1254,7 +1270,19 @@ export class BuildingsLayer implements CustomLayerInterface {
       const at = (t: number): [number, number] => [ax + (bx - ax) * t, ay + (by - ay) * t];
       const z1 = (t: number) => z1a + (z1b - z1a) * t;
       const lintel = z0 + DOOR_HEIGHT;
-      for (const { key, lo, hi } of namedGaps) {
+      if (this.graphics.edges) {
+        const previous = edgeOcclusionOnly;
+        edgeOcclusionOnly = true;
+        for (const [lo, hi] of gaps) {
+        // Внутри проёма не должно быть рёбер исходных частей здания.
+        // Отступ только от настоящих откосов, а не от стыков ways внутри двери.
+        const a = lo + (lo > 1e-6 ? 0.005 / len : 0);
+        const b = hi - (hi < 1 - 1e-6 ? 0.005 / len : 0);
+        if (b > a) slab(...at(a), ...at(b), z0, Math.min(lintel, z1(a)), Math.min(lintel, z1(b)), false);
+        }
+        edgeOcclusionOnly = previous;
+      }
+      for (const { key, lo, hi } of edgeOcclusionOnly ? [] : namedGaps) {
         const [lx, ly] = at(lo), [hx, hy] = at(hi);
         const zl = Math.min(lintel, z1(lo)), zh = Math.min(lintel, z1(hi));
         if (zl <= z0 || zh <= z0) continue;
@@ -1301,7 +1329,11 @@ export class BuildingsLayer implements CustomLayerInterface {
       },
     };
     for (const bi of g.items) {
-      if (g.hidden.has(bi.feature.key)) continue;
+      if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi)) continue;
+      // Контур крыши или части над/под этажом не заменяет стену помещения.
+      // Подавляем её только там, где фасад закрывает всю высоту от пола до среза.
+      const h = computeHeights(bi.tags);
+      if ((g.lift?.get(bi.feature.key) ?? h.min) > items[0].z + 0.01 || h.wallTop < top - 0.01) continue;
       for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
         const rp = r.map(g.toLocal);
         for (let i = 0; i < rp.length; i++) {
@@ -1323,8 +1355,11 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (Math.abs((px - ax) * dy - (py - ay) * dx) > WALL_MERGE_DIST || Math.abs((qx - ax) * dy - (qy - ay) * dx) > WALL_MERGE_DIST) continue;
         const t0 = ((px - ax) * dx + (py - ay) * dy) / len, t1 = ((qx - ax) * dx + (qy - ay) * dy) / len;
         const lo = Math.max(0, Math.min(t0, t1)), hi = Math.min(1, Math.max(t0, t1));
-        if (hi > lo) cover.push([lo, hi]);
+        if ((hi - lo) * len > 1e-6) cover.push([lo, hi]);
       }
+      // Короткий исходный сегмент — тоже стена. Порог 5 см относится
+      // только к остаточным щелям после вычитания перекрывающих стен.
+      if (!cover.length) return [[0, 1]];
       cover.sort((x, y) => x[0] - y[0]);
       const out: [number, number][] = [];
       const minGap = 0.05 / len; // щели короче 5 см — не стена
@@ -1351,6 +1386,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     /** Стена на участках ребра, ещё не занятых другими стенами (совпадающие грани мерцали бы). */
     const wallFree = (ax: number, ay: number, bx: number, by: number, z0: number) => {
+      if (this.graphics.edges) {
+        // Даже если фасад уже заменил геометрию indoor-стены, его рёбра
+        // внутри этой плоскости должны скрываться по контуру плана.
+        edgeOcclusionOnly = true;
+        shellWall(ax, ay, bx, by, z0);
+        edgeOcclusionOnly = false;
+      }
       for (const [t0, t1] of uncovered(ax, ay, bx, by)) {
         const x0 = ax + (bx - ax) * t0, y0 = ay + (by - ay) * t0, x1 = ax + (bx - ax) * t1, y1 = ay + (by - ay) * t1;
         shellWall(x0, y0, x1, y1, z0);
@@ -1449,6 +1491,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.indoorGlassBlockers = this.indoorGlassBlockers.concat(pos);
     }
     if (!pale) this.indoorWallPositions = walls;
+    if (this.graphics.edges) for (const value of walls) this.indoorEdgeOccluders.push(value);
     this.indoorGlassBlockers = this.indoorGlassBlockers.concat(walls);
     if (walls.length) {
       const geo = new THREE.BufferGeometry();
@@ -1462,16 +1505,45 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Вертикаль — в конце стены или где стены сходятся не по прямой (продолжение стены — без шва)
     const edgeCos = Math.cos(INDOOR_EDGE_TURN);
     for (const e of ends.values()) {
-      const opposite = (a: [number, number], b: [number, number]) => a[0] * b[0] + a[1] * b[1] < -edgeCos;
+      const opposite = (a: [number, number, number], b: [number, number, number]) => {
+        const dot = a[0] * b[0] + a[1] * b[1];
+        // На коротких сегментах сантиметровая погрешность OSM даёт большой
+        // угол. Сохраняем острые углы, но не рисуем шов при отклонении до 1 см.
+        return dot < -edgeCos || (dot < -0.9 && Math.abs(a[0] * b[1] - a[1] * b[0]) * Math.min(a[2], b[2]) < 0.01);
+      };
       const straight = e.dirs.length === 2 && opposite(e.dirs[0], e.dirs[1]);
       if (straight) continue;
+      let spans: [number, number][] = [[e.z0, e.z1]];
+      if (e.dirs.length === 1) {
+        for (let x = Math.floor((e.x - 0.02) / 4); x <= Math.floor((e.x + 0.02) / 4); x++)
+          for (let y = Math.floor((e.y - 0.02) / 4); y <= Math.floor((e.y + 0.02) / 4); y++)
+            for (const [ax, ay, bx, by, z0, za, zb] of edgeSurfaces.get(`${x},${y}`) ?? []) {
+              const len = Math.hypot(bx - ax, by - ay);
+              if (len < 1e-6) continue;
+              const dx = (bx - ax) / len, dy = (by - ay) / len;
+              const t = (e.x - ax) * dx + (e.y - ay) * dy;
+              if (t < -0.02 || t > len + 0.02 || Math.abs((e.x - ax) * dy - (e.y - ay) * dx) > 0.02) continue;
+              const dot = dx * e.dirs[0][0] + dy * e.dirs[0][1];
+              if (Math.abs(dot) < edgeCos || (t <= 0.02 && dot > -edgeCos) || (t >= len - 0.02 && dot < edgeCos)) continue;
+              // Перемычка закрывает только верх вертикали: откос ниже неё остаётся.
+              const top = za + (zb - za) * Math.max(0, Math.min(1, t / len));
+              spans = spans.flatMap(([lo, hi]): [number, number][] => {
+                if (top <= lo || z0 >= hi) return [[lo, hi]];
+                const rest: [number, number][] = [];
+                if (z0 > lo) rest.push([lo, z0]);
+                if (top < hi) rest.push([top, hi]);
+                return rest;
+              });
+            }
+        if (!spans.length) continue;
+      }
       // Стена упирается в другую (или в периметр): вертикаль чуть внутрь своей стены — с обратной стороны той стены
       // её закрывает сама стена (рёбра — линии, без отсечения задних граней). Конец в Т-образном примыкании —
       // внутрь примыкающей стены (у сквозной пары направлений — противоположные)
       const odd = e.dirs.length === 1 ? e.dirs[0]
         : e.dirs.length === 3 ? e.dirs.find((d, i) => e.dirs.some((o, j) => j !== i && !opposite(d, o)) && !e.dirs.some((o, j) => j !== i && opposite(d, o))) : undefined;
       const [x, y] = odd ? [e.x + odd[0] * EDGE_INSET, e.y + odd[1] * EDGE_INSET] : [e.x, e.y];
-      edges.push(x, y, e.z0, x, y, e.z1);
+      for (const [lo, hi] of spans) if (hi - lo > 0.01) edges.push(x, y, lo, x, y, hi);
     }
     if (edges.length) {
       const eg = new THREE.BufferGeometry();
@@ -3055,6 +3127,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.applyIssueEdges(g);
     if (!this.graphics.edges || !g.mesh) return;
     g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it)), EDGE_MATERIAL);
+    if (this.level && g === this.groups.get(FOCUS_GROUP)) {
+      const positions = g.edges.geometry.getAttribute('position').array as Float32Array;
+      g.edges.geometry.setAttribute('position', new THREE.BufferAttribute(trimIndoorBuildingEdges(positions, this.indoorEdgeOccluders), 3));
+    }
     g.scene.add(g.edges);
   }
 

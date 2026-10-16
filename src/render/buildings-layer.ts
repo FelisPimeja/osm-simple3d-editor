@@ -30,7 +30,9 @@ const HIGHLIGHT = new THREE.Color('#97beff'); // #2f7cff, смешанный с 
 const MONOCHROME = new THREE.Color('#ffffff');
 
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
-export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number }
+export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
+  /** Шахта лифта выше нижней остановки: без своего пола, и пол других объектов этажа по её контуру вырезан. */ shaft?: boolean;
+  /** Только вырез (этаж, где лифт проходит без остановки): ни пола, ни стен. */ cutOnly?: boolean }
 export interface EscalatorItem { key: string; line: LonLat[]; bottom: number; top: number; width: number; incline?: string; pale?: boolean }
 
 /** Заливка пола по виду indoor-объекта. */
@@ -43,6 +45,13 @@ const PERIMETER_WIDTH_PX = 3;
 const DOOR_WIDTH = 1;
 const DOOR_HEIGHT = 2.2;
 const DOOR_SNAP = 0.15;
+/** Дверь туалета (и кабинок) — уже обычной. */
+export const TOILET_DOOR_WIDTH = 0.8;
+/** Ширина из тега width двери (м), если правдоподобна. */
+const tagWidth = (tags?: Record<string, string>) => {
+  const w = parseFloat(tags?.width ?? '');
+  return w >= 0.5 && w <= 4 ? w : undefined;
+};
 /** Перемычка во всю толщину — только в просвете размером с дверь (до двустворчатой) в стене толщиной до 0,5 м:
  * шире или глубже — это проход или узкое место коридора, над ним ничего нет. */
 const LINTEL_MAX_GAP = DOOR_WIDTH * 2 + 0.2;
@@ -404,12 +413,19 @@ export class BuildingsLayer implements CustomLayerInterface {
   private renderGroups(options: CustomRenderMethodInput) {
     const renderer = this.renderer!;
     const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
-    this.lastMain = main;
+    this.lastMain = main.clone();
+    // Дальняя плоскость MapLibre рассчитана на землю: подземные этажи при наклоне камеры срезаются ею.
+    // Сжимаем глубину: ближняя плоскость та же, дальняя — втрое дальше (ndc' = (ndc − 1) / 2)
+    const e = main.elements;
+    for (let c = 0; c < 4; c++) e[c * 4 + 2] = 0.5 * e[c * 4 + 2] - 0.5 * e[c * 4 + 3];
     let triangles = 0;
     for (const g of this.activeGroups()) {
+      // Выбор и камера берут projectionMatrix с глубиной MapLibre — сжатая только на время отрисовки
+      const pick = g.camera.projectionMatrix = this.lastMain.clone().multiply(g.model);
       g.camera.projectionMatrix = main.clone().multiply(g.model);
       renderer.resetState();
       renderer.render(g.scene, g.camera);
+      g.camera.projectionMatrix = pick;
       triangles += renderer.info.render.triangles;
     }
     if (!this.focused && this.graphics.trees !== false) {
@@ -968,8 +984,11 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (voids.length && this.level.below?.length) {
       const z = this.level.floor - 0.03;
       const holes: ClipMulti = voids.map((poly) => poly.map((r) => { const rp = r.map(g.toLocal); return [...rp, rp[0]]; }));
+      // Лифтовые шахты выше нижней остановки — тоже дыры в плите (обводка края — только у пустот)
+      const shafts: ClipMulti = this.level.items.filter((it) => it.shaft).flatMap((it) => it.polygons.map((p) =>
+        [p.outer, ...p.inners].map((r) => { const rp = r.map(g.toLocal); return [...rp, rp[0]]; })));
       let slab: ClipMulti = [];
-      try { slab = spans.length ? polygonClipping.difference(polygonClipping.union(spans[0], ...spans.slice(1)), ...holes) : []; } catch (err) { console.warn('[levels] плита не построена', err); }
+      try { slab = spans.length ? polygonClipping.difference(polygonClipping.union(spans[0], ...spans.slice(1)), ...holes, ...shafts) : []; } catch (err) { console.warn('[levels] плита не построена', err); }
       const pos: number[] = [];
       for (const poly of slab) {
         const v2 = (r: Pt[]) => r.slice(0, -1).map(([x, y]) => new THREE.Vector2(x, y));
@@ -1220,11 +1239,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     const order: IndoorKind[] = ['level', 'area', 'corridor', 'room', 'column', 'wall'];
     const floorZ = (it: IndoorItem) => it.z + 0.02 + Math.min(order.indexOf(it.kind), 3) * 0.01;
     const floorLevel = items[0]?.z ?? 0;
-    const floorPolygons = items.filter(it => !it.line && it.kind !== 'wall' && it.kind !== 'column')
+    const floorPolygons = items.filter(it => !it.line && it.kind !== 'wall' && it.kind !== 'column' && !it.shaft)
       .flatMap(it => it.polygons.map(p => ({ it, p, outer: p.outer.map(g.toLocal), inners: p.inners.map(r => r.map(g.toLocal)), z: floorZ(it) })));
     const visibleFloors = partitionFloors(floorPolygons);
     // Под моделью эскалатора, проходящей сквозь пол, — вырез (площадка не ложится на пол, короб уходит вниз)
-    const escalatorHoles = escalatorFloorHoles((this.level?.escalators ?? []).map(e => ({ ...e, line: e.line.map(g.toLocal) })), items[0]?.z ?? 0);
+    const shaftHoles = items.filter(it => it.shaft).flatMap(it => it.polygons.map(p =>
+      [p.outer, ...p.inners].map(r => { const l = r.map(g.toLocal); return [...l, l[0]]; }) as ClipMulti[number]));
+    const escalatorHoles = [...escalatorFloorHoles((this.level?.escalators ?? []).map(e => ({ ...e, line: e.line.map(g.toLocal) })), items[0]?.z ?? 0), ...shaftHoles];
     if (escalatorHoles.length) visibleFloors.forEach((pieces, i) => {
       visibleFloors[i] = pieces.flatMap(f => polygonClipping.difference([[...f.outer, f.outer[0]], ...f.inners.map(r => [...r, r[0]])] as ClipMulti[number], escalatorHoles)
         .map(p => ({ outer: p[0].slice(0, -1) as Pt[], inners: p.slice(1).map(r => r.slice(0, -1) as Pt[]), z: f.z })));
@@ -1235,7 +1256,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     /** Цвета вершин стен: каждая сторона — цветом помещения, в которое смотрит. */
     const wallCols: number[] = [];
     // Полы с цветом назначения (локальные кольца, габарит; помещения раньше коридоров и площадок — меньшие сверху)
-    const tinted = items.filter((it) => it.colour !== undefined && !it.line).sort((a, b) => order.indexOf(b.kind) - order.indexOf(a.kind))
+    const tinted = items.filter((it) => it.colour !== undefined && !it.line && !it.cutOnly).sort((a, b) => order.indexOf(b.kind) - order.indexOf(a.kind))
       .flatMap((it) => it.polygons.map((p) => {
         const outer = p.outer.map(g.toLocal), holes = p.inners.map((h) => h.map(g.toLocal));
         const box = outer.reduce((b, [x, y]) => [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)], [Infinity, Infinity, -Infinity, -Infinity]);
@@ -1309,11 +1330,24 @@ export class BuildingsLayer implements CustomLayerInterface {
       end(bx, by, z0, Math.min(z1b, jambB), (ax - bx) / l, (ay - by) / l, l);
     };
     // Resolve metadata and local coordinates once, rather than scanning every door for each wall/door pair.
-    const metadata = [...this.doors, ...(this.level?.below ?? []).flatMap(b => b.doorModels ?? [])].map(d => ({ key: d.key, at: g.toLocal(this.doorAt(d)), z: d.z, diameter: revolvingDoorDiameter(d.tags) }));
+    const metadata = [...this.doors, ...(this.level?.below ?? []).flatMap(b => b.doorModels ?? [])].map(d => ({ key: d.key, at: g.toLocal(this.doorAt(d)), z: d.z, diameter: revolvingDoorDiameter(d.tags), width: tagWidth(d.tags) }));
+    /** Ширина двери: тег width, иначе самая узкая из помещений, на стене которых она стоит, иначе DOOR_WIDTH. */
+    const narrowRings = items.filter(it => it.doorWidth).flatMap(it => it.polygons.flatMap(p => [p.outer, ...p.inners].map(r => ({ ring: r.map(g.toLocal), width: it.doorWidth! }))));
+    const roomDoorWidth = (p: Pt) => {
+      let width: number | undefined;
+      for (const { ring, width: w } of narrowRings) for (let i = 0; i < ring.length; i++) {
+        const a = ring[i], b = ring[(i + 1) % ring.length], len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        if (len < 1e-6) continue;
+        const t = ((p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1])) / len;
+        if (t < -DOOR_SNAP || t > len + DOOR_SNAP || Math.abs((p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])) / len > DOOR_SNAP) continue;
+        width = Math.min(width ?? Infinity, w);
+      }
+      return width;
+    };
     const doors = doorList.map(at => {
       const p = g.toLocal(at);
       const door = metadata.find(d => Math.abs(d.z - items[0].z) < 0.1 && Math.hypot(d.at[0] - p[0], d.at[1] - p[1]) < 0.01);
-      return { at: p, key: pale ? undefined : door?.key, z: door?.z, diameter: door?.diameter };
+      return { at: p, key: pale ? undefined : door?.key, z: door?.z, diameter: door?.diameter, width: door?.width ?? roomDoorWidth(p) };
     });
     /** Стена с дверными проёмами (DOOR_WIDTH × DOOR_HEIGHT) там, где на ней стоит дверь. */
     const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number) => {
@@ -1327,7 +1361,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           const distance = (px - ax) * dy - (py - ay) * dx;
           const t = (px - ax) * dx + (py - ay) * dy;
           const diameter = door.z !== undefined && Math.abs(door.z - z0) < 0.1 ? door.diameter : undefined;
-          const halfWidth = doorOpeningHalfWidth(distance, diameter, DOOR_WIDTH, DOOR_SNAP);
+          const halfWidth = doorOpeningHalfWidth(distance, diameter, door.width ?? DOOR_WIDTH, DOOR_SNAP);
           if (!halfWidth || t + halfWidth <= 0 || t - halfWidth >= len) continue;
           if (diameter === undefined && (t < -DOOR_SNAP || t > len + DOOR_SNAP)) continue;
           const lo = Math.max(0, t - halfWidth) / len, hi = Math.min(len, t + halfWidth) / len;
@@ -1479,19 +1513,19 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (!it.line) continue;
       for (const p of it.polygons) {
         const pts = p.outer.map(g.toLocal);
-        for (let i = 0; i + 1 < pts.length; i++) wallFree(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], it.z);
-        // Замкнутая стена (короб, шахта) — с крышкой сечения, а не открытой коробкой
+        // Замкнутая стена (короб, шахта, тонкая стена-контур) — с крышкой сечения, а не открытой коробкой.
+        // Её противоположные грани ближе WALL_MERGE_DIST — сливаем только почти совпадающие, как у стен-полигонов
         const [f0, fl] = [pts[0], pts[pts.length - 1]];
-        if (pts.length >= 4 && Math.hypot(f0[0] - fl[0], f0[1] - fl[1]) < 1e-3) {
-          cap(pts.slice(0, -1), [], it.z);
-        }
+        const closed = pts.length >= 4 && Math.hypot(f0[0] - fl[0], f0[1] - fl[1]) < 1e-3;
+        for (let i = 0; i + 1 < pts.length; i++) wallFree(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], it.z, closed);
+        if (closed) cap(pts.slice(0, -1), [], it.z);
       }
     }
     for (const it of [...items].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind))) {
       const solid = it.kind === 'wall' || it.kind === 'column';
       const z = floorZ(it);
       for (const p of it.polygons) {
-        if (it.line) continue; // нарисованы выше
+        if (it.line || it.cutOnly) continue; // нарисованы выше; только вырез — без стен
         // У колонны и стены-полигона — крышка сечения, у остальных — пол своего цвета
         if (solid) cap(p.outer.map(g.toLocal), p.inners.map((h) => h.map(g.toLocal)), it.z);
         else for (const piece of floorPieces.get(p) ?? []) fill(piece.outer, piece.inners, z, it.colour ?? INDOOR_COLOURS[it.kind]);

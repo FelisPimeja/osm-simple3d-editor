@@ -345,3 +345,52 @@ for (const pale of [false, true]) test(`bottom edge of a wall inside an area is 
   assert.ok(bottom !== undefined, 'bottom edge is drawn');
   assert.ok(bottom > floorTop, `bottom edge ${bottom} is under the floor ${floorTop}`);
 });
+
+// Toilets and cubicles: doors in their walls are narrower (doorWidth); the door's own width tag wins.
+test('doors of toilet rooms are narrower, width tag overrides', async () => {
+  const THREE = await import('three');
+  const openingWidth = (doorTags) => {
+    const layer = new BuildingsLayer('test');
+    const toilet = { key: 't', kind: 'room', z: 0, doorWidth: .8, polygons: [{ outer: [[0, 0], [4, 0], [4, 3], [0, 3]], inners: [] }] };
+    const hall = { key: 'h', kind: 'room', z: 0, polygons: [{ outer: [[0, 0], [0, -3], [4, -3], [4, 0]], inners: [] }] };
+    const items = [toilet, hall];
+    layer.doors = [{ key: 'node/1', at: [2, 0], z: 0, tags: doorTags }];
+    layer.level = { floor: 0, cut: 3, items };
+    layer.drawPlan(new THREE.Group(), { toLocal: p => p, items: [], hidden: new Set(), flat: new Set() }, items, [[2, 0]], 3, false);
+    return [...layer.doorOpeningEdges.get('node/1').values()].reduce((s, v) => s + Math.hypot(v[3] - v[0], v[4] - v[1]), 0);
+  };
+  assert.ok(Math.abs(openingWidth({}) - .8) < 1e-6);
+  assert.ok(Math.abs(openingWidth({ width: '1.2' }) - 1.2) < 1e-6);
+});
+
+// Elevators: above the lowest stop the shaft has no floor and cuts the floors under it; where the elevator
+// passes without stopping (cutOnly) there are no walls either.
+for (const cutOnly of [false, true]) test(`elevator shaft cuts the floor, cutOnly=${cutOnly}`, async () => {
+  const THREE = await import('three');
+  const layer = new BuildingsLayer('test');
+  const hall = { key: 'hall', kind: 'area', z: 0, polygons: [{ outer: [[-5, -5], [5, -5], [5, 5], [-5, 5]], inners: [] }] };
+  const shaft = { key: 'lift', kind: 'room', z: 0, shaft: true, cutOnly, polygons: [{ outer: [[0, 0], [2, 0], [2, 2], [0, 2]], inners: [] }] };
+  const items = [hall, shaft];
+  layer.level = { floor: 0, cut: 3, items };
+  const root = new THREE.Group();
+  layer.drawPlan(root, { toLocal: p => p, items: [], hidden: new Set(), flat: new Set() }, items, [], 3, false);
+  const inTri = (x, y, p, i) => {
+    const s = (ax, ay, bx, by) => (x - bx) * (ay - by) - (ax - bx) * (y - by);
+    const d1 = s(p[i], p[i+1], p[i+3], p[i+4]), d2 = s(p[i+3], p[i+4], p[i+6], p[i+7]), d3 = s(p[i+6], p[i+7], p[i], p[i+1]);
+    return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
+  };
+  let floorInShaft = 0, floorOutside = 0, shaftWalls = 0;
+  root.traverse(o => {
+    if (o.type !== 'Mesh') return;
+    const p = o.geometry.getAttribute('position').array;
+    for (let i = 0; i < p.length; i += 9) {
+      const flat = Math.abs(p[i+2] - p[i+5]) < 1e-6 && Math.abs(p[i+2] - p[i+8]) < 1e-6;
+      if (flat && inTri(1, 1, p, i)) floorInShaft++;
+      if (flat && inTri(-3, -3, p, i)) floorOutside++;
+      if (!flat && [0, 3, 6].every(k => Math.abs(p[i+k]) < 1e-6 && p[i+k+1] > -1e-6 && p[i+k+1] < 2 + 1e-6)) shaftWalls++;
+    }
+  });
+  assert.equal(floorInShaft, 0, 'no floor inside the shaft');
+  assert.ok(floorOutside > 0, 'the hall floor stays around it');
+  assert.equal(shaftWalls > 0, !cutOnly, cutOnly ? 'no walls where the elevator does not stop' : 'shaft walls');
+});

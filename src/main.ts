@@ -30,7 +30,7 @@ import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
 import type { TreePoint } from './osm/trees';
 import { isBridge, isTunnel, roadLevel, type RoadWay } from './osm/roads';
-import { BuildingsLayer, isHiddenUnderground, setInheritance, setLevelGrid, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, TOILET_DOOR_WIDTH, isHiddenUnderground, setInheritance, setLevelGrid, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
@@ -4355,6 +4355,19 @@ const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.escalator) ? 
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level'] : [...INDOOR_EDIT_TAGS]);
 
 /** Дверь плана этажа: узел с door, indoor=door или entrance (точка на линии стены в проёме). */
+/** Лифт: помещение room=elevator (highway=elevator) или помещение с точкой highway=elevator внутри. */
+function isElevatorRoom(f: IndoorFeature, all: IndoorFeature[]): boolean {
+  if (f.kind !== 'room' || f.line) return false;
+  if (f.tags.room === 'elevator' || f.tags.highway === 'elevator') return true;
+  return all.some((p) => p.kind === 'poi' && p.point && p.tags.highway === 'elevator'
+    && f.polygons.some((q) => pointInRing(p.point!, q.outer) && !q.inners.some((h) => pointInRing(p.point!, h))));
+}
+
+/** Туалет или кабинка: двери в его стенах уже обычных. */
+function isToiletRoom(f: IndoorFeature): boolean {
+  const t = f.tags;
+  return ['toilets', 'toilet', 'toilet_cubicle', 'shower'].includes(t.room ?? '') || t.amenity === 'toilets' || t.toilets === 'yes';
+}
 const isDoor = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && !f.key.endsWith('#poi')
   && !!(f.tags.door || f.tags.indoor === 'door' || f.tags.entrance);
 
@@ -4845,8 +4858,13 @@ function renderLevelsImpl() {
     selectIndoor(undefined);
     infoEl.innerHTML = '';
   }
+  // Лифты: пол только на нижней остановке; выше, до верхней (и на этажах без остановки), — шахта: вырез в полу
+  const elevators = visibleIndoor.filter((f) => isElevatorRoom(f, visibleIndoor) && f.levels.length);
   const planOf = (l: Level) => {
     const fs = visibleIndoor.filter((f) => f.levels.includes(l.n));
+    const shaft = (f: IndoorFeature) => elevators.includes(f) && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels);
+    const passing = elevators.filter((f) => shaft(f) && !f.levels.includes(l.n))
+      .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, z: l.floor, shaft: true, cutOnly: true }));
     return {
       cut: l.ceil,
       // Площадь эскалатора задаёт его след и проём, но не сплошной пол под ступенями.
@@ -4855,7 +4873,9 @@ function renderLevelsImpl() {
         && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
         && (f.line || f.kind === 'wall' || f.kind === 'column' || floorLevels(f).includes(l.n)))
         .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor, areaLedge: f.tags.indoor === 'area',
-          ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}) })),
+          ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
+          ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
+          ...(shaft(f) ? { shaft: true } : {}) })).concat(passing),
       // Модели нижних этажей видны сквозь второй свет; маркеры остаются на активном этаже.
       doorModels: fs.filter((f) => isDoor(f) && f.tags.door === 'revolving')
         .map((f) => ({ key: f.key, at: f.point!, z: l.floor, tags: f.tags })),

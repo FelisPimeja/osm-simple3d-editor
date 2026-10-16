@@ -234,7 +234,8 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
     { label: t.door === undefined ? tr('удалить entrance, добавить door=yes') : tr('удалить entrance'),
       tags: { entrance: undefined, indoor: 'door', ...(t.door === undefined ? { door: 'yes' } : {}) } });
   if (t.indoor === 'door' && t.door === undefined && t.entrance !== 'yes') add('warning', 'indoor-door',
-    tr('Для внутренней двери indoor=door укажите также door=* (door=no для открытого прохода).'));
+    tr('Для внутренней двери indoor=door укажите также door=* (door=no для открытого прохода).'),
+    { label: 'door=yes', tags: { door: 'yes' } });
   if (t.door === 'loadingdock') add('warning', 'indoor-door', tr('door=loadingdock — погрузочную платформу обозначают amenity=loading_dock.'));
   if (t.entrance === 'gate') add('warning', 'indoor-door', tr('entrance=gate — для ворот проверьте barrier=gate.'));
   if (t['addr:entrance'] === 'yes') add('warning', 'indoor-door', tr('addr:entrance=yes — вход обозначают тегом entrance=*.'));
@@ -245,6 +246,17 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
     const parts = value.split(';').map((s) => s.trim());
     if (parts.some((part) => !/^-?\d+(?:\.\d+)?(?:\s*-\s*-?\d+(?:\.\d+)?)?$/.test(part)) || !parseLevels(value).length)
       add('error', 'indoor-level', tr('{tag}={value} — нужны номера этажей через «;» или диапазон, например -1;0;1 либо -1-1.', { tag, value }));
+  }
+  // Одинаковая точка на нескольких этажах (дверь лифта, огнетушитель): по Simple Indoor Tagging — level с исходным
+  // этажом и repeat_on с остальными. Несколько значений level у точки означают объект на несколько этажей
+  const repeatedPoint = key.startsWith('node/') && t.repeat_on === undefined
+    && (t.indoor === 'door' || t.door !== undefined || t.entrance !== undefined || t.emergency !== undefined || t.window !== undefined);
+  const pointLevels = repeatedPoint && t.level !== undefined ? [...new Set(parseLevels(t.level))].sort((a, b) => a - b) : [];
+  if (pointLevels.length > 1) {
+    const [base, ...rest] = pointLevels;
+    add('warning', 'indoor-level',
+      tr('level={value} у точки — одинаковые копии на других этажах задают через repeat_on=*, в level — один этаж.', { value: t.level! }),
+      { label: `level=${base}, repeat_on=${rest.join(';')}`, tags: { level: String(base), repeat_on: rest.join(';') } });
   }
   if (t.repeat_on !== undefined && t.level === undefined) add('warning', 'indoor-level',
     tr('repeat_on=* задаёт повторения; исходный этаж укажите в level=*.'));

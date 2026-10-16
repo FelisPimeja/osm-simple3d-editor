@@ -885,5 +885,6 @@
   "Заново запросить из OSM API это здание, его части и внутренние планы": "Request this building, its parts and indoor plans from the OSM API again",
   "Слой JOSM обновляется сам.": "The JOSM layer updates itself.",
   "Обновляем здание…": "Reloading building…",
-  "Данные здания актуальны.": "Building data is up to date."
+  "Данные здания актуальны.": "Building data is up to date.",
+  "level={value} у точки — одинаковые копии на других этажах задают через repeat_on=*, в level — один этаж.": "level={value} on a point — identical copies on other levels are tagged with repeat_on=*, level holds a single level."
 }

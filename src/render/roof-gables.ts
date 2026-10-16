@@ -1,5 +1,47 @@
 import type { Skeleton } from './skeleton';
 
+/** Restore real eaves after using a simplified footprint to infer roof topology. */
+export function restoreRoofBoundary(sk: Skeleton, rings: [number, number][][]): Skeleton {
+  const boundary = rings.flat();
+  const vertices = sk.vertices.map(v => {
+    if (v[2] >= 1e-9) return v;
+    const tolerance = Math.max(1e-5, Math.abs(v[0]) * 1e-7, Math.abs(v[1]) * 1e-7);
+    const point = boundary.find(p => Math.hypot(v[0] - p[0], v[1] - p[1]) < tolerance);
+    return point ? [point[0], point[1], 0] as [number, number, number] : v;
+  });
+  const retained = rings.map(ring => new Set(ring.flatMap((p, i) =>
+    vertices.some(v => v[2] < 1e-9 && Math.hypot(v[0] - p[0], v[1] - p[1]) < 1e-7) ? [i] : [])));
+  const added = new Map<string, number>();
+  const polygons = sk.polygons.map(face => face.flatMap((a, k) => {
+    const b = face[(k + 1) % face.length], p = vertices[a], q = vertices[b];
+    if (p[2] >= 1e-9 || q[2] >= 1e-9) return [a];
+    for (let r = 0; r < rings.length; r++) {
+      const ring = rings[r];
+      const start = ring.findIndex(v => Math.hypot(v[0] - p[0], v[1] - p[1]) < 1e-7);
+      const end = ring.findIndex(v => Math.hypot(v[0] - q[0], v[1] - q[1]) < 1e-7);
+      if (start < 0 || end < 0 || start === end) continue;
+      for (const step of [1, -1]) {
+        const chain: number[] = [];
+        let i = (start + step + ring.length) % ring.length;
+        while (i !== end && !retained[r].has(i)) {
+          chain.push(i); i = (i + step + ring.length) % ring.length;
+        }
+        if (i !== end) continue;
+        return [a, ...chain.map(index => {
+          const key = `${r}/${index}`;
+          let id = added.get(key);
+          if (id === undefined) {
+            id = vertices.length; vertices.push([...ring[index], 0]); added.set(key, id);
+          }
+          return id;
+        })];
+      }
+    }
+    return [a];
+  }));
+  return { vertices, polygons };
+}
+
 /** CGAL иногда отдаёт один узел несколькими вершинами с субмиллиметровым зазором. */
 export function weldRoofSkeleton(sk: Skeleton): Skeleton {
   const parent = sk.vertices.map((_, i) => i);

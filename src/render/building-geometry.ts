@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Heights } from '../osm/heights';
 import { skeletonOf, type Skeleton } from './skeleton';
 import { tr } from '../i18n';
-import { extendGables, weldRoofSkeleton } from './roof-gables';
+import { extendGables, weldRoofSkeleton, restoreRoofBoundary } from './roof-gables';
 
 /** Локальная точка в метрах: x — восток, y — север. */
 export type Pt = [number, number];
@@ -96,7 +96,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   } else if (quadRoof) {
     addQuadRoof(roof, walls, single!.outer, h.wallTop, h.top, shape === 'hipped', tags['roof:orientation'] === 'across');
   } else {
-    for (const sk of skeletons!) addSkeletonRoof(roof, walls, sk as Skeleton, h.wallTop, h.roofHeight, GABLED_SHAPES.has(shape), PROFILES[shape]);
+    for (const [i, sk] of skeletons!.entries()) addSkeletonRoof(roof, walls, sk as Skeleton, h.wallTop, h.roofHeight, GABLED_SHAPES.has(shape), PROFILES[shape], [polygons[i].outer, ...polygons[i].inners]);
   }
 
   return { walls, roof, gableStart, roofApproximated: !supported && !pending, pending };
@@ -221,11 +221,13 @@ function addQuadRoof(roof: number[], walls: number[], ring: Pt[], z0: number, z1
  */
 function addSkeletonRoof(
   roof: number[], walls: number[], sk: Skeleton,
-  z0: number, roofHeight: number, gabled: boolean, profile: Profile = LINEAR,
+  z0: number, roofHeight: number, gabled: boolean, profile: Profile = LINEAR, rings: Pt[][] = [],
 ) {
   sk = weldRoofSkeleton(sk);
-  const { vertices: verts, polygons, gables } = gabled
+  const extended = gabled
     ? extendGables(sk) : { vertices: sk.vertices, polygons: sk.polygons, gables: new Set<number[]>() };
+  const { vertices: verts, polygons } = restoreRoofBoundary(extended, rings);
+  const gables = new Set(polygons.filter((_, i) => extended.gables.has(extended.polygons[i])));
   const maxT = Math.max(...verts.map((v) => v[2])) || 1;
 
   const z = (t: number) => z0 + roofHeight * profile.z(Math.min(1, t / maxT));

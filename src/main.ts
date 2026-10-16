@@ -5020,28 +5020,32 @@ type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[] }[]> & 
 /** Пустоты (второй свет) всех этажей здания, lon/lat; кеш — по зданию и данным. */
 const voidsCache = new Map<string, { sig: string; map: LevelVoids }>();
 function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
-  const sig = `${overpass.revision}|${focusIndoor.get(g.key)?.length ?? -1}|${indoorEditRev}|${indoor.map((f) => f.key).join(',')}|${levels.map((l) => `${l.n}:${l.floor}:${l.ceil}`).join(',')}|${g.members.length}`;
+  const feats = groupFeatures(g);
+  let w = Infinity, s = Infinity, e = -Infinity, nn = -Infinity;
+  for (const f of feats) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); nn = Math.max(nn, y); }
+  const hasParts = feats.some((f) => f.kind === 'part');
+  // Части внутри здания, забытые в отношении (relation/17852191 вне relation/17852202), — тоже контур этажа
+  const members = new Set(g.members);
+  const outlines = feats.filter((f) => f.kind === 'building');
+  const strays = hasParts && Number.isFinite(w) ? overpass.allFeatures().filter((f) => f.kind === 'part' && !members.has(f.key) && f.polygons.length
+    && f.polygons[0].outer.every(([x, y]) => x >= w && x <= e && y >= s && y <= nn)
+    && outlines.some((o) => o.polygons.some((q) => pointInRing(pointOnSurface(f.polygons[0]), q.outer)))) : [];
+  const partFeats = [...feats.filter((f) => !hasParts || f.kind === 'part'), ...strays];
+  // По содержимому, а не по ревизии тайлов: тайлы приходят порциями, а здание в них то же — пересчёт (~1 с) зря
+  const sig = JSON.stringify([levels.map((l) => [l.n, l.floor, l.ceil]),
+    partFeats.map((f) => [f.key, f.tags, f.polygons]),
+    indoor.map((f) => [f.key, f.kind, f.tags, f.levels, f.line, f.escalator, f.escalatorArea, f.polygons])]);
   const hit = voidsCache.get(g.key);
   if (hit?.sig === sig) return hit.map;
   const map: LevelVoids = timed('этажи: второй свет', () => {
     const out: LevelVoids = new Map();
-    const feats = groupFeatures(g);
-    let w = Infinity, s = Infinity, e = -Infinity, nn = -Infinity;
-    for (const f of feats) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); nn = Math.max(nn, y); }
     if (!Number.isFinite(w) || !indoor.length) return out;
     // Плоская система в метрах вокруг здания
     const cx = (w + e) / 2, cy = (s + nn) / 2, kx = Math.cos(cy * Math.PI / 180) * 111320, ky = 111320;
     const loc = ([x, y]: LonLat): [number, number] => [(x - cx) * kx, (y - cy) * ky];
     const geo = ([x, y]: [number, number]): LonLat => [x / kx + cx, y / ky + cy];
     const poly = (p: Polygon) => [p.outer.map(loc), ...p.inners.map((r) => r.map(loc))];
-    const hasParts = feats.some((f) => f.kind === 'part');
-    // Части внутри здания, забытые в отношении (relation/17852191 вне relation/17852202), — тоже контур этажа
-    const members = new Set(g.members);
-    const outlines = feats.filter((f) => f.kind === 'building');
-    const strays = hasParts ? overpass.allFeatures().filter((f) => f.kind === 'part' && !members.has(f.key) && f.polygons.length
-      && f.polygons[0].outer.every(([x, y]) => x >= w && x <= e && y >= s && y <= nn)
-      && outlines.some((o) => o.polygons.some((q) => pointInRing(pointOnSurface(f.polygons[0]), q.outer)))) : [];
-    const parts = [...feats.filter((f) => !hasParts || f.kind === 'part'), ...strays]
+    const parts = partFeats
       .map((f) => { const h = computeHeights(f.tags); return { polygons: f.polygons.map(poly), min: h.min, wallTop: h.wallTop }; });
     const plans = buildPlans(levels, parts, indoor.filter((f) => f.kind !== 'poi').map((f) => ({ kind: f.kind, levels: f.levels, floors: floorLevels(f), line: f.line, polygons: f.polygons.map(poly) })));
     // Размеченное по этажам (lon/lat) — перекрытия стеклянных частей кладём только там

@@ -2687,7 +2687,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (this.groups.get(key) !== g) break; // группу убрали или заменили, пока ждали кадр
       }
       if (this.groups.get(key) !== g || !done.length) continue;
-      this.replaceItems(g, done);
+      this.replaceItems(g, done, true);
       for (const f of done) onRebuilt(rendered(g.byKey.get(f.key)!));
     }
   }
@@ -2977,19 +2977,35 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   private addItem(g: MeshGroup, f: Feature3D) {
     const item = timed('здание: треугольники', () => buildItem(g, f), () => describeFeature(f));
+    this.shapeSigs.set(item, shapeSig(f));
     // Контуры включены — считаем рёбра здесь, в порционной сборке, а не разом при слиянии
     if (this.graphics.edges) item.edges = itemEdges(item);
     g.byKey.set(f.key, item);
     g.items.push(item);
   }
 
-  private replaceItems(g: MeshGroup, features: Feature3D[]) {
+  /** Из чего собрана часть (shapeSig) — перечитанный тайл с той же частью не пересобирает её. */
+  private shapeSigs = new WeakMap<Item, string>();
+
+  private replaceItems(g: MeshGroup, features: Feature3D[], force = false) {
+    // Та же часть из перечитанного тайла (новый объект, то же содержимое) — без пересборки: иначе пропадают
+    // кеши по частям (оболочка здания в режиме этажей — секунды на сотнях частей)
+    features = features.filter((f) => {
+      const old = g.byKey.get(f.key);
+      if (force || !old || old.pending || this.shapeSigs.get(old) !== shapeSig(f)) return true;
+      old.feature = f;
+      return false;
+    });
+    if (!features.length) { this.rebuildGeometry(g); this.map?.triggerRepaint(); return; }
     const changed = new Set(features.filter((f) => g.byKey.has(f.key)).map((f) => f.key));
     this.refreshContacts(g, features, changed);
     for (const f of features) {
       const old = g.byKey.get(f.key);
       if (!old) continue;
       const item = timed('здание: треугольники', () => buildItem(g, f), () => describeFeature(f));
+      // Треугольники те же (пересборка всех частей ради стеклянных) — остаётся прежний объект с его кешами
+      if (sameItemGeometry(old, item)) { old.feature = f; this.shapeSigs.set(old, shapeSig(f)); continue; }
+      this.shapeSigs.set(item, shapeSig(f));
       g.items[g.items.indexOf(old)] = item;
       g.byKey.set(f.key, item);
     }
@@ -4017,6 +4033,23 @@ function objId(o: object): number {
 /** Освободить геометрию плана этажа (материалы бледных планов общие). */
 function disposePlanGroup(group: THREE.Object3D) {
   group.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose(); });
+}
+
+/** Новая сборка части совпадает со старой: те же треугольники, стекло и соседи. */
+function sameItemGeometry(old: Item, item: Item): boolean {
+  if (old.pending || item.pending || old.contacts !== item.contacts || old.floorVertices !== item.floorVertices
+    || old.glassWalls !== item.glassWalls || old.glassRoof !== item.glassRoof) return false;
+  const src = old.full ?? old;
+  if (src.wallVertices !== item.wallVertices) return false;
+  const a = src.positions, b = item.positions;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** Подпись версии объекта для рендера: геометрия, теги и роль в здании. */
+function shapeSig(f: Feature3D): string {
+  return JSON.stringify([f.kind, f.hasParts, f.tags, f.polygons, f.renderPolygons]);
 }
 
 /** Оболочка группы для планов этажей: та же, пока не менялись треугольники, скрытые и висящие части. */

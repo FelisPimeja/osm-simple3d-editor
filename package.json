@@ -10,7 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "i18n:check": "node scripts/i18n-check.mjs",
-    "i18n:extract": "node scripts/i18n-check.mjs --write"
+    "i18n:extract": "node scripts/i18n-check.mjs --write",
+    "presets:extract": "node scripts/presets-extract.mjs"
   },
   "dependencies": {
     "@mapbox/maki": "^8.2.0",
@@ -21,6 +22,7 @@
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@openstreetmap/id-tagging-schema": "7.3.0",
     "@types/three": "^0.186.0",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "typescript": "^7.0.2",

@@ -1,15 +1,17 @@
 import { INHERITABLE, inheritedValue } from '../osm/inherit';
 import type { EditSession } from './session';
 import { tr, trn } from '../i18n';
+import { idFieldLabel, idOptions, valueLabels } from '../osm/presets';
 
 type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour' | 'combo';
 
 interface Field {
   tag: string;
-  label: string;
+  /** Нет — название поля из iD (src/osm/presets.ts). */
+  label?: string;
   type: FieldType;
   options?: string[];
-  /** combo: подписи вариантов (значение → подпись). */
+  /** combo: подписи вариантов (значение → подпись), поверх подписей iD. */
   labels?: Record<string, string>;
   /** combo: иконки вариантов (SVG). */
   icons?: Record<string, string>;
@@ -65,8 +67,9 @@ const ROOF_ICONS: Record<string, string> = {
   'cone': roofIcon('<path d="M5.1 14.0L5.1 9.8L5.1 14.8Z" fill-opacity="0.60" class="c"/><path d="M5.1 9.0L5.1 9.8L5.1 14.0Z" fill-opacity="0.60" class="c"/><path d="M16.5 16.6L16.9 10.9L16.9 15.9Z" fill-opacity="0.49" class="c"/><path d="M5.1 14.8L5.5 10.6L5.5 15.6Z" fill-opacity="0.57" class="c"/><path d="M11.0 1.0L16.5 9.4L16.9 10.2Z" fill-opacity="0.45" class="c"/><path d="M5.1 9.8L5.5 10.6L5.1 14.8Z" fill-opacity="0.57" class="c"/><path d="M5.1 9.0L5.5 8.3L11.0 1.0Z" fill-opacity="0.52" class="c"/><path d="M16.5 11.7L16.9 10.9L16.5 16.6Z" fill-opacity="0.49" class="c"/><path d="M15.7 17.2L16.5 11.7L16.5 16.6Z" fill-opacity="0.41" class="c"/><path d="M11.0 1.0L16.9 10.2L16.9 10.9Z" fill-opacity="0.38" class="c"/><path d="M5.1 9.0L11.0 1.0L5.1 9.8Z" fill-opacity="0.45" class="c"/><path d="M5.5 15.6L6.3 11.3L6.3 16.3Z" fill-opacity="0.49" class="c"/><path d="M5.5 10.6L6.3 11.3L5.5 15.6Z" fill-opacity="0.49" class="c"/><path d="M14.6 17.7L15.7 12.3L15.7 17.2Z" fill-opacity="0.35" class="c"/><path d="M15.7 12.3L16.5 11.7L15.7 17.2Z" fill-opacity="0.41" class="c"/><path d="M11.0 1.0L16.9 10.9L16.5 11.7Z" fill-opacity="0.31" class="c"/><path d="M5.1 9.8L11.0 1.0L5.5 10.6Z" fill-opacity="0.38" class="c"/><path d="M6.3 16.3L7.4 12.0L7.4 17.0Z" fill-opacity="0.41" class="c"/><path d="M6.3 11.3L7.4 12.0L6.3 16.3Z" fill-opacity="0.41" class="c"/><path d="M13.3 17.9L14.6 12.7L14.6 17.7Z" fill-opacity="0.31" class="c"/><path d="M11.0 1.0L16.5 11.7L15.7 12.3Z" fill-opacity="0.25" class="c"/><path d="M5.5 10.6L11.0 1.0L6.3 11.3Z" fill-opacity="0.31" class="c"/><path d="M14.6 12.7L15.7 12.3L14.6 17.7Z" fill-opacity="0.35" class="c"/><path d="M7.4 17.0L8.8 12.5L8.8 17.5Z" fill-opacity="0.35" class="c"/><path d="M11.8 18.0L13.3 13.0L13.3 17.9Z" fill-opacity="0.29" class="c"/><path d="M8.8 17.5L10.3 12.9L10.3 17.8Z" fill-opacity="0.31" class="c"/><path d="M7.4 12.0L8.8 12.5L7.4 17.0Z" fill-opacity="0.35" class="c"/><path d="M10.3 17.8L11.8 13.0L11.8 18.0Z" fill-opacity="0.29" class="c"/><path d="M11.0 1.0L15.7 12.3L14.6 12.7Z" fill-opacity="0.20" class="c"/><path d="M6.3 11.3L11.0 1.0L7.4 12.0Z" fill-opacity="0.25" class="c"/><path d="M13.3 13.0L14.6 12.7L13.3 17.9Z" fill-opacity="0.31" class="c"/><path d="M8.8 12.5L10.3 12.9L8.8 17.5Z" fill-opacity="0.31" class="c"/><path d="M11.0 1.0L14.6 12.7L13.3 13.0Z" fill-opacity="0.16" class="c"/><path d="M7.4 12.0L11.0 1.0L8.8 12.5Z" fill-opacity="0.20" class="c"/><path d="M11.8 13.0L13.3 13.0L11.8 18.0Z" fill-opacity="0.29" class="c"/><path d="M10.3 12.9L11.8 13.0L10.3 17.8Z" fill-opacity="0.29" class="c"/><path d="M11.0 1.0L13.3 13.0L11.8 13.0Z" fill-opacity="0.14" class="c"/><path d="M8.8 12.5L11.0 1.0L10.3 12.9Z" fill-opacity="0.16" class="c"/><path d="M10.3 12.9L11.0 1.0L11.8 13.0Z" fill-opacity="0.14" class="c"/>'),
 };
 
-const FIELDS: Field[] = [
-  { tag: 'building:part', label: tr('Часть здания'), type: 'combo', options: Object.keys(PART_VALUES), labels: PART_VALUES, placeholder: 'yes', empty: 'yes' },
+/** Поля формы; чего не задано — из схемы iD: название, варианты, подписи вариантов. */
+const FIELDS = ([
+  { tag: 'building:part', type: 'combo', options: Object.keys(PART_VALUES), labels: PART_VALUES, placeholder: 'yes', empty: 'yes' },
   { tag: 'height', label: tr('Высота, м'), type: 'length', placeholder: tr('до верха крыши') },
   { tag: 'min_height', label: tr('Низ, м'), type: 'length' },
   { tag: 'building:levels', label: tr('Этажей'), type: 'int' },
@@ -76,8 +79,13 @@ const FIELDS: Field[] = [
   { tag: 'roof:direction', label: tr('Направление ската'), type: 'direction', placeholder: tr('0–360 или N, SE…') },
   { tag: 'roof:orientation', label: tr('Конёк'), type: 'select', options: ['along', 'across'] },
   { tag: 'building:colour', label: tr('Цвет стен'), type: 'colour' },
-  { tag: 'roof:colour', label: tr('Цвет крыши'), type: 'colour' },
-];
+  { tag: 'roof:colour', type: 'colour' },
+] as Field[]).map((f) => ({
+  ...f,
+  label: f.label ?? idFieldLabel(f.tag) ?? f.tag,
+  options: f.options ?? idOptions(f.tag),
+  labels: f.type === 'combo' ? valueLabels(f.tag, f.labels) : f.labels,
+}));
 
 const CARDINALS = new Set(['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']);
 
@@ -160,7 +168,7 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
     const inherited = from ? inheritedValue(from.tags, field.tag) : undefined;
     const hint = from ? tr('Не задано у объекта — унаследовано из {source}: {tag}. Модель рисуется с ним, но в OSM лучше задать значение на самой части.',
       { source: from.label, tag: `${field.tag}=${inherited}` }) : '';
-    if (from) inheritedAny.push(field.label.replace(/,.*$/, '').toLowerCase());
+    if (from) inheritedAny.push(field.label!.replace(/,.*$/, '').toLowerCase());
     const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || was || field.tag)}"`;
     let control: string;
     if (field.type === 'select') {
@@ -251,9 +259,9 @@ function combo(field: Field, common: string, value: string, placeholder: string,
     + `<button type="button" class="combo-btn" tabindex="-1" title="${tr('Выбрать из списка')}"></button><ul class="combo-list" hidden>${items}</ul></span>`;
 }
 
-/** Свободный ввод с тем же полным списком вариантов для indoor-форм. */
-export function renderValueCombo(options: string[], attributes: string, value: string, placeholder: string, labels?: Record<string, string>): string {
-  return combo({ tag: '', label: '', type: 'combo', options, labels }, attributes, value, placeholder, '');
+/** Свободный ввод с тем же полным списком вариантов для indoor-форм; key — ключ OSM для подписей iD. */
+export function renderValueCombo(options: string[], attributes: string, value: string, placeholder: string, labels?: Record<string, string>, key = ''): string {
+  return combo({ tag: key, label: '', type: 'combo', options, labels: key ? valueLabels(key, labels) : labels }, attributes, value, placeholder, '');
 }
 
 /** Поле со значком «унаследовано» справа (только если есть пояснение). */

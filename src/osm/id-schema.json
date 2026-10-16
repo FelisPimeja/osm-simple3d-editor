@@ -1,0 +1,189 @@
+{
+ "version": "7.3.0",
+ "fields": {
+  "building:part": {
+   "id": "building/part",
+   "type": "combo",
+   "label": {
+    "en": "Building Part",
+    "ru": "Часть здания"
+   },
+   "values": {}
+  },
+  "height": {
+   "id": "height",
+   "type": "number",
+   "label": {
+    "en": "Height (Meters)",
+    "ru": "Высота (метры)"
+   },
+   "values": {}
+  },
+  "min_height": {
+   "id": "min_height",
+   "type": "number",
+   "label": {
+    "en": "Height of Bottom (Meters)",
+    "ru": "Высота пола (метры)"
+   },
+   "values": {}
+  },
+  "building:levels": {
+   "id": "building/levels",
+   "type": "number",
+   "label": {
+    "en": "Levels",
+    "ru": "Число этажей"
+   },
+   "values": {},
+   "placeholder": {
+    "en": "2, 4, 6...",
+    "ru": "2, 4, 6..."
+   }
+  },
+  "roof:shape": {
+   "id": "roof/shape",
+   "type": "combo",
+   "label": {
+    "en": "Roof Shape",
+    "ru": "Форма крыши"
+   },
+   "values": {
+    "en": {
+     "flat": "Flat",
+     "gabled": "Gabled",
+     "gabled_height_moved": "Gabled (Height Moved)",
+     "skillion": "Skillion",
+     "hipped": "Hipped",
+     "half-hipped": "Half-Hipped",
+     "side_hipped": "Side-Hipped",
+     "side_half-hipped": "Side Half-Hipped",
+     "mansard": "Mansard",
+     "gambrel": "Gambrel",
+     "hipped-and-gabled": "Hipped & Gabled",
+     "pyramidal": "Pyramidal",
+     "crosspitched": "Cross-Pitched",
+     "sawtooth": "Sawtooth",
+     "butterfly": "Butterfly",
+     "cone": "Cone",
+     "dome": "Dome",
+     "onion": "Onion",
+     "round": "Round"
+    },
+    "ru": {
+     "cone": "Коническая",
+     "dome": "Купол",
+     "flat": "Плоская",
+     "gabled": "Двускатная",
+     "gambrel": "Амбарная",
+     "half-hipped": "Укороченная вальмовая",
+     "hipped": "Шатровая",
+     "mansard": "Мансардная",
+     "onion": "Луковичная",
+     "pyramidal": "Пирамидальная",
+     "round": "Полукруглая",
+     "skillion": "Односкатная"
+    }
+   },
+   "options": [
+    "flat",
+    "gabled",
+    "gabled_height_moved",
+    "skillion",
+    "hipped",
+    "half-hipped",
+    "side_hipped",
+    "side_half-hipped",
+    "mansard",
+    "gambrel",
+    "hipped-and-gabled",
+    "pyramidal",
+    "crosspitched",
+    "sawtooth",
+    "butterfly",
+    "cone",
+    "dome",
+    "onion",
+    "round"
+   ]
+  },
+  "roof:height": {
+   "id": "roof/height",
+   "type": "number",
+   "label": {
+    "en": "Roof Height (Meters)",
+    "ru": "Высота крыши (в метрах)"
+   },
+   "values": {}
+  },
+  "roof:colour": {
+   "id": "roof/colour",
+   "type": "colour",
+   "label": {
+    "en": "Roof Color",
+    "ru": "Цвет крыши"
+   },
+   "values": {}
+  },
+  "building:colour": {
+   "id": "building/colour",
+   "type": "colour",
+   "label": {
+    "en": "Façade Color",
+    "ru": "Цвет фасада"
+   },
+   "values": {}
+  },
+  "level": {
+   "id": "level",
+   "type": "combo",
+   "label": {
+    "en": "Level",
+    "ru": "Этаж (первый = 0)"
+   },
+   "values": {}
+  },
+  "indoor": {
+   "id": "indoor_type",
+   "type": "typeCombo",
+   "label": {
+    "en": "Type",
+    "ru": "Тип"
+   },
+   "values": {
+    "en": {
+     "area": "Indoor Area",
+     "corridor": "Indoor Corridor",
+     "door": "Indoor Door",
+     "room": "Room",
+     "wall": "Indoor Wall"
+    },
+    "ru": {
+     "area": "Зона внутри здания",
+     "corridor": "Коридор внутри здания",
+     "door": "Дверь внутри здания",
+     "room": "Комната в здании",
+     "wall": "Стена внутри здания"
+    }
+   }
+  },
+  "room": {
+   "id": "room",
+   "type": "combo",
+   "label": {
+    "en": "Type",
+    "ru": "Тип"
+   },
+   "values": {}
+  },
+  "door": {
+   "id": "door",
+   "type": "combo",
+   "label": {
+    "en": "Door",
+    "ru": "Дверь"
+   },
+   "values": {}
+  }
+ }
+}

@@ -1380,9 +1380,17 @@ export class BuildingsLayer implements CustomLayerInterface {
     const shaftHoles = items.filter(it => it.shaft).flatMap(it => it.polygons.map(p =>
       [p.outer, ...p.inners].map(r => { const l = r.map(g.toLocal); return [...l, l[0]]; }) as ClipMulti[number]));
     const escalatorHoles = [...escalatorFloorHoles(escalators.map(e => ({ ...e, line: e.line.map(g.toLocal) })), items[0]?.z ?? 0), ...shaftHoles];
+    // Вырезы — только у кусков пола рядом с ними (кусков сотни, polygon-clipping платит за каждый)
+    const holeBox = (r: Pt[]) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const [x, y] of r) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } return [x0, y0, x1, y1]; };
+    const holeBoxes = escalatorHoles.map((h) => holeBox(h[0] as Pt[]));
     if (escalatorHoles.length) visibleFloors.forEach((pieces, i) => {
-      visibleFloors[i] = pieces.flatMap(f => polygonClipping.difference([[...f.outer, f.outer[0]], ...f.inners.map(r => [...r, r[0]])] as ClipMulti[number], escalatorHoles)
-        .map(p => ({ outer: p[0].slice(0, -1) as Pt[], inners: p.slice(1).map(r => r.slice(0, -1) as Pt[]), z: f.z })));
+      visibleFloors[i] = pieces.flatMap(f => {
+        const [x0, y0, x1, y1] = holeBox(f.outer);
+        const near = escalatorHoles.filter((_, k) => { const q = holeBoxes[k]; return q[0] <= x1 && q[2] >= x0 && q[1] <= y1 && q[3] >= y0; });
+        if (!near.length) return [f];
+        return polygonClipping.difference([[...f.outer, f.outer[0]], ...f.inners.map(r => [...r, r[0]])] as ClipMulti[number], near)
+          .map(p => ({ outer: p[0].slice(0, -1) as Pt[], inners: p.slice(1).map(r => r.slice(0, -1) as Pt[]), z: f.z }));
+      });
     });
     const floorPieces = new Map(floorPolygons.map((entry,i) => [entry.p, visibleFloors[i]]));
     const lines: number[] = [];
@@ -1483,6 +1491,21 @@ export class BuildingsLayer implements CustomLayerInterface {
       const door = metadata.find(d => Math.abs(d.z - items[0].z) < 0.1 && Math.hypot(d.at[0] - p[0], d.at[1] - p[1]) < 0.01);
       return { at: p, key: pale ? undefined : door?.key, z: door?.z, diameter: door?.diameter, width: door?.width ?? roomDoorWidth(p) };
     });
+    // Сетка дверей 4 м: стене — только двери рядом (стен тысячи, дверей сотни)
+    const doorReach = Math.max(DOOR_WIDTH, ...doors.map((d) => Math.max(d.width ?? 0, d.diameter ?? 0))) + DOOR_SNAP;
+    const doorGrid = new Map<number, number[]>();
+    const doorCell = (i: number, j: number) => (i + 32768) * 65536 + (j + 32768);
+    doors.forEach((d, k) => {
+      const key = doorCell(Math.floor(d.at[0] / 4), Math.floor(d.at[1] / 4));
+      (doorGrid.get(key) ?? doorGrid.set(key, []).get(key)!).push(k);
+    });
+    const doorsNear = (ax: number, ay: number, bx: number, by: number) => {
+      const found: number[] = [];
+      for (let i = Math.floor((Math.min(ax, bx) - doorReach) / 4); i <= Math.floor((Math.max(ax, bx) + doorReach) / 4); i++)
+        for (let j = Math.floor((Math.min(ay, by) - doorReach) / 4); j <= Math.floor((Math.max(ay, by) + doorReach) / 4); j++)
+          for (const k of doorGrid.get(doorCell(i, j)) ?? []) found.push(k);
+      return found.sort((p, q) => p - q).map((k) => doors[k]);
+    };
     /** Стена с дверными проёмами (DOOR_WIDTH × DOOR_HEIGHT) там, где на ней стоит дверь. */
     const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number) => {
       const len = Math.hypot(bx - ax, by - ay);
@@ -1490,7 +1513,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const namedGaps: { key: string; lo: number; hi: number }[] = [];
       if (len > 1e-6) {
         const dx = (bx - ax) / len, dy = (by - ay) / len;
-        for (const door of doors) {
+        for (const door of doorsNear(ax, ay, bx, by)) {
           const [px, py] = door.at;
           const distance = (px - ax) * dy - (py - ay) * dx;
           const t = (px - ax) * dx + (py - ay) * dy;
@@ -3883,12 +3906,15 @@ function buildShell(g: MeshGroup): Shell {
   const parts: Part[] = [];
   /** Треугольники скатов (x, y, z × 3) и номер части; сетка — номера треугольников и отрезки контуров/рёбер. */
   const tris: number[] = [], triPart: number[] = [];
-  const partGrid = new Map<string, number[]>();
-  const triGrid = new Map<string, number[]>(), segGrid = new Map<string, number[][]>();
+  // Ключи клеток — числа: строки на каждый запрос at() (десятки тысяч на план) заметно дороже
+  const partGrid = new Map<number, number[]>();
+  const triGrid = new Map<number, number[]>(), segGrid = new Map<number, number[][]>();
+  const cellKey = (i: number, j: number) => (i + 32768) * 65536 + (j + 32768);
+  const cellAt = (x: number, y: number) => cellKey(Math.floor(x / SHELL_CELL), Math.floor(y / SHELL_CELL));
   const cellsOf = (x0: number, y0: number, x1: number, y1: number) => {
-    const out: string[] = [];
+    const out: number[] = [];
     for (let i = Math.floor(Math.min(x0, x1) / SHELL_CELL); i <= Math.floor(Math.max(x0, x1) / SHELL_CELL); i++)
-      for (let j = Math.floor(Math.min(y0, y1) / SHELL_CELL); j <= Math.floor(Math.max(y0, y1) / SHELL_CELL); j++) out.push(`${i},${j}`);
+      for (let j = Math.floor(Math.min(y0, y1) / SHELL_CELL); j <= Math.floor(Math.max(y0, y1) / SHELL_CELL); j++) out.push(cellKey(i, j));
     return out;
   };
   const addSeg = (x0: number, y0: number, x1: number, y1: number) => {
@@ -3927,19 +3953,27 @@ function buildShell(g: MeshGroup): Shell {
   const inside = (p: Part, x: number, y: number) => {
     const e = SHELL_EDGE_TOL;
     if (x < p.box[0] - e || x > p.box[2] + e || y < p.box[1] - e || y > p.box[3] + e) return false;
-    if (p.polys.some((q) => pointInLocalRing([x, y], q.outer) && !q.inners.some((r) => pointInLocalRing([x, y], r)))) return true;
-    return p.polys.some((q) => [q.outer, ...q.inners].some((r) => r.some((a, i) => {
-      const b = r[(i + 1) % r.length], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
-      const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
-      return Math.hypot(x - a[0] - dx * t, y - a[1] - dy * t) < e;
-    })));
+    const q: Pt = [x, y];
+    for (const poly of p.polys) if (pointInLocalRing(q, poly.outer) && !poly.inners.some((r) => pointInLocalRing(q, r))) return true;
+    for (const poly of p.polys) for (const r of [poly.outer, ...poly.inners]) {
+      for (let i = 0; i < r.length; i++) {
+        const a = r[i], b = r[(i + 1) % r.length], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+        const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
+        const ex = x - a[0] - dx * t, ey = y - a[1] - dy * t;
+        if (ex * ex + ey * ey < e * e) return true;
+      }
+    }
+    return false;
   };
   return {
     at(x, y, z0) {
       // Скат над точкой по каждой части: накрывающий треугольник (наивысший), иначе ближайший —
       // для точек на самом контуре части
       const roof = new Map<number, { score: number; z: number }>();
-      for (const t of triGrid.get(`${Math.floor(x / SHELL_CELL)},${Math.floor(y / SHELL_CELL)}`) ?? []) {
+      const cell = cellAt(x, y);
+      for (const t of triGrid.get(cell) ?? []) {
+        // Скаты частей выше пола этажа не в счёт (ниже их тоже отсеет проверка части) — не считаем
+        if (parts[triPart[t]].min > z0 + SHELL_LEVEL_TOL) continue;
         const o = t * 9;
         const x0 = tris[o], y0 = tris[o + 1], z0t = tris[o + 2], x1 = tris[o + 3], y1 = tris[o + 4], z1t = tris[o + 5], x2 = tris[o + 6], y2 = tris[o + 7], z2t = tris[o + 8];
         const d = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
@@ -3950,7 +3984,7 @@ function buildShell(g: MeshGroup): Shell {
         if (!cur || score > cur.score + 1e-9 || (score >= cur.score - 1e-9 && z > cur.z)) roof.set(p, { score, z });
       }
       let best: number | undefined;
-      for (const i of partGrid.get(`${Math.floor(x / SHELL_CELL)},${Math.floor(y / SHELL_CELL)}`) ?? []) {
+      for (const i of partGrid.get(cell) ?? []) {
         const p = parts[i];
         if (p.min > z0 + SHELL_LEVEL_TOL || !inside(p, x, y)) continue;
         const z = p.flat ? p.top : roof.get(i)?.z ?? p.top;

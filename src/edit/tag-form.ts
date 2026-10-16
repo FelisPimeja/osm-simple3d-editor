@@ -251,6 +251,11 @@ function combo(field: Field, common: string, value: string, placeholder: string,
     + `<button type="button" class="combo-btn" tabindex="-1" title="${tr('Выбрать из списка')}"></button><ul class="combo-list" hidden>${items}</ul></span>`;
 }
 
+/** Свободный ввод с тем же полным списком вариантов для indoor-форм. */
+export function renderValueCombo(options: string[], attributes: string, value: string, placeholder: string, labels?: Record<string, string>): string {
+  return combo({ tag: '', label: '', type: 'combo', options, labels }, attributes, value, placeholder, '');
+}
+
 /** Поле со значком «унаследовано» справа (только если есть пояснение). */
 function withBadge(input: string, hint: string): string {
   if (!hint) return input;
@@ -260,6 +265,10 @@ function withBadge(input: string, hint: string): string {
 /** Обработчики формы (делегирование на контейнер; вешается один раз). */
 export function bindTagForms(container: HTMLElement, session: () => EditSession | undefined) {
   const commit = (input: HTMLInputElement | HTMLSelectElement) => {
+    if (input.dataset.indoorTag) {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
     const form = input.closest<HTMLFormElement>('.tag-form');
     const s = session();
     if (!form || !s) return;

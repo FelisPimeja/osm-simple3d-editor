@@ -71,13 +71,13 @@ export class IndoorPois {
   private signature = '';
   private byEl = new Map<HTMLElement, IndoorFeature>();
 
-  constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, onPick: (f: IndoorFeature) => void) {
+  constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, onPick: (f: IndoorFeature, add: boolean) => void) {
     this.root = document.createElement('div');
     this.root.className = 'indoor-pois';
     this.root.addEventListener('click', (e) => {
       const el = (e.target as HTMLElement).closest<HTMLElement>('.indoor-poi');
       const f = el && this.byEl.get(el);
-      if (f) { e.stopPropagation(); onPick(f); }
+      if (f) { e.stopPropagation(); onPick(f, e.shiftKey); }
     });
     // Колесо над значком — карте: значки лежат вне слоя, где MapLibre слушает колесо, и зум над ними не работал
     this.root.addEventListener('wheel', (e) => {

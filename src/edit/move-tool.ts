@@ -78,7 +78,7 @@ export class MoveTool {
     this.typed = '';
     this.state = 'move';
     this.oneShot = { done, cancel };
-    this.layer.setMoveGuide({ from: this.from });
+    this.layer.setMoveGuide({ from: this.from, gizmoScale: this.horizontalOnly ? 0.375 : 1 });
     this.updateVcb();
     this.onState(hint);
     this.refresh();
@@ -110,7 +110,7 @@ export class MoveTool {
       this.axis = this.locked = undefined;
       this.typed = '';
       this.state = 'move';
-      this.layer.setMoveGuide({ from: this.from });
+      this.layer.setMoveGuide({ from: this.from, gizmoScale: this.horizontalOnly ? 0.375 : 1 });
       this.updateVcb();
       this.onState(tr('Ведите курсор: вдоль оси здания движение прилипает к ней. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.'));
       return;
@@ -147,7 +147,7 @@ export class MoveTool {
     if (this.shiftLock && this.locked === undefined && axis !== undefined) this.locked = axis;
     this.offset.copy(offset);
     this.layer.setMovePreview([...this.keys], offset);
-    this.layer.setMoveGuide({ from: this.from, to: this.from.clone().add(offset), axis, locked: this.locked });
+    this.layer.setMoveGuide({ from: this.from, to: this.from.clone().add(offset), axis, locked: this.locked, gizmoScale: this.horizontalOnly ? 0.375 : 1 });
     this.updateVcb();
   }
 

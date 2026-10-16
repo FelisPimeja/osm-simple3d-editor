@@ -160,3 +160,36 @@ test('building edge occlusion includes the empty doorway, across short wall segm
     assert.ok(cx<1.8 || cx>2.2 || cz>=2.2-1e-6);
   }
 });
+
+test('door move preview reuses models without rebuilding the floor, openings or selection every frame', async () => {
+  const THREE = await import('three');
+  const layer = new BuildingsLayer('test');
+  const ll = ([x,y]) => [37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+  layer.setFocus([{ key:'way/1',type:'way',id:1,version:1,kind:'part',hasParts:false,
+    tags:{'building:part':'yes',height:'9'},polygons:[{outer:[[0,0],[10,0],[10,10],[0,10]].map(ll),inners:[]}] }]);
+  layer.setLevel({floor:0,cut:3,items:[]});
+  layer.setDoors([{key:'node/1',at:ll([1,1]),z:0,tags:{door:'yes'}},{key:'node/2',at:ll([3,1]),z:0,tags:{door:'revolving'}}]);
+  layer.setIndoorSelection(['node/1','node/2']);
+  const objects=layer.doorObj.children.map(o=>({o,at:o.position.clone()}));
+  assert.ok(objects.length>2);
+  layer.applyLevel=()=>assert.fail('preview must not rebuild the floor');
+  layer.applyDoors=()=>assert.fail('preview must reuse door models');
+  let selections=0;
+  const outline=new THREE.Group();
+  outline.userData.doorKey='node/1';
+  layer.indoorSelObj=new THREE.Group();
+  layer.indoorSelObj.add(outline);
+  layer.applyIndoorSelection=()=>selections++;
+  const offset=new THREE.Vector3();
+  for(let i=1;i<=100;i++) {
+    offset.set(i*.01,i*.02,0);
+    layer.setMovePreview(['node/1','node/2'],offset);
+  }
+  assert.equal(selections,1);
+  assert.ok(outline.position.distanceTo(offset)<1e-6);
+  for(const {o,at} of objects) assert.ok(o.position.distanceTo(at.clone().add(offset))<1e-6);
+  layer.setMovePreview(['node/1','node/2'],undefined);
+  for(const {o,at} of objects) assert.ok(o.position.distanceTo(at)<1e-6);
+  assert.equal(selections,2);
+  assert.equal(outline.position.length(),0);
+});

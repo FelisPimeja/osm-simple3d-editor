@@ -49,7 +49,7 @@ import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edi
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { JOSM_URL, josmLayer, josmMode, minElementId, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
-import { bindTagForms, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
+import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
 import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from './settings';
@@ -421,7 +421,7 @@ let session = new EditSession([], onSessionChange);
 const overpassLayer = new BuildingsLayer('osm-overpass-buildings');
 const tileBorders = new TileBorders(map);
 const roadsLayer = new RoadsLayer('osm-roads-3d');
-const indoorPois = new IndoorPois(map, overpassLayer, (f) => selectIndoor(f));
+const indoorPois = new IndoorPois(map, overpassLayer, (f, add) => selectIndoor(f, add));
 const overpass = new OverpassTiles(map, overpassLayer, () => {
   updateTileFilter();
   showOverpassStatus();
@@ -4402,6 +4402,13 @@ const indoorKey = (k: string) => k.replace('#poi', '');
 /** Теги indoor-объекта, которые можно править (без геометрии). */
 const INDOOR_EDIT_TAGS = ['indoor', 'level', 'room'] as const;
 const INDOOR_VALUES = ['room', 'corridor', 'area', 'level', 'wall', 'column', 'door', 'yes'];
+// https://wiki.openstreetmap.org/wiki/Key:door — свободный ввод сохраняется.
+const DOOR_VALUES = ['yes', 'hinged', 'sliding', 'revolving', 'folding', 'trapdoor', 'overhead', 'no'];
+const DOOR_LABELS: Record<string, string> = {
+  yes: tr('Неизвестного типа'), hinged: tr('Распашная'), sliding: tr('Раздвижная'),
+  revolving: tr('Вращающаяся'), folding: tr('Складная'), trapdoor: tr('Люк'),
+  overhead: tr('Подъёмная'), no: tr('Открытый проём (без двери)'),
+};
 const ROOM_VALUES = ['shop', 'office', 'toilets', 'toilet', 'stairs', 'elevator', 'restaurant', 'technical', 'storage', 'class', 'conference', 'kitchen', 'waiting', 'entrance', 'auditorium', 'bedroom', 'living_room', 'bathroom', 'yes'];
 
 /** Поля правки indoor, level и room у выбранного indoor-объекта. */
@@ -4412,11 +4419,13 @@ function indoorForm(fs: IndoorFeature[]): string {
     const mixed = values.size > 1;
     const value = mixed ? '' : [...values][0];
     const changed = fs.some((f) => session.isChanged(indoorKey(f.key), k));
+    if (k === 'door') return `<label class="tag-row${changed ? ' changed' : ''}"><span>door</span>`
+      + renderValueCombo(DOOR_VALUES, 'data-indoor-tag="door"', value, mixed ? tr('разные значения') : '—', DOOR_LABELS) + '</label>';
     const lid = k === 'indoor' ? 'indoor-values' : k === 'room' ? 'room-values' : '';
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${k}</span>`
       + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : k === 'diameter' ? '2.4 m' : '—'}"${lid ? ` list="${lid}"` : ''} spellcheck="false" autocomplete="off"></label>`;
   }).join('');
-  const hint = fs.every(isDoor) ? `<p class="hint">${fs.every((f) => f.tags.door === 'revolving') ? tr('Дверь можно свободно перемещать по горизонтали.') : tr('Дверь можно перетащить вдоль стены.')}</p>` : '';
+  const hint = fs.every(isDoor) ? `<p class="hint">${tr('Для перемещения дверей используйте инструмент «Переместить» (M).')}</p>` : '';
   return `<div class="tag-form">${rows}${list('indoor-values', INDOOR_VALUES)}${list('room-values', ROOM_VALUES)}</div>${hint}`;
 }
 
@@ -4658,90 +4667,6 @@ async function deleteIndoorWalls() {
     deletingIndoorWalls = false;
   }
 }
-
-/**
- * Перетаскивание вращающейся двери — свободно по горизонтали; обычной — вдоль стены: точка скользит по отрезкам контуров (помещения, стены), на которых дверь
- * стоит; отпускание — сдвиг узла (шаг истории).
- */
-let doorDrag: { f: IndoorFeature; segs: [Pt, Pt][]; x: number; y: number; moved: boolean; at?: LonLat } | undefined;
-
-function doorSegments(at: LonLat): [Pt, Pt][] {
-  const p = overpassLayer.focusFromLngLat(at);
-  if (!p) return [];
-  const rings = shownIndoor.filter((f) => f.kind !== 'poi').flatMap((f) => f.polygons.map((q) => ({ rings: f.line ? [q.outer] : [q.outer, ...q.inners], closed: !f.line })))
-    .flatMap(({ rings, closed }) => rings.map((r) => ({ pts: r.map((c) => overpassLayer.focusFromLngLat(c)!), closed })));
-  const at0: [Pt, Pt][] = [], near: { s: [Pt, Pt]; d: number }[] = [];
-  for (const { pts, closed } of rings) {
-    const n = closed ? pts.length : pts.length - 1;
-    for (let i = 0; i < n; i++) {
-      const a = pts[i], b = pts[(i + 1) % pts.length];
-      if (Math.hypot(a[0] - p[0], a[1] - p[1]) < 0.05 || Math.hypot(b[0] - p[0], b[1] - p[1]) < 0.05) at0.push([a, b]);
-      else near.push({ s: [a, b], d: segDist2(p, a, b) });
-    }
-  }
-  // Дверь в вершине — соседние отрезки; посреди отрезка — ближайший (не дальше 30 см)
-  if (at0.length) return at0;
-  const best = near.sort((x, y) => x.d - y.d)[0];
-  return best && best.d < 0.3 ? [best.s] : [];
-}
-
-const mapCanvas = map.getCanvasContainer();
-mapCanvas.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0 || e.altKey || e.ctrlKey || e.metaKey || !focus || !shownLevel || toolActive()) return;
-  const r = map.getCanvas().getBoundingClientRect();
-  const pt: [number, number] = [e.clientX - r.left, e.clientY - r.top];
-  const key = overpassLayer.pickDoor(pt);
-  const f = key ? shownIndoor.find((x) => x.key === key) : undefined;
-  if (!f?.point) return;
-  // Клик по двери — выбор (Shift — добавить к выбранным); тянуть — сдвиг вдоль стены
-  e.preventDefault();
-  e.stopPropagation();
-  selectIndoor(f, e.shiftKey && indoorSelection.length > 0);
-  doorDrag = { f, segs: doorSegments(f.point), x: e.clientX, y: e.clientY, moved: false };
-  try { mapCanvas.setPointerCapture(e.pointerId); } catch { /* не критично */ }
-}, { capture: true });
-mapCanvas.addEventListener('pointermove', (e) => {
-  if (!doorDrag || !shownLevel) return;
-  if (!doorDrag.moved && Math.hypot(e.clientX - doorDrag.x, e.clientY - doorDrag.y) < 4) return;
-  doorDrag.moved = true;
-  const r = map.getCanvas().getBoundingClientRect();
-  const hit = overpassLayer.focusRay([e.clientX - r.left, e.clientY - r.top])?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -shownLevel.floor), new THREE.Vector3());
-  if (!hit) return;
-  if (doorDrag.f.tags.door === 'revolving') {
-    const at = overpassLayer.focusToLngLat(hit.x, hit.y);
-    if (at) {
-      doorDrag.at = at;
-      overpassLayer.previewDoor({ key: doorDrag.f.key, at });
-    }
-    return;
-  }
-  if (!doorDrag.segs.length) return;
-  // Ближайшая точка на отрезках стены
-  let best: { p: Pt; d: number } | undefined;
-  for (const [a, b] of doorDrag.segs) {
-    const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
-    const t = l2 ? Math.max(0, Math.min(1, ((hit.x - a[0]) * dx + (hit.y - a[1]) * dy) / l2)) : 0;
-    const p: Pt = [a[0] + t * dx, a[1] + t * dy];
-    const d = Math.hypot(p[0] - hit.x, p[1] - hit.y);
-    if (!best || d < best.d) best = { p, d };
-  }
-  const at = best && overpassLayer.focusToLngLat(best.p[0], best.p[1]);
-  if (!at) return;
-  doorDrag.at = at;
-  overpassLayer.previewDoor({ key: doorDrag.f.key, at });
-});
-const endDoorDrag = () => {
-  if (!doorDrag) return;
-  const { f, at, moved } = doorDrag;
-  doorDrag = undefined;
-  overpassLayer.previewDoor(undefined);
-  if (!moved || !at) return;
-  const key = indoorKey(f.key), id = Number(key.split('/')[1]);
-  trackIndoor(key, f);
-  session.editMany([{ key, polygons: [{ outer: [at], inners: [], outerIds: [id], innerIds: [] }] }]);
-};
-mapCanvas.addEventListener('pointerup', endDoorDrag);
-mapCanvas.addEventListener('pointercancel', endDoorDrag);
 
 /**
  * Записать теги indoor-объектов в сессию правок одним шагом истории (объект начинает отслеживаться при первой

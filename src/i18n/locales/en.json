@@ -886,5 +886,13 @@
   "Слой JOSM обновляется сам.": "The JOSM layer updates itself.",
   "Обновляем здание…": "Reloading building…",
   "Данные здания актуальны.": "Building data is up to date.",
-  "level={value} у точки — одинаковые копии на других этажах задают через repeat_on=*, в level — один этаж.": "level={value} on a point — identical copies on other levels are tagged with repeat_on=*, level holds a single level."
+  "level={value} у точки — одинаковые копии на других этажах задают через repeat_on=*, в level — один этаж.": "level={value} on a point — identical copies on other levels are tagged with repeat_on=*, level holds a single level.",
+  "level={value}: двери на разных этажах — похоже на одинаковые помещения разных этажей, а не одно помещение в несколько этажей.": "level={value}: doors on different levels — looks like identical rooms on several levels rather than one multi-storey room.",
+  "копии на этажах {levels}": "copies on levels {levels}",
+  "Данные изменились. Повторите исправление.": "Data changed. Apply the fix again.",
+  "Не удалось получить члены {key}.": "Could not fetch the members of {key}.",
+  "Геометрия {key} недоступна. Перезагрузите данные.": "Geometry of {key} is unavailable. Reload the data.",
+  "level={value} у эскалатора — похоже на несколько эскалаторов друг над другом; каждый соединяет два соседних этажа.": "level={value} on an escalator — looks like several escalators stacked; each one connects two neighbouring levels.",
+  "разделить: {levels}": "split: {levels}",
+  "Разделено по этажам: {n} копий. Отменить — Ctrl+Z.": "Split by level: {n} copies. Undo with Ctrl+Z."
 }

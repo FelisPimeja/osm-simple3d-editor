@@ -31,6 +31,10 @@ export interface Fix {
   tags: Record<string, string | undefined>;
   /** Исключить объект из указанного отношения type=building. */
   removeFromGroup?: string;
+  /** Разделить объект по этажам: он остаётся на level из tags, копии (те же узлы или члены) — с этими level. */
+  splitLevels?: string[];
+  /** Копии пути — на новых узлах в тех же точках (ось эскалатора не должна связывать этажи общими узлами). */
+  splitNewNodes?: boolean;
 }
 
 /** Высота этажа, ниже и выше которой этажность и высота противоречат друг другу, м. */
@@ -264,6 +268,61 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
     const base = new Set(parseLevels(t.level));
     if (parseLevels(t.repeat_on).some((n) => base.has(n))) add('warning', 'indoor-level',
       tr('repeat_on=* повторяет этаж из level=* — исходный этаж в список повторений не включают.'));
+  }
+  return out;
+}
+
+/**
+ * Помещение или зона с несколькими level, у которых двери на разных этажах, — скорее всего одинаковые помещения
+ * типовых этажей, записанные одним объектом (а не зал в несколько светов). Предлагаем копию на каждый этаж.
+ * Лестницы, лифты и эскалаторы проходят сквозь этажи — их не трогаем.
+ */
+export function validateRepeatedRooms(features: IndoorFeature[]): Issue[] {
+  const doors = features.filter((f) => f.kind === 'poi' && f.point && !f.key.endsWith('#poi')
+    && !!(f.tags.door || f.tags.indoor === 'door' || f.tags.entrance));
+  const elevators = features.filter((f) => f.kind === 'poi' && f.point && f.tags.highway === 'elevator');
+  const same = (a: LonLat, b: LonLat) => Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9;
+  const out: Issue[] = [];
+  for (const f of features) {
+    const t = f.tags;
+    if (f.line || f.escalator || f.escalatorArea || (t.indoor !== 'room' && t.indoor !== 'area')) continue;
+    if (t.stairs === 'yes' || t.room === 'stairs' || t.highway === 'steps' || t.conveying !== undefined
+      || t.room === 'elevator' || t.highway === 'elevator') continue;
+    const levels = [...new Set(parseLevels(t.level))].sort((a, b) => a - b);
+    if (levels.length < 2) continue;
+    const inside = (p: LonLat) => f.polygons.some((q) => pointInRing(p, q.outer) && !q.inners.some((h) => pointInRing(p, h)));
+    if (elevators.some((e) => inside(e.point!))) continue;
+    const rings = f.polygons.flatMap((q) => [q.outer, ...q.inners]);
+    const doorLevels = new Set<number>();
+    for (const d of doors) {
+      if (!rings.some((r) => r.some((v) => same(v, d.point!)))) continue;
+      for (const l of [...parseLevels(d.tags.level), ...parseLevels(d.tags.repeat_on)]) if (levels.includes(l)) doorLevels.add(l);
+    }
+    if (doorLevels.size < 2) continue;
+    const [base, ...rest] = levels;
+    out.push({ key: f.key, level: 'warning', code: 'indoor-level',
+      text: tr('level={value}: двери на разных этажах — похоже на одинаковые помещения разных этажей, а не одно помещение в несколько этажей.', { value: t.level }),
+      fix: { label: tr('копии на этажах {levels}', { levels: rest.join(';') }), tags: { level: String(base) }, splitLevels: rest.map(String) } });
+  }
+  return out;
+}
+
+/**
+ * Эскалатор (ось highway=steps или площадь indoor=area с conveying) с level больше чем на два этажа — стопка
+ * эскалаторов одним объектом. Предлагаем разбить на пары соседних этажей; ось — на новых узлах.
+ */
+export function validateStackedEscalators(features: IndoorFeature[]): Issue[] {
+  const out: Issue[] = [];
+  for (const f of features) {
+    const t = f.tags;
+    if (!t.conveying || t.conveying === 'no' || (t.highway !== 'steps' && t.indoor !== 'area')) continue;
+    const levels = [...new Set(parseLevels(t.level))].sort((a, b) => a - b);
+    if (levels.length < 3) continue;
+    const pairs = levels.slice(1).map((l, i) => `${levels[i]};${l}`);
+    const axis = t.highway === 'steps';
+    out.push({ key: f.key, level: 'warning', code: 'indoor-level',
+      text: tr('level={value} у эскалатора — похоже на несколько эскалаторов друг над другом; каждый соединяет два соседних этажа.', { value: t.level }),
+      fix: { label: tr('разделить: {levels}', { levels: pairs.join(', ') }), tags: { level: pairs[0] }, splitLevels: pairs.slice(1), ...(axis ? { splitNewNodes: true } : {}) } });
   }
   return out;
 }

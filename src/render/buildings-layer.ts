@@ -119,6 +119,8 @@ export interface IndoorLevel {
   /** Высота пола этажа, м. */
   floor: number;
   items: IndoorItem[];
+  /** Не рисуются, только подсветка выбора: помещения в несколько этажей выше своего пола (z — пол основания). */
+  highlights?: IndoorItem[];
   escalators?: EscalatorItem[];
   doors?: LonLat[];
   /** Пустоты в перекрытии этажа: многоугольники lon/lat ([внешнее кольцо, ...дыры]). */
@@ -724,7 +726,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (o instanceof THREE.Mesh && !(o instanceof Line2)) o.material = keys.has(key) ? ESCALATOR_SELECTED : o.userData.escalatorMaterial;
       else if (o instanceof Line2) o.material = keys.has(key) ? ESCALATOR_SELECTED_HANDRAIL : o.userData.escalatorMaterial;
     });
-    const items = this.level?.items.filter((i) => keys.has(i.key)) ?? [];
+    const items = [...this.level?.items ?? [], ...this.level?.highlights ?? []].filter((i) => keys.has(i.key));
     if (this.level) items.push(...this.roomWallSelection);
     if (!g || (!items.length && ![...keys].some((key) => this.doorOpeningEdges.has(key)))) return;
     const root = new THREE.Group();

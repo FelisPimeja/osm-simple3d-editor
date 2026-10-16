@@ -6,7 +6,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
-import { validateBuilding, validateGeometry, validateIndoor, validateTags, type Issue } from './edit/validate';
+import { validateBuilding, validateGeometry, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -3723,7 +3723,7 @@ function toolHint(hint: string | undefined, error = false) {
 }
 
 /** Выделить объект (или группу); false — выделять нечего. */
-function select(key: string | undefined, scrollIssues = true): boolean {
+function select(key: string | undefined): boolean {
   clearTreeSelection();
   roadsLayer.select([]);
   roadSelection = [];
@@ -3741,7 +3741,6 @@ function select(key: string | undefined, scrollIssues = true): boolean {
   if (key) clearTileHighlight();
   paintSelection();
   renderSelected();
-  if (scrollIssues) scrollToSelectedIssues();
   return !!key;
 }
 
@@ -3752,7 +3751,6 @@ function toggleSelection(key: string) {
   selectedKey = selection.at(-1);
   paintSelection();
   renderSelected();
-  scrollToSelectedIssues();
 }
 
 /** Добавить к выделению несколько объектов (рамкой). */
@@ -3764,7 +3762,6 @@ function addToSelection(keys: string[]) {
   selectedKey = selection.at(-1);
   paintSelection();
   renderSelected();
-  scrollToSelectedIssues();
 }
 
 // Выделение рамкой: Shift + перетаскивание. Объект попадает в рамку, если в неё попал центр его основания.
@@ -3860,6 +3857,7 @@ let suppressClick = false;
 
 function paintSelection() {
   overpassLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
+  syncIssueFilter();
   renderOutliner();
   for (const li of changesEl.querySelectorAll<HTMLElement>('li[data-key]')) li.classList.toggle('selected', selection.includes(li.dataset.key!));
 }
@@ -4305,7 +4303,7 @@ function selectRoomWall(wall: RoomWall, add = false) {
  * Выбрать indoor-объект: его теги в панели свойств, контур подсвечен. undefined — снять. add — Shift: добавить
  * к выбранным или убрать из них (несколько — общая форма: одинаковые значения, у разных — «разные значения»).
  */
-function selectIndoor(f: IndoorFeature | undefined, add = false, scrollIssues = true) {
+function selectIndoor(f: IndoorFeature | undefined, add = false) {
   selectedRoomWalls = [];
   overpassLayer.setRoomWallSelection([]);
   if (f) clearTreeSelection();
@@ -4315,15 +4313,16 @@ function selectIndoor(f: IndoorFeature | undefined, add = false, scrollIssues = 
     const k = indoorKey(f.key);
     indoorSelection = indoorSelection.some((x) => indoorKey(x.key) === k) ? indoorSelection.filter((x) => indoorKey(x.key) !== k) : [...indoorSelection, f];
   } else indoorSelection = f ? [f] : [];
-  renderIndoorSelection(add, scrollIssues);
+  renderIndoorSelection(add);
 }
 
 /** Обновить подсветку и общую форму после изменения набора выбранных indoor-объектов. */
-function renderIndoorSelection(add = false, scrollIssues = true) {
+function renderIndoorSelection(add = false) {
   let f: IndoorFeature;
   selectedIndoor = indoorSelection[0];
   overpassLayer.setIndoorSelection(indoorSelection.map((x) => x.key));
   indoorPois.setSelection(indoorSelection.map((x) => x.key));
+  syncIssueFilter();
   if (!indoorSelection.length) { if (add) infoEl.innerHTML = ''; return; }
   if (selection.length) select(undefined);
   if (indoorSelection.length > 1) { renderIndoorMulti(indoorSelection); return; }
@@ -4339,7 +4338,6 @@ function renderIndoorSelection(add = false, scrollIssues = true) {
     + indoorForm([f])
     + `<details class="all-tags"><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
   bindIndoorForm([f]);
-  if (scrollIssues) scrollToSelectedIssues();
 }
 
 /** Несколько indoor-объектов: число и виды, общая форма. */
@@ -4876,6 +4874,12 @@ function renderLevelsImpl() {
           ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
           ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
           ...(shaft(f) ? { shaft: true } : {}) })).concat(passing),
+      // Помещение в несколько этажей выше своего пола: только для подсветки выбора — по основанию на нижнем этаже
+      highlights: fs.filter((f) => isFloorKind(f) && !f.line && !f.escalator && !f.escalatorArea && !floorLevels(f).includes(l.n))
+        .flatMap((f): IndoorItem[] => {
+          const base = levels.find((x) => x.n === Math.min(...floorLevels(f)));
+          return base ? [{ key: f.key, kind: f.kind, polygons: f.polygons, z: base.floor }] : [];
+        }),
       // Модели нижних этажей видны сквозь второй свет; маркеры остаются на активном этаже.
       doorModels: fs.filter((f) => isDoor(f) && f.tags.door === 'revolving')
         .map((f) => ({ key: f.key, at: f.point!, z: l.floor, tags: f.tags })),
@@ -5122,10 +5126,18 @@ function issueMark(list: Issue[] | undefined): string {
 function renderIssues() {
   const simpleIssues = focus ? buildingIssues(focus) : [];
   const focusedBuilding = focus;
-  const indoorIssues = focusedBuilding ? buildingIndoor(focusedBuilding).flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding))) : [];
+  const indoorAll = focusedBuilding ? buildingIndoor(focusedBuilding) : [];
+  const indoorIssues = focusedBuilding ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding))), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
   focusIssues = [...simpleIssues, ...indoorIssues];
   if (!focus && mapIssuesDirty) { mapIssues = visibleMapIssues(); mapIssuesDirty = false; }
-  const currentIssues = focus ? focusIssues : mapIssues;
+  // Есть выбор — только проблемы выбранных объектов (в режиме здания само здание целиком не фильтрует)
+  const picked = issueFilterKeys();
+  if (focus) picked.delete(focus.key);
+  issueFilterSig = [...issueFilterKeys()].sort().join(',');
+  const mine = (i: Issue) => !picked.size || picked.has(i.key) || (!!i.other && picked.has(i.other))
+    || (!focus && picked.has(issueBuildingKey(i)));
+  const simpleShown = simpleIssues.filter(mine), indoorShown = indoorIssues.filter(mine);
+  const currentIssues = (focus ? focusIssues : mapIssues).filter(mine);
   // Список пересобирается — строки под курсором уже нет, превью исправления снимаем
   if (fixPreviewed) { fixPreviewed = undefined; overpassLayer.setFixPreview(undefined); }
   hoveredIssue = undefined;
@@ -5136,11 +5148,11 @@ function renderIssues() {
   issuesCount.textContent = `(${[errors ? tr('ошибок {n}', { n: errors }) : '', warnings || !errors ? tr('предупреждений {n}', { n: warnings }) : ''].filter(Boolean).join(', ')})`;
   const sorted = (list: Issue[]) => [...list].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1));
   const mapGroups = new Map<string, Issue[]>();
-  if (!focus) for (const issue of mapIssues) {
+  if (!focus) for (const issue of currentIssues) {
     const key = issueBuildingKey(issue);
     (mapGroups.get(key) ?? mapGroups.set(key, []).get(key)!).push(issue);
   }
-  shownIssues = focus ? [...sorted(simpleIssues), ...sorted(indoorIssues)] : [...mapGroups.values()].flatMap(sorted);
+  shownIssues = focus ? [...sorted(simpleShown), ...sorted(indoorShown)] : [...mapGroups.values()].flatMap(sorted);
   const currentIds = new Set(shownIssues.map(issueId));
   for (const id of selectedIssueIds) if (!currentIds.has(id)) selectedIssueIds.delete(id);
   const group = (title: string, list: Issue[], start: number, buildingKey?: string) => list.length ? `<section class="issue-group${buildingKey ? ' issue-building' : ''}${buildingKey && selection.includes(buildingKey) ? ' selected' : ''}"${buildingKey ? ` data-building-key="${esc(buildingKey)}"` : ''}>
@@ -5152,8 +5164,8 @@ function renderIssues() {
         <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span>
         ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</li>`;
     }).join('')}</ul></section>` : '';
-  issuesEl.innerHTML = focus ? group('Simple 3D', shownIssues.slice(0, simpleIssues.length), 0)
-    + group('Indoor', shownIssues.slice(simpleIssues.length), simpleIssues.length)
+  issuesEl.innerHTML = focus ? group('Simple 3D', shownIssues.slice(0, simpleShown.length), 0)
+    + group('Indoor', shownIssues.slice(simpleShown.length), simpleShown.length)
     : [...mapGroups].map(([key, list], i, all) => group(key, sorted(list), all.slice(0, i).reduce((n, [, prev]) => n + prev.length, 0), key)).join('');
   const fixable = shownIssues.filter((i) => i.fix && selectedIssueIds.has(issueId(i))).length;
   issuesFixAll.hidden = !fixable;
@@ -5161,20 +5173,17 @@ function renderIssues() {
   highlightIssues();
 }
 
-/** В здании прокрутить к проблеме части, на карте — к секции выбранного здания. */
-function scrollToSelectedIssues() {
-  if (issuesPanel.hidden) return;
-  const key = selectedIndoor?.key ?? (selection.length === 1 ? selection[0] : undefined);
-  if (!key) return;
-  if (focus && !selectedIndoor && !focus.members.some((member, i) => member === key && focus!.roles[i] === 'part')) return;
-  const index = focus ? shownIssues.findIndex((issue) => issue.key === key || issue.other === key) : -1;
-  const row = focus ? issuesEl.querySelector<HTMLElement>(`li[data-i="${index}"]`)
-    : [...issuesEl.querySelectorAll<HTMLElement>('.issue-building')].find((section) => section.dataset.buildingKey === key);
-  const body = issuesPanel.querySelector<HTMLElement>('.panel-body');
-  if (!row || !body) return;
-  if (issuesPanel.classList.contains('collapsed')) setCollapsed(issuesPanel, false);
-  const top = body.scrollTop + row.getBoundingClientRect().top - body.getBoundingClientRect().top - 8;
-  body.scrollTo({ top, behavior: 'smooth' });
+/** Выбранные объекты (части, здания, indoor): панель проверки показывает только их проблемы. */
+function issueFilterKeys(): Set<string> {
+  return new Set([...selection, ...indoorSelection.map((f) => indoorKey(f.key))]);
+}
+let issueFilterSig = '';
+/** Выбор сменился — пересобрать список проблем под него. */
+function syncIssueFilter() {
+  const sig = [...issueFilterKeys()].sort().join(',');
+  if (sig === issueFilterSig) return;
+  issueFilterSig = sig;
+  renderIssues();
 }
 
 /** «Подсветить все»: рёбра объёмов с проблемами (ошибка важнее предупреждения). */
@@ -5213,6 +5222,9 @@ issuesAll.addEventListener('change', () => {
 
 /** Применить исправления одним шагом истории; исправления одного объекта накладываются по очереди. */
 function applyFixes(list: Issue[]) {
+  const splits = list.filter((i) => i.fix?.splitLevels);
+  if (splits.length) void splitRoomsByLevel(splits);
+  list = list.filter((i) => !i.fix?.splitLevels);
   const tags = new Map<string, Record<string, string>>();
   const removals = new Map<string, Set<string>>();
   for (const i of list) {
@@ -5238,6 +5250,61 @@ function applyFixes(list: Issue[]) {
   }
   session.editMany(edits);
   setStatus(list.length > 1 ? tr('Применено исправлений: {n} (объектов: {objects}).', { n: list.length, objects: tags.size }) : tr('Исправлено: {fix}.', { fix: list[0].fix!.label }));
+}
+
+/**
+ * Помещения, записанные одним объектом на несколько этажей, — копия на каждый этаж одним шагом истории.
+ * Путь копируется с теми же узлами, мультиполигон — новым отношением с теми же членами; копии встают
+ * в те же отношения здания, что и исходный объект. Сам объект остаётся на нижнем этаже.
+ */
+async function splitRoomsByLevel(list: Issue[]) {
+  const api = server().api, stamp = JSON.stringify(session.changes());
+  const rels = list.filter((i) => i.key.startsWith('relation/') && Number(i.key.split('/')[1]) > 0).map((i) => i.key);
+  let fetched: Awaited<ReturnType<typeof fetchElements>>;
+  try { fetched = rels.length ? await fetchElements(rels, api) : new Map(); } catch (e) { setStatus(String(e), true); return; }
+  if (server().api !== api || JSON.stringify(session.changes()) !== stamp) return setStatus(tr('Данные изменились. Повторите исправление.'), true);
+  const edits: ObjectEdit[] = [];
+  const created: IndoorFeature[] = [];
+  const groupMembers = new Map<string, OsmMember[]>();
+  for (const i of list) {
+    const f = buildingIndoorFor(i.key);
+    if (!f) continue;
+    const [type, id] = [i.key.split('/')[0], Number(i.key.split('/')[1])];
+    let members: OsmMember[] | undefined;
+    if (type === 'relation') {
+      const r = id > 0 ? fetched.get(i.key) : session.get(i.key);
+      members = r && 'members' in r ? r.members : (r as { relMembers?: OsmMember[] } | undefined)?.relMembers;
+      if (!members) { setStatus(tr('Не удалось получить члены {key}.', { key: i.key }), true); return; }
+    } else if (f.polygons.length !== 1 || (!f.polygons[0].outerIds && !i.fix!.splitNewNodes)) {
+      setStatus(tr('Геометрия {key} недоступна. Перезагрузите данные.', { key: i.key }), true); return;
+    }
+    trackIndoor(i.key, f);
+    const tags = { ...(session.get(i.key)?.tags ?? f.tags), ...i.fix!.tags } as Record<string, string>;
+    edits.push({ key: i.key, tags });
+    for (const l of i.fix!.splitLevels!) {
+      const copyTags = { ...tags, level: l };
+      const newId = nextNewId--, key = `${type}/${newId}`;
+      if (type === 'way') {
+        const p = f.polygons[0];
+        // Ось (незамкнутая линия) — на новых узлах; контур — на тех же узлах, замкнутый
+        const line = i.fix!.splitNewNodes ? { ids: p.outer.map(() => nextNewId--), coords: p.outer.slice() }
+          : { ids: [...p.outerIds!, p.outerIds![0]], coords: [...p.outer, p.outer[0]] };
+        edits.push({ key, create: { key, version: 0, tags: copyTags, line, polygons: f.polygons } });
+      } else edits.push({ key, create: { key, version: 0, tags: copyTags, relMembers: members!.map((m) => ({ ...m })), polygons: f.polygons } });
+      created.push({ ...f, key, tags: copyTags, levels: parseLevels(l) });
+      for (const g of editGroups.values()) {
+        const cur = groupMembers.get(g.key) ?? g.relMembers;
+        const at = cur.findIndex((m) => `${m.type}/${m.ref}` === i.key);
+        if (at < 0) continue;
+        groupMembers.set(g.key, [...cur.slice(0, at + 1), { type: type as 'way' | 'relation', ref: newId, role: cur[at].role }, ...cur.slice(at + 1)]);
+      }
+    }
+  }
+  if (!created.length) return;
+  for (const [key, members] of groupMembers) edits.push({ key, tags: { ...editGroups.get(key)!.tags }, members });
+  for (const f of created) { indoorCreated.set(f.key, f); indoorEdited.add(f.key); }
+  session.editMany(edits);
+  setStatus(tr('Разделено по этажам: {n} копий. Отменить — Ctrl+Z.', { n: created.length }));
 }
 
 issuesFixAll.addEventListener('click', () => applyFixes(shownIssues.filter((i) => i.fix && selectedIssueIds.has(issueId(i)))));
@@ -5275,16 +5342,16 @@ issuesEl.addEventListener('click', (e) => {
   const indoor = buildingIndoorFor(li.dataset.key!);
   if (indoor) {
     if (!shownIndoor.some((f) => f.key === indoor.key)) { currentLevel = indoor.levels[0]; renderLevels(); }
-    selectIndoor(indoor, false, false);
+    selectIndoor(indoor, false);
     return;
   }
   if (!entity(li.dataset.key!)) return;
   if (!focus && issue) {
-    select(issueBuildingKey(issue), false);
+    select(issueBuildingKey(issue));
     flyToIssueBuilding(issue);
     return;
   }
-  select(li.dataset.key, false);
+  select(li.dataset.key);
   if (li.dataset.other && entity(li.dataset.other)) toggleSelection(li.dataset.other);
 });
 issuesEl.addEventListener('mouseover', (e) => {

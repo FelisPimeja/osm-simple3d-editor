@@ -1,4 +1,5 @@
 import { trimCoplanarWalls } from './shell-trim';
+import polygonClipping, { type MultiPolygon } from 'polygon-clipping';
 import type { Pt } from './building-geometry';
 export interface EscalatorCut { line: Pt[]; bottom: number; top: number; width: number; incline?: string }
 /** Intersect vertical wall planes with the escalator body and 2 m of headroom. */
@@ -62,4 +63,69 @@ export function cutEscalatorOpenings(positions: Float32Array, escalators: Escala
   if(!escalators.length)return positions;
   const masks=escalatorOpeningMasks(positions,escalators);
   return masks.length?new Float32Array(trimCoplanarWalls(positions,masks)):positions;
+}
+/**
+ * Рёбра по контуру проёма в стене: (маски ∩ грань) без сторон, лежащих на краях грани, —
+ * вертикали проёма обрываются на верху стены (этажа), низ и торцы стены не дублируются.
+ * face — прямоугольник стены из двух треугольников: a низ, b низ, b верх, a низ, b верх, a верх.
+ */
+export function escalatorOpeningOutline(face: ArrayLike<number>, masks: ArrayLike<number>): number[] {
+  if (!masks.length) return [];
+  const ax=face[0],ay=face[1],z0=face[2],bx=face[3],by=face[4],z1b=face[8],z1a=face[17];
+  const L=Math.hypot(bx-ax,by-ay);if(L<1e-6)return [];
+  const ux=(bx-ax)/L,uy=(by-ay)/L;
+  const top=(u:number)=>z1a+(z1b-z1a)*u/L;
+  const tris:MultiPolygon=[];
+  for(let i=0;i+8<masks.length;i+=9){
+    const ring:[number,number][]=[];
+    for(let k=0;k<3;k++)ring.push([(masks[i+k*3]-ax)*ux+(masks[i+k*3+1]-ay)*uy,masks[i+k*3+2]]);
+    const area=(ring[1][0]-ring[0][0])*(ring[2][1]-ring[0][1])-(ring[2][0]-ring[0][0])*(ring[1][1]-ring[0][1]);
+    if(Math.abs(area)<1e-9)continue;
+    tris.push([[...ring,ring[0]]]);
+  }
+  if(!tris.length)return [];
+  const faceRing:MultiPolygon=[[[[0,z0],[L,z0],[L,z1b],[0,z1a],[0,z0]]]];
+  const open=polygonClipping.intersection(faceRing,polygonClipping.union(tris[0],...tris.slice(1)));
+  const eps=1e-3,out:number[]=[];
+  const onEdge=(p:[number,number],q:[number,number])=>
+    (Math.abs(p[1]-z0)<eps&&Math.abs(q[1]-z0)<eps)||(Math.abs(p[0])<eps&&Math.abs(q[0])<eps)||
+    (Math.abs(p[0]-L)<eps&&Math.abs(q[0]-L)<eps)||(Math.abs(p[1]-top(p[0]))<eps&&Math.abs(q[1]-top(q[0]))<eps);
+  for(const poly of open)for(const ring of poly)for(let i=0;i+1<ring.length;i++){
+    const p=ring[i] as [number,number],q=ring[i+1] as [number,number];
+    if(Math.hypot(q[0]-p[0],q[1]-p[1])<eps||onEdge(p,q))continue;
+    out.push(ax+ux*p[0],ay+uy*p[0],p[1],ax+ux*q[0],ay+uy*q[0],q[1]);
+  }
+  return out;
+}
+/** Глубина короба эскалатора под ступенями — как в модели (drawEscalators). */
+const BODY_DEPTH = 0.7;
+/**
+ * Вырез в полу на высоте floorZ под моделью эскалатора: след модели (ширина ступеней) там, где её короб
+ * проходит сквозь плоскость пола, — площадка у пола иначе ложится на пол, а короб торчит из него.
+ * Профиль — как у модели: площадки по краям, между ними — прямой подъём.
+ */
+export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number): MultiPolygon {
+  const out: Pt[][] = [];
+  for (const e of escalators) {
+    if (e.top <= e.bottom || floorZ < e.bottom - .1 || floorZ > e.top + .1) continue;
+    const lengths=[0];for(let j=1;j<e.line.length;j++)lengths.push(lengths[j-1]+Math.hypot(e.line[j][0]-e.line[j-1][0],e.line[j][1]-e.line[j-1][1]));
+    const length=lengths.at(-1)??0;if(length<2)continue;
+    const landing=Math.min(1,length*.12),half=Math.max(.35,Math.min(2.5,e.width/2));
+    const zAt=(d:number)=>{const rise=Math.max(0,Math.min(1,(d-landing)/(length-2*landing)));return e.bottom+(e.top-e.bottom)*(e.incline==='down'?1-rise:rise)+.05;};
+    // Короб от z−BODY_DEPTH до ступеней (с запасом на пол чуть выше уровня этажа)
+    const crosses=(d:number)=>{const z=zAt(d);return z-BODY_DEPTH<floorZ+.08&&z>floorZ-.02;};
+    const at=(s:number)=>{let j=1;while(j<lengths.length-1&&lengths[j]<s)j++;const t=(s-lengths[j-1])/(lengths[j]-lengths[j-1]||1);
+      const dx=(e.line[j][0]-e.line[j-1][0])/(lengths[j]-lengths[j-1]||1),dy=(e.line[j][1]-e.line[j-1][1])/(lengths[j]-lengths[j-1]||1);
+      return {x:e.line[j-1][0]+(e.line[j][0]-e.line[j-1][0])*t,y:e.line[j-1][1]+(e.line[j][1]-e.line[j-1][1])*t,nx:-dy,ny:dx};};
+    const steps=Math.max(2,Math.ceil(length/.05)),ds=[...new Set([...Array.from({length:steps+1},(_,i)=>length*i/steps),...lengths])].sort((a,b)=>a-b);
+    for(let i=1;i<ds.length;i++){
+      const a=ds[i-1],b=ds[i];if(b-a<1e-6||!crosses((a+b)/2))continue;
+      // Отрезок внутри одного звена ломаной: нормаль — по его середине
+      const m=at((a+b)/2),pa=at(a),pb=at(b);
+      out.push([[pa.x+m.nx*half,pa.y+m.ny*half],[pb.x+m.nx*half,pb.y+m.ny*half],[pb.x-m.nx*half,pb.y-m.ny*half],[pa.x-m.nx*half,pa.y-m.ny*half]]);
+    }
+  }
+  if(!out.length)return [];
+  const polys=out.map(r=>[[...r,r[0]]] as unknown as MultiPolygon);
+  return polygonClipping.union(polys[0],...polys.slice(1));
 }

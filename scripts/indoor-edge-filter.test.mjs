@@ -213,3 +213,135 @@ test('solid indoor walls below an atrium do not duplicate the opaque facade', as
   });
   assert.equal(verticalTriangles,0);
 });
+
+// Like node/12083650193: a door in the gap between two thick wall polygons (0.24 m), a corridor on one side only.
+// Regression: the corridor wall 0.24 m away (< WALL_MERGE_DIST) used to swallow the far faces of both columns.
+function doorBetweenColumns() {
+  const columnA = { key: 'a', kind: 'column', z: 0, polygons: [{ outer: [[0, 0], [2, 0], [2, .24], [0, .24]], inners: [] }] };
+  const columnB = { key: 'b', kind: 'column', z: 0, polygons: [{ outer: [[2.9, 0], [5, 0], [5, .24], [2.9, .24]], inners: [] }] };
+  const corridor = { key: 'c', kind: 'corridor', z: 0, polygons: [{ outer: [[-1, -3], [6, -3], [6, 0], [-1, 0]], inners: [] }] };
+  return [corridor, columnA, columnB];
+}
+async function drawDoorBetweenColumns(pale) {
+  const THREE = await import('three');
+  const layer = new BuildingsLayer('test');
+  layer.graphics.edges = true;
+  const items = doorBetweenColumns();
+  layer.level = { floor: 0, cut: 3, items };
+  const root = new THREE.Group();
+  layer.drawPlan(root, { toLocal: p => p, items: [], hidden: new Set(), flat: new Set() }, items, [[2.45, 0]], 3, pale);
+  const tris = [], lines = [];
+  root.traverse(o => {
+    if (o.type === 'Mesh') { const p = o.geometry.getAttribute('position').array; for (let i = 0; i < p.length; i += 9) tris.push(Array.from(p.slice(i, i + 9))); }
+    if (o.type === 'LineSegments') { const p = o.geometry.getAttribute('position').array; for (let i = 0; i < p.length; i += 6) lines.push(Array.from(p.slice(i, i + 6))); }
+  });
+  return { tris, lines };
+}
+/** Длина отрезка y=Y, x∈[x0,x1], закрытая вертикальными треугольниками на высоте z. */
+function covered(tris, Y, x0, x1, z) {
+  const spans = [];
+  for (const t of tris) {
+    const ys = [t[1], t[4], t[7]], zs = [t[2], t[5], t[8]], xs = [t[0], t[3], t[6]];
+    if (ys.some(y => Math.abs(y - Y) > 1e-4) || Math.min(...zs) > z || Math.max(...zs) < z || Math.max(...zs) - Math.min(...zs) < .1) continue;
+    spans.push([Math.max(x0, Math.min(...xs)), Math.min(x1, Math.max(...xs))]);
+  }
+  spans.sort((a, b) => a[0] - b[0]);
+  let at = x0, total = 0;
+  for (const [lo, hi] of spans) { if (hi > at) { total += hi - Math.max(lo, at); at = hi; } }
+  return total;
+}
+for (const pale of [false, true]) test(`thick walls keep both faces next to a room wall closer than the merge distance, pale=${pale}`, async () => {
+  const { tris } = await drawDoorBetweenColumns(pale);
+  for (const [x0, x1] of [[0, 2], [2.9, 5]]) {
+    assert.ok(covered(tris, .24, x0, x1, 1) > (x1 - x0) - .01, `far face ${x0}..${x1} must be drawn`);
+    assert.ok(covered(tris, 0, x0, x1, 1) > (x1 - x0) - .01, `near face ${x0}..${x1} must be drawn`);
+  }
+});
+for (const pale of [false, true]) test(`lintel between thick walls is closed and jambs stop below it, pale=${pale}`, async () => {
+  const { tris, lines } = await drawDoorBetweenColumns(pale);
+  // Back face of the lintel and its underside
+  assert.ok(covered(tris, .24, 2, 2.9, 2.6) > .89, 'back face of the lintel');
+  const under = tris.filter(t => [t[2], t[5], t[8]].every(z => Math.abs(z - 2.2) < 1e-6) && [t[1], t[4], t[7]].every(y => y > -1e-6 && y < .24 + 1e-6)
+    && [t[0], t[3], t[6]].every(x => x > 2 - 1e-6 && x < 2.9 + 1e-6));
+  assert.ok(under.length >= 2, 'underside of the lintel');
+  // Corners of the gap: verticals only up to the lintel
+  for (const [x, y] of [[2, 0], [2, .24], [2.9, 0], [2.9, .24]]) {
+    for (const l of lines) {
+      if (Math.hypot(l[0] - x, l[1] - y) > .03 || Math.hypot(l[3] - x, l[4] - y) > .03 || Math.abs(l[2] - l[5]) < .1) continue;
+      assert.ok(Math.max(l[2], l[5]) < 2.2 + 1e-6, `vertical at ${x},${y} goes above the lintel: ${Math.max(l[2], l[5])}`);
+    }
+  }
+});
+
+// Like node/12083648799: a door on the corridor edge between two columns, but the gap is a 2.9 m wide, 0.87 m deep
+// passage of the corridor itself — no lintel may be built across it.
+for (const pale of [false, true]) test(`no lintel across a corridor passage between columns, pale=${pale}`, async () => {
+  const THREE = await import('three');
+  const layer = new BuildingsLayer('test');
+  layer.graphics.edges = true;
+  const columnA = { key: 'a', kind: 'column', z: 0, polygons: [{ outer: [[-2, 0], [0, 0], [0, .87], [-2, .87]], inners: [] }] };
+  const columnB = { key: 'b', kind: 'column', z: 0, polygons: [{ outer: [[2.9, 0], [5, 0], [5, .87], [2.9, .87]], inners: [] }] };
+  const corridor = { key: 'c', kind: 'corridor', z: 0, polygons: [{ outer: [[0, 0], [2.9, 0], [2.9, 3], [0, 3]], inners: [] }] };
+  const items = [corridor, columnA, columnB];
+  layer.level = { floor: 0, cut: 3, items };
+  const root = new THREE.Group();
+  layer.drawPlan(root, { toLocal: p => p, items: [], hidden: new Set(), flat: new Set() }, items, [[1.45, 0]], 3, pale);
+  root.traverse(o => {
+    if (o.type !== 'Mesh') return;
+    const p = o.geometry.getAttribute('position').array;
+    for (let i = 0; i < p.length; i += 9) {
+      const xs = [p[i], p[i+3], p[i+6]], ys = [p[i+1], p[i+4], p[i+7]], zs = [p[i+2], p[i+5], p[i+8]];
+      const cx = (xs[0] + xs[1] + xs[2]) / 3, cy = (ys[0] + ys[1] + ys[2]) / 3;
+      // Над проходом (между колоннами, выше пола) ничего нет: ни перемычки, ни стены поперёк
+      assert.ok(!(cx > .01 && cx < 2.89 && cy > -1e-4 && cy < .87 + 1e-4 && Math.max(...zs) > .1), `geometry across the passage at ${cx.toFixed(2)},${cy.toFixed(2)}`);
+    }
+  });
+});
+
+// Like node/12080113721: a door on an edge shared by two rooms. Each room walks the edge in its own direction;
+// the opening must be recorded once, or the highlight drops its jambs as internal joints.
+test('door between two rooms keeps both jambs in the selection outline', async () => {
+  const THREE = await import('three');
+  const layer = new BuildingsLayer('test');
+  layer.graphics.edges = true;
+  const roomA = { key: 'a', kind: 'room', z: 0, polygons: [{ outer: [[0, 0], [4, 0], [4, 3], [0, 3]], inners: [] }] };
+  const roomB = { key: 'b', kind: 'room', z: 0, polygons: [{ outer: [[0, 0], [0, -3], [4, -3], [4, 0]], inners: [] }] };
+  const items = [roomA, roomB];
+  layer.doors = [{ key: 'node/1', at: [2, 0], z: 0, tags: {} }];
+  layer.level = { floor: 0, cut: 3, items };
+  layer.drawPlan(new THREE.Group(), { toLocal: p => p, items: [], hidden: new Set(), flat: new Set() }, items, [[2, 0]], 3, false);
+  const raw = [...layer.doorOpeningEdges.get('node/1').values()].flat();
+  const verticals = new Map();
+  for (let i = 0; i < raw.length; i += 6) {
+    if (Math.hypot(raw[i] - raw[i+3], raw[i+1] - raw[i+4]) > 1e-5) continue;
+    const k = `${raw[i].toFixed(3)},${raw[i+1].toFixed(3)}`;
+    verticals.set(k, (verticals.get(k) ?? 0) + 1);
+  }
+  assert.equal([...verticals.values()].filter(n => n === 1).length, 2);
+});
+
+// Like way/1304501560: a free-standing wall line inside an area. Its bottom edge must lie above every floor layer,
+// otherwise the floor covers it.
+for (const pale of [false, true]) test(`bottom edge of a wall inside an area is above the floor, pale=${pale}`, async () => {
+  const THREE = await import('three');
+  const layer = new BuildingsLayer('test');
+  layer.graphics.edges = true;
+  const area = { key: 'area', kind: 'area', z: -6, polygons: [{ outer: [[-5, -5], [5, -5], [5, 5], [-5, 5]], inners: [] }] };
+  const room = { key: 'room', kind: 'room', z: -6, polygons: [{ outer: [[2, 2], [4, 2], [4, 4], [2, 4]], inners: [] }] };
+  const wall = { key: 'wall', kind: 'wall', line: true, z: -6, polygons: [{ outer: [[-2, 0], [0, 0]], inners: [] }] };
+  const items = [area, room, wall];
+  layer.level = { floor: -6, cut: -3, items };
+  const root = new THREE.Group();
+  layer.drawPlan(root, { toLocal: p => p, items: [], hidden: new Set(), flat: new Set() }, items, [], -3, pale);
+  let floorTop = -Infinity, bottom;
+  root.traverse(o => {
+    const p = o.geometry?.getAttribute('position')?.array;
+    if (!p) return;
+    if (o.type === 'Mesh') for (let i = 0; i < p.length; i += 9)
+      if (Math.abs(p[i+2] - p[i+5]) < 1e-6 && Math.abs(p[i+2] - p[i+8]) < 1e-6 && p[i+2] < -5.5) floorTop = Math.max(floorTop, p[i+2]);
+    if (o.type === 'LineSegments') for (let i = 0; i < p.length; i += 6)
+      if (Math.abs(p[i+1]) < 1e-6 && Math.abs(p[i+4]) < 1e-6 && Math.abs(p[i] - p[i+3]) > 1 && p[i+2] < -5.5) bottom = Math.min(bottom ?? Infinity, p[i+2]);
+  });
+  assert.ok(bottom !== undefined, 'bottom edge is drawn');
+  assert.ok(bottom > floorTop, `bottom edge ${bottom} is under the floor ${floorTop}`);
+});

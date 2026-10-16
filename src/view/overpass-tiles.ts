@@ -53,6 +53,11 @@ export interface TileSource { api: string; db: string; josm?: boolean }
  */
 /** Таймаут запроса четверти тайла к API: дольше — сервер считаем не отвечающим (повтор через 30 с). */
 const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Тайлы боевого OSM через Overpass выключены: он отстаёт от API на минуты, и во время правок
+ * отдавал версии зданий до них. Данные — только из OSM API (/map).
+ */
+const USE_OVERPASS = false;
 /** Сколько помнить отправленные версии: Overpass отстаёт от API на минуты, с запасом — сутки. */
 const UPLOADED_TTL_MS = 24 * 60 * 60 * 1000;
 /** Удалённый объект в списке отправленного. */
@@ -513,7 +518,7 @@ export class OverpassTiles {
       const seen = new Map<string, OsmElement>();
       // Боевой OSM — сначала Overpass: ответ в разы меньше и не тратит лимит скачивания API (509).
       // Отказ, таймаут или неполный ответ — тот же тайл через /map
-      if (this.source.api === SERVERS.prod.api && overpassFree()) {
+      if (USE_OVERPASS && this.source.api === SERVERS.prod.api && overpassFree()) {
         try {
           for (const el of await fetchOverpassTile(tileBbox(key), abort.signal, withRoads)) {
             const id = `${el.type}/${el.id}`;

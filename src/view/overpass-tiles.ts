@@ -53,6 +53,11 @@ export interface TileSource { api: string; db: string; josm?: boolean }
  */
 /** Таймаут запроса четверти тайла к API: дольше — сервер считаем не отвечающим (повтор через 30 с). */
 const REQUEST_TIMEOUT_MS = 30_000;
+/** Сколько помнить отправленные версии: Overpass отстаёт от API на минуты, с запасом — сутки. */
+const UPLOADED_TTL_MS = 24 * 60 * 60 * 1000;
+/** Удалённый объект в списке отправленного. */
+const DELETED = -1;
+type Uploaded = Record<string, { v: number; at: number }>;
 
 export class OverpassTiles {
   private readonly cache = new Map<string, Entry>(); // порядок вставки = LRU
@@ -79,6 +84,8 @@ export class OverpassTiles {
   mode: OverpassMode = 'off';
   /** Нужны дороги (мосты и развязки): тайлы из кеша без них перезапрашиваются в фоне. */
   roadsWanted = false;
+  /** Версии, отправленные из редактора (по источнику, в localStorage): ответ с более старыми — устаревший. */
+  private uploaded: Uploaded = {};
 
   /**
    * overlay — подмена объекта перед отрисовкой (несохранённые правки живут поверх данных тайлов
@@ -88,7 +95,36 @@ export class OverpassTiles {
     private readonly map: MlMap, private readonly layer: BuildingsLayer, private readonly onChange: () => void,
     private readonly overlay: (f: Feature3D) => Feature3D = (f) => f,
   ) {
+    this.loadUploaded();
     this.loadStoredKeys();
+  }
+
+  private uploadedKey() { return `simple3d:uploaded:${this.source?.db ?? 'osm-simple3d'}`; }
+
+  private loadUploaded() {
+    const now = Date.now();
+    try {
+      const all = JSON.parse(localStorage.getItem(this.uploadedKey()) ?? '{}') as Uploaded;
+      this.uploaded = Object.fromEntries(Object.entries(all).filter(([, u]) => now - u.at < UPLOADED_TTL_MS));
+    } catch { this.uploaded = {}; }
+  }
+
+  /** Запомнить отправленные версии (и удаления), чтобы не принять за свежие данные до правки. */
+  noteUploaded(versions: Map<string, number>, deleted: Iterable<string> = []) {
+    const at = Date.now();
+    for (const [k, v] of versions) this.uploaded[k] = { v, at };
+    for (const k of deleted) this.uploaded[k] = { v: DELETED, at };
+    try { localStorage.setItem(this.uploadedKey(), JSON.stringify(this.uploaded)); } catch { /* хранилище недоступно */ }
+  }
+
+  /** В ответе есть объект старше отправленной версии или уже удалённый — данные до правки. */
+  private behindUploads(elements: Iterable<{ type: string; id: number; version?: number }>): boolean {
+    if (!Object.keys(this.uploaded).length) return false;
+    for (const el of elements) {
+      const u = this.uploaded[`${el.type}/${el.id}`];
+      if (u && (u.v === DELETED || (el.version ?? 0) < u.v)) return true;
+    }
+    return false;
   }
 
   private loadStoredKeys() {
@@ -120,6 +156,7 @@ export class OverpassTiles {
     this.stored = new Set();
     this.pool = new RequestPool([source.api]);
     this.store = new TileStore(source.db);
+    this.loadUploaded();
     this.loadStoredKeys();
     this.update();
   }
@@ -426,6 +463,8 @@ export class OverpassTiles {
     const stored = this.source?.josm ? undefined : await this.store.get(key);
     if (this.cache.get(key)?.state !== 'lookup') return; // за время поиска ушли с тайла
     if (stored) {
+      // Запись из кеша старше отправленных правок (её успели перезаписать данными до правки) — обновить в фоне
+      if (this.behindUploads([...stored.features, ...stored.groups])) stored.fetchedAt = 0;
       this.cache.set(key, { state: 'ready', ...stored });
       this.evict();
       this.tileReady(key);
@@ -481,7 +520,11 @@ export class OverpassTiles {
             // Голая копия пути (out skel после рекурсии) не затирает путь с тегами
             if (!(seen.get(id) as { tags?: unknown } | undefined)?.tags || el.tags) seen.set(id, el);
           }
-          via = 'overpass';
+          if (this.behindUploads(seen.values())) {
+            // Overpass ещё не получил наши правки — этот тайл берём из API
+            console.warn(`Overpass ${key}: данные старше отправленных правок — загружаю через OSM API`);
+            seen.clear();
+          } else via = 'overpass';
         } catch (err) {
           if (abort.signal.aborted) throw err;
           console.warn(`Overpass ${key}: ${(err as Error).message} — загружаю через OSM API`);
@@ -521,7 +564,8 @@ export class OverpassTiles {
       const trees = timed('тайлы: разбор деревьев', () => parseTrees(elements), (r) => `${key}, ${r.points.length} деревьев, ${r.woods.length} лесов`);
       // Без дорог в запросе — undefined, а не []: при включении галок тайл перекачается (isStale)
       const roads = via === 'overpass' && !withRoads ? undefined : timed('тайлы: дороги', () => parseRoads(elements), (r) => `${key}, ${r.length} путей`);
-      const fetchedAt = Date.now();
+      // Запрос ушёл до отправки правок — показываем, но вскоре перезапросим
+      const fetchedAt = this.behindUploads(elements) ? 0 : Date.now();
       this.cache.set(key, { state: 'ready', features, groups, indoor, trees, roads, fetchedAt, via });
       this.lastApiError = undefined;
       this.reloading.delete(key);
@@ -605,8 +649,15 @@ export class OverpassTiles {
       for (const g of fresh.values()) if (!t.groups.some((x) => x.key === g.key)) out.push(g);
       return out;
     };
-    const touched = (t: { features: Feature3D[]; groups: BuildingGroup[] }) =>
-      t.features.some((f) => saved.has(f.key) || gone.has(f.key)) || t.groups.some((g) => saved.has(g.key)) || groupFor(t).length > 0;
+    const indoorTouched = (t: { indoor?: IndoorFeature[] }) => !!t.indoor?.some((f) => saved.has(f.key) || gone.has(f.key));
+    const touched = (t: { features: Feature3D[]; groups: BuildingGroup[]; indoor?: IndoorFeature[] }) =>
+      t.features.some((f) => saved.has(f.key) || gone.has(f.key)) || t.groups.some((g) => saved.has(g.key)) || groupFor(t).length > 0
+      || indoorTouched(t);
+    // Помещения, стены, двери: теги и контур; точки (перенесённые двери) поправит фоновое обновление тайла
+    const patchIndoor = (indoor: IndoorFeature[] | undefined) => indoor?.filter((f) => !gone.has(f.key)).map((f) => {
+      const s = saved.get(f.key);
+      return s ? { ...f, tags: s.tags, polygons: s.polygons ?? f.polygons } : f;
+    });
     const patch = (features: Feature3D[], groups: BuildingGroup[]): Feature3D[] => {
       if (!features.some((f) => saved.has(f.key) || gone.has(f.key))) return features;
       const out: Feature3D[] = [];
@@ -627,6 +678,8 @@ export class OverpassTiles {
       if (e.state !== 'ready') continue;
       inMemory.add(key);
       if (!touched(e)) continue;
+      if (indoorTouched(e)) e.fetchedAt = 0;
+      e.indoor = patchIndoor(e.indoor) ?? e.indoor;
       e.groups = patchGroups(e);
       e.features = patch(e.features, e.groups);
       this.indexGroups(e.groups);
@@ -638,7 +691,8 @@ export class OverpassTiles {
       const stored = await this.store.get(key);
       if (stored && touched(stored)) {
         const groups = patchGroups(stored);
-        await this.store.put(key, { ...stored, groups, features: patch(stored.features, groups) });
+        await this.store.put(key, { ...stored, groups, features: patch(stored.features, groups), indoor: patchIndoor(stored.indoor) ?? [],
+          fetchedAt: indoorTouched(stored) ? 0 : stored.fetchedAt });
       }
     }
   }

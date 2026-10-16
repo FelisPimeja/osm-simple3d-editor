@@ -650,7 +650,21 @@ document.getElementById('cache-clear')!.addEventListener('click', async () => {
   await overpass.clearStore();
   await showCacheInfo();
 });
-document.getElementById('tiles-reload')!.addEventListener('click', () => {
+const tilesReload = document.getElementById('tiles-reload')!;
+/** В режиме здания кнопка обновляет только его: части, отношение и внутренние планы. */
+function syncReloadButton() {
+  tilesReload.textContent = focus ? tr('Обновить здание') : tr('Перезагрузить видимые тайлы');
+  tilesReload.title = focus ? tr('Заново запросить из OSM API это здание, его части и внутренние планы') : tr('Отладка: заново запросить из OSM API тайлы на экране');
+}
+tilesReload.addEventListener('click', () => {
+  if (focus) {
+    if (josmMode) return setStatus(tr('Слой JOSM обновляется сам.'));
+    setStatus(tr('Обновляем здание…'));
+    focusIndoor.delete(focus.key);
+    loadFocusIndoor(focus);
+    void refreshFocusedBuilding(focus, ++focusRefreshId, true);
+    return;
+  }
   if (overpass.mode !== 'full') return setStatus(tr('Тайлы загружаются с z ≥ {z}.', { z: OVERPASS_MIN_ZOOM }), true);
   setStatus(tr('Перезапрашиваем тайлов ({src}): {n}.', { src: overpass.sourceLabel, n: overpass.reloadVisible() }));
 });
@@ -1234,7 +1248,8 @@ function hideMapLayers() {
 
 let focusRefreshId = 0;
 
-async function refreshFocusedBuilding(g: BuildingGroup, requestId: number) {
+/** manual — по кнопке «Обновить здание»: сообщить и об актуальных данных. */
+async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manual = false) {
   // В слое JOSM есть неопубликованные правки: API сервера не может его обновлять.
   if (josmMode) return;
   const api = server().api;
@@ -1253,7 +1268,10 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number) {
     });
     const oldGroup = overpass.groupOf(g.key);
     const groupChanged = !isSolo(g) && JSON.stringify(oldGroup) !== JSON.stringify(freshGroup);
-    if (!changed.length && !groupChanged) return;
+    if (!changed.length && !groupChanged) {
+      if (manual && requestId === focusRefreshId) setStatus(tr('Данные здания актуальны.'));
+      return;
+    }
     const stillFocused = requestId === focusRefreshId && focus?.key === g.key;
     const touched = stillFocused && ([...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.has(key) && session.isChanged(key)) || session.hasDataHistory());
     if (touched) {
@@ -1318,6 +1336,7 @@ function enterFocus(g: BuildingGroup, flyIn = true) {
   renderSelected();
   setEditParam(isSolo(g) ? g.members[0] : g.key);
   void refreshFocusedBuilding(g, ++focusRefreshId);
+  syncReloadButton();
 }
 
 /** Доля экрана, которую занимает здание после подлёта. */
@@ -1452,6 +1471,7 @@ function exitFocus() {
     updateTileFilter();
     restore(tileLayers);
   });
+  syncReloadButton();
   refreshOverpass(); // камера могла уйти — догружаем тайлы
 }
 
@@ -6432,6 +6452,7 @@ async function doUpload() {
     // Сразу в кеш тайлов текущего источника — не ждать фонового обновления тайла
     const savedGroups = [...saved].map(([k, v]) => editGroups.get(v.newKey ?? k)).filter((g): g is EditGroup => !!g)
       .map((g) => ({ key: g.key, type: g.type, id: g.id, version: g.version, tags: { ...g.tags }, members: [...g.members], roles: [...g.roles] }));
+    overpass.noteUploaded(res.versions, [...res.deleted, ...res.dropped]);
     void overpass.applySaved(withMemberWays(new Map([...saved].map(([k, v]) => [v.newKey ?? k, v]))), savedGroups, createdWays, [...res.deleted]);
     uploadComment = '';
     const link = `<a href="${s.web}/changeset/${res.changeset}" target="_blank" rel="noopener">changeset ${res.changeset}</a>`;

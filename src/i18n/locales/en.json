@@ -880,5 +880,10 @@
   "изменены теги": "tags edited",
   "изменена геометрия": "geometry changed",
   "Поэтажные планы:": "Indoor plans:",
-  "правки зданий": "building edits"
+  "правки зданий": "building edits",
+  "Обновить здание": "Reload building",
+  "Заново запросить из OSM API это здание, его части и внутренние планы": "Request this building, its parts and indoor plans from the OSM API again",
+  "Слой JOSM обновляется сам.": "The JOSM layer updates itself.",
+  "Обновляем здание…": "Reloading building…",
+  "Данные здания актуальны.": "Building data is up to date."
 }

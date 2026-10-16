@@ -177,7 +177,8 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
     else if (shape !== main && !ROOF_DOCUMENTED.has(shape)) add('warning', 'roof', tr('roof:shape={value} — значение с проблемами, основное — {main}.', { value: raw!, main }), set({ 'roof:shape': main }));
     else if (raw !== shape) add('warning', 'roof', tr('roof:shape={value} — значения пишут строчными: {lower}.', { value: raw!, lower: shape }), set({ 'roof:shape': shape }));
   }
-  if (t['roof:levels'] !== undefined && Number(t['roof:levels']) > 0 && t['roof:shape'] !== undefined && roofShapeOf(t) === 'flat') {
+  // roofShapeOf also maps many/mixed to flat for rendering; that fallback says nothing about roof levels.
+  if (Number(t['roof:levels']) > 0 && shape === 'flat') {
     add('warning', 'roof', tr('roof:levels={levels} при roof:shape=flat — в плоской крыше нет этажей.', { levels: t['roof:levels'] }));
   }
   const orient = t['roof:orientation'];

@@ -100,7 +100,7 @@ test('indoor wall opening follows the off-wall revolving door during preview',()
  layer.applyLevel();
  assert.equal(layer.doorOpeningEdges.has('node/1'),false);
 });
-test('Move previews multiple doors and restores their openings on cancellation',async()=>{
+test('Move previews multiple doors without rebuilding openings and restores them on cancellation',async()=>{
  const {Vector3}=await import('three');
  const ll=(x,y)=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
  const layer=new BuildingsLayer('test');
@@ -109,12 +109,16 @@ test('Move previews multiple doors and restores their openings on cancellation',
  layer.setDoors(doors);
  layer.setLevel({floor:0,cut:3,items:[{key:'way/2',kind:'wall',line:true,z:0,polygons:[{outer:[ll(0,2),ll(8,2)],inners:[]}]}],doors:doors.map(d=>d.at)});
  const before=doors.map(d=>layer.doorAnchor(d.key));
+ const openings=layer.doorOpeningEdges;
+ assert.equal(openings.size,2);
  layer.setMovePreview(doors.map(d=>d.key),new Vector3(.2,2,0));
  doors.forEach((d,i)=>assert.ok(layer.doorAnchor(d.key).distanceTo(before[i].clone().add(new Vector3(.2,2,0)))<.001));
- assert.equal(layer.doorOpeningEdges.size,0);
+ // Во время движения сдвигаются только модели: проёмы пересобираются после записи, а не на каждый mousemove
+ assert.equal(layer.doorOpeningEdges,openings);
+ assert.equal(layer.doorOpeningEdges.size,2);
  layer.setMovePreview(doors.map(d=>d.key),undefined);
  doors.forEach((d,i)=>assert.ok(layer.doorAnchor(d.key).distanceTo(before[i])<.001));
- assert.ok(layer.doorOpeningEdges.size>0);
+ assert.equal(layer.doorOpeningEdges.size,2);
 });
 test('Move supports door anchors with snaps off, horizontal snaps, numeric distance and Esc',async()=>{
  const {Vector3}=await import('three');

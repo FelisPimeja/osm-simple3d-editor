@@ -97,6 +97,11 @@ function lengthHint(v: string): string {
   return tr('ожидаются метры: 12, 12.5, «12 m», 40 ft, 7\'4"');
 }
 
+type Deprecation = { old: Record<string, string>; replace?: Record<string, string> };
+/** Список устаревших тегов iD: грузится отдельно (src/osm/presets.ts), до загрузки — пусто. */
+let deprecatedList: readonly Deprecation[] = [];
+export function setDeprecatedTags(list: readonly Deprecation[]) { deprecatedList = list; }
+
 /** Проблемы тегов одного объекта. */
 export function validateTags(key: string, t: Record<string, string>): Issue[] {
   const out: Issue[] = [];
@@ -214,6 +219,7 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
     if (v.startsWith('#') && !/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) add('warning', 'colour', tr('{tag} — неверный hex-цвет (нужно #RGB или #RRGGBB).', { tag: `${k}=${v}` }));
     else if (/^gray$/i.test(v)) add('warning', 'colour', tr('{tag} — в OSM британское написание: grey.', { tag: `${k}=${v}` }), set({ [k]: 'grey' }));
   }
+  out.push(...validateDeprecated(key, t));
   return out;
 }
 
@@ -269,6 +275,7 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
     if (parseLevels(t.repeat_on).some((n) => base.has(n))) add('warning', 'indoor-level',
       tr('repeat_on=* повторяет этаж из level=* — исходный этаж в список повторений не включают.'));
   }
+  out.push(...validateDeprecated(key, t));
   return out;
 }
 
@@ -541,6 +548,31 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
         text: tr('Почти совпадает с {other} ({area} м² в плане, высоты {from}–{to} м) — похоже на дубликат части.',
           { other: b.f.key, area: fmt(x), from: fmt(Math.max(a.min, b.min)), to: fmt(Math.min(a.top, b.top)) }) });
     }
+  }
+  return out;
+}
+
+/**
+ * Устаревшие теги по списку iD (deprecated.json): предупреждение и замена, как «Обновить теги» в iD. Наши
+ * проверки ошибочных ключей (WRONG_KEYS) точнее — их не повторяем. Замены с $1 подставляют старое значение.
+ */
+export function validateDeprecated(key: string, t: Record<string, string>, list: readonly Deprecation[] = deprecatedList): Issue[] {
+  const out: Issue[] = [];
+  for (const d of list) {
+    const old = Object.entries(d.old);
+    if (!old.every(([k, v]) => t[k] !== undefined && (v === '*' || t[k] === v))) continue;
+    if (old.length === 1 && old[0][0] in WRONG_KEYS) continue;
+    const was = old.map(([k]) => `${k}=${t[k]}`).join(' + ');
+    const star = old.find(([, v]) => v === '*');
+    const replace = d.replace && Object.fromEntries(Object.entries(d.replace).map(([k, v]) => [k, v.replace('$1', star ? t[star[0]] : '')]));
+    // Замена спорит с уже заданным значением — не исправляем автоматически
+    const clash = replace && Object.entries(replace).some(([k, v]) => t[k] !== undefined && t[k] !== v && !(k in d.old));
+    if (!replace) { out.push({ key, level: 'warning', code: 'deprecated', text: tr('{tag} — устаревший тег, замены нет: проверьте, нужен ли он.', { tag: was }) }); continue; }
+    const now = Object.entries(replace).map(([k, v]) => `${k}=${v}`).join(' + ');
+    const tags: Record<string, string | undefined> = Object.fromEntries(old.filter(([k]) => !(k in replace)).map(([k]) => [k, undefined]));
+    Object.assign(tags, replace);
+    out.push({ key, level: 'warning', code: 'deprecated', text: tr('{tag} — устаревший тег, сейчас пишут {replace}.', { tag: was, replace: now }),
+      ...(clash ? {} : { fix: { label: tr('заменить на {replace}', { replace: now }), tags } }) });
   }
   return out;
 }

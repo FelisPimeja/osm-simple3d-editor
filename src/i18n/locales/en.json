@@ -914,5 +914,8 @@
   "Аудитория": "Auditorium",
   "Спальня": "Bedroom",
   "Гостиная": "Living room",
-  "Ванная": "Bathroom"
+  "Ванная": "Bathroom",
+  "{tag} — устаревший тег, замены нет: проверьте, нужен ли он.": "{tag} is a deprecated tag with no replacement: check whether it is needed.",
+  "{tag} — устаревший тег, сейчас пишут {replace}.": "{tag} is a deprecated tag; use {replace} instead.",
+  "заменить на {replace}": "replace with {replace}"
 }

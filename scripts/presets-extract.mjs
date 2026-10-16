@@ -2,6 +2,8 @@
  * Выжимка схемы тегов iD (@openstreetmap/id-tagging-schema) для полей редактора: подписи полей и значений
  * на наших языках. Вся схема с переводами — мегабайты, нам нужна малая часть: берём поля из белого списка
  * и подписи значений из полей и однотеговых пресетов (indoor=room → «Комната в здании»).
+ * Отдельно (грузятся лениво) — пресеты для названия объекта по тегам: id-presets.json; и замены устаревших
+ * тегов для валидатора: id-deprecated.json.
  * Обновление схемы: npm update @openstreetmap/id-tagging-schema && npm run presets:extract.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -48,5 +50,19 @@ for (const [key, id] of Object.entries(FIELDS)) {
   }
   out.fields[key] = entry;
 }
-writeFileSync(new URL('../src/osm/id-schema.json', import.meta.url), JSON.stringify(out, null, 1) + '\n');
-console.log(`id-tagging-schema ${version}: ${Object.keys(out.fields).length} полей`);
+const write = (name, data, indent) => writeFileSync(new URL(`../src/osm/${name}`, import.meta.url), JSON.stringify(data, null, indent) + '\n');
+write('id-schema.json', out, 1);
+
+// Пресеты: теги, геометрия, вес, addTags, названия по языкам. Без региональных (locationSet: наш редактор
+// не знает, где объект) и без пустых тегов (общие «точка», «линия» — у нас свои названия)
+const list = [];
+for (const [id, p] of Object.entries(presets)) {
+  if (!Object.keys(p.tags).length || p.locationSet) continue;
+  const name = Object.fromEntries(LANGS.map((l) => [l, tr[l].presets[id]?.name]).filter(([, n]) => n));
+  if (!name.en) continue;
+  list.push({ id, tags: p.tags, geometry: p.geometry, ...(p.matchScore !== undefined ? { score: p.matchScore } : {}),
+    ...(p.addTags ? { addTags: p.addTags } : {}), ...(p.searchable === false ? { hidden: true } : {}), name });
+}
+write('id-presets.json', { version, presets: list });
+write('id-deprecated.json', dist('deprecated.json'));
+console.log(`id-tagging-schema ${version}: ${Object.keys(out.fields).length} полей, ${list.length} пресетов`);

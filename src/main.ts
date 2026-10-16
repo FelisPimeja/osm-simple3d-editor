@@ -6,7 +6,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
-import { validateBuilding, validateGeometry, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, type Issue } from './edit/validate';
+import { setDeprecatedTags, validateBuilding, validateGeometry, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -49,6 +49,7 @@ import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edi
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { JOSM_URL, josmLayer, josmMode, minElementId, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
+import { deprecations, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
 import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
@@ -4316,6 +4317,23 @@ function selectIndoor(f: IndoorFeature | undefined, add = false) {
   renderIndoorSelection(add);
 }
 
+/** Геометрия indoor-объекта для пресетов iD: узел-дверь — вершина, линия, остальное — площадь. */
+const indoorGeometry = (f: IndoorFeature): PresetGeometry => (indoorKey(f.key).startsWith('node/')
+  ? (isDoor(f) ? 'vertex' : 'point') : f.line ? 'line' : 'area');
+
+/**
+ * Название indoor-объекта: пресет iD, если он говорит больше, чем indoor=* (indoor=room + shop=clothes — «Магазин
+ * одежды», + stairs=yes — «Лестница»); иначе — наши короткие названия видов. Пресеты ещё грузятся — свои, потом
+ * панель перерисуется.
+ */
+function indoorTitle(f: IndoorFeature): string {
+  const own = f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
+  if (f.escalator) return own;
+  loadPresets(() => { if (indoorSelection.length) renderIndoorSelection(); });
+  const p = matchPreset(f.tags, indoorGeometry(f));
+  return p && Object.keys(p.tags).some((k) => k !== 'indoor' && k !== 'door') ? p.name : own;
+}
+
 /** Обновить подсветку и общую форму после изменения набора выбранных indoor-объектов. */
 function renderIndoorSelection(add = false) {
   let f: IndoorFeature;
@@ -4330,7 +4348,7 @@ function renderIndoorSelection(add = false) {
   const key = indoorKey(f.key);
   const [type, id] = key.split('/');
   const t = f.tags;
-  const kind = f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
+  const kind = indoorTitle(f);
   const levels = f.levels.map((n) => LEVEL_NAME(n)).join(', ');
   infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''} — `
     + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
@@ -4342,7 +4360,7 @@ function renderIndoorSelection(add = false) {
 
 /** Несколько indoor-объектов: число и виды, общая форма. */
 function renderIndoorMulti(fs: IndoorFeature[]) {
-  const kinds = [...new Set(fs.map((f) => (f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind])))].join(', ');
+  const kinds = [...new Set(fs.map(indoorTitle))].join(', ');
   infoEl.innerHTML = `<h2>${trn(fs.length, 'Выбран {n} объект|Выбрано {n} объекта|Выбрано {n} объектов')}</h2><p class="hint">${esc(kinds)}</p>`
     + indoorForm(fs);
   bindIndoorForm(fs);
@@ -5142,6 +5160,8 @@ const issueId = (i: Issue) => `${i.key}\0${i.other ?? ''}\0${i.code}\0${i.text}`
 
 /** Последние проверки по зданиям: пересчёт, только когда сменились объекты (правка даёт новый объект). */
 const issueCache = new Map<string, { feats: Feature3D[]; roles: string; issues: Issue[] }>();
+// Устаревшие теги iD — отдельным файлом; пришли — перепроверить уже показанное
+loadDeprecated(() => { setDeprecatedTags(deprecations()); issueCache.clear(); renderIssues(); });
 
 /** Проверить здание: члены с правками сессии, без удалённых. */
 function buildingIssues(g: BuildingGroup): Issue[] {

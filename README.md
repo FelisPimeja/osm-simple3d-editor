@@ -20,6 +20,10 @@ Open the editor: https://felispimeja.github.io/osm-simple3d-editor/
 - Basemaps: satellite imagery and OSM GPS traces, with imagery offset and opacity.
 - Upload via OAuth 2.0 directly to the OSM API, no backend required. Data can also be read from a locally running JOSM.
 
+## Open from OpenStreetMap
+
+The [osm-open-simple3d.user.js](userscripts/osm-open-simple3d.user.js) userscript adds **Simple3D Editor** to the top menu on openstreetmap.org, immediately after **About**. Install it in Tampermonkey or another userscript manager. It opens a new tab with the current map position and zoom, or links directly to the object on way and relation pages (`?edit=w123` / `?edit=r456`). Node pages use the current map view. The menu also works when navigating without a full page reload.
+
 ## Interface languages
 
 Russian and English. The language is chosen in the settings panel; on first launch it follows the browser and system language

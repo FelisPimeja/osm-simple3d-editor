@@ -111,8 +111,16 @@ export function trimTriangles(pos: ArrayLike<number>, from: number, to: number, 
 type V3 = [number, number, number];
 
 /** Стеклянные стены без совпадающих граней indoor-плана: у этих стен нет объёма для trimTriangles. */
-export function trimCoplanarWalls(pos: ArrayLike<number>, walls: ArrayLike<number>): number[] {
-  const blockers: { vs: V3[]; box: Box; min: number; max: number }[] = [];
+type Blocker = { vs: V3[]; box: Box; min: number; max: number };
+/** Подготовленные стены (без дублей сторон, с сеткой по плану): один массив стен приходит для каждой стеклянной части. */
+const preparedWalls = new WeakMap<object, { blockers: Blocker[]; grid: Map<number, number[]> }>();
+const WALL_CELL = 4;
+const wallCell = (x: number, y: number) => (x + 32768) * 65536 + (y + 32768);
+
+function prepareWalls(walls: ArrayLike<number>) {
+  const hit = typeof walls === 'object' ? preparedWalls.get(walls) : undefined;
+  if (hit) return hit;
+  const blockers: Blocker[] = [];
   const seen = new Set<string>();
   for (let i = 0; i + 8 < walls.length; i += 9) {
     const vs: V3[] = [[walls[i], walls[i + 1], walls[i + 2]], [walls[i + 3], walls[i + 4], walls[i + 5]], [walls[i + 6], walls[i + 7], walls[i + 8]]];
@@ -125,6 +133,22 @@ export function trimCoplanarWalls(pos: ArrayLike<number>, walls: ArrayLike<numbe
     blockers.push({ vs, box: [Math.min(...vs.map((v) => v[0])), Math.min(...vs.map((v) => v[1])), Math.max(...vs.map((v) => v[0])), Math.max(...vs.map((v) => v[1]))],
       min: Math.min(...vs.map((v) => v[2])), max: Math.max(...vs.map((v) => v[2])) });
   }
+  // Сетка по плану: стен на этаж (и этажах под вторым светом) — десятки тысяч, перебирать все на каждую грань долго
+  const grid = new Map<number, number[]>();
+  blockers.forEach((w, k) => {
+    for (let x = Math.floor((w.box[0] - FACE_EPS) / WALL_CELL); x <= Math.floor((w.box[2] + FACE_EPS) / WALL_CELL); x++)
+      for (let y = Math.floor((w.box[1] - FACE_EPS) / WALL_CELL); y <= Math.floor((w.box[3] + FACE_EPS) / WALL_CELL); y++)
+        (grid.get(wallCell(x, y)) ?? grid.set(wallCell(x, y), []).get(wallCell(x, y))!).push(k);
+  });
+  const out = { blockers, grid };
+  if (typeof walls === 'object') preparedWalls.set(walls, out);
+  return out;
+}
+
+export function trimCoplanarWalls(pos: ArrayLike<number>, walls: ArrayLike<number>): number[] {
+  const { blockers, grid } = prepareWalls(walls);
+  const CELL = WALL_CELL, key = wallCell;
+  const stamp = new Int32Array(blockers.length).fill(-1);
   const out: number[] = [];
   for (let i = 0; i + 8 < pos.length; i += 9) {
     const a: V3 = [pos[i], pos[i + 1], pos[i + 2]], b: V3 = [pos[i + 3], pos[i + 4], pos[i + 5]], c: V3 = [pos[i + 6], pos[i + 7], pos[i + 8]];
@@ -140,7 +164,11 @@ export function trimCoplanarWalls(pos: ArrayLike<number>, walls: ArrayLike<numbe
     const covered: ClipPolygon[] = [];
     let pieces: V3[][] | undefined;
     try {
-      for (const wall of blockers) {
+      const near: Blocker[] = [];
+      for (let x = Math.floor(box[0] / CELL); x <= Math.floor(box[2] / CELL); x++)
+        for (let y = Math.floor(box[1] / CELL); y <= Math.floor(box[3] / CELL); y++)
+          for (const k of grid.get(key(x, y)) ?? []) if (stamp[k] !== i) { stamp[k] = i; near.push(blockers[k]); }
+      for (const wall of near) {
         if (wall.box[0] > box[2] + FACE_EPS || wall.box[2] < box[0] - FACE_EPS || wall.box[1] > box[3] + FACE_EPS || wall.box[3] < box[1] - FACE_EPS || wall.min >= z1 || wall.max <= z0) continue;
         if (!wall.vs.every((v) => Math.abs((v[0] - a[0]) * nx + (v[1] - a[1]) * ny) <= FACE_EPS)) continue;
         const intersection = polygonClipping.intersection(snapAt([ring(tri)], 1e4), snapAt([ring(wall.vs.map(project))], 1e4));

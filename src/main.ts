@@ -4943,7 +4943,7 @@ function renderLevelsImpl() {
   const plan = level && planOf(level);
   // Видимые сквозь второй свет эскалаторы нижних этажей тоже нужны в сцене.
   const voids = level ? levelVoids(focus, levels, visibleIndoor, level.n) : [];
-  const escalators = visibleIndoor.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2
+  const allEscalators = visibleIndoor.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2
       && (f.tags.incline === 'up' || f.tags.incline === 'down'))
     .map((f) => {
       const low = levels.find((l) => l.n === Math.min(...f.levels));
@@ -4955,10 +4955,13 @@ function renderLevelsImpl() {
         return [a, mid, b].some((p) => v.polygon.some(([outer, ...holes]) =>
           pointInRing(p, outer) && !holes.some((hole) => pointInRing(p, hole))));
       }));
-      return f.levels.includes(level.n) || visibleBelow ? { key: f.key, line, bottom: low.floor, top: high.floor,
+      return { key: f.key, line, bottom: low.floor, top: high.floor,
         width: Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2)), incline: f.tags.incline,
-        pale: !f.levels.includes(level.n) } : undefined;
+        pale: !f.levels.includes(level.n), visible: f.levels.includes(level.n) || visibleBelow };
     }).filter((f): f is NonNullable<typeof f> => !!f);
+  // Все эскалаторы здания режут проёмы в планах нижних этажей (те не зависят от выбранного этажа и кешируются)
+  const cutEscalators = allEscalators.map(({ visible: _, ...e }) => e);
+  const escalators = cutEscalators.filter((_, i) => allEscalators[i].visible);
   const selectable = new Set([...onLevel.map((f) => f.key), ...escalators.map((e) => e.key)]);
   // Выбранные, которых на этаже больше нет (сменили level или этаж) — из выбора вон
   if (indoorSelection.some((s) => !selectable.has(s.key))) {
@@ -4998,7 +5001,7 @@ function renderLevelsImpl() {
   levelSignature = sig;
   overpassLayer.setLevel(plan && {
     ...plan, floor: level!.floor,
-    escalators,
+    escalators, cutEscalators,
     voids: voids.map((v) => v.polygon).flat(),
     // Пустота прорезает пол этажа и полы промежуточных этажей (у самого нижнего — пол атриума)
     voidCuts: voids.map((v) => ({

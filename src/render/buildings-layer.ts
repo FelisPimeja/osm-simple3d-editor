@@ -80,6 +80,8 @@ const INDOOR_FLOOR_MATERIAL = new THREE.MeshBasicMaterial({ vertexColors: true, 
 const INDOOR_CAP_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 /** Стена помещения совпадает с уже нарисованной (периметр, indoor=wall, соседнее помещение): ближе этого, м. */
 const WALL_MERGE_DIST = 0.3;
+/** Сколько бледных планов нижних этажей держать готовыми (см. palePlans). */
+const PALE_PLAN_CACHE = 24;
 /** То же для граней колонн и стен-полигонов: тоньше любой стены. */
 const SOLID_MERGE_DIST = 0.03;
 /** Внутренний контур помещения тоньше этого, м, — стена (объём с крышкой), а не проём. */
@@ -124,6 +126,8 @@ export interface IndoorLevel {
   /** Не рисуются, только подсветка выбора: помещения в несколько этажей выше своего пола (z — пол основания). */
   highlights?: IndoorItem[];
   escalators?: EscalatorItem[];
+  /** Все эскалаторы здания (и не видные с этажа): проёмы в планах нижних этажей. */
+  cutEscalators?: EscalatorItem[];
   doors?: LonLat[];
   /** Пустоты в перекрытии этажа: многоугольники lon/lat ([внешнее кольцо, ...дыры]). */
   voids?: LonLat[][][];
@@ -297,6 +301,8 @@ class MeshGroup {
   strokes?: THREE.LineSegments;
   /** Из чего посчитана оболочка (исходные треугольники, скрытые и плоские объекты, стекло) — не пересчитывать зря. */
   shellOf?: { bases: Float32Array[]; hidden: string };
+  /** Оболочка для планов этажей (buildShell) и по каким данным посчитана — между переключениями этажей не пересчитывается. */
+  planShell?: { bases: Float32Array[]; sig: string; shell: Shell };
   /** Висящие части в режиме этажей (ключ → низ, ниже которого части нет): см. floatingParts. */
   lift?: Map<string, number>;
   /** Кеш оболочки по частям (см. applyShell): sig — скрытые/голые объекты и стекло. */
@@ -894,6 +900,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       ESCALATOR_PALE_BELT, ESCALATOR_PALE_SIDE, ESCALATOR_PALE_STEP, ESCALATOR_PALE_BALUSTRADE, ESCALATOR_PALE_HANDRAIL, ESCALATOR_SELECTED, ESCALATOR_SELECTED_HANDRAIL]) m.clippingPlanes = planes;
     if (this.indoorObj) {
       this.indoorObj.parent?.remove(this.indoorObj);
+      // Кешированные планы нижних этажей — не освобождать: понадобятся при следующем переключении
+      for (const o of [...[...this.palePlans.values()].map((p) => p.group), ...[...this.paleLedges.values()].flatMap((l) => l.meshes)]) o.parent?.remove(o);
       this.indoorObj.traverse((o) => {
         if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments || o instanceof Line2) o.geometry.dispose();
         if (o instanceof Line2 && o.material !== ESCALATOR_HANDRAIL && o.material !== ESCALATOR_PALE_HANDRAIL && o.material !== ESCALATOR_SELECTED_HANDRAIL) o.material.dispose();
@@ -933,7 +941,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     const top = cut!;
     let shellCache: Shell | undefined;
-    const shell = () => (shellCache ??= buildShell(g));
+    const shell = () => (shellCache ??= planShell(g));
     // Внешний периметр этажа: объединение следов объектов здания, которые есть на высоте среза, — толстой линией
     const spans: ClipMulti = [];
     // Есть части — контур здания (outline) не в счёт: его след накрывает и то, что у частей лишь крыша
@@ -1017,11 +1025,11 @@ export class BuildingsLayer implements CustomLayerInterface {
       el.frustumCulled = false;
       root.add(el);
       // Нижние этажи видны целиком: отступ среза нужен только выбранному этажу, иначе между стенами щель.
-      for (const b of this.level.below) this.drawPlan(root, g, b.items, b.doors ?? [], b.cut, true, shell(), b.voids);
+      timed('этажи: планы нижних этажей', () => { for (const b of this.level!.below!) this.drawPlan(root, g, b.items, b.doors ?? [], b.cut, true, shell(), b.voids); }, () => `${this.level!.below!.length} этажей`);
     }
-    this.drawPlan(root, g, this.level.items, this.previewDoors(this.level.doors ?? []), top, false, shell());
-    this.drawEscalators(root, g);
-    this.rebuildGeometry(g);
+    timed('этажи: план выбранного этажа', () => this.drawPlan(root, g, this.level!.items, this.previewDoors(this.level!.doors ?? []), top, false, shell()));
+    timed('этажи: эскалаторы', () => this.drawEscalators(root, g));
+    timed('этажи: слияние геометрии', () => this.rebuildGeometry(g));
   }
 
   /** Эскалатор с горизонтальными ступенями, подступенками и закрытым корпусом. */
@@ -1210,8 +1218,130 @@ export class BuildingsLayer implements CustomLayerInterface {
    * План этажа: стены помещений и стены-линии с проёмами, полы по видам, крышки колонн; pale — бледный (этаж под вторым светом).
    * Стены и крышки не выше оболочки здания (shell): под скатом крыши стена срезается по скату.
    */
+  /** Бледные планы нижних этажей (видны сквозь второй свет): готовая геометрия по ключу входных данных, последние сверху. */
+  private palePlans = new Map<string, { group: THREE.Group; occluders: number[]; blockers: number[] }>();
+  /** Торцы площадок бледных планов: по ключу плана и пустотам выбранного этажа. */
+  private paleLedges = new Map<string, { meshes: THREE.Object3D[]; blockers: number[] }>();
+
   private drawPlan(root: THREE.Group, g: MeshGroup, items: IndoorItem[], doorList: LonLat[], top: number, pale: boolean, shell?: Shell, ownVoids?: LonLat[][][]) {
     if (!items.length) return;
+    const all = this.level?.escalators ?? [];
+    if (!pale) {
+      this.drawPlanBody(root, g, items, doorList, top, false, shell, all);
+      this.drawLedges(root, g, items, false, ownVoids);
+      return;
+    }
+    // Нижний этаж при переключении верхних не меняется — его план берём из кеша. Эскалаторы — только задевающие этаж
+    // (проём в стенах — до 2 м над ступенями, вырез в полу — где короб проходит сквозь пол): с остальными план тот же
+    const floor = items[0].z;
+    const escalators = (this.level?.cutEscalators ?? all).filter((e) => e.bottom - 0.7 <= top && e.top + 2.05 >= floor - 0.1);
+    const doorModels = [...this.doors, ...(this.level?.below ?? []).flatMap((b) => b.doorModels ?? [])]
+      .filter((d) => Math.abs(d.z - floor) < 0.1).map((d) => `${d.key}@${this.doorAt(d).join(',')}:${JSON.stringify(d.tags ?? {})}`);
+    const key = [objId(g), shell ? objId(shell) : 0, top, +this.graphics.edges, +glassEnabled,
+      items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.cutOnly}:${+!!it.areaLedge}`).join(','),
+      doorList.map((d) => d.join(',')).join(';'), doorModels.join(';'),
+      escalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.width}:${e.incline}:${objId(e.line)}`).join(',')].join('|');
+    let plan = this.palePlans.get(key);
+    if (plan) {
+      this.palePlans.delete(key);
+      for (const v of plan.occluders) this.indoorEdgeOccluders.push(v);
+      this.indoorGlassBlockers = this.indoorGlassBlockers.concat(plan.blockers);
+    } else {
+      const group = new THREE.Group();
+      const occ = this.indoorEdgeOccluders.length, blk = this.indoorGlassBlockers.length;
+      this.drawPlanBody(group, g, items, doorList, top, true, shell, escalators);
+      plan = { group, occluders: this.indoorEdgeOccluders.slice(occ), blockers: this.indoorGlassBlockers.slice(blk) };
+    }
+    this.palePlans.set(key, plan);
+    // Этажей бывает десяток с лишним; больше — старые вон
+    while (this.palePlans.size > PALE_PLAN_CACHE) {
+      const [old, entry] = this.palePlans.entries().next().value!;
+      this.palePlans.delete(old);
+      disposePlanGroup(entry.group);
+    }
+    root.add(plan.group);
+    // Торцы площадок зависят ещё и от пустот выбранного этажа
+    const ledgeKey = `${key}|${(ownVoids ?? []).map(objId).join(',')}|${(this.level?.voids ?? []).map(objId).join(',')}`;
+    let ledges = this.paleLedges.get(ledgeKey);
+    if (ledges) {
+      this.paleLedges.delete(ledgeKey);
+      this.indoorGlassBlockers = this.indoorGlassBlockers.concat(ledges.blockers);
+    } else {
+      const group = new THREE.Group();
+      const blk = this.indoorGlassBlockers.length;
+      timed('этажи: торцы площадок', () => this.drawLedges(group, g, items, true, ownVoids));
+      ledges = { meshes: [...group.children], blockers: this.indoorGlassBlockers.slice(blk) };
+    }
+    this.paleLedges.set(ledgeKey, ledges);
+    while (this.paleLedges.size > PALE_PLAN_CACHE * 2) {
+      const [old, entry] = this.paleLedges.entries().next().value!;
+      this.paleLedges.delete(old);
+      for (const m of entry.meshes) disposePlanGroup(m);
+    }
+    for (const m of ledges.meshes) root.add(m);
+  }
+
+  /** Нижняя грань свободного края площадки над пустотой (торец перекрытия). Зависит от пустот выбранного этажа — не кешируется. */
+  private drawLedges(root: THREE.Group, g: MeshGroup, items: IndoorItem[], pale: boolean, ownVoids?: LonLat[][][]) {
+    // Проверяем площадки после всех стен, включая стены помещений: дверь в стене не считается свободным краем.
+    const ledgeWalls = new Map<string, PlanSeg[]>();
+    const addLedgeWall = (a: Pt, b: Pt) => {
+      const s: PlanSeg = [...a, ...b];
+      for (const c of planCells(...s, 0)) (ledgeWalls.get(c) ?? ledgeWalls.set(c, []).get(c)!).push(s);
+    };
+    if (items.some((it) => it.kind === 'area' && it.areaLedge)) {
+      const floor = items[0].z;
+      for (const bi of g.items) {
+        if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi)) continue;
+        const h = computeHeights(bi.tags);
+        if ((g.lift?.get(bi.feature.key) ?? h.min) > floor + 0.1 || h.wallTop <= floor + 0.1) continue;
+        for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
+          const ring = r.map(g.toLocal);
+          for (let i = 0; i < ring.length; i++) addLedgeWall(ring[i], ring[(i + 1) % ring.length]);
+        }
+      }
+      for (const it of items) if (it.kind === 'room' || it.kind === 'wall' || it.kind === 'column') {
+        for (const p of it.polygons) for (const r of it.line ? [p.outer] : [p.outer, ...p.inners]) {
+          const ring = r.map(g.toLocal), n = it.line ? ring.length - 1 : ring.length;
+          for (let i = 0; i < n; i++) addLedgeWall(ring[i], ring[(i + 1) % ring.length]);
+        }
+      }
+    }
+    for (const it of items) {
+      if (it.kind !== 'area' || !it.areaLedge || it.line) continue;
+      const floorVoids = ownVoids ?? (Math.abs(it.z - this.level!.floor) < 1e-3 ? this.level!.voids ?? []
+        : (this.level!.voidCuts ?? []).filter((c) => c.zs.some((z) => Math.abs(z - it.z) < 1e-3)).flatMap((c) => c.polygon));
+      // Самый нижний видимый этаж может не иметь собственного проёма. Его свободный край всё равно
+      // виден из атриума сверху; соседний размеченный пол, в отличие от пустоты, исключает торец.
+      const voids = pale ? [...floorVoids, ...(this.level!.voids ?? [])] : floorVoids;
+      if (!voids.length) continue;
+      const localVoids = voids.map(([outer, ...holes]) => ({ outer: outer.map(g.toLocal), inners: holes.map((r) => r.map(g.toLocal)) }));
+      const adjacentFloors = items.filter((f) => !f.line && (f.kind === 'area' || f.kind === 'room' || f.kind === 'corridor'))
+        .flatMap((f) => f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })));
+      const pos: number[] = [];
+      for (const p of it.polygons) {
+        const underside = areaLedgeTriangles({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) },
+          localVoids, planFloorZ(it), (a, b) => {
+            const near = new Set<PlanSeg>();
+            for (const c of planCells(...a, ...b, WALL_MERGE_DIST)) for (const s of ledgeWalls.get(c) ?? []) near.add(s);
+            return uncoveredSpans(...a, ...b, near);
+          }, adjacentFloors);
+        for (const v of underside) pos.push(v);
+      }
+      if (!pos.length) continue;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, pale ? INDOOR_PALE_WALL : INDOOR_SLAB_MATERIAL);
+      mesh.name = 'indoor-area-underside';
+      mesh.userData.key = it.key;
+      mesh.frustumCulled = false;
+      root.add(mesh);
+      this.indoorGlassBlockers = this.indoorGlassBlockers.concat(pos);
+    }
+  }
+
+  private drawPlanBody(root: THREE.Group, g: MeshGroup, items: IndoorItem[], doorList: LonLat[], top: number, pale: boolean, shell: Shell | undefined, escalators: NonNullable<IndoorLevel['escalators']>) {
     const capPos: number[] = [], floorPos: number[] = [], floorCol: number[] = [];
     const white = new THREE.Color(0xffffff);
     const fill = (outer: Pt[], holes: Pt[][], z: number | ((x: number, y: number) => number), colour?: number) => {
@@ -1240,8 +1370,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
     };
     // Сначала этажи целиком, затем площадки, коридоры и помещения — каждый следующий чуть выше
-    const order: IndoorKind[] = ['level', 'area', 'corridor', 'room', 'column', 'wall'];
-    const floorZ = (it: IndoorItem) => it.z + 0.02 + Math.min(order.indexOf(it.kind), 3) * 0.01;
+    const order = PLAN_ORDER;
+    const floorZ = planFloorZ;
     const floorLevel = items[0]?.z ?? 0;
     const floorPolygons = items.filter(it => !it.line && it.kind !== 'wall' && it.kind !== 'column' && !it.shaft)
       .flatMap(it => it.polygons.map(p => ({ it, p, outer: p.outer.map(g.toLocal), inners: p.inners.map(r => r.map(g.toLocal)), z: floorZ(it) })));
@@ -1249,7 +1379,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Под моделью эскалатора, проходящей сквозь пол, — вырез (площадка не ложится на пол, короб уходит вниз)
     const shaftHoles = items.filter(it => it.shaft).flatMap(it => it.polygons.map(p =>
       [p.outer, ...p.inners].map(r => { const l = r.map(g.toLocal); return [...l, l[0]]; }) as ClipMulti[number]));
-    const escalatorHoles = [...escalatorFloorHoles((this.level?.escalators ?? []).map(e => ({ ...e, line: e.line.map(g.toLocal) })), items[0]?.z ?? 0), ...shaftHoles];
+    const escalatorHoles = [...escalatorFloorHoles(escalators.map(e => ({ ...e, line: e.line.map(g.toLocal) })), items[0]?.z ?? 0), ...shaftHoles];
     if (escalatorHoles.length) visibleFloors.forEach((pieces, i) => {
       visibleFloors[i] = pieces.flatMap(f => polygonClipping.difference([[...f.outer, f.outer[0]], ...f.inners.map(r => [...r, r[0]])] as ClipMulti[number], escalatorHoles)
         .map(p => ({ outer: p[0].slice(0, -1) as Pt[], inners: p.slice(1).map(r => r.slice(0, -1) as Pt[]), z: f.z })));
@@ -1276,7 +1406,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       return WHITE_WALL;
     };
     // Рёбра стен (опция «рёбра»): низ и вертикали в концах и на изломах — по направлениям стен в каждой точке
-    const escalatorCuts = (this.level?.escalators ?? []).map(e => ({ ...e, line: e.line.map(g.toLocal) }));
+    const escalatorCuts = escalators.map(e => ({ ...e, line: e.line.map(g.toLocal) }));
     const openingMasks: number[] = [];
     /** Контур проёмов эскалаторов — добавляется после обрезки рёбер масками (иначе их срежет). */
     const openingEdges: number[] = [];
@@ -1422,15 +1552,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     // Уже стоящие стены: периметр объектов здания и стены-линии; стены помещений, совпадающие с ними, — пропускаем
     // Сетка 4 м: стена сравнивается только со стенами из соседних ячеек (иначе тысячи × тысячи сравнений)
-    type Seg = [number, number, number, number];
+    type Seg = PlanSeg;
     const grid = new Map<string, Seg[]>();
-    const CELL = 4;
-    const cells = (x0: number, y0: number, x1: number, y1: number, pad: number) => {
-      const out: string[] = [];
-      for (let i = Math.floor((Math.min(x0, x1) - pad) / CELL); i <= Math.floor((Math.max(x0, x1) + pad) / CELL); i++)
-        for (let j = Math.floor((Math.min(y0, y1) - pad) / CELL); j <= Math.floor((Math.max(y0, y1) + pad) / CELL); j++) out.push(`${i},${j}`);
-      return out;
-    };
+    const cells = planCells;
     const taken = {
       push(sg: Seg) { for (const c of cells(...sg, 0)) (grid.get(c) ?? grid.set(c, []).get(c)!).push(sg); },
       near(x0: number, y0: number, x1: number, y1: number): Set<Seg> {
@@ -1464,36 +1588,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
       }
     }
-    /** Участки ребра a→b (доли 0…1), не закрытые уже стоящими стенами, — стена ставится только на них. */
-    /** mergeDist — насколько далеко может стоять стена, закрывающая ребро. */
-    const uncovered = (ax: number, ay: number, bx: number, by: number, segments?: Iterable<Seg>, mergeDist = WALL_MERGE_DIST): [number, number][] => {
-      const len = Math.hypot(bx - ax, by - ay);
-      if (len < 1e-6) return [];
-      const dx = (bx - ax) / len, dy = (by - ay) / len;
-      const cover: [number, number][] = [];
-      for (const [px, py, qx, qy] of segments ?? taken.near(ax, ay, bx, by)) {
-        const l = Math.hypot(qx - px, qy - py);
-        if (l < 1e-6 || Math.abs(((qx - px) * dx + (qy - py) * dy) / l) < WALL_MERGE_COS) continue;
-        // Оба конца отрезка — близко к прямой ребра
-        if (Math.abs((px - ax) * dy - (py - ay) * dx) > mergeDist || Math.abs((qx - ax) * dy - (qy - ay) * dx) > mergeDist) continue;
-        const t0 = ((px - ax) * dx + (py - ay) * dy) / len, t1 = ((qx - ax) * dx + (qy - ay) * dy) / len;
-        const lo = Math.max(0, Math.min(t0, t1)), hi = Math.min(1, Math.max(t0, t1));
-        if ((hi - lo) * len > 1e-6) cover.push([lo, hi]);
-      }
-      // Короткий исходный сегмент — тоже стена. Порог 5 см относится
-      // только к остаточным щелям после вычитания перекрывающих стен.
-      if (!cover.length) return [[0, 1]];
-      cover.sort((x, y) => x[0] - y[0]);
-      const out: [number, number][] = [];
-      const minGap = 0.05 / len; // щели короче 5 см — не стена
-      let at = 0;
-      for (const [lo, hi] of cover) {
-        if (lo - at > minGap) out.push([at, lo]);
-        at = Math.max(at, hi);
-      }
-      if (1 - at > minGap) out.push([at, 1]);
-      return out;
-    };
+    /** Участки ребра a→b, не закрытые уже стоящими стенами (по умолчанию — taken), — стена ставится только на них. */
+    const uncovered = (ax: number, ay: number, bx: number, by: number, segments?: Iterable<Seg>, mergeDist = WALL_MERGE_DIST) =>
+      uncoveredSpans(ax, ay, bx, by, segments ?? taken.near(ax, ay, bx, by), mergeDist);
     /** Стена от пола z0 до среза, обрезанная оболочкой здания. */
     const shellWall = (ax: number, ay: number, bx: number, by: number, z0: number) => {
       for (const [t0, t1, za, zb] of shellPieces(shell, ax, ay, bx, by, z0, top))
@@ -1617,62 +1714,6 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (e) e.z1 = Math.min(e.z1, lintel);
         }
       }
-    }
-    // Проверяем площадки после всех стен, включая стены помещений: дверь в стене не считается свободным краем.
-    const ledgeWalls = new Map<string, Seg[]>();
-    const addLedgeWall = (a: Pt, b: Pt) => {
-      const s: Seg = [...a, ...b];
-      for (const c of cells(...s, 0)) (ledgeWalls.get(c) ?? ledgeWalls.set(c, []).get(c)!).push(s);
-    };
-    if (items.some((it) => it.kind === 'area' && it.areaLedge)) {
-      const floor = items[0].z;
-      for (const bi of g.items) {
-        if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi)) continue;
-        const h = computeHeights(bi.tags);
-        if ((g.lift?.get(bi.feature.key) ?? h.min) > floor + 0.1 || h.wallTop <= floor + 0.1) continue;
-        for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
-          const ring = r.map(g.toLocal);
-          for (let i = 0; i < ring.length; i++) addLedgeWall(ring[i], ring[(i + 1) % ring.length]);
-        }
-      }
-      for (const it of items) if (it.kind === 'room' || it.kind === 'wall' || it.kind === 'column') {
-        for (const p of it.polygons) for (const r of it.line ? [p.outer] : [p.outer, ...p.inners]) {
-          const ring = r.map(g.toLocal), n = it.line ? ring.length - 1 : ring.length;
-          for (let i = 0; i < n; i++) addLedgeWall(ring[i], ring[(i + 1) % ring.length]);
-        }
-      }
-    }
-    for (const it of items) {
-      if (it.kind !== 'area' || !it.areaLedge || it.line) continue;
-      const floorVoids = ownVoids ?? (Math.abs(it.z - this.level!.floor) < 1e-3 ? this.level!.voids ?? []
-        : (this.level!.voidCuts ?? []).filter((c) => c.zs.some((z) => Math.abs(z - it.z) < 1e-3)).flatMap((c) => c.polygon));
-      // Самый нижний видимый этаж может не иметь собственного проёма. Его свободный край всё равно
-      // виден из атриума сверху; соседний размеченный пол, в отличие от пустоты, исключает торец.
-      const voids = pale ? [...floorVoids, ...(this.level!.voids ?? [])] : floorVoids;
-      if (!voids.length) continue;
-      const localVoids = voids.map(([outer, ...holes]) => ({ outer: outer.map(g.toLocal), inners: holes.map((r) => r.map(g.toLocal)) }));
-      const adjacentFloors = items.filter((f) => !f.line && (f.kind === 'area' || f.kind === 'room' || f.kind === 'corridor'))
-        .flatMap((f) => f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })));
-      const pos: number[] = [];
-      for (const p of it.polygons) {
-        const underside = areaLedgeTriangles({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) },
-          localVoids, floorZ(it), (a, b) => {
-            const near = new Set<Seg>();
-            for (const c of cells(...a, ...b, WALL_MERGE_DIST)) for (const s of ledgeWalls.get(c) ?? []) near.add(s);
-            return uncovered(...a, ...b, near);
-          }, adjacentFloors);
-        for (const v of underside) pos.push(v);
-      }
-      if (!pos.length) continue;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-      geo.computeVertexNormals();
-      const mesh = new THREE.Mesh(geo, pale ? INDOOR_PALE_WALL : INDOOR_SLAB_MATERIAL);
-      mesh.name = 'indoor-area-underside';
-      mesh.userData.key = it.key;
-      mesh.frustumCulled = false;
-      root.add(mesh);
-      this.indoorGlassBlockers = this.indoorGlassBlockers.concat(pos);
     }
     if (!pale) this.indoorWallPositions = walls;
     if (this.graphics.edges) for (const value of walls) this.indoorEdgeOccluders.push(value);
@@ -3051,7 +3092,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Стеклянные диапазоны — в отдельный буфер, в общем остаются нулями
       for (const [a, b] of glassRanges(it)) positions.fill(0, (it.start + a) * 3, (it.start + b) * 3);
     }
-    this.cutVoids(g, positions);
+    timed('геометрия: пустоты', () => this.cutVoids(g, positions));
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(total * 3), 3));
@@ -3305,9 +3346,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     const rings = polygon.map((poly) => poly.map((r) => r.map(g.toLocal)));
     const inside = (x: number, y: number) => rings.some(([outer, ...holes]) => pointInLocalRing([x, y], outer) && !holes.some((h) => pointInLocalRing([x, y], h)));
     const near = (z: number) => zs.some((h) => Math.abs(z - h) <= VOID_FACE_DZ);
+    // Габарит пустоты: треугольники в стороне от неё — без точных проверок
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const poly of rings) for (const [x, y] of poly[0] ?? []) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
     for (let i = 0; i + 8 < pos.length; i += 9) {
       const z0 = pos[i + 2], z1 = pos[i + 5], z2 = pos[i + 8];
       if (Math.abs(z0 - z1) > 1e-3 || Math.abs(z0 - z2) > 1e-3 || !near(z0)) continue;
+      if (Math.max(pos[i], pos[i + 3], pos[i + 6]) < x0 || Math.min(pos[i], pos[i + 3], pos[i + 6]) > x1
+        || Math.max(pos[i + 1], pos[i + 4], pos[i + 7]) < y0 || Math.min(pos[i + 1], pos[i + 4], pos[i + 7]) > y1) continue;
       // Любое пересечение с пустотой (центр длинного узкого треугольника бывает снаружи): снаружи пустоты
       // место грани закрывает плита перекрытия этажа
       const t: Pt[] = [[pos[i], pos[i + 1]], [pos[i + 3], pos[i + 4]], [pos[i + 6], pos[i + 7]]];
@@ -3879,7 +3925,7 @@ function buildShell(g: MeshGroup): Shell {
       const roof = new Map<number, { score: number; z: number }>();
       for (const t of triGrid.get(`${Math.floor(x / SHELL_CELL)},${Math.floor(y / SHELL_CELL)}`) ?? []) {
         const o = t * 9;
-        const [x0, y0, z0t, x1, y1, z1t, x2, y2, z2t] = tris.slice(o, o + 9);
+        const x0 = tris[o], y0 = tris[o + 1], z0t = tris[o + 2], x1 = tris[o + 3], y1 = tris[o + 4], z1t = tris[o + 5], x2 = tris[o + 6], y2 = tris[o + 7], z2t = tris[o + 8];
         const d = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
         const l0 = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / d, l1 = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / d, l2 = 1 - l0 - l1;
         const score = Math.min(0, l0, l1, l2);
@@ -3914,10 +3960,94 @@ function buildShell(g: MeshGroup): Shell {
   };
 }
 
+/** Отрезок стены на плане (x0, y0, x1, y1), локальные метры. */
+type PlanSeg = [number, number, number, number];
+/** Клетки сетки 4 м, которые задевает прямоугольник отрезка (с отступом pad). */
+function planCells(x0: number, y0: number, x1: number, y1: number, pad: number): string[] {
+  const out: string[] = [];
+  for (let i = Math.floor((Math.min(x0, x1) - pad) / 4); i <= Math.floor((Math.max(x0, x1) + pad) / 4); i++)
+    for (let j = Math.floor((Math.min(y0, y1) - pad) / 4); j <= Math.floor((Math.max(y0, y1) + pad) / 4); j++) out.push(`${i},${j}`);
+  return out;
+}
+
+/** Участки ребра a→b (доли 0…1), не закрытые уже стоящими стенами, — стена ставится только на них. */
+/** mergeDist — насколько далеко может стоять стена, закрывающая ребро. */
+function uncoveredSpans(ax: number, ay: number, bx: number, by: number, segments: Iterable<PlanSeg>, mergeDist = WALL_MERGE_DIST): [number, number][] {
+  const len = Math.hypot(bx - ax, by - ay);
+  if (len < 1e-6) return [];
+  const dx = (bx - ax) / len, dy = (by - ay) / len;
+  const cover: [number, number][] = [];
+  for (const [px, py, qx, qy] of segments) {
+    const l = Math.hypot(qx - px, qy - py);
+    if (l < 1e-6 || Math.abs(((qx - px) * dx + (qy - py) * dy) / l) < WALL_MERGE_COS) continue;
+    // Оба конца отрезка — близко к прямой ребра
+    if (Math.abs((px - ax) * dy - (py - ay) * dx) > mergeDist || Math.abs((qx - ax) * dy - (qy - ay) * dx) > mergeDist) continue;
+    const t0 = ((px - ax) * dx + (py - ay) * dy) / len, t1 = ((qx - ax) * dx + (qy - ay) * dy) / len;
+    const lo = Math.max(0, Math.min(t0, t1)), hi = Math.min(1, Math.max(t0, t1));
+    if ((hi - lo) * len > 1e-6) cover.push([lo, hi]);
+  }
+  // Короткий исходный сегмент — тоже стена. Порог 5 см относится
+  // только к остаточным щелям после вычитания перекрывающих стен.
+  if (!cover.length) return [[0, 1]];
+  cover.sort((x, y) => x[0] - y[0]);
+  const out: [number, number][] = [];
+  const minGap = 0.05 / len; // щели короче 5 см — не стена
+  let at = 0;
+  for (const [lo, hi] of cover) {
+    if (lo - at > minGap) out.push([at, lo]);
+    at = Math.max(at, hi);
+  }
+  if (1 - at > minGap) out.push([at, 1]);
+  return out;
+}
+
+/** Порядок слоёв пола плана: этаж целиком, площадки, коридоры, помещения — каждый следующий чуть выше. */
+const PLAN_ORDER: IndoorKind[] = ['level', 'area', 'corridor', 'room', 'column', 'wall'];
+const planFloorZ = (it: IndoorItem) => it.z + 0.02 + Math.min(PLAN_ORDER.indexOf(it.kind), 3) * 0.01;
+
+/** Номер объекта для ключей кешей (по идентичности). */
+const objIds = new WeakMap<object, number>();
+let nextObjId = 0;
+function objId(o: object): number {
+  let id = objIds.get(o);
+  if (id === undefined) objIds.set(o, id = ++nextObjId);
+  return id;
+}
+
+/** Освободить геометрию плана этажа (материалы бледных планов общие). */
+function disposePlanGroup(group: THREE.Object3D) {
+  group.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose(); });
+}
+
+/** Оболочка группы для планов этажей: та же, пока не менялись треугольники, скрытые и висящие части. */
+function planShell(g: MeshGroup): Shell {
+  const bases = g.items.map((it) => it.full?.positions ?? it.positions);
+  const sig = `${[...g.hidden].sort().join(',')}|${[...g.flat].sort().join(',')}|${[...g.lift ?? []].map(([k, v]) => `${k}:${v}`).join(',')}`;
+  const hit = g.planShell;
+  if (hit && hit.sig === sig && hit.bases.length === bases.length && hit.bases.every((b, i) => b === bases[i])) return hit.shell;
+  const shell = buildShell(g);
+  g.planShell = { bases, sig, shell };
+  return shell;
+}
+
+/** Куски стен под оболочкой: те же стены считаются и для каждого видимого сквозь второй свет этажа, и при каждом переключении. */
+const shellPiecesCache = new WeakMap<Shell, Map<string, [number, number, number, number][]>>();
+
 /** Стена a→b от пола z0 до top под оболочкой: куски [t0, t1, верх в t0, верх в t1]; где крыша ниже пола — стены нет. */
 function shellPieces(shell: Shell | undefined, ax: number, ay: number, bx: number, by: number, z0: number, top: number): [number, number, number, number][] {
   const len = Math.hypot(bx - ax, by - ay);
   if (!shell || len < 1e-6) return [[0, 1, top, top]];
+  const memo = shellPiecesCache.get(shell) ?? shellPiecesCache.set(shell, new Map()).get(shell)!;
+  const key = `${ax},${ay},${bx},${by},${z0},${top}`;
+  const hit = memo.get(key);
+  if (hit) return hit;
+  const pieces = shellPiecesImpl(shell, ax, ay, bx, by, z0, top, len);
+  if (memo.size > 200000) memo.clear();
+  memo.set(key, pieces);
+  return pieces;
+}
+
+function shellPiecesImpl(shell: Shell, ax: number, ay: number, bx: number, by: number, z0: number, top: number, len: number): [number, number, number, number][] {
   const ts = [0, ...shell.breaks(ax, ay, bx, by), 1].filter((t, i, a) => i === 0 || t - a[i - 1] > 1e-9);
   const h = (t: number) => shell.at(ax + (bx - ax) * t, ay + (by - ay) * t, z0) ?? top;
   const pieces: [number, number, number, number][] = [];

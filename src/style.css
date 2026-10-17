@@ -304,7 +304,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .maplibregl-ctrl-group.basemap-group { position: relative; }
 .maplibregl-ctrl-group button.maplibregl-ctrl-basemap { color: #333; }
 .maplibregl-ctrl-basemap svg { width: 20px; height: 20px; margin: auto; display: block; }
-.maplibregl-ctrl-basemap.active { color: #2f7cff; }
+.maplibregl-ctrl-group button.maplibregl-ctrl-basemap.active { color: #2f7cff; }
 .basemap-menu { position: absolute; right: calc(100% + 6px); top: 0; min-width: 230px; padding: 6px 8px; border-radius: 4px;
   background: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.1); font: 12px/1.4 system-ui, sans-serif; color: #222; }
 .basemap-menu[hidden] { display: none; }
@@ -317,6 +317,10 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .basemap-offset-btn:hover { border-color: #d1d5db; color: #222; }
 .basemap-offset-btn.active { color: #2f7cff; }
 .basemap-offset-btn[hidden] { display: none; }
+.basemap-menu .basemap-alpha { padding: 0 0 4px 20px; cursor: default; font-size: 12px; color: #4b5563; }
+.basemap-menu .basemap-alpha[hidden] { display: none; }
+.basemap-alpha input { flex: 1; min-width: 90px; }
+.basemap-alpha span { width: 34px; text-align: right; }
 .basemap-offset-btn svg { width: 14px; height: 14px; display: block; }
 /* Панель смещения снимка */
 .offset-panel { position: absolute; z-index: 21; width: 250px; padding: 8px 10px; border-radius: 6px;

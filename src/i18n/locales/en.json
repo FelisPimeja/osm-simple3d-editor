@@ -917,5 +917,8 @@
   "Ванная": "Bathroom",
   "{tag} — устаревший тег, замены нет: проверьте, нужен ли он.": "{tag} is a deprecated tag with no replacement: check whether it is needed.",
   "{tag} — устаревший тег, сейчас пишут {replace}.": "{tag} is a deprecated tag; use {replace} instead.",
-  "заменить на {replace}": "replace with {replace}"
+  "заменить на {replace}": "replace with {replace}",
+  "Настройки слоя зданий: прозрачность": "Buildings layer settings: transparency",
+  "3D-здания": "3D buildings",
+  "Только рёбра зданий, без заливки (W)": "Building edges only, no fill (W)"
 }

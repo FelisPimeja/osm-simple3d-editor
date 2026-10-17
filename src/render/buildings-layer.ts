@@ -200,7 +200,10 @@ function cornersOnly(ring: Pt[]): Pt[] {
   }
   return pts;
 }
-const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: 0.55 });
+const EDGE_OPACITY = 0.55;
+const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: EDGE_OPACITY });
+/** Проход отрисовки: обычный или режим контуров (грани зданий только пишут глубину). */
+type RenderPass = 'all' | 'wire';
 /** Рёбра объёмов с проблемами проверки («Подсветить все»): ошибки — красные, предупреждения — оранжевые; толщина, px. */
 const ISSUE_COLOUR = { error: 0xff1a1a, warning: 0xff8a00 };
 const ISSUE_WIDTH_PX = 3;
@@ -214,15 +217,14 @@ const FIX_HOLD_FROM = 500, FIX_MORPH = 900, FIX_HOLD_TO = 900;
 const ISSUE_XRAY_WIDTH_PX = 1.5;
 /**
  * Скрытые рёбра выделенного в режиме здания: пунктир рисуется только там, где ребро закрыто
- * (глубина больше записанной). Линии чуть подвинуты к камере — видимые рёбра не мерцают пунктиром.
+ * (глубина больше записанной). Видимые рёбра пунктиром не мерцают: грани отодвинуты от камеры (polygonOffset).
+ * Сдвигать сами линии к камере нельзя: глубина MapLibre сильно нелинейна, и сдвиг на вид небольшой — это метры,
+ * пунктир пропадал там, где закрывающая грань близко к ребру (у углов).
  */
 const HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
-  color: 0xd2401e, dashSize: 0.25, gapSize: 0.15, transparent: true, opacity: 0.9,
+  color: 0x2563eb, dashSize: 0.25, gapSize: 0.15, transparent: true, opacity: 0.9,
   depthFunc: THREE.GreaterDepth, depthWrite: false,
 });
-HIDDEN_EDGE_MATERIAL.onBeforeCompile = (sh) => {
-  sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  gl_Position.z -= 0.001 * gl_Position.w;');
-};
 /** Цвет берётся из вершин (стены/крыша, подсветка, затемнение) — один материал на всё. */
 // polygonOffset отодвигает грани от камеры: рёбра на плоскостях (основание части на крыше другой) не тонут в них
 const MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
@@ -233,6 +235,24 @@ const MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE
 const THIN_MATERIAL = MATERIAL.clone();
 THIN_MATERIAL.polygonOffsetFactor = -1;
 THIN_MATERIAL.polygonOffsetUnits = -4;
+/** Режим контуров: грани только пишут глубину — рёбра за ними скрыты, а самих граней не видно. */
+const DEPTH_ONLY_MATERIAL = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+/** Видимые рёбра в режиме контуров — темнее обычных: кроме них от здания может ничего не остаться. */
+const WIRE_EDGE_OPACITY = 0.9;
+/** Рёбра выделенного в режиме контуров: цвет и толщина, px. */
+const SELECTED_EDGE_COLOUR = 0x2563eb;
+const SELECTED_EDGE_WIDTH_PX = 2;
+/**
+ * Заливка выделенного в режиме контуров: полупрозрачная голубая, только ближние грани (глубина та же, что у граней,
+ * которые пишет DEPTH_ONLY_MATERIAL, — те же polygonOffset).
+ */
+const SELECTED_FILL_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.25, side: THREE.DoubleSide,
+  depthWrite: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+/** Скрытые рёбра выделенного на карте: пунктир крупнее, чем в режиме здания (видно издалека), синий — как выделение. */
+const MAP_HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
+  color: 0x2563eb, dashSize: 1, gapSize: 0.7, transparent: true, opacity: 0.8,
+  depthFunc: THREE.GreaterDepth, depthWrite: false,
+});
 /** Бюджет асинхронной сборки группы на кадр, мс. */
 const FRAME_BUDGET_MS = 8;
 
@@ -391,6 +411,13 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Треугольников в последнем кадре — для оценки производительности. */
   lastTriangles = 0;
   visible = true;
+  /** Непрозрачность слоя (1 — как есть): здания рисуются в отдельный буфер и кладутся на карту с этой альфой. */
+  private opacity = 1;
+  /** Режим контуров: заливки зданий нет (грани только закрывают рёбра за собой), рёбра — темнее. */
+  private wireframe = false;
+  /** Контуры из настроек графики (в режиме контуров рёбра есть всегда). */
+  private userEdges = false;
+  private composite?: { target: THREE.WebGLRenderTarget; scene: THREE.Scene; camera: THREE.OrthographicCamera; material: THREE.MeshBasicMaterial };
   /** Режим одного здания: рисуется и выбирается только группа FOCUS_GROUP (здание + земля). */
   private focused = false;
   /** Матрица проекции MapLibre из последнего кадра — чтобы проецировать сцену режима здания до её первой отрисовки. */
@@ -411,16 +438,84 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   onRemove() {
+    if (this.composite) { this.composite.target.dispose(); this.composite.material.dispose(); this.composite = undefined; }
     this.renderer?.dispose();
     this.renderer = undefined;
   }
 
   render(_gl: WebGL2RenderingContext, options: CustomRenderMethodInput) {
     if (!this.visible || !this.renderer) return;
-    timed(`${this.id}: кадр (CPU)`, () => this.renderGroups(options), () => `${this.groups.size} групп`);
+    timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
   }
 
-  private renderGroups(options: CustomRenderMethodInput) {
+  /** Куда рисуются группы: буфер прозрачного слоя или сама карта. */
+  private drawTarget: THREE.WebGLRenderTarget | null = null;
+
+  /** resetState three сбрасывает и цель отрисовки — вернуть её. */
+  private resetState() {
+    this.renderer!.resetState();
+    if (this.drawTarget) this.renderer!.setRenderTarget(this.drawTarget);
+  }
+
+  setOpacity(opacity: number) {
+    this.opacity = Math.min(1, Math.max(0, opacity));
+    this.map?.triggerRepaint();
+  }
+
+  /**
+   * Прозрачный слой: просто прозрачные материалы просвечивали бы стенами и частями друг сквозь друга (сортировка
+   * по объектам, а не по треугольникам) — рисуем здания непрозрачными в свой буфер и кладём его на карту целиком.
+   */
+  private renderTranslucent(options: CustomRenderMethodInput) {
+    if (!this.wireframe) { this.renderFill(options, 'all'); return; }
+    EDGE_MATERIAL.opacity = WIRE_EDGE_OPACITY;
+    try { this.renderGroups(options, 'wire'); } finally { EDGE_MATERIAL.opacity = EDGE_OPACITY; }
+  }
+
+  /** Здания с прозрачностью слоя: непрозрачно — прямо на карту, иначе — через свой буфер. */
+  private renderFill(options: CustomRenderMethodInput, pass: RenderPass) {
+    const renderer = this.renderer!;
+    if (this.opacity >= 1) { this.renderGroups(options, pass); return; }
+    if (this.opacity <= 0) { this.lastTriangles = 0; return; }
+    const gl = renderer.getContext();
+    const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    let c = this.composite;
+    if (!c) {
+      const target = new THREE.WebGLRenderTarget(w, h, { samples: 4, type: THREE.HalfFloatType });
+      const material = new THREE.MeshBasicMaterial({ map: target.texture, transparent: true, depthTest: false, depthWrite: false, premultipliedAlpha: true });
+      const scene = new THREE.Scene();
+      scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material));
+      c = this.composite = { target, scene, material, camera: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1) };
+    }
+    if (c.target.width !== w || c.target.height !== h) c.target.setSize(w, h);
+    this.drawTarget = c.target;
+    this.resetState();
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, true, true);
+    try { this.renderGroups(options, pass); } finally { this.drawTarget = null; }
+    c.material.opacity = this.opacity;
+    renderer.resetState();
+    renderer.render(c.scene, c.camera);
+  }
+
+  /** Режим контуров: грани зданий группы — только в глубину. Возвращает, как вернуть сцену обратно. */
+  private filterPass(g: MeshGroup, pass: RenderPass): () => void {
+    if (pass === 'all') return () => {};
+    DEPTH_ONLY_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
+    const swapped = [g.mesh, g.glass].filter((o): o is THREE.Mesh => !!o).map((o) => [o, o.material] as const);
+    for (const [o] of swapped) o.material = DEPTH_ONLY_MATERIAL;
+    return () => { for (const [o, m] of swapped) o.material = m; };
+  }
+
+  /** Режим контуров вкл/выкл. */
+  setWireframe(on: boolean) {
+    if (on === this.wireframe) return;
+    this.wireframe = on;
+    this.setGraphics({ ...this.graphics, edges: this.userEdges });
+    this.updateHiddenEdges();
+  }
+
+  private renderGroups(options: CustomRenderMethodInput, pass: RenderPass = 'all') {
     const renderer = this.renderer!;
     const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
     this.lastMain = main.clone();
@@ -433,8 +528,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Выбор и камера берут projectionMatrix с глубиной MapLibre — сжатая только на время отрисовки
       const pick = g.camera.projectionMatrix = this.lastMain.clone().multiply(g.model);
       g.camera.projectionMatrix = main.clone().multiply(g.model);
-      renderer.resetState();
-      renderer.render(g.scene, g.camera);
+      this.resetState();
+      const restore = this.filterPass(g, pass);
+      try { renderer.render(g.scene, g.camera); } finally { restore(); }
       g.camera.projectionMatrix = pick;
       triangles += renderer.info.render.triangles;
     }
@@ -443,7 +539,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const t of this.trees.values()) {
         t.camera.projectionMatrix = main.clone().multiply(t.model);
         if (!t.prepare(height)) continue;
-        renderer.resetState();
+        this.resetState();
         renderer.render(t.scene, t.camera);
         triangles += renderer.info.render.triangles;
       }
@@ -485,8 +581,6 @@ export class BuildingsLayer implements CustomLayerInterface {
   setFocus(features: Feature3D[] | undefined, flat: Iterable<string> = []) {
     this.sketching = false;
     this.moveGuide = undefined;
-    this.hiddenEdges?.geometry.dispose();
-    this.hiddenEdges = undefined;
     this.movingEdges?.geometry.dispose();
     this.movingEdges = undefined;
     this.removeGroup(FOCUS_GROUP);
@@ -2337,7 +2431,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.movingEdges = undefined;
       this.applyEdges(g);
     }
-    for (const obj of [this.movingEdges, this.hiddenEdges]) {
+    for (const obj of [this.movingEdges, ...(this.selEdges.get(g) ?? [])]) {
       if (!obj) continue;
       obj.matrixAutoUpdate = false;
       obj.matrix.copy(m ?? new THREE.Matrix4());
@@ -2392,24 +2486,69 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
-  private hiddenEdges?: THREE.LineSegments;
+  /** Рёбра выделенного по группам: пунктир закрытых другими объектами и (в режиме контуров) синие видимые. */
+  private selEdges = new Map<MeshGroup, (THREE.LineSegments | LineSegments2 | THREE.Mesh)[]>();
   private movingEdges?: THREE.LineSegments;
 
-  /** Пунктир закрытых другими объектами рёбер выделенного и наведённого — только в режиме здания. */
   private updateHiddenEdges() {
-    if (this.hiddenEdges) {
-      this.hiddenEdges.parent?.remove(this.hiddenEdges);
-      this.hiddenEdges.geometry.dispose();
-      this.hiddenEdges = undefined;
+    for (const g of [...this.selEdges.keys()]) if (![...this.groups.values()].includes(g)) this.selEdges.delete(g);
+    for (const g of this.groups.values()) this.updateSelEdges(g);
+  }
+
+  /**
+   * Рёбра выделенного в группе — только в режиме контуров (в обычном выделение видно по заливке, а пунктир на
+   * сложных зданиях дорог). Скрытые — пунктиром: в режиме здания у выделенного и наведённого, на карте — у
+   * выделенного; видимые рёбра выделенного — синие.
+   */
+  private updateSelEdges(g: MeshGroup) {
+    for (const o of this.selEdges.get(g) ?? []) {
+      o.parent?.remove(o);
+      o.geometry.dispose();
+      if (o instanceof LineSegments2) o.material.dispose();
     }
-    const g = this.groups.get(FOCUS_GROUP);
-    if (!this.focused || !g) return;
-    const items = [...new Set([...this.selected, ...(this.hovered ? [this.hovered] : [])])].filter((k) => !g.hidden.has(k)).map((k) => g.byKey.get(k)).filter((it): it is Item => !!it && !strokeOnly(g, it));
-    if (!items.length) return;
-    this.hiddenEdges = edgeLines(items, HIDDEN_EDGE_MATERIAL);
-    this.hiddenEdges.computeLineDistances();
-    this.hiddenEdges.renderOrder = 999; // после зданий: глубина уже записана
-    g.scene.add(this.hiddenEdges);
+    this.selEdges.delete(g);
+    const inFocus = g === this.groups.get(FOCUS_GROUP);
+    if (inFocus !== this.focused) return;
+    const pick = (keys: Iterable<string>) => [...new Set(keys)].filter((k) => !g.hidden.has(k)).map((k) => g.byKey.get(k))
+      .filter((it): it is Item => !!it && !strokeOnly(g, it));
+    const selected = pick(this.selected);
+    const dashed = inFocus ? pick([...this.selected, ...(this.hovered ? [this.hovered] : [])]) : selected;
+    const out: (THREE.LineSegments | LineSegments2 | THREE.Mesh)[] = [];
+    if (this.wireframe && dashed.length) {
+      const hidden = edgeLines(dashed, inFocus ? HIDDEN_EDGE_MATERIAL : MAP_HIDDEN_EDGE_MATERIAL);
+      hidden.computeLineDistances();
+      hidden.renderOrder = 999; // после зданий: глубина уже записана
+      out.push(hidden);
+    }
+    if (this.wireframe && selected.length && this.map) {
+      // Толстые линии (полосы из треугольников) — их можно сдвинуть к камере: поверх серых рёбер на том же месте,
+      // но за гранями, которые их закрывают
+      const canvas = this.map.getCanvas();
+      const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+      const geo = new LineSegmentsGeometry();
+      geo.setPositions(edgeLines(selected, EDGE_MATERIAL).geometry.getAttribute('position').array as Float32Array);
+      const mat = new LineMaterial({ color: SELECTED_EDGE_COLOUR, linewidth: SELECTED_EDGE_WIDTH_PX * dpr, depthWrite: false,
+        polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 });
+      mat.clippingPlanes = MATERIAL.clippingPlanes;
+      mat.resolution.set(canvas.width, canvas.height);
+      const lines = new LineSegments2(geo, mat);
+      lines.frustumCulled = false;
+      lines.renderOrder = 998; // после серых рёбер
+      out.push(lines);
+      const fill = new THREE.BufferGeometry();
+      const pos = new Float32Array(selected.reduce((n, it) => n + it.positions.length, 0));
+      let o = 0;
+      for (const it of selected) { pos.set(it.positions, o); o += it.positions.length; }
+      fill.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      SELECTED_FILL_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
+      const mesh = new THREE.Mesh(fill, SELECTED_FILL_MATERIAL);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 997;
+      out.push(mesh);
+    }
+    if (!out.length) return;
+    for (const o of out) g.scene.add(o);
+    this.selEdges.set(g, out);
   }
 
   private snapLine?: THREE.Line;
@@ -3009,7 +3148,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       raiseDefault = raise;
       void this.rebuildWhere((f) => computeHeights(f.tags).source === 'default');
     }
-    this.graphics = { ...o };
+    this.userEdges = o.edges;
+    this.graphics = { ...o, edges: o.edges || this.wireframe };
     // Стекло — отдельный меш: при переключении пересобираем слитую геометрию
     if (glassChanged) for (const g of this.groups.values()) if (g.mesh) this.rebuildGeometry(g);
     for (const g of this.groups.values()) {
@@ -3483,6 +3623,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   private applyEdges(g: MeshGroup, exclude?: Set<string>) {
     g.disposeEdges();
     this.applyIssueEdges(g);
+    // Пересборка тайла: рёбра выделенного — по новым треугольникам (в режиме здания ими ведают его правки)
+    if (g !== this.groups.get(FOCUS_GROUP)) this.updateSelEdges(g);
     if (!this.graphics.edges || !g.mesh) return;
     g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it)), EDGE_MATERIAL);
     if (this.level && g === this.groups.get(FOCUS_GROUP)) {

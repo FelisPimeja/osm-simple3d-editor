@@ -20,7 +20,7 @@ import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
-import { applyBasemap, applyGpsTraces, BasemapButton, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
+import { applyBasemap, applyGpsTraces, BasemapButton, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
@@ -64,6 +64,9 @@ const REMAINDERS_LAYER = 'simple3d-outline-remainders';
 const MERGED_LAYER = 'simple3d-merged-exploded';
 const MERGED_HIGHLIGHT_LAYER = 'simple3d-merged-highlight';
 const TILE_LAYERS = [BUILDINGS_LAYER, REMAINDERS_LAYER, MERGED_LAYER];
+/** Выбранное здание из тайлов (подсвечено). */
+let highlightedTile: number | undefined;
+
 const HIGHLIGHT_LAYER = 'simple3d-highlight';
 // Начиная с этого зума здания тайлов z14 подменяются данными OSM API
 const OVERPASS_MIN_ZOOM = 15;
@@ -218,7 +221,9 @@ let mapLoaded = false;
 const focusScene = () => focusHiddenLayers.length > 0;
 // Кнопка — в блоке кнопок масштаба и компаса, последней
 const navGroup = document.querySelector<HTMLElement>('.maplibregl-ctrl-compass')?.parentElement;
-const basemapCtrl = server().imagery && navGroup ? new BasemapButton(navGroup, basemap, (id) => {
+// Слой 3D-зданий: показан ли и прозрачность — в localStorage; применяется к слою при его создании
+const buildingsView = storedBuildings();
+const basemapCtrl = navGroup ? new BasemapButton(navGroup, basemap, (id) => {
   pickBasemap(id);
 }, gpsTraces, (on) => {
   if (focusScene()) { focusGps = on; syncBasemapLayers(); return; }
@@ -228,13 +233,62 @@ const basemapCtrl = server().imagery && navGroup ? new BasemapButton(navGroup, b
   // Настройки снимка: показать его (если выбран другой) и открыть панель
   if ((focusScene() ? focusBasemap : basemap) !== id) pickBasemap(id);
   offsetPanel.show(id);
-}) : undefined;
+}, !!server().imagery, { ...buildingsView }, (v) => setBuildingsView(v)) : undefined;
+
+function setBuildingsView(v: typeof buildingsView) {
+  Object.assign(buildingsView, v);
+  storeBuildings(buildingsView);
+  overpassLayer.setVisible(v.shown);
+  overpassLayer.setOpacity(v.opacity);
+  overpassLayer.setWireframe(v.wireframe);
+  applyTileBuildingsView();
+  syncWireBtn();
+}
+
+/** В режиме контуров рёбер у объёмов тайлов нет — только бледная заливка, чтобы было видно, что здесь здание. */
+const TILE_WIRE_OPACITY = 0.3;
+
+/** Множитель непрозрачности объёмов из тайлов (до загрузки данных API) по настройке слоя зданий. */
+const tileOpacity = () => (!buildingsView.shown ? 0 : buildingsView.wireframe ? TILE_WIRE_OPACITY : buildingsView.opacity);
+
+/**
+ * Объёмы из тайлов и их подсветка — тоже 3D-здания: та же видимость и прозрачность. Видимостью слоёв ведает режим
+ * здания (прячет и возвращает), поэтому скрываем непрозрачностью, а выбор кликом отключает queryTileLayers.
+ */
+function applyTileBuildingsView() {
+  if (!mapLoaded) return;
+  updateDraftStyle();
+  // Подсветка выбранного — заметнее: не бледнее половины
+  const k = buildingsView.shown ? Math.max(0.9 * tileOpacity(), 0.5) : 0;
+  for (const id of [MERGED_HIGHLIGHT_LAYER, HIGHLIGHT_LAYER]) if (map.getLayer(id)) map.setPaintProperty(id, 'fill-extrusion-opacity', k);
+}
+
 // Геолокация — в том же вертикальном блоке, сразу под кнопкой слоёв.
 const geolocateButton = document.querySelector<HTMLElement>('.maplibregl-ctrl-geolocate');
 if (navGroup && geolocateButton) {
   const oldGroup = geolocateButton.parentElement;
   navGroup.appendChild(geolocateButton);
   if (oldGroup !== navGroup) oldGroup?.remove();
+}
+
+// Режим контуров (W) — последней кнопкой того же блока: переключают часто, в меню слоёв далеко
+const wireBtn = document.createElement('button');
+wireBtn.type = 'button';
+wireBtn.className = 'maplibregl-ctrl-basemap maplibregl-ctrl-wireframe';
+wireBtn.title = tr('Только рёбра зданий, без заливки (W)');
+// Каркас куба: передние рёбра сплошные, задние — пунктиром
+wireBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M3 6.5 10 3l7 3.5v7L10 17l-7-3.5z"/><path d="M3 6.5 10 10l7-3.5M10 10v7"/><path d="M3 13.5 10 10" stroke-dasharray="1.6 1.4" opacity=".6"/></svg>';
+wireBtn.addEventListener('click', () => toggleWireframe());
+navGroup?.appendChild(wireBtn);
+const syncWireBtn = () => {
+  wireBtn.classList.toggle('active', buildingsView.wireframe);
+  wireBtn.setAttribute('aria-pressed', String(buildingsView.wireframe));
+};
+syncWireBtn();
+
+function toggleWireframe() {
+  setBuildingsView({ ...buildingsView, wireframe: !buildingsView.wireframe });
+  basemapCtrl?.setBuildings({ ...buildingsView });
 }
 
 /** Подложку выбрали в списке: в режиме здания — только для него, иначе — запомнить. */
@@ -420,6 +474,9 @@ const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
  */
 let session = new EditSession([], onSessionChange);
 const overpassLayer = new BuildingsLayer('osm-overpass-buildings');
+overpassLayer.visible = buildingsView.shown;
+overpassLayer.setOpacity(buildingsView.opacity);
+overpassLayer.setWireframe(buildingsView.wireframe);
 const tileBorders = new TileBorders(map);
 const roadsLayer = new RoadsLayer('osm-roads-3d');
 const indoorPois = new IndoorPois(map, overpassLayer, (f, add) => selectIndoor(f, add));
@@ -475,7 +532,7 @@ map.on('load', () => {
   const extrusion: FillExtrusionLayerSpecification['paint'] = {
     'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 5],
     'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
-    'fill-extrusion-opacity': 0.9,
+    'fill-extrusion-opacity': 0.9 * tileOpacity(),
   };
 
   // Здания из тайлов OpenFreeMap — только для серверов OSM; у OGF и OHM здания лишь из данных API
@@ -542,6 +599,7 @@ map.on('load', () => {
     paint: { 'line-color': '#5a5f66', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.85 },
   });
   mapLoaded = true;
+  applyTileBuildingsView();
   syncBasemapLayers();
   overpass.setSource(tileSource());
   applyDate();
@@ -812,6 +870,8 @@ function updateTileFilter() {
   lastFilterSig = sig;
   console.debug(`[perf] setFilter: скрыто ${overpassIds.length} фич тайлов под Overpass`);
   map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...hiddenIds, ...overpassIds])]);
+  // Выбранное здание тайла заменили данные API: его подсветка осталась бы внутри здания (видна сквозь прозрачные)
+  if (highlightedTile !== undefined && [...replacedIds, ...hiddenIds, ...overpassIds].includes(highlightedTile)) clearTileHighlight();
   map.setFilter(REMAINDERS_LAYER, notIn(hiddenIds));
   map.setFilter(MERGED_LAYER, ['all',
     byAreas ? ['!', ['in', ['get', 'key'], ['literal', hiddenMerged]]] : ['!', ['in', ['get', 'tile'], ['literal', overpassTiles]]],
@@ -990,7 +1050,8 @@ map.on('click', (e) => {
   if (select(resolveClick(key))) return;
   const f = queryTileLayers(e.point)[0];
   infoEl.innerHTML = f ? describeTile(f) : '';
-  if (map.getLayer(HIGHLIGHT_LAYER)) map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], f?.layer.id === MERGED_LAYER ? -1 : f?.id ?? -1]);
+  highlightedTile = f?.layer.id === MERGED_LAYER ? undefined : f?.id as number | undefined;
+  if (map.getLayer(HIGHLIGHT_LAYER)) map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], highlightedTile ?? -1]);
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], f?.layer.id === MERGED_LAYER ? f.properties.key : '']);
   if (f) resolveTileFeature(f);
 });
@@ -3493,6 +3554,12 @@ document.addEventListener('keydown', (e) => {
     toggleSnaps();
     return;
   }
+  // W — режим контуров вкл/выкл (и на карте, и в режиме здания)
+  if (e.code === 'KeyW' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    toggleWireframe();
+    return;
+  }
   // G — сетка основания вкл/выкл
   if (focus && e.code === 'KeyG' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
@@ -3560,7 +3627,7 @@ document.addEventListener('keyup', (e) => { offsetTool.key(e); splitTool.key(e);
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
 function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
-  const layers = TILE_LAYERS.filter((id) => map.getLayer(id));
+  const layers = buildingsView.shown ? TILE_LAYERS.filter((id) => map.getLayer(id)) : [];
   return layers.length ? map.queryRenderedFeatures(point, { layers }) : [];
 }
 
@@ -3613,6 +3680,7 @@ function clearSelection() {
 }
 
 function clearTileHighlight() {
+  highlightedTile = undefined;
   if (map.getLayer(HIGHLIGHT_LAYER)) map.setFilter(HIGHLIGHT_LAYER, ['==', ['id'], -1]);
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], '']);
 }
@@ -3667,13 +3735,13 @@ function updateDraftStyle() {
   const draft = overpass.enabled && overpass.mode === 'full';
   for (const id of TILE_LAYERS) {
     map.setPaintProperty(id, 'fill-extrusion-color', draft ? DRAFT_FILL : TILE_FILL);
-    if (!draft || !loading) map.setPaintProperty(id, 'fill-extrusion-opacity', draft ? 0.45 : 0.9);
+    if (!draft || !loading) map.setPaintProperty(id, 'fill-extrusion-opacity', (draft ? 0.45 : 0.9) * tileOpacity());
   }
   if (draft && loading && draftTimer === undefined) {
     const t0 = performance.now();
     draftTimer = window.setInterval(() => {
       const o = 0.4 + 0.15 * Math.sin(((performance.now() - t0) / 1500) * 2 * Math.PI);
-      for (const id of TILE_LAYERS) map.setPaintProperty(id, 'fill-extrusion-opacity', o);
+      for (const id of TILE_LAYERS) map.setPaintProperty(id, 'fill-extrusion-opacity', o * tileOpacity());
     }, 100);
   } else if (!(draft && loading) && draftTimer !== undefined) {
     clearInterval(draftTimer);

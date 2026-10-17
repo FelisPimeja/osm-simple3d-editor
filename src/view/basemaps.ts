@@ -230,14 +230,44 @@ export function applyBasemap(map: MlMap, id: string, bounds?: Bounds): boolean {
 }
 
 /** Кнопка со списком подложек — в общем блоке кнопок карты (масштаб, компас). */
+const BUILDINGS_KEY = 'osm3d.buildings';
+const BUILDINGS_OPACITY_KEY = 'osm3d.buildings-opacity';
+const WIREFRAME_KEY = 'osm3d.wireframe';
+
+/** Слой 3D-зданий: показан ли и его непрозрачность (1 — как есть). */
+export interface BuildingsView { shown: boolean; opacity: number; /** Режим контуров. */ wireframe: boolean }
+
+export function storedBuildings(): BuildingsView {
+  try {
+    const o = Number(localStorage.getItem(BUILDINGS_OPACITY_KEY) ?? 1);
+    return { shown: localStorage.getItem(BUILDINGS_KEY) !== 'off', opacity: Number.isFinite(o) ? Math.min(1, Math.max(0, o)) : 1,
+      wireframe: localStorage.getItem(WIREFRAME_KEY) === '1' };
+  } catch { return { shown: true, opacity: 1, wireframe: false }; }
+}
+
+export function storeBuildings(v: BuildingsView) {
+  try {
+    if (v.shown) localStorage.removeItem(BUILDINGS_KEY); else localStorage.setItem(BUILDINGS_KEY, 'off');
+    if (v.opacity >= 1) localStorage.removeItem(BUILDINGS_OPACITY_KEY); else localStorage.setItem(BUILDINGS_OPACITY_KEY, String(v.opacity));
+    if (v.wireframe) localStorage.setItem(WIREFRAME_KEY, '1'); else localStorage.removeItem(WIREFRAME_KEY);
+  } catch { /* до перезагрузки */ }
+}
+
+const GEAR_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M6.8 1.5h2.4l.4 1.8 1.2.7 1.8-.6 1.2 2.1-1.4 1.2v1.4l1.4 1.2-1.2 2.1-1.8-.6-1.2.7-.4 1.8H6.8l-.4-1.8-1.2-.7-1.8.6-1.2-2.1 1.4-1.2V6.7L2.2 5.5l1.2-2.1 1.8.6 1.2-.7z"/><circle cx="8" cy="8" r="2"/></svg>';
+
 export class BasemapButton {
   private readonly btn: HTMLButtonElement;
   private readonly menu: HTMLDivElement;
-  private readonly gpsInput: HTMLInputElement;
+  private readonly gpsInput?: HTMLInputElement;
+  private readonly buildingsInput: HTMLInputElement;
+  private readonly buildingsGear: HTMLButtonElement;
+  private readonly alphaInput: HTMLInputElement;
   private readonly offsetBtns = new Map<string, HTMLButtonElement>();
 
   constructor(group: HTMLElement, private current: string, private readonly onSelect: (id: string) => void,
-    private gps: boolean, onGps: (on: boolean) => void, onOffset: (id: string) => void) {
+    private gps: boolean, onGps: (on: boolean) => void, onOffset: (id: string) => void,
+    /** Снимки и треки есть только у OSM; без них в меню — только слой зданий. */
+    imagery: boolean, private buildings: BuildingsView, onBuildings: (v: BuildingsView) => void) {
     group.classList.add('basemap-group');
     const btn = this.btn = document.createElement('button');
     btn.type = 'button';
@@ -250,7 +280,7 @@ export class BasemapButton {
     const menu = this.menu = document.createElement('div');
     menu.className = 'basemap-menu';
     menu.hidden = true;
-    const items: [string, string][] = [[MAP_BASEMAP, tr('Карта')], ...IMAGERY.map((i): [string, string] => [i.id, i.name])];
+    const items: [string, string][] = imagery ? [[MAP_BASEMAP, tr('Карта')], ...IMAGERY.map((i): [string, string] => [i.id, i.name])] : [];
     for (const [id, label] of items) {
       const row = document.createElement('label');
       const input = document.createElement('input');
@@ -266,7 +296,7 @@ export class BasemapButton {
         off.className = 'basemap-offset-btn';
         off.title = tr('Настройки подложки: смещение и прозрачность');
         // Шестерёнка
-        off.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M6.8 1.5h2.4l.4 1.8 1.2.7 1.8-.6 1.2 2.1-1.4 1.2v1.4l1.4 1.2-1.2 2.1-1.8-.6-1.2.7-.4 1.8H6.8l-.4-1.8-1.2-.7-1.8.6-1.2-2.1 1.4-1.2V6.7L2.2 5.5l1.2-2.1 1.8.6 1.2-.7z"/><circle cx="8" cy="8" r="2"/></svg>';
+        off.innerHTML = GEAR_SVG;
         off.addEventListener('click', (e) => {
           e.preventDefault(); // не выбирать радиокнопку строки дважды
           e.stopPropagation();
@@ -278,19 +308,62 @@ export class BasemapButton {
       }
       menu.append(row);
     }
-    const gpsRow = document.createElement('label');
-    gpsRow.className = 'basemap-overlay';
-    gpsRow.title = tr('Общедоступные GPS-треки участников OSM: по ним видно, куда сдвинуты снимки');
-    const gpsInput = this.gpsInput = document.createElement('input');
-    gpsInput.type = 'checkbox';
-    gpsInput.checked = gps;
-    gpsInput.addEventListener('change', () => { this.gps = gpsInput.checked; this.sync(); onGps(gpsInput.checked); });
-    gpsRow.append(gpsInput, ` ${tr('GPS-треки OSM')}`);
-    menu.append(gpsRow);
-    const note = document.createElement('div');
-    note.className = 'basemap-note';
-    note.textContent = tr('Снимки, разрешённые для обводки в OSM. Проверяйте сдвиг снимков по GPS-трекам.');
-    menu.append(note);
+    // 3D-здания: показать или скрыть; шестерёнка — прозрачность (видна подложка сквозь здания)
+    const bRow = document.createElement('label');
+    bRow.className = imagery ? 'basemap-overlay' : '';
+    const bInput = this.buildingsInput = document.createElement('input');
+    bInput.type = 'checkbox';
+    bInput.checked = buildings.shown;
+    bInput.addEventListener('change', () => { this.buildings = { ...this.buildings, shown: bInput.checked }; this.sync(); onBuildings(this.buildings); });
+    const gear = this.buildingsGear = document.createElement('button');
+    gear.type = 'button';
+    gear.className = 'basemap-offset-btn';
+    gear.title = tr('Настройки слоя зданий: прозрачность');
+    gear.innerHTML = GEAR_SVG;
+    const alphaRow = document.createElement('label');
+    alphaRow.className = 'basemap-alpha';
+    alphaRow.hidden = true;
+    const alpha = this.alphaInput = document.createElement('input');
+    alpha.type = 'range';
+    alpha.min = '0';
+    alpha.max = '100';
+    alpha.step = '5';
+    const alphaValue = document.createElement('span');
+    const syncAlpha = () => {
+      const t = Math.round((1 - this.buildings.opacity) * 100);
+      alpha.value = String(t);
+      alphaValue.textContent = `${t} %`;
+    };
+    syncAlpha();
+    alpha.addEventListener('input', () => {
+      this.buildings = { ...this.buildings, opacity: 1 - Number(alpha.value) / 100 };
+      syncAlpha();
+      this.sync();
+      onBuildings(this.buildings);
+    });
+    gear.addEventListener('click', (e) => {
+      e.preventDefault(); // не переключать галку строки
+      e.stopPropagation();
+      alphaRow.hidden = !alphaRow.hidden;
+    });
+    alphaRow.append(tr('Прозрачность'), alpha, alphaValue);
+    bRow.append(bInput, ` ${tr('3D-здания')}`, gear);
+    menu.append(bRow, alphaRow);
+    if (imagery) {
+      const gpsRow = document.createElement('label');
+      gpsRow.className = 'basemap-overlay';
+      gpsRow.title = tr('Общедоступные GPS-треки участников OSM: по ним видно, куда сдвинуты снимки');
+      const gpsInput = this.gpsInput = document.createElement('input');
+      gpsInput.type = 'checkbox';
+      gpsInput.checked = gps;
+      gpsInput.addEventListener('change', () => { this.gps = gpsInput.checked; this.sync(); onGps(gpsInput.checked); });
+      gpsRow.append(gpsInput, ` ${tr('GPS-треки OSM')}`);
+      menu.append(gpsRow);
+      const note = document.createElement('div');
+      note.className = 'basemap-note';
+      note.textContent = tr('Снимки, разрешённые для обводки в OSM. Проверяйте сдвиг снимков по GPS-трекам.');
+      menu.append(note);
+    }
     group.append(btn, menu);
     this.sync();
     document.addEventListener('click', (e) => {
@@ -309,10 +382,16 @@ export class BasemapButton {
     this.onSelect(id);
   }
 
+  /** Слой зданий переключили не из меню (режим контуров — кнопкой или клавишей). */
+  setBuildings(v: BuildingsView) {
+    this.buildings = v;
+    this.sync();
+  }
+
   /** GPS-треки включили или выключили не галкой (из профиля). */
   setGps(on: boolean) {
     this.gps = on;
-    this.gpsInput.checked = on;
+    if (this.gpsInput) this.gpsInput.checked = on;
     this.sync();
   }
 
@@ -324,7 +403,11 @@ export class BasemapButton {
 
   /** Подсветить кнопки смещения сдвинутых снимков и кнопку слоёв. */
   sync() {
-    this.btn.classList.toggle('active', this.current !== MAP_BASEMAP || this.gps);
+    this.btn.classList.toggle('active', this.current !== MAP_BASEMAP || this.gps || !this.buildings.shown || this.buildings.opacity < 1);
+    this.buildingsInput.checked = this.buildings.shown;
+    // В режиме контуров заливки нет — прозрачность не к чему применять
+    this.alphaInput.disabled = this.buildings.wireframe;
+    this.buildingsGear.classList.toggle('active', this.buildings.opacity < 1);
     for (const input of this.menu.querySelectorAll<HTMLInputElement>('input[type=radio]')) input.checked = input.value === this.current;
     // Шестерёнка — только у выбранного снимка; синяя, если сдвиг или прозрачность изменены
     for (const [id, b] of this.offsetBtns) {

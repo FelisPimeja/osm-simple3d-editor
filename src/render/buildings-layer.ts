@@ -32,7 +32,8 @@ const MONOCHROME = new THREE.Color('#ffffff');
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
 export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
   /** Шахта лифта выше нижней остановки: без своего пола, и пол других объектов этажа по её контуру вырезан. */ shaft?: boolean;
-  /** Только вырез (этаж, где лифт проходит без остановки): ни пола, ни стен. */ cutOnly?: boolean }
+  /** Только вырез (этаж, где лифт проходит без остановки): ни пола, ни стен. */ cutOnly?: boolean;
+  /** Бассейн: чаша этой глубины (м) под полом этажа, вода чуть ниже пола. */ pool?: number }
 export interface EscalatorItem { key: string; line: LonLat[]; bottom: number; top: number; width: number; incline?: string; pale?: boolean }
 
 /** Заливка пола по виду indoor-объекта. */
@@ -94,6 +95,10 @@ const INDOOR_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
 const INDOOR_PALE_WALL = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x777777, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 const INDOOR_PALE_LINE = new THREE.LineBasicMaterial({ color: 0xc4c0bb });
 const PALE_MIX = 0.5;
+/** Чаша бассейна: стенки и дно — светлый кафель; вода — полупрозрачная, на POOL_WATER_DROP ниже пола. */
+const POOL_TILE_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xd3e6ec, side: THREE.DoubleSide });
+const POOL_WATER_MATERIAL = new THREE.MeshLambertMaterial({ color: 0x2f9bd6, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false });
+const POOL_WATER_DROP = 0.2;
 /** Грани частей здания ближе этого к полу этажа со вторым светом — вырезаются в пустотах, м. */
 const VOID_FACE_DZ = 0.1;
 
@@ -1473,7 +1478,11 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Под моделью эскалатора, проходящей сквозь пол, — вырез (площадка не ложится на пол, короб уходит вниз)
     const shaftHoles = items.filter(it => it.shaft).flatMap(it => it.polygons.map(p =>
       [p.outer, ...p.inners].map(r => { const l = r.map(g.toLocal); return [...l, l[0]]; }) as ClipMulti[number]));
-    const escalatorHoles = [...escalatorFloorHoles(escalators.map(e => ({ ...e, line: e.line.map(g.toLocal) })), items[0]?.z ?? 0), ...shaftHoles];
+    // Бассейн — тоже вырез: пол (и свой, и площадок под ним) уходит чашей вниз
+    const pools = items.filter(it => it.pool && !it.line);
+    const poolHoles = pools.flatMap(it => it.polygons.map(p =>
+      [p.outer, ...p.inners].map(r => { const l = r.map(g.toLocal); return [...l, l[0]]; }) as ClipMulti[number]));
+    const escalatorHoles = [...escalatorFloorHoles(escalators.map(e => ({ ...e, line: e.line.map(g.toLocal) })), items[0]?.z ?? 0), ...shaftHoles, ...poolHoles];
     // Вырезы — только у кусков пола рядом с ними (кусков сотни, polygon-clipping платит за каждый)
     const holeBox = (r: Pt[]) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const [x, y] of r) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } return [x0, y0, x1, y1]; };
     const holeBoxes = escalatorHoles.map((h) => holeBox(h[0] as Pt[]));
@@ -1944,6 +1953,50 @@ export class BuildingsLayer implements CustomLayerInterface {
     seg.frustumCulled = false;
     root.add(seg);
     finish();
+    for (const it of pools) this.drawPool(root, g, it, pale);
+  }
+
+  /** Чаша бассейна: стенки по контуру (и вокруг островков) от пола вниз на глубину, дно и вода. */
+  private drawPool(root: THREE.Group, g: MeshGroup, it: IndoorItem, pale: boolean) {
+    const top = it.z, bottom = it.z - it.pool!, water = it.z - Math.min(POOL_WATER_DROP, it.pool! / 2);
+    const tile: number[] = [], waterPos: number[] = [], rim: number[] = [];
+    const flat = (outer: Pt[], holes: Pt[][], z: number, out: number[]) => {
+      const v2 = (r: Pt[]) => r.map(([x, y]) => new THREE.Vector2(x, y));
+      const contour = v2(outer), hs = holes.map(v2);
+      if (THREE.ShapeUtils.isClockWise(contour)) contour.reverse();
+      for (const h of hs) if (!THREE.ShapeUtils.isClockWise(h)) h.reverse();
+      const pts = [...contour, ...hs.flat()];
+      for (const tri of THREE.ShapeUtils.triangulateShape(contour, hs)) for (const i of tri) out.push(pts[i].x, pts[i].y, z);
+    };
+    for (const p of it.polygons) {
+      const outer = p.outer.map(g.toLocal), holes = p.inners.map(r => r.map(g.toLocal));
+      flat(outer, holes, bottom, tile);
+      flat(outer, holes, water, waterPos);
+      for (const r of [outer, ...holes]) for (let i = 0; i < r.length; i++) {
+        const [ax, ay] = r[i], [bx, by] = r[(i + 1) % r.length];
+        tile.push(ax, ay, bottom, bx, by, bottom, bx, by, top, ax, ay, bottom, bx, by, top, ax, ay, top);
+        rim.push(ax, ay, top, bx, by, top, ax, ay, bottom, bx, by, bottom);
+        if (turnAt(r, i) >= CORNER_MIN_TURN) rim.push(ax, ay, bottom, ax, ay, top);
+      }
+    }
+    const mesh = (pos: number[], mat: THREE.Material) => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, mat);
+      m.frustumCulled = false;
+      return m;
+    };
+    root.add(mesh(tile, pale ? INDOOR_PALE_WALL : POOL_TILE_MATERIAL));
+    const w = mesh(waterPos, POOL_WATER_MATERIAL);
+    w.renderOrder = 1; // после дна и стенок: сквозь воду их видно
+    root.add(w);
+    if (!this.graphics.edges) return;
+    const eg = new THREE.BufferGeometry();
+    eg.setAttribute('position', new THREE.Float32BufferAttribute(rim, 3));
+    const es = new THREE.LineSegments(eg, pale ? INDOOR_PALE_LINE : EDGE_MATERIAL);
+    es.frustumCulled = false;
+    root.add(es);
   }
 
   /**

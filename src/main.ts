@@ -4450,6 +4450,28 @@ function isElevatorRoom(f: IndoorFeature, all: IndoorFeature[]): boolean {
 }
 
 /** Туалет или кабинка: двери в его стенах уже обычных. */
+/** Глубина бассейна по умолчанию, м (детский «лягушатник» мельче, но для плана не страшно). */
+const POOL_DEPTH = 1.5;
+
+/**
+ * Бассейн на плане этажа: площадка (indoor=area или yes) с leisure=swimming_pool или room=swimming_pool
+ * (встречается и через дефис: relation/17946689). indoor=room — зал с бассейном, а не чаша: его не трогаем.
+ */
+function isPool(f: IndoorFeature): boolean {
+  const t = f.tags;
+  return (t.leisure === 'swimming_pool' || t.room === 'swimming_pool' || t.room === 'swimming-pool')
+    && (t.indoor === 'area' || t.indoor === 'yes') && !f.line && !f.point;
+}
+
+/** Глубина чаши: depth или max_depth, если правдоподобны, иначе POOL_DEPTH. */
+function poolDepth(f: IndoorFeature): number {
+  for (const k of ['depth', 'max_depth']) {
+    const d = parseLength(f.tags[k]);
+    if (d !== undefined && d >= 0.3 && d <= 6) return d;
+  }
+  return POOL_DEPTH;
+}
+
 function isToiletRoom(f: IndoorFeature): boolean {
   const t = f.tags;
   return ['toilets', 'toilet', 'toilet_cubicle', 'shower'].includes(t.room ?? '') || t.amenity === 'toilets' || t.toilets === 'yes';
@@ -5026,6 +5048,7 @@ function renderLevelsImpl() {
         .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor, areaLedge: f.tags.indoor === 'area',
           ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
           ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
+          ...(isPool(f) ? { pool: poolDepth(f) } : {}),
           ...(shaft(f) ? { shaft: true } : {}) })).concat(passing),
       // Помещение в несколько этажей выше своего пола: только для подсветки выбора — по основанию на нижнем этаже
       highlights: fs.filter((f) => isFloorKind(f) && !f.line && !f.escalator && !f.escalatorArea && !floorLevels(f).includes(l.n))

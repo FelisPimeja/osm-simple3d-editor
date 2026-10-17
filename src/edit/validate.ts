@@ -575,3 +575,66 @@ export function validateDeprecated(key: string, t: Record<string, string>, list:
   }
   return out;
 }
+
+/** Доля совпадения контуров (пересечение / объединение), начиная с которой объект — копия. */
+const DUPLICATE_IOU = 0.95;
+/** Габариты копий отличаются не больше чем на столько, м (прикидка перед точным сравнением). */
+const DUPLICATE_BOX_M = 3;
+
+type Box = [number, number, number, number];
+const boxes = new WeakMap<Feature3D, Box>();
+function boxOf(f: Feature3D): Box {
+  let b = boxes.get(f);
+  if (!b) {
+    b = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const p of f.polygons) for (const [x, y] of p.outer) { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); }
+    boxes.set(f, b);
+  }
+  return b;
+}
+
+/**
+ * Копии: здание или часть почти совпадает по контуру (пересечение не меньше DUPLICATE_IOU объединения) с объектом
+ * другого здания того же вида (здание — со зданием, часть — с частью), и высоты перекрываются. Обычно —
+ * скопированное здание вместо второго адреса (бывает, потом чуть подвинута вершина): объёмы мерцают друг в
+ * друге, выделение одного не видно. Внутри здания одинаковые части ловит проверка пересечения объёмов.
+ * scope — что проверяем, all — с чем сравниваем, building — здание объекта (ключ).
+ */
+export function validateDuplicates(scope: Feature3D[], all: Feature3D[], building: (key: string) => string): Issue[] {
+  const isPart = (f: Feature3D) => !!f.tags['building:part'] && !f.tags.building;
+  // Кандидаты — по клеткам центра габарита (~0.0001° ≈ 7–11 м): копия — в той же или соседней клетке
+  const CELL = 1e-4;
+  const cell = (f: Feature3D) => { const b = boxOf(f); return [Math.floor((b[0] + b[2]) / 2 / CELL), Math.floor((b[1] + b[3]) / 2 / CELL)]; };
+  const grid = new Map<string, Feature3D[]>();
+  for (const f of all) {
+    if (!f.polygons?.length) continue;
+    const [cx, cy] = cell(f), k = `${cx},${cy}`;
+    (grid.get(k) ?? grid.set(k, []).get(k)!).push(f);
+  }
+  const out: Issue[] = [];
+  for (const f of scope) {
+    if (!f.polygons?.length) continue;
+    const b = boxOf(f), [cx, cy] = cell(f);
+    const p = projector([b[0], b[1]]);
+    const [w, s] = p([b[0], b[1]]), [e, n] = p([b[2], b[3]]);
+    const h = computeHeights(f.tags);
+    let mine: MultiPolygon | undefined, mineArea = 0;
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const o of grid.get(`${cx + dx},${cy + dy}`) ?? []) {
+      if (o.key === f.key || isPart(o) !== isPart(f) || building(o.key) === building(f.key)) continue;
+      const ob = boxOf(o), [ow, os] = p([ob[0], ob[1]]), [oe, on] = p([ob[2], ob[3]]);
+      if (Math.max(Math.abs(ow - w), Math.abs(os - s), Math.abs(oe - e), Math.abs(on - n)) > DUPLICATE_BOX_M) continue;
+      const k = computeHeights(o.tags);
+      if (Math.min(h.top, k.top) <= Math.max(h.min, k.min)) continue;
+      try {
+        if (!mine) { mine = toMulti(f.polygons, p); mineArea = multiArea(mine); }
+        const theirs = toMulti(o.polygons, p);
+        const common = multiArea(polygonClipping.intersection(mine, theirs));
+        const union = mineArea + multiArea(theirs) - common;
+        if (!(union > 0) || common / union < DUPLICATE_IOU) continue;
+      } catch { continue; }
+      out.push({ key: f.key, other: o.key, level: 'warning', code: 'duplicate',
+        text: tr('Совпадает по контуру и высоте с {other}: похоже на копию. Оставьте один объект (второй адрес можно добавить к нему).', { other: o.key }) });
+    }
+  }
+  return out;
+}

@@ -6,7 +6,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
-import { setDeprecatedTags, validateBuilding, validateGeometry, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, type Issue } from './edit/validate';
+import { setDeprecatedTags, validateBuilding, validateDuplicates, validateGeometry, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -5265,7 +5265,15 @@ function visibleMapIssues(): Issue[] {
     if (available.length === group.members.length) issues.push(...buildingIssues(group));
     else for (const f of available) issues.push(...validateTags(f.key, f.tags), ...validateGeometry(f));
   }
+  const byKey = new Map(rendered.map((f) => [f.key, f]));
+  issues.push(...duplicateIssues([...seen].map((k) => byKey.get(k)!), rendered));
   return issues;
+}
+
+/** Копии объектов других зданий (совпадающие контуры): scope — что проверяем, all — с чем сравниваем. */
+function duplicateIssues(scope: Feature3D[], all: Feature3D[]): Issue[] {
+  const live = (fs: Feature3D[]) => fs.filter((f) => !session.isDeleted(f.key));
+  return timed('проверка копий', () => validateDuplicates(live(scope), live(all), (key) => groupOf(key)?.key ?? key), (r) => `${r.length}`);
 }
 
 /** Принадлежность проблемы зданию для группировки в режиме карты. */
@@ -5296,7 +5304,8 @@ function renderIssues() {
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding ? buildingIndoor(focusedBuilding) : [];
   const indoorIssues = focusedBuilding ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding))), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
-  focusIssues = [...simpleIssues, ...indoorIssues];
+  const duplicates = focusedBuilding ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
+  focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
   if (!focus && mapIssuesDirty) { mapIssues = visibleMapIssues(); mapIssuesDirty = false; }
   // Есть выбор — только проблемы выбранных объектов (в режиме здания само здание целиком не фильтрует)
   const picked = issueFilterKeys();

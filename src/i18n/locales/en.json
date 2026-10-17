@@ -920,5 +920,6 @@
   "заменить на {replace}": "replace with {replace}",
   "Настройки слоя зданий: прозрачность": "Buildings layer settings: transparency",
   "3D-здания": "3D buildings",
-  "Только рёбра зданий, без заливки (W)": "Building edges only, no fill (W)"
+  "Только рёбра зданий, без заливки (W)": "Building edges only, no fill (W)",
+  "Совпадает по контуру и высоте с {other}: похоже на копию. Оставьте один объект (второй адрес можно добавить к нему).": "Same outline and height as {other}: looks like a copy. Keep one object (the second address can be added to it)."
 }

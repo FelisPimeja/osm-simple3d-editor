@@ -76,6 +76,7 @@ const FIELDS = ([
   { tag: 'building:min_level', label: tr('Нижний этаж'), type: 'int' },
   { tag: 'roof:shape', label: tr('Форма крыши'), type: 'combo', options: ROOF_SHAPES, labels: ROOF_SHAPE_LABELS, icons: ROOF_ICONS },
   { tag: 'roof:height', label: tr('Высота крыши, м'), type: 'length' },
+  { tag: 'roof:levels', label: tr('Этажей в крыше'), type: 'int' },
   { tag: 'roof:direction', label: tr('Направление ската'), type: 'direction', placeholder: tr('0–360 или N, SE…') },
   { tag: 'roof:orientation', label: tr('Конёк'), type: 'select', options: ['along', 'across'] },
   { tag: 'building:colour', label: tr('Цвет стен'), type: 'colour' },

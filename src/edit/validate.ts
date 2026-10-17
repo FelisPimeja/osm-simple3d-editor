@@ -234,7 +234,7 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
   if (t.indoor === 'highway' || t.indoor === 'stairs') add('warning', 'indoor-key',
     tr('indoor={value} — тип объекта указывают отдельным тегом; для общего признака используют indoor=yes.', { value: t.indoor }));
   if (space && t.level === undefined) add('error', 'indoor-level', tr('У indoor-объекта нет level=* — этаж обязателен для поэтажного плана.'));
-  if (t.room !== undefined && t.indoor !== 'room' && t.indoor !== 'area') add('warning', 'indoor-room',
+  if (t.room !== undefined && t.indoor !== 'room' && t.indoor !== 'area' && t.indoor !== 'corridor') add('warning', 'indoor-room',
     tr('room=* описывает назначение помещения; проверьте indoor=room или indoor=area.'));
   if (t['building:part'] !== undefined && space) add('warning', 'indoor-key',
     tr('building:part=* описывает объём здания, а не помещение indoor=*.'));

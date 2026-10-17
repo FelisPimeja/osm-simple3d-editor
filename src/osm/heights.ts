@@ -52,7 +52,7 @@ export function computeHeights(tags: Record<string, string>): Heights {
 
   let roofHeight = roofShape === 'flat'
     ? 0
-    : parseLength(tags['roof:height']) ?? (roofLevels !== undefined ? roofLevels * LEVEL_HEIGHT : DEFAULT_ROOF_HEIGHT);
+    : parseLength(tags['roof:height']) ?? (roofLevels !== undefined && roofLevels > 0 ? roofLevels * LEVEL_HEIGHT : DEFAULT_ROOF_HEIGHT);
   let min = parseLength(tags.min_height) ?? (minLevel !== undefined ? minLevel * LEVEL_HEIGHT : 0);
 
   const height = parseLength(tags.height);

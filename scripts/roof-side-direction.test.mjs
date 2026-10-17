@@ -11,14 +11,29 @@ before(async () => {
 after(async () => { await vite.close(); });
 
 const polygons = [{ outer: [[-5,-5],[5,-5],[5,5],[-5,5]], inners: [] }];
-function build(shape, direction, orientation) {
+function build(shape, direction, orientation, footprint = polygons) {
   const tags = { building: 'yes', height: '9', 'roof:height': '3', 'roof:shape': shape };
   if (direction !== undefined) tags['roof:direction'] = direction;
   if (orientation !== undefined) tags['roof:orientation'] = orientation;
-  return buildTriangles(polygons, computeHeights(tags), tags);
+  return buildTriangles(footprint, computeHeights(tags), tags);
 }
 
 for (const shape of ['side_hipped', 'side_half-hipped']) {
+  test(`${shape}: compass directions follow a rotated footprint, numeric angles stay exact`, () => {
+    const angle = 20 * Math.PI / 180;
+    const rotate = ([x,y]) => [x*Math.cos(angle)-y*Math.sin(angle), x*Math.sin(angle)+y*Math.cos(angle)];
+    const footprint = [{ outer: polygons[0].outer.map(rotate), inners: [] }];
+    for (const direction of ['N','E','S','W']) {
+      const expected = build(shape, direction).roof;
+      const actual = build(shape, direction, undefined, footprint).roof;
+      assert.equal(actual.length, expected.length);
+      for (let i=0; i<expected.length; i+=3) {
+        const [x,y] = rotate([expected[i],expected[i+1]]);
+        assert.ok(Math.abs(actual[i]-x)<1e-5 && Math.abs(actual[i+1]-y)<1e-5 && Math.abs(actual[i+2]-expected[i+2])<1e-5, direction);
+      }
+    }
+    assert.notDeepEqual(build(shape, 'N', undefined, footprint).roof, build(shape, '0', undefined, footprint).roof);
+  });
   test(`${shape}: cardinal directions put the gable opposite the hip`, () => {
     for (const [direction, dx, dy] of [['N',0,1],['E',1,0],['S',0,-1],['W',-1,0]]) {
       const mesh = build(shape, direction);

@@ -504,21 +504,27 @@ function addAxisPlanesRoof(
   roof: number[], walls: number[], ring: Pt[], ax: RectAxis, shape: string,
   z0: number, roofHeight: number, across: boolean, direction?: string,
 ) {
-  // Explicit hip direction defines the ridge axis as well as its end.
-  // Refit bounds in that direction so arbitrary bearings keep the roof inside the footprint.
+  // Compass labels select the nearest end of the footprint; numeric bearings use an exact axis.
   if (shape === 'side_hipped' || shape === 'side_half-hipped') {
-    const deg = direction === undefined ? NaN : CARDINAL[direction.toUpperCase()] ?? Number(direction);
+    const compass = direction === undefined ? undefined : CARDINAL[direction.toUpperCase()];
+    const deg = direction === undefined ? NaN : compass ?? Number(direction);
     if (Number.isFinite(deg)) {
       const rad = deg * Math.PI / 180;
-      const dir: Pt = [Math.sin(rad), Math.cos(rad)];
-      const normal: Pt = [-dir[1], dir[0]];
-      const us = ring.map(([x, y]) => x * dir[0] + y * dir[1]);
-      const vs = ring.map(([x, y]) => x * normal[0] + y * normal[1]);
-      const loU = Math.min(...us), hiU = Math.max(...us);
-      const loV = Math.min(...vs), hiV = Math.max(...vs);
-      const cu = (loU + hiU) / 2, cv = (loV + hiV) / 2;
-      ax = { dir, center: [cu * dir[0] + cv * normal[0], cu * dir[1] + cv * normal[1]], length: hiU - loU, width: hiV - loV };
-      across = false;
+      if (compass !== undefined) {
+        const dot = Math.sin(rad) * ax.dir[0] + Math.cos(rad) * ax.dir[1];
+        const cross = -Math.sin(rad) * ax.dir[1] + Math.cos(rad) * ax.dir[0];
+        across = Math.abs(cross) > Math.abs(dot);
+      } else {
+        const dir: Pt = [Math.sin(rad), Math.cos(rad)];
+        const normal: Pt = [-dir[1], dir[0]];
+        const us = ring.map(([x, y]) => x * dir[0] + y * dir[1]);
+        const vs = ring.map(([x, y]) => x * normal[0] + y * normal[1]);
+        const loU = Math.min(...us), hiU = Math.max(...us);
+        const loV = Math.min(...vs), hiV = Math.max(...vs);
+        const cu = (loU + hiU) / 2, cv = (loV + hiV) / 2;
+        ax = { dir, center: [cu * dir[0] + cv * normal[0], cu * dir[1] + cv * normal[1]], length: hiU - loU, width: hiV - loV };
+        across = false;
+      }
     }
   }
   const along: Pt = across ? [-ax.dir[1], ax.dir[0]] : ax.dir; // вдоль конька

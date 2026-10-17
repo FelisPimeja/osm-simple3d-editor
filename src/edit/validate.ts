@@ -81,7 +81,7 @@ const WRONG_KEYS: Record<string, string> = {
 /** Значения roof:shape из «Values with problems» без однозначной замены (у остальных — ROOF_SYNONYMS в heights). */
 const ROOF_UNCLEAR: Record<string, string> = { gabled_row: tr('неясное значение — возможно, sawtooth или ряд gabled-частей') };
 /** gabled_height_moved в вики — документированное значение, хотя рисуем его как saltbox. */
-const ROOF_DOCUMENTED = new Set(['gabled_height_moved']);
+const ROOF_DOCUMENTED = new Set(['gabled_height_moved', 'many']);
 const COMPASS = /^(N|NNE|NE|ENE|E|ESE|SE|SSE|S|SSW|SW|WSW|W|WNW|NW|NNW)$/;
 const COMPASS_WORDS: Record<string, string> = { north: 'N', south: 'S', east: 'E', west: 'W' };
 const COLOUR_KEYS = ['building:colour', 'roof:colour'];
@@ -180,7 +180,6 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
   if (shape !== undefined) {
     const main = roofShapeOf(t);
     if (/^\d+(\.\d+)?$/.test(shape)) add('warning', 'roof', tr('roof:shape={value} — число вместо формы; число этажей в крыше — roof:levels.', { value: raw! }));
-    else if (shape === 'many') add('warning', 'roof', tr('roof:shape=many описывает несколько форм крыши; задайте формы на отдельных частях и удалите этот ключ.'), set({ 'roof:shape': undefined }));
     else if (ROOF_UNCLEAR[shape]) add('warning', 'roof', tr('roof:shape={value} — {hint}.', { value: raw!, hint: ROOF_UNCLEAR[shape] }));
     else if (!KNOWN_ROOFS.has(main)) add('warning', 'roof', tr('roof:shape={value} — неизвестная форма крыши (рисуется плоской).', { value: raw! }));
     else if (shape !== main && !ROOF_DOCUMENTED.has(shape)) add('warning', 'roof', tr('roof:shape={value} — значение с проблемами, основное — {main}.', { value: raw!, main }), set({ 'roof:shape': main }));

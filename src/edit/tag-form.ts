@@ -186,6 +186,7 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
         ${withBadge(`<input type="text" ${common} value="${esc(value)}" placeholder="${esc(inherited ?? tr('#rrggbb или имя'))}" />`, hint)}</span>`;
     } else {
       control = withBadge(`<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common} value="${esc(value)}" placeholder="${esc(inherited ?? field.placeholder ?? '')}" />`, hint);
+      if (field.type === 'direction') control = directionField(control);
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
   }).join('');
@@ -237,6 +238,7 @@ export function renderMultiTagForm(keys: string[], session: EditSession): string
         <input type="text" ${common}${cls} value="${esc(value)}" placeholder="${mixed ? tr('разные') : tr('#rrggbb или имя')}" /></span>`;
     } else {
       control = `<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${cls} value="${esc(value)}" placeholder="${esc(mixed ? tr('разные') : field.placeholder ?? '')}" />`;
+      if (field.type === 'direction') control = directionField(control);
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
   }).join('');
@@ -263,6 +265,14 @@ function combo(field: Field, common: string, value: string, placeholder: string,
 /** Свободный ввод с тем же полным списком вариантов для indoor-форм; key — ключ OSM для подписей iD. */
 export function renderValueCombo(options: string[], attributes: string, value: string, placeholder: string, labels?: Record<string, string>, key = ''): string {
   return combo({ tag: key, label: '', type: 'combo', options, labels: key ? valueLabels(key, labels) : labels }, attributes, value, placeholder, '');
+}
+
+/** Значок «задать направление двумя точками» — стрелка из точки. */
+const ICON_DIRECTION = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="3.5" cy="12.5" r="1.5"/><path d="M5 11l1.5-1.5M8 8l1.5-1.5"/><path d="M13 3l-4.5 1M13 3l-1 4.5M13 3l-2 2"/></svg>';
+
+/** Поле направления с кнопкой инструмента «две точки в 3D». */
+function directionField(input: string): string {
+  return `<span class="direction-field">${input}<button type="button" class="direction-pick" data-pick-direction title="${esc(tr('Задать направление двумя точками в 3D'))}">${ICON_DIRECTION}</button></span>`;
 }
 
 /** Поле со значком «унаследовано» справа (только если есть пояснение). */

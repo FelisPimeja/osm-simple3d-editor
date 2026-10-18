@@ -940,5 +940,11 @@
   "Плагин simple3d в JOSM устарел (протокол {v}, нужен {min}). Обновите его: {url} — и перезапустите JOSM.": "The simple3d plugin in JOSM is outdated (protocol {v}, {min} required). Update it from {url} and restart JOSM.",
   "Источник — JOSM без модуля simple3d: только чтение, правки из 3D не возвращаются в JOSM и отправка отсюда отключена. Установите модуль — правки будут сразу попадать в JOSM.": "Source: JOSM without the simple3d plugin. Read-only: edits made in 3D do not return to JOSM, and uploading from here is off. Install the plugin to send edits straight into JOSM.",
   "Как установить модуль": "How to install the plugin",
-  "Это режим только для чтения: правки из 3D не вернутся в JOSM. Для полной работы (правки, общая отмена и выделение) установите в JOSM модуль simple3d.": "This is read-only mode: edits made in 3D will not return to JOSM. For full use (edits, shared undo and selection), install the simple3d plugin in JOSM."
+  "Это режим только для чтения: правки из 3D не вернутся в JOSM. Для полной работы (правки, общая отмена и выделение) установите в JOSM модуль simple3d.": "This is read-only mode: edits made in 3D will not return to JOSM. For full use (edits, shared undo and selection), install the simple3d plugin in JOSM.",
+  "Направление ската: кликните начальную точку — по её высоте строится направление. Esc — выйти.": "Roof direction: click the start point; the direction is drawn at its height. Esc to exit.",
+  "Направление ската: кликните, куда смотрит скат. Esc — выйти.": "Roof direction: click where the slope faces. Esc to exit.",
+  "Направление": "Direction",
+  "Задать направление двумя точками в 3D": "Set direction with two points in 3D",
+  "Направление двумя точками задаётся в режиме здания.": "Two-point direction works in building mode.",
+  "roof:direction={value}. Отменить — Ctrl+Z.": "roof:direction={value}. Undo with Ctrl+Z."
 }

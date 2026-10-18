@@ -1826,11 +1826,27 @@ function startSplit() {
 // Инструмент «Рулетка» (T): расстояние между двумя точками
 const measureBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="measure"]')!;
 const measureTool = new MeasureTool(overpassLayer, map.getContainer(), (hint) => {
-  measureBtn.classList.toggle('active', measureTool.active);
+  measureBtn.classList.toggle('active', measureTool.active && !measureTool.picking);
+  for (const b of infoEl.querySelectorAll('[data-pick-direction]')) b.classList.toggle('active', measureTool.picking);
   syncCursor();
   toolHint(hint);
 });
 measureBtn.addEventListener('click', () => (measureTool.active ? measureTool.stop() : startMeasure()));
+
+/** Направление ската двумя точками в 3D — для объектов формы, где нажата кнопка у поля roof:direction. */
+function startDirectionPick(form: HTMLFormElement) {
+  if (!focus) { setStatus(tr('Направление двумя точками задаётся в режиме здания.')); return; }
+  const keys = form.dataset.keys ? form.dataset.keys.split(' ') : [form.dataset.key!];
+  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop(); offsetTool.stop(); rotateTool.stop(); measureTool.stop();
+  measureTool.startDirection((deg) => {
+    const value = String(deg);
+    const edits = keys.filter((k) => session.get(k) && session.get(k)!.tags['roof:direction'] !== value)
+      .map((k) => ({ key: k, tags: { ...session.get(k)!.tags, 'roof:direction': value } }));
+    if (edits.length === 1) session.setTags(edits[0].key, { 'roof:direction': value });
+    else if (edits.length) session.editMany(edits);
+    setStatus(tr('roof:direction={value}. Отменить — Ctrl+Z.', { value }));
+  });
+}
 
 function startMeasure() {
   if (!focus) return;
@@ -3650,6 +3666,11 @@ infoEl.addEventListener('click', (e) => {
   if (link) { e.preventDefault(); select(link.dataset.select); return; }
   const btn = (e.target as HTMLElement).closest('button');
   if (!btn) return;
+  if (btn.dataset.pickDirection !== undefined) {
+    const form = btn.closest<HTMLFormElement>('.tag-form');
+    if (measureTool.picking) measureTool.stop(); else if (form) startDirectionPick(form);
+    return;
+  }
   if (btn.dataset.merge !== undefined) return mergeIntoBuilding();
   if (btn.dataset.addSelectedParts !== undefined) return addSelectedPartsToGroup();
   if (btn.dataset.focusExit !== undefined) return closeFocus();

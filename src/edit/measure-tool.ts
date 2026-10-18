@@ -16,6 +16,8 @@ export class MeasureTool {
   private locked?: 0 | 1 | 2;
   private lastPoint?: [number, number];
   private readonly vcb: HTMLDivElement;
+  /** Режим «направление ската»: вторая точка — на горизонтали первой, результат — азимут в градусах. */
+  private onPick?: (deg: number) => void;
 
   constructor(
     private readonly layer: BuildingsLayer,
@@ -29,6 +31,16 @@ export class MeasureTool {
   }
 
   get active() { return this.state !== 'off'; }
+  /** Включён режим задания направления (а не рулетка). */
+  get picking() { return !!this.onPick; }
+
+  /** Направление двумя кликами: первая точка задаёт высоту, вторая — на этой горизонтали. */
+  startDirection(onPick: (deg: number) => void) {
+    this.reset();
+    this.onPick = onPick;
+    this.state = 'first';
+    this.onState(tr('Направление ската: кликните начальную точку — по её высоте строится направление. Esc — выйти.'));
+  }
 
   start() {
     this.state = 'first';
@@ -37,6 +49,7 @@ export class MeasureTool {
 
   stop() {
     this.reset();
+    this.onPick = undefined;
     this.state = 'off';
     this.onState('');
   }
@@ -49,7 +62,15 @@ export class MeasureTool {
       this.a = p;
       this.state = 'second';
       this.show(p);
-      this.onState(tr('Рулетка: кликните вторую точку. Esc — отмена.'));
+      this.onState(this.onPick ? tr('Направление ската: кликните, куда смотрит скат. Esc — выйти.') : tr('Рулетка: кликните вторую точку. Esc — отмена.'));
+      return;
+    }
+    if (this.onPick) {
+      const d = p.clone().sub(this.a!);
+      if (Math.hypot(d.x, d.y) < 1e-3) return;
+      const pick = this.onPick;
+      this.stop();
+      pick(bearing(d));
       return;
     }
     // Замер остаётся на экране; следующий клик начнёт новый
@@ -69,14 +90,15 @@ export class MeasureTool {
   /** true — клавиша обработана. */
   key(e: KeyboardEvent): boolean {
     if (!this.active) return false;
-    if (e.key === 'Shift') {
+    if (e.key === 'Shift' && !this.onPick) {
       if (e.type === 'keyup') this.locked = undefined;
       else if (!e.repeat && this.state === 'second' && this.a && this.b) this.locked = this.nearestAxis(this.b.clone().sub(this.a));
       if (this.lastPoint) this.move(this.lastPoint);
       return true;
     }
     if (e.type !== 'keydown' || e.key !== 'Escape') return false;
-    if (this.state === 'second' || !this.vcb.hidden) { this.reset(); this.state = 'first'; this.start(); } else this.stop();
+    if (this.onPick) this.stop();
+    else if (this.state === 'second' || !this.vcb.hidden) { this.reset(); this.state = 'first'; this.start(); } else this.stop();
     return true;
   }
 
@@ -84,6 +106,12 @@ export class MeasureTool {
   private pointAt(point: [number, number]): THREE.Vector3 | undefined {
     if (this.locked !== undefined && this.a) return this.onAxis(point, this.axes()[this.locked]);
     this.snap = this.layer.snapAt(point, undefined, undefined, { from: this.a });
+    if (this.onPick && this.a) {
+      // Вторая точка — на горизонтальной плоскости первой: привязку проецируем, иначе луч курсора
+      const z = this.a.z;
+      if (this.snap) return this.snap.local.clone().setZ(z);
+      return this.layer.focusRay(point)?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3()) ?? undefined;
+    }
     if (this.snap) return this.snap.local.clone();
     const hit = this.layer.focusRayHits(point)[0];
     if (hit) return hit.local.clone();
@@ -122,6 +150,12 @@ export class MeasureTool {
     const d = b.clone().sub(a);
     const flat = Math.hypot(d.x, d.y);
     this.vcb.hidden = false;
+    if (this.onPick) {
+      const deg = bearing(d);
+      this.vcb.innerHTML = `<span class="vcb-label">${tr('Направление')}</span><span class="vcb-value">${flat < 1e-3 ? '—' : deg}</span>°
+        <span class="vcb-axis">${flat < 1e-3 ? '' : compass(deg)}</span>`;
+      return;
+    }
     this.vcb.innerHTML = `<span class="vcb-label">${done ? tr('Замер') : tr('Расстояние')}</span><span class="vcb-value">${d.length().toFixed(2)}</span> ${tr('м')}
       <span class="vcb-axis">${this.locked !== undefined ? `${tr('по оси {axis} (Shift)', { axis: 'xyz'[this.locked] })} · ` : ''}${tr('по горизонтали {h} · по высоте {v}', { h: flat.toFixed(2), v: `${d.z >= 0 ? '+' : ''}${d.z.toFixed(2)}` })}</span>`;
   }
@@ -133,4 +167,14 @@ export class MeasureTool {
     this.vcb.hidden = true;
     this.layer.setMoveGuide(undefined);
   }
+}
+
+/** Азимут (0 — север, по часовой) горизонтальной проекции вектора, целые градусы 0–359. */
+function bearing(d: THREE.Vector3): number {
+  return (Math.round(Math.atan2(d.x, d.y) * 180 / Math.PI) + 360) % 360;
+}
+
+const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+function compass(deg: number): string {
+  return COMPASS[Math.round(deg / 22.5) % 16];
 }

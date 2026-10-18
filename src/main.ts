@@ -6771,7 +6771,7 @@ async function doUpload() {
       if (newKey) {
         // Созданное отношение получило настоящий id
         const g = editGroups.get(e.key);
-        if (g) { editGroups.delete(e.key); g.id = Number(newKey.split('/')[1]); editGroups.set(newKey, g); }
+        if (g) { editGroups.delete(e.key); g.id = Number(newKey.split('/')[1]); g.key = newKey; editGroups.set(newKey, g); }
         selection = selection.map((k) => (k === e.key ? newKey : k));
         if (selectedKey === e.key) selectedKey = newKey;
         if (indoorEdited.delete(e.key)) indoorEdited.add(newKey);
@@ -6794,6 +6794,19 @@ async function doUpload() {
       void k;
     }
     rebuildGroupIndex();
+    // Здание режима получило настоящие id (новое здание с карты, новые части): сцена и группа — по новым ключам,
+    // иначе «Вытянуть» и выбор ищут уже несуществующий объект
+    if (focus && [...saved.values()].some((v) => v.newKey)) {
+      const renamed = (k: string) => saved.get(k)?.newKey ?? k;
+      const fresh = isSolo(focus) ? soloGroup(renamed(focus.members[0])) : groupOf(renamed(focus.key));
+      if (fresh) {
+        drill = focus = fresh;
+        overpassLayer.setFocus(groupFeatures(fresh), bareOutlines(fresh));
+        syncFocusHidden();
+        paintSelection();
+        renderSelected();
+      }
+    }
     // Сразу в кеш тайлов текущего источника — не ждать фонового обновления тайла
     const savedGroups = [...saved].map(([k, v]) => editGroups.get(v.newKey ?? k)).filter((g): g is EditGroup => !!g)
       .map((g) => ({ key: g.key, type: g.type, id: g.id, version: g.version, tags: { ...g.tags }, members: [...g.members], roles: [...g.roles] }));

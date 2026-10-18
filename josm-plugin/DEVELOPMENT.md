@@ -38,7 +38,8 @@
 
 ## Выпуск
 
-Тег `josm-plugin-vN` (N — целое, больше прошлого: JOSM обновляет модуль по `Plugin-Version`) — workflow
+Тег `josm-plugin-vN` или `josm-plugin-vN.M` (`Plugin-Version` = `N` / `N.M`; JOSM обновляет модуль, если версия в списке
+не совпадает с установленной — сравнивает как строки, поэтому номер только растёт и не повторяется) — workflow
 [josm-plugin.yml](../.github/workflows/josm-plugin.yml) собирает jar на `josm-tested.jar` и выкладывает релиз:
 
 ```sh

@@ -13,6 +13,8 @@ Work in JOSM as usual and edit heights, roofs, building parts and floors in 3D o
   (“3D: …”). It appears in JOSM's history, and JOSM uploads it to OSM together with your other edits.
 - **Shared undo.** Ctrl+Z in the editor or in JOSM undoes the last command, wherever it was made.
 - **Shared selection.** Select a building in JOSM and it is selected in 3D, and the other way round.
+- **Tagged changesets.** When an upload from JOSM contains edits made in 3D, the plugin adds `#simple3d` to the
+  changeset's `hashtags`, so these changesets are easy to find (for example in OSMCha).
 - **No extra login.** The editor shows your JOSM user; uploading to OSM happens in JOSM.
 
 ## Installation

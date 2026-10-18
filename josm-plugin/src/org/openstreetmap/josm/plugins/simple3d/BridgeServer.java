@@ -378,6 +378,34 @@ class BridgeServer {
 
     private volatile boolean askedIdentity;
 
+    /** Объекты, которые меняли правки из 3D (слабые ссылки: удалённые из слоя забываются). */
+    private final Set<OsmPrimitive> touched = java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>()));
+
+    /** Хештег пакета правок, в котором есть правки из 3D, — как у отправки из самого редактора. */
+    static final String HASHTAG = "#simple3d";
+
+    /**
+     * Перед отправкой из JOSM: если среди отправляемых есть объекты, которые меняли правки из 3D, — #simple3d
+     * в теге hashtags пакета правок (через «;», как пишет JOSM).
+     */
+    org.openstreetmap.josm.actions.upload.UploadHook uploadHook() {
+        return new org.openstreetmap.josm.actions.upload.UploadHook() {
+            @Override
+            public void modifyChangesetTags(Map<String, String> tags) {
+                DataSet ds = MainApplication.getLayerManager().getEditDataSet();
+                if (ds == null || touched.isEmpty()) return;
+                boolean ours;
+                synchronized (touched) {
+                    ours = ds.allModifiedPrimitives().stream().anyMatch(touched::contains);
+                }
+                if (!ours) return;
+                String h = tags.getOrDefault("hashtags", "");
+                if (java.util.Arrays.stream(h.split(";")).anyMatch(t -> t.trim().equalsIgnoreCase(HASHTAG))) return;
+                tags.put("hashtags", h.isBlank() ? HASHTAG : h + ";" + HASHTAG);
+            }
+        };
+    }
+
     /** Имя следующей команды (комментарий из changeset/create). */
     private volatile String label = "";
 
@@ -509,12 +537,14 @@ class BridgeServer {
 
         if (!cmds.isEmpty()) {
             String name = "3D: " + (label.isEmpty() ? "Simple3D" : label);
-            UndoRedoHandler.getInstance().add(new SequenceCommand(ds, name, cmds, false) {
+            SequenceCommand seq = new SequenceCommand(ds, name, cmds, false) {
                 @Override
                 public String getDescriptionText() {
                     return name;
                 }
-            });
+            };
+            UndoRedoHandler.getInstance().add(seq);
+            touched.addAll(seq.getParticipatingPrimitives());
         }
         // Новым объектам JOSM выдал свои временные id — сообщаем их как new_id
         for (Element e : newEls) {

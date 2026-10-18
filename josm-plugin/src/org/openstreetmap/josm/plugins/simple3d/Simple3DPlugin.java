@@ -41,6 +41,7 @@ public class Simple3DPlugin extends Plugin {
             Logging.error("Simple3D: не удалось открыть порт " + PORT.get() + ": " + e);
         }
         MainMenu.add(MainApplication.getMenu().viewMenu, new OpenEditorAction());
+        org.openstreetmap.josm.actions.UploadAction.registerUploadHook(server.uploadHook());
     }
 
     /** Открыть 3D-редактор в браузере над текущим видом карты. */

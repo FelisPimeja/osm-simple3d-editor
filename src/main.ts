@@ -2024,6 +2024,15 @@ for (const type of ['keydown', 'keyup'] as const) {
 window.addEventListener('blur', () => { pickModifier = false; syncCursor(); });
 
 /** Какой-нибудь инструмент режима здания включён. */
+/**
+ * Инструмент посреди действия (тянут, режут, рисуют): подменять данные под ним нельзя. Включённый, но ждущий
+ * (перемещение в режиме здания включено всегда) — можно: иначе в режиме здания не доходили бы правки из JOSM.
+ */
+function toolBusy(): boolean {
+  return moveTool.state === 'move' || pushTool.state === 'push' || rotateTool.state === 'ref' || rotateTool.state === 'rotate'
+    || offsetTool.state === 'offset' || splitTool.state === 'cut' || drawTool.active || measureTool.state === 'second' || !!copyPick;
+}
+
 function toolActive(): boolean {
   return moveTool.active || pushTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || paintTool.active || offsetTool.active || !!copyPick;
 }
@@ -6824,7 +6833,7 @@ let josmSyncTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleJosmSync() {
   clearTimeout(josmSyncTimer);
   josmSyncTimer = setTimeout(() => {
-    if (uploading || toolActive()) return scheduleJosmSync();
+    if (uploading || toolBusy()) return scheduleJosmSync();
     if (session.changes().length) void doUpload();
   }, 300);
 }
@@ -7179,7 +7188,7 @@ function josmApplied(l: JosmLayer): JosmLayer {
 // и не включён инструмент (пересборка под курсором сбила бы правку); перерисовка — только если слой изменился
 async function pollJosm() {
   try {
-    if (document.hidden || toolActive()) return;
+    if (document.hidden || toolBusy()) return;
     if (!josmReady) { await loadJosm(true); return; }
     const next = await pollJosmLayer();
     if (next) {
@@ -7200,7 +7209,7 @@ async function pollJosm() {
       paintSelection();
       renderSelected();
     }
-  } finally { setTimeout(pollJosm, josmPlugin() ? (document.hidden || toolActive() ? 500 : 50) : 2000); }
+  } finally { setTimeout(pollJosm, josmPlugin() ? (document.hidden || toolBusy() ? 500 : 50) : 2000); }
 }
 if (josmMode) setTimeout(pollJosm, 2000);
 // Панели ввода инструментов (VCB) стоят над строкой состояния: её высоту пишем в --statusbar-h (style.css)
@@ -7456,7 +7465,7 @@ function syncJosmSelection() {
   });
 }
 if (josmMode) watchJosmSelection((keys) => {
-  if (!josmPlugin() || toolActive()) return;
+  if (!josmPlugin() || toolBusy()) return;
   const sig = selSig(keys);
   if (sig === josmSelSig || sig === selSig(currentSelectionKeys())) { josmSelSig = sig; return; }
   josmSelSig = sig;

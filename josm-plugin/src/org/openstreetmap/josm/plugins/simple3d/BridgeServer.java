@@ -247,6 +247,13 @@ class BridgeServer {
             UndoRedoHandler h = UndoRedoHandler.getInstance();
             List<Command> undo = h.getUndoCommands(), redo = h.getRedoCommands();
             org.openstreetmap.josm.data.UserIdentityManager u = org.openstreetmap.josm.data.UserIdentityManager.getInstance();
+            // Вход по OAuth: имя JOSM узнаёт запросом к серверу — попросим его один раз (в фоне, не на EDT)
+            if (u.isAnonymous() && !askedIdentity) {
+                askedIdentity = true;
+                Thread t = new Thread(u::initFromOAuth, "simple3d-identity");
+                t.setDaemon(true);
+                t.start();
+            }
             extra.set(",\"layer\":" + (ds != null)
                 + (ds != null ? ",\"layerName\":" + str(MainApplication.getLayerManager().getEditLayer().getName()) : "")
                 + ",\"api\":" + str(org.openstreetmap.josm.io.OsmApi.getOsmApi().getBaseUrl())
@@ -364,6 +371,8 @@ class BridgeServer {
     private static String key(String type, long id) {
         return type + "/" + id;
     }
+
+    private volatile boolean askedIdentity;
 
     /** Имя следующей команды (комментарий из changeset/create). */
     private volatile String label = "";

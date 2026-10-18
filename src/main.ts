@@ -7490,4 +7490,8 @@ if (josmMode) watchJosmSelection((keys) => {
   // Здесь выделено по-своему (часть → всё здание, дорога → ничего) — не повод менять выделение в JOSM:
   // согласованным считаем то, что получилось здесь, и отрисовка (paintSelection) его не отправит
   josmSelSig = selSig(currentSelectionKeys());
+}, (v) => {
+  // Повторный «Open in 3D editor» в JOSM: этот редактор открыт — показать вид JOSM здесь (второе окно не открывается)
+  map.jumpTo({ center: [v.lon, v.lat], zoom: v.zoom });
+  window.focus();
 });

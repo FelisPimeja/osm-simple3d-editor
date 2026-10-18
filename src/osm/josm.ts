@@ -69,14 +69,18 @@ export async function refreshJosmStatus(): Promise<JosmStatus | undefined> {
  * Выделение в JOSM: f вызывается с ключами type/id при каждом изменении (долгий опрос плагина).
  * Пустой список — в JOSM ничего не выделено.
  */
-export function watchJosmSelection(f: (keys: string[]) => void) {
+export function watchJosmSelection(f: (keys: string[]) => void, onView?: (v: JosmView) => void) {
   let rev: number | undefined;
+  // Вид, запрошенный до открытия этой страницы, не применяем: её адрес уже с видом JOSM
+  let viewSeq: number | undefined;
   const loop = async () => {
     try {
       const res = await fetch(`${PLUGIN_URL}/simple3d/selection${rev ? `?since=${rev}` : ''}`);
       if (res.status === 200) {
-        const s = (await res.json()) as { rev: number; keys: string[] };
+        const s = (await res.json()) as { rev: number; keys: string[]; viewSeq?: number; view?: JosmView };
         rev = s.rev;
+        if (viewSeq !== undefined && s.viewSeq !== undefined && s.viewSeq > viewSeq && s.view) onView?.(s.view);
+        viewSeq = s.viewSeq ?? viewSeq;
         f(s.keys);
       }
       setTimeout(loop, 0);
@@ -84,6 +88,9 @@ export function watchJosmSelection(f: (keys: string[]) => void) {
   };
   void loop();
 }
+
+/** Вид карты JOSM: повторный выбор «Open in 3D editor» при открытом редакторе — перейти к нему. */
+export interface JosmView { lat: number; lon: number; zoom: number }
 
 /** Выделить в JOSM (пустой список — снять выделение). */
 export async function sendJosmSelection(keys: string[]) {

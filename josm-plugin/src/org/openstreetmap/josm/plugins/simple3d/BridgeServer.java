@@ -270,7 +270,46 @@ class BridgeServer {
     }
 
     /** Выделение в JOSM: ключи type/id; since — ждать изменения после этой ревизии (до 25 с, иначе 204). */
+    /** Открытый редактор всё время ждёт выделение (долгий опрос): сколько таких запросов сейчас и когда был последний. */
+    private int editorWaiting;
+    private volatile long editorSeen;
+    /** Вид, к которому перейти открытому редактору (повторный выбор пункта меню), и его номер. */
+    private String view;
+    private long viewSeq;
+
+    /** Редактор открыт: ждёт выделение сейчас или ждал только что (между запросами). */
+    boolean editorOpen() {
+        synchronized (revLock) {
+            return editorWaiting > 0 || System.currentTimeMillis() - editorSeen < 4000;
+        }
+    }
+
+    /** Перевести открытый редактор к виду JOSM: он получит его вместе с выделением. */
+    void goTo(double lat, double lon, double zoom) {
+        synchronized (revLock) {
+            view = String.format(java.util.Locale.ROOT, "{\"lat\":%.7f,\"lon\":%.7f,\"zoom\":%.2f}", lat, lon, zoom);
+            viewSeq++;
+            selRev++;
+            revLock.notifyAll();
+        }
+    }
+
     private void selection(Exchange ex, String since) throws Exception {
+        synchronized (revLock) {
+            editorWaiting++;
+            editorSeen = System.currentTimeMillis();
+        }
+        try {
+            selectionInner(ex, since);
+        } finally {
+            synchronized (revLock) {
+                editorWaiting--;
+                editorSeen = System.currentTimeMillis();
+            }
+        }
+    }
+
+    private void selectionInner(Exchange ex, String since) throws Exception {
         if (since != null) {
             long s = Long.parseLong(since);
             long deadline = System.currentTimeMillis() + 25_000;
@@ -286,11 +325,15 @@ class BridgeServer {
                 }
             }
         }
-        long r;
+        long r, vs;
+        String v;
         synchronized (revLock) {
             r = selRev;
+            vs = viewSeq;
+            v = view;
         }
-        StringBuilder sb = new StringBuilder("{\"rev\":").append(r).append(",\"keys\":[");
+        StringBuilder sb = new StringBuilder("{\"rev\":").append(r).append(",\"viewSeq\":").append(vs)
+            .append(v != null ? ",\"view\":" + v : "").append(",\"keys\":[");
         DataSet ds = MainApplication.getLayerManager().getEditDataSet();
         if (ds != null) {
             readLocked(ds, () -> {

@@ -40,16 +40,19 @@ public class Simple3DPlugin extends Plugin {
         } catch (Exception e) {
             Logging.error("Simple3D: не удалось открыть порт " + PORT.get() + ": " + e);
         }
-        MainMenu.add(MainApplication.getMenu().viewMenu, new OpenEditorAction());
+        MainMenu.add(MainApplication.getMenu().viewMenu, new OpenEditorAction(server));
         org.openstreetmap.josm.actions.UploadAction.registerUploadHook(server.uploadHook());
     }
 
     /** Открыть 3D-редактор в браузере над текущим видом карты. */
     static class OpenEditorAction extends JosmAction {
-        OpenEditorAction() {
+        private final BridgeServer server;
+
+        OpenEditorAction(BridgeServer server) {
             super(tr("Open in 3D editor (Simple3D)"), "simple3d", tr("Open the active layer in the Simple 3D Buildings editor"),
                 Shortcut.registerShortcut("view:simple3d", tr("View: {0}", tr("Open in 3D editor (Simple3D)")),
                     KeyEvent.VK_3, Shortcut.ALT_CTRL_SHIFT), false);
+            this.server = server;
         }
 
         @Override
@@ -63,11 +66,17 @@ public class Simple3DPlugin extends Plugin {
             else if (api.contains("openhistoricalmap")) url += "&server=ohm";
             else if (api.contains("openstreetmap.org")) url += "&server=osm";
             MapView mv = MainApplication.isDisplayingMapView() ? MainApplication.getMap().mapView : null;
-            if (mv != null) {
-                LatLon c = mv.getProjection().eastNorth2latlon(mv.getCenter());
-                double zoom = Math.max(16, Math.min(20, Math.log(156543.03 * Math.cos(Math.toRadians(c.lat())) / mv.getDist100Pixel() * 100) / Math.log(2)));
-                url += String.format(Locale.ROOT, "#%.2f/%.6f/%.6f", zoom, c.lat(), c.lon());
+            LatLon c = mv != null ? mv.getProjection().eastNorth2latlon(mv.getCenter()) : null;
+            double zoom = c == null ? 0
+                : Math.max(16, Math.min(20, Math.log(156543.03 * Math.cos(Math.toRadians(c.lat())) / mv.getDist100Pixel() * 100) / Math.log(2)));
+            // Редактор уже открыт — второе окно не нужно: открытый переходит к виду JOSM
+            if (server.editorOpen()) {
+                if (c != null) server.goTo(c.lat(), c.lon(), zoom);
+                new org.openstreetmap.josm.gui.Notification(tr("The 3D editor is already open — it now shows the current JOSM view."))
+                    .setIcon(javax.swing.JOptionPane.INFORMATION_MESSAGE).show();
+                return;
             }
+            if (c != null) url += String.format(Locale.ROOT, "#%.2f/%.6f/%.6f", zoom, c.lat(), c.lon());
             AppWindow.open(url);
         }
     }

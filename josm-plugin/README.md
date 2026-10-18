@@ -38,7 +38,8 @@ Requires JOSM 19613 or newer.
 Download some data in JOSM and choose **View → Open in 3D editor (Simple3D)** (Ctrl+Alt+Shift+3).
 The editor opens at the current map view in its own app window — no tabs or address bar, on the right half of
 the screen JOSM is on. This needs a Chromium-based browser (Chrome, Edge, Chromium, Brave or Vivaldi);
-without one, the editor opens in your default browser.
+without one, the editor opens in your default browser. If the editor is already open, the menu item does not
+open a second window: the open editor moves to the current JOSM view.
 
 The page is served by the plugin itself at `http://127.0.0.1:8112/editor/` (a copy of the editor website), so it
 works in every browser, Safari included. The plugin listens on `127.0.0.1` only and answers only the editor's

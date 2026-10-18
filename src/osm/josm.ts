@@ -14,7 +14,8 @@ export const JOSM_URL = 'http://127.0.0.1:8111';
  * сообщает об изменениях сразу (долгий опрос) и принимает правки редактора через подмножество OSM API 0.6:
  * они становятся одной командой JOSM (отменяется Ctrl+Z в JOSM).
  */
-export const PLUGIN_URL = 'http://127.0.0.1:8112';
+// Страницу отдал сам плагин (http://127.0.0.1:порт/editor/ — так работает и Safari) — он по тому же адресу
+export const PLUGIN_URL = location.hostname === '127.0.0.1' && location.pathname.startsWith('/editor/') ? location.origin : 'http://127.0.0.1:8112';
 /** Плагин отвечает: правки уходят в JOSM, слой читается через него. */
 let plugin = false;
 /** Ревизия слоя у плагина (растёт при каждом изменении данных в JOSM). */

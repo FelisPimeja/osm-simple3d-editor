@@ -156,6 +156,8 @@ final class MiniHttp {
         private static String reason(int status) {
             switch (status) {
             case 200: return "OK";
+            case 302: return "Found";
+            case 304: return "Not Modified";
             case 204: return "No Content";
             case 400: return "Bad Request";
             case 404: return "Not Found";

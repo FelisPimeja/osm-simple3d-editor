@@ -25,6 +25,8 @@ import org.openstreetmap.josm.tools.Shortcut;
  */
 public class Simple3DPlugin extends Plugin {
     static final IntegerProperty PORT = new IntegerProperty("simple3d.port", 8112);
+    /** Открывать редактор через плагин (http://127.0.0.1:порт/editor/), а не прямо с его сайта. */
+    static final org.openstreetmap.josm.data.preferences.BooleanProperty PROXY = new org.openstreetmap.josm.data.preferences.BooleanProperty("simple3d.proxy", true);
     static final StringProperty EDITOR_URL = new StringProperty("simple3d.url", "https://felispimeja.github.io/osm-simple3d-editor/");
 
     private final BridgeServer server;
@@ -50,7 +52,9 @@ public class Simple3DPlugin extends Plugin {
 
         @Override
         public void actionPerformed(ActionEvent e) {
-            String url = EDITOR_URL.get() + (EDITOR_URL.get().contains("?") ? "&" : "?") + "source=josm";
+            // Через плагин (http://127.0.0.1) — иначе Safari со страницы по https не достучится до плагина
+            String page = PROXY.get() ? "http://127.0.0.1:" + PORT.get() + "/editor/" : EDITOR_URL.get();
+            String url = page + (page.contains("?") ? "&" : "?") + "source=josm";
             MapView mv = MainApplication.isDisplayingMapView() ? MainApplication.getMap().mapView : null;
             if (mv != null) {
                 LatLon c = mv.getProjection().eastNorth2latlon(mv.getCenter());

@@ -133,6 +133,15 @@ class BridgeServer {
         String path = ex.getRequestURI().getPath();
         String method = ex.getRequestMethod();
         Map<String, String> q = query(ex.getRequestURI().getRawQuery());
+        if (path.equals("/editor")) {
+            ex.getResponseHeaders().add("Location", "/editor/");
+            send(ex, 302, "text/plain", "");
+            return;
+        }
+        if (path.startsWith("/editor/") && method.equals("GET")) {
+            proxyEditor(ex, path.substring("/editor/".length()));
+            return;
+        }
         if (path.equals("/simple3d/status")) {
             DataSet ds = MainApplication.getLayerManager().getEditDataSet();
             send(ex, 200, "application/json", "{\"plugin\":\"simple3d\",\"protocol\":" + PROTOCOL + ",\"rev\":" + rev()
@@ -515,6 +524,33 @@ class BridgeServer {
 
     private static byte[] readAll(InputStream in) throws IOException {
         return in.readAllBytes();
+    }
+
+    /**
+     * Страница редактора с его сайта (simple3d.url) под адресом плагина: со страницы по https Safari не пускает
+     * запросы к http://127.0.0.1, а страница с того же http-адреса, что и плагин, работает в любом браузере.
+     * Сборка редактора с base './' — пути относительные, подпапка /editor/ ей подходит.
+     */
+    private static void proxyEditor(Exchange ex, String rest) throws IOException {
+        String base = Simple3DPlugin.EDITOR_URL.get();
+        if (!base.endsWith("/")) base += "/";
+        String query = ex.getRequestURI().getRawQuery();
+        java.net.HttpURLConnection c = (java.net.HttpURLConnection) java.net.URI.create(base + rest + (query != null ? "?" + query : "")).toURL().openConnection();
+        c.setConnectTimeout(15_000);
+        c.setReadTimeout(60_000);
+        int status = c.getResponseCode();
+        byte[] body;
+        try (InputStream in = status >= 400 ? c.getErrorStream() : c.getInputStream()) {
+            body = in == null ? new byte[0] : in.readAllBytes();
+        }
+        for (String h : new String[] {"Content-Type", "Cache-Control", "Last-Modified", "ETag"}) {
+            String v = c.getHeaderField(h);
+            if (v != null) ex.getResponseHeaders().add(h, v);
+        }
+        ex.sendResponseHeaders(status, body.length);
+        try (OutputStream os = ex.getResponseBody()) {
+            os.write(body);
+        }
     }
 
     private static void send(Exchange ex, int status, String type, String body) throws IOException {

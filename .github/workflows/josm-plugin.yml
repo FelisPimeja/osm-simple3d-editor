@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # история и теги — для заметок к выпуску
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -41,7 +43,18 @@ jobs:
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
+        # Заметки — заголовки коммитов с изменениями плагина с прошлого выпуска (josm-plugin/, кроме слияний)
         run: |
+          prev=$(git describe --tags --abbrev=0 --match 'josm-plugin-v*' "$GITHUB_REF_NAME^" 2>/dev/null || true)
+          {
+            echo "Плагин simple3d для JOSM, версия $PLUGIN_VERSION."
+            echo
+            if [ -n "$prev" ]; then echo "Изменения с ${prev#josm-plugin-v}:"; else echo "Изменения:"; fi
+            echo
+            git log --no-merges --reverse --format='- %s' ${prev:+$prev..}"$GITHUB_REF_NAME" -- josm-plugin
+            echo
+            echo "Установка и описание: [README](https://github.com/$GITHUB_REPOSITORY/blob/main/josm-plugin/README.ru.md)."
+            [ -n "$prev" ] && echo "Все изменения: https://github.com/$GITHUB_REPOSITORY/compare/$prev...$GITHUB_REF_NAME"
+          } > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" josm-plugin/build/simple3d.jar \
-            --title "JOSM plugin simple3d v$PLUGIN_VERSION" \
-            --notes "Плагин simple3d для JOSM, версия $PLUGIN_VERSION. Установка: josm-plugin/README.md."
+            --title "JOSM plugin simple3d v$PLUGIN_VERSION" --notes-file "$RUNNER_TEMP/notes.md"

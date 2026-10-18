@@ -32,8 +32,12 @@ final class AppWindow {
             try {
                 launch(exe, url);
                 return;
-            } catch (Exception e) {
+            } catch (Exception | LinkageError e) {
+                // Не молча: иначе непонятно, почему открылся обычный браузер
                 Logging.warn("Simple3D: не удалось открыть окно-приложение (" + exe + "): " + e);
+                new org.openstreetmap.josm.gui.Notification(org.openstreetmap.josm.tools.I18n.tr(
+                    "Could not open the 3D editor as an app window ({0}), opening the default browser instead.", e.getMessage()))
+                    .setIcon(javax.swing.JOptionPane.WARNING_MESSAGE).show();
             }
         }
         OpenBrowser.displayUrl(url);

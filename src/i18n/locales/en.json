@@ -936,5 +936,6 @@
   "JOSM: вход не выполнен": "JOSM: not logged in",
   "Правки из 3D сразу попадают в слой JOSM, история отмены общая. Отправка в OSM — из JOSM.": "Edits made in 3D go straight into the JOSM layer and share its undo history. Upload to OSM from JOSM.",
   "JOSM · {server}": "JOSM · {server}",
-  "{server} — данные API": "{server} — API data"
+  "{server} — данные API": "{server} — API data",
+  "Плагин simple3d в JOSM устарел (протокол {v}, нужен {min}). Обновите его: {url} — и перезапустите JOSM.": "The simple3d plugin in JOSM is outdated (protocol {v}, {min} required). Update it from {url} and restart JOSM."
 }

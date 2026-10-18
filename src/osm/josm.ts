@@ -16,6 +16,10 @@ export const JOSM_URL = 'http://127.0.0.1:8111';
  */
 // Страницу отдал сам плагин (http://127.0.0.1:порт/editor/ — так работает и Safari) — он по тому же адресу
 export const PLUGIN_URL = location.hostname === '127.0.0.1' && location.pathname.startsWith('/editor/') ? location.origin : 'http://127.0.0.1:8112';
+/** Минимальная версия протокола плагина (PROTOCOL в BridgeServer.java), с которой работает этот редактор. */
+const MIN_PROTOCOL = 2;
+/** Последняя версия плагина. */
+export const PLUGIN_DOWNLOAD = 'https://github.com/FelisPimeja/osm-simple3d-editor/releases/latest/download/simple3d.jar';
 /** Плагин отвечает: правки уходят в JOSM, слой читается через него. */
 let plugin = false;
 /** Ревизия слоя у плагина (растёт при каждом изменении данных в JOSM). */
@@ -100,7 +104,13 @@ export function josmLayer(): Promise<JosmLayer> {
 }
 
 async function loadLayer(): Promise<JosmLayer> {
-  plugin = await fetch(`${PLUGIN_URL}/simple3d/status`).then((r) => r.ok).catch(() => false);
+  const st = await fetch(`${PLUGIN_URL}/simple3d/status`).then((r) => (r.ok ? r.json() as Promise<{ protocol?: number }> : undefined)).catch(() => undefined);
+  plugin = !!st;
+  if (st && (st.protocol ?? 0) < MIN_PROTOCOL) {
+    plugin = false;
+    throw new Error(tr('Плагин simple3d в JOSM устарел (протокол {v}, нужен {min}). Обновите его: {url} — и перезапустите JOSM.',
+      { v: st.protocol ?? 0, min: MIN_PROTOCOL, url: PLUGIN_DOWNLOAD }));
+  }
   if (plugin) {
     const xml = await exportXml();
     if (!xml.trim()) throw new Error(tr('В JOSM нет активного слоя данных OSM. Откройте или выберите слой данных.'));

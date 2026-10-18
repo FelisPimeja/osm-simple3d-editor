@@ -6,6 +6,8 @@ name: Pages
 on:
   push:
     branches: [main]
+    # Плагин JOSM собирается своим workflow (josm-plugin.yml) — сайт от него не зависит
+    paths-ignore: ['josm-plugin/**', '.github/workflows/josm-plugin.yml']
   workflow_dispatch:
 
 permissions:

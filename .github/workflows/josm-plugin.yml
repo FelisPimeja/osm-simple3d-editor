@@ -1,0 +1,47 @@
+# Плагин simple3d для JOSM: сборка при изменениях в josm-plugin/ и выпуск по тегу josm-plugin-vN.
+# Выпуск — релиз GitHub с simple3d.jar; Plugin-Version в манифесте = N (JOSM сравнивает версии для обновления).
+# Постоянная ссылка на последнюю версию: …/releases/latest/download/simple3d.jar.
+name: JOSM plugin
+
+on:
+  push:
+    branches: [main]
+    paths: ['josm-plugin/**', '.github/workflows/josm-plugin.yml']
+    tags: ['josm-plugin-v*']
+  pull_request:
+    paths: ['josm-plugin/**', '.github/workflows/josm-plugin.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: JOSM (tested)
+        run: curl -fsSL -o "$RUNNER_TEMP/josm.jar" https://josm.openstreetmap.de/josm-tested.jar
+      - name: Version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then echo "PLUGIN_VERSION=${GITHUB_REF_NAME#josm-plugin-v}" >> "$GITHUB_ENV"
+          else echo "PLUGIN_VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"; fi
+      - run: josm-plugin/build.sh
+        env:
+          JOSM_JAR: ${{ runner.temp }}/josm.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simple3d-${{ env.PLUGIN_VERSION }}
+          path: josm-plugin/build/simple3d.jar
+      - name: Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" josm-plugin/build/simple3d.jar \
+            --title "JOSM plugin simple3d v$PLUGIN_VERSION" \
+            --notes "Плагин simple3d для JOSM, версия $PLUGIN_VERSION. Установка: josm-plugin/README.md."

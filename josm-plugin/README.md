@@ -34,11 +34,31 @@
 Редактор отправляет в JOSM тем же кодом, что и в OSM (`src/osm/upload.ts`, параметр `to`).
 Удаление — как `if-unused`: то, на что ещё ссылаются, не удаляется. Адрес редактора — настройка `simple3d.url`.
 
-## Сборка и установка
+## Установка
+
+Скачать [последнюю версию](https://github.com/FelisPimeja/osm-simple3d-editor/releases/latest/download/simple3d.jar)
+в папку модулей JOSM (macOS: `~/Library/JOSM/plugins/`, Linux: `~/.local/share/JOSM/plugins/`,
+Windows: `%APPDATA%\JOSM\plugins\`), включить `simple3d` в Настройки → Модули и перезапустить JOSM.
+
+## Выпуск
+
+Тег `josm-plugin-vN` (N — целое, больше прошлого: JOSM обновляет модуль по `Plugin-Version`) — workflow
+[josm-plugin.yml](../.github/workflows/josm-plugin.yml) собирает jar на `josm-tested.jar` и выкладывает релиз:
 
 ```sh
-JAVA_HOME=$(brew --prefix openjdk) ./build.sh        # JOSM_JAR=… — другой jar JOSM
-cp build/simple3d.jar ~/Library/JOSM/plugins/        # Linux: ~/.local/share/JOSM/plugins/
+git tag josm-plugin-v3 && git push origin josm-plugin-v3
 ```
 
-Затем включить `simple3d` в Настройки → Модули и перезапустить JOSM.
+Без тега workflow только проверяет сборку (изменения в `josm-plugin/`). Сайт редактора от плагина не зависит:
+`pages.yml` такие изменения пропускает.
+
+**Протокол.** `PROTOCOL` в `BridgeServer.java` растёт, когда редактору нужно новое от плагина; минимальная версия,
+с которой работает редактор, — `MIN_PROTOCOL` в `src/osm/josm.ts`. Со старым плагином редактор просит обновить его.
+Поднимая `MIN_PROTOCOL`, сначала выпустите плагин: сайт обновляется сразу, плагин у пользователей — нет.
+
+## Сборка вручную
+
+```sh
+JAVA_HOME=$(brew --prefix openjdk) ./build.sh        # JOSM_JAR=… — другой jar JOSM, PLUGIN_VERSION=… — версия
+cp build/simple3d.jar ~/Library/JOSM/plugins/
+```

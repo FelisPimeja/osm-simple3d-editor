@@ -1,6 +1,6 @@
 Manifest-Version: 1.0
 Plugin-Class: org.openstreetmap.josm.plugins.simple3d.Simple3DPlugin
-Plugin-Version: 1
+Plugin-Version: dev
 Plugin-Mainversion: 19439
 Plugin-Description: Two-way link with the Simple 3D Buildings editor (osm-simple3d-editor): the editor reads the active layer and writes its edits back as undoable JOSM commands.
 Plugin-Link: https://github.com/felispimeja/osm-simple3d-editor

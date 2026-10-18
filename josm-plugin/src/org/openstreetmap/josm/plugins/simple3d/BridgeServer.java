@@ -64,7 +64,11 @@ import org.openstreetmap.josm.plugins.simple3d.MiniHttp.Exchange;
  * </ul>
  */
 class BridgeServer {
-    static final int PROTOCOL = 1;
+    /**
+     * Версия протокола: растёт при несовместимых изменениях и при новых возможностях, без которых редактор не обойдётся
+     * (редактор знает минимальную, MIN_PROTOCOL в src/osm/josm.ts). 2 — выделение, история, пользователь в status.
+     */
+    static final int PROTOCOL = 2;
 
     private final int port;
     private MiniHttp http;

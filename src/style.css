@@ -218,9 +218,9 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .colour-field { display: flex; gap: 4px; }
 .direction-field { display: flex; gap: 4px; flex: 1; min-width: 0; }
 .direction-field > input, .direction-field > .inherit-field { flex: 1; min-width: 0; }
-.direction-pick { flex: none; width: 28px; padding: 0; display: grid; place-items: center; cursor: pointer; }
-.direction-pick svg { width: 16px; height: 16px; }
-.direction-pick.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+#info .direction-pick { flex: none; width: 28px; padding: 0; display: grid; place-items: center; cursor: pointer; }
+.direction-pick svg { width: 16px; height: 16px; display: block; }
+#info .direction-pick.active { background: #2563eb; color: #fff; border-color: #2563eb; }
 .colour-field input[type="color"] { width: 32px; height: 26px; padding: 0; border: 1px solid #ccc; border-radius: 4px; flex: none; }
 .tag-form [data-revert] { justify-self: start; margin-top: 4px; }
 .inherit-field { position: relative; display: block; flex: 1; min-width: 0; }

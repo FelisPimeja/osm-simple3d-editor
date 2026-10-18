@@ -318,7 +318,7 @@ export function renderValueCombo(options: string[], attributes: string, value: s
 }
 
 /** Значок «задать направление двумя точками» — стрелка из точки. */
-const ICON_DIRECTION = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="3.5" cy="12.5" r="1.5"/><path d="M5 11l1.5-1.5M8 8l1.5-1.5"/><path d="M13 3l-4.5 1M13 3l-1 4.5M13 3l-2 2"/></svg>';
+const ICON_DIRECTION = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(.5 -.5)"><circle cx="3.5" cy="12.5" r="1.5"/><path d="M5 11l1.5-1.5M8 8l1.5-1.5"/><path d="M13 3l-4.5 1M13 3l-1 4.5M13 3l-2 2"/></g></svg>';
 
 /** Поле направления с кнопкой инструмента «две точки в 3D». */
 function directionField(input: string): string {

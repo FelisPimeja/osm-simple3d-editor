@@ -138,10 +138,14 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 #status a, #status button { pointer-events: auto; }
 #status.error { color: #b91c1c; }
 /* Копировать сообщение: сама строка не ловит мышь (клики проходят на карту), поэтому текст не выделить */
-.status-copy { pointer-events: auto; display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 0; border-radius: 4px;
+.status-copy { pointer-events: auto; flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; border: 0; border-radius: 4px;
   background: none; color: #6b7280; font: inherit; font-size: 12px; cursor: pointer; }
 .status-copy:hover { background: rgba(0,0,0,.06); color: #111; }
 #status:empty ~ .status-copy { display: none; }
+/* Кнопка слева от сообщения (в разметке — после него: её прячет #status:empty ~) */
+.status-line { display: flex; align-items: flex-start; gap: 4px; max-width: 100%; }
+.status-line .status-copy { order: -1; margin-top: 1px; }
+.status-line:not(:has(#status:not(:empty))) { display: none; }
 .status-copy[data-done] { color: #15803d; }
 @media (max-width: 1000px) { #statusbar { width: max-content; max-width: calc(100% - 24px); bottom: 56px; } .vcb { bottom: calc(64px + var(--statusbar-h, 0px)); } }
 /* Мобильная версия: над карточкой здания и панелями, прижатыми к низу (отступ считает main.ts) */

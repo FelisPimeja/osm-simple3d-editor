@@ -16,7 +16,6 @@ import org.openstreetmap.josm.gui.MapView;
 import org.openstreetmap.josm.plugins.Plugin;
 import org.openstreetmap.josm.plugins.PluginInformation;
 import org.openstreetmap.josm.tools.Logging;
-import org.openstreetmap.josm.tools.OpenBrowser;
 import org.openstreetmap.josm.tools.Shortcut;
 
 /**
@@ -68,7 +67,7 @@ public class Simple3DPlugin extends Plugin {
                 double zoom = Math.max(16, Math.min(20, Math.log(156543.03 * Math.cos(Math.toRadians(c.lat())) / mv.getDist100Pixel() * 100) / Math.log(2)));
                 url += String.format(Locale.ROOT, "#%.2f/%.6f/%.6f", zoom, c.lat(), c.lon());
             }
-            OpenBrowser.displayUrl(url);
+            AppWindow.open(url);
         }
     }
 }

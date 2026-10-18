@@ -46,7 +46,7 @@ public class Simple3DPlugin extends Plugin {
     /** Открыть 3D-редактор в браузере над текущим видом карты. */
     static class OpenEditorAction extends JosmAction {
         OpenEditorAction() {
-            super(tr("Open in 3D editor (Simple3D)"), (String) null, tr("Open the active layer in the Simple 3D Buildings editor"),
+            super(tr("Open in 3D editor (Simple3D)"), "simple3d", tr("Open the active layer in the Simple 3D Buildings editor"),
                 Shortcut.registerShortcut("view:simple3d", tr("View: {0}", tr("Open in 3D editor (Simple3D)")),
                     KeyEvent.VK_3, Shortcut.ALT_CTRL_SHIFT), false);
         }

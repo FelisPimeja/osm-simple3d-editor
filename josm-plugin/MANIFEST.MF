@@ -1,9 +1,11 @@
 Manifest-Version: 1.0
 Plugin-Class: org.openstreetmap.josm.plugins.simple3d.Simple3DPlugin
 Plugin-Version: dev
-Plugin-Mainversion: 19439
-Plugin-Description: Two-way link with the Simple 3D Buildings editor (osm-simple3d-editor): the editor reads the active layer and writes its edits back as undoable JOSM commands.
-Plugin-Link: https://github.com/felispimeja/osm-simple3d-editor
-Author: osm-simple3d-editor
+Plugin-Mainversion: 19613
+Plugin-Minimum-Java-Version: 17
+Plugin-Description: Edit 3D buildings (Simple 3D Buildings, indoor) of the active layer in the Simple3D web editor: edits, undo and selection are shared with JOSM. View → Open in 3D editor.
+Plugin-Icon: images/simple3d.svg
+Plugin-Link: https://github.com/FelisPimeja/osm-simple3d-editor/tree/main/josm-plugin#readme
+Author: FelisPimeja
 Plugin-Canloadatruntime: true
 

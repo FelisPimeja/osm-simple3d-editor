@@ -1,64 +1,60 @@
-# Плагин simple3d для JOSM
+# simple3d — JOSM plugin for the Simple3D building editor
 
-Двусторонняя связь JOSM и 3D-редактора:
+[Русский](README.ru.md)
 
-- редактор читает активный слой JOSM и узнаёт об изменениях сразу (долгий опрос, без настроек Remote Control);
-- правки из 3D через ~0,3 с попадают в слой JOSM одной командой «3D editor (Simple3D)» — её видно в истории
-  и отменяет Ctrl+Z (в JOSM или в редакторе, когда своих шагов истории в нём нет);
-- отправка в OSM — как обычно, из JOSM.
+A bridge between [JOSM](https://josm.openstreetmap.de/) and the
+[OSM Simple3D editor](https://felispimeja.github.io/osm-simple3d-editor/), a browser editor for 3D buildings
+([Simple 3D Buildings](https://wiki.openstreetmap.org/wiki/Simple_3D_Buildings)) and indoor plans.
+Work in JOSM as usual and edit heights, roofs, building parts and floors in 3D on the same data:
 
-Меню **Вид → Open in 3D editor (Simple3D)** (Ctrl+Alt+Shift+3) открывает редактор над текущим видом
-(`?source=josm`). Страницу отдаёт сам плагин: `http://127.0.0.1:8112/editor/` — копия сайта редактора
-(`simple3d.url`). Со страницы по https Safari не пускает запросы к `http://127.0.0.1`, а с того же адреса — пускает;
-`simple3d.proxy=false` — открывать сайт напрямую (Chrome и Firefox так тоже работают). Без плагина редактор по-прежнему читает слой через Remote Control `/export` (только чтение).
+- **One dataset.** The editor shows the active JOSM data layer, including unsaved edits, and picks up changes
+  made in JOSM within a second.
+- **Edits go straight into JOSM.** Every change made in 3D becomes a JOSM command named after the edit
+  (“3D: …”). It appears in JOSM's history, and JOSM uploads it to OSM together with your other edits.
+- **Shared undo.** Ctrl+Z in the editor or in JOSM undoes the last command, wherever it was made.
+- **Shared selection.** Select a building in JOSM and it is selected in 3D, and the other way round.
+- **No extra login.** The editor shows your JOSM user; uploading to OSM happens in JOSM.
 
-Выделение общее: выбранное в JOSM выделяется в 3D и наоборот (объект, которого нет в 3D, там просто снимает
-выделение). Панель правок в редакторе показывает неотправленные объекты слоя JOSM, кнопки отмены — команды JOSM
-(имя команды — комментарий, который редактор предлагает к правке). Вместо входа в OSM — пользователь JOSM.
+## Installation
 
-Обращаться к плагину могут только сайт редактора (`simple3d.url`), страницы с `localhost`/`127.0.0.1` и сайты из
-`simple3d.origins` (через запятую): иначе любой открытый сайт мог бы читать и менять данные в JOSM.
+**From JOSM:** Preferences → Plugins → find `simple3d` → tick it → OK, then restart JOSM
+(if it is not in the list, click *Download list* first).
 
-## Протокол (127.0.0.1:8112, настройка `simple3d.port`)
+**Manually:** download [simple3d.jar](https://github.com/FelisPimeja/osm-simple3d-editor/releases/latest/download/simple3d.jar)
+into the JOSM plugins folder and enable it in Preferences → Plugins:
 
-| Запрос | Что делает |
+| System | Folder |
 |---|---|
-| `GET /simple3d/status` | `{"plugin":"simple3d","protocol":1,"rev":N,"layer":true}` |
-| `GET /simple3d/export[?since=N]` | слой в .osm, заголовок `X-Simple3D-Rev`; с `since` ждёт изменения до 25 с, иначе 204 |
-| `GET /editor/…` | страница редактора с `simple3d.url` (прокси) |
-| `GET /simple3d/selection[?since=N]`, `POST /simple3d/selection` | выделение в JOSM (ключи `way/1,relation/2`); GET с `since` ждёт изменения |
-| `POST /simple3d/undo`, `/simple3d/redo` | отмена и повтор в JOSM |
-| `GET /api/0.6/{nodes,ways,relations}.json`, `/way/{id}/relations.json` | текущие объекты слоя (с правками) |
-| `PUT /api/0.6/changeset/create`, `…/close`; `POST …/upload` | osmChange → команды JOSM, ответ diffResult (`new_id` — id в JOSM) |
+| macOS | `~/Library/JOSM/plugins/` |
+| Linux | `~/.local/share/JOSM/plugins/` |
+| Windows | `%APPDATA%\JOSM\plugins\` |
 
-Редактор отправляет в JOSM тем же кодом, что и в OSM (`src/osm/upload.ts`, параметр `to`).
-Удаление — как `if-unused`: то, на что ещё ссылаются, не удаляется. Адрес редактора — настройка `simple3d.url`.
+Requires JOSM 19613 or newer.
 
-## Установка
+## Usage
 
-Скачать [последнюю версию](https://github.com/FelisPimeja/osm-simple3d-editor/releases/latest/download/simple3d.jar)
-в папку модулей JOSM (macOS: `~/Library/JOSM/plugins/`, Linux: `~/.local/share/JOSM/plugins/`,
-Windows: `%APPDATA%\JOSM\plugins\`), включить `simple3d` в Настройки → Модули и перезапустить JOSM.
+Download some data in JOSM and choose **View → Open in 3D editor (Simple3D)** (Ctrl+Alt+Shift+3).
+The editor opens in your browser at the current map view.
 
-## Выпуск
+The page is served by the plugin itself at `http://127.0.0.1:8112/editor/` (a copy of the editor website), so it
+works in every browser, Safari included. The plugin listens on `127.0.0.1` only and answers only the editor's
+pages, so other websites cannot read or change your JOSM data.
 
-Тег `josm-plugin-vN` (N — целое, больше прошлого: JOSM обновляет модуль по `Plugin-Version`) — workflow
-[josm-plugin.yml](../.github/workflows/josm-plugin.yml) собирает jar на `josm-tested.jar` и выкладывает релиз:
+Without the plugin the editor can still read the JOSM layer through Remote Control, but read-only: edits do not
+return to JOSM, and there is no shared undo or selection.
 
-```sh
-git tag josm-plugin-v3 && git push origin josm-plugin-v3
-```
+## Settings
 
-Без тега workflow только проверяет сборку (изменения в `josm-plugin/`). Сайт редактора от плагина не зависит:
-`pages.yml` такие изменения пропускает.
+Advanced preferences in JOSM (Preferences → Advanced):
 
-**Протокол.** `PROTOCOL` в `BridgeServer.java` растёт, когда редактору нужно новое от плагина; минимальная версия,
-с которой работает редактор, — `MIN_PROTOCOL` в `src/osm/josm.ts`. Со старым плагином редактор просит обновить его.
-Поднимая `MIN_PROTOCOL`, сначала выпустите плагин: сайт обновляется сразу, плагин у пользователей — нет.
+| Key | Default | Meaning |
+|---|---|---|
+| `simple3d.port` | `8112` | Local port of the plugin |
+| `simple3d.url` | the editor website | Where the editor page comes from |
+| `simple3d.proxy` | `true` | Open the editor through the plugin; `false` opens the website directly (Chrome, Firefox) |
+| `simple3d.origins` | empty | Extra websites (origins, comma-separated) allowed to talk to the plugin |
 
-## Сборка вручную
+## Feedback
 
-```sh
-JAVA_HOME=$(brew --prefix openjdk) ./build.sh        # JOSM_JAR=… — другой jar JOSM, PLUGIN_VERSION=… — версия
-cp build/simple3d.jar ~/Library/JOSM/plugins/
-```
+Bugs and ideas: [GitHub issues](https://github.com/FelisPimeja/osm-simple3d-editor/issues).
+How the plugin works, its protocol and releases: [DEVELOPMENT.md](DEVELOPMENT.md) (in Russian).

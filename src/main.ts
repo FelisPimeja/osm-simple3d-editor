@@ -6684,7 +6684,7 @@ function renderUpload(count: number): string {
       : tr('Правки из 3D сразу попадают в слой JOSM, история отмены общая. Отправка в OSM — из JOSM.'))}</p></div>`;
   }
   if (josmMode) {
-    return `<div class="upload"><p class="hint">${esc(tr('Источник — JOSM: отправка отсюда отключена, правки из 3D пока не возвращаются в JOSM. Вносите их в JOSM: изменения слоя подтягиваются сами (раз в 2 с).'))}</p></div>`;
+    return `<div class="upload"><p class="hint">${esc(tr('Источник — JOSM без модуля simple3d: только чтение, правки из 3D не возвращаются в JOSM и отправка отсюда отключена. Установите модуль — правки будут сразу попадать в JOSM.'))} ${josmPluginLink()}</p></div>`;
   }
   const s = server();
   const canUpload = osmUser && uploadComment.trim() && !uploading;
@@ -6824,6 +6824,9 @@ async function doUpload() {
     if (josmApi() && session.changes().length) scheduleJosmSync();
   }
 }
+
+/** Ссылка на описание модуля JOSM и его установку. */
+const josmPluginLink = () => `<a href="https://github.com/FelisPimeja/osm-simple3d-editor/tree/main/josm-plugin${lang === 'ru' ? '/README.ru.md' : '#readme'}" target="_blank" rel="noopener">${esc(tr('Как установить модуль'))}</a>`;
 
 /**
  * Плагин JOSM: каждая правка (шаг истории) уходит в слой JOSM вскоре после неё — пачкой, если правок несколько подряд.
@@ -7144,7 +7147,11 @@ async function loadJosm(retry = false) {
     const { elements, bbox } = await josmLayer().then(josmApplied);
     josmReady = true;
     if (retry) await overpass.refreshJosm();
-    setStatus(trn(elements.length, 'Из JOSM: {n} объект.|Из JOSM: {n} объекта.|Из JOSM: {n} объектов.'));
+    // Без модуля simple3d — только чтение через Remote Control: подсказать, что модуль даёт полный режим
+    if (josmPlugin()) setStatus(trn(elements.length, 'Из JOSM: {n} объект.|Из JOSM: {n} объекта.|Из JOSM: {n} объектов.'));
+    else setStatus(trn(elements.length, 'Из JOSM: {n} объект.|Из JOSM: {n} объекта.|Из JOSM: {n} объектов.') + ' '
+      + tr('Это режим только для чтения: правки из 3D не вернутся в JOSM. Для полной работы (правки, общая отмена и выделение) установите в JOSM модуль simple3d.'),
+      false, josmPluginLink());
     if (!bbox) return;
     // Ракурс из адреса (перезагрузка, ссылка) сохраняем, если он над данными слоя; иначе — к данным
     const c = map.getCenter();

@@ -11,5 +11,5 @@ JAR=${JAVA_HOME:+$JAVA_HOME/bin/}jar
 rm -rf build && mkdir -p build/classes
 "$JAVAC" --release 17 -encoding UTF-8 -cp "$JOSM_JAR" -d build/classes $(find src -name '*.java')
 sed "s/^Plugin-Version: .*/Plugin-Version: $PLUGIN_VERSION/" MANIFEST.MF > build/MANIFEST.MF
-"$JAR" cfm build/simple3d.jar build/MANIFEST.MF -C build/classes .
+"$JAR" cfm build/simple3d.jar build/MANIFEST.MF -C build/classes . images
 echo "build/simple3d.jar"

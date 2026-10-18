@@ -68,7 +68,10 @@ final class MiniHttp {
             int length = 0;
             for (String h; (h = line(in)) != null && !h.isEmpty();) {
                 int i = h.indexOf(':');
-                if (i > 0 && h.substring(0, i).trim().equalsIgnoreCase("Content-Length")) length = Integer.parseInt(h.substring(i + 1).trim());
+                if (i <= 0) continue;
+                String name = h.substring(0, i).trim().toLowerCase(Locale.ROOT), value = h.substring(i + 1).trim();
+                ex.requestHeaders.put(name, value);
+                if (name.equals("content-length")) length = Integer.parseInt(value);
             }
             ex.body = in.readNBytes(length);
             handler.handle(ex);
@@ -92,6 +95,7 @@ final class MiniHttp {
         private final OutputStream out;
         private byte[] body = new byte[0];
         private final Headers headers = new Headers();
+        private final java.util.Map<String, String> requestHeaders = new java.util.HashMap<>();
         private long remaining = -1;
 
         Exchange(String method, URI uri, OutputStream out) {
@@ -110,6 +114,11 @@ final class MiniHttp {
 
         InputStream getRequestBody() {
             return new ByteArrayInputStream(body);
+        }
+
+        /** Заголовок запроса (имя без учёта регистра) или null. */
+        String getRequestHeader(String name) {
+            return requestHeaders.get(name.toLowerCase(Locale.ROOT));
         }
 
         Headers getResponseHeaders() {
@@ -157,6 +166,7 @@ final class MiniHttp {
             switch (status) {
             case 200: return "OK";
             case 302: return "Found";
+            case 403: return "Forbidden";
             case 304: return "Not Modified";
             case 204: return "No Content";
             case 400: return "Bad Request";

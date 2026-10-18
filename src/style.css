@@ -47,6 +47,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .vcb-units button { border: 0; background: none; padding: 2px 8px; font-size: 12px; cursor: pointer; color: #444; }
 .vcb-units button + button { border-left: 1px solid #d1d5db; }
 .vcb-units button.active { background: #2f7cff; color: #fff; }
+.vcb-units button[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
 #popup:empty { display: none; }
 #popup { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.15); }
 .popup-card { max-width: 420px; max-height: 70%; overflow: auto; padding: 12px 16px; background: #fff; border-radius: 8px;

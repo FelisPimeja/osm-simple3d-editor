@@ -72,14 +72,24 @@ class BridgeServer {
     private long rev = 1;
     private DataSet watched;
     private final DataSetListenerAdapter dsListener = new DataSetListenerAdapter(e -> bump());
+    /** Ревизия выделения в JOSM (отдельно от данных: выделение меняется чаще и без перезагрузки слоя). */
+    private long selRev = 1;
+    private final org.openstreetmap.josm.data.osm.DataSelectionListener selListener = e -> bumpSelection();
     private final ActiveLayerChangeListener layerListener = e -> {
         DataSet ds = MainApplication.getLayerManager().getEditDataSet();
         if (ds != watched) {
-            if (watched != null) watched.removeDataSetListener(dsListener);
+            if (watched != null) {
+                watched.removeDataSetListener(dsListener);
+                watched.removeSelectionListener(selListener);
+            }
             watched = ds;
-            if (ds != null) ds.addDataSetListener(dsListener);
+            if (ds != null) {
+                ds.addDataSetListener(dsListener);
+                ds.addSelectionListener(selListener);
+            }
         }
         bump();
+        bumpSelection();
     };
 
     BridgeServer(int port) {
@@ -99,6 +109,13 @@ class BridgeServer {
         }
     }
 
+    private void bumpSelection() {
+        synchronized (revLock) {
+            selRev++;
+            revLock.notifyAll();
+        }
+    }
+
     private long rev() {
         synchronized (revLock) {
             return rev;
@@ -109,7 +126,13 @@ class BridgeServer {
 
     private void handle(Exchange ex) throws IOException {
         try {
-            ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            String origin = ex.getRequestHeader("Origin");
+            if (origin != null && !allowedOrigin(origin)) {
+                send(ex, 403, "text/plain", "origin not allowed: " + origin + " (JOSM preference simple3d.origins)");
+                return;
+            }
+            ex.getResponseHeaders().add("Access-Control-Allow-Origin", origin != null ? origin : "*");
+            ex.getResponseHeaders().add("Vary", "Origin");
             ex.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
             ex.getResponseHeaders().add("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept");
             ex.getResponseHeaders().add("Access-Control-Allow-Private-Network", "true");
@@ -120,9 +143,11 @@ class BridgeServer {
             }
             route(ex);
         } catch (HttpError e) {
+            ex.getResponseHeaders().add("Cache-Control", "no-store");
             send(ex, e.status, "text/plain", e.getMessage());
         } catch (Exception e) {
             Logging.error(e);
+            ex.getResponseHeaders().add("Cache-Control", "no-store");
             send(ex, 500, "text/plain", String.valueOf(e));
         } finally {
             ex.close();
@@ -143,9 +168,16 @@ class BridgeServer {
             return;
         }
         if (path.equals("/simple3d/status")) {
-            DataSet ds = MainApplication.getLayerManager().getEditDataSet();
-            send(ex, 200, "application/json", "{\"plugin\":\"simple3d\",\"protocol\":" + PROTOCOL + ",\"rev\":" + rev()
-                + ",\"layer\":" + (ds != null) + "}");
+            send(ex, 200, "application/json", status());
+            return;
+        }
+        if (path.equals("/simple3d/selection") && method.equals("GET")) {
+            selection(ex, q.get("since"));
+            return;
+        }
+        if (path.equals("/simple3d/selection") && method.equals("POST")) {
+            select(new String(readAll(ex.getRequestBody()), StandardCharsets.UTF_8));
+            send(ex, 200, "text/plain", "");
             return;
         }
         if (path.equals("/simple3d/export")) {
@@ -187,6 +219,10 @@ class BridgeServer {
             });
             send(ex, 200, "application/json", elementsJson(ds, found));
         } else if (p.equals("changeset/create") && method.equals("PUT")) {
+            // Комментарий пакета (редактор предлагает его по правкам) — имя команды в истории JOSM
+            Matcher c = Pattern.compile("k=\"comment\"\\s+v=\"([^\"]*)\"").matcher(new String(readAll(ex.getRequestBody()), StandardCharsets.UTF_8));
+            label = c.find() ? String.join("; ", java.util.Arrays.stream(unescapeXml(c.group(1)).split("\n"))
+                .map(l -> l.replaceFirst("^\\s*[*•-]\\s*", "").replaceFirst(":$", "").trim()).filter(l -> !l.isEmpty()).toArray(String[]::new)) : "";
             send(ex, 200, "text/plain", "1");
         } else if (p.matches("changeset/\\d+/close") && method.equals("PUT")) {
             send(ex, 200, "text/plain", "");
@@ -197,6 +233,93 @@ class BridgeServer {
         } else {
             throw new HttpError(404, "not supported: " + method + " " + path);
         }
+    }
+
+    /**
+     * Состояние: ревизия слоя, есть ли слой, пользователь и сервер JOSM (адрес API — редактор по нему выбирает
+     * подложку), история команд JOSM — она же общая история правок: в неё попадают и правки из 3D.
+     */
+    private String status() throws Exception {
+        StringBuilder sb = new StringBuilder("{\"plugin\":\"simple3d\",\"protocol\":").append(PROTOCOL).append(",\"rev\":").append(rev());
+        AtomicReference<String> extra = new AtomicReference<>();
+        onEdt(() -> {
+            DataSet ds = MainApplication.getLayerManager().getEditDataSet();
+            UndoRedoHandler h = UndoRedoHandler.getInstance();
+            List<Command> undo = h.getUndoCommands(), redo = h.getRedoCommands();
+            org.openstreetmap.josm.data.UserIdentityManager u = org.openstreetmap.josm.data.UserIdentityManager.getInstance();
+            extra.set(",\"layer\":" + (ds != null)
+                + (ds != null ? ",\"layerName\":" + str(MainApplication.getLayerManager().getEditLayer().getName()) : "")
+                + ",\"api\":" + str(org.openstreetmap.josm.io.OsmApi.getOsmApi().getBaseUrl())
+                + (u.isAnonymous() || u.getUserName() == null ? "" : ",\"user\":" + str(u.getUserName()))
+                + ",\"undo\":" + undo.size() + ",\"redo\":" + redo.size()
+                + (undo.isEmpty() ? "" : ",\"undoName\":" + str(undo.get(undo.size() - 1).getDescriptionText()))
+                + (redo.isEmpty() ? "" : ",\"redoName\":" + str(redo.get(0).getDescriptionText())));
+        });
+        return sb.append(extra.get()).append('}').toString();
+    }
+
+    /** Выделение в JOSM: ключи type/id; since — ждать изменения после этой ревизии (до 25 с, иначе 204). */
+    private void selection(Exchange ex, String since) throws Exception {
+        if (since != null) {
+            long s = Long.parseLong(since);
+            long deadline = System.currentTimeMillis() + 25_000;
+            synchronized (revLock) {
+                while (selRev == s) {
+                    long left = deadline - System.currentTimeMillis();
+                    if (left <= 0) break;
+                    revLock.wait(left);
+                }
+                if (selRev == s) {
+                    send(ex, 204, null, null);
+                    return;
+                }
+            }
+        }
+        long r;
+        synchronized (revLock) {
+            r = selRev;
+        }
+        StringBuilder sb = new StringBuilder("{\"rev\":").append(r).append(",\"keys\":[");
+        DataSet ds = MainApplication.getLayerManager().getEditDataSet();
+        if (ds != null) {
+            readLocked(ds, () -> {
+                boolean first = true;
+                for (OsmPrimitive p : ds.getAllSelected()) {
+                    sb.append(first ? "" : ",").append(str(p.getType().getAPIName() + "/" + p.getUniqueId()));
+                    first = false;
+                }
+            });
+        }
+        send(ex, 200, "application/json", sb.append("]}").toString());
+    }
+
+    /** Выделить в JOSM объекты из редактора: ключи type/id через запятую или с новой строки; пусто — снять выделение. */
+    private static void select(String body) throws Exception {
+        DataSet ds = editDataSet();
+        List<OsmPrimitive> found = new ArrayList<>();
+        for (String k : body.split("[,\\s]+")) {
+            String[] t = k.trim().split("/");
+            if (t.length != 2) continue;
+            OsmPrimitive p = ds.getPrimitiveById(new SimplePrimitiveId(Long.parseLong(t[1]), OsmPrimitiveType.from(t[0])));
+            if (p != null && live(p)) found.add(p);
+        }
+        onEdt(() -> {
+            if (new HashSet<>(ds.getAllSelected()).equals(new HashSet<>(found))) return;
+            ds.setSelected(found);
+        });
+    }
+
+    /** Кому можно обращаться: сайт редактора (simple3d.url), сам плагин, localhost (разработка) и simple3d.origins. */
+    private boolean allowedOrigin(String origin) {
+        if (origin.equals("http://127.0.0.1:" + port) || origin.matches("https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?")) return true;
+        try {
+            java.net.URI u = java.net.URI.create(Simple3DPlugin.EDITOR_URL.get());
+            if (origin.equals(u.getScheme() + "://" + u.getAuthority())) return true;
+        } catch (IllegalArgumentException e) {
+            Logging.trace(e);
+        }
+        for (String o : Simple3DPlugin.ORIGINS.get().split("[,\\s]+")) if (!o.isEmpty() && origin.equals(o)) return true;
+        return false;
     }
 
     private void export(Exchange ex, String since) throws Exception {
@@ -221,7 +344,7 @@ class BridgeServer {
         StringWriter sw = new StringWriter();
         if (ds != null) {
             readLocked(ds, () -> {
-                try (OsmWriter w = OsmWriterFactory.createOsmWriter(new PrintWriter(sw), true, "0.6")) {
+                try (OsmWriter w = OsmWriterFactory.createOsmWriter(new PrintWriter(sw), false, "0.6")) {
                     w.header();
                     w.writeDataSources(ds);
                     w.writeContent(ds);
@@ -240,6 +363,13 @@ class BridgeServer {
     /** Ключ элемента osmChange: тип/id (id — как прислал редактор, у новых отрицательный). */
     private static String key(String type, long id) {
         return type + "/" + id;
+    }
+
+    /** Имя следующей команды (комментарий из changeset/create). */
+    private volatile String label = "";
+
+    private static String unescapeXml(String s) {
+        return s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&");
     }
 
     private String applyOsmChange(DataSet ds, byte[] body) throws Exception {
@@ -365,7 +495,13 @@ class BridgeServer {
         }
 
         if (!cmds.isEmpty()) {
-            UndoRedoHandler.getInstance().add(new SequenceCommand(ds, "3D editor (Simple3D)", cmds, false));
+            String name = "3D: " + (label.isEmpty() ? "Simple3D" : label);
+            UndoRedoHandler.getInstance().add(new SequenceCommand(ds, name, cmds, false) {
+                @Override
+                public String getDescriptionText() {
+                    return name;
+                }
+            });
         }
         // Новым объектам JOSM выдал свои временные id — сообщаем их как new_id
         for (Element e : newEls) {
@@ -543,7 +679,9 @@ class BridgeServer {
         try (InputStream in = status >= 400 ? c.getErrorStream() : c.getInputStream()) {
             body = in == null ? new byte[0] : in.readAllBytes();
         }
-        for (String h : new String[] {"Content-Type", "Cache-Control", "Last-Modified", "ETag"}) {
+        // Ошибку сайта не кешировать: иначе браузер покажет её и после того, как сайт ожил
+        if (status >= 400) ex.getResponseHeaders().add("Cache-Control", "no-store");
+        for (String h : status >= 400 ? new String[] {"Content-Type"} : new String[] {"Content-Type", "Cache-Control", "Last-Modified", "ETag"}) {
             String v = c.getHeaderField(h);
             if (v != null) ex.getResponseHeaders().add(h, v);
         }

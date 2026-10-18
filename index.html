@@ -1,7 +1,9 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-ui-loading>
 <head>
   <meta charset="UTF-8" />
+  <!-- Keep the initial HTML hidden until styles and the UI are initialized. -->
+  <style>html[data-ui-loading] body { visibility: hidden; }</style>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OSM Simple 3D Editor</title>

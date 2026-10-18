@@ -923,10 +923,18 @@
   "Только рёбра зданий, без заливки (W)": "Building edges only, no fill (W)",
   "Совпадает по контуру и высоте с {other}: похоже на копию. Оставьте один объект (второй адрес можно добавить к нему).": "Same outline and height as {other}: looks like a copy. Keep one object (the second address can be added to it).",
   "Передаю правки в JOSM…": "Sending edits to JOSM…",
-  "Источник — JOSM с плагином simple3d: правки сразу уходят в слой JOSM (отмена — Ctrl+Z здесь или в JOSM), отправка в OSM — из JOSM.": "Source: JOSM with the simple3d plugin. Edits go straight into the JOSM layer (undo with Ctrl+Z here or in JOSM); upload to OSM from JOSM.",
   "В JOSM: {n} объект.|В JOSM: {n} объекта.|В JOSM: {n} объектов.": "In JOSM: {n} object.|In JOSM: {n} objects.",
   "В JOSM нет активного слоя данных OSM. Откройте или выберите слой данных.": "JOSM has no active OSM data layer. Open or select a data layer.",
   "Копировать сообщение": "Copy message",
   "Скопировано": "Copied",
-  "Не удалось скопировать": "Could not copy"
+  "Не удалось скопировать": "Could not copy",
+  "Единицы нельзя переключить: высота объекта задана только в метрах или только в этажах. Добавьте второй тег высоты в свойствах.": "Cannot switch units: the object height is defined only in meters or only in levels. Add the other height tag in Properties.",
+  "Отменить в JOSM: {name} (Ctrl+Z)": "Undo in JOSM: {name} (Ctrl+Z)",
+  "Повторить в JOSM: {name} (Ctrl+Shift+Z)": "Redo in JOSM: {name} (Ctrl+Shift+Z)",
+  "В слое JOSM нет неотправленных правок.": "The JOSM layer has no unsaved edits.",
+  "JOSM: {name}": "JOSM: {name}",
+  "JOSM: вход не выполнен": "JOSM: not logged in",
+  "Правки из 3D сразу попадают в слой JOSM, история отмены общая. Отправка в OSM — из JOSM.": "Edits made in 3D go straight into the JOSM layer and share its undo history. Upload to OSM from JOSM.",
+  "JOSM · {server}": "JOSM · {server}",
+  "{server} — данные API": "{server} — API data"
 }

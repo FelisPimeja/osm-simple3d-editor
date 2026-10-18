@@ -41,7 +41,50 @@ export function writeJosmParam(on: boolean) {
 }
 
 /** areas — области загрузки слоя (<bounds> из JOSM): тайловые здания скрываются только внутри них. */
-export interface JosmLayer { elements: OsmElement[]; bbox?: Bbox; areas: Bbox[]; fetchedAt: number }
+export interface JosmLayer { elements: OsmElement[]; bbox?: Bbox; areas: Bbox[]; fetchedAt: number; changed: JosmChange[] }
+
+/** Объект слоя с неотправленной правкой (что JOSM отправит в OSM): new — создан, modify — изменён, delete — удалён. */
+export interface JosmChange { key: string; kind: 'new' | 'modify' | 'delete'; tags: Record<string, string> }
+
+/** Состояние плагина: история команд JOSM (общая с правками из 3D), пользователь и сервер JOSM. */
+export interface JosmStatus {
+  rev: number; layer: boolean; layerName?: string; api?: string; user?: string;
+  undo: number; redo: number; undoName?: string; redoName?: string;
+}
+let status: JosmStatus | undefined;
+export const josmStatus = () => status;
+
+/** Перечитать состояние плагина (после изменения слоя: undo/redo в JOSM всегда меняют данные). */
+export async function refreshJosmStatus(): Promise<JosmStatus | undefined> {
+  if (!plugin) return;
+  try { status = await fetch(`${PLUGIN_URL}/simple3d/status`).then((r) => r.json() as Promise<JosmStatus>); } catch { /* следующий раз */ }
+  return status;
+}
+
+/**
+ * Выделение в JOSM: f вызывается с ключами type/id при каждом изменении (долгий опрос плагина).
+ * Пустой список — в JOSM ничего не выделено.
+ */
+export function watchJosmSelection(f: (keys: string[]) => void) {
+  let rev: number | undefined;
+  const loop = async () => {
+    try {
+      const res = await fetch(`${PLUGIN_URL}/simple3d/selection${rev ? `?since=${rev}` : ''}`);
+      if (res.status === 200) {
+        const s = (await res.json()) as { rev: number; keys: string[] };
+        rev = s.rev;
+        f(s.keys);
+      }
+      setTimeout(loop, 0);
+    } catch { setTimeout(loop, 2000); }
+  };
+  void loop();
+}
+
+/** Выделить в JOSM (пустой список — снять выделение). */
+export async function sendJosmSelection(keys: string[]) {
+  if (plugin) await fetch(`${PLUGIN_URL}/simple3d/selection`, { method: 'POST', body: keys.join(',') });
+}
 
 let layer: Promise<JosmLayer> | undefined;
 /** Ответ /export последней загрузки — чтобы опрос перерисовывал только изменившийся слой. */
@@ -86,9 +129,10 @@ async function pluginExport(since?: string): Promise<string> {
 }
 
 function toLayer(xml: string): JosmLayer {
-  const elements = parseOsmXml(xml);
+  const changed: JosmChange[] = [];
+  const elements = parseOsmXml(xml, changed);
   lastXml = xml;
-  return { elements, bbox: elementsBbox(elements), areas: parseBounds(xml), fetchedAt: Date.now() };
+  return { elements, bbox: elementsBbox(elements), areas: parseBounds(xml), fetchedAt: Date.now(), changed };
 }
 
 /**
@@ -120,16 +164,24 @@ async function josmGet(path: string): Promise<Response> {
 }
 
 /** .osm XML → элементы в форме ответа API (JSON). Удалённые в JOSM (action="delete", visible="false") пропускаются. */
-export function parseOsmXml(xml: string): OsmElement[] {
+export function parseOsmXml(xml: string, changed?: JosmChange[]): OsmElement[] {
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
   if (doc.querySelector('parsererror')) throw new Error(tr('JOSM отдал не .osm (ошибка разбора XML)'));
   const out: OsmElement[] = [];
+  const movedNodes = new Set<number>();
   for (const el of doc.documentElement.children) {
-    if (el.getAttribute('action') === 'delete' || el.getAttribute('visible') === 'false') continue;
+    const deleted = el.getAttribute('action') === 'delete' || el.getAttribute('visible') === 'false';
     const id = Number(el.getAttribute('id'));
     const version = Number(el.getAttribute('version') ?? 0);
     const tags: Record<string, string> = {};
     for (const t of el.getElementsByTagName('tag')) tags[t.getAttribute('k')!] = t.getAttribute('v') ?? '';
+    if (changed && el.tagName !== 'bounds') {
+      const kind = id < 0 ? (deleted ? undefined : 'new') : deleted ? 'delete' : el.getAttribute('action') === 'modify' ? 'modify' : undefined;
+      // Вершины без тегов в список не идут: их правка — правка пути (сдвинули контур)
+      if (kind && el.tagName === 'node' && !Object.keys(tags).length) movedNodes.add(id);
+      else if (kind) changed.push({ key: `${el.tagName}/${id}`, kind, tags });
+    }
+    if (deleted) continue;
     const withTags = Object.keys(tags).length ? { tags } : {};
     if (el.tagName === 'node') {
       out.push({ type: 'node', id, lat: Number(el.getAttribute('lat')), lon: Number(el.getAttribute('lon')), ...withTags });
@@ -141,6 +193,13 @@ export function parseOsmXml(xml: string): OsmElement[] {
         type: m.getAttribute('type') as OsmMember['type'], ref: Number(m.getAttribute('ref')), role: m.getAttribute('role') ?? '',
       }));
       out.push({ type: 'relation', id, version, members, ...withTags });
+    }
+  }
+  if (changed && movedNodes.size) {
+    const have = new Set(changed.map((c) => c.key));
+    for (const el of out) {
+      if (el.type !== 'way' || have.has(`way/${el.id}`) || !el.nodes.some((n) => movedNodes.has(n))) continue;
+      changed.push({ key: `way/${el.id}`, kind: 'modify', tags: el.tags ?? {} });
     }
   }
   return out;

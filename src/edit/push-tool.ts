@@ -51,6 +51,8 @@ export class PushTool {
   linked = 0;
   /** Контур грани t в метрах сцены (для подсветки грани под курсором при Shift); задаётся снаружи. */
   faceOutline?: (t: PushTarget) => THREE.Vector3[][];
+  unitConstraint?: (t: PushTarget) => PushUnits | undefined;
+  onUnitBlocked?: () => void;
   private outlined = false;
 
   constructor(
@@ -83,6 +85,8 @@ export class PushTool {
   }
 
   setUnits(u: PushUnits) {
+    const locked = this.target && this.unitConstraint?.(this.target);
+    if (locked && u !== locked) { this.onUnitBlocked?.(); return; }
     this.units = u;
     try { localStorage.setItem(UNITS_STORAGE, u); } catch { /* без хранилища — до перезагрузки */ }
     this.typed = '';
@@ -192,6 +196,8 @@ export class PushTool {
       this.hover(undefined, false);
       if (t.face === 'side' && !this.allowSide(t)) return true;
       this.target = t;
+      const locked = this.unitConstraint?.(t);
+      if (locked) this.units = locked;
       this.dz = 0;
       this.typed = '';
       this.state = 'push';
@@ -286,8 +292,9 @@ export class PushTool {
     const levels = this.levelsNow;
     const shown = levels ? Math.round(this.dz / LEVEL_HEIGHT) : this.dz;
     const value = this.typed || (shown >= 0 ? '+' : '') + (levels ? String(shown) : shown.toFixed(2));
+    const locked = t && this.unitConstraint?.(t);
     const units = `<span class="vcb-units" title="${tr('Единицы сдвига верха и низа (Tab)')}">${(['m', 'levels'] as const)
-      .map((u) => `<button type="button" data-units="${u}"${u === this.units ? ' class="active"' : ''}>${u === 'm' ? tr('м') : tr('этажи')}</button>`).join('')}</span>`;
+      .map((u) => `<button type="button" data-units="${u}"${locked && u !== locked ? ' aria-disabled="true"' : ''}${u === this.units ? ' class="active"' : ''}>${u === 'm' ? tr('м') : tr('этажи')}</button>`).join('')}</span>`;
     const glue = `<span class="vcb-units" title="${tr('Общие с соседями углы стены: «с соседями» — соседи тянутся следом, «отдельно» — стена отделяется от них (D)')}">${[true, false]
       .map((on) => `<button type="button" data-glue="${on ? 'on' : 'off'}"${on === this.glue ? ' class="active"' : ''}>${on ? tr('с соседями') : tr('отдельно')}</button>`).join('')}</span>`;
     this.vcb.innerHTML = t

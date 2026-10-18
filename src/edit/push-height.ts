@@ -1,0 +1,44 @@
+import { computeHeights, LEVEL_HEIGHT } from '../osm/heights';
+import type { PushFace, PushUnits } from './push-tool';
+
+/** Drawn contours carry a temporary height at their drawing plane. */
+export function isFreshFlat(tags: Record<string, string>, version: number): boolean {
+  const h = computeHeights(tags);
+  return version === 0 && Math.abs(h.top - h.min) < 1e-6;
+}
+
+export function lockedPushUnits(tags: Record<string, string>, version: number): PushUnits | undefined {
+  if (isFreshFlat(tags, version)) return;
+  const meters = !!tags.height, levels = !!tags['building:levels'];
+  return meters === levels ? undefined : meters ? 'm' : 'levels';
+}
+
+export function pushHeightTags(tags: Record<string, string>, face: PushFace, dz: number, units: PushUnits, fresh = false): Record<string, string> {
+  const h = computeHeights(tags), out = { ...tags };
+  const fmt = (n: number) => String(Math.round(n * 100) / 100);
+  const levels = units === 'levels';
+  if (face === 'top') {
+    if (levels || tags['building:levels']) {
+      out['building:levels'] = fmt(Number(tags['building:levels'] ?? h.wallTop / LEVEL_HEIGHT) + dz / LEVEL_HEIGHT);
+    }
+    if (!levels || (tags.height && !fresh)) out.height = fmt(h.top + dz);
+    else if (fresh) {
+      delete out.height;
+      if (tags.min_height) {
+        out['building:min_level'] = fmt(h.min / LEVEL_HEIGHT);
+        delete out.min_height;
+      }
+    }
+  } else if (face === 'bottom') {
+    const min = h.min + dz;
+    if (levels || tags['building:min_level']) {
+      if (min > 1e-4) out['building:min_level'] = fmt(min / LEVEL_HEIGHT);
+      else delete out['building:min_level'];
+    }
+    if (!levels || tags.min_height) {
+      if (min > 1e-4) out.min_height = fmt(min);
+      else delete out.min_height;
+    }
+  }
+  return out;
+}

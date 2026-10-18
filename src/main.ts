@@ -35,6 +35,7 @@ import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuil
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
+import { pushHeightTags, lockedPushUnits, isFreshFlat } from './edit/push-height';
 import { SplitTool, type CutPoint } from './edit/split-tool';
 import { insertInLine, insertInRing, restructureRing, type Insert, type RingWay } from './edit/topology';
 import { MAX_DEVIATION_DEG, orthogonalize } from './edit/orthogonalize';
@@ -48,7 +49,7 @@ import { suggestComment, isIndoorChange } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
-import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmUndo, minElementId, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
+import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmStatus, josmUndo, minElementId, refreshJosmStatus, sendJosmSelection, watchJosmSelection, type JosmChange, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
 import { deprecations, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
 import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
@@ -1763,6 +1764,11 @@ const pushTool = new PushTool(overpassLayer, map.getContainer(),
     syncCursor();
     toolHint(hint);
   });
+pushTool.unitConstraint = (t) => {
+  const f = entity(t.key) as Feature3D | undefined;
+  return f && t.face !== 'side' ? lockedPushUnits(f.tags, f.version) : undefined;
+};
+pushTool.onUnitBlocked = () => setStatus(tr('Единицы нельзя переключить: высота объекта задана только в метрах или только в этажах. Добавьте второй тег высоты в свойствах.'), true);
 pushBtn.addEventListener('click', () => (pushTool.active ? pushTool.stop() : startPush()));
 // Контур грани для подсветки при Shift: верх — по верху стен, низ — по основанию, стена — прямоугольник стены
 pushTool.faceOutline = (t) => {
@@ -3257,9 +3263,13 @@ function clampPush(t: PushTarget, dz: number): number {
   if (t.face === 'side') return dz;
   const h = computeHeights(f.tags);
   // Верх не ниже низа + крыша + запас; низ — не ниже земли и не выше верха стен минус запас
-  return t.face === 'top'
-    ? Math.max(dz, h.min + h.roofHeight + MIN_THICKNESS - h.top)
-    : Math.min(Math.max(dz, -h.min), h.wallTop - MIN_THICKNESS - h.min);
+  let lower = t.face === 'top' ? h.min + h.roofHeight + MIN_THICKNESS - h.top : -h.min;
+  let upper = t.face === 'top' ? Infinity : h.wallTop - MIN_THICKNESS - h.min;
+  if (pushTool.units === 'levels') {
+    lower = Math.ceil(lower / LEVEL_HEIGHT) * LEVEL_HEIGHT;
+    upper = Math.floor(upper / LEVEL_HEIGHT) * LEVEL_HEIGHT;
+  }
+  return Math.min(Math.max(dz, lower), upper);
 }
 
 function previewPush(t: PushTarget, dz: number | undefined) {
@@ -3297,7 +3307,7 @@ function previewPush(t: PushTarget, dz: number | undefined) {
   }
   overpassLayer.previewFocusFeature(t.face === 'side'
     ? { ...f, polygons: pushSidePolygons(f, t.edge!, dz) }
-    : { ...f, tags: pushTags(f.tags, t.face, dz) });
+    : { ...f, tags: pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version)) });
 }
 
 function commitPush(t: PushTarget, dz: number) {
@@ -3308,7 +3318,7 @@ function commitPush(t: PushTarget, dz: number) {
     if (typeof edits === 'string') return setStatus(edits, true);
     session.editMany(edits);
   }
-  else session.setTags(t.key, diffTags(f.tags, pushTags(f.tags, t.face, dz)));
+  else session.setTags(t.key, diffTags(f.tags, pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version))));
   const levels = t.face !== 'side' && pushTool.units === 'levels' ? ' ' + tr('({n} эт.)', { n: `${dz >= 0 ? '+' : ''}${Math.round(dz / LEVEL_HEIGHT)}` }) : '';
   const params = { key: t.key, d: `${dz >= 0 ? '+' : ''}${dz.toFixed(2)}`, levels };
   setStatus(t.face === 'top' ? tr('Верх {key} сдвинут на {d} м{levels}.', params)
@@ -3320,37 +3330,6 @@ function commitPush(t: PushTarget, dz: number) {
 function diffTags(before: Record<string, string>, after: Record<string, string>): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = {};
   for (const k of new Set([...Object.keys(before), ...Object.keys(after)])) if (before[k] !== after[k]) out[k] = after[k];
-  return out;
-}
-
-/**
- * Сдвинуть верх или низ на dz, сохраняя способ разметки: у объекта на этажах при сдвиге, кратном этажу,
- * меняем этажи; иначе пишем метры (height / min_height).
- */
-function pushTags(tags: Record<string, string>, face: PushTarget['face'], dz: number): Record<string, string> {
-  const h = computeHeights(tags);
-  const out = { ...tags };
-  const fmt = (v: number) => String(Math.round(v * 100) / 100);
-  const k = dz / 3, whole = Math.abs(k - Math.round(k)) < 1e-6;
-  // Сдвиг на целые этажи: этажи меняем, а если заданы и метры — их тоже, чтобы не разошлись
-  if (face === 'top') {
-    if (tags['building:levels'] && whole) {
-      out['building:levels'] = String(Number(tags['building:levels']) + Math.round(k));
-      if (tags.height) out.height = fmt(h.top + dz);
-    } else out.height = fmt(h.top + dz);
-    return out;
-  }
-  if (whole && (tags['building:min_level'] || (!tags.height && !tags.min_height && tags['building:levels']))) {
-    const minLevel = Number(tags['building:min_level'] ?? 0) + Math.round(k);
-    if (minLevel) out['building:min_level'] = String(minLevel); else delete out['building:min_level'];
-    if (tags.min_height) { const min = h.min + dz; if (min > 1e-4) out.min_height = fmt(min); else delete out.min_height; }
-    return out;
-  }
-  const min = h.min + dz;
-  if (min > 1e-4) out.min_height = fmt(min); else delete out.min_height;
-  delete out['building:min_level']; // низ теперь задан метрами
-  // Верх задан этажами — фиксируем его метрами, иначе он поедет вместе с этажами низа
-  if (!tags.height) out.height = fmt(h.top);
   return out;
 }
 
@@ -3940,6 +3919,7 @@ window.addEventListener('mouseup', (e) => {
 let suppressClick = false;
 
 function paintSelection() {
+  syncJosmSelection();
   overpassLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
   syncIssueFilter();
   renderOutliner();
@@ -6562,6 +6542,7 @@ const ICON_REVERT = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" 
 
 function renderChanges() {
   renderAccount();
+  if (josmPlugin()) return renderJosmChanges();
   // Пути-члены мультиполигонов (разрезание при правке контуров) — служебные: отправляются, но в списке не видны
   const changes = session.changes().filter((c) => !c.feature.line || isIndoorChange(c));
   // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
@@ -6602,6 +6583,38 @@ function renderChanges() {
     ${renderUpload(changes.length)}`;
 }
 
+/**
+ * С плагином JOSM: история и правки — общие с JOSM. Кнопки отмены и повтора работают с командами JOSM
+ * (в них и правки из 3D), список — неотправленные объекты слоя JOSM, то, что JOSM отправит в OSM.
+ */
+let josmChanges: JosmChange[] = [];
+function renderJosmChanges() {
+  const st = josmStatus();
+  // Свой шаг ещё не передан в JOSM (доли секунды) — отмена своя
+  const local = session.hasDataHistory();
+  editsHistory.hidden = !local && !st?.undo && !st?.redo;
+  undoBtn.disabled = local ? !session.canUndo() : !st?.undo;
+  redoBtn.disabled = local ? !session.canRedo() : !st?.redo;
+  undoBtn.title = !local && st?.undoName ? tr('Отменить в JOSM: {name} (Ctrl+Z)', { name: st.undoName }) : tr('Отменить (Ctrl+Z)');
+  redoBtn.title = !local && st?.redoName ? tr('Повторить в JOSM: {name} (Ctrl+Shift+Z)', { name: st.redoName }) : tr('Повторить (Ctrl+Shift+Z)');
+  const show = josmChanges.length > 0 || !editsHistory.hidden;
+  changesEl.hidden = !show;
+  editsCount.textContent = josmChanges.length ? `(${josmChanges.length})` : '';
+  if (show !== editsHadContent) setCollapsed(editsPanel, !show);
+  editsHadContent = show;
+  if (!show) { changesEl.innerHTML = ''; return; }
+  const label = { new: tr('новый'), modify: '', delete: tr('удалён') };
+  const list = josmChanges.map((c) => {
+    const icon = c.tags.type === 'building' ? ICON_GROUP : c.tags['building:part'] ? ICON_PART : c.tags.indoor ? ICON_PLAN : ICON_OUTLINE;
+    return `<li data-key="${esc(c.key)}" class="${selection.includes(c.key) ? 'selected' : ''}" title="${esc(c.key)}">
+      <span class="ch-icon">${icon}</span>
+      <span class="ch-title">${c.tags.name ? esc(c.tags.name) : ''}<span class="ch-key">${esc(c.key)}</span>${label[c.kind] ? `<span class="ch-new">${label[c.kind]}</span>` : ''}</span></li>`;
+  }).join('');
+  changesEl.innerHTML = `
+    ${josmChanges.length ? `<ul class="change-list">${list}</ul>` : `<p class="hint">${tr('В слое JOSM нет неотправленных правок.')}</p>`}
+    ${renderUpload(1)}`;
+}
+
 /** Состав отношения: было → стало и сколько членов добавлено/убрано. */
 function membersDiff(c: TagChange): string {
   const before = c.membersBefore ?? [], after = c.members ?? [];
@@ -6614,6 +6627,12 @@ function membersDiff(c: TagChange): string {
 
 function renderAccount() {
   const s = server();
+  // С JOSM вход не нужен: в OSM отправляет JOSM — показываем, под кем
+  if (josmPlugin()) {
+    const user = josmStatus()?.user;
+    accountEl.innerHTML = user ? esc(tr('JOSM: {name}', { name: user })) : esc(tr('JOSM: вход не выполнен'));
+    return;
+  }
   accountEl.innerHTML = osmUser
     ? `<a href="${s.web}/user/${encodeURIComponent(osmUser.name)}" target="_blank" rel="noopener">${esc(osmUser.name)}</a> ·
        <button type="button" class="link-btn" data-logout ${uploading ? 'disabled' : ''}>${tr('Выйти')}</button>`
@@ -6653,7 +6672,7 @@ function renderUpload(count: number): string {
   }
   if (josmMode && josmPlugin()) {
     return `<div class="upload"><p class="hint">${esc(uploading ? tr('Передаю правки в JOSM…')
-      : tr('Источник — JOSM с плагином simple3d: правки сразу уходят в слой JOSM (отмена — Ctrl+Z здесь или в JOSM), отправка в OSM — из JOSM.'))}</p></div>`;
+      : tr('Правки из 3D сразу попадают в слой JOSM, история отмены общая. Отправка в OSM — из JOSM.'))}</p></div>`;
   }
   if (josmMode) {
     return `<div class="upload"><p class="hint">${esc(tr('Источник — JOSM: отправка отсюда отключена, правки из 3D пока не возвращаются в JOSM. Вносите их в JOSM: изменения слоя подтягиваются сами (раз в 2 с).'))}</p></div>`;
@@ -6717,7 +6736,8 @@ async function doUpload() {
         splitFrom: c.feature.splitFrom };
     });
     const toJosm = josmApi();
-    const res = await uploadEdits(edits, uploadComment.trim(), (t) => panelStatus(t), toJosm);
+    // В JOSM комментарий — имя команды в его истории: предложенный по правкам
+    const res = await uploadEdits(edits, toJosm ? commentSuggestion() : uploadComment.trim(), (t) => panelStatus(t), toJosm);
     // Временные id узлов и путей → настоящие: в геометрии, членах отношений и в отправленных полигонах
     const nodeIdMap = new Map<number, number>(), wayIdMap = new Map<number, number>();
     for (const [from, to] of res.newKeys) {
@@ -6812,8 +6832,11 @@ function scheduleJosmSync() {
 editsHistory.addEventListener('click', (e) => {
   e.stopPropagation(); // не сворачивать панель
   const t = e.target as HTMLElement;
-  if (t.closest('[data-undo]')) return void selectAfterHistory(session.undo() ?? selectedKey);
-  if (t.closest('[data-redo]')) return void selectAfterHistory(session.redo() ?? selectedKey);
+  const redo = !!t.closest('[data-redo]');
+  if (!redo && !t.closest('[data-undo]')) return;
+  if (josmPlugin() && !session.hasDataHistory()) return void josmUndo(redo).catch((err) => setStatus((err as Error).message, true));
+  if (redo) return void selectAfterHistory(session.redo() ?? selectedKey);
+  selectAfterHistory(session.undo() ?? selectedKey);
 });
 
 changesEl.addEventListener('click', (e) => {
@@ -6868,8 +6891,13 @@ accountEl.addEventListener('click', (e) => {
 });
 
 const serverSelect = document.getElementById('server-select') as HTMLSelectElement;
-serverSelect.innerHTML = SERVER_LIST.map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('')
-  + `<option value="josm" title="${esc(tr('Активный слой запущенного JOSM (Remote Control, localhost:8111)'))}">${esc(tr('JOSM (локально)'))}</option>`;
+// С JOSM: выбор между слоем JOSM и данными того же сервера из API (сервер задаёт JOSM — ?server= из плагина);
+// другие проекты здесь ни к чему — их данные не из этого слоя
+serverSelect.innerHTML = josmMode
+  ? `<option value="josm">${esc(tr('JOSM · {server}', { server: server().label }))}</option>`
+    + `<option value="${server().id}">${esc(tr('{server} — данные API', { server: server().label }))}</option>`
+  : SERVER_LIST.map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('')
+    + `<option value="josm" title="${esc(tr('Активный слой запущенного JOSM (Remote Control, localhost:8111)'))}">${esc(tr('JOSM (локально)'))}</option>`;
 serverSelect.value = josmMode ? 'josm' : server().id;
 // Настройки пользователя — отдельное окно; хранятся в браузере и в профиле на сервере (см. src/settings.ts)
 const settingsDialog = document.getElementById('settings-dialog') as HTMLDialogElement;
@@ -7140,6 +7168,8 @@ function josmApplied(l: JosmLayer): JosmLayer {
   rebuildGroupIndex();
   nextNewId = Math.min(nextNewId, minElementId(l.elements) - 1);
   josmAreas = l.areas;
+  josmChanges = l.changed;
+  void refreshJosmStatus().then(() => renderChanges());
   lastFilterSig = '';
   updateTileFilter();
   return l;
@@ -7400,3 +7430,48 @@ map.on('click', (e) => {
 // Долгое нажатие — без контекстного меню и выделения текста
 map.getCanvasContainer().addEventListener('contextmenu', (e) => { if (mobile) e.preventDefault(); });
 applyMobile();
+
+// CSS imports and the initial panel setup are complete; reveal the UI together.
+requestAnimationFrame(() => document.documentElement.removeAttribute('data-ui-loading'));
+
+/**
+ * Выделение, общее с JOSM (плагин): выбрали здесь — выделяется в JOSM, выбрали в JOSM — здесь. Объект JOSM,
+ * которого нет в 3D (дорога, точка), здесь просто снимает выделение — в JOSM его выбор не трогаем.
+ * josmSelSig — последнее согласованное выделение: совпадает — ничего не отправляем (нет эха туда-обратно).
+ */
+let josmSelSig = '';
+const selSig = (keys: string[]) => [...keys].sort().join(',');
+function currentSelectionKeys(): string[] {
+  if (indoorSelection.length) return indoorSelection.map((f) => indoorKey(f.key));
+  return selection;
+}
+function syncJosmSelection() {
+  if (!josmPlugin()) return;
+  // После отрисовки: indoor-выделение и selection к этому моменту уже обновлены
+  queueMicrotask(() => {
+    const keys = currentSelectionKeys(), sig = selSig(keys);
+    if (sig === josmSelSig) return;
+    josmSelSig = sig;
+    void sendJosmSelection(keys).catch(() => {});
+  });
+}
+if (josmMode) watchJosmSelection((keys) => {
+  if (!josmPlugin() || toolActive()) return;
+  const sig = selSig(keys);
+  if (sig === josmSelSig || sig === selSig(currentSelectionKeys())) { josmSelSig = sig; return; }
+  josmSelSig = sig;
+  const shown = keys.filter((k) => entity(k));
+  const rooms = shown.length ? [] : keys.map((k) => buildingIndoorFor(k)).filter((f): f is IndoorFeature => !!f);
+  if (rooms.length) {
+    rooms.forEach((f, i) => selectIndoor(f, i > 0));
+  } else if (shown.length) {
+    select(shown[0]);
+    if (shown.length > 1) addToSelection(shown.slice(1));
+  } else {
+    if (indoorSelection.length || selectedRoomWalls.length) selectIndoor(undefined);
+    if (selection.length) select(undefined);
+  }
+  // Здесь выделено по-своему (часть → всё здание, дорога → ничего) — не повод менять выделение в JOSM:
+  // согласованным считаем то, что получилось здесь, и отрисовка (paintSelection) его не отправит
+  josmSelSig = selSig(currentSelectionKeys());
+});

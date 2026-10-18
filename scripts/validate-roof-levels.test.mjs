@@ -16,10 +16,11 @@ const issues = (shape, levels = '1') => validateTags('way/134676870', {
 });
 const flatWarning = (list) => list.filter(i => i.text.includes('roof:shape=flat'));
 
-test('many with roof levels produces no roof warning or destructive fix', () => {
+test('many requests detail without a false flat warning or destructive fix', () => {
   const result = issues('many');
   assert.equal(flatWarning(result).length, 0);
   assert.equal(result.filter(i => i.code === 'roof').length, 0);
+  assert.ok(result.some(i => i.code === 'roof-detail' && !i.fix));
 });
 test('rendering fallbacks, unspecified and pitched shapes do not imply flat roofs', () => {
   for (const shape of ['mixed', 'mix', 'multi', 'gabled', 'pitched', 'unknown', undefined]) {
@@ -31,4 +32,10 @@ test('explicit flat roofs with positive roof levels still warn, including normal
 });
 test('flat roofs with zero roof levels do not warn about roof levels', () => {
   assert.equal(flatWarning(issues('flat', '0')).length, 0);
+});
+
+ test('many on a detailed building is quiet, while parts still request refinement', () => {
+  const tags = { building: 'yes', 'roof:shape': 'many' };
+  assert.ok(!validateTags('way/1', tags, true).some(i => i.code === 'roof-detail'));
+  assert.ok(validateTags('way/1', { ...tags, 'building:part': 'yes' }, true).some(i => i.code === 'roof-detail' && !i.fix));
 });

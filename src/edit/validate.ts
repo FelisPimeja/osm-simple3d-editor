@@ -103,7 +103,7 @@ let deprecatedList: readonly Deprecation[] = [];
 export function setDeprecatedTags(list: readonly Deprecation[]) { deprecatedList = list; }
 
 /** Проблемы тегов одного объекта. */
-export function validateTags(key: string, t: Record<string, string>): Issue[] {
+export function validateTags(key: string, t: Record<string, string>, hasParts = false): Issue[] {
   const out: Issue[] = [];
   const add = (level: IssueLevel, code: string, text: string, fix?: Fix) => out.push({ key, level, code, text, ...(fix ? { fix } : {}) });
   const set = (tags: Record<string, string | undefined>): Fix => ({
@@ -177,6 +177,9 @@ export function validateTags(key: string, t: Record<string, string>): Issue[] {
     }
   }
   const raw = t['roof:shape'], shape = raw?.trim().toLowerCase();
+  if (shape === 'many' && ((t['building:part'] !== undefined && t['building:part'] !== 'no') || (t.building !== undefined && !hasParts))) {
+    add('warning', 'roof-detail', tr('roof:shape=many — для точного 3D-представления уточните формы крыши на отдельных building:part. Сам тег допустим и не требует удаления.'));
+  }
   if (shape !== undefined) {
     const main = roofShapeOf(t);
     if (/^\d+(\.\d+)?$/.test(shape)) add('warning', 'roof', tr('roof:shape={value} — число вместо формы; число этажей в крыше — roof:levels.', { value: raw! }));
@@ -409,7 +412,7 @@ export function validateGeometry(f: Feature3D): Issue[] {
 export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue[] {
   const role = new Map(g.members.map((k, i) => [k, g.roles[i]]));
   const out: Issue[] = [];
-  for (const f of features) out.push(...validateTags(f.key, f.tags), ...validateGeometry(f));
+  for (const f of features) out.push(...validateTags(f.key, f.tags, f.hasParts || (role.get(f.key) === 'outline' && features.some((part) => role.get(part.key) === 'part'))), ...validateGeometry(f));
   const withGeom = features.filter((f) => f.polygons.length);
   if (!withGeom.length) return out;
   const p = projector(withGeom[0].polygons[0].outer[0]);

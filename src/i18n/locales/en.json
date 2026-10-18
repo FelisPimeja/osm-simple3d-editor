@@ -1,4 +1,5 @@
 {
+  "roof:shape=many — для точного 3D-представления уточните формы крыши на отдельных building:part. Сам тег допустим и не требует удаления.": "roof:shape=many: specify roof shapes on individual building:part objects for an accurate 3D representation. The tag itself is valid and does not need to be removed.",
   "Этажей в крыше": "Roof levels",
   "Неизвестного типа": "Unspecified type",
   "Распашная": "Hinged",

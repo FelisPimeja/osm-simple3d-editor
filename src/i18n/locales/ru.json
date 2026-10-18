@@ -245,6 +245,7 @@
   "roof:height ({roof} м) больше высоты объёма ({height} м) — крыша обрезана.": "roof:height ({roof} м) больше высоты объёма ({height} м) — крыша обрезана.",
   "building:levels ({levels}) не больше building:min_level ({min}) — building:levels считает этажи от земли, включая пропущенные снизу.": "building:levels ({levels}) не больше building:min_level ({min}) — building:levels считает этажи от земли, включая пропущенные снизу.",
   "building:levels={levels} при высоте стен {walls} м — этаж выходит {step} м.": "building:levels={levels} при высоте стен {walls} м — этаж выходит {step} м.",
+  "roof:shape=many — для точного 3D-представления уточните формы крыши на отдельных building:part. Сам тег допустим и не требует удаления.": "roof:shape=many — для точного 3D-представления уточните формы крыши на отдельных building:part. Сам тег допустим и не требует удаления.",
   "roof:shape={value} — число вместо формы; число этажей в крыше — roof:levels.": "roof:shape={value} — число вместо формы; число этажей в крыше — roof:levels.",
   "roof:shape={value} — {hint}.": "roof:shape={value} — {hint}.",
   "roof:shape={value} — неизвестная форма крыши (рисуется плоской).": "roof:shape={value} — неизвестная форма крыши (рисуется плоской).",

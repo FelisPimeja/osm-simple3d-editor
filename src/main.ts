@@ -5277,7 +5277,7 @@ function buildingIssues(g: BuildingGroup): Issue[] {
 let featureIssueCache = new WeakMap<Feature3D, Issue[]>();
 function featureIssues(f: Feature3D): Issue[] {
   let issues = featureIssueCache.get(f);
-  if (!issues) featureIssueCache.set(f, issues = [...validateTags(f.key, f.tags), ...validateGeometry(f)]);
+  if (!issues) featureIssueCache.set(f, issues = [...validateTags(f.key, f.tags, f.hasParts), ...validateGeometry(f)]);
   return issues;
 }
 
@@ -6667,8 +6667,8 @@ function commentSuggestion(): string {
       if (!before || !f) return false;
       // Проблема — вид проверки и тег, о котором она (значение может меняться: 4m → 4)
       const sig = (i: Issue) => `${i.code} ${i.text.split(/[=\s]/)[0]}`;
-      const now = new Set(validateTags(key, f.tags).map(sig));
-      return validateTags(key, before).some((i) => !now.has(sig(i)));
+      const now = new Set(validateTags(key, f.tags, 'hasParts' in f && !!f.hasParts).map(sig));
+      return validateTags(key, before, 'hasParts' in f && !!f.hasParts).some((i) => !now.has(sig(i)));
     },
   });
 }
@@ -7308,7 +7308,7 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: s
     levelsAboveOutline(f),
   ].filter(Boolean);
   // Проверка: в режиме здания — вся (с пересечениями частей), иначе — теги и геометрия объекта
-  const issues = (focus ? focusIssues.filter((i) => i.key === f.key || i.other === f.key) : [...validateTags(f.key, f.tags), ...validateGeometry(f)])
+  const issues = (focus ? focusIssues.filter((i) => i.key === f.key || i.other === f.key) : [...validateTags(f.key, f.tags, f.hasParts), ...validateGeometry(f)])
     .filter((i) => i.code !== 'above');
   return `
     <h2>${f.kind === 'part' ? 'building:part' : 'building'} — <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a>${f.version ? ` v${f.version}` : ''}</h2>

@@ -946,5 +946,18 @@
   "Направление": "Direction",
   "Задать направление двумя точками в 3D": "Set direction with two points in 3D",
   "Направление двумя точками задаётся в режиме здания.": "Two-point direction works in building mode.",
-  "roof:direction={value}. Отменить — Ctrl+Z.": "roof:direction={value}. Undo with Ctrl+Z."
+  "roof:direction={value}. Отменить — Ctrl+Z.": "roof:direction={value}. Undo with Ctrl+Z.",
+  "roof:levels × {m} м": "roof:levels × {m} m",
+  "по умолчанию {m} м": "default {m} m",
+  " + крыша {m} м": " + roof {m} m",
+  "building:levels × {m} м": "building:levels × {m} m",
+  "стены по умолчанию {m} м": "default walls {m} m",
+  "building:min_level × {m} м": "building:min_level × {m} m",
+  "у части-кровли — чуть ниже крыши": "roof-only part: just below the roof",
+  "без формы крыша плоская": "no shape means a flat roof",
+  "конёк вдоль длинной стороны": "ridge along the long side",
+  "белый по умолчанию": "white by default",
+  "у плоской крыши — цвет стен": "flat roof uses the wall colour",
+  "Не задано — редактор рисует со значением по умолчанию {value} ({why}). В OSM ничего не записывается: чтобы закрепить, введите значение.": "Not set: the editor draws with the default {value} ({why}). Nothing is written to OSM; enter a value to set it.",
+  "не выше высоты части": "capped by the part height"
 }

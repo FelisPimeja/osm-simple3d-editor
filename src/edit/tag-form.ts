@@ -1,4 +1,5 @@
-import { INHERITABLE, inheritedValue } from '../osm/inherit';
+import { INHERITABLE, inheritedTags, inheritedValue } from '../osm/inherit';
+import { computeHeights, LEVEL_HEIGHT } from '../osm/heights';
 import type { EditSession } from './session';
 import { tr, trn } from '../i18n';
 import { idFieldLabel, idOptions, valueLabels } from '../osm/presets';
@@ -147,6 +148,47 @@ export interface InheritSource { label: string; tags: Record<string, string> }
 /** Значок «унаследовано» — стрелка вниз из рамки. */
 const ICON_INHERIT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h10"/><path d="M8 5v8.5M5 10.5l3 3 3-3"/></svg>';
 
+/** Значок «по умолчанию» — пунктирный круг. */
+const ICON_DEFAULT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="2 2.2"><circle cx="8" cy="8" r="5.5"/></svg>';
+
+const num = (v: number) => String(Math.round(v * 100) / 100);
+
+/**
+ * Значения, которые редактор подставляет при рисовании, когда тега нет (ни своего, ни унаследованного):
+ * тег → значение и откуда оно. Повторяет умолчания computeHeights и раскраски.
+ */
+function defaultValues(effective: Record<string, string>): Record<string, { value: string; why: string }> {
+  const out: Record<string, { value: string; why: string }> = {};
+  const h = computeHeights(effective);
+  const roofLevels = Number(effective['roof:levels']);
+  const nominal = roofLevels > 0 ? roofLevels * LEVEL_HEIGHT : 3;
+  const roofWhy = h.roofHeight < nominal - 1e-6 ? tr('не выше высоты части')
+    : roofLevels > 0 ? tr('roof:levels × {m} м', { m: LEVEL_HEIGHT }) : tr('по умолчанию {m} м', { m: 3 });
+  if (effective.height === undefined) {
+    const roof = h.roofHeight ? tr(' + крыша {m} м', { m: num(h.roofHeight) }) : '';
+    out.height = { value: num(h.top), why: h.source === 'levels'
+      ? tr('building:levels × {m} м', { m: LEVEL_HEIGHT }) + roof
+      : tr('стены по умолчанию {m} м', { m: num(h.wallTop - h.min) }) + roof };
+  }
+  if (effective.min_height === undefined && h.min > 0) {
+    out.min_height = { value: num(h.min), why: effective['building:min_level'] !== undefined
+      ? tr('building:min_level × {m} м', { m: LEVEL_HEIGHT }) : tr('у части-кровли — чуть ниже крыши') };
+  }
+  if (effective['roof:height'] === undefined && h.roofShape !== 'flat') {
+    out['roof:height'] = { value: num(h.roofHeight), why: roofWhy };
+  }
+  if (effective['roof:shape'] === undefined) out['roof:shape'] = { value: 'flat', why: tr('без формы крыша плоская') };
+  if (effective['roof:orientation'] === undefined && effective['roof:direction'] === undefined) out['roof:orientation'] = { value: 'along', why: tr('конёк вдоль длинной стороны') };
+  if (effective['building:colour'] === undefined && effective.colour === undefined) out['building:colour'] = { value: '#ffffff', why: tr('белый по умолчанию') };
+  if (effective['roof:colour'] === undefined) {
+    const pitched = h.roofShape !== 'flat';
+    out['roof:colour'] = pitched
+      ? { value: '#ffffff', why: tr('белый по умолчанию') }
+      : { value: effective['building:colour'] ?? effective.colour ?? '#ffffff', why: tr('у плоской крыши — цвет стен') };
+  }
+  return out;
+}
+
 /** HTML формы тегов для объекта. sources — откуда показывать унаследованные значения (по порядку). */
 export function renderTagForm(key: string, session: EditSession, sources: InheritSource[] = []): string {
   const f = session.get(key);
@@ -155,6 +197,7 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   const inheritedAny: string[] = [];
   // Форма крыши — своя или унаследованная: от неё зависит, нужны ли направление ската и конёк
   const shape = f.tags['roof:shape'] ?? sources.map((s) => s.tags['roof:shape']).find((v) => v !== undefined);
+  const defaults = defaultValues({ ...f.tags, ...inheritedTags(f.tags, sources.map((s) => s.tags)) });
   const rows = FIELDS.filter((field) => {
     if (field.tag === 'building:part' && f.tags['building:part'] === undefined) return false; // только у частей
     const only = SHAPE_ONLY[field.tag];
@@ -169,23 +212,30 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
     const inherited = from ? inheritedValue(from.tags, field.tag) : undefined;
     const hint = from ? tr('Не задано у объекта — унаследовано из {source}: {tag}. Модель рисуется с ним, но в OSM лучше задать значение на самой части.',
       { source: from.label, tag: `${field.tag}=${inherited}` }) : '';
+    // Нет ни своего, ни унаследованного — значение, с которым редактор рисует по умолчанию (серым, с пояснением)
+    const def = !value && !from ? defaults[field.tag] : undefined;
+    const defHint = def ? tr('Не задано — редактор рисует со значением по умолчанию {value} ({why}). В OSM ничего не записывается: чтобы закрепить, введите значение.',
+      { value: def.value, why: def.why }) : '';
     if (from) inheritedAny.push(field.label!.replace(/,.*$/, '').toLowerCase());
-    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || was || field.tag)}"`;
+    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || defHint || was || field.tag)}"`;
+    const shown = inherited ?? def?.value;
+    const grey = inherited ? ' class="inherited"' : def ? ' class="inherited defaulted"' : '';
+    const badge = (input: string) => withBadge(input, hint || defHint, def ? ICON_DEFAULT : ICON_INHERIT);
     let control: string;
     if (field.type === 'select') {
       // Нестандартное значение из данных тоже показываем, чтобы не потерять его
       const options = [...new Set([...(value && !field.options!.includes(value) ? [value] : []), ...field.options!])];
-      // Унаследованное — серым в пустом варианте
-      control = withBadge(`<select ${common}${inherited ? ' class="inherited"' : ''}><option value="">${esc(inherited ?? '—')}</option>${options
+      // Унаследованное или умолчание — серым в пустом варианте
+      control = badge(`<select ${common}${grey}><option value="">${esc(shown ?? '—')}</option>${options
         .map((o) => `<option value="${esc(o)}"${o === value ? ' selected' : ''}>${esc(o)}</option>`)
-        .join('')}</select>`, hint);
+        .join('')}</select>`);
     } else if (field.type === 'combo') {
-      control = withBadge(combo(field, common, value, inherited ?? field.placeholder ?? '—', inherited ? ' class="inherited"' : '', inherited), hint);
+      control = badge(combo(field, common, value, shown ?? field.placeholder ?? '—', grey, shown));
     } else if (field.type === 'colour') {
-      control = `<span class="colour-field"><input type="color" value="${toHex(value || inherited)}" data-picker-for="${esc(field.tag)}"${inherited ? ' class="inherited"' : ''} />
-        ${withBadge(`<input type="text" ${common} value="${esc(value)}" placeholder="${esc(inherited ?? tr('#rrggbb или имя'))}" />`, hint)}</span>`;
+      control = `<span class="colour-field"><input type="color" value="${toHex(value || shown)}" data-picker-for="${esc(field.tag)}"${grey} />
+        ${badge(`<input type="text" ${common} value="${esc(value)}" placeholder="${esc(shown ?? tr('#rrggbb или имя'))}" />`)}</span>`;
     } else {
-      control = withBadge(`<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common} value="${esc(value)}" placeholder="${esc(inherited ?? field.placeholder ?? '')}" />`, hint);
+      control = badge(`<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common} value="${esc(value)}" placeholder="${esc(shown ?? field.placeholder ?? '')}" />`);
       if (field.type === 'direction') control = directionField(control);
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
@@ -276,9 +326,9 @@ function directionField(input: string): string {
 }
 
 /** Поле со значком «унаследовано» справа (только если есть пояснение). */
-function withBadge(input: string, hint: string): string {
+function withBadge(input: string, hint: string, icon = ICON_INHERIT): string {
   if (!hint) return input;
-  return `<span class="inherit-field" title="${esc(hint)}">${input}<span class="inherit-badge">${ICON_INHERIT}</span></span>`;
+  return `<span class="inherit-field" title="${esc(hint)}">${input}<span class="inherit-badge">${icon}</span></span>`;
 }
 
 /** Обработчики формы (делегирование на контейнер; вешается один раз). */

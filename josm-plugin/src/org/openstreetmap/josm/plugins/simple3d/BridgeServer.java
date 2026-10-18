@@ -1,0 +1,541 @@
+package org.openstreetmap.josm.plugins.simple3d;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.swing.SwingUtilities;
+import javax.xml.parsers.DocumentBuilderFactory;
+
+import org.openstreetmap.josm.command.AddCommand;
+import org.openstreetmap.josm.command.ChangeMembersCommand;
+import org.openstreetmap.josm.command.ChangeNodesCommand;
+import org.openstreetmap.josm.command.ChangePropertyCommand;
+import org.openstreetmap.josm.command.Command;
+import org.openstreetmap.josm.command.DeleteCommand;
+import org.openstreetmap.josm.command.MoveCommand;
+import org.openstreetmap.josm.command.SequenceCommand;
+import org.openstreetmap.josm.data.UndoRedoHandler;
+import org.openstreetmap.josm.data.coor.LatLon;
+import org.openstreetmap.josm.data.osm.DataSet;
+import org.openstreetmap.josm.data.osm.Node;
+import org.openstreetmap.josm.data.osm.OsmPrimitive;
+import org.openstreetmap.josm.data.osm.OsmPrimitiveType;
+import org.openstreetmap.josm.data.osm.Relation;
+import org.openstreetmap.josm.data.osm.RelationMember;
+import org.openstreetmap.josm.data.osm.SimplePrimitiveId;
+import org.openstreetmap.josm.data.osm.Way;
+import org.openstreetmap.josm.data.osm.event.DataSetListenerAdapter;
+import org.openstreetmap.josm.gui.MainApplication;
+import org.openstreetmap.josm.gui.layer.MainLayerManager.ActiveLayerChangeListener;
+import org.openstreetmap.josm.io.OsmWriter;
+import org.openstreetmap.josm.io.OsmWriterFactory;
+import org.openstreetmap.josm.tools.Logging;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+
+import org.openstreetmap.josm.plugins.simple3d.MiniHttp.Exchange;
+
+/**
+ * HTTP только на 127.0.0.1:
+ * <ul>
+ * <li>GET /simple3d/status — версия протокола и номер ревизии слоя (rev растёт при любом изменении данных);</li>
+ * <li>GET /simple3d/export[?since=rev] — активный слой в .osm; с since ждёт изменения до 25 с (иначе 204);</li>
+ * <li>POST /simple3d/undo, /simple3d/redo — отмена/повтор в JOSM;</li>
+ * <li>/api/0.6/… — подмножество OSM API, которым пользуется отправка редактора: nodes/ways/relations.json,
+ * way/{id}/relations.json, changeset create/upload/close. Загрузка osmChange — одна команда JOSM.</li>
+ * </ul>
+ */
+class BridgeServer {
+    static final int PROTOCOL = 1;
+
+    private final int port;
+    private MiniHttp http;
+    private final Object revLock = new Object();
+    private long rev = 1;
+    private DataSet watched;
+    private final DataSetListenerAdapter dsListener = new DataSetListenerAdapter(e -> bump());
+    private final ActiveLayerChangeListener layerListener = e -> {
+        DataSet ds = MainApplication.getLayerManager().getEditDataSet();
+        if (ds != watched) {
+            if (watched != null) watched.removeDataSetListener(dsListener);
+            watched = ds;
+            if (ds != null) ds.addDataSetListener(dsListener);
+        }
+        bump();
+    };
+
+    BridgeServer(int port) {
+        this.port = port;
+    }
+
+    void start() throws IOException {
+        http = new MiniHttp(port, this::handle);
+        MainApplication.getLayerManager().addAndFireActiveLayerChangeListener(layerListener);
+        Logging.info("Simple3D: слушаю 127.0.0.1:" + port);
+    }
+
+    private void bump() {
+        synchronized (revLock) {
+            rev++;
+            revLock.notifyAll();
+        }
+    }
+
+    private long rev() {
+        synchronized (revLock) {
+            return rev;
+        }
+    }
+
+    // ---------------------------------------------------------------- HTTP
+
+    private void handle(Exchange ex) throws IOException {
+        try {
+            ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            ex.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+            ex.getResponseHeaders().add("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept");
+            ex.getResponseHeaders().add("Access-Control-Allow-Private-Network", "true");
+            ex.getResponseHeaders().add("Access-Control-Expose-Headers", "X-Simple3D-Rev");
+            if ("OPTIONS".equals(ex.getRequestMethod())) {
+                send(ex, 204, null, null);
+                return;
+            }
+            route(ex);
+        } catch (HttpError e) {
+            send(ex, e.status, "text/plain", e.getMessage());
+        } catch (Exception e) {
+            Logging.error(e);
+            send(ex, 500, "text/plain", String.valueOf(e));
+        } finally {
+            ex.close();
+        }
+    }
+
+    private void route(Exchange ex) throws Exception {
+        String path = ex.getRequestURI().getPath();
+        String method = ex.getRequestMethod();
+        Map<String, String> q = query(ex.getRequestURI().getRawQuery());
+        if (path.equals("/simple3d/status")) {
+            DataSet ds = MainApplication.getLayerManager().getEditDataSet();
+            send(ex, 200, "application/json", "{\"plugin\":\"simple3d\",\"protocol\":" + PROTOCOL + ",\"rev\":" + rev()
+                + ",\"layer\":" + (ds != null) + "}");
+            return;
+        }
+        if (path.equals("/simple3d/export")) {
+            export(ex, q.get("since"));
+            return;
+        }
+        if (path.equals("/simple3d/undo") && method.equals("POST")) {
+            onEdt(() -> UndoRedoHandler.getInstance().undo());
+            send(ex, 200, "text/plain", "");
+            return;
+        }
+        if (path.equals("/simple3d/redo") && method.equals("POST")) {
+            onEdt(() -> UndoRedoHandler.getInstance().redo());
+            send(ex, 200, "text/plain", "");
+            return;
+        }
+        String api = "/api/0.6/";
+        if (!path.startsWith(api)) throw new HttpError(404, "not found");
+        String p = path.substring(api.length());
+        DataSet ds = editDataSet();
+        Matcher m;
+        if ((m = Pattern.compile("(node|way|relation)s\\.json").matcher(p)).matches()) {
+            String type = m.group(1);
+            List<OsmPrimitive> found = new ArrayList<>();
+            readLocked(ds, () -> {
+                for (String id : Objects.requireNonNullElse(q.get(type + "s"), "").split(",")) {
+                    if (id.isEmpty()) continue;
+                    OsmPrimitive o = ds.getPrimitiveById(new SimplePrimitiveId(Long.parseLong(id), OsmPrimitiveType.from(type)));
+                    if (o != null && live(o)) found.add(o);
+                }
+            });
+            send(ex, 200, "application/json", elementsJson(ds, found));
+        } else if ((m = Pattern.compile("way/(-?\\d+)/relations\\.json").matcher(p)).matches()) {
+            List<OsmPrimitive> found = new ArrayList<>();
+            long id = Long.parseLong(m.group(1));
+            readLocked(ds, () -> {
+                OsmPrimitive w = ds.getPrimitiveById(new SimplePrimitiveId(id, OsmPrimitiveType.WAY));
+                if (w != null) for (OsmPrimitive r : w.getReferrers()) if (r instanceof Relation && live(r)) found.add(r);
+            });
+            send(ex, 200, "application/json", elementsJson(ds, found));
+        } else if (p.equals("changeset/create") && method.equals("PUT")) {
+            send(ex, 200, "text/plain", "1");
+        } else if (p.matches("changeset/\\d+/close") && method.equals("PUT")) {
+            send(ex, 200, "text/plain", "");
+        } else if (p.matches("changeset/\\d+/upload") && method.equals("POST")) {
+            byte[] body = readAll(ex.getRequestBody());
+            String result = applyOsmChange(ds, body);
+            send(ex, 200, "application/xml", result);
+        } else {
+            throw new HttpError(404, "not supported: " + method + " " + path);
+        }
+    }
+
+    private void export(Exchange ex, String since) throws Exception {
+        if (since != null) {
+            long s = Long.parseLong(since);
+            long deadline = System.currentTimeMillis() + 25_000;
+            synchronized (revLock) {
+                while (rev == s) {
+                    long left = deadline - System.currentTimeMillis();
+                    if (left <= 0) break;
+                    revLock.wait(left);
+                }
+            }
+            if (rev() == s) {
+                ex.getResponseHeaders().add("X-Simple3D-Rev", String.valueOf(s));
+                send(ex, 204, null, null);
+                return;
+            }
+        }
+        long r = rev();
+        DataSet ds = MainApplication.getLayerManager().getEditDataSet();
+        StringWriter sw = new StringWriter();
+        if (ds != null) {
+            readLocked(ds, () -> {
+                try (OsmWriter w = OsmWriterFactory.createOsmWriter(new PrintWriter(sw), true, "0.6")) {
+                    w.header();
+                    w.writeDataSources(ds);
+                    w.writeContent(ds);
+                    w.footer();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+        }
+        ex.getResponseHeaders().add("X-Simple3D-Rev", String.valueOf(r));
+        send(ex, 200, "application/xml; charset=utf-8", sw.toString());
+    }
+
+    // ---------------------------------------------------------------- osmChange → команды JOSM
+
+    /** Ключ элемента osmChange: тип/id (id — как прислал редактор, у новых отрицательный). */
+    private static String key(String type, long id) {
+        return type + "/" + id;
+    }
+
+    private String applyOsmChange(DataSet ds, byte[] body) throws Exception {
+        DocumentBuilderFactory f = DocumentBuilderFactory.newInstance();
+        f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        Document doc = f.newDocumentBuilder().parse(new ByteArrayInputStream(body));
+        AtomicReference<String> out = new AtomicReference<>();
+        AtomicReference<Exception> err = new AtomicReference<>();
+        onEdt(() -> {
+            ds.beginUpdate();
+            try {
+                out.set(buildAndRun(ds, doc));
+            } catch (Exception e) {
+                err.set(e);
+            } finally {
+                ds.endUpdate();
+            }
+        });
+        if (err.get() != null) throw err.get();
+        return out.get();
+    }
+
+    private String buildAndRun(DataSet ds, Document doc) throws HttpError {
+        Map<String, OsmPrimitive> created = new HashMap<>();
+        List<Command> cmds = new ArrayList<>();
+        StringBuilder diff = new StringBuilder("<diffResult version=\"0.6\" generator=\"JOSM simple3d\">");
+        List<Element> creates = children(doc.getDocumentElement(), "create");
+        List<Element> modifies = children(doc.getDocumentElement(), "modify");
+        List<Element> deletes = children(doc.getDocumentElement(), "delete");
+
+        // Создание: сначала объекты без связей (в том же порядке — узлы, пути, отношения), потом связи
+        List<Element> newEls = new ArrayList<>();
+        for (Element block : creates) newEls.addAll(elements(block));
+        for (Element e : newEls) {
+            OsmPrimitive p;
+            switch (e.getTagName()) {
+            case "node": p = new Node(latLon(e)); break;
+            case "way": p = new Way(); break;
+            case "relation": p = new Relation(); break;
+            default: continue;
+            }
+            p.setKeys(tags(e));
+            created.put(key(e.getTagName(), id(e)), p);
+        }
+        for (Element e : newEls) {
+            OsmPrimitive p = created.get(key(e.getTagName(), id(e)));
+            if (p instanceof Way) ((Way) p).setNodes(wayNodes(ds, created, e));
+            if (p instanceof Relation) ((Relation) p).setMembers(members(ds, created, e));
+        }
+        // Добавлять так, чтобы всё, на что ссылаются, уже было в слое
+        Set<OsmPrimitive> added = new HashSet<>();
+        List<OsmPrimitive> pending = new ArrayList<>(created.values());
+        pending.sort((a, b) -> rank(a) - rank(b));
+        while (!pending.isEmpty()) {
+            boolean progress = false;
+            for (var it = pending.iterator(); it.hasNext();) {
+                OsmPrimitive p = it.next();
+                boolean ready = true;
+                if (p instanceof Relation) {
+                    for (RelationMember m : ((Relation) p).getMembers()) {
+                        if (created.containsValue(m.getMember()) && !added.contains(m.getMember())) ready = false;
+                    }
+                }
+                if (!ready) continue;
+                cmds.add(new AddCommand(ds, p));
+                added.add(p);
+                it.remove();
+                progress = true;
+            }
+            if (!progress) throw new HttpError(400, "relation cycle among created relations");
+        }
+
+        // Изменение: координаты, состав, теги — только то, что действительно отличается
+        for (Element block : modifies) {
+            for (Element e : elements(block)) {
+                OsmPrimitive p = existing(ds, created, e);
+                if (p instanceof Node) {
+                    LatLon ll = latLon(e);
+                    if (!((Node) p).getCoor().equalsEpsilon(ll)) cmds.add(new MoveCommand((Node) p, ll));
+                } else if (p instanceof Way) {
+                    List<Node> nodes = wayNodes(ds, created, e);
+                    if (!nodes.equals(((Way) p).getNodes())) cmds.add(new ChangeNodesCommand(ds, (Way) p, nodes));
+                } else if (p instanceof Relation) {
+                    List<RelationMember> members = members(ds, created, e);
+                    if (!members.equals(((Relation) p).getMembers())) cmds.add(new ChangeMembersCommand(ds, (Relation) p, members));
+                }
+                Node holder = new Node();
+                holder.setKeys(tags(e));
+                if (!p.getKeys().equals(holder.getKeys())) {
+                    Command c = ChangePropertyCommand.build(p, holder);
+                    if (c != null) cmds.add(c);
+                }
+                diff.append('<').append(e.getTagName()).append(" old_id=\"").append(id(e)).append("\" new_id=\"")
+                    .append(p.getUniqueId()).append("\" new_version=\"").append(p.getVersion()).append("\"/>");
+            }
+        }
+
+        // Удаление (if-unused): пропускаем то, на что ещё ссылаются объекты вне удаляемых
+        Set<OsmPrimitive> toDelete = new LinkedHashSet<>();
+        List<Element> delEls = new ArrayList<>();
+        for (Element block : deletes) delEls.addAll(elements(block));
+        for (Element e : delEls) {
+            OsmPrimitive p = ds.getPrimitiveById(new SimplePrimitiveId(id(e), OsmPrimitiveType.from(e.getTagName())));
+            if (p != null && live(p)) toDelete.add(p);
+        }
+        boolean changed;
+        do {
+            changed = false;
+            for (var it = toDelete.iterator(); it.hasNext();) {
+                OsmPrimitive p = it.next();
+                for (OsmPrimitive r : p.getReferrers()) {
+                    if (live(r) && !toDelete.contains(r)) {
+                        it.remove();
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        } while (changed);
+        if (!toDelete.isEmpty()) cmds.add(new DeleteCommand(ds, toDelete));
+        for (OsmPrimitive p : toDelete) {
+            diff.append('<').append(p.getType().getAPIName()).append(" old_id=\"").append(p.getUniqueId()).append("\"/>");
+        }
+
+        if (!cmds.isEmpty()) {
+            UndoRedoHandler.getInstance().add(new SequenceCommand(ds, "3D editor (Simple3D)", cmds, false));
+        }
+        // Новым объектам JOSM выдал свои временные id — сообщаем их как new_id
+        for (Element e : newEls) {
+            OsmPrimitive p = created.get(key(e.getTagName(), id(e)));
+            diff.append('<').append(e.getTagName()).append(" old_id=\"").append(id(e)).append("\" new_id=\"")
+                .append(p.getUniqueId()).append("\" new_version=\"0\"/>");
+        }
+        return diff.append("</diffResult>").toString();
+    }
+
+    /** Есть в слое и скачан целиком (isUsable не годится: скрытые фильтром JOSM тоже «не usable»). */
+    private static boolean live(OsmPrimitive p) {
+        return !p.isDeleted() && !p.isIncomplete();
+    }
+
+    private static int rank(OsmPrimitive p) {
+        return p instanceof Node ? 0 : p instanceof Way ? 1 : 2;
+    }
+
+    private static OsmPrimitive resolve(DataSet ds, Map<String, OsmPrimitive> created, String type, long id) throws HttpError {
+        OsmPrimitive p = created.get(key(type, id));
+        if (p == null) p = ds.getPrimitiveById(new SimplePrimitiveId(id, OsmPrimitiveType.from(type)));
+        if (p == null || p.isDeleted()) throw new HttpError(409, type + "/" + id + " is not in the JOSM layer");
+        return p;
+    }
+
+    private static OsmPrimitive existing(DataSet ds, Map<String, OsmPrimitive> created, Element e) throws HttpError {
+        return resolve(ds, created, e.getTagName(), id(e));
+    }
+
+    private static List<Node> wayNodes(DataSet ds, Map<String, OsmPrimitive> created, Element e) throws HttpError {
+        List<Node> out = new ArrayList<>();
+        for (Element nd : children(e, "nd")) out.add((Node) resolve(ds, created, "node", Long.parseLong(nd.getAttribute("ref"))));
+        return out;
+    }
+
+    private static List<RelationMember> members(DataSet ds, Map<String, OsmPrimitive> created, Element e) throws HttpError {
+        List<RelationMember> out = new ArrayList<>();
+        for (Element m : children(e, "member")) {
+            out.add(new RelationMember(m.getAttribute("role"), resolve(ds, created, m.getAttribute("type"), Long.parseLong(m.getAttribute("ref")))));
+        }
+        return out;
+    }
+
+    private static Map<String, String> tags(Element e) {
+        Map<String, String> out = new HashMap<>();
+        for (Element t : children(e, "tag")) out.put(t.getAttribute("k"), t.getAttribute("v"));
+        return out;
+    }
+
+    private static LatLon latLon(Element e) {
+        return new LatLon(Double.parseDouble(e.getAttribute("lat")), Double.parseDouble(e.getAttribute("lon")));
+    }
+
+    private static long id(Element e) {
+        return Long.parseLong(e.getAttribute("id"));
+    }
+
+    private static List<Element> elements(Element block) {
+        List<Element> out = new ArrayList<>();
+        for (org.w3c.dom.Node n = block.getFirstChild(); n != null; n = n.getNextSibling()) if (n instanceof Element) out.add((Element) n);
+        return out;
+    }
+
+    private static List<Element> children(Element e, String tag) {
+        List<Element> out = new ArrayList<>();
+        for (Element c : elements(e)) if (c.getTagName().equals(tag)) out.add(c);
+        return out;
+    }
+
+    // ---------------------------------------------------------------- JSON в форме OSM API
+
+    private static String elementsJson(DataSet ds, Collection<OsmPrimitive> items) {
+        StringBuilder sb = new StringBuilder("{\"version\":\"0.6\",\"generator\":\"JOSM simple3d\",\"elements\":[");
+        readLocked(ds, () -> {
+            boolean first = true;
+            for (OsmPrimitive p : items) {
+                if (!first) sb.append(',');
+                first = false;
+                sb.append("{\"type\":\"").append(p.getType().getAPIName()).append("\",\"id\":").append(p.getUniqueId())
+                    .append(",\"version\":").append(p.getVersion());
+                if (p instanceof Node) {
+                    LatLon c = ((Node) p).getCoor();
+                    sb.append(",\"lat\":").append(c.lat()).append(",\"lon\":").append(c.lon());
+                } else if (p instanceof Way) {
+                    sb.append(",\"nodes\":[");
+                    List<Node> nodes = ((Way) p).getNodes();
+                    for (int i = 0; i < nodes.size(); i++) sb.append(i > 0 ? "," : "").append(nodes.get(i).getUniqueId());
+                    sb.append(']');
+                } else if (p instanceof Relation) {
+                    sb.append(",\"members\":[");
+                    List<RelationMember> ms = ((Relation) p).getMembers();
+                    for (int i = 0; i < ms.size(); i++) {
+                        RelationMember m = ms.get(i);
+                        sb.append(i > 0 ? "," : "").append("{\"type\":\"").append(m.getType().getAPIName()).append("\",\"ref\":")
+                            .append(m.getUniqueId()).append(",\"role\":").append(str(m.getRole())).append('}');
+                    }
+                    sb.append(']');
+                }
+                if (p.hasKeys()) {
+                    sb.append(",\"tags\":{");
+                    boolean ft = true;
+                    for (Map.Entry<String, String> t : p.getKeys().entrySet()) {
+                        sb.append(ft ? "" : ",").append(str(t.getKey())).append(':').append(str(t.getValue()));
+                        ft = false;
+                    }
+                    sb.append('}');
+                }
+                sb.append('}');
+            }
+        });
+        return sb.append("]}").toString();
+    }
+
+    private static String str(String s) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (char c : s.toCharArray()) {
+            if (c == '"' || c == '\\') sb.append('\\').append(c);
+            else if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+            else sb.append(c);
+        }
+        return sb.append('"').toString();
+    }
+
+    // ---------------------------------------------------------------- служебное
+
+    private static DataSet editDataSet() throws HttpError {
+        DataSet ds = MainApplication.getLayerManager().getEditDataSet();
+        if (ds == null) throw new HttpError(409, "no active OSM data layer in JOSM");
+        return ds;
+    }
+
+    private static void readLocked(DataSet ds, Runnable r) {
+        ds.getReadLock().lock();
+        try {
+            r.run();
+        } finally {
+            ds.getReadLock().unlock();
+        }
+    }
+
+    private static void onEdt(Runnable r) throws Exception {
+        if (SwingUtilities.isEventDispatchThread()) r.run();
+        else SwingUtilities.invokeAndWait(r);
+    }
+
+    private static Map<String, String> query(String raw) {
+        Map<String, String> out = new HashMap<>();
+        if (raw == null) return out;
+        for (String kv : raw.split("&")) {
+            int i = kv.indexOf('=');
+            if (i > 0) out.put(URLDecoder.decode(kv.substring(0, i), StandardCharsets.UTF_8), URLDecoder.decode(kv.substring(i + 1), StandardCharsets.UTF_8));
+        }
+        return out;
+    }
+
+    private static byte[] readAll(InputStream in) throws IOException {
+        return in.readAllBytes();
+    }
+
+    private static void send(Exchange ex, int status, String type, String body) throws IOException {
+        if (body == null) {
+            ex.sendResponseHeaders(status, -1);
+            return;
+        }
+        byte[] b = body.getBytes(StandardCharsets.UTF_8);
+        if (type != null) ex.getResponseHeaders().add("Content-Type", type);
+        ex.sendResponseHeaders(status, b.length);
+        try (OutputStream os = ex.getResponseBody()) {
+            os.write(b);
+        }
+    }
+
+    static class HttpError extends Exception {
+        final int status;
+
+        HttpError(int status, String message) {
+            super(message);
+            this.status = status;
+        }
+    }
+}

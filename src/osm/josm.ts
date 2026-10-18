@@ -9,6 +9,23 @@ import { tr } from '../i18n';
  * (Chrome 142+ один раз спрашивает разрешение на доступ к локальной сети).
  */
 export const JOSM_URL = 'http://127.0.0.1:8111';
+/**
+ * Плагин simple3d для JOSM (josm-plugin/): свой сервер на 127.0.0.1:8112 — отдаёт слой без настроек Remote Control,
+ * сообщает об изменениях сразу (долгий опрос) и принимает правки редактора через подмножество OSM API 0.6:
+ * они становятся одной командой JOSM (отменяется Ctrl+Z в JOSM).
+ */
+export const PLUGIN_URL = 'http://127.0.0.1:8112';
+/** Плагин отвечает: правки уходят в JOSM, слой читается через него. */
+let plugin = false;
+/** Ревизия слоя у плагина (растёт при каждом изменении данных в JOSM). */
+let pluginRev: string | undefined;
+export const josmPlugin = () => plugin;
+/** Адрес API 0.6 плагина — для отправки правок в JOSM (undefined — плагина нет). */
+export const josmApi = () => (plugin ? `${PLUGIN_URL}/api/0.6` : undefined);
+/** Отмена (redo — повтор) последней команды в JOSM. */
+export async function josmUndo(redo = false) {
+  if (plugin) await fetch(`${PLUGIN_URL}/simple3d/${redo ? 'redo' : 'undo'}`, { method: 'POST' });
+}
 /** Первая стабильная версия JOSM с командой /export (r19425). */
 const MIN_VERSION = 19439;
 
@@ -39,6 +56,12 @@ export function josmLayer(): Promise<JosmLayer> {
 }
 
 async function loadLayer(): Promise<JosmLayer> {
+  plugin = await fetch(`${PLUGIN_URL}/simple3d/status`).then((r) => r.ok).catch(() => false);
+  if (plugin) {
+    const xml = await exportXml();
+    if (!xml.trim()) throw new Error(tr('В JOSM нет активного слоя данных OSM. Откройте или выберите слой данных.'));
+    return toLayer(xml);
+  }
   const version = await josmGet('/version').then((r) => r.json() as Promise<{ version?: number }>);
   if (version.version && version.version < MIN_VERSION) {
     throw new Error(tr('JOSM {v} не умеет отдавать данные — нужна версия {min} (25.08) или новее.', { v: version.version, min: MIN_VERSION }));
@@ -50,7 +73,16 @@ async function loadLayer(): Promise<JosmLayer> {
   return toLayer(xml);
 }
 
-const exportXml = () => josmGet('/export').then((r) => r.text());
+const exportXml = () => (plugin ? pluginExport() : josmGet('/export').then((r) => r.text()));
+
+/** Слой от плагина; since — ждать изменения после этой ревизии (до 25 с; не дождались — пустая строка). */
+async function pluginExport(since?: string): Promise<string> {
+  const res = await fetch(`${PLUGIN_URL}/simple3d/export${since ? `?since=${since}` : ''}`);
+  if (res.status === 204) return '';
+  if (!res.ok) throw new Error(tr('JOSM ответил {status} на {path}', { status: res.status, path: '/simple3d/export' }));
+  pluginRev = res.headers.get('X-Simple3D-Rev') ?? undefined;
+  return res.text();
+}
 
 function toLayer(xml: string): JosmLayer {
   const elements = parseOsmXml(xml);
@@ -64,7 +96,7 @@ function toLayer(xml: string): JosmLayer {
  */
 export async function pollJosmLayer(): Promise<JosmLayer | undefined> {
   if (lastXml === undefined) return;
-  const xml = await exportXml().catch(() => '');
+  const xml = await (plugin ? pluginExport(pluginRev) : exportXml()).catch(() => '');
   if (!xml.trim() || xml === lastXml) return;
   const next = toLayer(xml);
   layer = Promise.resolve(next);

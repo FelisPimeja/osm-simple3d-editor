@@ -91,12 +91,16 @@ export function buildOsmChange(edits: { element: OsmWay | OsmRelation | (OsmNode
     modify ? `<modify>${modify}</modify>` : ''}${del ? `<delete if-unused="true">${del}</delete>` : ''}</osmChange>`;
 }
 
+/** Куда идёт отправка: API сервера или (target) локальный API плагина JOSM — ему вход не нужен. */
+let target: string | undefined;
+const api = () => target ?? server().api;
+
 async function call(method: string, path: string, body?: string, accept = 'text/plain'): Promise<string> {
-  const token = getToken();
-  if (!token) throw new Error(tr('Нужно войти в {server}.', { server: server().short }));
-  const res = await fetch(`${server().api}${path}`, {
+  const token = target ? undefined : getToken();
+  if (!token && !target) throw new Error(tr('Нужно войти в {server}.', { server: server().short }));
+  const res = await fetch(`${api()}${path}`, {
     method,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/xml; charset=utf-8', Accept: accept },
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'text/xml; charset=utf-8', Accept: accept },
     body,
   });
   const text = await res.text();
@@ -142,18 +146,20 @@ function parseDiffResult(xml: string): Pick<UploadResult, 'versions' | 'newKeys'
  * данные для показа (кеш тайлов) и могут отставать. Если те же теги успел изменить
  * кто-то ещё — ConflictError, ничего не отправляется.
  */
-export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (s: string) => void = () => {}): Promise<UploadResult> {
+export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (s: string) => void = () => {}, to?: string): Promise<UploadResult> {
+  target = to;
   onApiWait((seconds) => onStatus(tr('Лимит скачивания OSM API исчерпан — ждём {seconds} с и повторяем…', { seconds })));
   try {
     return await uploadInner(edits, comment, onStatus);
   } finally {
     onApiWait(undefined);
+    target = undefined;
   }
 }
 
 async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: string) => void): Promise<UploadResult> {
   onStatus(tr('Получаем текущие версии объектов…'));
-  const fresh = await fetchElements(edits.filter((e) => !e.created).map((e) => e.key));
+  const fresh = await fetchElements(edits.filter((e) => !e.created).map((e) => e.key), api());
   const conflicts: { key: string; tags: string[] }[] = [];
   const payload: Parameters<typeof buildOsmChange>[0] = [];
   const written = new Map<string, Tags>();
@@ -161,7 +167,7 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   const geometrySaved = new Set<string>();
   // Узлы: двигаем, только если на сервере они там же, где были у нас (иначе — конфликт)
   const moves = edits.flatMap((e) => (e.nodeMoves ?? []).map((m) => ({ ...m, key: e.key })));
-  const nodes = moves.length ? await fetchNodes([...new Set(moves.map((m) => m.id))]) : new Map();
+  const nodes = moves.length ? await fetchNodes([...new Set(moves.map((m) => m.id))], api()) : new Map();
   const near = (a: number, b: number) => Math.abs(a - b) < 1e-7;
   const movedIds = new Set<number>();
   for (const m of moves) {
@@ -190,12 +196,12 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   const memberKeys = [...new Set(edits.filter((e) => e.deleted && e.key.startsWith('relation/')).map((e) => fresh.get(e.key))
     .flatMap((r) => r?.type === 'relation' && r.tags?.type === 'multipolygon' ? r.members.filter((m) => m.type === 'way').map((m) => `way/${m.ref}`) : [])
     .filter((k) => !editKeys.has(k)))];
-  const memberWays = memberKeys.length ? [...(await fetchElements(memberKeys)).values()]
+  const memberWays = memberKeys.length ? [...(await fetchElements(memberKeys, api())).values()]
     .filter((w): w is OsmWay => w.type === 'way' && !Object.keys(w.tags ?? {}).length) : [];
   deletedWays.push(...memberWays);
   const keepNodes = new Set(edits.filter((e) => !e.deleted).flatMap((e) => e.wayNodes?.after ?? []));
   const dropIds = [...new Set(deletedWays.flatMap((w) => w.nodes))].filter((id) => !keepNodes.has(id));
-  const dropNodes = dropIds.length ? await fetchNodes(dropIds) : new Map();
+  const dropNodes = dropIds.length ? await fetchNodes(dropIds, api()) : new Map();
   const deleted = new Set<string>();
   for (const edit of edits) {
     if (edit.deleted) {
@@ -278,7 +284,7 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
   if (splits.size) onStatus(tr('Проверяем отношения разрезанных путей…'));
   const patched = new Map<number, OsmRelation>();
   for (const [orig, ids] of splits) {
-    for (const r of await fetchWayRelations(orig)) {
+    for (const r of await fetchWayRelations(orig, api())) {
       if (editKeys.has(`relation/${r.id}`)) continue; // наша правка состава уже их содержит
       const base = patched.get(r.id) ?? r;
       patched.set(r.id, { ...base, members: base.members.flatMap((m) => (m.type === 'way' && m.ref === orig
@@ -307,7 +313,7 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
     const now = new Set(e.members.filter((m) => m.type === 'way').map((m) => m.ref));
     for (const m of e.membersBefore) if (m.type === 'way' && !now.has(m.ref) && !wayRefs.has(m.ref) && !editKeys.has(`way/${m.ref}`)) removed.add(`way/${m.ref}`);
   }
-  const removedWays = removed.size ? [...(await fetchElements([...removed])).values()]
+  const removedWays = removed.size ? [...(await fetchElements([...removed], api())).values()]
     .filter((w): w is OsmWay => w.type === 'way' && !Object.keys(w.tags ?? {}).length) : [];
   for (const w of removedWays) {
     if (fresh.has(`way/${w.id}`) && payload.some((p) => p.element.type === 'way' && p.element.id === w.id)) continue;
@@ -324,7 +330,7 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
   }
   const already = new Set(payload.filter((p) => p.deleted && p.element.type === 'node').map((p) => p.element.id));
   const ids = [...dropNodes].filter((n) => !used.has(n) && !already.has(n));
-  if (ids.length) for (const n of (await fetchNodes(ids)).values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
+  if (ids.length) for (const n of (await fetchNodes(ids, api())).values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
   return dropped;
 }
 

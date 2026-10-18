@@ -48,7 +48,7 @@ import { suggestComment, isIndoorChange } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
-import { JOSM_URL, josmLayer, josmMode, minElementId, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
+import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmUndo, minElementId, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
 import { deprecations, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
 import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
@@ -463,6 +463,21 @@ const editsCount = document.getElementById('edits-count')!;
 /** Было ли в панели правок что показать при прошлой отрисовке: раскрываем/сворачиваем только на переходе. */
 let editsHadContent = false;
 const statusEl = document.getElementById('status')!;
+const statusCopy = document.getElementById('status-copy') as HTMLButtonElement;
+statusCopy.title = tr('Копировать сообщение');
+// Вместе со строкой индикатора загрузки («Не удалось загрузить…»), если она показана
+statusCopy.addEventListener('click', async () => {
+  const label = document.querySelector<HTMLElement>('#op-indicator:not([hidden]) .label')?.innerText.trim();
+  const text = [label, statusEl.innerText.trim()].filter(Boolean).join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    statusCopy.dataset.done = '';
+    statusCopy.title = tr('Скопировано');
+  } catch {
+    statusCopy.title = tr('Не удалось скопировать');
+  }
+  setTimeout(() => { delete statusCopy.dataset.done; statusCopy.title = tr('Копировать сообщение'); }, 1500);
+});
 const toasts = new Toasts(map.getContainer());
 const opIndicator = document.getElementById('op-indicator')!;
 opIndicator.querySelector('.retry')!.addEventListener('click', () => overpass.retryFailed());
@@ -6450,6 +6465,7 @@ function describeGroup(g: BuildingGroup): string {
 
 /** После правки тегов: пересобрать меши, обновить панель и список изменений. */
 function onSessionChange(keys: string[]) {
+  if (josmApi() && !uploading) scheduleJosmSync();
   mapIssuesDirty = true;
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
@@ -6635,6 +6651,10 @@ function renderUpload(count: number): string {
     insertedSuggestion = undefined;
     return '';
   }
+  if (josmMode && josmPlugin()) {
+    return `<div class="upload"><p class="hint">${esc(uploading ? tr('Передаю правки в JOSM…')
+      : tr('Источник — JOSM с плагином simple3d: правки сразу уходят в слой JOSM (отмена — Ctrl+Z здесь или в JOSM), отправка в OSM — из JOSM.'))}</p></div>`;
+  }
   if (josmMode) {
     return `<div class="upload"><p class="hint">${esc(tr('Источник — JOSM: отправка отсюда отключена, правки из 3D пока не возвращаются в JOSM. Вносите их в JOSM: изменения слоя подтягиваются сами (раз в 2 с).'))}</p></div>`;
   }
@@ -6696,7 +6716,8 @@ async function doUpload() {
         nodeMoves: c.nodeMoves, wayNodes: c.wayNodes, newNodes: c.newNodes, deleted: c.deleted, version: c.feature.version, polygons: c.feature.polygons,
         splitFrom: c.feature.splitFrom };
     });
-    const res = await uploadEdits(edits, uploadComment.trim(), (t) => panelStatus(t));
+    const toJosm = josmApi();
+    const res = await uploadEdits(edits, uploadComment.trim(), (t) => panelStatus(t), toJosm);
     // Временные id узлов и путей → настоящие: в геометрии, членах отношений и в отправленных полигонах
     const nodeIdMap = new Map<number, number>(), wayIdMap = new Map<number, number>();
     for (const [from, to] of res.newKeys) {
@@ -6747,6 +6768,12 @@ async function doUpload() {
     // Сразу в кеш тайлов текущего источника — не ждать фонового обновления тайла
     const savedGroups = [...saved].map(([k, v]) => editGroups.get(v.newKey ?? k)).filter((g): g is EditGroup => !!g)
       .map((g) => ({ key: g.key, type: g.type, id: g.id, version: g.version, tags: { ...g.tags }, members: [...g.members], roles: [...g.roles] }));
+    // В JOSM: кеш тайлов обновит сам слой (плагин сообщает об изменении сразу)
+    if (toJosm) {
+      uploading = false;
+      setStatus(trn(saved.size + res.deleted.size, 'В JOSM: {n} объект.|В JOSM: {n} объекта.|В JOSM: {n} объектов.'));
+      return;
+    }
     overpass.noteUploaded(res.versions, [...res.deleted, ...res.dropped]);
     void overpass.applySaved(withMemberWays(new Map([...saved].map(([k, v]) => [v.newKey ?? k, v]))), savedGroups, createdWays, [...res.deleted]);
     uploadComment = '';
@@ -6764,7 +6791,22 @@ async function doUpload() {
   } finally {
     uploading = false;
     renderChanges();
+    // Пока шла передача в JOSM, появились новые правки — передать и их
+    if (josmApi() && session.changes().length) scheduleJosmSync();
   }
+}
+
+/**
+ * Плагин JOSM: каждая правка (шаг истории) уходит в слой JOSM вскоре после неё — пачкой, если правок несколько подряд.
+ * Во время работы инструмента (перетаскивание) ждём: промежуточные состояния в JOSM не нужны.
+ */
+let josmSyncTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleJosmSync() {
+  clearTimeout(josmSyncTimer);
+  josmSyncTimer = setTimeout(() => {
+    if (uploading || toolActive()) return scheduleJosmSync();
+    if (session.changes().length) void doUpload();
+  }, 300);
 }
 
 editsHistory.addEventListener('click', (e) => {
@@ -7128,7 +7170,7 @@ async function pollJosm() {
       paintSelection();
       renderSelected();
     }
-  } finally { setTimeout(pollJosm, 2000); }
+  } finally { setTimeout(pollJosm, josmPlugin() ? (document.hidden || toolActive() ? 500 : 50) : 2000); }
 }
 if (josmMode) setTimeout(pollJosm, 2000);
 // Панели ввода инструментов (VCB) стоят над строкой состояния: её высоту пишем в --statusbar-h (style.css)
@@ -7168,6 +7210,8 @@ document.addEventListener('keydown', (e) => {
   const field = (e.target as HTMLElement).closest<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
   if (field && field.type !== 'color' && field.value !== field.defaultValue) return;
   e.preventDefault();
+  // Правки уже в JOSM (история редактора после передачи пуста) — отмена и повтор там
+  if (josmPlugin() && !session.hasDataHistory()) return void josmUndo(e.shiftKey).catch((err) => setStatus((err as Error).message, true));
   const key = e.shiftKey ? session.redo() : session.undo();
   if (key) selectAfterHistory(key);
 });

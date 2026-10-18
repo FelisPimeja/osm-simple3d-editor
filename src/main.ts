@@ -5255,7 +5255,7 @@ const issueId = (i: Issue) => `${i.key}\0${i.other ?? ''}\0${i.code}\0${i.text}`
 /** Последние проверки по зданиям: пересчёт, только когда сменились объекты (правка даёт новый объект). */
 const issueCache = new Map<string, { feats: Feature3D[]; roles: string; issues: Issue[] }>();
 // Устаревшие теги iD — отдельным файлом; пришли — перепроверить уже показанное
-loadDeprecated(() => { setDeprecatedTags(deprecations()); issueCache.clear(); renderIssues(); });
+loadDeprecated(() => { setDeprecatedTags(deprecations()); issueCache.clear(); featureIssueCache = new WeakMap(); renderIssues(); });
 
 /** Проверить здание: члены с правками сессии, без удалённых. */
 function buildingIssues(g: BuildingGroup): Issue[] {
@@ -5264,8 +5264,16 @@ function buildingIssues(g: BuildingGroup): Issue[] {
   const hit = issueCache.get(g.key);
   if (hit && hit.roles === roles && hit.feats.length === feats.length && hit.feats.every((f, i) => f === feats[i])) return hit.issues;
   const issues = timed('проверка здания', () => validateBuilding(g, feats), () => `${g.key}, ${feats.length}`);
-  if (issueCache.size > 50) issueCache.clear();
+  if (issueCache.size > 2000) issueCache.clear();
   issueCache.set(g.key, { feats, roles, issues });
+  return issues;
+}
+
+/** Проверка тегов и контура одного объекта; кеш по объекту фичи (правка создаёт новый объект). */
+let featureIssueCache = new WeakMap<Feature3D, Issue[]>();
+function featureIssues(f: Feature3D): Issue[] {
+  let issues = featureIssueCache.get(f);
+  if (!issues) featureIssueCache.set(f, issues = [...validateTags(f.key, f.tags), ...validateGeometry(f)]);
   return issues;
 }
 
@@ -5282,11 +5290,11 @@ function visibleMapIssues(): Issue[] {
     if (group) groups.set(group.key, group);
     else singles.push(f);
   }
-  const issues = singles.flatMap((f) => [...validateTags(f.key, f.tags), ...validateGeometry(f)]);
+  const issues = singles.flatMap(featureIssues);
   for (const group of groups.values()) {
     const available = groupFeatures(group).filter((f) => !session.isDeleted(f.key));
     if (available.length === group.members.length) issues.push(...buildingIssues(group));
-    else for (const f of available) issues.push(...validateTags(f.key, f.tags), ...validateGeometry(f));
+    else for (const f of available) issues.push(...featureIssues(f));
   }
   const byKey = new Map(rendered.map((f) => [f.key, f]));
   issues.push(...duplicateIssues([...seen].map((k) => byKey.get(k)!), rendered));
@@ -5329,7 +5337,7 @@ function renderIssues() {
   const indoorIssues = focusedBuilding ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding))), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
   const duplicates = focusedBuilding ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
   focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
-  if (!focus && mapIssuesDirty) { mapIssues = visibleMapIssues(); mapIssuesDirty = false; }
+  if (!focus && mapIssuesDirty) { mapIssues = timed('проверка карты', visibleMapIssues, (r) => `${r.length}`); mapIssuesDirty = false; }
   // Есть выбор — только проблемы выбранных объектов (в режиме здания само здание целиком не фильтрует)
   const picked = issueFilterKeys();
   if (focus) picked.delete(focus.key);

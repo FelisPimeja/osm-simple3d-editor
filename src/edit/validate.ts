@@ -593,6 +593,10 @@ function boxOf(f: Feature3D): Box {
   return b;
 }
 
+const heightCache = new WeakMap<Feature3D, ReturnType<typeof computeHeights>>();
+const heightsOf = (f: Feature3D) => heightCache.get(f) ?? heightCache.set(f, computeHeights(f.tags)).get(f)!;
+const duplicateCache = new WeakMap<Feature3D, { cands: Feature3D[]; issues: Issue[] }>();
+
 /**
  * Копии: здание или часть почти совпадает по контуру (пересечение не меньше DUPLICATE_IOU объединения) с объектом
  * другого здания того же вида (здание — со зданием, часть — с частью), и высоты перекрываются. Обычно —
@@ -600,7 +604,19 @@ function boxOf(f: Feature3D): Box {
  * друге, выделение одного не видно. Внутри здания одинаковые части ловит проверка пересечения объёмов.
  * scope — что проверяем, all — с чем сравниваем, building — здание объекта (ключ).
  */
+let lastDuplicates: { scope: Feature3D[]; all: Feature3D[]; buildings: string[]; issues: Issue[] } | undefined;
+
 export function validateDuplicates(scope: Feature3D[], all: Feature3D[], building: (key: string) => string): Issue[] {
+  // Те же объекты в тех же зданиях, что в прошлый раз (камера повернулась) — прежний результат
+  const buildings = all.map((f) => building(f.key));
+  const same = <T>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+  if (lastDuplicates && same(lastDuplicates.scope, scope) && same(lastDuplicates.all, all) && same(lastDuplicates.buildings, buildings)) return lastDuplicates.issues;
+  const issues = findDuplicates(scope, all, building);
+  lastDuplicates = { scope, all, buildings, issues };
+  return issues;
+}
+
+function findDuplicates(scope: Feature3D[], all: Feature3D[], building: (key: string) => string): Issue[] {
   const isPart = (f: Feature3D) => !!f.tags['building:part'] && !f.tags.building;
   // Кандидаты — по клеткам центра габарита (~0.0001° ≈ 7–11 м): копия — в той же или соседней клетке
   const CELL = 1e-4;
@@ -617,14 +633,23 @@ export function validateDuplicates(scope: Feature3D[], all: Feature3D[], buildin
     const b = boxOf(f), [cx, cy] = cell(f);
     const p = projector([b[0], b[1]]);
     const [w, s] = p([b[0], b[1]]), [e, n] = p([b[2], b[3]]);
-    const h = computeHeights(f.tags);
-    let mine: MultiPolygon | undefined, mineArea = 0;
+    const h = heightsOf(f);
+    // Кандидаты: другое здание того же вида, близкий габарит, перекрытие по высоте
+    const cands: Feature3D[] = [];
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const o of grid.get(`${cx + dx},${cy + dy}`) ?? []) {
       if (o.key === f.key || isPart(o) !== isPart(f) || building(o.key) === building(f.key)) continue;
       const ob = boxOf(o), [ow, os] = p([ob[0], ob[1]]), [oe, on] = p([ob[2], ob[3]]);
       if (Math.max(Math.abs(ow - w), Math.abs(os - s), Math.abs(oe - e), Math.abs(on - n)) > DUPLICATE_BOX_M) continue;
-      const k = computeHeights(o.tags);
+      const k = heightsOf(o);
       if (Math.min(h.top, k.top) <= Math.max(h.min, k.min)) continue;
+      cands.push(o);
+    }
+    // Тот же объект с теми же кандидатами — результат прежний (вращение камеры не пересчитывает пересечения)
+    const hit = duplicateCache.get(f);
+    if (hit && hit.cands.length === cands.length && hit.cands.every((o, i) => o === cands[i])) { out.push(...hit.issues); continue; }
+    const found: Issue[] = [];
+    let mine: MultiPolygon | undefined, mineArea = 0;
+    for (const o of cands) {
       try {
         if (!mine) { mine = toMulti(f.polygons, p); mineArea = multiArea(mine); }
         const theirs = toMulti(o.polygons, p);
@@ -632,9 +657,11 @@ export function validateDuplicates(scope: Feature3D[], all: Feature3D[], buildin
         const union = mineArea + multiArea(theirs) - common;
         if (!(union > 0) || common / union < DUPLICATE_IOU) continue;
       } catch { continue; }
-      out.push({ key: f.key, other: o.key, level: 'warning', code: 'duplicate',
+      found.push({ key: f.key, other: o.key, level: 'warning', code: 'duplicate',
         text: tr('Совпадает по контуру и высоте с {other}: похоже на копию. Оставьте один объект (второй адрес можно добавить к нему).', { other: o.key }) });
     }
+    duplicateCache.set(f, { cands, issues: found });
+    out.push(...found);
   }
   return out;
 }

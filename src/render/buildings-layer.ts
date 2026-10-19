@@ -4311,7 +4311,8 @@ function disposePlanGroup(group: THREE.Object3D) {
 /** Новая сборка части совпадает со старой: те же треугольники, стекло и соседи. */
 function sameItemGeometry(old: Item, item: Item): boolean {
   if (old.pending || item.pending || old.contacts !== item.contacts || old.floorVertices !== item.floorVertices
-    || old.glassWalls !== item.glassWalls || old.glassRoof !== item.glassRoof) return false;
+    || old.glassWalls !== item.glassWalls || old.glassRoof !== item.glassRoof
+    || !old.wall.equals(item.wall) || !old.roof.equals(item.roof)) return false;
   const src = old.full ?? old;
   if (src.wallVertices !== item.wallVertices) return false;
   const a = src.positions, b = item.positions;

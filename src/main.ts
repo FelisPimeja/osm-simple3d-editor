@@ -1333,6 +1333,8 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
   const api = server().api;
   try {
     const root = isSolo(g) ? g.members[0] : g.key;
+    // Здание создано в сессии (например, разрезом отдельного здания) — на сервере его ещё нет
+    if (Number(root.split('/')[1]) < 0) return;
     const parsed = parseBuildings(await fetchBuildingElements(root, api));
     if (api !== server().api) return;
     const freshGroup = isSolo(g) ? { ...g } : parsed.groups.find((item) => item.key === g.key);

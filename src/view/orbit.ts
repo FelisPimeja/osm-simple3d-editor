@@ -25,7 +25,9 @@ const MIN_PITCH = 0;
  * перемещение левой кнопкой остаётся.
  */
 export class CursorOrbit {
-  private drag?: { pivot: Pivot; x: number; y: number; pointerId: number };
+  private drag?: { pivot: Pivot; x: number; y: number; x0: number; y0: number; pointerId: number };
+  /** Последний жест вращения сдвинул мышь — следующий click не клик. */
+  private rotated = false;
   private readonly marker: HTMLDivElement;
 
   constructor(private readonly map: MlMap, private readonly pickPivot: (x: number, y: number) => Pivot) {
@@ -40,6 +42,9 @@ export class CursorOrbit {
     canvas.addEventListener('pointerup', this.onUp);
     canvas.addEventListener('pointercancel', this.onUp);
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Ctrl+ЛКМ: после вращения браузер всё равно шлёт click, а MapLibre (без mousedown — его гасит preventDefault)
+    // сверяет его со старой точкой нажатия и может принять за клик — выделение сбрасывалось
+    canvas.addEventListener('click', (e) => { if (this.rotated) { this.rotated = false; e.stopPropagation(); } }, { capture: true });
     map.dragRotate.disable();
     this.updateMaxPitch();
   }
@@ -63,6 +68,7 @@ export class CursorOrbit {
   }
 
   private onDown = (e: PointerEvent) => {
+    this.rotated = false;
     if (e.pointerType === 'touch') return;
     const orbit = e.button === 1 || e.button === 2 || (e.button === 0 && e.ctrlKey);
     if (!orbit) return;
@@ -72,7 +78,7 @@ export class CursorOrbit {
     const rect = this.map.getCanvas().getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
     const pivot = this.pickPivot(x, y);
-    this.drag = { pivot, x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+    this.drag = { pivot, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pointerId: e.pointerId };
     const [mx, my] = pivot.point ?? [x, y];
     this.marker.style.left = `${mx}px`;
     this.marker.style.top = `${my}px`;
@@ -91,6 +97,7 @@ export class CursorOrbit {
 
   private onUp = (e: PointerEvent) => {
     if (!this.drag || e.pointerId !== this.drag.pointerId) return;
+    this.rotated = Math.hypot(e.clientX - this.drag.x0, e.clientY - this.drag.y0) > 4;
     this.drag = undefined;
     this.marker.hidden = true;
   };

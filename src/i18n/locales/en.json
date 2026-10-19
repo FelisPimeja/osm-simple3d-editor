@@ -45,7 +45,6 @@
   "Шаг назад": "Step back",
   "Воспроизвести": "Play",
   "Шаг вперёд": "Step forward",
-  "Текущий год: показываются объекты, существовавшие в нём (start_date … end_date). До н. э. — со знаком минус": "Current year: shows objects that existed in it (start_date … end_date). BCE years are negative",
   "Шаг воспроизведения": "Playback step",
   "шаг": "step",
   "1 год": "1 year",
@@ -61,7 +60,6 @@
   "2 с": "2 s",
   "4 с": "4 s",
   "Начало шкалы": "Timeline start",
-  "Текущий год": "Current year",
   "Конец шкалы": "Timeline end",
   "Новое здание: прямоугольник (R, Tab — способ построения)": "New building: rectangle (R, Tab: drawing method)",
   "Новое здание: полигон (L)": "New building: polygon (L)",
@@ -298,7 +296,6 @@
   "Применено исправлений: {n} (объектов: {objects}).": "Fixes applied: {n} (objects: {objects}).",
   "Исправлено: {fix}.": "Fixed: {fix}.",
   "{key} — не загружен": "{key}: not loaded",
-  "{key} — нет в {year} году (слайдер времени)": "{key}: does not exist in {year} (time slider)",
   "Показать": "Show",
   "Скрыть": "Hide",
   "Выделить все: {kind}": "Select all: {kind}",
@@ -962,5 +959,10 @@
   "у плоской крыши — цвет стен": "flat roof uses the wall colour",
   "Не задано — редактор рисует со значением по умолчанию {value} ({why}). В OSM ничего не записывается: чтобы закрепить, введите значение.": "Not set: the editor draws with the default {value} ({why}). Nothing is written to OSM; enter a value to set it.",
   "не выше высоты части": "capped by the part height",
-  "Часть здания (building:part) вне контура здания — нужен контур с building=* вокруг частей или отношение type=building.": "Building part outside any building outline — draw an outline with building=* around the parts or add a type=building relation."
+  "Часть здания (building:part) вне контура здания — нужен контур с building=* вокруг частей или отношение type=building.": "Building part outside any building outline — draw an outline with building=* around the parts or add a type=building relation.",
+  "1 день": "1 day",
+  "1 месяц": "1 month",
+  "Текущая дата": "Current date",
+  "Текущая дата: год, ГГГГ-ММ или ГГГГ-ММ-ДД; показываются объекты, существовавшие в это время (start_date … end_date). До н. э. — со знаком минус": "Current date: year, YYYY-MM or YYYY-MM-DD; shows objects that existed at that time (start_date … end_date). BCE years are negative",
+  "{key} — нет на дату {date} (слайдер времени)": "{key} — doesn't exist on {date} (time slider)"
 }

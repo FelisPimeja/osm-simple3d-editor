@@ -13,7 +13,7 @@ import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fe
 import { materializeRoomWalls, roomTouchesWall, roomWallSpan, type RoomWall, type WallSpan } from './edit/indoor-walls';
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
-import { applyBasemapDate, existsIn, yearsSpan } from './osm/dates';
+import { applyBasemapDate, dateSpan, decimalDate, existsIn, isoDay, parseDate, shiftDate } from './osm/dates';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT, parseLength } from './osm/heights';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type IndoorCategory } from './osm/indoor-categories';
@@ -5679,7 +5679,7 @@ function renderOutliner() {
     const off = focusHidden.has(r.key), dated = focusDated.has(r.key);
     const cls = [child && 'ol-child', selection.includes(r.key) && 'selected', off && 'off', dated && 'dated', !r.f && 'missing'].filter(Boolean).join(' ');
     const title = !r.f ? tr('{key} — не загружен', { key: r.key })
-      : dated ? tr('{key} — нет в {year} году (слайдер времени)', { key: r.key, year: ohm.year }) : r.key;
+      : dated ? tr('{key} — нет на дату {date} (слайдер времени)', { key: r.key, date: ohm.date }) : r.key;
     return `<li class="${cls}" data-key="${esc(r.key)}" title="${esc(title)}">
       <span class="ol-icon" title="${esc(r.kind.title)}">${r.kind.icon}</span>
       <span class="ol-label">${child && !r.f?.tags.name ? `<span class="ol-key bare">${esc(r.key)}</span>` : `${esc(r.f?.tags.name ?? r.kind.label)}<span class="ol-key">${esc(r.key)}</span>`}</span>
@@ -7071,23 +7071,33 @@ serverSelect.addEventListener('change', () => {
 
 /**
  * Фильтр по дате для OpenHistoricalMap (панель внизу, по образцу openhistoricalmap.org, компактнее):
- * границы шкалы (с … по), текущий год ползунком и воспроизведение — год шагает на «шаг» раз в «скорость».
- * Показываются объекты, существовавшие в текущем году. В адресе — &date=1850 (как на сайте OHM);
- * границы шкалы, шаг и скорость — в localStorage. Фильтруются и подложка (start_decdate/end_decdate тайлов),
+ * границы шкалы (с … по, годы), текущая дата ползунком (до дня) или полем (год, ГГГГ-ММ, ГГГГ-ММ-ДД)
+ * и воспроизведение — дата шагает на «шаг» раз в «скорость». Показываются объекты, существовавшие
+ * в этот год/месяц/день. В адресе — &date=1850 или &date=1850-03-12 (как на сайте OHM); границы шкалы,
+ * шаг и скорость — в localStorage. Фильтруются и подложка (start_decdate/end_decdate тайлов),
  * и здания из API (start_date/end_date).
  */
 const DATE_KEY = 'osm3d.ohm-time';
 const thisYear = new Date().getFullYear();
-interface OhmTime { year: number; from: number; to: number; step: number; speed: number }
+/** step: число лет, 'd' — день, 'm' — месяц. */
+interface OhmTime { date: string; from: number; to: number; step: string; speed: number }
 const ohm: OhmTime = (() => {
-  const d: OhmTime = { year: thisYear, from: thisYear - 200, to: thisYear, step: 10, speed: 1000 };
-  try { Object.assign(d, JSON.parse(localStorage.getItem(DATE_KEY) ?? '{}')); } catch { /* по умолчанию */ }
+  const d: OhmTime = { date: String(thisYear), from: thisYear - 200, to: thisYear, step: '10', speed: 1000 };
+  try {
+    const saved = JSON.parse(localStorage.getItem(DATE_KEY) ?? '{}');
+    Object.assign(d, saved);
+    if (typeof saved.year === 'number' && typeof saved.date !== 'string') d.date = String(saved.year); // прежний формат
+    d.step = String(d.step);
+  } catch { /* по умолчанию */ }
   const q = new URLSearchParams(location.search).get('date');
-  if (q !== null && q.trim() !== '' && Number.isFinite(Number(q))) d.year = Math.round(Number(q));
-  if (d.year < d.from) d.from = d.year;
-  if (d.year > d.to) d.to = d.year;
+  if (q !== null && parseDate(q)) d.date = q.trim();
+  if (!parseDate(d.date)) d.date = String(thisYear);
+  const y = parseDate(d.date)!.y;
+  if (y < d.from) d.from = y;
+  if (y > d.to) d.to = y;
   return d;
 })();
+const ohmYear = () => parseDate(ohm.date)!.y;
 
 const datePanel = document.getElementById('date-panel')!;
 const dateYear = document.getElementById('date-year') as HTMLInputElement;
@@ -7101,13 +7111,15 @@ let playTimer: ReturnType<typeof setInterval> | undefined;
 
 function saveOhm() { try { localStorage.setItem(DATE_KEY, JSON.stringify(ohm)); } catch { /* не критично */ } }
 
-/** Поля панели по состоянию (без перерисовки карты). */
-function showDateControls(year = ohm.year) {
-  dateYear.value = String(year);
-  dateSlider.min = dateFrom.value = String(ohm.from);
-  dateSlider.max = dateTo.value = String(ohm.to);
-  dateSlider.value = String(year);
-  dateStep.value = String(ohm.step);
+/** Поля панели по состоянию (без перерисовки карты). Ползунок — десятичный год, конец шкалы — последний день года «по». */
+function showDateControls() {
+  dateYear.value = ohm.date;
+  dateFrom.value = String(ohm.from);
+  dateTo.value = String(ohm.to);
+  dateSlider.min = String(ohm.from);
+  dateSlider.max = String(dateSpan(String(ohm.to))!.to - 1e-6);
+  dateSlider.value = String(decimalDate(ohm.date));
+  dateStep.value = ohm.step;
   dateSpeed.value = String(ohm.speed);
   datePlay.classList.toggle('playing', !!playTimer);
   datePlay.title = playTimer ? tr('Пауза') : tr('Воспроизвести');
@@ -7119,13 +7131,13 @@ function applyDate() {
   if (!on) stopPlay();
   showDateControls();
   const url = new URL(location.href);
-  if (on) url.searchParams.set('date', String(ohm.year)); else url.searchParams.delete('date');
+  if (on) url.searchParams.set('date', ohm.date); else url.searchParams.delete('date');
   if (url.href !== location.href) history.replaceState(history.state, '', url);
-  const span = on ? yearsSpan(ohm.year, ohm.year) : undefined;
+  const span = on ? dateSpan(ohm.date) : undefined;
   if (map.getSource('ohm')) applyBasemapDate(map, 'ohm', span);
   overpass.setFeatureFilter(span === undefined ? () => true : (f) => existsIn(f.tags, span));
-  overpass.setTreeFilter(span ? String(ohm.year) : '', span === undefined ? () => true : (d) => existsIn(d as Record<string, string>, span));
-  // В режиме здания сцена — своя, не из тайлов: части не того года скрываем в ней
+  overpass.setTreeFilter(span ? ohm.date : '', span === undefined ? () => true : (d) => existsIn(d as Record<string, string>, span));
+  // В режиме здания сцена — своя, не из тайлов: части не той даты скрываем в ней
   if (focus && syncFocusHidden(true)) {
     outlinerUnhover();
     if (selection.some((k) => focusDated.has(k))) select(undefined);
@@ -7133,17 +7145,24 @@ function applyDate() {
   }
 }
 
-function setYear(y: number) {
-  // Год 0 допустим: даты OSM — ISO 8601, там 0 = 1 г. до н. э., -1 = 2 г. до н. э.
-  if (!Number.isFinite(y)) return showDateControls();
-  y = Math.round(y);
-  // Год за границами шкалы — шкала расширяется до него
-  ohm.from = Math.min(ohm.from, y);
-  ohm.to = Math.max(ohm.to, y);
-  if (y === ohm.year) return showDateControls();
-  ohm.year = y;
+/** Новая дата (год, ГГГГ-ММ или ГГГГ-ММ-ДД). Год 0 допустим: даты OSM — ISO 8601, там 0 = 1 г. до н. э. */
+function setDate(v: string) {
+  v = v.trim();
+  const p = parseDate(v);
+  if (!p) return showDateControls();
+  // Дата за границами шкалы — шкала расширяется до неё
+  ohm.from = Math.min(ohm.from, p.y);
+  ohm.to = Math.max(ohm.to, p.y);
+  if (v === ohm.date) return showDateControls();
+  ohm.date = v;
   saveOhm();
   applyDate();
+}
+
+/** Дата, сдвинутая на шаг воспроизведения (dir = ±1). */
+function stepDate(dir: number): string {
+  const unit = ohm.step === 'd' || ohm.step === 'm' ? ohm.step : 'y';
+  return shiftDate(ohm.date, unit, unit === 'y' ? dir * Number(ohm.step) : dir) ?? ohm.date;
 }
 
 function setBounds(from: number, to: number) {
@@ -7151,7 +7170,8 @@ function setBounds(from: number, to: number) {
   ohm.from = Math.round(from);
   ohm.to = Math.round(to);
   saveOhm();
-  setYear(Math.min(ohm.to, Math.max(ohm.from, ohm.year)));
+  const y = ohmYear();
+  if (y < ohm.from || y > ohm.to) setDate(String(Math.min(ohm.to, Math.max(ohm.from, y))));
   showDateControls();
 }
 
@@ -7161,13 +7181,14 @@ function stopPlay() {
   showDateControls();
 }
 
-/** Воспроизведение: с конца шкалы — с начала; на конце — стоп. */
+/** Воспроизведение: с конца шкалы — с начала; дальше конца — стоп. */
 function startPlay() {
-  if (ohm.year >= ohm.to) setYear(ohm.from);
+  if (parseDate(stepDate(1))!.y > ohm.to) setDate(String(ohm.from));
   playTimer = setInterval(() => {
-    const next = Math.min(ohm.to, ohm.year + ohm.step);
-    setYear(next);
-    if (next >= ohm.to) stopPlay();
+    const next = stepDate(1);
+    if (parseDate(next)!.y > ohm.to) return stopPlay();
+    setDate(next);
+    if (parseDate(stepDate(1))!.y > ohm.to) stopPlay();
   }, ohm.speed);
   showDateControls();
 }
@@ -7176,16 +7197,16 @@ datePanel.addEventListener('click', (e) => {
   const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
   if (!b) return;
   if (b.dataset.play !== undefined) return playTimer ? stopPlay() : startPlay();
-  if (b.dataset.back !== undefined) setYear(Math.max(ohm.from, ohm.year - ohm.step));
-  if (b.dataset.fwd !== undefined) setYear(Math.min(ohm.to, ohm.year + ohm.step));
+  if (b.dataset.back !== undefined) { const v = stepDate(-1); setDate(parseDate(v)!.y < ohm.from ? String(ohm.from) : v); }
+  if (b.dataset.fwd !== undefined) { const v = stepDate(1); setDate(parseDate(v)!.y > ohm.to ? String(ohm.to) : v); }
 });
-// Ползунок: при движении — только подпись, перерисовка по отпусканию (тайлы перестраиваются не мгновенно)
-dateSlider.addEventListener('input', () => { dateYear.value = dateSlider.value; });
-dateSlider.addEventListener('change', () => setYear(Number(dateSlider.value)));
-dateYear.addEventListener('change', () => setYear(Number(dateYear.value)));
+// Ползунок — с точностью до дня: при движении — только подпись, перерисовка по отпусканию (тайлы перестраиваются не мгновенно)
+dateSlider.addEventListener('input', () => { dateYear.value = isoDay(Number(dateSlider.value)); });
+dateSlider.addEventListener('change', () => setDate(isoDay(Number(dateSlider.value))));
+dateYear.addEventListener('change', () => setDate(dateYear.value));
 dateFrom.addEventListener('change', () => setBounds(Number(dateFrom.value), ohm.to));
 dateTo.addEventListener('change', () => setBounds(ohm.from, Number(dateTo.value)));
-dateStep.addEventListener('change', () => { ohm.step = Number(dateStep.value); saveOhm(); });
+dateStep.addEventListener('change', () => { ohm.step = dateStep.value; saveOhm(); });
 dateSpeed.addEventListener('change', () => {
   ohm.speed = Number(dateSpeed.value);
   saveOhm();

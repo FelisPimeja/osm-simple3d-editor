@@ -17,13 +17,13 @@
       <button type="button" class="dp-btn" data-back title="Шаг назад">⏮</button>
       <button type="button" class="dp-btn dp-play" data-play title="Воспроизвести"></button>
       <button type="button" class="dp-btn" data-fwd title="Шаг вперёд">⏭</button>
-      <input id="date-year" class="dp-year" type="number" step="1" title="Текущий год: показываются объекты, существовавшие в нём (start_date … end_date). До н. э. — со знаком минус" />
-      <label class="dp-opt" title="Шаг воспроизведения">шаг <select id="date-step"><option value="1">1 год</option><option value="5">5 лет</option><option value="10">10 лет</option><option value="25">25 лет</option><option value="50">50 лет</option><option value="100">100 лет</option></select></label>
+      <input id="date-year" class="dp-year" type="text" inputmode="numeric" spellcheck="false" title="Текущая дата: год, ГГГГ-ММ или ГГГГ-ММ-ДД; показываются объекты, существовавшие в это время (start_date … end_date). До н. э. — со знаком минус" />
+      <label class="dp-opt" title="Шаг воспроизведения">шаг <select id="date-step"><option value="d">1 день</option><option value="m">1 месяц</option><option value="1">1 год</option><option value="5">5 лет</option><option value="10">10 лет</option><option value="25">25 лет</option><option value="50">50 лет</option><option value="100">100 лет</option></select></label>
       <label class="dp-opt" title="Скорость воспроизведения: пауза между шагами">каждые <select id="date-speed"><option value="500">0,5 с</option><option value="1000">1 с</option><option value="2000">2 с</option><option value="4000">4 с</option></select></label>
     </div>
     <div class="dp-row">
       <input id="date-from" class="dp-bound" type="number" step="1" title="Начало шкалы" />
-      <input id="date-slider" class="dp-slider" type="range" step="1" aria-label="Текущий год" />
+      <input id="date-slider" class="dp-slider" type="range" step="any" aria-label="Текущая дата" />
       <input id="date-to" class="dp-bound" type="number" step="1" title="Конец шкалы" />
     </div>
   </div>

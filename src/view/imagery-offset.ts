@@ -7,7 +7,7 @@
  */
 import type { GeoJSONSource, LngLat, Map as MlMap, MapMouseEvent } from 'maplibre-gl';
 import { tr } from '../i18n';
-import { getOffset, getOpacity, IMAGERY, isOffset, refreshImagery, setImageryOpacity, storeOffset, storeOpacity, type Offset } from './basemaps';
+import { findImagery, getOffset, getOpacity, isOffset, refreshImagery, setImageryOpacity, storeOffset, storeOpacity, type Offset } from './basemaps';
 
 const R = 6378137;
 const POS_KEY = 'osm3d.offset-panel-pos';
@@ -148,7 +148,7 @@ export class ImageryOffsetPanel {
     this.id = id;
     this.before = this.offset = getOffset(id);
     this.opacityBefore = this.opacity = getOpacity(id);
-    this.title.textContent = tr('Подложка: {name}', { name: IMAGERY.find((i) => i.id === id)?.name ?? id });
+    this.title.textContent = tr('Подложка: {name}', { name: findImagery(id)?.name ?? id });
     this.syncAlpha();
     this.el.hidden = false;
     this.hooks.onOpen?.(true);

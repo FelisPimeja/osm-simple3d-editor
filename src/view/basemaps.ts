@@ -16,6 +16,8 @@ export interface Imagery {
   /** Последний зум с настоящими снимками; дальше — растягиваем (у Esri выше — заглушки «Map data not yet available»). */
   maxzoom: number;
   attribution: string;
+  /** Esri Wayback: дата показанного выпуска. */
+  release?: string;
 }
 
 const ESRI_ATTRIBUTION = 'Esri, Maxar, Earthstar Geographics, GIS User Community · '
@@ -52,6 +54,22 @@ export const IMAGERY: Imagery[] = [
   }] : []),
 ];
 
+/**
+ * Esri World Imagery Wayback (src/view/wayback.ts) — для OpenHistoricalMap: выпуск по дате слайдера времени.
+ * Адрес тайлов задаёт выбранный выпуск; пока список выпусков не загружен — пусто, слой не показывается.
+ */
+export const WAYBACK: Imagery = {
+  id: 'esri-wayback',
+  name: 'Esri Wayback',
+  tiles: [],
+  tileSize: 256,
+  maxzoom: 19,
+  attribution: ESRI_ATTRIBUTION,
+};
+
+const ALL_IMAGERY = [...IMAGERY, WAYBACK];
+export const findImagery = (id: string) => ALL_IMAGERY.find((i) => i.id === id);
+
 /** 'map' — векторная карта без снимков. */
 export const MAP_BASEMAP = 'map';
 export const IMAGERY_LAYER = 'imagery';
@@ -61,16 +79,17 @@ export const GPS_LAYER = 'gps-traces';
 const STORE_KEY = 'osm3d.basemap';
 const GPS_KEY = 'osm3d.gps-traces';
 
-export const isBasemap = (id: string | undefined | null): id is string => id === MAP_BASEMAP || IMAGERY.some((i) => i.id === id);
+export const isBasemap = (id: string | undefined | null): id is string => id === MAP_BASEMAP || ALL_IMAGERY.some((i) => i.id === id);
 
-export function storedBasemap(): string {
+/** scope — свой выбор у серверов с другим набором снимков (OHM: '.ohm'). */
+export function storedBasemap(scope = ''): string {
   let v: string | null = null;
-  try { v = localStorage.getItem(STORE_KEY); } catch { /* без хранилища */ }
+  try { v = localStorage.getItem(STORE_KEY + scope); } catch { /* без хранилища */ }
   return isBasemap(v) ? v : MAP_BASEMAP;
 }
 
-export function storeBasemap(id: string) {
-  try { if (id === MAP_BASEMAP) localStorage.removeItem(STORE_KEY); else localStorage.setItem(STORE_KEY, id); } catch { /* до перезагрузки */ }
+export function storeBasemap(id: string, scope = '') {
+  try { if (id === MAP_BASEMAP) localStorage.removeItem(STORE_KEY + scope); else localStorage.setItem(STORE_KEY + scope, id); } catch { /* до перезагрузки */ }
 }
 
 export function storedGps(): boolean {
@@ -147,7 +166,7 @@ const tileUrl = (im: Imagery, z: number, x: number, y: number) =>
 
 maplibregl.addProtocol(PROTOCOL, async (params) => {
   const u = new URL(params.url);
-  const im = IMAGERY.find((i) => i.id === u.hostname);
+  const im = findImagery(u.hostname);
   const [z, x, y] = u.pathname.split('/').filter(Boolean).map(Number);
   if (!im) throw new Error(`imgoffset: ${params.url}`);
   const n = 2 ** z, S = im.tileSize;
@@ -182,9 +201,9 @@ function imageryTiles(im: Imagery): string[] {
 
 /** Смещение показываемого снимка изменилось — пересобрать его тайлы. */
 export function refreshImagery(map: MlMap, id: string) {
-  const im = IMAGERY.find((i) => i.id === id);
+  const im = findImagery(id);
   const src = map.getSource(IMAGERY_LAYER) as RasterTileSource | undefined;
-  if (im && src) src.setTiles(imageryTiles(im));
+  if (im?.tiles.length && src) src.setTiles(imageryTiles(im));
 }
 
 /** Слой подписей стиля, под который кладём растры. */
@@ -217,10 +236,11 @@ export function applyGpsTraces(map: MlMap, on: boolean, bounds?: Bounds): boolea
 export function applyBasemap(map: MlMap, id: string, bounds?: Bounds): boolean {
   if (map.getLayer(IMAGERY_LAYER)) map.removeLayer(IMAGERY_LAYER);
   if (map.getSource(IMAGERY_LAYER)) map.removeSource(IMAGERY_LAYER);
-  const im = IMAGERY.find((i) => i.id === id);
-  if (!im) return false;
+  const im = findImagery(id);
+  if (!im?.tiles.length) return false;
   map.addSource(IMAGERY_LAYER, {
-    type: 'raster', tiles: imageryTiles(im), tileSize: im.tileSize, maxzoom: im.maxzoom, attribution: im.attribution,
+    type: 'raster', tiles: imageryTiles(im), tileSize: im.tileSize, maxzoom: im.maxzoom,
+    attribution: im.release ? `${im.attribution} · Wayback ${im.release}` : im.attribution,
     ...(bounds && { bounds }),
   });
   // Под GPS-треками, если они включены
@@ -263,11 +283,14 @@ export class BasemapButton {
   private readonly buildingsGear: HTMLButtonElement;
   private readonly alphaInput: HTMLInputElement;
   private readonly offsetBtns = new Map<string, HTMLButtonElement>();
+  private readonly labels = new Map<string, HTMLSpanElement>();
 
   constructor(group: HTMLElement, private current: string, private readonly onSelect: (id: string) => void,
     private gps: boolean, onGps: (on: boolean) => void, onOffset: (id: string) => void,
-    /** Снимки и треки есть только у OSM; без них в меню — только слой зданий. */
-    imagery: boolean, private buildings: BuildingsView, onBuildings: (v: BuildingsView) => void) {
+    /** Снимки в меню (у OSM — разрешённые для обводки, у OHM — Esri Wayback); пусто — только слой зданий. */
+    list: Imagery[],
+    /** GPS-треки и пояснение — только у OSM. */
+    osm: boolean, private buildings: BuildingsView, onBuildings: (v: BuildingsView) => void) {
     group.classList.add('basemap-group');
     const btn = this.btn = document.createElement('button');
     btn.type = 'button';
@@ -280,7 +303,7 @@ export class BasemapButton {
     const menu = this.menu = document.createElement('div');
     menu.className = 'basemap-menu';
     menu.hidden = true;
-    const items: [string, string][] = imagery ? [[MAP_BASEMAP, tr('Карта')], ...IMAGERY.map((i): [string, string] => [i.id, i.name])] : [];
+    const items: [string, string][] = list.length ? [[MAP_BASEMAP, tr('Карта')], ...list.map((i): [string, string] => [i.id, i.name])] : [];
     for (const [id, label] of items) {
       const row = document.createElement('label');
       const input = document.createElement('input');
@@ -288,7 +311,10 @@ export class BasemapButton {
       input.name = 'basemap';
       input.value = id;
       input.addEventListener('change', () => { if (input.checked) this.select(id); });
-      row.append(input, ` ${label}`);
+      const text = document.createElement('span');
+      text.textContent = ` ${label}`;
+      this.labels.set(id, text);
+      row.append(input, text);
       if (id !== MAP_BASEMAP) {
         // Настройки снимка (видна у выбранного)
         const off = document.createElement('button');
@@ -310,7 +336,7 @@ export class BasemapButton {
     }
     // 3D-здания: показать или скрыть; шестерёнка — прозрачность (видна подложка сквозь здания)
     const bRow = document.createElement('label');
-    bRow.className = imagery ? 'basemap-overlay' : '';
+    bRow.className = list.length ? 'basemap-overlay' : '';
     const bInput = this.buildingsInput = document.createElement('input');
     bInput.type = 'checkbox';
     bInput.checked = buildings.shown;
@@ -349,7 +375,13 @@ export class BasemapButton {
     alphaRow.append(tr('Прозрачность'), alpha, alphaValue);
     bRow.append(bInput, ` ${tr('3D-здания')}`, gear);
     menu.append(bRow, alphaRow);
-    if (imagery) {
+    if (!osm && list.length) {
+      const note = document.createElement('div');
+      note.className = 'basemap-note';
+      note.textContent = tr('Esri Wayback: архив снимков с 2014 г. Выпуск — последний до даты слайдера времени (дата выпуска, а не съёмки).');
+      menu.append(note);
+    }
+    if (osm) {
       const gpsRow = document.createElement('label');
       gpsRow.className = 'basemap-overlay';
       gpsRow.title = tr('Общедоступные GPS-треки участников OSM: по ним видно, куда сдвинуты снимки');
@@ -393,6 +425,12 @@ export class BasemapButton {
     this.gps = on;
     if (this.gpsInput) this.gpsInput.checked = on;
     this.sync();
+  }
+
+  /** Подпись подложки в меню (Esri Wayback — с датой выпуска). */
+  setLabel(id: string, label: string) {
+    const el = this.labels.get(id);
+    if (el) el.textContent = ` ${label}`;
   }
 
   /** Подложку сменили не кнопкой (пришла из профиля). */

@@ -26,7 +26,7 @@ export interface OsmServer {
   tileBuildings: boolean;
   /**
    * Спутниковые подложки (src/view/basemaps.ts). Только у OSM: OGF — вымышленный мир, у OHM — прошлое,
-   * обводить по сегодняшним снимкам там нечего.
+   * обводить по сегодняшним снимкам там нечего (у OHM — свой архив Esri Wayback по дате слайдера, src/view/wayback.ts).
    */
   imagery?: boolean;
   /**

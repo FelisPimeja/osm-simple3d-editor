@@ -20,7 +20,8 @@ import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
-import { applyBasemap, applyGpsTraces, BasemapButton, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps } from './view/basemaps';
+import { applyBasemap, applyGpsTraces, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK } from './view/basemaps';
+import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
@@ -210,9 +211,11 @@ cubeBtn.addEventListener('click', () => {
   viewCube.update();
 });
 
-// Подложка: карта или спутниковые снимки (только у OSM — у OHM и OGF кнопки нет). Выбор — в localStorage
-// и в профиле (simple3d:basemap)
-let basemap = server().imagery ? storedBasemap() : MAP_BASEMAP;
+// Подложка: карта или спутниковые снимки (у OSM — разрешённые для обводки, у OHM — Esri Wayback по дате
+// слайдера, у OGF — нет). Выбор — в localStorage (у OHM — свой) и у OSM в профиле (simple3d:basemap)
+const imageryList = server().imagery ? IMAGERY : server().id === 'ohm' ? [WAYBACK] : [];
+const basemapScope = server().imagery ? '' : `.${server().id}`;
+let basemap = imageryList.length ? storedBasemap(basemapScope) : MAP_BASEMAP;
 let gpsTraces = server().imagery ? storedGps() : false;
 /** В режиме здания — свой выбор подложки и треков: при входе выключены, обрезаны тайлами вокруг здания. */
 let focusBasemap = MAP_BASEMAP;
@@ -234,7 +237,7 @@ const basemapCtrl = navGroup ? new BasemapButton(navGroup, basemap, (id) => {
   // Настройки снимка: показать его (если выбран другой) и открыть панель
   if ((focusScene() ? focusBasemap : basemap) !== id) pickBasemap(id);
   offsetPanel.show(id);
-}, !!server().imagery, { ...buildingsView }, (v) => setBuildingsView(v)) : undefined;
+}, imageryList, !!server().imagery, { ...buildingsView }, (v) => setBuildingsView(v)) : undefined;
 
 function setBuildingsView(v: typeof buildingsView) {
   Object.assign(buildingsView, v);
@@ -389,7 +392,7 @@ function setGpsTraces(on: boolean) {
 function setBasemap(id: string) {
   if (id !== basemap) offsetPanel.hide();
   basemap = id;
-  storeBasemap(id);
+  storeBasemap(id, basemapScope);
   syncBasemapLayers();
 }
 
@@ -7137,6 +7140,7 @@ function applyDate() {
   const span = on ? dateSpan(ohm.date) : undefined;
   if (map.getSource('ohm')) applyBasemapDate(map, 'ohm', span);
   overpass.setFeatureFilter(span === undefined ? () => true : (f) => existsIn(f.tags, span));
+  if (on) void syncWayback(span!.to);
   overpass.setTreeFilter(span ? ohm.date : '', span === undefined ? () => true : (d) => existsIn(d as Record<string, string>, span));
   // В режиме здания сцена — своя, не из тайлов: части не той даты скрываем в ней
   if (focus && syncFocusHidden(true)) {
@@ -7147,6 +7151,16 @@ function applyDate() {
 }
 
 /** Новая дата (год, ГГГГ-ММ или ГГГГ-ММ-ДД). Год 0 допустим: даты OSM — ISO 8601, там 0 = 1 г. до н. э. */
+/** Выпуск Esri Wayback по дате слайдера: последний до конца периода (to — десятичный год). */
+async function syncWayback(to: number) {
+  const r = pickRelease(await waybackReleases(), to);
+  if (!r || !setWaybackRelease(r)) return;
+  basemapCtrl?.setLabel(WAYBACK.id, `Esri Wayback · ${r.date}`);
+  const shown = (focusScene() ? focusBasemap : basemap) === WAYBACK.id;
+  // Слой ещё не добавлен (выпусков не было) — добавить; есть — сменить тайлы и подпись атрибуции
+  if (shown && mapLoaded) syncBasemapLayers();
+}
+
 function setDate(v: string) {
   v = v.trim();
   const p = parseDate(v);

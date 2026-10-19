@@ -967,5 +967,6 @@
   "{key} — нет на дату {date} (слайдер времени)": "{key} — doesn't exist on {date} (time slider)",
   "Существует с": "Exists from",
   "Существует до": "Exists until",
-  "ГГГГ-ММ-ДД": "YYYY-MM-DD"
+  "ГГГГ-ММ-ДД": "YYYY-MM-DD",
+  "Esri Wayback: архив снимков с 2014 г. Выпуск — последний до даты слайдера времени (дата выпуска, а не съёмки).": "Esri Wayback: imagery archive since 2014. Shows the latest release before the time slider date (release date, not capture date)."
 }

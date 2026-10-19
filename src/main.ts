@@ -4125,7 +4125,8 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   for (const [key, f] of indoorCreated) if (session.get(key)) all.set(key, { ...f, tags: session.get(key)!.tags, polygons: session.get(key)!.polygons ?? f.polygons });
   const list = [...all.values()].filter((f) => {
     const p = f.point ?? (f.line ? f.polygons[0].outer[0] : pointOnSurface(f.polygons[0]));
-    return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer)));
+    // Дверь на наружной стене лежит ровно на контуре — для такой точки pointInRing случаен
+    return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || (!!f.point && nearRing(p, q.outer, 0.3))));
   }).filter((f) => !session.isDeleted(indoorKey(f.key)) && (!indoorCreated.has(f.key) || !!session.get(f.key))).map((f) => {
     // Правки тегов в сессии (indoor, level, room) — поверх данных: вид и этажи по новым тегам; у двери — и место
     const e = indoorEdited.has(indoorKey(f.key)) ? session.get(indoorKey(f.key)) : undefined;
@@ -4143,19 +4144,26 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   });
 }
 
-/** Узел двери внутри контура здания, достаточно далеко от наружной стены для безопасного автофикса entrance=yes. */
-function isInteriorDoor(f: IndoorFeature, g: BuildingGroup): boolean {
-  if (!f.point || f.kind !== 'poi' || f.tags.entrance !== 'yes') return false;
-  const [x, y] = f.point;
+/** Точка не дальше tol метров от какой-либо стороны кольца. */
+function nearRing([x, y]: LonLat, ring: LonLat[], tol: number): boolean {
   const metresPerLon = 111_320 * Math.cos(y * Math.PI / 180);
-  const farFromEdge = (ring: LonLat[]) => ring.every((a, i) => {
+  return ring.some((a, i) => {
     const b = ring[(i + 1) % ring.length];
     const dx = (b[0] - a[0]) * metresPerLon, dy = (b[1] - a[1]) * 111_320;
     const px = (x - a[0]) * metresPerLon, py = (y - a[1]) * 111_320;
     const t = Math.max(0, Math.min(1, (px * dx + py * dy) / (dx * dx + dy * dy || 1)));
-    return Math.hypot(px - t * dx, py - t * dy) > 0.5;
+    return Math.hypot(px - t * dx, py - t * dy) <= tol;
   });
-  return groupFeatures(g).filter((b) => b.kind === 'building').some((b) => b.polygons.some((p) =>
+}
+
+/** Узел двери внутри контура здания, достаточно далеко от наружной стены для безопасного автофикса entrance=yes. */
+function isInteriorDoor(f: IndoorFeature, g: BuildingGroup): boolean {
+  if (!f.point || f.kind !== 'poi' || f.tags.entrance !== 'yes') return false;
+  const farFromEdge = (ring: LonLat[]) => !nearRing(f.point!, ring, 0.5);
+  const features = groupFeatures(g);
+  // Дверь на стене части — тоже может быть наружной: часть первого этажа под нависающими этажами уже контура
+  if (features.some((b) => b.kind === 'part' && b.polygons.some((p) => !farFromEdge(p.outer) || !p.inners.every(farFromEdge)))) return false;
+  return features.filter((b) => b.kind === 'building').some((b) => b.polygons.some((p) =>
     pointInRing(f.point!, p.outer) && !p.inners.some((hole) => pointInRing(f.point!, hole))
     && farFromEdge(p.outer) && p.inners.every(farFromEdge)));
 }

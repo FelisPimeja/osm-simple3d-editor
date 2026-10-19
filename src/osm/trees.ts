@@ -7,9 +7,16 @@ export type LeafType = 'broadleaved' | 'needleleaved' | 'mixed';
 /** Отдельное дерево (natural=tree): размеры — из тегов, если указаны, м. */
 export interface TreePoint { key?: string; tags?: Record<string, string>; p: LonLat; leaf?: LeafType; height?: number; crown?: number; trunk?: number }
 /** Ряд деревьев (natural=tree_row) — ломаная. */
-export interface TreeRow { key: string; line: LonLat[]; leaf?: LeafType; height?: number; crown?: number }
+export interface TreeRow { key: string; line: LonLat[]; leaf?: LeafType; height?: number; crown?: number; dates?: LifeDates }
 /** Лес (natural=wood, landuse=forest): кольца без повторённой замыкающей точки. */
-export interface WoodArea { key: string; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; leaf?: LeafType }
+export interface WoodArea { key: string; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; leaf?: LeafType; dates?: LifeDates }
+/** start_date / end_date объекта (OpenHistoricalMap) — для фильтра по дате; нет — существовал всегда. */
+export type LifeDates = { start_date?: string; end_date?: string };
+
+function lifeDates(tags: Record<string, string>): LifeDates | undefined {
+  if (!tags.start_date && !tags.end_date) return;
+  return { ...(tags.start_date ? { start_date: tags.start_date } : {}), ...(tags.end_date ? { end_date: tags.end_date } : {}) };
+}
 export interface TreeData { points: TreePoint[]; rows: TreeRow[]; woods: WoodArea[] }
 
 export const NO_TREES: TreeData = { points: [], rows: [], woods: [] };
@@ -78,12 +85,12 @@ export function parseTrees(elements: OsmElement[]): TreeData {
   for (const w of ways.values()) {
     if (w.tags?.natural === 'tree_row') {
       const line = coords(w.nodes);
-      if (line && line.length >= 2) rows.push({ key: `way/${w.id}`, line, leaf: leafOf(w.tags), height: meters(w.tags.height, 150), crown: meters(w.tags.diameter_crown, 60) });
+      if (line && line.length >= 2) rows.push({ key: `way/${w.id}`, line, leaf: leafOf(w.tags), height: meters(w.tags.height, 150), crown: meters(w.tags.diameter_crown, 60), dates: lifeDates(w.tags) });
       continue;
     }
     if (!isWood(w.tags) || w.nodes.length < 4 || w.nodes[0] !== w.nodes[w.nodes.length - 1]) continue;
     const outer = coords(w.nodes.slice(0, -1));
-    if (outer) woods.push({ key: `way/${w.id}`, polygons: [{ outer, inners: [] }], leaf: leafOf(w.tags!) });
+    if (outer) woods.push({ key: `way/${w.id}`, polygons: [{ outer, inners: [] }], leaf: leafOf(w.tags!), dates: lifeDates(w.tags!) });
   }
   for (const r of relations) {
     if (r.tags?.type !== 'multipolygon' || !isWood(r.tags)) continue;
@@ -108,7 +115,7 @@ export function parseTrees(elements: OsmElement[]): TreeData {
       if (!inner || inner.length < 3) continue;
       polygons.find((p) => pointInRing(inner[0], p.outer))?.inners.push(inner);
     }
-    if (polygons.length) woods.push({ key: `relation/${r.id}`, polygons, leaf: leafOf(r.tags) });
+    if (polygons.length) woods.push({ key: `relation/${r.id}`, polygons, leaf: leafOf(r.tags), dates: lifeDates(r.tags) });
   }
   return { points, rows, woods };
 }

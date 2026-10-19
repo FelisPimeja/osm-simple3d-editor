@@ -7124,6 +7124,7 @@ function applyDate() {
   const span = on ? yearsSpan(ohm.year, ohm.year) : undefined;
   if (map.getSource('ohm')) applyBasemapDate(map, 'ohm', span);
   overpass.setFeatureFilter(span === undefined ? () => true : (f) => existsIn(f.tags, span));
+  overpass.setTreeFilter(span ? String(ohm.year) : '', span === undefined ? () => true : (d) => existsIn(d as Record<string, string>, span));
   // В режиме здания сцена — своя, не из тайлов: части не того года скрываем в ней
   if (focus && syncFocusHidden(true)) {
     outlinerUnhover();

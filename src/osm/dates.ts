@@ -1,4 +1,5 @@
-import type { ExpressionSpecification, Map as MlMap } from 'maplibre-gl';
+import type { ExpressionSpecification, FilterSpecification, Map as MlMap } from 'maplibre-gl';
+import { convertFilter, expression } from '@maplibre/maplibre-gl-style-spec';
 
 /**
  * Даты OpenHistoricalMap: объект существует с start_date (включительно) до end_date (не включая).
@@ -36,7 +37,8 @@ const original = new WeakMap<MlMap, Map<string, unknown>>();
 
 /**
  * Фильтр по дате для слоёв подложки из источника source (undefined — снять). Фильтр слоя дополняется
- * условием даты; слои со старым (не выражением) синтаксисом фильтра пропускаем — смешивать нельзя.
+ * условием даты; фильтр старого синтаксиса (["has", "shop"], ["==", "kind", "x"]) сначала переводится
+ * в выражение — смешивать синтаксисы в одном фильтре нельзя.
  */
 export function applyBasemapDate(map: MlMap, source: string, t: DateSpan | undefined) {
   let saved = original.get(map);
@@ -47,9 +49,9 @@ export function applyBasemapDate(map: MlMap, source: string, t: DateSpan | undef
   }
   for (const [id, filter] of saved) {
     if (!map.getLayer(id)) continue;
-    const expr = filter === undefined || JSON.stringify(filter).includes('["get"');
-    if (!expr) continue;
-    const f = filter as ExpressionSpecification | undefined;
-    map.setFilter(id, t === undefined ? f ?? null : f ? ['all', f, dateExpression(t)] : dateExpression(t));
+    const f = filter as FilterSpecification | undefined;
+    if (t === undefined) { map.setFilter(id, f ?? null); continue; }
+    const base = f === undefined ? undefined : expression.isExpressionFilter(f) ? f : convertFilter(f);
+    map.setFilter(id, base === undefined ? dateExpression(t) : ['all', base, dateExpression(t)] as ExpressionSpecification);
   }
 }

@@ -261,6 +261,13 @@ export class OverpassTiles {
     this.visible = fn;
     for (const key of this.layer.groupKeys()) this.show(key);
   }
+  /** Какие деревья и леса показывать (фильтр по дате OHM, по start_date/end_date); key — подпись фильтра. */
+  private treeDates: { key: string; fn: (d: { start_date?: string; end_date?: string }) => boolean } = { key: '', fn: () => true };
+  setTreeFilter(key: string, fn: (d: { start_date?: string; end_date?: string }) => boolean) {
+    if (key === this.treeDates.key) return;
+    this.treeDates = { key, fn };
+    for (const k of this.wanted) this.showTrees(k);
+  }
   /** Проходит ли объект фильтр по дате. */
   isVisible(f: Feature3D): boolean { return this.visible(f); }
 
@@ -779,10 +786,12 @@ export class OverpassTiles {
   private showTrees(key: string) {
     const e = this.cache.get(key);
     if (e?.state !== 'ready') return;
-    const own = e.trees ?? NO_TREES;
+    const ok = this.treeDates.fn;
+    const all = e.trees ?? NO_TREES;
+    const own = { ...all, points: all.points.filter((p) => ok(p.tags ?? {})), rows: all.rows.filter((r) => ok(r.dates ?? {})) };
     const bbox = tileBbox(key);
-    const woods = this.woodsIn(bbox);
-    const signature = `${e.fetchedAt}:${own.points.length}:${own.rows.length}:${e.features.length}:${this.treeCutsVersion}|${woods.map((w) => w.key).sort().join(',')}`;
+    const woods = this.woodsIn(bbox).filter((w) => ok(w.dates ?? {}));
+    const signature = `${e.fetchedAt}:${own.points.length}:${own.rows.length}:${e.features.length}:${this.treeCutsVersion}:${this.treeDates.key}|${woods.map((w) => w.key).sort().join(',')}`;
     if (this.layer.treeSignature(key) === signature || this.treesPending.get(key) === signature) return;
     if (!own.points.length && !own.rows.length && !woods.length) { this.treesPending.delete(key); this.layer.setTrees(key, undefined); return; }
     const buildings = e.features.flatMap((f) => f.polygons.map((p) => p.outer));

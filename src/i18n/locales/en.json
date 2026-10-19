@@ -964,5 +964,8 @@
   "1 месяц": "1 month",
   "Текущая дата": "Current date",
   "Текущая дата: год, ГГГГ-ММ или ГГГГ-ММ-ДД; показываются объекты, существовавшие в это время (start_date … end_date). До н. э. — со знаком минус": "Current date: year, YYYY-MM or YYYY-MM-DD; shows objects that existed at that time (start_date … end_date). BCE years are negative",
-  "{key} — нет на дату {date} (слайдер времени)": "{key} — doesn't exist on {date} (time slider)"
+  "{key} — нет на дату {date} (слайдер времени)": "{key} — doesn't exist on {date} (time slider)",
+  "Существует с": "Exists from",
+  "Существует до": "Exists until",
+  "ГГГГ-ММ-ДД": "YYYY-MM-DD"
 }

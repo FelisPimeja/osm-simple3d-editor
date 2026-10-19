@@ -3,8 +3,9 @@ import { computeHeights, LEVEL_HEIGHT } from '../osm/heights';
 import type { EditSession } from './session';
 import { tr, trn } from '../i18n';
 import { idFieldLabel, idOptions, valueLabels } from '../osm/presets';
+import { parseDate } from '../osm/dates';
 
-type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour' | 'combo';
+type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour' | 'combo' | 'date';
 
 interface Field {
   tag: string;
@@ -19,6 +20,8 @@ interface Field {
   /** combo: значение вместо пустого (иначе пустое удаляет тег). */
   empty?: string;
   placeholder?: string;
+  /** Только на OpenHistoricalMap (setDateFields); заданное значение показываем везде. */
+  dated?: boolean;
 }
 
 /** Частые значения building:part (taginfo) с подписями; можно ввести и своё. */
@@ -86,6 +89,8 @@ const FIELDS = ([
   { tag: 'roof:orientation', label: tr('Конёк'), type: 'select', options: ['along', 'across'] },
   { tag: 'building:colour', label: tr('Цвет стен'), type: 'colour' },
   { tag: 'roof:colour', type: 'colour' },
+  { tag: 'start_date', label: tr('Существует с'), type: 'date', placeholder: tr('ГГГГ-ММ-ДД'), dated: true },
+  { tag: 'end_date', label: tr('Существует до'), type: 'date', placeholder: tr('ГГГГ-ММ-ДД'), dated: true },
 ] as Field[]).map((f) => ({
   ...f,
   label: f.label ?? idFieldLabel(f.tag) ?? f.tag,
@@ -113,6 +118,10 @@ function applyFormula(type: FieldType, input: string, current: string | undefine
 }
 
 /** Пустое значение валидно (означает удаление тега). */
+/** Поля дат (start_date / end_date) — для серверов с историей (OpenHistoricalMap). */
+let dateFields = false;
+export function setDateFields(on: boolean) { dateFields = on; }
+
 function isValid(type: FieldType, v: string): boolean {
   v = v.trim();
   if (!v) return true;
@@ -122,6 +131,8 @@ function isValid(type: FieldType, v: string): boolean {
     case 'int': return /^-?\d+$/.test(v);
     case 'direction': return CARDINALS.has(v.toUpperCase()) || (/^\d+(\.\d+)?$/.test(v) && Number(v) <= 360);
     case 'colour': return CSS.supports('color', v.split(';')[0].trim());
+    // Даты OSM: год (до н. э. — с минусом), ГГГГ-ММ, ГГГГ-ММ-ДД, ~1850 (примерно), 1850s (десятилетие)
+    case 'date': return /^(~?-?\d{1,4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?|\d{3}0s)$/.test(v) && !!parseDate(v);
     default: return true;
   }
 }
@@ -204,6 +215,7 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   const defaults = defaultValues({ ...f.tags, ...inheritedTags(f.tags, sources.map((s) => s.tags)) });
   const rows = FIELDS.filter((field) => {
     if (field.tag === 'building:part' && f.tags['building:part'] === undefined) return false; // только у частей
+    if (field.dated && !dateFields && f.tags[field.tag] === undefined) return false;
     const only = SHAPE_ONLY[field.tag];
     // Уже заданное значение показываем всегда — чтобы его было видно и можно было удалить
     return !only || f.tags[field.tag] !== undefined || (!!shape && only.includes(shape));
@@ -268,6 +280,7 @@ export function renderMultiTagForm(keys: string[], session: EditSession): string
   const shapes = values('roof:shape');
   const rows = FIELDS.filter((field) => {
     if (field.tag === 'building:part' && !feats.every((f) => f.tags['building:part'] !== undefined)) return false;
+    if (field.dated && !dateFields && !values(field.tag).some(Boolean)) return false;
     const only = SHAPE_ONLY[field.tag];
     return !only || values(field.tag).some(Boolean) || shapes.some((v) => only.includes(v));
   }).map((field) => {

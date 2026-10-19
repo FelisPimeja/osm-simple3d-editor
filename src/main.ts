@@ -51,7 +51,7 @@ import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmStatus, josmUndo, minElementId, refreshJosmStatus, sendJosmSelection, watchJosmSelection, type JosmChange, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
 import { deprecations, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
-import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, type InheritSource } from './edit/tag-form';
+import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, setDateFields, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
 import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from './settings';
@@ -7128,6 +7128,7 @@ function showDateControls() {
 function applyDate() {
   const on = server().id === 'ohm';
   datePanel.hidden = !on;
+  setDateFields(on);
   if (!on) stopPlay();
   showDateControls();
   const url = new URL(location.href);

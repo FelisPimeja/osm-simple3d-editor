@@ -321,7 +321,11 @@ function combo(field: Field, common: string, value: string, placeholder: string,
   // Нестандартное значение из данных — тоже в списке, чтобы его было видно
   const options = [...new Set([...(value && !field.options!.includes(value) ? [value] : []), ...field.options!])];
   const icon = (o: string) => (field.icons ? `<i class="combo-icon">${field.icons[o] ?? ''}</i>` : '');
-  const items = options.map((o) => `<li data-value="${esc(o)}"${o === value ? ' class="current"' : ''}>${icon(o)}<b>${esc(field.labels?.[o] ?? o)}</b><span>${esc(o)}</span></li>`).join('');
+  const items = options.map((o) => {
+    const label = field.labels?.[o] ?? o;
+    const raw = label.toLowerCase() === o.toLowerCase() ? '' : `<span>${esc(o)}</span>`;
+    return `<li data-value="${esc(o)}"${o === value ? ' class="current"' : ''}>${icon(o)}<b>${esc(label)}</b>${raw}</li>`;
+  }).join('');
   // Иконка выбранного (или унаследованного) значения — слева в поле
   const shown = field.icons?.[value || inherited || ''];
   const lead = field.icons ? `<i class="combo-icon combo-lead${!value && inherited ? ' inherited' : ''}">${shown ?? ''}</i>` : '';

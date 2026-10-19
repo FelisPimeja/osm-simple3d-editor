@@ -45,6 +45,12 @@ npm run dev     # local dev server (Vite)
 npm run build   # type check and production build
 ```
 
+## AI assistance
+
+This project is developed with AI assistance. Most of the code, documentation and translations were written with [Claude](https://claude.ai/) (Anthropic) via Claude Code, under the direction of the project maintainer, who designs the features, reviews and tests the changes, and is responsible for every commit. Commits made with AI help carry a `Co-authored-by: Claude <noreply@anthropic.com>` trailer.
+
+Edits uploaded to OpenStreetMap and other map projects with this editor are made by human mappers; the editor does not generate map data on its own.
+
 ## License
 
 The code is distributed under the [ISC](LICENSE) license. Map data is licensed by the respective projects

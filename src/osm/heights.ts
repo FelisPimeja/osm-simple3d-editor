@@ -36,6 +36,10 @@ function parseNum(v?: string): number | undefined {
 const ROOF_SYNONYMS: Record<string, string> = {
   pitched: 'gabled', lean_to: 'skillion', monopitch: 'skillion', shed: 'skillion', sloped: 'skillion',
   gabled_height_moved: 'saltbox', many: 'flat', mixed: 'flat', mix: 'flat', multi: 'flat',
+  equal_hipped: 'hipped', cross_gabled: 'crosspitched',
+  // Импорт GSI (Япония): категории числа скатов вместо формы
+  '2 faces (pitched)': 'gabled', '2 face (pitched)': 'gabled', '4 faces (hipped)': 'hipped', '4 face (hipped)': 'hipped',
+  'more than 4 faces': 'hipped', 'more than 4 faces (hipped)': 'hipped', more_than_4_faces: 'hipped',
 };
 
 /** Значение roof:shape, приведённое к основному (регистр, синонимы); без тега — flat. */

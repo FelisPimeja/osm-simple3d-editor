@@ -36,6 +36,7 @@ const ROOF_SHAPE_LABELS: Record<string, string> = {
   side_hipped: tr('Двускатная с вальмой с одной стороны'), 'side_half-hipped': tr('Двускатная с полувальмой с одной стороны'),
   'hipped-and-gabled': tr('Голландская (вальмовая с фронтоном)'), bellcast_gable: tr('Двускатная с отгибом у карниза'),
   crosspitched: tr('Крестовая'), sawtooth: tr('Шедовая (пилообразная)'), butterfly: tr('Бабочка (обратная двускатная)'), cone: tr('Коническая'),
+  gabled_row: tr('Ряд двускатных'), double_saltbox: tr('Двускатная с плоским верхом'), quadruple_saltbox: tr('Вальмовая с плоским верхом'),
 };
 export const ROOF_SHAPES = Object.keys(ROOF_SHAPE_LABELS);
 
@@ -139,7 +140,7 @@ const INHERITABLE_SET = new Set<string>(INHERITABLE);
 const SHAPE_ONLY: Record<string, string[]> = {
   'roof:direction': ['skillion', 'saltbox', 'side_hipped', 'side_half-hipped'],
   'roof:orientation': ['gabled', 'hipped', 'half-hipped', 'gambrel', 'round', 'saltbox', 'bellcast_gable', 'side_hipped',
-    'side_half-hipped', 'hipped-and-gabled', 'crosspitched', 'sawtooth', 'butterfly'],
+    'side_half-hipped', 'hipped-and-gabled', 'crosspitched', 'sawtooth', 'butterfly', 'gabled_row', 'double_saltbox'],
 };
 
 /** Откуда наследуются значения: контур (outline) и/или само отношение здания. */

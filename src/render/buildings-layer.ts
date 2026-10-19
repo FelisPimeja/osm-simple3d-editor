@@ -4323,7 +4323,7 @@ function sameItemGeometry(old: Item, item: Item): boolean {
 
 /** Подпись версии объекта для рендера: геометрия, теги и роль в здании. */
 function shapeSig(f: Feature3D): string {
-  return JSON.stringify([f.kind, f.hasParts, f.tags, f.polygons, f.renderPolygons]);
+  return JSON.stringify([f.kind, f.hasParts, f.tags, f.polygons]);
 }
 
 /** Оболочка группы для планов этажей: та же, пока не менялись треугольники, скрытые и висящие части. */
@@ -4713,7 +4713,7 @@ function prepItem(g: MeshGroup, f: Feature3D) {
   // Свои теги главнее унаследованных; в данных объекта ничего не меняется — только для рисования
   const inherited = inheritFor(f);
   const tags = inherited && Object.keys(inherited).length ? { ...inherited, ...f.tags } : f.tags;
-  const polys = (f.renderPolygons ?? f.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+  const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
   let heights = computeHeights(tags);
   // Контур под частями и здания нулевой высоты — плоский след на земле: видно и можно выделить;
   // без высоты и этажей — тоже, если высоту по умолчанию выключили в настройках
@@ -4843,7 +4843,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   positions.set(tri.roof, tri.walls.length);
   positions.set(floors, tri.walls.length + tri.roof.length);
   const wall = tags['building:colour'] ?? tags.colour ?? DEFAULT_WALL;
-  const roof = f.hasParts && f.renderPolygons ? '#e9a24a' : tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
+  const roof = tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
   const box = new THREE.Box3();
   if (positions.length) box.setFromArray(positions);
   return {

@@ -6,7 +6,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
-import { setDeprecatedTags, validateBuilding, validateDuplicates, validateGeometry, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, type Issue } from './edit/validate';
+import { setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -5325,7 +5325,18 @@ function visibleMapIssues(): Issue[] {
   }
   const byKey = new Map(rendered.map((f) => [f.key, f]));
   issues.push(...duplicateIssues([...seen].map((k) => byKey.get(k)!), rendered));
+  issues.push(...orphanPartIssues(singles));
   return issues;
+}
+
+/** Части без здания вокруг: контуры — загруженные и созданные в сессии, с правками сессии. */
+function orphanPartIssues(scope: Feature3D[]): Issue[] {
+  const parts = scope.filter((f) => f.kind === 'part');
+  if (!parts.length) return [];
+  const buildings = [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)]
+    .filter((f) => !session.isDeleted(f.key))
+    .map((f) => (session.has(f.key) ? (session.get(f.key) as Feature3D | undefined) ?? f : f));
+  return timed('проверка частей без здания', () => validateOrphanParts(parts, buildings, (key) => !!groupOf(key)), (r) => `${r.length}`);
 }
 
 /** Копии объектов других зданий (совпадающие контуры): scope — что проверяем, all — с чем сравниваем. */
@@ -5358,7 +5369,7 @@ function issueMark(list: Issue[] | undefined): string {
 
 /** Панель «Проверка»: проблемы здания режима здания, клик — выделить объект (Shift — оба пересекающихся). */
 function renderIssues() {
-  const simpleIssues = focus ? buildingIssues(focus) : [];
+  const simpleIssues = focus ? [...buildingIssues(focus), ...(isSolo(focus) ? orphanPartIssues(groupFeatures(focus)) : [])] : [];
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding ? buildingIndoor(focusedBuilding) : [];
   const indoorIssues = focusedBuilding ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding))), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];

@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from 'polygon-clipping';
-import { parseLevels, pointInRing, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type Polygon } from '../osm/model';
+import { parseLevels, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type Polygon } from '../osm/model';
 import { computeHeights, parseLength, roofShapeOf } from '../osm/heights';
 import { ROOF_SHAPES } from './tag-form';
 import { tr, trn } from '../i18n';
@@ -79,7 +79,7 @@ const WRONG_KEYS: Record<string, string> = {
   'building:max_level': 'max_level',
 };
 /** Значения roof:shape из «Values with problems» без однозначной замены (у остальных — ROOF_SYNONYMS в heights). */
-const ROOF_UNCLEAR: Record<string, string> = { gabled_row: tr('неясное значение — возможно, sawtooth или ряд gabled-частей') };
+const ROOF_UNCLEAR: Record<string, string> = {};
 /** gabled_height_moved в вики — документированное значение, хотя рисуем его как saltbox. */
 const ROOF_DOCUMENTED = new Set(['gabled_height_moved', 'many']);
 const COMPASS = /^(N|NNE|NE|ENE|E|ESE|SE|SSE|S|SSW|SW|WSW|W|WNW|NW|NNW)$/;
@@ -241,7 +241,8 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
     tr('room=* описывает назначение помещения; проверьте indoor=room или indoor=area.'));
   if (t['building:part'] !== undefined && space) add('warning', 'indoor-key',
     tr('building:part=* описывает объём здания, а не помещение indoor=*.'));
-  if (t.entrance === 'yes' && (t.indoor === 'door' || interiorDoor)) add('warning', 'indoor-door',
+  // Только по геометрии: indoor=door + entrance=yes на наружной стене — обычный вход в здание (Simple Indoor Tagging)
+  if (t.entrance === 'yes' && interiorDoor) add('warning', 'indoor-door',
     tr('Внутренняя дверь: entrance=yes обозначает вход в здание; используйте indoor=door и door=*.'),
     { label: t.door === undefined ? tr('удалить entrance, добавить door=yes') : tr('удалить entrance'),
       tags: { entrance: undefined, indoor: 'door', ...(t.door === undefined ? { door: 'yes' } : {}) } });
@@ -493,14 +494,13 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
         out.push({ key: f.key, level: 'warning', code: 'outside', text: tr('Часть выходит за контур здания на {area} м² — контур должен охватывать все части.', { area: fmt(rest) }) });
       }
     }
-    // Проверяем геометрический пробел между частями у основания, без достраивания объёма по высоте контура.
-    const outlineHeights = computeHeights(outline.tags);
-    const baseParts = parts.filter((f) => !broken.has(f.key) && computeHeights(f.tags).min <= outlineHeights.min + 0.5
-      && computeHeights(f.tags).min < outlineHeights.top - 1);
-    if (baseParts.length && outlineArea > 0) {
-      const missing = safe(() => multiArea(polygonClipping.difference(o, polygonClipping.union(multi(baseParts[0]), ...baseParts.slice(1).map(multi)))));
+    // Пробел — место контура, над которым нет ни одной части. Приподнятые части тоже покрывают контур:
+    // вырез первого этажа под нависающими этажами (аркада, навес над входом) — не пропущенная часть
+    const coverParts = parts.filter((f) => !broken.has(f.key));
+    if (coverParts.length && outlineArea > 0) {
+      const missing = safe(() => multiArea(polygonClipping.difference(o, polygonClipping.union(multi(coverParts[0]), ...coverParts.slice(1).map(multi)))));
       if (missing !== undefined && missing > 1 && missing > outlineArea * 0.001) {
-        out.push({ key: outline.key, level: 'warning', code: 'coverage', text: tr('Части не покрывают {pct}% контура — этот участок показан плоским. Добавьте недостающую часть или проверьте роли в отношении.',
+        out.push({ key: outline.key, level: 'warning', code: 'coverage', text: tr('Части не покрывают {pct}% контура — этот участок не нарисован. Добавьте недостающую часть или проверьте роли в отношении.',
           { pct: Math.round((missing / outlineArea) * 100) }) });
       }
     }
@@ -608,6 +608,34 @@ const duplicateCache = new WeakMap<Feature3D, { cands: Feature3D[]; issues: Issu
  * scope — что проверяем, all — с чем сравниваем, building — здание объекта (ключ).
  */
 let lastDuplicates: { scope: Feature3D[]; all: Feature3D[]; buildings: string[]; issues: Issue[] } | undefined;
+
+/**
+ * Части (building:part) вне всякого здания: не в отношении type=building и не внутри контура с building=*.
+ * Рисуем их как есть, но по Simple 3D Buildings часть уточняет здание — контур должен быть.
+ * inRelation — входит ли часть в отношение здания (такие проверяет validateBuilding).
+ */
+export function validateOrphanParts(parts: Feature3D[], buildings: Feature3D[], inRelation: (key: string) => boolean): Issue[] {
+  const CELL = 0.0005; // ≈50 м, как в markOutlinesWithParts
+  const grid = new Map<string, Feature3D[]>();
+  for (const b of buildings) {
+    if (b.kind !== 'building' || !b.polygons.length) continue;
+    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+    for (const p of b.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
+    for (let i = Math.floor(w / CELL); i <= Math.floor(e / CELL); i++) {
+      for (let j = Math.floor(s / CELL); j <= Math.floor(n / CELL); j++) (grid.get(`${i},${j}`) ?? grid.set(`${i},${j}`, []).get(`${i},${j}`)!).push(b);
+    }
+  }
+  const out: Issue[] = [];
+  for (const f of parts) {
+    if (f.kind !== 'part' || !f.polygons.length || inRelation(f.key)) continue;
+    const c = pointOnSurface(f.polygons[0]);
+    const hosts = grid.get(`${Math.floor(c[0] / CELL)},${Math.floor(c[1] / CELL)}`) ?? [];
+    if (hosts.some((b) => b.key !== f.key && b.polygons.some((q) => pointInRing(c, q.outer) && !q.inners.some((h) => pointInRing(c, h))))) continue;
+    out.push({ key: f.key, level: 'warning', code: 'orphan-part',
+      text: tr('Часть здания (building:part) вне контура здания — нужен контур с building=* вокруг частей или отношение type=building.') });
+  }
+  return out;
+}
 
 export function validateDuplicates(scope: Feature3D[], all: Feature3D[], building: (key: string) => string): Issue[] {
   // Те же объекты в тех же зданиях, что в прошлый раз (камера повернулась) — прежний результат

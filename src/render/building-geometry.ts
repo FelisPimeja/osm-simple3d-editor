@@ -25,10 +25,11 @@ export interface BuildingTriangles {
 const SUPPORTED_ANY_POLYGON = new Set(['flat', 'pyramidal', 'cone', 'dome', 'onion', 'skillion']);
 const SUPPORTED_QUAD = new Set(['gabled', 'hipped']);
 /** Крыши по straight skeleton на контурах любой формы (gabled/hipped на четырёхугольниках — свой код). */
-const SKELETON_SHAPES = new Set(['gabled', 'hipped', 'round', 'gambrel', 'mansard', 'half-hipped', 'saltbox', 'bellcast_gable', 'side_hipped', 'side_half-hipped', 'hipped-and-gabled']);
+const SKELETON_SHAPES = new Set(['gabled', 'hipped', 'round', 'gambrel', 'mansard', 'half-hipped', 'saltbox', 'bellcast_gable', 'side_hipped', 'side_half-hipped', 'hipped-and-gabled',
+  'double_saltbox', 'quadruple_saltbox']);
 /** Формы, которые на почти прямоугольных контурах строятся вдоль оси описанного прямоугольника. */
 const AXIS_SHAPES = new Set(['gabled', 'round', 'gambrel', 'half-hipped', 'saltbox', 'bellcast_gable',
-  'side_hipped', 'side_half-hipped', 'hipped-and-gabled', 'crosspitched', 'sawtooth', 'butterfly']);
+  'side_hipped', 'side_half-hipped', 'hipped-and-gabled', 'crosspitched', 'sawtooth', 'butterfly', 'gabled_row', 'double_saltbox']);
 
 export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Record<string, string>): BuildingTriangles {
   const walls: number[] = [];
@@ -405,8 +406,9 @@ function addHalfHippedRoof(roof: number[], walls: number[], ring: Pt[], ax: Rect
 const SALTBOX_RIDGE = 1 / 3;
 
 /**
- * Saltbox: двускатная с коньком, смещённым к одной стороне, — короткий крутой скат и длинный пологий.
- * Карнизы на одной высоте, фронтоны несимметричные. roof:direction — куда смотрит длинный скат
+ * Saltbox (вики Tag:roof:shape=saltbox): двускатная с коньком, смещённым к одной стороне; скаты одного уклона,
+ * длинный спускается ниже — его карниз на высоте стен, карниз короткого выше (стена с той стороны выше).
+ * Смещение конька теги не задают — берём типичное. roof:direction — куда смотрит длинный скат
  * (как направление ската у skillion); без него длинный скат — с «левой» стороны оси.
  */
 function addSaltboxRoof(roof: number[], walls: number[], ring: Pt[], ax: RectAxis, z0: number, roofHeight: number, across: boolean, direction?: string) {
@@ -421,10 +423,12 @@ function addSaltboxRoof(roof: number[], walls: number[], ring: Pt[], ax: RectAxi
   const halfW = (across ? ax.length : ax.width) / 2 || 1;
   const [cx, cy] = ax.center;
   const ridge = halfW * SALTBOX_RIDGE; // конёк сдвинут в сторону +n
-  const kLong = roofHeight / (halfW + ridge), kShort = roofHeight / (halfW - ridge);
+  const k = roofHeight / (halfW + ridge);
   // z = z0 + k · (расстояние от карниза), расстояние меряем вдоль d от линии s = -halfW
   const plane = (d: Pt, k: number): Plane => [k * d[0], k * d[1], z0 - k * (d[0] * cx + d[1] * cy) + k * halfW];
-  addPlanesRoof(roof, walls, ring, [plane(n, kLong), plane([-n[0], -n[1]], kShort)], z0, z0 + roofHeight);
+  // Короткий скат — тот же уклон от конька: его плоскость проходит через конёк (s = ridge) на высоте top
+  const shortPlane: Plane = [-k * n[0], -k * n[1], z0 + roofHeight + k * (n[0] * cx + n[1] * cy) + k * ridge];
+  addPlanesRoof(roof, walls, ring, [plane(n, k), shortPlane], z0, z0 + roofHeight);
 }
 
 /**
@@ -480,9 +484,11 @@ function addPlanesRoof(
 }
 
 /** Формы, которые строятся из плоскостей вдоль оси описанного прямоугольника (addAxisPlanesRoof). */
-const AXIS_PLANE_SHAPES = new Set(['side_hipped', 'side_half-hipped', 'hipped-and-gabled', 'crosspitched', 'sawtooth', 'butterfly']);
+const AXIS_PLANE_SHAPES = new Set(['side_hipped', 'side_half-hipped', 'hipped-and-gabled', 'crosspitched', 'sawtooth', 'butterfly', 'gabled_row']);
 /** hipped-and-gabled: доля высоты крыши, до которой идут вальмы (выше — маленький фронтон). */
 const DUTCH_GABLE_CUT = 0.5;
+/** Пролёт одной двускатной крыши gabled_row в высотах крыши (скаты 45°), не меньше 3 м. */
+const GABLED_ROW_WIDTH = 2;
 /** Зубец sawtooth: ширина в высотах крыши (пологий скат и вертикальный «фонарь»), не меньше 3 м. */
 const SAWTOOTH_WIDTH = 2.5;
 
@@ -498,7 +504,9 @@ function clipRing(ring: Pt[], f: (p: Pt) => number, level: number, sign: 1 | -1)
  * - hipped-and-gabled (голландская) — вальмовая внизу, наверху маленький фронтон;
  * - crosspitched — два двускатных объёма крест-накрест, фронтоны на всех четырёх сторонах;
  * - sawtooth — ряд односкатных зубцов (шедовая): коньки вдоль длинной стороны;
- * - butterfly — обратная двускатная: ендова посередине, карнизы по краям — вверху.
+ * - butterfly — обратная двускатная: ендова посередине, карнизы по краям — вверху;
+ * - gabled_row — ряд одинаковых двускатных крыш: коньки поперёк длинной стороны (across — вдоль), фронтоны
+ *   на длинных сторонах; число пролётов — по высоте крыши.
  */
 function addAxisPlanesRoof(
   roof: number[], walls: number[], ring: Pt[], ax: RectAxis, shape: string,
@@ -591,6 +599,19 @@ function addAxisPlanesRoof(
     }
   } else if (shape === 'butterfly') {
     addPlanesRoof(roof, walls, ring, [plane(n, k, z0), plane(neg(n), k, z0)], z0, top, 'max');
+  } else if (shape === 'gabled_row') {
+    // Пролёты режут ось along (у across она короткая): коньки идут поперёк неё, по n
+    const count = Math.max(1, Math.round((2 * halfL) / Math.max(3, GABLED_ROW_WIDTH * roofHeight)));
+    const w = (2 * halfL) / count, kr = roofHeight / (w / 2);
+    for (let i = 0; i < count; i++) {
+      const lo = -halfL + i * w;
+      let strip = ring;
+      if (i > 0) strip = clipRing(strip, u, lo, 1);
+      if (i < count - 1) strip = clipRing(strip, u, lo + w, -1);
+      if (strip.length < 3) continue;
+      // Скаты пролёта: от z0 на его краях до top посередине; на ендовах между пролётами стен нет (высота z0)
+      addPlanesRoof(roof, walls, strip, [plane(along, kr, z0 - kr * lo), plane(neg(along), kr, z0 + kr * (lo + w))], z0, top);
+    }
   }
 }
 
@@ -610,6 +631,8 @@ const twoPitch = (tb: number, zb: number): Profile => ({
 });
 
 const ROUND_BANDS = 8;
+/** Доля пути от карниза к середине, где скаты double/quadruple_saltbox выходят на плоский верх. */
+const SALTBOX_FLAT = 0.5;
 
 const PROFILES: Record<string, Profile | undefined> = {
   // Цилиндрический свод: дуга окружности
@@ -619,11 +642,15 @@ const PROFILES: Record<string, Profile | undefined> = {
   mansard: twoPitch(0.25, 0.75),
   // Двускатная с отгибом у карниза (колоколом): пологий низ ската и крутой верх
   bellcast_gable: twoPitch(0.25, 0.1),
+  // Скаты с плоским верхом (OSM-4D Roof table): double_saltbox — с двух сторон, фронтоны на торцах;
+  // quadruple_saltbox — со всех сторон. Ширину плоского верха теги не задают — типичная
+  double_saltbox: { z: (t) => Math.min(1, t / SALTBOX_FLAT), breaks: [SALTBOX_FLAT] },
+  quadruple_saltbox: { z: (t) => Math.min(1, t / SALTBOX_FLAT), breaks: [SALTBOX_FLAT] },
 };
 
 /** Крыши с фронтонами на торцах (остальные скатные — со скатами со всех сторон). */
 // half-hipped и saltbox на сложных контурах (без оси) — упрощённо как двускатная
-const GABLED_SHAPES = new Set(['gabled', 'round', 'gambrel', 'half-hipped', 'saltbox', 'bellcast_gable']);
+const GABLED_SHAPES = new Set(['gabled', 'round', 'gambrel', 'half-hipped', 'saltbox', 'bellcast_gable', 'double_saltbox']);
 
 /** Отсечение многоугольника по третьей координате: sign=1 — оставить t ≥ level, -1 — t ≤ level. */
 function clipT(poly: V3[], level: number, sign: 1 | -1): V3[] {

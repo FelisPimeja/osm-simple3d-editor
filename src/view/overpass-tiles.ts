@@ -875,7 +875,7 @@ export class OverpassTiles {
   private bareOutline(f: Feature3D): boolean {
     if (!isBareOutlineTags(f.tags)) return false;
     const g = this.groups.get(this.memberGroup.get(f.key) ?? '');
-    return !!g && g.roles[g.members.indexOf(f.key)] === 'outline' && !f.renderPolygons;
+    return !!g && g.roles[g.members.indexOf(f.key)] === 'outline';
   }
 
   private show(key: string) {

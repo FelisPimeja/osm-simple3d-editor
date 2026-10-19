@@ -18,8 +18,6 @@ export interface Feature3D {
   polygons: Polygon[];
   /** Контур здания, у которого есть building:part — сам не рендерится. */
   hasParts: boolean;
-  /** Только для рендера: непокрытый частями участок, плоский сигнал о недостающей части. */
-  renderPolygons?: Polygon[];
   /** У мультиполигона — его пути-члены (для правки топологии); в старом кеше нет. */
   ways?: MemberWay[];
 }
@@ -377,8 +375,8 @@ export function pointOnSurface(p: Polygon): LonLat {
 const ON_TOP_TOLERANCE = 1;
 
 /**
- * Контур с частями не достраиваем по общей высоте: участок без части показываем плоским,
- * чтобы маппер увидел пробел в модели. Приподнятые части не вычитаем из основания.
+ * Контур с частями не достраиваем по общей высоте и участок без части не рисуем — о пробеле в модели
+ * предупреждает валидатор (coverage). Приподнятые части не вычитаем из основания.
  */
 export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[] = features, groups: BuildingGroup[] = []) {
   const byKey = new Map(features.map((f) => [f.key, f]));
@@ -404,7 +402,6 @@ export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[
   }
   for (const b of targets) {
     if (b.kind !== 'building') continue;
-    delete b.renderPolygons;
     const heights = computeHeights(b.tags);
     const top = heights.top;
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
@@ -432,11 +429,7 @@ export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[
       const mergedParts = polygonClipping.union(partShapes[0], ...partShapes.slice(1));
       const covered = polygonClipping.intersection(outline, mergedParts);
       const coveredArea = covered.reduce((sum, [outer, ...holes]) => sum + area({ outer: outer.slice(0, -1), inners: holes.map((r) => r.slice(0, -1)) }), 0);
-      if (coveredArea <= 0) { b.hasParts = false; continue; }
-      const rest = polygonClipping.difference(outline, covered);
-      if (!rest.length) { b.hasParts = true; continue; }
-      b.renderPolygons = rest.map(([outer, ...inners]) => ({ outer: outer.slice(0, -1) as LonLat[], inners: inners.map((r) => r.slice(0, -1) as LonLat[]) }));
-      b.hasParts = true;
+      b.hasParts = coveredArea > 0;
     } catch {
       // Некорректная геометрия: оставляем исходный контур видимым.
       b.hasParts = false;

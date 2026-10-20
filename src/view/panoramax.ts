@@ -8,6 +8,7 @@
 import type { ExpressionSpecification, GeoJSONSource, Map as MlMap, MapSourceDataEvent, MapGeoJSONFeature, PointLike } from 'maplibre-gl';
 import * as THREE from 'three';
 import { tr } from '../i18n';
+import { glPixels } from '../edit/eyedropper';
 
 const API = 'https://api.panoramax.xyz/api';
 const SOURCE = 'panoramax';
@@ -427,6 +428,8 @@ export class PanoramaxViewer {
   private coneFov = 70;
   /** Окно двигали или меняли его размер — больше не прижимаем его к панелям инструментов сами. */
   private userPlaced = false;
+  /** Холст с пикселями обычного фото (для пипетки) — по blob: URL. */
+  private flatPixels?: { url: string; ctx: CanvasRenderingContext2D };
   /** Последний открытый снимок — его покажем, когда слой снова включат. */
   private lastId?: string;
 
@@ -493,6 +496,9 @@ export class PanoramaxViewer {
   }
 
   get shown() { return !this.el.hidden; }
+
+  /** Область фото — источник растра для пипетки (src/edit/eyedropper.ts). */
+  get photoEl(): HTMLElement { return this.stage; }
 
   /**
    * Пока окно не двигали — слева внизу, правее панелей инструментов, если они видны. Иначе — там, куда поставили,
@@ -681,6 +687,31 @@ export class PanoramaxViewer {
     this.camera.lookAt(-Math.cos(el) * Math.cos(rel), Math.sin(el), -Math.cos(el) * Math.sin(rel));
     this.renderer.render(this.scene, this.camera);
     this.updateArrows();
+  }
+
+  /**
+   * Пиксели фото вокруг точки стадии: квадрат (2R+1)², строки сверху вниз, RGBA (за краем фото — прозрачные).
+   * Панораму перерисовываем и читаем из WebGL в той же задаче (буфер ещё не очищен; строки там снизу вверх);
+   * обычное фото — из холста с картинкой (blob: — без CORS), в пикселях самой картинки.
+   */
+  pixelsAt(x: number, y: number, R: number): Uint8ClampedArray | undefined {
+    const n = 2 * R + 1;
+    if (this.pic?.pano && this.renderer) {
+      this.draw();
+      return glPixels(this.renderer.getContext(), x, y, R, this.renderer.getPixelRatio());
+    }
+    if (!this.pic || !this.img.naturalWidth) return;
+    const { naturalWidth: nw, naturalHeight: nh } = this.img;
+    if (this.flatPixels?.url !== this.img.src) {
+      const ctx = new OffscreenCanvas(nw, nh).getContext('2d', { willReadFrequently: true }) as unknown as CanvasRenderingContext2D;
+      ctx.drawImage(this.img, 0, 0);
+      this.flatPixels = { url: this.img.src, ctx };
+    }
+    // object-fit: contain — картинка вписана по центру
+    const w = this.stage.clientWidth, h = this.stage.clientHeight, s = Math.min(w / nw, h / nh);
+    const ix = Math.round((x - (w - nw * s) / 2) / s), iy = Math.round((y - (h - nh * s) / 2) / s);
+    if (ix < 0 || iy < 0 || ix >= nw || iy >= nh) return;
+    return this.flatPixels.ctx.getImageData(ix - R, iy - R, n, n).data;
   }
 
   private bindDrag() {

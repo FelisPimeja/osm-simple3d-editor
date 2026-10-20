@@ -45,7 +45,10 @@ import type { Pt } from './render/building-geometry';
 import { MeasureTool } from './edit/measure-tool';
 import { OffsetTool, type OffsetTarget } from './edit/offset-tool';
 import { setToolCursor, type ToolCursor } from './view/cursors';
-import { PAINT_TAGS, PaintTool } from './edit/paint-tool';
+import { PAINT_TAGS, PaintTool, type PaintFace, type PaintSample } from './edit/paint-tool';
+import { Eyedropper, glPixels, pickFieldHint } from './edit/eyedropper';
+import { openColourPopover } from './edit/colour-popover';
+import { loadRecentColours, recordColour } from './edit/recent-colours';
 import { CIRCLE_LABELS, CIRCLE_MODES, CIRCLE_TITLES, DrawTool, RECT_LABELS, RECT_MODES, RECT_TITLES, type CircleMode, type DrawShape, type RectMode } from './edit/draw-tool';
 import { suggestComment, isIndoorChange } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
@@ -1000,14 +1003,15 @@ function highlightKeys(key: string | undefined): string[] {
 map.on('click', (e) => {
   if (e.originalEvent.button !== 0) return;
   if (suppressClick) return;
+  // Этим нажатием пипетка взяла цвет — не выделять и не заливать
+  if (performance.now() - eyedropper.pickedAt < 600) return;
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (measureTool.active) { measureTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (rotateTool.active) { rotateTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (offsetTool.active) { offsetTool.click([e.point.x, e.point.y], e.originalEvent.shiftKey); return; }
   if (paintTool.active) {
-    // Образец уже взят на нажатии (Ctrl/Cmd/Alt) — этот клик его же
-    if (performance.now() - paintPickedAt > 600) paintTool.click([e.point.x, e.point.y], false);
+    paintTool.click([e.point.x, e.point.y], false);
     return;
   }
   if (splitTool.active) {
@@ -1900,26 +1904,32 @@ function startMeasure() {
 
 // Инструмент «Заливка» (B): Ctrl+клик — взять цвет и материал поверхности, клик — назначить
 const paintBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="paint"]')!;
+/** Цвет и материал поверхности (крыши или фасада): свои, иначе — с чем объект нарисован (унаследованные). */
+function readSurface(key: string, face: PaintFace): PaintSample {
+  const t = PAINT_TAGS[face];
+  const own = entity(key)?.tags ?? {};
+  const inh = (tag: string) => own[tag] ?? inheritSources(key).map((s) => inheritedValue(s.tags, tag)).find((v) => v !== undefined);
+  return { from: face, colour: inh(t.colour), material: inh(t.material) };
+}
 const paintTool = new PaintTool(overpassLayer,
   (key) => !!focus?.members.includes(key) && !hiddenInFocus(key),
-  (key, face) => {
-    const t = PAINT_TAGS[face];
-    const own = entity(key)?.tags ?? {};
-    // Своего нет — то, с чем объект нарисован (унаследованное от контура или отношения)
-    const inh = (tag: string) => own[tag] ?? inheritSources(key).map((s) => inheritedValue(s.tags, tag)).find((v) => v !== undefined);
-    return { from: face, colour: inh(t.colour), material: inh(t.material) };
-  },
+  readSurface,
   (key, face, sample) => {
     const t = PAINT_TAGS[face];
     if (!entity(key)) return;
-    session.setTags(key, { [t.colour]: sample.colour, [t.material]: sample.material });
-    const params = { key, colour: sample.colour ?? '—', material: sample.material ?? '—' };
+    // Образец с фото — только цвет: материал поверхности оставляем как есть
+    const photo = sample.from === 'photo';
+    recordColour(sample.colour);
+    session.setTags(key, photo ? { [t.colour]: sample.colour } : { [t.colour]: sample.colour, [t.material]: sample.material });
+    const material = photo ? entity(key)?.tags[t.material] : sample.material;
+    const params = { key, colour: sample.colour ?? '—', material: material ?? '—' };
     setStatus(face === 'roof'
       ? tr('Крыша {key}: цвет {colour}, материал {material}. Отменить — Ctrl+Z.', params)
       : tr('Фасад {key}: цвет {colour}, материал {material}. Отменить — Ctrl+Z.', params));
   },
   (hint, error) => {
     paintBtn.classList.toggle('active', paintTool.active);
+    syncEyedropper();
     syncCursor();
     toolHint(hint, error);
   });
@@ -2057,14 +2067,89 @@ function startOffset() {
   offsetTool.start();
 }
 
-// Образец — Ctrl/Cmd/Alt+клик. На macOS Ctrl+клик — это правый клик (click не приходит), поэтому берём на нажатии
-let paintPickedAt = 0;
-map.getContainer().addEventListener('pointerdown', (e) => {
-  if (!paintTool.active || e.button !== 0 || !(e.ctrlKey || e.metaKey || e.altKey)) return;
-  const rect = map.getCanvas().getBoundingClientRect();
-  paintTool.click([e.clientX - rect.left, e.clientY - rect.top], true);
-  paintPickedAt = performance.now();
-}, { capture: true });
+/**
+ * Универсальная пипетка (src/edit/eyedropper.ts): у заливки — образец (Ctrl/Cmd/Alt+клик; пока образца нет — любой
+ * клик), у цветового поля в свойствах — кнопкой рядом с ним. Здание на карте — его цвет, иначе — пиксели под курсором.
+ */
+const eyedropper = new Eyedropper(
+  {
+    el: map.getCanvasContainer(),
+    pixels: (x, y, R) => {
+      map.redraw(); // кадр рисуем сейчас — буфер WebGL читаем в той же задаче
+      const c = map.getCanvas();
+      const gl = (c.getContext('webgl2') ?? c.getContext('webgl')) as WebGL2RenderingContext | null;
+      return gl ? glPixels(gl, x, y, R, map.getPixelRatio()) : undefined;
+    },
+  },
+  { el: panoramaxViewer.photoEl, pixels: (x, y, R) => panoramaxViewer.pixelsAt(x, y, R) },
+  (x, y) => {
+    if (focus) {
+      const hit = overpassLayer.focusRayHits([x, y], (key) => !hiddenInFocus(key))[0];
+      return hit && { key: hit.key, face: hit.face === 'wall' ? 'wall' : 'roof' };
+    }
+    const key = overpassLayer.pick(new maplibregl.Point(x, y));
+    return key ? { key } : undefined;
+  },
+  () => syncCursor(),
+);
+/** Пипетка цветового поля в свойствах: тег, в который пишем взятый цвет. */
+let fieldPick: string | undefined;
+
+function syncEyedropper() {
+  if (fieldPick) return; // режим поля главнее — после него вернёмся сюда
+  eyedropper.set(paintTool.active ? {
+    modifier: !!paintTool.sample, // пока образца нет — берём любым кликом
+    building: (key, face) => paintTool.pickBuilding(key, face ?? 'wall'),
+    colour: (c) => paintTool.pickColour(c),
+  } : undefined);
+}
+
+/** Кнопка-пипетка у цветового поля: следующий клик — цвет в это поле. */
+function startFieldPick(tag: string) {
+  fieldPick = tag;
+  const swatch = () => infoEl.querySelector(`[data-picker-for="${CSS.escape(tag)}"]`);
+  swatch()?.classList.add('picking');
+  const end = () => { fieldPick = undefined; swatch()?.classList.remove('picking'); toolHint(''); syncEyedropper(); };
+  const put = (c: string) => { end(); putFieldColour(tag, c); };
+  // Поверхность — по тегу поля (крыша или фасад), иначе — куда кликнули
+  const face = (hit: PaintFace | undefined): PaintFace => (tag.startsWith('roof:') ? 'roof' : tag.startsWith('building:') ? 'wall' : hit ?? 'wall');
+  eyedropper.set({
+    modifier: false,
+    building: (key, hit) => {
+      const c = readSurface(key, face(hit)).colour;
+      if (c) put(c);
+      else { end(); setStatus(tr('У {key} цвет не задан.', { key })); }
+    },
+    colour: put,
+    cancel: end,
+  });
+  toolHint(pickFieldHint());
+}
+// Последние использованные цвета (окно выбора цвета): что записали в цветовое поле — текстом, палитрой, пипеткой
+void loadRecentColours();
+infoEl.addEventListener('change', (e) => {
+  const el = e.target as HTMLInputElement;
+  const v = el.dataset.type === 'colour' || el.dataset.pickerFor ? el.value.trim() : '';
+  if (v && CSS.supports('color', v)) recordColour(v);
+});
+
+/** Записать цвет в поле свойств (через текстовое поле — как ввод руками). */
+function putFieldColour(tag: string, c: string) {
+  const text = infoEl.querySelector<HTMLInputElement>(`.colour-field [data-tag="${CSS.escape(tag)}"]`);
+  if (!text) return;
+  text.value = c;
+  text.dispatchEvent(new Event('change', { bubbles: true }));
+}
+// Плашка цвета в свойствах: вместо системного окна — своё, с универсальной пипеткой (системную подменить нельзя);
+// системное — пунктом «Другой цвет…»
+infoEl.addEventListener('click', (e) => {
+  const picker = (e.target as HTMLElement).closest<HTMLInputElement>('input[type="color"][data-picker-for]');
+  if (!picker) return;
+  e.preventDefault();
+  const tag = picker.dataset.pickerFor!;
+  if (fieldPick === tag) { fieldPick = undefined; picker.classList.remove('picking'); toolHint(''); syncEyedropper(); return; }
+  openColourPopover(picker, picker, { pick: (c) => putFieldColour(tag, c), eyedropper: () => startFieldPick(tag) });
+});
 
 /** Курсор над картой — по включённому инструменту; у заливки — пипетка, пока нет образца или зажат Ctrl/Cmd/Alt. */
 let pickModifier = false;
@@ -2072,7 +2157,7 @@ function syncCursor() {
   const tool: ToolCursor | undefined = moveTool.active ? 'move' : rotateTool.active ? 'rotate' : pushTool.active ? 'push' : splitTool.active ? 'split'
     : drawTool.active ? drawTool.shape : measureTool.active ? 'measure' : offsetTool.active ? 'offset'
     : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : undefined;
-  setToolCursor(map.getCanvasContainer(), tool);
+  setToolCursor(map.getCanvasContainer(), fieldPick ? 'pick' : tool);
   renderHelp();
 }
 for (const type of ['keydown', 'keyup'] as const) {

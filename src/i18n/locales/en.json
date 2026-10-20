@@ -565,7 +565,6 @@
   "крыша: цвет {colour}, материал {material}": "roof: color {colour}, material {material}",
   "фасад: цвет {colour}, материал {material}": "facade: color {colour}, material {material}",
   "Заливка ({what}): клик по крыше или стене — назначить. Ctrl+клик — взять другой образец. Esc — выйти.": "Paint bucket ({what}): click a roof or wall to apply. Ctrl+click to pick another sample. Esc to exit.",
-  "Заливка: Ctrl+клик по поверхности — взять цвет и материал (крыша или фасад). Esc — выйти.": "Paint bucket: Ctrl+click a surface to pick its color and material (roof or facade). Esc to exit.",
   "Клик по крыше — тянем верх, по стене — стену; Shift+клик — задняя грань (дно или дальняя стена). Esc — выйти.": "Click a roof to pull the top, a wall to pull the wall; Shift+click for the back face (bottom or far wall). Esc to exit.",
   "в этажах": "in levels",
   "в метрах": "in meters",
@@ -983,5 +982,13 @@
   "по": "to",
   "Фильтр снимков: тип и даты съёмки": "Picture filter: type and capture dates",
   "Обычные": "Regular",
-  "Кликните по снимку на карте": "Click a picture on the map"
+  "Кликните по снимку на карте": "Click a picture on the map",
+  "Заливка: клик по зданию — взять цвет и материал (крыша или фасад), по спутниковой подложке или фото в окне панорамы — только цвет. Esc — выйти.": "Paint: click a building to pick colour and material (roof or facade), or satellite imagery or a photo in the panorama window to pick colour only. Esc to exit.",
+  "цвет с растра {colour}": "image colour {colour}",
+  "Пипетка: клик по зданию — его цвет, по спутниковой подложке или фото в окне панорамы — цвет пикселей. Esc — отмена.": "Eyedropper: click a building to take its colour, or satellite imagery or a photo in the panorama window to take the pixel colour. Esc to cancel.",
+  "У {key} цвет не задан.": "{key} has no colour set.",
+  "Пипетка": "Eyedropper",
+  "Взять цвет со здания, спутниковой подложки или фото панорамы": "Take colour from a building, satellite imagery or a panorama photo",
+  "Другой цвет…": "Other colour…",
+  "Здесь появятся последние использованные цвета": "Recently used colours will appear here"
 }

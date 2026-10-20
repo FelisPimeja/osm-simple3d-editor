@@ -46,6 +46,9 @@ function install() {
   document.head.appendChild(style);
 }
 
+/** Значение CSS cursor инструмента — для элементов вне карты (окно панорамы). */
+export const toolCursor = (tool: ToolCursor) => cursorUrl(ICONS[tool]);
+
 /** Курсор инструмента над картой (undefined — обычная стрелка). */
 export function setToolCursor(container: HTMLElement, tool: ToolCursor | undefined) {
   install();

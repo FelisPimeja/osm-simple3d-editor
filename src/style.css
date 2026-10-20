@@ -229,6 +229,20 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .inherit-badge { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: #9ca3af; pointer-events: none; }
 .inherit-badge svg { width: 14px; height: 14px; display: block; }
 .colour-field input[type="color"].inherited { opacity: .55; }
+.colour-field input[type="color"].picking { outline: 2px solid #2563eb; outline-offset: 1px; }
+/* Окно выбора цвета (src/edit/colour-popover.ts) */
+.colour-popover { position: fixed; z-index: 60; width: 168px; padding: 8px; display: grid; gap: 8px; background: #fff;
+  border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 12px; }
+.colour-popover button { font: inherit; cursor: pointer; }
+.colour-popover-eye { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: #111; }
+.colour-popover-eye:hover { background: #dbeafe; border-color: #93c5fd; }
+.colour-popover-eye svg { width: 16px; height: 16px; }
+.colour-popover-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+.colour-popover-grid button { aspect-ratio: 1; padding: 0; border: 1px solid rgba(0,0,0,.25); border-radius: 4px; }
+.colour-popover-grid button:hover { outline: 2px solid #2563eb; outline-offset: 1px; }
+.colour-popover-empty { color: #6b7280; font-size: 11px; }
+.colour-popover-more { padding: 4px; border: 0; background: none; color: #2563eb; text-align: left; }
+.colour-popover-more:hover { text-decoration: underline; }
 .inherit-field select { width: 100%; box-sizing: border-box; }
 .inherit-field select.inherited { color: #9ca3af; }
 .inherit-field select.inherited option { color: #222; }
@@ -601,6 +615,10 @@ body.mobile #issues-panel { display: none !important; }
 .panoramax-arrow:hover .face path { fill: #92b1f5; stroke: #92b1f5; }
 .panoramax-arrow:hover .side path { fill: #1e3a8a; stroke: #1e3a8a; }
 .panoramax-arrow[hidden] { display: none; }
+/* Лупа пипетки (src/edit/eyedropper.ts): увеличенные пиксели под курсором, кольцо — взятый цвет */
+.eyedropper-loupe { position: fixed; left: 0; top: 0; width: 120px; height: 120px; box-sizing: border-box; border-radius: 50%; border: 6px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.5), 0 4px 12px rgba(0,0,0,.5); pointer-events: none; z-index: 50; image-rendering: pixelated; }
+.eyedropper-loupe[hidden] { display: none; }
 /* Края и углы для изменения размера */
 .panoramax-rs { position: absolute; z-index: 1; touch-action: none; }
 .panoramax-rs-n, .panoramax-rs-s { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }

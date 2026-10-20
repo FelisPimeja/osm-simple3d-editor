@@ -1361,10 +1361,14 @@ function soloGroup(key: string): BuildingGroup | undefined {
 }
 
 /** Живые объекты с контуром вне отношений type=building, чья рамка задевает near (данные тайлов с правками сессии). */
-function looseFeatures(near: { w: number; s: number; e: number; n: number }): Feature3D[] {
+function looseFeatures(near: { w: number; s: number; e: number; n: number }, pool = loosePool()): Feature3D[] {
+  return pool.filter((f) => { const r = bboxOf(f); return r.w <= near.e && r.e >= near.w && r.s <= near.n && r.n >= near.s; });
+}
+
+/** Все объекты вне отношений (с правками сессии) — один раз на серию поисков looseFeatures. */
+function loosePool(): Feature3D[] {
   const all = [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)];
-  const hits = (f: Feature3D) => { const r = bboxOf(f); return r.w <= near.e && r.e >= near.w && r.s <= near.n && r.n >= near.s; };
-  return all.filter((f) => f.polygons?.length && hits(f) && !session.isDeleted(f.key) && !groupOf(f.key))
+  return all.filter((f) => f.polygons?.length && !session.isDeleted(f.key) && !groupOf(f.key))
     .map((f) => (session.has(f.key) ? (session.get(f.key) as Feature3D | undefined) ?? f : f))
     .filter((f) => f.polygons?.length);
 }
@@ -1385,20 +1389,20 @@ const insideFeature = (c: LonLat, f: Feature3D) => f.polygons.some((p) => pointI
  * Здание без отношения: контур (building=*) и части (building:part) вне отношений, чья точка на поверхности
  * лежит внутри контура. f — контур или одна из частей; частей нет — undefined.
  */
-function implicitBuilding(f: Feature3D): { outline: string; parts: string[] } | undefined {
+function implicitBuilding(f: Feature3D, pool?: Feature3D[]): { outline: string; parts: string[] } | undefined {
   if (groupOf(f.key)) return;
   const isOutline = (b: Feature3D) => !!b.tags.building && b.tags.building !== 'no' && !b.tags['building:part'];
   let outline: Feature3D | undefined = isOutline(f) ? f : undefined;
   if (!outline && f.tags['building:part']) {
     const c = pointOnSurface(f.polygons[0]);
-    const loose = looseFeatures({ w: c[0], e: c[0], s: c[1], n: c[1] });
+    const loose = looseFeatures({ w: c[0], e: c[0], s: c[1], n: c[1] }, pool);
     // Несколько контуров вокруг (вложенные здания) — ближайший, т. е. наименьший
     const area = (b: Feature3D) => { const r = bboxOf(b); return (r.e - r.w) * (r.n - r.s); };
     outline = loose.filter((b) => b.key !== f.key && isOutline(b) && insideFeature(c, b)).sort((a, b) => area(a) - area(b))[0];
   }
   if (!outline) return;
   const r = bboxOf(outline);
-  const parts = looseFeatures(r).filter((p) => {
+  const parts = looseFeatures(r, pool).filter((p) => {
     if (p.key === outline!.key || !p.tags['building:part'] || p.tags.building) return false;
     const c = pointOnSurface(p.polygons[0]);
     return c[0] >= r.w && c[0] <= r.e && c[1] >= r.s && c[1] <= r.n && insideFeature(c, outline!);
@@ -5629,7 +5633,7 @@ function visibleMapIssues(): Issue[] {
   const byKey = new Map(rendered.map((f) => [f.key, f]));
   issues.push(...duplicateIssues([...seen].map((k) => byKey.get(k)!), rendered));
   issues.push(...orphanPartIssues(singles));
-  issues.push(...implicitIssues(singles));
+  issues.push(...timed('проверка зданий без отношения', () => implicitIssues(singles), (r) => `${r.length}`));
   return issues;
 }
 
@@ -5637,9 +5641,12 @@ function visibleMapIssues(): Issue[] {
 function implicitIssues(scope: Feature3D[]): Issue[] {
   const seen = new Set<string>();
   const out: Issue[] = [];
+  let pool: Feature3D[] | undefined;
   for (const f of scope) {
     if (f.kind !== 'part' && !f.hasParts) continue;
-    const b = implicitBuilding(f);
+    if (seen.has(f.key)) continue;
+    const b = implicitBuilding(f, pool ??= loosePool());
+    b?.parts.forEach((k) => seen.add(k));
     if (!b || seen.has(b.outline)) continue;
     seen.add(b.outline);
     out.push({ key: b.outline, level: 'warning', code: 'implicit-building',

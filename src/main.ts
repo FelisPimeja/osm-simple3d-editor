@@ -2783,11 +2783,26 @@ function inLocalRing([x, y]: [number, number], ring: [number, number][]): boolea
  * добавляется в отношение здания с ролью part. Всё одним шагом истории. Возвращает текст ошибки или undefined.
  */
 function splitFeature(key: string, a: CutPoint, b: CutPoint, bends: [number, number][]): string | undefined {
-  // Здание без отношения: сначала отношение из контура и частей, режется уже часть отношения
-  if (isSolo(focus) && focus!.roles.includes('part')) createImplicitRelation();
+  // Здание без отношения: отношение из контура и частей создаётся тем же шагом, что и разрез
+  const pending = isSolo(focus) && focus!.roles.includes('part') ? implicitRelation(focus!.members[0], implicitParts(focus!)) : undefined;
+  const result = splitFeatureIn(key, a, b, bends, pending);
+  if (pending && !session.get(pending.key)) editGroups.delete(pending.key);
+  return result;
+}
+
+/** Состав отношения здания в шаге разреза: у ещё не созданного (здание без отношения) — создание с этим составом. */
+function groupMembersEdit(g: EditGroup, members: OsmMember[]): ObjectEdit {
+  if (session.get(g.key)) return { key: g.key, members };
+  const rel = members.filter((m) => m.type !== 'node');
+  // Тот же объект, что в editGroups: сессия и индекс групп видят один состав
+  Object.assign(g, { relMembers: members, members: rel.map((m) => `${m.type}/${m.ref}`), roles: rel.map((m) => m.role) });
+  return { key: g.key, create: g };
+}
+
+function splitFeatureIn(key: string, a: CutPoint, b: CutPoint, bends: [number, number][], pending: EditGroup | undefined): string | undefined {
   const f = entity(key) as Feature3D | undefined;
-  const solo = isSolo(focus);
-  const g = focus && !solo ? (entity(focus.key) as EditGroup | undefined) : undefined;
+  const solo = isSolo(focus) && !pending;
+  const g = pending ?? (focus && !solo ? (entity(focus.key) as EditGroup | undefined) : undefined);
   if (!f || (!g && !solo)) return tr('Объект не найден.');
   if (a.poly !== b.poly) return tr('Начало и конец разреза должны быть на одной грани.');
   const poly = f.polygons[a.poly];
@@ -2872,7 +2887,7 @@ function splitFeature(key: string, a: CutPoint, b: CutPoint, bends: [number, num
     { key, polygons: [keepPoly] },
     { key: created.key, create: created },
     ...[...neighbours].map(([k, polygons]) => ({ key: k, polygons })),
-    { key: g!.key, members },
+    groupMembersEdit(g!, members),
   ]);
   select(created.key);
   setStatus(neighbours.size
@@ -3009,7 +3024,7 @@ function splitMultipolygon(f: Feature3D, group: EditGroup | undefined, polyIndex
       ? [m, ...pieces.get(m.ref)!.map((ref) => ({ type: 'way' as const, ref, role: m.role }))] : [m]) });
   }
   const groupMembers = [...group!.relMembers, { type: 'relation' as const, ref: created.id, role: 'part' }];
-  put({ key: group!.key, members: groupMembers });
+  put(groupMembersEdit(group!, groupMembers));
   session.editMany([...edits.values()]);
   select(created.key);
   setStatus(tr('Рассечено: {key} и новая часть {part}.', { key: f.key, part: created.key }));

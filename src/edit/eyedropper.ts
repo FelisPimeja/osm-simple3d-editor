@@ -72,7 +72,8 @@ export class Eyedropper {
 
   constructor(
     private readonly map: RasterSource,
-    private readonly photo: RasterSource,
+    /** Фото в окнах просмотра (Panoramax, Mapillary). */
+    private readonly photos: RasterSource[],
     private readonly buildingAt: BuildingAt,
     /** Курсор над картой и фото сменился (пипетка или обычный). */
     private readonly onCursor: () => void,
@@ -81,7 +82,7 @@ export class Eyedropper {
     this.loupe.className = 'eyedropper-loupe';
     this.loupe.hidden = true;
     document.body.append(this.loupe);
-    for (const [src, isMap] of [[map, true], [photo, false]] as const) {
+    for (const [src, isMap] of [[map, true] as const, ...photos.map((p) => [p, false] as const)]) {
       src.el.addEventListener('pointermove', (e) => { this.track(src, isMap, e); this.sync(); });
       src.el.addEventListener('pointerleave', () => { if (this.pointer?.src === src) this.pointer = undefined; this.sync(); });
       // Берём на нажатии: на macOS Ctrl+клик — правый, click не придёт; перехватываем раньше карты и панорамы
@@ -118,7 +119,7 @@ export class Eyedropper {
 
   /** Курсор-пипетка над фото (над картой курсором ведает main.ts — у неё свои курсоры инструментов). */
   private syncPhotoCursor() {
-    this.photo.el.style.cursor = this.picking ? toolCursor('pick') : '';
+    for (const p of this.photos) p.el.style.cursor = this.picking ? toolCursor('pick') : '';
   }
 
   private armed(e: MouseEvent) {

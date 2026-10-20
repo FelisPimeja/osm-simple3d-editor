@@ -274,7 +274,10 @@ export function storeBuildings(v: BuildingsView) {
 }
 
 // Шестерёнка: 8 одинаковых зубьев и кольцо — всё с центром (8, 8), симметрично
-const GEAR_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M6.20 3.12 6.63 1.13 9.37 1.13 9.80 3.12 10.18 3.28 11.89 2.18 13.82 4.11 12.72 5.82 12.88 6.20 14.87 6.63 14.87 9.37 12.88 9.80 12.72 10.18 13.82 11.89 11.89 13.82 10.18 12.72 9.80 12.88 9.37 14.87 6.63 14.87 6.20 12.88 5.82 12.72 4.11 13.82 2.18 11.89 3.28 10.18 3.12 9.80 1.13 9.37 1.13 6.63 3.12 6.20 3.28 5.82 2.18 4.11 4.11 2.18 5.82 3.28z"/><circle cx="8" cy="8" r="2.2"/></svg>';
+/** Стрелка раскрытия секции настроек слоя (вниз; раскрыта — повёрнута вверх). */
+const FOLD_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.2 8 10.2 12 6.2"/></svg>';
+/** Значок инструмента смещения снимка: стрелки во все стороны. */
+const MOVE_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5v13M1.5 8h13M6 3.5 8 1.5l2 2M6 12.5l2 2 2-2M3.5 6 1.5 8l2 2M12.5 6l2 2-2 2"/></svg>';
 
 export class BasemapButton {
   private readonly btn: HTMLButtonElement;
@@ -284,6 +287,9 @@ export class BasemapButton {
   private readonly buildingsGear: HTMLButtonElement;
   private readonly alphaInput: HTMLInputElement;
   private readonly offsetBtns = new Map<string, HTMLButtonElement>();
+  /** Секции настроек снимков (видна у выбранного, если раскрыта) и их поля. */
+  private readonly imagerySections = new Map<string, { el: HTMLElement; sync: () => void }>();
+  private imageryOpen = false;
   private readonly labels = new Map<string, HTMLSpanElement>();
 
   constructor(group: HTMLElement, private current: string, private readonly onSelect: (id: string) => void,
@@ -291,7 +297,9 @@ export class BasemapButton {
     /** Снимки в меню (у OSM — разрешённые для обводки, у OHM — Esri Wayback); пусто — только слой зданий. */
     list: Imagery[],
     /** GPS-треки и пояснение — только у OSM. */
-    osm: boolean, private buildings: BuildingsView, onBuildings: (v: BuildingsView) => void) {
+    osm: boolean, private buildings: BuildingsView, onBuildings: (v: BuildingsView) => void,
+    /** Сдвиг или прозрачность снимка изменили полями меню: edit — записать (после закрытия инструмента сдвига), потом показать. */
+    onImageryEdit: (id: string, edit: () => void) => void = (_, edit) => edit()) {
     group.classList.add('basemap-group');
     const btn = this.btn = document.createElement('button');
     btn.type = 'button';
@@ -316,24 +324,21 @@ export class BasemapButton {
       text.textContent = ` ${label}`;
       this.labels.set(id, text);
       row.append(input, text);
+      let section: HTMLElement | undefined;
       if (id !== MAP_BASEMAP) {
-        // Настройки снимка (видна у выбранного)
-        const off = document.createElement('button');
-        off.type = 'button';
-        off.className = 'basemap-offset-btn';
-        off.title = tr('Настройки подложки: смещение и прозрачность');
-        // Шестерёнка
-        off.innerHTML = GEAR_SVG;
-        off.addEventListener('click', (e) => {
-          e.preventDefault(); // не выбирать радиокнопку строки дважды
-          e.stopPropagation();
-          this.toggleMenu(false);
-          onOffset(id);
+        // Настройки снимка — раскрывающаяся секция под строкой (стрелка видна у выбранного)
+        const sec = this.imagerySection(id, onOffset, onImageryEdit);
+        section = sec.el;
+        this.imagerySections.set(id, sec);
+        const fold = this.foldBtn(tr('Настройки подложки: смещение и прозрачность'), () => {
+          this.imageryOpen = !this.imageryOpen;
+          this.sync();
         });
-        this.offsetBtns.set(id, off);
-        row.append(off);
+        this.offsetBtns.set(id, fold);
+        row.append(fold);
       }
       menu.append(row);
+      if (section) menu.append(section);
     }
     // 3D-здания: показать или скрыть; шестерёнка — прозрачность (видна подложка сквозь здания)
     const bRow = document.createElement('label');
@@ -342,11 +347,6 @@ export class BasemapButton {
     bInput.type = 'checkbox';
     bInput.checked = buildings.shown;
     bInput.addEventListener('change', () => { this.buildings = { ...this.buildings, shown: bInput.checked }; this.sync(); onBuildings(this.buildings); });
-    const gear = this.buildingsGear = document.createElement('button');
-    gear.type = 'button';
-    gear.className = 'basemap-offset-btn';
-    gear.title = tr('Настройки слоя зданий: прозрачность');
-    gear.innerHTML = GEAR_SVG;
     const alphaRow = document.createElement('label');
     alphaRow.className = 'basemap-alpha';
     alphaRow.hidden = true;
@@ -368,10 +368,9 @@ export class BasemapButton {
       this.sync();
       onBuildings(this.buildings);
     });
-    gear.addEventListener('click', (e) => {
-      e.preventDefault(); // не переключать галку строки
-      e.stopPropagation();
+    const gear = this.buildingsGear = this.foldBtn(tr('Настройки слоя зданий: прозрачность'), () => {
       alphaRow.hidden = !alphaRow.hidden;
+      gear.classList.toggle('open', !alphaRow.hidden);
     });
     alphaRow.append(tr('Прозрачность'), alpha, alphaValue);
     bRow.append(bInput, ` ${tr('3D-здания')}`, gear);
@@ -409,6 +408,126 @@ export class BasemapButton {
   private overlaysAt?: HTMLElement;
   private readonly overlays = new Map<string, { input: HTMLInputElement; on: boolean; gear?: HTMLButtonElement; filtered?: () => boolean }>();
 
+  /** Шестерёнки групп слоёв: синяя — настройки изменены. */
+  private readonly groupGears: { gear: HTMLButtonElement; filtered: () => boolean }[] = [];
+
+  /** Стрелка раскрытия секции настроек (в строке слоя). */
+  private foldBtn(title: string, toggle: () => void) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'basemap-offset-btn basemap-fold';
+    b.title = title;
+    b.innerHTML = FOLD_SVG;
+    b.addEventListener('click', (e) => {
+      e.preventDefault(); // не переключать галку или радиокнопку строки
+      e.stopPropagation();
+      toggle();
+    });
+    return b;
+  }
+
+  /** Стрелка раскрытия секции settings.el под строкой. */
+  private gear(settings: { el: HTMLElement; title: string }) {
+    settings.el.hidden = true;
+    const b: HTMLButtonElement = this.foldBtn(settings.title, () => {
+      settings.el.hidden = !settings.el.hidden;
+      b.classList.toggle('open', !settings.el.hidden);
+    });
+    return b;
+  }
+
+  /**
+   * Секция настроек снимка: прозрачность, сдвиг полями (м) и кнопки — инструмент сдвига мышью (по карте) и сброс.
+   */
+  private imagerySection(id: string, onOffset: (id: string) => void, onEdit: (id: string, edit: () => void) => void) {
+    const el = document.createElement('div');
+    el.className = 'basemap-imagery';
+    el.hidden = true;
+    el.addEventListener('click', (e) => e.stopPropagation());
+    const alphaRow = document.createElement('label');
+    alphaRow.className = 'basemap-alpha';
+    const alpha = document.createElement('input');
+    alpha.type = 'range';
+    alpha.min = '0';
+    alpha.max = '100';
+    alpha.step = '5';
+    const alphaValue = document.createElement('span');
+    alpha.addEventListener('input', () => onEdit(id, () => storeOpacity(id, 1 - Number(alpha.value) / 100)));
+    alphaRow.append(tr('Прозрачность'), alpha, alphaValue);
+    const field = (label: string, title: string) => {
+      const row = document.createElement('label');
+      row.className = 'basemap-shift';
+      row.title = title;
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = '0.1';
+      row.append(label, input, tr('м'));
+      return { row, input };
+    };
+    const lat = field(tr('По широте'), tr('Сдвиг на север (минус — на юг), м'));
+    const lon = field(tr('По долготе'), tr('Сдвиг на восток (минус — на запад), м'));
+    const fromInputs = () => onEdit(id, () => storeOffset(id, { east: Number(lon.input.value) || 0, north: Number(lat.input.value) || 0 }));
+    lat.input.addEventListener('change', fromInputs);
+    lon.input.addEventListener('change', fromInputs);
+    const buttons = document.createElement('div');
+    buttons.className = 'basemap-shift-buttons';
+    const tool = document.createElement('button');
+    tool.type = 'button';
+    tool.className = 'basemap-shift-tool';
+    tool.innerHTML = `${MOVE_SVG}<span>${tr('Сдвинуть мышью')}</span>`;
+    tool.title = tr('Инструмент сдвига: щёлкните точку на снимке и ведите её к тому месту, где она должна быть (по GPS-трекам)');
+    tool.addEventListener('click', () => { this.toggleMenu(false); onOffset(id); });
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'basemap-shift-reset';
+    reset.textContent = tr('Сбросить');
+    reset.title = tr('Убрать смещение и прозрачность');
+    reset.addEventListener('click', () => onEdit(id, () => { storeOffset(id, { east: 0, north: 0 }); storeOpacity(id, 1); }));
+    buttons.append(tool, reset);
+    el.append(alphaRow, lat.row, lon.row, buttons);
+    const sync = () => {
+      const t = Math.round((1 - getOpacity(id)) * 100);
+      alpha.value = String(t);
+      alphaValue.textContent = `${t} %`;
+      const o = getOffset(id);
+      // Поле, которое сейчас правят, не трогаем
+      if (document.activeElement !== lat.input) lat.input.value = o.north.toFixed(1);
+      if (document.activeElement !== lon.input) lon.input.value = o.east.toFixed(1);
+      reset.disabled = !isTuned(id);
+    };
+    return { el, sync };
+  }
+
+  /**
+   * Группа дополнительных слоёв с общими настройками: заголовок с шестерёнкой, под ним настройки и галки слоёв.
+   */
+  addOverlayGroup(label: string, title: string, settings: { el: HTMLElement; title: string; filtered: () => boolean },
+    items: { id: string; label: string; title: string; on: boolean; onChange: (on: boolean) => void }[]) {
+    const head = document.createElement('div');
+    head.className = 'basemap-overlay basemap-overlay-head';
+    head.title = title;
+    const gear = this.gear(settings);
+    this.groupGears.push({ gear, filtered: settings.filtered });
+    head.append(label, gear);
+    const els: HTMLElement[] = [head, settings.el];
+    for (const it of items) {
+      const row = document.createElement('label');
+      row.className = 'basemap-overlay-sub';
+      row.title = it.title;
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = it.on;
+      const o = { input, on: it.on };
+      this.overlays.set(it.id, o);
+      input.addEventListener('change', () => { o.on = input.checked; this.sync(); it.onChange(input.checked); });
+      row.append(input, ` ${it.label}`);
+      els.push(row);
+    }
+    if (this.overlaysAt) this.overlaysAt.after(...els); else this.menu.append(...els);
+    this.overlaysAt = els[els.length - 1];
+    this.sync();
+  }
+
   /**
    * Дополнительный слой поверх карты (галка в меню, после GPS-треков). settings — настройки слоя под строкой,
    * открываются шестерёнкой; filtered() — шестерёнка синяя (настройки изменены).
@@ -426,24 +545,20 @@ export class BasemapButton {
     row.append(input, ` ${label}`);
     let last: HTMLElement = row;
     if (settings) {
-      const gear = o.gear = document.createElement('button');
-      gear.type = 'button';
-      gear.className = 'basemap-offset-btn';
-      gear.title = settings.title;
-      gear.innerHTML = GEAR_SVG;
-      settings.el.hidden = true;
-      gear.addEventListener('click', (e) => {
-        e.preventDefault(); // не переключать галку строки
-        e.stopPropagation();
-        settings.el.hidden = !settings.el.hidden;
-      });
-      row.append(gear);
+      row.append(o.gear = this.gear(settings));
       last = settings.el;
     }
     if (this.overlaysAt) this.overlaysAt.after(row); else this.menu.append(row);
     if (settings) row.after(settings.el);
     this.overlaysAt = last;
     this.sync();
+  }
+
+  /** Открыть меню с раскрытыми настройками выбранного снимка (после инструмента сдвига). */
+  openImagery() {
+    this.imageryOpen = true;
+    this.sync();
+    this.toggleMenu(true);
   }
 
   private toggleMenu(open = this.menu.hidden) {
@@ -499,11 +614,17 @@ export class BasemapButton {
     this.alphaInput.disabled = this.buildings.wireframe;
     this.buildingsGear.classList.toggle('active', this.buildings.opacity < 1);
     for (const o of this.overlays.values()) o.gear?.classList.toggle('active', !!o.filtered?.());
+    for (const g of this.groupGears) g.gear.classList.toggle('active', g.filtered());
     for (const input of this.menu.querySelectorAll<HTMLInputElement>('input[type=radio]')) input.checked = input.value === this.current;
-    // Шестерёнка — только у выбранного снимка; синяя, если сдвиг или прозрачность изменены
+    // Стрелка — только у выбранного снимка; синяя, если сдвиг или прозрачность изменены
     for (const [id, b] of this.offsetBtns) {
       b.hidden = id !== this.current;
       b.classList.toggle('active', isTuned(id));
+      b.classList.toggle('open', this.imageryOpen);
+    }
+    for (const [id, sec] of this.imagerySections) {
+      sec.el.hidden = !this.imageryOpen || id !== this.current;
+      if (!sec.el.hidden) sec.sync();
     }
   }
 }

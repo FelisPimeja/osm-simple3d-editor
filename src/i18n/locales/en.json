@@ -742,7 +742,6 @@
   "GPS-треки OSM": "OSM GPS traces",
   "Настройки подложки: смещение и прозрачность": "Basemap settings: offset and transparency",
   "Прозрачность": "Transparency",
-  "Смещение": "Offset",
   "Убрать смещение и прозрачность": "Remove offset and transparency",
   "Подложка: {name}": "Basemap: {name}",
   "Отменить": "Cancel",
@@ -968,7 +967,6 @@
   "Существует до": "Exists until",
   "ГГГГ-ММ-ДД": "YYYY-MM-DD",
   "Esri Wayback: архив снимков с 2014 г. Выпуск — последний до даты слайдера времени (дата выпуска, а не съёмки).": "Esri Wayback: imagery archive since 2014. Shows the latest release before the time slider date (release date, not capture date).",
-  "Фото и панорамы Panoramax": "Panoramax photos and panoramas",
   "Открытые уличные фото и панорамы 360°, разрешённые для OSM. Клик по стрелке — открыть снимок": "Open street-level photos and 360° panoramas permitted for OSM. Click an arrow to open the picture",
   "Предыдущий снимок": "Previous picture",
   "Следующий снимок": "Next picture",
@@ -990,5 +988,13 @@
   "Пипетка": "Eyedropper",
   "Взять цвет со здания, спутниковой подложки или фото панорамы": "Take colour from a building, satellite imagery or a panorama photo",
   "Другой цвет…": "Other colour…",
-  "Здесь появятся последние использованные цвета": "Recently used colours will appear here"
+  "Здесь появятся последние использованные цвета": "Recently used colours will appear here",
+  "Уличные фото и панорамы 360° Mapillary, разрешённые для OSM. Клик по стрелке — открыть снимок": "Mapillary street photos and 360° panoramas, allowed for OSM. Click an arrow to open a photo",
+  "Открыть на Mapillary": "Open on Mapillary",
+  "Уличные фото": "Street photos",
+  "Фото и панорамы": "Photos and panoramas",
+  "Уличные фото и панорамы 360°, разрешённые для OSM": "Street photos and 360° panoramas allowed for OSM",
+  "Сдвинуть мышью": "Shift with mouse",
+  "Инструмент сдвига: щёлкните точку на снимке и ведите её к тому месту, где она должна быть (по GPS-трекам)": "Shift tool: click a point on the imagery and drag it to where it should be (by GPS traces)",
+  "Убрать смещение": "Remove offset"
 }

@@ -20,9 +20,11 @@ import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
-import { applyBasemap, applyGpsTraces, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK } from './view/basemaps';
+import { applyBasemap, applyGpsTraces, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
-import { applyPanoramax, isPanoramaxFiltered, isPanoramaxLayer, PanoramaxViewer, panoramaxSettings, pickPanoramax, setPanoramaxFilter, storedPanoramax, storedPanoramaxFilter, storePanoramax, storePanoramaxFilter } from './view/panoramax';
+import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
+import { panoramax } from './view/panoramax';
+import { mapillary } from './view/mapillary';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
@@ -241,40 +243,59 @@ const basemapCtrl = navGroup ? new BasemapButton(navGroup, basemap, (id) => {
   // Настройки снимка: показать его (если выбран другой) и открыть панель
   if ((focusScene() ? focusBasemap : basemap) !== id) pickBasemap(id);
   offsetPanel.show(id);
-}, imageryList, !!server().imagery, { ...buildingsView }, (v) => setBuildingsView(v)) : undefined;
+}, imageryList, !!server().imagery, { ...buildingsView }, (v) => setBuildingsView(v), (id, edit) => {
+  // Поля сдвига и прозрачности в меню: инструмент сдвига закрыть (иначе он перезапишет своё), записать и показать
+  offsetPanel.hide();
+  edit();
+  refreshImagery(map, id);
+  setImageryOpacity(map, getOpacity(id));
+  basemapCtrl?.sync();
+}) : undefined;
 
-// Уличные фото Panoramax (только OSM): слой точек снимков и окно просмотра по клику
-let panoramax = server().imagery ? storedPanoramax() : false;
-// Окно просмотра открыто, пока включён слой: закрыли окно — слой выключается, включили слой — окно открывается
-const panoramaxViewer = new PanoramaxViewer(map, () => setPanoramax(false));
-let panoramaxFilter = storedPanoramaxFilter();
-basemapCtrl?.addOverlay('panoramax', tr('Фото и панорамы Panoramax'),
-  tr('Открытые уличные фото и панорамы 360°, разрешённые для OSM. Клик по стрелке — открыть снимок'), panoramax,
-  (on) => setPanoramax(on), {
-    title: tr('Фильтр снимков: тип и даты съёмки'),
-    filtered: () => isPanoramaxFiltered(panoramaxFilter),
-    el: panoramaxSettings(panoramaxFilter, (f) => {
-      panoramaxFilter = f;
-      storePanoramaxFilter(f);
-      basemapCtrl?.sync();
-      if (mapLoaded) setPanoramaxFilter(map, f);
-    }),
-  });
-function setPanoramax(on: boolean) {
-  panoramax = on;
-  storePanoramax(on);
-  basemapCtrl?.setOverlay('panoramax', on);
-  if (on) panoramaxViewer.show(); else panoramaxViewer.close();
-  syncPanoramax();
+// Уличные фото Panoramax и Mapillary (только OSM): слои точек снимков — группой с общим фильтром — и одно окно
+// просмотра. Окно открыто, пока включён хоть один слой: закрыли окно — слои выключаются, включили слой — окно открывается
+const PHOTOS_KEY = { id: 'photos' };
+let photoFilter = storedFilter(PHOTOS_KEY) ?? storedFilter(panoramax) ?? { type: 'all', from: '', to: '' };
+const photoViewer = new PhotoViewer(map, () => { for (const p of photoLayers) if (p.on) setPhotos(p, false); });
+const photoLayers = [
+  { service: panoramax, label: 'Panoramax',
+    title: tr('Открытые уличные фото и панорамы 360°, разрешённые для OSM. Клик по стрелке — открыть снимок') },
+  ...(mapillary ? [{ service: mapillary, label: 'Mapillary',
+    title: tr('Уличные фото и панорамы 360° Mapillary, разрешённые для OSM. Клик по стрелке — открыть снимок') }] : []),
+].map(({ service, label, title }) => ({
+  service, label, title, layer: new PhotoLayer(map, service), on: server().imagery ? storedOn(service) : false,
+}));
+type PhotoLayerState = typeof photoLayers[number];
+basemapCtrl?.addOverlayGroup(tr('Фото и панорамы'), tr('Уличные фото и панорамы 360°, разрешённые для OSM'), {
+  title: tr('Фильтр снимков: тип и даты съёмки'),
+  filtered: () => isPhotoFiltered(photoFilter),
+  el: photoFilterSettings(photoFilter, (f) => {
+    photoFilter = f;
+    storeFilter(PHOTOS_KEY, f);
+    basemapCtrl?.sync();
+    if (mapLoaded) for (const p of photoLayers) p.layer.setFilter(f);
+  }),
+}, photoLayers.map((p) => ({ id: p.service.id, label: p.label, title: p.title, on: p.on, onChange: (on: boolean) => setPhotos(p, on) })));
+const photoShown = (layer: PhotoLayer) => photoLayers.some((p) => p.layer === layer && p.on);
+if (photoLayers.some((p) => p.on)) photoViewer.show(photoShown);
+function setPhotos(p: PhotoLayerState, on: boolean) {
+  p.on = on;
+  storeOn(p.service, on);
+  basemapCtrl?.setOverlay(p.service.id, on);
+  if (!on) photoViewer.drop(p.layer);
+  if (photoLayers.some((x) => x.on)) photoViewer.show(photoShown); else photoViewer.close();
+  syncPhotos();
 }
-if (panoramax) panoramaxViewer.show();
 
-/** Слой Panoramax; в режиме здания — обрезан областью вокруг здания, как снимки подложки. */
-function syncPanoramax() {
+/** Слои уличных фото; в режиме здания — обрезаны областью вокруг здания, как снимки подложки. */
+function syncPhotos() {
   if (!mapLoaded || !server().imagery) return;
   const bounds = focusScene() ? focusImageryBounds() : undefined;
-  applyPanoramax(map, panoramax, panoramaxFilter, map.getLayer(UNDERGROUND_LAYER) ? UNDERGROUND_LAYER : undefined, bounds);
-  panoramaxViewer.syncCone();
+  // Под зданиями: под объёмами стиля (первый fill-extrusion) или под слоями дорог и зданий редактора
+  const under = map.getStyle().layers.find((l) => l.type === 'fill-extrusion' && !photoLayers.some((p) => p.layer.isLayer(l.id)))?.id
+    ?? (map.getLayer(roadsLayer.id) ? roadsLayer.id : undefined);
+  for (const p of photoLayers) p.layer.apply(p.on, photoFilter, map.getLayer(UNDERGROUND_LAYER) ? UNDERGROUND_LAYER : undefined, bounds, under);
+  photoViewer.syncCone();
 }
 
 function setBuildingsView(v: typeof buildingsView) {
@@ -364,7 +385,7 @@ function syncBasemapLayers() {
   const bounds = f ? focusImageryBounds() : undefined;
   applyGpsTraces(map, gps && (!f || !!bounds), bounds);
   applyBasemap(map, f && !bounds ? MAP_BASEMAP : id, bounds);
-  syncPanoramax();
+  syncPhotos();
   if (!f) applyVectorStyle(id !== MAP_BASEMAP);
 }
 
@@ -387,6 +408,8 @@ const offsetPanel = new ImageryOffsetPanel(map, {
     else if (!open && snapsBtn.parentElement === mapToolbar) focusToolbar.querySelector('[data-help]')!.before(snapsBtn);
   },
   snap: (pt) => snapGround(pt),
+  // После клика: иначе этот же клик закрыл бы меню как «мимо него»
+  onConfirm: () => setTimeout(() => basemapCtrl?.openImagery()),
 });
 
 /**
@@ -1026,9 +1049,11 @@ map.on('click', (e) => {
     updateSnap(p);
     return;
   }
-  // Снимок Panoramax под курсором — открыть вместо выбора здания
-  const picId = pickPanoramax(map, e.point);
-  if (picId) { void panoramaxViewer.open(picId); return; }
+  // Снимок уличных фото под курсором — открыть вместо выбора здания
+  for (const p of photoLayers) {
+    const picId = p.layer.pick(e.point);
+    if (picId) { void photoViewer.open(p.layer, picId); return; }
+  }
   if (moveTool.state === 'select') {
     const doorKey = overpassLayer.pickDoor([e.point.x, e.point.y]);
     const door = shownIndoor.find(f => f.key === doorKey && isDoor(f));
@@ -1358,7 +1383,7 @@ function hideMapLayers() {
   setFocusBackground(true);
   for (const l of map.getStyle().layers) {
     // Снимки и треки в режиме здания — свои (syncBasemapLayers), отметка сдвига — у панели настроек
-    if (l.id === overpassLayer.id || l.type === 'background' || l.id === IMAGERY_LAYER || l.id === GPS_LAYER || l.id.startsWith('imagery-offset') || isPanoramaxLayer(l.id)) continue;
+    if (l.id === overpassLayer.id || l.type === 'background' || l.id === IMAGERY_LAYER || l.id === GPS_LAYER || l.id.startsWith('imagery-offset') || photoLayers.some((p) => p.layer.isLayer(l.id))) continue;
     const pending = pendingTileLayers.find((p) => p.id === l.id);
     focusHiddenLayers.push(pending ?? { id: l.id, visibility: (map.getLayoutProperty(l.id, 'visibility') as string | undefined) ?? 'visible' });
     map.setLayoutProperty(l.id, 'visibility', 'none');
@@ -2081,7 +2106,7 @@ const eyedropper = new Eyedropper(
       return gl ? glPixels(gl, x, y, R, map.getPixelRatio()) : undefined;
     },
   },
-  { el: panoramaxViewer.photoEl, pixels: (x, y, R) => panoramaxViewer.pixelsAt(x, y, R) },
+  [{ el: photoViewer.photoEl, pixels: (x, y, R) => photoViewer.pixelsAt(x, y, R) }],
   (x, y) => {
     if (focus) {
       const hit = overpassLayer.focusRayHits([x, y], (key) => !hiddenInFocus(key))[0];

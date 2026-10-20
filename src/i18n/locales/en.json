@@ -980,7 +980,6 @@
   "по": "to",
   "Фильтр снимков: тип и даты съёмки": "Picture filter: type and capture dates",
   "Обычные": "Regular",
-  "Кликните по снимку на карте": "Click a picture on the map",
   "Заливка: клик по зданию — взять цвет и материал (крыша или фасад), по спутниковой подложке или фото в окне панорамы — только цвет. Esc — выйти.": "Paint: click a building to pick colour and material (roof or facade), or satellite imagery or a photo in the panorama window to pick colour only. Esc to exit.",
   "цвет с растра {colour}": "image colour {colour}",
   "Пипетка: клик по зданию — его цвет, по спутниковой подложке или фото в окне панорамы — цвет пикселей. Esc — отмена.": "Eyedropper: click a building to take its colour, or satellite imagery or a photo in the panorama window to take the pixel colour. Esc to cancel.",
@@ -996,5 +995,5 @@
   "Уличные фото и панорамы 360°, разрешённые для OSM": "Street photos and 360° panoramas allowed for OSM",
   "Сдвинуть мышью": "Shift with mouse",
   "Инструмент сдвига: щёлкните точку на снимке и ведите её к тому месту, где она должна быть (по GPS-трекам)": "Shift tool: click a point on the imagery and drag it to where it should be (by GPS traces)",
-  "Убрать смещение": "Remove offset"
+  "Вернуть сдвиг, бывший до открытия (Esc)": "Restore the offset from before opening (Esc)"
 }

@@ -146,18 +146,20 @@ function parseDiffResult(xml: string): Pick<UploadResult, 'versions' | 'newKeys'
  * данные для показа (кеш тайлов) и могут отставать. Если те же теги успел изменить
  * кто-то ещё — ConflictError, ничего не отправляется.
  */
-export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (s: string) => void = () => {}, to?: string): Promise<UploadResult> {
+export async function uploadEdits(edits: TagEdit[], comment: string, onStatus: (s: string) => void = () => {}, to?: string,
+  /** Доп. теги changeset (источники: imagery_used, source). */
+  extraTags: Record<string, string> = {}): Promise<UploadResult> {
   target = to;
   onApiWait((seconds) => onStatus(tr('Лимит скачивания OSM API исчерпан — ждём {seconds} с и повторяем…', { seconds })));
   try {
-    return await uploadInner(edits, comment, onStatus);
+    return await uploadInner(edits, comment, onStatus, extraTags);
   } finally {
     onApiWait(undefined);
     target = undefined;
   }
 }
 
-async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: string) => void): Promise<UploadResult> {
+async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: string) => void, extraTags: Record<string, string>): Promise<UploadResult> {
   onStatus(tr('Получаем текущие версии объектов…'));
   const fresh = await fetchElements(edits.filter((e) => !e.created).map((e) => e.key), api());
   const conflicts: { key: string; tags: string[] }[] = [];
@@ -252,6 +254,7 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
     comment,
     created_by: GENERATOR,
     hashtags: '#simple3d',
+    ...extraTags,
   })}</changeset></osm>`;
   const changeset = Number(await call('PUT', '/changeset/create', changesetXml));
   try {

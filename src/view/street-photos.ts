@@ -457,14 +457,12 @@ export class PhotoViewer {
   private userPlaced = false;
   /** Холст с пикселями обычного фото (для пипетки) — по blob: URL. */
   private flatPixels?: { url: string; ctx: CanvasRenderingContext2D };
-  /** Последний открытый снимок и его слой — покажем, когда слой снова включат. */
-  private last?: { layer: PhotoLayer; id: string };
   /** Слой показанного снимка (его сервис и конус на карте). */
   private layer?: PhotoLayer;
   private readonly title: HTMLHeadingElement;
 
-  /** onClose — окно закрыли кнопкой × (слой выключается вместе с окном). */
-  constructor(private readonly map: MlMap, private readonly onClose: () => void) {
+  /** onOpen — снимок показан (сервис — в источники правок). */
+  constructor(private readonly map: MlMap, private readonly onOpen: (service: PhotoService) => void = () => {}) {
     const el = this.el = document.createElement('div');
     el.className = 'panoramax-viewer';
     el.hidden = true;
@@ -478,7 +476,7 @@ export class PhotoViewer {
     close.className = 'panoramax-close';
     close.textContent = '×';
     close.title = tr('Закрыть');
-    close.addEventListener('click', () => { this.close(); this.onClose(); });
+    close.addEventListener('click', () => this.close());
     head.append(title, close);
     this.stage = document.createElement('div');
     this.stage.className = 'panoramax-stage';
@@ -526,6 +524,9 @@ export class PhotoViewer {
   }
 
   get shown() { return !this.el.hidden; }
+
+  /** Сервис снимка, показанного сейчас (окно открыто). */
+  get service(): PhotoService | undefined { return !this.el.hidden && this.pic ? this.layer?.service : undefined; }
 
   /** Область фото — источник растра для пипетки (src/edit/eyedropper.ts). */
   get photoEl(): HTMLElement { return this.stage; }
@@ -639,10 +640,10 @@ export class PhotoViewer {
     try { pic = await layer.service.fetchPicture(id); } catch { if (load === this.loadId) this.info.textContent = tr('Не удалось загрузить снимок'); return; }
     if (load !== this.loadId) return;
     this.pic = pic;
-    this.last = { layer, id: pic.id };
     // Смотрим туда же, куда смотрели (по следующим снимкам), иначе — по направлению съёмки
     if (!this.sphere?.visible) this.yaw = pic.azimuth;
     this.renderInfo(pic);
+    this.onOpen(layer.service);
     let url: string;
     try { url = await loadImage(pic.image); } catch { if (load === this.loadId) this.info.textContent = tr('Не удалось загрузить снимок'); return; }
     if (load !== this.loadId) { URL.revokeObjectURL(url); return; }
@@ -654,34 +655,11 @@ export class PhotoViewer {
     this.syncCone();
   }
 
-  /**
-   * Показать окно (слой включили): последний снимок, если его слой включён (shown), иначе — подсказка.
-   */
-  show(shown: (layer: PhotoLayer) => boolean) {
-    if (!this.el.hidden && (this.layer || !this.last || !shown(this.last.layer))) return;
-    if (this.last && shown(this.last.layer)) { void this.open(this.last.layer, this.last.id); return; }
-    this.pic = undefined;
-    this.title.textContent = tr('Уличные фото');
-    this.el.hidden = false;
-    this.place();
-    this.renderer?.domElement.remove();
-    this.img.remove();
-    this.updateArrows();
-    this.info.textContent = tr('Кликните по снимку на карте');
-  }
-
-  /** Слой выключили: его снимок убрать из окна (окно остаётся, если включён другой слой). */
+  /** Слой выключили: если в окне его снимок — окно закрыть. */
   drop(layer: PhotoLayer) {
     if (this.layer !== layer) return;
-    this.loadId++;
-    this.pic = undefined;
-    this.syncCone();
+    this.close();
     this.layer = undefined;
-    this.title.textContent = tr('Уличные фото');
-    this.renderer?.domElement.remove();
-    this.img.remove();
-    this.updateArrows();
-    this.info.textContent = tr('Кликните по снимку на карте');
   }
 
   close() {

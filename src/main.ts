@@ -20,7 +20,7 @@ import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
-import { applyBasemap, applyGpsTraces, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
+import { applyBasemap, applyGpsTraces, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
@@ -253,10 +253,10 @@ const basemapCtrl = navGroup ? new BasemapButton(navGroup, basemap, (id) => {
 }) : undefined;
 
 // Уличные фото Panoramax и Mapillary (только OSM): слои точек снимков — группой с общим фильтром — и одно окно
-// просмотра. Окно открыто, пока включён хоть один слой: закрыли окно — слои выключаются, включили слой — окно открывается
+// просмотра. Окно открывается кликом по снимку на карте; закрыли окно — слои остаются, выключили слой его снимка — окно закрывается
 const PHOTOS_KEY = { id: 'photos' };
 let photoFilter = storedFilter(PHOTOS_KEY) ?? storedFilter(panoramax) ?? { type: 'all', from: '', to: '' };
-const photoViewer = new PhotoViewer(map, () => { for (const p of photoLayers) if (p.on) setPhotos(p, false); });
+const photoViewer = new PhotoViewer(map, (service) => usedStreet.add(service.name));
 const photoLayers = [
   { service: panoramax, label: 'Panoramax',
     title: tr('Открытые уличные фото и панорамы 360°, разрешённые для OSM. Клик по стрелке — открыть снимок') },
@@ -276,14 +276,11 @@ basemapCtrl?.addOverlayGroup(tr('Фото и панорамы'), tr('Уличн�
     if (mapLoaded) for (const p of photoLayers) p.layer.setFilter(f);
   }),
 }, photoLayers.map((p) => ({ id: p.service.id, label: p.label, title: p.title, on: p.on, onChange: (on: boolean) => setPhotos(p, on) })));
-const photoShown = (layer: PhotoLayer) => photoLayers.some((p) => p.layer === layer && p.on);
-if (photoLayers.some((p) => p.on)) photoViewer.show(photoShown);
 function setPhotos(p: PhotoLayerState, on: boolean) {
   p.on = on;
   storeOn(p.service, on);
   basemapCtrl?.setOverlay(p.service.id, on);
   if (!on) photoViewer.drop(p.layer);
-  if (photoLayers.some((x) => x.on)) photoViewer.show(photoShown); else photoViewer.close();
   syncPhotos();
 }
 
@@ -375,6 +372,25 @@ function focusImageryBounds(): [number, number, number, number] | undefined {
   return [w - dLng, s - dLat, e + dLng, n + dLat];
 }
 
+/**
+ * Источники правок: спутниковые снимки, включённые с прошлой отправки, и открытые уличные фото — в теги changeset
+ * (imagery_used — названия, source — «aerial imagery» / «streetlevel imagery», как в iD).
+ */
+const usedImagery = new Set<string>();
+const usedStreet = new Set<string>();
+function noteSources() {
+  const id = focusScene() ? focusBasemap : basemap;
+  if (id !== MAP_BASEMAP) usedImagery.add(findImagery(id)?.name ?? id);
+  const shown = photoViewer.service;
+  if (shown) usedStreet.add(shown.name);
+}
+function sourceTags(): Record<string, string> {
+  const used = [...usedImagery, ...usedStreet];
+  if (!used.length) return {};
+  const source = [usedImagery.size ? 'aerial imagery' : '', usedStreet.size ? 'streetlevel imagery' : ''].filter(Boolean);
+  return { imagery_used: used.join(';').slice(0, 255), source: source.join(';') };
+}
+
 /** Слои снимков и треков — по режиму (карта или здание). */
 function syncBasemapLayers() {
   const f = focusScene();
@@ -386,6 +402,7 @@ function syncBasemapLayers() {
   applyGpsTraces(map, gps && (!f || !!bounds), bounds);
   applyBasemap(map, f && !bounds ? MAP_BASEMAP : id, bounds);
   syncPhotos();
+  noteSources();
   if (!f) applyVectorStyle(id !== MAP_BASEMAP);
 }
 
@@ -6940,7 +6957,11 @@ async function doUpload() {
     });
     const toJosm = josmApi();
     // В JOSM комментарий — имя команды в его истории: предложенный по правкам
-    const res = await uploadEdits(edits, toJosm ? commentSuggestion() : uploadComment.trim(), (t) => panelStatus(t), toJosm);
+    const res = await uploadEdits(edits, toJosm ? commentSuggestion() : uploadComment.trim(), (t) => panelStatus(t), toJosm, sourceTags());
+    // Отправлено — источники считаем заново, с того, что включено сейчас
+    usedImagery.clear();
+    usedStreet.clear();
+    noteSources();
     // Временные id узлов и путей → настоящие: в геометрии, членах отношений и в отправленных полигонах
     const nodeIdMap = new Map<number, number>(), wayIdMap = new Map<number, number>();
     for (const [from, to] of res.newKeys) {

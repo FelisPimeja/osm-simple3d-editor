@@ -1,5 +1,5 @@
 /**
- * Панель инструмента сдвига снимка: поля сдвига (м, по широте — на север, по долготе — на восток), «Подтвердить» и «Сбросить».
+ * Панель инструмента сдвига снимка: подсказка и текущий сдвиг, «Подтвердить» и «Отменить» (поля сдвига и сброс — в меню слоёв).
  * Пока панель открыта, сдвиг задаётся и мышью: щелчок по точке снимка — она «прилипает» к курсору (сдвиг только
  * в плоскости земли), повторный щелчок — закончить. Щелчки по карте в это время не выделяют объекты.
  * Esc или × — отменить (вернуть сдвиг, бывший до открытия). Точка первого щелчка отмечена, от неё до курсора —
@@ -32,8 +32,6 @@ const LIVE_MS = 80;
 export class ImageryOffsetPanel {
   private readonly el: HTMLDivElement;
   private readonly title: HTMLDivElement;
-  private readonly latInput: HTMLInputElement;
-  private readonly lonInput: HTMLInputElement;
   private readonly info: HTMLDivElement;
   private id: string | undefined;
   /** Сдвиг до открытия панели — для отмены. */
@@ -63,20 +61,6 @@ export class ImageryOffsetPanel {
     close.addEventListener('click', () => this.cancel());
     head.append(this.title, close);
     this.draggable(head);
-    const field = (label: string, title: string) => {
-      const row = document.createElement('label');
-      row.title = title;
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.step = '0.1';
-      input.addEventListener('input', () => this.fromInputs());
-      row.append(label, input, tr('м'));
-      return { row, input };
-    };
-    const lat = field(tr('По широте'), tr('Сдвиг на север (минус — на юг), м'));
-    const lon = field(tr('По долготе'), tr('Сдвиг на восток (минус — на запад), м'));
-    this.latInput = lat.input;
-    this.lonInput = lon.input;
     this.info = document.createElement('div');
     this.info.className = 'offset-info';
     const buttons = document.createElement('div');
@@ -86,13 +70,13 @@ export class ImageryOffsetPanel {
     ok.className = 'offset-ok';
     ok.textContent = tr('Подтвердить');
     ok.addEventListener('click', () => { this.confirm(); this.hooks.onConfirm?.(); });
-    const reset = document.createElement('button');
-    reset.type = 'button';
-    reset.textContent = tr('Сбросить');
-    reset.title = tr('Убрать смещение');
-    reset.addEventListener('click', () => { this.set({ east: 0, north: 0 }, true); this.confirm(); });
-    buttons.append(ok, reset);
-    el.append(head, lat.row, lon.row, this.info, buttons);
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = tr('Отменить');
+    cancel.title = tr('Вернуть сдвиг, бывший до открытия (Esc)');
+    cancel.addEventListener('click', () => this.cancel());
+    buttons.append(ok, cancel);
+    el.append(head, this.info, buttons);
     this.snapEl = document.createElement('div');
     this.snapEl.className = 'snap-marker';
     this.snapEl.hidden = true;
@@ -128,7 +112,7 @@ export class ImageryOffsetPanel {
     this.el.hidden = false;
     this.hooks.onOpen?.(true);
     this.place();
-    this.syncInputs();
+    this.syncInfo();
   }
 
   /**
@@ -191,7 +175,7 @@ export class ImageryOffsetPanel {
       this.anchor = { at, base: this.offset };
       this.map.getCanvas().style.cursor = 'grabbing';
       this.drawAnchor(at, at);
-      this.syncInputs();
+      this.syncInfo();
     }
   }
 
@@ -253,17 +237,13 @@ export class ImageryOffsetPanel {
     this.drawAnchor(undefined);
     if (revert && a) this.set(a.base, true);
     else this.apply();
-    this.syncInputs();
-  }
-
-  private fromInputs() {
-    this.set({ east: Number(this.lonInput.value) || 0, north: Number(this.latInput.value) || 0 }, false, false);
+    this.syncInfo();
   }
 
   /** Новый сдвиг; при перетаскивании тайлы пересобираются не чаще LIVE_MS. */
-  private set(o: Offset, now = false, inputs = true) {
+  private set(o: Offset, now = false) {
     this.offset = o;
-    if (inputs) this.syncInputs(); else this.syncInfo();
+    this.syncInfo();
     clearTimeout(this.liveTimer);
     const wait = now ? 0 : LIVE_MS - (performance.now() - this.lastLive);
     if (wait <= 0) this.apply();
@@ -277,12 +257,6 @@ export class ImageryOffsetPanel {
     storeOffset(this.id, this.offset);
     refreshImagery(this.map, this.id);
     this.hooks.onChange(this.id);
-  }
-
-  private syncInputs() {
-    this.latInput.value = this.offset.north.toFixed(1);
-    this.lonInput.value = this.offset.east.toFixed(1);
-    this.syncInfo();
   }
 
   private syncInfo() {

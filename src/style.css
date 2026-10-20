@@ -576,3 +576,47 @@ body.mobile #issues-panel { display: none !important; }
 .level-picker-row:hover { background: #f3f4f6; }
 .level-picker-row.current { font-weight: 600; }
 .level-picker-n { margin-left: auto; color: #9ca3af; font-size: 11px; }
+
+/* Окно просмотра снимка Panoramax (src/view/panoramax.ts); кнопки фильтра — в меню слоёв, внутри .maplibregl-ctrl-group: свои размеры и рамки */
+.panoramax-viewer { position: absolute; left: 10px; bottom: 34px; z-index: 5; width: min(520px, calc(100vw - 20px)); background: #fff; border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,.25); font-size: 12px; overflow: visible; display: flex; flex-direction: column; min-width: 240px; min-height: 180px; height: 360px; }
+.panoramax-viewer[hidden] { display: none; }
+/* Заголовок — .panel-head (шрифт как у панелей); тянуть за него — двигать окно */
+.panoramax-head { cursor: move; touch-action: none; border-bottom: 1px solid #eee; }
+.panoramax-close { border: 0; background: none; font-size: 20px; line-height: 1; padding: 0 4px; cursor: pointer; color: #555; }
+/* Стрелки к соседним снимкам — как на сайте Panoramax: на «земле» внизу кадра (круг, наклонённый в перспективе);
+   стрелка повёрнута вокруг центра круга к своему снимку */
+.panoramax-nav { position: absolute; left: 50%; bottom: 20%; width: 0; height: 0; transform: perspective(420px) rotateX(58deg);
+  transform-style: preserve-3d; pointer-events: none; }
+.panoramax-arrow { position: absolute; left: -36px; top: -36px; width: 72px; height: 72px; padding: 0; border: 0; background: none;
+  cursor: pointer; pointer-events: auto; transform-origin: 50% 50%; transform-style: preserve-3d; }
+.panoramax-arrow svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.panoramax-arrow .face path { fill: #fff; stroke: #fff; }
+.panoramax-arrow .side path { fill: #6b7280; stroke: #6b7280; }
+.panoramax-arrow .shadow { filter: blur(4px); opacity: .75; }
+.panoramax-arrow .shadow path { fill: #000; stroke: #000; }
+/* При наведении — синий выделения (SELECTED_EDGE_COLOUR в buildings-layer.ts) наполовину с белым: прозрачная грань
+   показала бы слои боковины под ней */
+.panoramax-arrow:hover .face path { fill: #92b1f5; stroke: #92b1f5; }
+.panoramax-arrow:hover .side path { fill: #1e3a8a; stroke: #1e3a8a; }
+.panoramax-arrow[hidden] { display: none; }
+/* Края и углы для изменения размера */
+.panoramax-rs { position: absolute; z-index: 1; touch-action: none; }
+.panoramax-rs-n, .panoramax-rs-s { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+.panoramax-rs-e, .panoramax-rs-w { top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+.panoramax-rs-n { top: -3px; } .panoramax-rs-s { bottom: -3px; } .panoramax-rs-e { right: -3px; } .panoramax-rs-w { left: -3px; }
+.panoramax-rs-ne, .panoramax-rs-nw, .panoramax-rs-se, .panoramax-rs-sw { width: 12px; height: 12px; }
+.panoramax-rs-ne { top: -3px; right: -3px; cursor: nesw-resize; } .panoramax-rs-sw { bottom: -3px; left: -3px; cursor: nesw-resize; }
+.panoramax-rs-nw { top: -3px; left: -3px; cursor: nwse-resize; } .panoramax-rs-se { bottom: -3px; right: -3px; cursor: nwse-resize; }
+.panoramax-stage { flex: 1; position: relative; overflow: hidden; background: #111; cursor: grab; touch-action: none; min-height: 0; }
+.panoramax-stage:active { cursor: grabbing; }
+.panoramax-stage canvas, .panoramax-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.panoramax-info { padding: 4px 6px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panoramax-filter { display: grid; grid-template-columns: auto minmax(max-content, 1fr) 18px; align-items: center; gap: 4px 6px; padding: 4px 0 4px 22px; font-size: 12px; }
+.panoramax-filter[hidden] { display: none; }
+.panoramax-filter > span { white-space: nowrap; justify-self: end; }
+.panoramax-filter input { font: inherit; min-width: 0; width: 100%; box-sizing: border-box; }
+.panoramax-filter > button { width: auto; height: auto; border: 0; background: none; cursor: pointer; font-size: 14px; color: #6b7280; padding: 0; }
+.panoramax-seg { display: flex; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
+.panoramax-seg button { flex: 1 0 auto; width: auto; height: auto; border: 0 !important; background: #fff; padding: 3px 8px; white-space: nowrap; font: inherit; cursor: pointer; color: #374151; }
+.panoramax-seg button + button { border-left: 1px solid #d1d5db !important; }
+.panoramax-seg button.active { background: #dbeafe; color: #1e3a8a; font-weight: 600; }

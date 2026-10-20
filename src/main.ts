@@ -22,6 +22,7 @@ import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
 import { applyBasemap, applyGpsTraces, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK } from './view/basemaps';
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
+import { applyPanoramax, isPanoramaxFiltered, isPanoramaxLayer, PanoramaxViewer, panoramaxSettings, pickPanoramax, setPanoramaxFilter, storedPanoramax, storedPanoramaxFilter, storePanoramax, storePanoramaxFilter } from './view/panoramax';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
@@ -239,6 +240,34 @@ const basemapCtrl = navGroup ? new BasemapButton(navGroup, basemap, (id) => {
   offsetPanel.show(id);
 }, imageryList, !!server().imagery, { ...buildingsView }, (v) => setBuildingsView(v)) : undefined;
 
+// Уличные фото Panoramax (только OSM): слой точек снимков и окно просмотра по клику
+let panoramax = server().imagery ? storedPanoramax() : false;
+const panoramaxViewer = new PanoramaxViewer(map);
+let panoramaxFilter = storedPanoramaxFilter();
+basemapCtrl?.addOverlay('panoramax', tr('Фото и панорамы Panoramax'),
+  tr('Открытые уличные фото и панорамы 360°, разрешённые для OSM. Клик по стрелке — открыть снимок'), panoramax, (on) => {
+    panoramax = on;
+    storePanoramax(on);
+    if (!on) panoramaxViewer.close();
+    syncPanoramax();
+  }, {
+    title: tr('Фильтр снимков: тип и даты съёмки'),
+    filtered: () => isPanoramaxFiltered(panoramaxFilter),
+    el: panoramaxSettings(panoramaxFilter, (f) => {
+      panoramaxFilter = f;
+      storePanoramaxFilter(f);
+      basemapCtrl?.sync();
+      if (mapLoaded) setPanoramaxFilter(map, f);
+    }),
+  });
+/** Слой Panoramax; в режиме здания — обрезан областью вокруг здания, как снимки подложки. */
+function syncPanoramax() {
+  if (!mapLoaded || !server().imagery) return;
+  const bounds = focusScene() ? focusImageryBounds() : undefined;
+  applyPanoramax(map, panoramax, panoramaxFilter, map.getLayer(UNDERGROUND_LAYER) ? UNDERGROUND_LAYER : undefined, bounds);
+  panoramaxViewer.syncCone();
+}
+
 function setBuildingsView(v: typeof buildingsView) {
   Object.assign(buildingsView, v);
   storeBuildings(buildingsView);
@@ -326,6 +355,7 @@ function syncBasemapLayers() {
   const bounds = f ? focusImageryBounds() : undefined;
   applyGpsTraces(map, gps && (!f || !!bounds), bounds);
   applyBasemap(map, f && !bounds ? MAP_BASEMAP : id, bounds);
+  syncPanoramax();
   if (!f) applyVectorStyle(id !== MAP_BASEMAP);
 }
 
@@ -986,6 +1016,9 @@ map.on('click', (e) => {
     updateSnap(p);
     return;
   }
+  // Снимок Panoramax под курсором — открыть вместо выбора здания
+  const picId = pickPanoramax(map, e.point);
+  if (picId) { void panoramaxViewer.open(picId); return; }
   if (moveTool.state === 'select') {
     const doorKey = overpassLayer.pickDoor([e.point.x, e.point.y]);
     const door = shownIndoor.find(f => f.key === doorKey && isDoor(f));
@@ -1315,7 +1348,7 @@ function hideMapLayers() {
   setFocusBackground(true);
   for (const l of map.getStyle().layers) {
     // Снимки и треки в режиме здания — свои (syncBasemapLayers), отметка сдвига — у панели настроек
-    if (l.id === overpassLayer.id || l.type === 'background' || l.id === IMAGERY_LAYER || l.id === GPS_LAYER || l.id.startsWith('imagery-offset')) continue;
+    if (l.id === overpassLayer.id || l.type === 'background' || l.id === IMAGERY_LAYER || l.id === GPS_LAYER || l.id.startsWith('imagery-offset') || isPanoramaxLayer(l.id)) continue;
     const pending = pendingTileLayers.find((p) => p.id === l.id);
     focusHiddenLayers.push(pending ?? { id: l.id, visibility: (map.getLayoutProperty(l.id, 'visibility') as string | undefined) ?? 'visible' });
     map.setLayoutProperty(l.id, 'visibility', 'none');

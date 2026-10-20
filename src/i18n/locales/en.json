@@ -968,5 +968,19 @@
   "Существует с": "Exists from",
   "Существует до": "Exists until",
   "ГГГГ-ММ-ДД": "YYYY-MM-DD",
-  "Esri Wayback: архив снимков с 2014 г. Выпуск — последний до даты слайдера времени (дата выпуска, а не съёмки).": "Esri Wayback: imagery archive since 2014. Shows the latest release before the time slider date (release date, not capture date)."
+  "Esri Wayback: архив снимков с 2014 г. Выпуск — последний до даты слайдера времени (дата выпуска, а не съёмки).": "Esri Wayback: imagery archive since 2014. Shows the latest release before the time slider date (release date, not capture date).",
+  "Фото и панорамы Panoramax": "Panoramax photos and panoramas",
+  "Открытые уличные фото и панорамы 360°, разрешённые для OSM. Клик по стрелке — открыть снимок": "Open street-level photos and 360° panoramas permitted for OSM. Click an arrow to open the picture",
+  "Предыдущий снимок": "Previous picture",
+  "Следующий снимок": "Next picture",
+  "Загрузка…": "Loading…",
+  "Не удалось загрузить снимок": "Could not load the picture",
+  "Открыть на Panoramax": "Open on Panoramax",
+  "Все": "All",
+  "Сбросить даты": "Clear dates",
+  "Тип": "Type",
+  "Съёмка с": "Taken from",
+  "по": "to",
+  "Фильтр снимков: тип и даты съёмки": "Picture filter: type and capture dates",
+  "Обычные": "Regular"
 }

@@ -391,6 +391,7 @@ export class BasemapButton {
       gpsInput.addEventListener('change', () => { this.gps = gpsInput.checked; this.sync(); onGps(gpsInput.checked); });
       gpsRow.append(gpsInput, ` ${tr('GPS-треки OSM')}`);
       menu.append(gpsRow);
+      this.overlaysAt = gpsRow;
       const note = document.createElement('div');
       note.className = 'basemap-note';
       note.textContent = tr('Снимки, разрешённые для обводки в OSM. Проверяйте сдвиг снимков по GPS-трекам.');
@@ -401,6 +402,47 @@ export class BasemapButton {
     document.addEventListener('click', (e) => {
       if (!this.menu.hidden && !this.menu.contains(e.target as Node)) this.toggleMenu(false);
     });
+  }
+
+  /** Строка, после которой встают дополнительные слои (addOverlay). */
+  private overlaysAt?: HTMLElement;
+  private readonly overlays = new Map<string, { input: HTMLInputElement; on: boolean; gear?: HTMLButtonElement; filtered?: () => boolean }>();
+
+  /**
+   * Дополнительный слой поверх карты (галка в меню, после GPS-треков). settings — настройки слоя под строкой,
+   * открываются шестерёнкой; filtered() — шестерёнка синяя (настройки изменены).
+   */
+  addOverlay(id: string, label: string, title: string, on: boolean, onChange: (on: boolean) => void,
+    settings?: { el: HTMLElement; title: string; filtered: () => boolean }) {
+    const row = document.createElement('label');
+    row.title = title;
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = on;
+    const o = { input, on, gear: undefined as HTMLButtonElement | undefined, filtered: settings?.filtered };
+    this.overlays.set(id, o);
+    input.addEventListener('change', () => { o.on = input.checked; this.sync(); onChange(input.checked); });
+    row.append(input, ` ${label}`);
+    let last: HTMLElement = row;
+    if (settings) {
+      const gear = o.gear = document.createElement('button');
+      gear.type = 'button';
+      gear.className = 'basemap-offset-btn';
+      gear.title = settings.title;
+      gear.innerHTML = GEAR_SVG;
+      settings.el.hidden = true;
+      gear.addEventListener('click', (e) => {
+        e.preventDefault(); // не переключать галку строки
+        e.stopPropagation();
+        settings.el.hidden = !settings.el.hidden;
+      });
+      row.append(gear);
+      last = settings.el;
+    }
+    if (this.overlaysAt) this.overlaysAt.after(row); else this.menu.append(row);
+    if (settings) row.after(settings.el);
+    this.overlaysAt = last;
+    this.sync();
   }
 
   private toggleMenu(open = this.menu.hidden) {
@@ -441,11 +483,12 @@ export class BasemapButton {
 
   /** Подсветить кнопки смещения сдвинутых снимков и кнопку слоёв. */
   sync() {
-    this.btn.classList.toggle('active', this.current !== MAP_BASEMAP || this.gps || !this.buildings.shown || this.buildings.opacity < 1);
+    this.btn.classList.toggle('active', this.current !== MAP_BASEMAP || this.gps || [...this.overlays.values()].some((o) => o.on) || !this.buildings.shown || this.buildings.opacity < 1);
     this.buildingsInput.checked = this.buildings.shown;
     // В режиме контуров заливки нет — прозрачность не к чему применять
     this.alphaInput.disabled = this.buildings.wireframe;
     this.buildingsGear.classList.toggle('active', this.buildings.opacity < 1);
+    for (const o of this.overlays.values()) o.gear?.classList.toggle('active', !!o.filtered?.());
     for (const input of this.menu.querySelectorAll<HTMLInputElement>('input[type=radio]')) input.checked = input.value === this.current;
     // Шестерёнка — только у выбранного снимка; синяя, если сдвиг или прозрачность изменены
     for (const [id, b] of this.offsetBtns) {

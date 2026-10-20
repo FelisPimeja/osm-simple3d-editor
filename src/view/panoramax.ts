@@ -427,8 +427,11 @@ export class PanoramaxViewer {
   private coneFov = 70;
   /** Окно двигали или меняли его размер — больше не прижимаем его к панелям инструментов сами. */
   private userPlaced = false;
+  /** Последний открытый снимок — его покажем, когда слой снова включат. */
+  private lastId?: string;
 
-  constructor(private readonly map: MlMap) {
+  /** onClose — окно закрыли кнопкой × (слой выключается вместе с окном). */
+  constructor(private readonly map: MlMap, private readonly onClose: () => void) {
     const el = this.el = document.createElement('div');
     el.className = 'panoramax-viewer';
     el.hidden = true;
@@ -442,7 +445,7 @@ export class PanoramaxViewer {
     close.className = 'panoramax-close';
     close.textContent = '×';
     close.title = tr('Закрыть');
-    close.addEventListener('click', () => this.close());
+    close.addEventListener('click', () => { this.close(); this.onClose(); });
     head.append(title, close);
     this.stage = document.createElement('div');
     this.stage.className = 'panoramax-stage';
@@ -587,6 +590,7 @@ export class PanoramaxViewer {
     try { pic = await fetchPicture(id); } catch { if (load === this.loadId) this.info.textContent = tr('Не удалось загрузить снимок'); return; }
     if (load !== this.loadId) return;
     this.pic = pic;
+    this.lastId = pic.id;
     // Смотрим туда же, куда смотрели (по следующим снимкам), иначе — по направлению съёмки
     if (!this.sphere?.visible) this.yaw = pic.azimuth;
     this.renderInfo(pic);
@@ -599,6 +603,18 @@ export class PanoramaxViewer {
     else this.showFlat(url);
     this.updateArrows();
     this.syncCone();
+  }
+
+  /** Показать окно (слой включили): последний снимок, если был, иначе — подсказка. */
+  show() {
+    if (!this.el.hidden) return;
+    if (this.lastId) { void this.open(this.lastId); return; }
+    this.el.hidden = false;
+    this.place();
+    this.renderer?.domElement.remove();
+    this.img.remove();
+    this.updateArrows();
+    this.info.textContent = tr('Кликните по снимку на карте');
   }
 
   close() {

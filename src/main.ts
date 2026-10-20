@@ -242,15 +242,12 @@ const basemapCtrl = navGroup ? new BasemapButton(navGroup, basemap, (id) => {
 
 // Уличные фото Panoramax (только OSM): слой точек снимков и окно просмотра по клику
 let panoramax = server().imagery ? storedPanoramax() : false;
-const panoramaxViewer = new PanoramaxViewer(map);
+// Окно просмотра открыто, пока включён слой: закрыли окно — слой выключается, включили слой — окно открывается
+const panoramaxViewer = new PanoramaxViewer(map, () => setPanoramax(false));
 let panoramaxFilter = storedPanoramaxFilter();
 basemapCtrl?.addOverlay('panoramax', tr('Фото и панорамы Panoramax'),
-  tr('Открытые уличные фото и панорамы 360°, разрешённые для OSM. Клик по стрелке — открыть снимок'), panoramax, (on) => {
-    panoramax = on;
-    storePanoramax(on);
-    if (!on) panoramaxViewer.close();
-    syncPanoramax();
-  }, {
+  tr('Открытые уличные фото и панорамы 360°, разрешённые для OSM. Клик по стрелке — открыть снимок'), panoramax,
+  (on) => setPanoramax(on), {
     title: tr('Фильтр снимков: тип и даты съёмки'),
     filtered: () => isPanoramaxFiltered(panoramaxFilter),
     el: panoramaxSettings(panoramaxFilter, (f) => {
@@ -260,6 +257,15 @@ basemapCtrl?.addOverlay('panoramax', tr('Фото и панорамы Panoramax'
       if (mapLoaded) setPanoramaxFilter(map, f);
     }),
   });
+function setPanoramax(on: boolean) {
+  panoramax = on;
+  storePanoramax(on);
+  basemapCtrl?.setOverlay('panoramax', on);
+  if (on) panoramaxViewer.show(); else panoramaxViewer.close();
+  syncPanoramax();
+}
+if (panoramax) panoramaxViewer.show();
+
 /** Слой Panoramax; в режиме здания — обрезан областью вокруг здания, как снимки подложки. */
 function syncPanoramax() {
   if (!mapLoaded || !server().imagery) return;

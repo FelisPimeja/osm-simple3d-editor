@@ -273,7 +273,8 @@ export function storeBuildings(v: BuildingsView) {
   } catch { /* до перезагрузки */ }
 }
 
-const GEAR_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M6.8 1.5h2.4l.4 1.8 1.2.7 1.8-.6 1.2 2.1-1.4 1.2v1.4l1.4 1.2-1.2 2.1-1.8-.6-1.2.7-.4 1.8H6.8l-.4-1.8-1.2-.7-1.8.6-1.2-2.1 1.4-1.2V6.7L2.2 5.5l1.2-2.1 1.8.6 1.2-.7z"/><circle cx="8" cy="8" r="2"/></svg>';
+// Шестерёнка: 8 одинаковых зубьев и кольцо — всё с центром (8, 8), симметрично
+const GEAR_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M6.20 3.12 6.63 1.13 9.37 1.13 9.80 3.12 10.18 3.28 11.89 2.18 13.82 4.11 12.72 5.82 12.88 6.20 14.87 6.63 14.87 9.37 12.88 9.80 12.72 10.18 13.82 11.89 11.89 13.82 10.18 12.72 9.80 12.88 9.37 14.87 6.63 14.87 6.20 12.88 5.82 12.72 4.11 13.82 2.18 11.89 3.28 10.18 3.12 9.80 1.13 9.37 1.13 6.63 3.12 6.20 3.28 5.82 2.18 4.11 4.11 2.18 5.82 3.28z"/><circle cx="8" cy="8" r="2.2"/></svg>';
 
 export class BasemapButton {
   private readonly btn: HTMLButtonElement;
@@ -459,6 +460,15 @@ export class BasemapButton {
   /** Слой зданий переключили не из меню (режим контуров — кнопкой или клавишей). */
   setBuildings(v: BuildingsView) {
     this.buildings = v;
+    this.sync();
+  }
+
+  /** Дополнительный слой включили или выключили не галкой (закрыли его окно). */
+  setOverlay(id: string, on: boolean) {
+    const o = this.overlays.get(id);
+    if (!o) return;
+    o.on = on;
+    o.input.checked = on;
     this.sync();
   }
 

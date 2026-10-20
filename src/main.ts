@@ -1341,7 +1341,75 @@ function inFocus(k: string): boolean {
 function soloGroup(key: string): BuildingGroup | undefined {
   const f = entity(key) as Feature3D | undefined;
   if (!f?.polygons?.length || editGroups.has(key) || f.tags.type === 'building') return;
+  // Схема Simple 3D: части внутри контура здания — уже одно здание, отношение необязательно
+  const implicit = implicitBuilding(f);
+  if (implicit) return { key: SOLO + implicit.outline, type: 'relation', id: 0, version: 0, tags: {},
+    members: [implicit.outline, ...implicit.parts], roles: ['outline', ...implicit.parts.map(() => 'part')] };
   return { key: SOLO + key, type: 'relation', id: 0, version: 0, tags: {}, members: [key], roles: [''] };
+}
+
+/** Живые объекты с контуром вне отношений type=building, чья рамка задевает near (данные тайлов с правками сессии). */
+function looseFeatures(near: { w: number; s: number; e: number; n: number }): Feature3D[] {
+  const all = [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)];
+  const hits = (f: Feature3D) => { const r = bboxOf(f); return r.w <= near.e && r.e >= near.w && r.s <= near.n && r.n >= near.s; };
+  return all.filter((f) => f.polygons?.length && hits(f) && !session.isDeleted(f.key) && !groupOf(f.key))
+    .map((f) => (session.has(f.key) ? (session.get(f.key) as Feature3D | undefined) ?? f : f))
+    .filter((f) => f.polygons?.length);
+}
+
+const bboxOf = (f: Feature3D) => {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
+  return { w, s, e, n };
+};
+const insideFeature = (c: LonLat, f: Feature3D) => f.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
+
+/**
+ * Здание без отношения: контур (building=*) и части (building:part) вне отношений, чья точка на поверхности
+ * лежит внутри контура. f — контур или одна из частей; частей нет — undefined.
+ */
+function implicitBuilding(f: Feature3D): { outline: string; parts: string[] } | undefined {
+  if (groupOf(f.key)) return;
+  const isOutline = (b: Feature3D) => !!b.tags.building && b.tags.building !== 'no' && !b.tags['building:part'];
+  let outline: Feature3D | undefined = isOutline(f) ? f : undefined;
+  if (!outline && f.tags['building:part']) {
+    const c = pointOnSurface(f.polygons[0]);
+    const loose = looseFeatures({ w: c[0], e: c[0], s: c[1], n: c[1] });
+    // Несколько контуров вокруг (вложенные здания) — ближайший, т. е. наименьший
+    const area = (b: Feature3D) => { const r = bboxOf(b); return (r.e - r.w) * (r.n - r.s); };
+    outline = loose.filter((b) => b.key !== f.key && isOutline(b) && insideFeature(c, b)).sort((a, b) => area(a) - area(b))[0];
+  }
+  if (!outline) return;
+  const r = bboxOf(outline);
+  const parts = looseFeatures(r).filter((p) => {
+    if (p.key === outline!.key || !p.tags['building:part'] || p.tags.building) return false;
+    const c = pointOnSurface(p.polygons[0]);
+    return c[0] >= r.w && c[0] <= r.e && c[1] >= r.s && c[1] <= r.n && insideFeature(c, outline!);
+  }).map((p) => p.key);
+  return parts.length ? { outline: outline.key, parts } : undefined;
+}
+
+/** Собрать отношение type=building из здания без отношения (контур и части внутри него). */
+function createImplicitRelation() {
+  if (!focus || !isSolo(focus) || !focus.roles.includes('part')) return;
+  const relId = nextNewId--;
+  const relMembers = focus.members.map((k, i) => {
+    const [type, ref] = k.split('/');
+    return { type: type as 'way' | 'relation', ref: Number(ref), role: focus!.roles[i] || 'part' };
+  });
+  const group: EditGroup = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, tags: { type: 'building' },
+    members: relMembers.map((m) => `${m.type}/${m.ref}`), roles: relMembers.map((m) => m.role), relMembers };
+  editGroups.set(group.key, group);
+  session.editMany([{ key: group.key, create: group }]);
+  enterFocus(group);
+  setStatus(tr('Создано отношение {key} (type=building).', { key: group.key }));
+}
+
+/** Здание без отношения в режиме здания: предложение собрать отношение. */
+function implicitWarning(g: BuildingGroup): string {
+  if (!isSolo(g) || !g.roles.includes('part')) return '';
+  return `<p class="hint">${tr('Части лежат внутри контура здания без отношения type=building — по схеме Simple 3D это уже одно здание. Отношение делает состав явным для других редакторов.')}
+    <button type="button" data-implicit-relation>${tr('Собрать отношение type=building')}</button></p>`;
 }
 
 /** Члены группы для отрисовки: из сессии (с правками) или из тайлов. */
@@ -1361,7 +1429,7 @@ function bareOutlines(g: BuildingGroup): string[] {
     const t = entity(k)?.tags;
     // Контур нового отношения, покрытый частями (рассекли отдельное здание), — плоским следом; часть
     // поменьше (надстройка, пристройка) — нет: объём по-прежнему задаёт контур
-    return !!t && (isBareOutlineTags(t) || (g.id < 0 && outlineCovered(g, k)));
+    return !!t && (isBareOutlineTags(t) || ((g.id < 0 || isSolo(g)) && outlineCovered(g, k)));
   });
 }
 
@@ -1428,7 +1496,8 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     const freshGroup = isSolo(g) ? { ...g } : parsed.groups.find((item) => item.key === g.key);
     if (!freshGroup) throw new Error(`OSM: ${g.key} отсутствует в ответе API`);
     const features = parsed.features.filter((f) => freshGroup.members.includes(f.key));
-    if (features.length !== freshGroup.members.length) throw new Error(`OSM: не удалось загрузить все части ${g.key}`);
+    // У здания без отношения API отдаёт только контур — части проверяются по своим тайлам
+    if (!isSolo(g) && features.length !== freshGroup.members.length) throw new Error(`OSM: не удалось загрузить все части ${g.key}`);
     const changed = features.filter((f) => {
       const old = overpass.cachedFeature(f.key);
       return !old || old.version !== f.version || JSON.stringify(old.polygons) !== JSON.stringify(f.polygons) ||
@@ -2510,8 +2579,13 @@ function attachParts(edits: Parameters<typeof session.editMany>[0], wayIds: (num
   const parts = wayIds.map((m) => (typeof m === 'number' ? { type: 'way' as const, ref: m, role: 'part' } : { ...m, role: 'part' }));
   if (isSolo(focus)) {
     const relId = nextNewId--;
-    const [type, ref] = focus.members[0].split('/');
-    const relMembers = [{ type: type as 'way' | 'relation', ref: Number(ref), role: 'outline' }, ...parts];
+    // Части, найденные внутри контура без отношения, тоже входят в новое отношение
+    const own = focus.members.flatMap((k, i) => {
+      if (i > 0 && focus!.roles[i] !== 'part') return [];
+      const [type, ref] = k.split('/');
+      return [{ type: type as 'way' | 'relation', ref: Number(ref), role: i ? 'part' : 'outline' }];
+    });
+    const relMembers = [...own, ...parts];
     const group: EditGroup = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, tags: { type: 'building' },
       members: relMembers.map((m) => `${m.type}/${m.ref}`), roles: relMembers.map((m) => m.role), relMembers };
     editGroups.set(group.key, group);
@@ -2624,6 +2698,7 @@ function segDist2([px, py]: [number, number], [ax, ay]: [number, number], [bx, b
 
 /** Почему объект нельзя рассечь (undefined — можно). */
 function splitReason(key: string): string | undefined {
+  if (isSolo(focus) && focus!.roles.includes('part')) return tr('Здание без отношения: сначала соберите отношение type=building.');
   if (isSolo(focus) && key !== focus!.members[0]) return tr('Копию режьте отдельно: выйдите и откройте её двойным кликом.');
   if (!focus?.members.includes(key) || hiddenInFocus(key)) return tr('Резать можно только части этого здания.');
   const f = entity(key) as Feature3D | undefined;
@@ -3844,6 +3919,7 @@ infoEl.addEventListener('click', (e) => {
   if (btn.dataset.addSelectedParts !== undefined) return addSelectedPartsToGroup();
   if (btn.dataset.focusExit !== undefined) return closeFocus();
   if (btn.dataset.outlineFix !== undefined) return fixOutline();
+  if (btn.dataset.implicitRelation !== undefined) return createImplicitRelation();
   if (btn.dataset.exclude !== undefined) return excludeFromGroup();
   if (btn.dataset.addParts !== undefined) return startAdding();
   if (btn.dataset.addConfirm !== undefined) return confirmAdding();
@@ -6648,9 +6724,10 @@ function describeFocus(g: BuildingGroup): string {
   return `
     <h2>${tr('Режим здания')}</h2>
     ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
-    <p class="hint">${tr('{link}, членов: {n}.', { link: `<a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>`, n: g.members.length })}
+    <p class="hint">${tr('{link}, членов: {n}.', { link: `<a href="${server().web}/${isSolo(g) ? g.members[0] : g.key}" target="_blank" rel="noopener">${isSolo(g) ? g.members[0] : g.key}</a>`, n: g.members.length })}
       ${tr('Клик по части — выделить её, Shift — несколько. Двойной клик мимо здания — выход.')}</p>
     ${outlineWarning(g)}
+    ${implicitWarning(g)}
     ${focusExitButton('Esc')}`;
 }
 

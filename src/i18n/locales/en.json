@@ -996,5 +996,9 @@
   "Уличные фото и панорамы 360°, разрешённые для OSM": "Street photos and 360° panoramas allowed for OSM",
   "Сдвинуть мышью": "Shift with mouse",
   "Инструмент сдвига: щёлкните точку на снимке и ведите её к тому месту, где она должна быть (по GPS-трекам)": "Shift tool: click a point on the imagery and drag it to where it should be (by GPS traces)",
-  "Вернуть сдвиг, бывший до открытия (Esc)": "Restore the offset from before opening (Esc)"
+  "Вернуть сдвиг, бывший до открытия (Esc)": "Restore the offset from before opening (Esc)",
+  "Создано отношение {key} (type=building).": "Created relation {key} (type=building).",
+  "Части лежат внутри контура здания без отношения type=building — по схеме Simple 3D это уже одно здание. Отношение делает состав явным для других редакторов.": "The parts lie inside the building outline without a type=building relation — under the Simple 3D scheme this is already one building. A relation makes the composition explicit for other editors.",
+  "Собрать отношение type=building": "Create type=building relation",
+  "Здание без отношения: сначала соберите отношение type=building.": "Building without a relation: create a type=building relation first."
 }

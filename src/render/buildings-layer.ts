@@ -4578,8 +4578,9 @@ function describeFeature(f: Feature3D): string {
 /** Стекло: голубовато-бирюзовое, полупрозрачное; без цветов — светлее. */
 const GLASS = new THREE.Color('#7fc4cc');
 const GLASS_MONO = new THREE.Color('#bfe3e6');
+// Отодвинуто дальше сплошных граней (MATERIAL: 1/1): стекло в одной плоскости со сплошной стеной под ней не мерцает
 const GLASS_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.45, depthWrite: false,
-  side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+  side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });
 
 /** Цвет перекрытий (срезов этажей) внутри здания. */
 const FLOOR_SLAB = new THREE.Color(0xffffff);

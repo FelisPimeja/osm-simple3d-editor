@@ -571,6 +571,7 @@ const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
  * при отрисовке тайлов отслеживаемые объекты подменяются этими копиями — правки переживают перезагрузку тайлов.
  */
 let session = new EditSession([], onSessionChange);
+session.beforeStep = (keys) => autoRelation(keys);
 const overpassLayer = new BuildingsLayer('osm-overpass-buildings');
 overpassLayer.visible = buildingsView.shown;
 overpassLayer.setOpacity(buildingsView.opacity);
@@ -1030,14 +1031,25 @@ function resolveClick(key: string | undefined): string | undefined {
     leaveDrill();
     return g.key;
   }
-  return key ? (groupOf(key)?.key ?? key) : undefined;
+  return key ? buildingKey(key) : undefined;
 }
 
-/** Ключи для подсветки: у группы — все её члены. */
+/** Здание объекта в режиме карты: отношение type=building, контур здания без отношения или сам объект. */
+function buildingKey(key: string): string {
+  const g = groupOf(key);
+  if (g) return g.key;
+  const f = entity(key) as Feature3D | undefined;
+  return (f?.polygons?.length && implicitBuilding(f)?.outline) || key;
+}
+
+/** Ключи для подсветки: у группы — все её члены, у контура здания без отношения — и части внутри. */
 function highlightKeys(key: string | undefined): string[] {
   if (!key) return [];
   const g = groupOf(key);
-  return g?.key === key ? g.members : [key];
+  if (g) return g.key === key ? g.members : [key];
+  const f = entity(key) as Feature3D | undefined;
+  const implicit = f?.polygons?.length ? implicitBuilding(f) : undefined;
+  return implicit?.outline === key ? [key, ...implicit.parts] : [key];
 }
 
 map.on('click', (e) => {
@@ -1135,7 +1147,7 @@ map.on('click', (e) => {
   }
   if (e.originalEvent.shiftKey && key) {
     // Shift+клик: добавить/убрать объект; внутри группы — только её члены
-    const k = drill ? (drill.members.includes(key) ? key : undefined) : (groupOf(key)?.key ?? key);
+    const k = drill ? (drill.members.includes(key) ? key : undefined) : buildingKey(key);
     if (k) toggleSelection(k);
     return;
   }
@@ -1357,10 +1369,15 @@ function looseFeatures(near: { w: number; s: number; e: number; n: number }): Fe
     .filter((f) => f.polygons?.length);
 }
 
+const bboxCache = new WeakMap<Feature3D, { w: number; s: number; e: number; n: number }>();
 const bboxOf = (f: Feature3D) => {
+  const hit = bboxCache.get(f);
+  if (hit) return hit;
   let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
   for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
-  return { w, s, e, n };
+  const r = { w, s, e, n };
+  bboxCache.set(f, r);
+  return r;
 };
 const insideFeature = (c: LonLat, f: Feature3D) => f.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
 
@@ -1389,20 +1406,38 @@ function implicitBuilding(f: Feature3D): { outline: string; parts: string[] } | 
   return parts.length ? { outline: outline.key, parts } : undefined;
 }
 
-/** Собрать отношение type=building из здания без отношения (контур и части внутри него). */
-function createImplicitRelation() {
-  if (!focus || !isSolo(focus) || !focus.roles.includes('part')) return;
+/** Новое отношение type=building из контура и частей (зарегистрировано в editGroups, в сессию не записано). */
+function implicitRelation(outline: string, parts: string[]): EditGroup {
   const relId = nextNewId--;
-  const relMembers = focus.members.map((k, i) => {
+  const relMembers = [outline, ...parts].map((k, i) => {
     const [type, ref] = k.split('/');
-    return { type: type as 'way' | 'relation', ref: Number(ref), role: focus!.roles[i] || 'part' };
+    return { type: type as 'way' | 'relation', ref: Number(ref), role: i ? 'part' : 'outline' };
   });
   const group: EditGroup = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, tags: { type: 'building' },
     members: relMembers.map((m) => `${m.type}/${m.ref}`), roles: relMembers.map((m) => m.role), relMembers };
   editGroups.set(group.key, group);
+  return group;
+}
+
+/** Части здания режима без отношения (кроме вставленных рядом копий). */
+const implicitParts = (g: BuildingGroup) => g.members.filter((_, i) => g.roles[i] === 'part');
+
+/** Собрать отношение type=building из здания без отношения (контур и части внутри него). */
+function createImplicitRelation() {
+  if (!focus || !isSolo(focus) || !focus.roles.includes('part')) return;
+  const group = implicitRelation(focus.members[0], implicitParts(focus));
   session.editMany([{ key: group.key, create: group }]);
-  enterFocus(group);
   setStatus(tr('Создано отношение {key} (type=building).', { key: group.key }));
+}
+
+/** Правка контура или части здания без отношения в режиме здания — отношение собирается тем же шагом. */
+function autoRelation(keys: string[]): EditGroup | undefined {
+  // Шаг сам создаёт отношение здания (кнопка, новая часть) — второе не нужно
+  if (keys.some((k) => editGroups.has(k))) return;
+  if (!focus || !isSolo(focus) || !focus.roles.includes('part')) return;
+  const members = new Set([focus.members[0], ...implicitParts(focus)]);
+  if (!keys.some((k) => members.has(k))) return;
+  return implicitRelation(focus.members[0], implicitParts(focus));
 }
 
 /** Здание без отношения в режиме здания: предложение собрать отношение. */
@@ -2698,8 +2733,7 @@ function segDist2([px, py]: [number, number], [ax, ay]: [number, number], [bx, b
 
 /** Почему объект нельзя рассечь (undefined — можно). */
 function splitReason(key: string): string | undefined {
-  if (isSolo(focus) && focus!.roles.includes('part')) return tr('Здание без отношения: сначала соберите отношение type=building.');
-  if (isSolo(focus) && key !== focus!.members[0]) return tr('Копию режьте отдельно: выйдите и откройте её двойным кликом.');
+  if (isSolo(focus) && key !== focus!.members[0] && focus!.roles[focus!.members.indexOf(key)] !== 'part') return tr('Копию режьте отдельно: выйдите и откройте её двойным кликом.');
   if (!focus?.members.includes(key) || hiddenInFocus(key)) return tr('Резать можно только части этого здания.');
   const f = entity(key) as Feature3D | undefined;
   if (!f?.polygons) return tr('Объект не найден.');
@@ -2749,6 +2783,8 @@ function inLocalRing([x, y]: [number, number], ring: [number, number][]): boolea
  * добавляется в отношение здания с ролью part. Всё одним шагом истории. Возвращает текст ошибки или undefined.
  */
 function splitFeature(key: string, a: CutPoint, b: CutPoint, bends: [number, number][]): string | undefined {
+  // Здание без отношения: сначала отношение из контура и частей, режется уже часть отношения
+  if (isSolo(focus) && focus!.roles.includes('part')) createImplicitRelation();
   const f = entity(key) as Feature3D | undefined;
   const solo = isSolo(focus);
   const g = focus && !solo ? (entity(focus.key) as EditGroup | undefined) : undefined;
@@ -4072,7 +4108,8 @@ function select(key: string | undefined): boolean {
   if (drill && key && key !== drill.key && !drill.members.includes(key)) leaveDrill();
   if (drill && key === drill.key) leaveDrill();
   // Вне группы её член выделяется вместе с ней
-  if (!drill && key) key = groupOf(key)?.key ?? key;
+  if (!drill && key && !focus) key = buildingKey(key);
+  else if (!drill && key) key = groupOf(key)?.key ?? key;
   if (key && !entity(key)) key = undefined; // нет в данных или отменили создание группы
   selection = key ? [key] : [];
   selectedKey = key;
@@ -5577,7 +5614,24 @@ function visibleMapIssues(): Issue[] {
   const byKey = new Map(rendered.map((f) => [f.key, f]));
   issues.push(...duplicateIssues([...seen].map((k) => byKey.get(k)!), rendered));
   issues.push(...orphanPartIssues(singles));
+  issues.push(...implicitIssues(singles));
   return issues;
+}
+
+/** Здания без отношения (контур и части внутри) среди объектов scope — предложение собрать отношение. */
+function implicitIssues(scope: Feature3D[]): Issue[] {
+  const seen = new Set<string>();
+  const out: Issue[] = [];
+  for (const f of scope) {
+    if (f.kind !== 'part' && !f.hasParts) continue;
+    const b = implicitBuilding(f);
+    if (!b || seen.has(b.outline)) continue;
+    seen.add(b.outline);
+    out.push({ key: b.outline, level: 'warning', code: 'implicit-building',
+      text: tr('Контур здания и части внутри него (частей: {n}) без отношения type=building — соберите отношение, чтобы состав здания был явным.', { n: b.parts.length }),
+      fix: { label: tr('собрать отношение type=building'), tags: {}, createRelation: b } });
+  }
+  return out;
 }
 
 /** Части без здания вокруг: контуры — загруженные и созданные в сессии, с правками сессии. */
@@ -5620,7 +5674,7 @@ function issueMark(list: Issue[] | undefined): string {
 
 /** Панель «Проверка»: проблемы здания режима здания, клик — выделить объект (Shift — оба пересекающихся). */
 function renderIssues() {
-  const simpleIssues = focus ? [...buildingIssues(focus), ...(isSolo(focus) ? orphanPartIssues(groupFeatures(focus)) : [])] : [];
+  const simpleIssues = focus ? [...buildingIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : [])] : [];
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding ? buildingIndoor(focusedBuilding) : [];
   const indoorIssues = focusedBuilding ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding))), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
@@ -5741,6 +5795,10 @@ function applyFixes(list: Issue[]) {
   }
   if (!tags.size) return;
   const edits: ObjectEdit[] = [...tags].map(([key, t]) => ({ key, tags: t }));
+  for (const i of list) {
+    const b = i.fix?.createRelation;
+    if (b && !groupOf(b.outline)) { const g = implicitRelation(b.outline, b.parts); edits.push({ key: g.key, create: g }); }
+  }
   for (const [key, keys] of removals) {
     const group = entity(key) as EditGroup | undefined;
     if (group) edits.push({ key, tags: { ...group.tags }, members: group.relMembers.filter((m) => !keys.has(`${m.type}/${m.ref}`)) });
@@ -6830,11 +6888,19 @@ function onSessionChange(keys: string[]) {
     // Отменили создание отношения из отдельного здания — назад к нему одному
     const outline = focus.members.find((_, i) => focus!.roles[i] === 'outline');
     const back = !g && focus.id < 0 && outline ? soloGroup(outline) : undefined;
-    if (g || back) { drill = focus = (g ?? back)!; overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus)); syncFocusHidden(); } else closeFocus();
+    if (g || back) { drill = focus = (g ?? back)!; overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus)); syncFocusHidden(); setEditParam(isSolo(focus) ? focus.members[0] : focus.key); } else closeFocus();
   } else if (isSolo(focus)) {
     // Повтор рассечения: отдельное здание снова в отношении
     const g = groupOf(focus!.members[0]);
-    if (g) enterFocus(g);
+    // Здание без отношения получило отношение (правка или кнопка) — та же сцена, выделение сохраняется
+    if (g && focus!.members.every((k, i) => focus!.roles[i] === '' || g.members.includes(k))) {
+      drill = focus = g;
+      overpassLayer.setFocus(groupFeatures(g), bareOutlines(g));
+      syncFocusHidden();
+      setEditParam(g.key);
+      paintSelection();
+      renderSelected();
+    } else if (g) enterFocus(g);
     else {
       // Отменили вставку копий рядом с отдельным зданием — убрать их из сцены
       const gone = focus!.members.slice(1).filter((k) => keys.includes(k) && !session.get(k));
@@ -7334,6 +7400,7 @@ serverSelect.addEventListener('change', () => {
   if (server().style !== style) return void location.reload();
   // Данные — с выбранного сервера: правки прежнего к нему не относятся
   session = new EditSession([], onSessionChange);
+session.beforeStep = autoRelation;
   indoorEdited.clear();
   indoorCreated.clear();
   editGroups = new Map();

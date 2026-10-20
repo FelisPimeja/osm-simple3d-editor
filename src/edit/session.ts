@@ -426,7 +426,21 @@ export class EditSession {
     this.onChange([...[...saved].map(([k, s]) => s.newKey ?? k), ...deleted]);
   }
 
+  /**
+   * Перед шагом истории: объект, который создаётся в том же шаге (отношение здания без отношения, чьих членов
+   * правят), — отменяется вместе с правкой.
+   */
+  beforeStep?: (keys: string[]) => Tagged | undefined;
+
   private push(step: Entry[]) {
+    const c = this.beforeStep?.(step.map((e) => e.key));
+    if (c && !this.features.has(c.key)) {
+      this.features.set(c.key, c);
+      this.original.set(c.key, {});
+      if (c.relMembers) this.originalMembers.set(c.key, []);
+      this.created.add(c.key);
+      step = [{ key: c.key, before: null, after: { ...c.tags } }, ...step];
+    }
     this.undoStack.push(step);
     this.redoStack = [];
     for (const e of step) this.apply(e.key, e.after, e.mAfter, e.gAfter, e.lAfter);

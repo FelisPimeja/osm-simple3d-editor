@@ -29,6 +29,8 @@ export interface Fix {
   /** Что сделает кнопка — для подсказки. */
   label: string;
   tags: Record<string, string | undefined>;
+  /** Собрать отношение type=building: контур и части внутри него (здание без отношения). */
+  createRelation?: { outline: string; parts: string[] };
   /** Исключить объект из указанного отношения type=building. */
   removeFromGroup?: string;
   /** Разделить объект по этажам: он остаётся на level из tags, копии (те же узлы или члены) — с этими level. */

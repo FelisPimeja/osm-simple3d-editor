@@ -4565,18 +4565,29 @@ function updateIndoorBadges() {
     }
   }
   const count = new Map<string, number>();
+  // Здание без отношения (части внутри контура) — один значок на контур; отбор объектов один на весь пересчёт
+  let pool: Feature3D[] | undefined;
+  const owner = new Map<string, string>();
+  const ownerOf = (b: Feature3D) => {
+    let k = owner.get(b.key);
+    if (k === undefined) {
+      k = groupOf(b.key)?.key ?? implicitBuilding(b, pool ??= loosePool())?.outline ?? b.key;
+      owner.set(b.key, k);
+    }
+    return k;
+  };
   for (const f of indoor) {
     const p = pointOnSurface(f.polygons[0]);
     const hit = grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`)?.find(({ f: b, box }) =>
       p[0] >= box[0] && p[0] <= box[2] && p[1] >= box[1] && p[1] <= box[3] && b.polygons.some((q) => pointInRing(p, q.outer)));
     if (!hit) continue;
-    const key = groupOf(hit.f.key)?.key ?? hit.f.key;
+    const key = ownerOf(hit.f);
     count.set(key, (count.get(key) ?? 0) + 1);
   }
   const badges: IndoorBadge[] = [];
   for (const [key, n] of count) {
     if (n < BADGE_MIN_POLYGONS) continue;
-    const g = groupOf(key);
+    const g = groupOf(key) ?? soloGroup(key);
     const feats = g ? groupFeatures(g) : [overpass.findFeature(key)].filter((f): f is Feature3D => !!f);
     let w = Infinity, s = Infinity, e = -Infinity, nn = -Infinity, top = 0;
     for (const f of feats) {

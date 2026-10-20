@@ -148,7 +148,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .status-line .status-copy { order: -1; margin-top: 1px; }
 .status-line:not(:has(#status:not(:empty))) { display: none; }
 .status-copy[data-done] { color: #15803d; }
-@media (max-width: 1000px) { #statusbar { width: max-content; max-width: calc(100% - 24px); bottom: 56px; } .vcb { bottom: calc(64px + var(--statusbar-h, 0px)); } }
+@media (max-width: 1000px) { #statusbar { width: max-content; max-width: calc(100% - 24px); bottom: 56px; } .vcb { bottom: calc(64px + var(--statusbar-h, 0px)); } .vcb.vcb-track { bottom: calc(104px + var(--statusbar-h, 0px)); } }
 /* Мобильная версия: над карточкой здания и панелями, прижатыми к низу (отступ считает main.ts) */
 body.mobile #statusbar { bottom: calc(var(--mobile-bottom, 44px) + 16px); }
 /* Правая колонка (панель «Этажи») — над карточкой здания, а не под ней */
@@ -202,6 +202,15 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .snap-marker.perpendicular { background: #db2777; border: 0; box-shadow: none; width: 12px; height: 12px; margin: -6px 0 0 -6px;
   clip-path: polygon(0 0, 22% 0, 22% 78%, 100% 78%, 100% 100%, 0 100%); }
 .snap-marker.extension { background: #7c3aed; border-radius: 50%; width: 8px; height: 8px; margin: -5px 0 0 -5px; }
+.snap-marker.tracking { background: #7c3aed; border-radius: 50%; width: 8px; height: 8px; margin: -5px 0 0 -5px; }
+.snap-marker.tracked { background: #7c3aed; }
+/* Откладывание от вершины: якорь — кольцо, отложенная точка — ромб */
+.track-marker { position: absolute; pointer-events: none; z-index: 2; width: 14px; height: 14px; margin: -9px 0 0 -9px;
+  border: 2px dashed #7c3aed; border-radius: 50%; }
+.track-marker.point { width: 10px; height: 10px; margin: -7px 0 0 -7px; border: 2px solid #fff; border-radius: 0; background: #7c3aed;
+  transform: rotate(45deg); box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
+.track-marker[hidden] { display: none; }
+.vcb.vcb-track { bottom: calc(76px + var(--statusbar-h, 0px)); }
 .snap-marker.grid { background: #6b7280; border-radius: 1px; outline: 1px solid #6b7280; outline-offset: 2px; }
 .snap-marker::after {
   content: attr(data-label); position: absolute; left: 14px; top: -4px; white-space: nowrap;

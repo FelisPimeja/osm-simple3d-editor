@@ -2044,6 +2044,33 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (this.gridFrame) this.gridFrame.visible = on;
     this.map?.triggerRepaint();
   }
+  /**
+   * Откладывание от вершины: курсор задержан над вершиной (TRACK_ARM_MS) — она становится якорем,
+   * курсор ловится на оси через неё (горизонтальные рёбра, их продолжения и перпендикуляры к ним).
+   * point — виртуальная точка, отложенная по оси числом с клавиатуры: привязка к ней, как к вершине.
+   */
+  tracking?: { anchor: THREE.Vector3; key: string; dirs: THREE.Vector3[]; px?: [number, number]; axis?: number; dist?: number; point?: THREE.Vector3; pointPx?: [number, number] };
+  /** Включать откладывание (только в инструментах). */
+  trackingEnabled = false;
+  /** Якорь только что взведён задержкой курсора — перерисовать маркеры. */
+  onTrackArmed?: () => void;
+  private vertexHover?: { id: string; since: number; timer: ReturnType<typeof setTimeout> };
+
+  clearTracking() {
+    this.tracking = undefined;
+    if (this.vertexHover) clearTimeout(this.vertexHover.timer);
+    this.vertexHover = undefined;
+  }
+
+  /** Отложить виртуальную точку по текущей оси: dist > 0 — в сторону курсора, < 0 — в обратную. */
+  placeTracked(dist: number, axis: number, side: number): boolean {
+    const t = this.tracking;
+    const u = t?.dirs[axis];
+    if (!t || !u) return false;
+    t.point = t.anchor.clone().addScaledVector(u, dist * side);
+    return true;
+  }
+
   /** Выключенные типы привязок (всплывашка у кнопки привязок). */
   snapKindsOff = new Set<SnapKind>();
   /** Alt зажат — привязки временно выключены. */
@@ -2158,6 +2185,27 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     if (!hovered) this.edgeHover = undefined;
     else if (this.edgeHover?.id !== hovered.id) this.edgeHover = { id: hovered.id, since: now };
+    // Оси откладывания через якорь и отложенная по ним виртуальная точка
+    const track = this.trackingEnabled && !off.has('tracking') ? this.tracking : undefined;
+    if (track) {
+      track.px = toPx(track.anchor);
+      track.pointPx = track.point && toPx(track.point);
+      if (track.point && filter(track.key)) {
+        const px = track.pointPx;
+        const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
+        if (px && d <= radius) near.push({ s: { kind: 'tracked', key: track.key, p: track.point.clone() }, d: d + SNAP_PRIORITY.tracked * 6, px, along: track.anchor.clone() });
+      }
+      if (ray) track.dirs.forEach((u, i) => {
+        ext0.copy(track.anchor).addScaledVector(u, -TRACK_M);
+        ext1.copy(track.anchor).addScaledVector(u, TRACK_M);
+        ray.distanceSqToSegment(ext0, ext1, undefined, onSeg);
+        const dist = foot.subVectors(onSeg, track.anchor).dot(u);
+        if (Math.abs(dist) < 0.02) return;
+        const px = toPx(onSeg);
+        const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
+        if (px && d <= Math.min(radius, TRACK_RADIUS_PX)) near.push({ s: { kind: 'tracking', key: track.key, p: onSeg.clone(), axis: i, dist }, d: d + SNAP_PRIORITY.tracking * 6, px, along: track.anchor.clone() });
+      });
+    }
     // Узел сетки основания (земля, вдоль осей здания) под курсором
     const grid = !off.has('grid') && filter(GRID_SNAP_KEY) && !this.sketching && this.gridVisible ? this.gridSnap(point) : undefined; // в наброске сетки не видно
     if (grid) {
@@ -2171,13 +2219,42 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Видимость проверяем только у кандидатов в радиусе (луч на каждый — недёшево): заслонённые — в конец
     for (const c of near.sort((a, b) => a.d - b.d)) {
       if (best && c.d >= best.d) continue;
-      if (this.snapHidden(c.s.p, c.px)) c.d += SNAP_HIDDEN_PENALTY_PX;
+      // Оси и отложенная точка — построения пользователя: видны сквозь геометрию
+      if (c.s.kind !== 'tracking' && c.s.kind !== 'tracked' && this.snapHidden(c.s.p, c.px)) c.d += SNAP_HIDDEN_PENALTY_PX;
       if (!best || c.d < best.d) best = c;
     }
+    if (track) { track.axis = best?.s.kind === 'tracking' ? best.s.axis : undefined; track.dist = best?.s.dist; }
+    this.armTracking(best?.s.kind === 'vertex' && this.trackingEnabled && !off.has('tracking') ? best.s : undefined);
     if (!best) return;
     const { s, px, along } = best;
     const merc = new MercatorCoordinate(g.origin.x + s.p.x * g.metersToMerc, g.origin.y - s.p.y * g.metersToMerc, 0);
-    return { kind: s.kind, key: s.key, local: s.p.clone(), lngLat: merc.toLngLat(), altitude: s.p.z, point: px, along, label: s.label };
+    return { kind: s.kind, key: s.key, local: s.p.clone(), lngLat: merc.toLngLat(), altitude: s.p.z, point: px, along, label: s.label, dist: s.dist };
+  }
+
+  /** Задержка курсора над вершиной с горизонтальными рёбрами взводит её якорем откладывания. */
+  private armTracking(s: SnapPoint | undefined) {
+    const id = s && `${s.key}:${s.p.x.toFixed(3)},${s.p.y.toFixed(3)},${s.p.z.toFixed(3)}`;
+    if (this.vertexHover?.id === id) return;
+    if (this.vertexHover) clearTimeout(this.vertexHover.timer);
+    this.vertexHover = undefined;
+    if (!s || !id || (this.tracking && !this.tracking.point && this.tracking.anchor.distanceTo(s.p) < 1e-3)) return;
+    const timer = setTimeout(() => {
+      this.vertexHover = undefined;
+      const dirs: THREE.Vector3[] = [];
+      const add = (u: THREE.Vector3) => { if (!dirs.some((v) => Math.abs(v.x * u.y - v.y * u.x) < 0.02)) dirs.push(u); };
+      for (const e of [...this.snaps?.edges ?? [], ...this.indoorSnaps?.edges ?? []]) {
+        if (Math.abs(e.a.z - e.b.z) > 1e-3) continue;
+        const other = e.a.distanceTo(s.p) < 1e-3 ? e.b : e.b.distanceTo(s.p) < 1e-3 ? e.a : undefined;
+        if (!other) continue;
+        const u = other.clone().sub(s.p).setZ(0).normalize();
+        add(u);
+        add(new THREE.Vector3(-u.y, u.x, 0));
+      }
+      if (!dirs.length) return;
+      this.tracking = { anchor: s.p.clone(), key: s.key, dirs };
+      this.onTrackArmed?.();
+    }, TRACK_ARM_MS);
+    this.vertexHover = { id, since: performance.now(), timer };
   }
 
   /** Ближайший к лучу через точку экрана узел сетки на земле (z = 0). */
@@ -4385,14 +4462,15 @@ function shellPiecesImpl(shell: Shell, ax: number, ay: number, bx: number, by: n
   return pieces;
 }
 
-export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'shape' | 'grid' | 'perpendicular' | 'edge' | 'extension';
+export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'shape' | 'grid' | 'perpendicular' | 'edge' | 'extension' | 'tracking' | 'tracked';
 /** Ключ привязки к узлу сетки основания: фильтр snapAt пропускает его, если инструменту нужна и сетка. */
 export const GRID_SNAP_KEY = '@grid';
-interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3; label?: string }
+/** axis, dist — у оси откладывания: номер оси якоря и расстояние от него со знаком. */
+interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3; label?: string; axis?: number; dist?: number }
 interface SnapEdge { key: string; a: THREE.Vector3; b: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 /** along — у продолжения ребра: конец ребра, от которого идёт продолжение (для пунктира). */
-export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number]; along?: THREE.Vector3; label?: string }
+export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number]; along?: THREE.Vector3; label?: string; /** У оси откладывания — расстояние от якоря со знаком. */ dist?: number }
 const SNAP_RADIUS_PX = 12;
 /** Длина стрелок осей в начале координат здания, м — одна клетка сетки. */
 const AXES_LENGTH = 10;
@@ -4403,7 +4481,7 @@ const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
 const SNAP_HIDDEN_PENALTY_PX = 100;
 /** Точка на ребре — последней: курсор у ребра почти всегда, она не должна перебивать вершины и середины. */
-const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, shape: 1, grid: 2, center: 2, extension: 4, edge: 3 };
+const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, shape: 1, grid: 2, center: 2, extension: 4, edge: 3, tracked: 0, tracking: 2 };
 /** Как далеко за конец ребра тянется его продолжение, м. */
 const EXTENSION_M = 30;
 /** Продолжение ловит курсор ближе обычного (px): иначе срабатывает почти везде вокруг здания. */
@@ -4414,6 +4492,12 @@ const EXTENSION_ARM_MS = 1000;
 const EXTENSION_TTL_MS = 4000;
 /** Курсор «над ребром» — ближе этого к нему на экране, px. */
 const EXTENSION_HOVER_PX = 6;
+/** Сколько держать курсор над вершиной, чтобы откладывать от неё по осям, мс. */
+const TRACK_ARM_MS = 2000;
+/** Длина осей откладывания в обе стороны от якоря, м. */
+const TRACK_M = 100;
+/** Ось откладывания ловит курсор ближе этого, px. */
+const TRACK_RADIUS_PX = 8;
 /** Шаг сетки основания режима здания, м. */
 const GRID_STEP = 10;
 

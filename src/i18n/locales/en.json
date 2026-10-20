@@ -1001,5 +1001,9 @@
   "Части лежат внутри контура здания без отношения type=building — по схеме Simple 3D это уже одно здание. Отношение делает состав явным для других редакторов.": "The parts lie inside the building outline without a type=building relation — under the Simple 3D scheme this is already one building. A relation makes the composition explicit for other editors.",
   "Собрать отношение type=building": "Create type=building relation",
   "Контур здания и части внутри него (частей: {n}) без отношения type=building — соберите отношение, чтобы состав здания был явным.": "Building outline and parts inside it ({n} parts) without a type=building relation — create the relation to make the building composition explicit.",
-  "собрать отношение type=building": "create type=building relation"
+  "собрать отношение type=building": "create type=building relation",
+  "От вершины": "From vertex",
+  "Отложенная точка": "Offset point",
+  "Enter — отложить точку, минус — в обратную сторону, Esc — сбросить": "Enter — place point, minus — opposite direction, Esc — reset",
+  "Откладывание от вершины": "Offset from vertex"
 }

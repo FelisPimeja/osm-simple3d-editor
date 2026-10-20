@@ -1768,13 +1768,86 @@ const snapEl = document.createElement('div');
 snapEl.className = 'snap-marker';
 snapEl.hidden = true;
 map.getContainer().appendChild(snapEl);
-const SNAP_LABELS = { vertex: tr('Вершина'), midpoint: tr('Середина'), center: tr('Центр'), shape: tr('Центр фигуры'), grid: tr('Сетка'), perpendicular: tr('Перпендикуляр'), edge: tr('На ребре'), extension: tr('Продолжение') } as const;
+const SNAP_LABELS = { vertex: tr('Вершина'), midpoint: tr('Середина'), center: tr('Центр'), shape: tr('Центр фигуры'), grid: tr('Сетка'), perpendicular: tr('Перпендикуляр'), edge: tr('На ребре'), extension: tr('Продолжение'), tracking: tr('От вершины'), tracked: tr('Отложенная точка') } as const;
 /** Текущая привязка под курсором — для будущих инструментов геометрии. */
 let currentSnap: SnapHit | undefined;
 
 function updateSnap(point: [number, number] | undefined) {
+  const tracking = !!focus && toolActive();
+  if (!tracking && (overpassLayer.tracking || trackTyped)) { overpassLayer.clearTracking(); trackTyped = ''; trackAxis = undefined; }
+  overpassLayer.trackingEnabled = tracking;
   updateSnapMarker(point);
   overpassLayer.setSnapLine(currentSnap?.along && [currentSnap.along, currentSnap.local]);
+  updateTracking();
+}
+
+// Откладывание от вершины: задержка курсора над вершиной делает её якорем, число + Enter на оси — виртуальная точка
+const trackAnchorEl = document.createElement('div');
+trackAnchorEl.className = 'track-marker anchor';
+trackAnchorEl.hidden = true;
+const trackPointEl = document.createElement('div');
+trackPointEl.className = 'track-marker point';
+trackPointEl.hidden = true;
+const trackVcb = document.createElement('div');
+trackVcb.className = 'vcb vcb-track';
+trackVcb.hidden = true;
+map.getContainer().append(trackAnchorEl, trackPointEl, trackVcb);
+/** Набранное расстояние и ось, на которой стоял курсор при первом символе (side — сторона курсора). */
+let trackTyped = '';
+let trackAxis: { axis: number; side: number } | undefined;
+overpassLayer.onTrackArmed = () => { if (lastPointer) updateSnap(lastPointer); };
+
+function updateTracking() {
+  const t = overpassLayer.trackingEnabled ? overpassLayer.tracking : undefined;
+  const place = (el: HTMLElement, px: [number, number] | undefined) => {
+    el.hidden = !px;
+    if (px) { el.style.left = `${px[0]}px`; el.style.top = `${px[1]}px`; }
+  };
+  place(trackAnchorEl, t?.px);
+  place(trackPointEl, t?.point ? t.pointPx : undefined);
+  const live = t && t.axis !== undefined && t.dist !== undefined;
+  trackVcb.hidden = !t || (!trackTyped && !live);
+  if (trackVcb.hidden) return;
+  const value = trackTyped || Math.abs(t!.dist ?? 0).toFixed(2);
+  trackVcb.innerHTML = `<span class="vcb-label">${tr('От вершины')}</span><span class="vcb-value${trackTyped ? ' typed' : ''}">${value}</span> ${tr('м')}
+    <span class="vcb-axis">${tr('Enter — отложить точку, минус — в обратную сторону, Esc — сбросить')}</span>`;
+}
+
+/** true — клавиша ушла в откладывание (набор расстояния на оси якоря или Esc). */
+function trackKey(e: KeyboardEvent): boolean {
+  const t = overpassLayer.trackingEnabled ? overpassLayer.tracking : undefined;
+  if (!t || e.ctrlKey || e.metaKey || e.altKey) return false;
+  if (e.key === 'Escape') {
+    overpassLayer.clearTracking();
+    trackTyped = '';
+    trackAxis = undefined;
+    updateSnap(lastPointer);
+    return true;
+  }
+  if (/^[\d.,-]$/.test(e.key) && (trackTyped || (t.axis !== undefined && t.dist !== undefined))) {
+    if (!trackTyped) trackAxis = { axis: t.axis!, side: Math.sign(t.dist!) || 1 };
+    trackTyped += e.key === ',' ? '.' : e.key;
+    updateTracking();
+    return true;
+  }
+  if (!trackTyped) return false;
+  if (e.key === 'Backspace') {
+    trackTyped = trackTyped.slice(0, -1);
+    if (!trackTyped) trackAxis = undefined;
+    updateTracking();
+    return true;
+  }
+  if (e.key === 'Enter') {
+    const v = Number(trackTyped);
+    if (Number.isFinite(v) && trackAxis) {
+      overpassLayer.placeTracked(v, trackAxis.axis, trackAxis.side);
+      trackTyped = '';
+      trackAxis = undefined;
+      updateSnap(lastPointer);
+    }
+    return true;
+  }
+  return false;
 }
 
 // Alt — привязки временно выключены (пока зажат)
@@ -1808,7 +1881,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
     snapEl.hidden = !currentSnap;
     if (currentSnap) {
       snapEl.className = `snap-marker ${currentSnap.kind}`;
-      snapEl.dataset.label = currentSnap.label ?? SNAP_LABELS[currentSnap.kind];
+      snapEl.dataset.label = currentSnap.kind === 'tracking' ? `${Math.abs(currentSnap.dist ?? 0).toFixed(2)} ${tr('м')}` : currentSnap.label ?? SNAP_LABELS[currentSnap.kind];
       snapEl.style.left = `${currentSnap.point[0]}px`;
       snapEl.style.top = `${currentSnap.point[1]}px`;
     }
@@ -1827,6 +1900,14 @@ function updateSnapMarker(point: [number, number] | undefined) {
 }
 /** Последняя точка курсора над картой — чтобы пересчитать привязку после S без движения мыши. */
 let lastPointer: [number, number] | undefined;
+// Клик в инструменте забирает отложенную точку (или уходит мимо неё) — якорь больше не нужен
+map.on('click', () => {
+  if (!overpassLayer.tracking && !trackTyped) return;
+  overpassLayer.clearTracking();
+  trackTyped = '';
+  trackAxis = undefined;
+  updateTracking();
+});
 map.on('mousemove', (e) => { lastPointer = [e.point.x, e.point.y]; updateSnap(lastPointer); });
 map.on('movestart', () => { if (moveTool.state !== 'move') updateSnap(undefined); });
 map.getCanvasContainer().addEventListener('mouseleave', () => updateSnap(undefined));
@@ -3864,6 +3945,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === 'Escape' && copyPick) { e.preventDefault(); e.stopImmediatePropagation(); cancelCopyPick(); return; }
+  if (trackKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e) || paintTool.key(e) || offsetTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   // S — привязки вкл/выкл, в том числе посреди перемещения или вытягивания
   if (focus && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -6345,6 +6427,7 @@ snapsBtn.addEventListener('click', () => toggleSnaps());
 const SNAP_KINDS: [SnapKind, string][] = [
   ['vertex', tr('Вершины')], ['midpoint', tr('Середины рёбер')], ['center', tr('Центры')], ['edge', tr('На ребре')],
   ['perpendicular', tr('Перпендикуляр')], ['extension', tr('Продолжение ребра')], ['grid', tr('Узлы сетки')], ['shape', tr('Центр фигуры')],
+  ['tracking', tr('Откладывание от вершины')],
 ];
 try { for (const k of JSON.parse(localStorage.getItem('snaps-off') ?? '[]') as SnapKind[]) overpassLayer.snapKindsOff.add(k); } catch { /* нет хранилища */ }
 snapsBtn.insertAdjacentHTML('beforeend', `<span class="flyout-arrow" data-flyout title="${tr('Типы привязок')}"></span>`);

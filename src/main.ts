@@ -1440,15 +1440,13 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
       if (manual && requestId === focusRefreshId) setStatus(tr('Данные здания актуальны.'));
       return;
     }
-    const stillFocused = requestId === focusRefreshId && focus?.key === g.key;
-    const touched = stillFocused && ([...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.has(key) && session.isChanged(key)) || session.hasDataHistory());
-    if (touched) {
-      setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
-      return;
-    }
+    // Кеш тайлов (память и IndexedDB) хранит данные сервера, а не правки сессии — обновляем его всегда,
+    // иначе после выхода в режим карты снова покажется старое здание
     const saved = new Map(changed.map((f) => [f.key, { version: f.version, tags: f.tags, polygons: f.polygons, ways: f.ways }]));
     await overpass.applySaved(saved, isSolo(g) ? [] : [freshGroup], changed);
-    if (!stillFocused || requestId !== focusRefreshId || focus?.key !== g.key) return;
+    // Свежие версии запоминаем как отправленные: отстающий Overpass или старая запись IndexedDB не вернут прежнее здание
+    overpass.noteUploaded(new Map([...changed, ...(groupChanged ? [freshGroup] : [])].map((f) => [f.key, f.version])));
+    if (requestId !== focusRefreshId || focus?.key !== g.key) return;
     if (session.hasDataHistory() || [...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.has(key) && session.isChanged(key))) {
       setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
       return;

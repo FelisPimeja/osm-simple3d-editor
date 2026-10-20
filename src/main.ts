@@ -5955,13 +5955,16 @@ let rightDown: [number, number] | undefined;
 map.getContainer().addEventListener('pointerdown', (e) => { if (e.button === 2) rightDown = [e.clientX, e.clientY]; }, { capture: true });
 // Системное меню глушим на всём контейнере карты: при вращении событие приходит не на canvas, а на слой поверх,
 // и системное меню уводит фокус из окна — наше тут же закрывается
-map.getContainer().addEventListener('contextmenu', (e) => { if (focus) e.preventDefault(); }, { capture: true });
+map.getContainer().addEventListener('contextmenu', (e) => e.preventDefault(), { capture: true });
 window.addEventListener('pointerup', (e) => {
   if (e.button !== 2 || !rightDown) return;
   const moved = Math.hypot(e.clientX - rightDown[0], e.clientY - rightDown[1]) > 4;
   rightDown = undefined;
-  if (!focus || moved || moveTool.state === 'move' || pushTool.state === 'push') return;
+  if (moved || moveTool.state === 'move' || pushTool.state === 'push') return;
   const rect = map.getCanvas().getBoundingClientRect();
+  if (!rect.width || e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+  ctxLngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+  if (!focus) return openCtxMenu(e.clientX, e.clientY, 'map');
   const key = overpassLayer.pickHit([e.clientX - rect.left, e.clientY - rect.top])?.key;
   if (shownLevel) {
     const point: [number, number] = [e.clientX - rect.left, e.clientY - rect.top];
@@ -5988,7 +5991,12 @@ window.addEventListener('pointerup', (e) => {
  * Меню частей. В сцене скрытые не выбрать — вместо «Показать» там «Показать всё скрытое»;
  * 'empty' — клик мимо здания: только «Показать всё» и выход.
  */
-function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | 'indoor') {
+function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | 'indoor' | 'map') {
+  const yandex = `<li class="ctx-sep"></li><li><button type="button" data-ctx="yandex-pano">${tr('Открыть Яндекс Панорамы здесь')}</button></li>`;
+  if (where === 'map') {
+    ctxMenu.innerHTML = yandex.replace('<li class="ctx-sep"></li>', '');
+    return placeCtxMenu(x, y);
+  }
   if (!focus) return;
   const hiddenCount = focusHidden.size + indoorHidden.size;
   const showAll = `<li><button type="button" data-ctx="show-all"${hiddenCount ? '' : ' disabled'}>${tr('Показать всё')}${hiddenCount ? ` (${hiddenCount})` : ''}<kbd>⇧H</kbd></button></li>`;
@@ -5998,11 +6006,7 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
     ctxMenu.innerHTML = `<li><button type="button" data-ctx="indoor-hide"${indoorSelection.length ? '' : ' disabled'}>${tr('Скрыть объекты')}${n}<kbd>H</kbd></button></li>`
       + showAll
       + `<li><button type="button" data-ctx="indoor-delete"${canDeleteIndoorSelection() && !uploading && !deletingIndoorWalls ? '' : ' disabled'}>${tr('Удалить')}${n}<kbd>Del</kbd></button></li>`;
-    ctxMenu.hidden = false;
-    const { width, height } = ctxMenu.getBoundingClientRect();
-    ctxMenu.style.left = `${Math.min(x, innerWidth - width - 4)}px`;
-    ctxMenu.style.top = `${Math.min(y, innerHeight - height - 4)}px`;
-    return;
+    return placeCtxMenu(x, y);
   }
   const inScene = where !== 'list';
   const kbd = (k: string) => `<kbd>${k}</kbd>`;
@@ -6012,7 +6016,7 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
   const anyShown = keys.some((k) => !focusHidden.has(k)), anyHidden = keys.some((k) => focusHidden.has(k));
   const n = keys.length > 1 ? ` (${keys.length})` : '';
   ctxMenu.innerHTML = where === 'empty' ? `
-    ${showAll}${snaps}${exit}` : `
+    ${showAll}${snaps}${yandex}${exit}` : `
     <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>${tr('Скрыть объекты')}${n}${kbd('H')}</button></li>
     <li><button type="button" data-ctx="isolate"${keys.length && focus.members.some((k) => !keys.includes(k) && !focusHidden.has(k)) ? '' : ' disabled'}>${tr('Изолировать')}${n}</button></li>
     ${inScene
@@ -6020,6 +6024,10 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
       : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>${tr('Показать объекты')}${n}</button></li>`}
     <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>${tr('Исключить из модели')}${n}</button></li>
     <li><button type="button" data-ctx="delete"${keys.length ? '' : ' disabled'}>${tr('Удалить')}${n}${kbd('Del')}</button></li>${inScene ? '' : showAll}${snaps}${exit}`;
+  placeCtxMenu(x, y);
+}
+
+function placeCtxMenu(x: number, y: number) {
   ctxMenu.hidden = false;
   // Не выходим за край окна
   const { width, height } = ctxMenu.getBoundingClientRect();
@@ -6027,9 +6035,29 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
   ctxMenu.style.top = `${Math.min(y, innerHeight - height - 4)}px`;
 }
 
+/** Точка последнего правого клика по карте — для перехода на панорамы. */
+let ctxLngLat: maplibregl.LngLat | undefined;
+
+/**
+ * Яндекс Панорамы — только переходом на сайт Яндекс Карт: условия API не разрешают показывать их панорамы
+ * поверх чужих карт (п. 6.1.1), а для OSM разрешено лишь обрисовывать увиденное на снимках. Направление взгляда —
+ * как у камеры карты; Яндекс сам откроет ближайшую к точке панораму.
+ */
+function openYandexPanorama(at: maplibregl.LngLat) {
+  const ll = `${at.lng.toFixed(6)},${at.lat.toFixed(6)}`;
+  const dir = ((map.getBearing() % 360) + 360) % 360;
+  const q = `ll=${ll}&z=18&l=stv%2Csta&panorama%5Bpoint%5D=${ll}&panorama%5Bdirection%5D=${dir.toFixed(1)}%2C0&panorama%5Bspan%5D=120%2C60`;
+  window.open(`https://yandex.ru/maps/?${q}`, '_blank', 'noopener');
+}
+
 ctxMenu.addEventListener('click', (e) => {
   const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ctx]:not(:disabled)');
   const action = button?.dataset.ctx;
+  if (action === 'yandex-pano') {
+    closeCtxMenu();
+    if (ctxLngLat) openYandexPanorama(ctxLngLat);
+    return;
+  }
   if (!action || !focus) return;
   closeCtxMenu();
   if (action === 'indoor-hide') return hideSelectedIndoor();

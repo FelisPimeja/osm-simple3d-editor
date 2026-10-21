@@ -2938,7 +2938,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         const geo = new LineGeometry();
         geo.setPositions([...points, points[0]].flatMap((p) => [p.x, p.y, p.z]));
         const mat = new LineMaterial({ color: 0x2563eb, linewidth: widthPx * dpr, depthTest: false, depthWrite: false, transparent: true,
-          ...(dashed ? { dashed: true, dashSize: 0.5, gapSize: 0.3 } : {}) });
+          // Штрихи — как у скрытых рёбер выделенного
+          ...(dashed ? { dashed: true, dashSize: 0.25, gapSize: 0.15 } : {}) });
         mat.resolution.set(canvas.width, canvas.height);
         const line = new Line2(geo, mat);
         if (dashed) line.computeLineDistances();

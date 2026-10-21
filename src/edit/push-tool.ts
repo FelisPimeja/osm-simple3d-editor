@@ -198,7 +198,8 @@ export class PushTool {
     if (id === this.outlined) return;
     this.outlined = id;
     const rings = t && this.faceOutline?.(t);
-    this.layer.setOutline(rings?.length ? rings : undefined, 2, back, true);
+    // Задняя — пунктиром, как скрытые рёбра выделенного, но толще: видно, что это цель, а не просто скрытое ребро
+    this.layer.setOutline(rings?.length ? rings : undefined, back ? 3 : 2, back, true);
   }
 
   /** back — Shift: задняя грань под курсором. */

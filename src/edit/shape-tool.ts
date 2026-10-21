@@ -10,11 +10,20 @@ const AXIS_SNAP_DEG = 15;
 const MIN_DRAG_PX = 6;
 /** Как близко (px) к вертикальному ребру стены курсор берёт вершину. */
 const GRAB_PX = 12;
+/** Как близко (px) к стороне (верху или низу стены) курсор берёт точку на ней — новую вершину. */
+const EDGE_PX = 8;
+/** Точка на стороне ближе этого к её концу (доля длины) — не новая вершина: там уже есть. */
+const EDGE_END = 0.02;
 /** Общие узлы — тот же переключатель, что у «Вытянуть»: выбор один на оба инструмента. */
 const GLUE_STORAGE = 'push-glue';
 
-/** Захваченная вершина: объект, полигон, кольцо (0 — внешнее, 1… — дыры), номер вершины и точка захвата (метры сцены). */
-export interface ShapeTarget { key: string; poly: number; ring: number; i: number; from: THREE.Vector3 }
+/**
+ * Захваченная вершина: объект, полигон, кольцо (0 — внешнее, 1… — дыры), номер вершины и точка захвата (метры сцены).
+ * insert — захвачена точка на стороне i → i+1 (её положение на стороне, 0…1): там встанет новая вершина.
+ */
+export interface ShapeTarget { key: string; poly: number; ring: number; i: number; from: THREE.Vector3; insert?: number }
+
+type Hover = { index?: number; point?: THREE.Vector3 };
 
 /** Направления, к которым прилипает движение: оси здания и стороны у вершины. */
 type Dir = { v: THREE.Vector3; name: string; axis?: 0 | 1 };
@@ -22,7 +31,8 @@ type Dir = { v: THREE.Vector3; name: string; axis?: 0 | 1 };
 /**
  * Инструмент «Форма»: правка контура выделенной части по вершинам (только в плане — в Simple 3D у вершины нет высоты).
  * 1. клик по вершине выделенной части — захват; вершину можно взять на любой высоте вертикального ребра стены,
- *    маркеры вершин видны поверх геометрии. Клик не по вершине — выбрать другой объект (мимо — снять выделение);
+ *    маркеры вершин видны поверх геометрии. Клик по стороне (верх или низ стены) — новая вершина в этой точке,
+ *    сразу в сдвиг (клик без движения — просто вставить). Клик мимо — выбрать другой объект (мимо всех — снять выделение);
  * 2. движение курсора — вершина едет по горизонтали; прилипает к осям здания и продолжениям сторон у вершины,
  *    привязка к точке другого объекта ставит вершину в неё (по высоте — проекция);
  * 3. второй клик — применить; число + Enter — сдвиг в метрах по текущему направлению. Shift держит направление.
@@ -43,7 +53,8 @@ export class ShapeTool {
   private typed = '';
   /** Почему текущее положение нельзя применить (самопересечение и т. п.). */
   private problem?: string;
-  private hover?: number;
+  /** Под курсором: номер вершины или точка на стороне (новая вершина). */
+  private hover?: Hover;
   private lastPoint?: [number, number];
   private readonly vcb: HTMLDivElement;
 
@@ -104,11 +115,11 @@ export class ShapeTool {
   refresh() {
     if (this.state === 'drag') { if (this.lastPoint) this.move(this.lastPoint); return; }
     if (this.state !== 'pick') return;
-    if (this.lastPoint) this.hover = this.vertexAt(this.lastPoint)?.index;
+    if (this.lastPoint) this.hover = this.hoverAt(this.lastPoint);
     this.showHandles();
     this.updateVcb();
     this.onState(this.selected()
-      ? tr('Форма: кликните по вершине выделенной части (на любой высоте ребра стены). Клик по другому объекту — выбрать его. Esc — выйти.')
+      ? tr('Форма: кликните по вершине выделенной части (на любой высоте ребра стены) или по стороне — новая вершина. Клик по другому объекту — выбрать его. Esc — выйти.')
       : tr('Форма: выберите часть здания кликом, затем кликните по её вершине. Esc — выйти.'));
   }
 
@@ -120,7 +131,7 @@ export class ShapeTool {
       return true;
     }
     if (this.state !== 'pick') return false;
-    const hit = this.vertexAt(point);
+    const hit = this.vertexAt(point) ?? this.edgeAt(point);
     if (!hit) return false;
     this.target = hit.target;
     this.offset.set(0, 0, 0);
@@ -137,8 +148,8 @@ export class ShapeTool {
   move(point: [number, number]) {
     this.lastPoint = point;
     if (this.state === 'pick') {
-      const h = this.vertexAt(point)?.index;
-      if (h !== this.hover) { this.hover = h; this.showHandles(); }
+      const h = this.hoverAt(point);
+      if (h?.index !== this.hover?.index || !samePoint(h?.point, this.hover?.point)) { this.hover = h; this.showHandles(); }
       return;
     }
     const t = this.target;
@@ -213,7 +224,8 @@ export class ShapeTool {
     const t = this.target!;
     this.cancelDrag();
     this.state = 'pick';
-    if (offset.lengthSq() > 1e-8) this.commit(t, offset.clone());
+    // Новая вершина вставляется и без сдвига
+    if (offset.lengthSq() > 1e-8 || t.insert !== undefined) this.commit(t, offset.clone());
     this.refresh();
   }
 
@@ -239,13 +251,55 @@ export class ShapeTool {
     let active: number | undefined;
     const t = this.state === 'drag' ? this.target : undefined;
     polys.forEach((p, pi) => [p.outer, ...p.inners].forEach((ring, ri) => ring.forEach(([x, y], i) => {
-      if (t && t.poly === pi && t.ring === ri && t.i === i) {
+      if (t && t.insert === undefined && t.poly === pi && t.ring === ri && t.i === i) {
         active = pts.length;
         pts.push(new THREE.Vector3(t.from.x + this.offset.x, t.from.y + this.offset.y, w.top));
       } else pts.push(new THREE.Vector3(x, y, w.top));
-      if (!t && this.hover === pts.length - 1) active = pts.length - 1;
+      if (!t && this.hover?.index === pts.length - 1) active = pts.length - 1;
     })));
+    // Новая вершина — захваченная (на новом месте) или будущая под курсором
+    const extra = t?.insert !== undefined ? new THREE.Vector3(t.from.x + this.offset.x, t.from.y + this.offset.y, w.top)
+      : !t && this.hover?.point ? this.hover.point.clone().setZ(w.top) : undefined;
+    if (extra) { active = pts.length; pts.push(extra); }
     this.layer.setHandles(pts, active);
+  }
+
+  private hoverAt(point: [number, number]): Hover | undefined {
+    const v = this.vertexAt(point);
+    if (v) return { index: v.index };
+    const e = this.edgeAt(point);
+    return e ? { point: e.target.from } : undefined;
+  }
+
+  /**
+   * Точка на стороне выделенной части под курсором: сторона — верх или низ стены (ближайший на экране), точка —
+   * пересечение луча курсора с горизонталью этого уровня, спроецированное на сторону. Концы сторон — вершины, не тут.
+   */
+  private edgeAt(point: [number, number]): { target: ShapeTarget } | undefined {
+    const key = this.selected();
+    const polys = key ? this.layer.focusPolygons(key) : undefined;
+    const w = key ? this.walls(key) : undefined;
+    const ray = this.layer.focusRay(point);
+    if (!key || !polys || !w || !ray) return;
+    let best: { target: ShapeTarget; d: number } | undefined;
+    const levels = w.top - w.min > 0.2 ? [w.top, w.min] : [w.min];
+    polys.forEach((p, poly) => [p.outer, ...p.inners].forEach((r, ring) => r.forEach(([ax, ay], i) => {
+      const [bx, by] = r[(i + 1) % r.length];
+      for (const z of levels) {
+        const a = this.layer.focusProject(new THREE.Vector3(ax, ay, z));
+        const b = this.layer.focusProject(new THREE.Vector3(bx, by, z));
+        if (!a || !b) continue;
+        const { d } = segDist(point, a, b);
+        if (d > EDGE_PX || (best && d >= best.d)) continue;
+        const hit = ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+        const ex = bx - ax, ey = by - ay, l2 = ex * ex + ey * ey;
+        if (!hit || l2 < 1e-8) continue;
+        const s = ((hit.x - ax) * ex + (hit.y - ay) * ey) / l2;
+        if (s < EDGE_END || s > 1 - EDGE_END) continue;
+        best = { target: { key, poly, ring, i, insert: s, from: new THREE.Vector3(ax + s * ex, ay + s * ey, z) }, d };
+      }
+    })));
+    return best;
   }
 
   /** Вершина выделенной части под курсором: ближайшее на экране вертикальное ребро стены (низ — верх). */
@@ -268,7 +322,7 @@ export class ShapeTool {
     return best;
   }
 
-  /** Оси здания и продолжения обеих сторон у захваченной вершины. */
+  /** Оси здания и продолжения обеих сторон у захваченной вершины (у новой — сама сторона и перпендикуляр к ней). */
   private dirs(t: ShapeTarget): Dir[] {
     const out: Dir[] = [];
     const f = this.layer.focusAxes;
@@ -278,14 +332,21 @@ export class ShapeTool {
     const p = this.layer.focusPolygons(t.key)?.[t.poly];
     const ring = p && (t.ring ? p.inners[t.ring - 1] : p.outer);
     if (!ring || ring.length < 3) return out;
+    const add = (v: THREE.Vector3, name: string) => {
+      if (v.lengthSq() < 1e-8) return;
+      v.normalize();
+      // По оси здания — уже есть
+      if (!out.some((d) => Math.abs(d.v.dot(v)) > 0.9998)) out.push({ v, name });
+    };
+    if (t.insert !== undefined) {
+      const [ax, ay] = ring[t.i], [bx, by] = ring[(t.i + 1) % ring.length];
+      add(new THREE.Vector3(bx - ax, by - ay, 0), tr('вдоль стороны'));
+      add(new THREE.Vector3(ay - by, bx - ax, 0), tr('перпендикуляр к стороне'));
+      return out;
+    }
     for (const k of [t.i - 1 + ring.length, t.i + 1]) {
       const [x, y] = ring[k % ring.length];
-      const v = new THREE.Vector3(t.from.x - x, t.from.y - y, 0);
-      if (v.lengthSq() < 1e-8) continue;
-      v.normalize();
-      // Сторона по оси здания — уже есть
-      if (out.some((d) => Math.abs(d.v.dot(v)) > 0.9998)) continue;
-      out.push({ v, name: tr('вдоль стороны') });
+      add(new THREE.Vector3(t.from.x - x, t.from.y - y, 0), tr('вдоль стороны'));
     }
     return out;
   }
@@ -336,6 +397,10 @@ export class ShapeTool {
     this.vcb.innerHTML = `<span class="vcb-label">${tr('Вершина')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
       <span class="vcb-axis">${this.snap ? tr('к точке · {along}', { along }) : along}</span>${linked}${problem}${glue}`;
   }
+}
+
+function samePoint(a: THREE.Vector3 | undefined, b: THREE.Vector3 | undefined): boolean {
+  return a === b || (!!a && !!b && a.distanceToSquared(b) < 1e-6);
 }
 
 /** Расстояние от точки до отрезка на экране и параметр ближайшей точки (0 — a, 1 — b). */

@@ -1014,7 +1014,6 @@
   "Часть здания внутри контура отношения {relation}, но не входит в него — добавьте её в отношение с ролью part.": "Building part lies inside the outline of {relation} but is not its member — add it to the relation with role part.",
   "добавить в {relation} (part)": "add to {relation} (part)",
   "Часть стоит внутри {other} и до {seat} м скрыта в её объёме — объёмы накладываются. Начните её с верха {other}: min_height={seat}.": "The part stands inside {other} and is hidden in its volume up to {seat} m — the volumes overlap. Start it at the top of {other}: min_height={seat}.",
-  "Форма: кликните по вершине выделенной части (на любой высоте ребра стены). Клик по другому объекту — выбрать его. Esc — выйти.": "Shape: click a vertex of the selected part (at any height of the wall edge). Click another object to select it. Esc — exit.",
   "Форма: выберите часть здания кликом, затем кликните по её вершине. Esc — выйти.": "Shape: click a building part to select it, then click one of its vertices. Esc — exit.",
   "Ведите курсор: вершина едет в плане, прилипает к осям здания и сторонам у вершины. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.": "Move the cursor: the vertex moves in plan, snapping to the building axes and the sides at the vertex. Click — apply, number + Enter — offset in metres, Esc — cancel.",
   "вдоль стороны": "along side",
@@ -1029,5 +1028,10 @@
   "Движение прилипает к осям здания и продолжениям сторон у вершины; Shift держит направление.": "Movement snaps to the building axes and to the extensions of the sides at the vertex; Shift holds the direction.",
   "Число + Enter — сдвиг в метрах; D — общие узлы с соседями или отдельно.": "Number + Enter — offset in metres; D — shared nodes: with neighbours or detached.",
   "Клик не по вершине — выбрать другой объект. Esc — отмена.": "Click away from a vertex to select another object. Esc — cancel.",
-  "Форма: вершины контура выделенной части (V)": "Shape: outline vertices of the selected part (V)"
+  "Форма: вершины контура выделенной части (V)": "Shape: outline vertices of the selected part (V)",
+  "Форма: кликните по вершине выделенной части (на любой высоте ребра стены) или по стороне — новая вершина. Клик по другому объекту — выбрать его. Esc — выйти.": "Shape: click a vertex of the selected part (at any height of the wall edge) or a side to add a vertex. Click another object to select it. Esc — exit.",
+  "перпендикуляр к стороне": "perpendicular to side",
+  "Новая вершина {key} сдвинута на {d} м": "New vertex of {key} moved by {d} m",
+  "Новая вершина на стороне {key}": "New vertex on a side of {key}",
+  "Клик по стороне (верх или низ стены) — новая вершина в этой точке, сразу в сдвиг; клик без движения — просто вставить.": "Click a side (top or bottom of the wall) to add a vertex there and move it right away; click without moving to just insert it."
 }

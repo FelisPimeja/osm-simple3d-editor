@@ -41,7 +41,9 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   // Двускатная и сводчатая на почти прямоугольных контурах — вдоль оси описанного прямоугольника (учитывает roof:orientation)
   // roof:orientation=across скелет не умеет (у него конёк всегда вдоль) — для неё допускаем контуры кривее:
   // изогнутая полоса (арка, крыло вдоль дуги) заполняет описанный прямоугольник заметно хуже 85%
-  const across = tags['roof:orientation'] === 'across';
+  // Saltbox скелет рисует симметричной двускатной (roof:direction теряется) — для неё тоже допускаем
+  // контуры кривее: way/267152388 с вырезом сбоку заполняет описанный прямоугольник на ~75%
+  const across = tags['roof:orientation'] === 'across' || shape === 'saltbox';
   const axis = single && AXIS_SHAPES.has(shape)
     ? rectAxis(single.outer, across ? RECT_FILL_ACROSS : shape === 'crosspitched' ? RECT_FILL_CROSSPITCHED : RECT_FILL)
     : undefined;

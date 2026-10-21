@@ -1,0 +1,359 @@
+import * as THREE from 'three';
+import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import { tr, trn } from '../i18n';
+
+type Pt = [number, number];
+
+/** Угол между движением курсора и направлением на экране, при котором движение «прилипает» к нему. */
+const AXIS_SNAP_DEG = 15;
+/** Курсор ближе к точке захвата — направление ещё не определено. */
+const MIN_DRAG_PX = 6;
+/** Как близко (px) к вертикальному ребру стены курсор берёт вершину. */
+const GRAB_PX = 12;
+/** Общие узлы — тот же переключатель, что у «Вытянуть»: выбор один на оба инструмента. */
+const GLUE_STORAGE = 'push-glue';
+
+/** Захваченная вершина: объект, полигон, кольцо (0 — внешнее, 1… — дыры), номер вершины и точка захвата (метры сцены). */
+export interface ShapeTarget { key: string; poly: number; ring: number; i: number; from: THREE.Vector3 }
+
+/** Направления, к которым прилипает движение: оси здания и стороны у вершины. */
+type Dir = { v: THREE.Vector3; name: string; axis?: 0 | 1 };
+
+/**
+ * Инструмент «Форма»: правка контура выделенной части по вершинам (только в плане — в Simple 3D у вершины нет высоты).
+ * 1. клик по вершине выделенной части — захват; вершину можно взять на любой высоте вертикального ребра стены,
+ *    маркеры вершин видны поверх геометрии. Клик не по вершине — выбрать другой объект (мимо — снять выделение);
+ * 2. движение курсора — вершина едет по горизонтали; прилипает к осям здания и продолжениям сторон у вершины,
+ *    привязка к точке другого объекта ставит вершину в неё (по высоте — проекция);
+ * 3. второй клик — применить; число + Enter — сдвиг в метрах по текущему направлению. Shift держит направление.
+ * Общие с соседями узлы (D): «с соседями» — соседи тянутся следом, «отдельно» — у части новый узел.
+ * Esc — отмена, повторный Esc — выйти. Пересчёт геометрии, проверка и правки — снаружи (preview, commit).
+ */
+export class ShapeTool {
+  state: 'off' | 'pick' | 'drag' = 'off';
+  snap?: SnapHit;
+  glue = loadGlue();
+  /** Сколько соседей тянется в текущем превью (задаёт preview). */
+  linked = 0;
+  private target?: ShapeTarget;
+  private offset = new THREE.Vector3();
+  private dir?: Dir;
+  private locked?: Dir;
+  private shiftLock = false;
+  private typed = '';
+  /** Почему текущее положение нельзя применить (самопересечение и т. п.). */
+  private problem?: string;
+  private hover?: number;
+  private lastPoint?: [number, number];
+  private readonly vcb: HTMLDivElement;
+
+  constructor(
+    private readonly layer: BuildingsLayer,
+    container: HTMLElement,
+    /** Выделенная часть, вершины которой правим (одна, член здания). */
+    private readonly selected: () => string | undefined,
+    /** Низ и верх стен объекта, м сцены. */
+    private readonly walls: (key: string) => { min: number; top: number } | undefined,
+    /** Объекты, к которым не привязываемся во время сдвига (сам объект и соседи в превью). */
+    private readonly moving: () => ReadonlySet<string>,
+    /** Превью; строка — почему так нельзя. offset undefined — вернуть как было. */
+    private readonly preview: (t: ShapeTarget, offset: THREE.Vector3 | undefined) => string | undefined,
+    private readonly commit: (t: ShapeTarget, offset: THREE.Vector3) => void,
+    private readonly onState: (hint: string, error?: boolean) => void,
+  ) {
+    this.vcb = document.createElement('div');
+    this.vcb.className = 'vcb';
+    this.vcb.hidden = true;
+    container.appendChild(this.vcb);
+    for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
+    this.vcb.addEventListener('click', (e) => {
+      const g = (e.target as HTMLElement).closest<HTMLElement>('[data-glue]')?.dataset.glue;
+      if (g) this.setGlue(g === 'on');
+    });
+  }
+
+  get active() { return this.state !== 'off'; }
+
+  start() {
+    this.glue = loadGlue();
+    this.state = 'pick';
+    this.refresh();
+  }
+
+  stop() {
+    this.cancelDrag();
+    this.state = 'off';
+    this.hover = undefined;
+    this.layer.setHandles(undefined);
+    this.vcb.hidden = true;
+    this.onState('');
+  }
+
+  setGlue(on: boolean) {
+    this.glue = on;
+    try { localStorage.setItem(GLUE_STORAGE, on ? 'on' : 'off'); } catch { /* без хранилища — до перезагрузки */ }
+    if (this.state === 'drag' && this.target) {
+      // Превью прежнего режима могло задеть соседей — сбросить его целиком
+      this.preview(this.target, undefined);
+      this.problem = this.preview(this.target, this.offset);
+    }
+    this.updateVcb();
+  }
+
+  /** Выделение или геометрия поменялись снаружи — перерисовать маркеры и подсказку. */
+  refresh() {
+    if (this.state === 'drag') { if (this.lastPoint) this.move(this.lastPoint); return; }
+    if (this.state !== 'pick') return;
+    if (this.lastPoint) this.hover = this.vertexAt(this.lastPoint)?.index;
+    this.showHandles();
+    this.updateVcb();
+    this.onState(this.selected()
+      ? tr('Форма: кликните по вершине выделенной части (на любой высоте ребра стены). Клик по другому объекту — выбрать его. Esc — выйти.')
+      : tr('Форма: выберите часть здания кликом, затем кликните по её вершине. Esc — выйти.'));
+  }
+
+  /** true — клик ушёл в инструмент; false — не по вершине (main выбирает объект под курсором). */
+  click(point: [number, number]): boolean {
+    if (this.state === 'drag') {
+      if (this.problem) { this.onState(this.problem, true); return true; }
+      this.apply(this.offset);
+      return true;
+    }
+    if (this.state !== 'pick') return false;
+    const hit = this.vertexAt(point);
+    if (!hit) return false;
+    this.target = hit.target;
+    this.offset.set(0, 0, 0);
+    this.dir = this.locked = undefined;
+    this.typed = '';
+    this.problem = undefined;
+    this.state = 'drag';
+    this.layer.setMoveGuide({ from: hit.target.from, gizmoScale: 0.375 });
+    this.updateVcb();
+    this.onState(tr('Ведите курсор: вершина едет в плане, прилипает к осям здания и сторонам у вершины. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.'));
+    return true;
+  }
+
+  move(point: [number, number]) {
+    this.lastPoint = point;
+    if (this.state === 'pick') {
+      const h = this.vertexAt(point)?.index;
+      if (h !== this.hover) { this.hover = h; this.showHandles(); }
+      return;
+    }
+    const t = this.target;
+    if (this.state !== 'drag' || !t) return;
+    const ray = this.layer.focusRay(point);
+    const dirs = this.dirs(t);
+    if (!ray) return;
+    const moving = this.moving();
+    this.snap = this.layer.snapAt(point, (k) => !moving.has(k), undefined, { from: t.from });
+    let dir = this.locked;
+    const offset = new THREE.Vector3();
+    if (this.snap) {
+      offset.subVectors(this.snap.local, t.from).setZ(0);
+      if (dir) offset.copy(dir.v).multiplyScalar(offset.dot(dir.v));
+    } else {
+      dir ??= this.inferDir(point, t.from, dirs);
+      if (dir) offset.copy(dir.v).multiplyScalar(closestOnLine(ray, t.from, dir.v));
+      else {
+        const hit = ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -t.from.z), new THREE.Vector3());
+        if (hit) offset.subVectors(hit, t.from).setZ(0);
+      }
+    }
+    this.dir = dir;
+    if (this.shiftLock && !this.locked && dir) this.locked = dir;
+    this.offset.copy(offset);
+    this.problem = this.preview(t, offset);
+    this.showHandles();
+    this.guide();
+    this.updateVcb();
+  }
+
+  /** true — клавиша обработана инструментом. */
+  key(e: KeyboardEvent): boolean {
+    if (!this.active) return false;
+    if (e.type === 'keyup') {
+      if (e.key === 'Shift' && this.state === 'drag') { this.shiftLock = false; this.locked = undefined; this.refresh(); return true; }
+      return false;
+    }
+    if (e.key === 'Escape') {
+      if (this.state === 'drag') { this.cancelDrag(); this.state = 'pick'; this.refresh(); } else this.stop();
+      return true;
+    }
+    if (e.code === 'KeyD' && !e.ctrlKey && !e.metaKey && !e.altKey) { this.setGlue(!this.glue); return true; }
+    if (this.state !== 'drag') return false;
+    if (e.key === 'Shift') {
+      if (e.repeat) return true;
+      this.shiftLock = true;
+      if (this.dir) this.locked = this.dir;
+      this.refresh();
+      return true;
+    }
+    if (/^[\d.,-]$/.test(e.key)) { this.typed += e.key === ',' ? '.' : e.key; this.updateVcb(); return true; }
+    if (e.key === 'Backspace') { this.typed = this.typed.slice(0, -1); this.updateVcb(); return true; }
+    if (e.key === 'Enter') {
+      const dist = Number(this.typed);
+      if (!this.typed || !Number.isFinite(dist) || !this.target) return true;
+      // Направление — прилипшее (в сторону курсора) или текущее направление движения
+      let v: THREE.Vector3;
+      if (this.dir) v = this.dir.v.clone().multiplyScalar(this.offset.dot(this.dir.v) < 0 ? -1 : 1);
+      else if (this.offset.lengthSq() > 1e-6) v = this.offset.clone().normalize();
+      else return true;
+      const offset = v.multiplyScalar(dist);
+      const problem = this.preview(this.target, offset);
+      if (problem) { this.problem = problem; this.typed = ''; this.updateVcb(); this.onState(problem, true); return true; }
+      this.apply(offset);
+      return true;
+    }
+    return false;
+  }
+
+  private apply(offset: THREE.Vector3) {
+    const t = this.target!;
+    this.cancelDrag();
+    this.state = 'pick';
+    if (offset.lengthSq() > 1e-8) this.commit(t, offset.clone());
+    this.refresh();
+  }
+
+  private cancelDrag() {
+    if (this.state === 'drag' && this.target) this.preview(this.target, undefined);
+    this.layer.setMoveGuide(undefined);
+    this.target = undefined;
+    this.snap = undefined;
+    this.typed = '';
+    this.problem = undefined;
+    this.shiftLock = false;
+    this.locked = this.dir = undefined;
+    this.linked = 0;
+  }
+
+  /** Вершины выделенной части: на верху стен (у плоских — на земле), захваченная — на новом месте. */
+  private showHandles() {
+    const key = this.selected();
+    const polys = key ? this.layer.focusPolygons(key) : undefined;
+    const w = key ? this.walls(key) : undefined;
+    if (!key || !polys || !w) { this.layer.setHandles(undefined); return; }
+    const pts: THREE.Vector3[] = [];
+    let active: number | undefined;
+    const t = this.state === 'drag' ? this.target : undefined;
+    polys.forEach((p, pi) => [p.outer, ...p.inners].forEach((ring, ri) => ring.forEach(([x, y], i) => {
+      if (t && t.poly === pi && t.ring === ri && t.i === i) {
+        active = pts.length;
+        pts.push(new THREE.Vector3(t.from.x + this.offset.x, t.from.y + this.offset.y, w.top));
+      } else pts.push(new THREE.Vector3(x, y, w.top));
+      if (!t && this.hover === pts.length - 1) active = pts.length - 1;
+    })));
+    this.layer.setHandles(pts, active);
+  }
+
+  /** Вершина выделенной части под курсором: ближайшее на экране вертикальное ребро стены (низ — верх). */
+  private vertexAt(point: [number, number]): { target: ShapeTarget; index: number } | undefined {
+    const key = this.selected();
+    const polys = key ? this.layer.focusPolygons(key) : undefined;
+    const w = key ? this.walls(key) : undefined;
+    if (!key || !polys || !w) return;
+    let best: { target: ShapeTarget; index: number; d: number } | undefined;
+    let index = 0;
+    polys.forEach((p, poly) => [p.outer, ...p.inners].forEach((r, ring) => r.forEach(([x, y], i) => {
+      const n = index++;
+      const a = this.layer.focusProject(new THREE.Vector3(x, y, w.min));
+      const b = this.layer.focusProject(new THREE.Vector3(x, y, w.top));
+      if (!a || !b) return;
+      const { d, s } = segDist(point, a, b);
+      if (d > GRAB_PX || (best && d >= best.d)) return;
+      best = { target: { key, poly, ring, i, from: new THREE.Vector3(x, y, w.min + s * (w.top - w.min)) }, index: n, d };
+    })));
+    return best;
+  }
+
+  /** Оси здания и продолжения обеих сторон у захваченной вершины. */
+  private dirs(t: ShapeTarget): Dir[] {
+    const out: Dir[] = [];
+    const f = this.layer.focusAxes;
+    if (f) {
+      out.push({ v: new THREE.Vector3(f.x[0], f.x[1], 0), name: 'x', axis: 0 }, { v: new THREE.Vector3(f.y[0], f.y[1], 0), name: 'y', axis: 1 });
+    }
+    const p = this.layer.focusPolygons(t.key)?.[t.poly];
+    const ring = p && (t.ring ? p.inners[t.ring - 1] : p.outer);
+    if (!ring || ring.length < 3) return out;
+    for (const k of [t.i - 1 + ring.length, t.i + 1]) {
+      const [x, y] = ring[k % ring.length];
+      const v = new THREE.Vector3(t.from.x - x, t.from.y - y, 0);
+      if (v.lengthSq() < 1e-8) continue;
+      v.normalize();
+      // Сторона по оси здания — уже есть
+      if (out.some((d) => Math.abs(d.v.dot(v)) > 0.9998)) continue;
+      out.push({ v, name: tr('вдоль стороны') });
+    }
+    return out;
+  }
+
+  /** Направление, вдоль которого (на экране) идёт курсор от точки захвата, с допуском AXIS_SNAP_DEG. */
+  private inferDir(point: [number, number], from: THREE.Vector3, dirs: Dir[]): Dir | undefined {
+    const s0 = this.layer.focusProject(from);
+    if (!s0) return;
+    const cx = point[0] - s0[0], cy = point[1] - s0[1];
+    const len = Math.hypot(cx, cy);
+    if (len < MIN_DRAG_PX) return;
+    let best: { d: Dir; angle: number } | undefined;
+    for (const d of dirs) {
+      const s1 = this.layer.focusProject(from.clone().addScaledVector(d.v, 5));
+      if (!s1) continue;
+      const dx = s1[0] - s0[0], dy = s1[1] - s0[1];
+      const l = Math.hypot(dx, dy);
+      if (l < 1) continue; // направление смотрит в камеру
+      const angle = Math.acos(Math.min(1, Math.abs((cx * dx + cy * dy) / (len * l)))) * 180 / Math.PI;
+      if (!best || angle < best.angle) best = { d, angle };
+    }
+    return best && best.angle < AXIS_SNAP_DEG ? best.d : undefined;
+  }
+
+  private guide() {
+    const t = this.target;
+    if (!t) return;
+    const to = t.from.clone().add(this.offset);
+    const d = this.locked ?? this.dir;
+    // Сторона у вершины — своя ось x по ней (цвет оси x)
+    const axes = d && d.axis === undefined ? { x: [d.v.x, d.v.y] as Pt, y: [-d.v.y, d.v.x] as Pt } : undefined;
+    const axis = d ? (d.axis ?? 0) : undefined;
+    this.layer.setMoveGuide({ from: t.from, to, axis, locked: this.locked ? axis : undefined, axes, gizmoScale: 0.375 });
+  }
+
+  private updateVcb() {
+    if (!this.active) { this.vcb.hidden = true; return; }
+    this.vcb.hidden = false;
+    const glue = `<span class="vcb-units" title="${tr('Общие с соседями узлы: «с соседями» — соседи тянутся следом, «отдельно» — часть отделяется от них (D)')}">${[true, false]
+      .map((on) => `<button type="button" data-glue="${on ? 'on' : 'off'}"${on === this.glue ? ' class="active"' : ''}>${on ? tr('с соседями') : tr('отдельно')}</button>`).join('')}</span>`;
+    if (this.state !== 'drag') { this.vcb.innerHTML = `<span class="vcb-label">${tr('Вершина')}</span>${glue}`; return; }
+    const d = this.locked ?? this.dir;
+    const along = !d ? tr('свободно') : this.locked ? tr('{dir} (зафиксировано)', { dir: d.axis === undefined ? d.name : tr('ось {axis}', { axis: d.name }) })
+      : d.axis === undefined ? d.name : tr('ось {axis}', { axis: d.name });
+    const value = this.typed || this.offset.length().toFixed(2);
+    const linked = this.glue && this.linked ? `<span class="vcb-axis vcb-linked">${trn(this.linked, 'тянет {n} соседа|тянет {n} соседей|тянет {n} соседей')}</span>` : '';
+    const problem = this.problem ? `<span class="vcb-axis vcb-error">${this.problem}</span>` : '';
+    this.vcb.innerHTML = `<span class="vcb-label">${tr('Вершина')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
+      <span class="vcb-axis">${this.snap ? tr('к точке · {along}', { along }) : along}</span>${linked}${problem}${glue}`;
+  }
+}
+
+/** Расстояние от точки до отрезка на экране и параметр ближайшей точки (0 — a, 1 — b). */
+function segDist([px, py]: Pt, [ax, ay]: Pt, [bx, by]: Pt): { d: number; s: number } {
+  const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+  const s = l2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+  return { d: Math.hypot(px - ax - s * dx, py - ay - s * dy), s };
+}
+
+/** Параметр t ближайшей к лучу точки прямой from + t·dir (dir единичный). */
+function closestOnLine(ray: THREE.Ray, from: THREE.Vector3, dir: THREE.Vector3): number {
+  const w0 = ray.origin.clone().sub(from);
+  const b = ray.direction.dot(dir), d = ray.direction.dot(w0), e = dir.dot(w0);
+  const denom = 1 - b * b;
+  if (denom < 1e-6) return 0;
+  return (e - b * d) / denom;
+}
+
+function loadGlue(): boolean {
+  try { return localStorage.getItem(GLUE_STORAGE) !== 'off'; } catch { return true; }
+}

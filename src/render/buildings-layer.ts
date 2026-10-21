@@ -2863,6 +2863,42 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  private handles?: THREE.Group;
+  /**
+   * Маркеры вершин (инструмент «Форма»): квадраты поверх всей геометрии, active — захваченная или под курсором
+   * (крупнее, другим цветом). undefined — убрать.
+   */
+  setHandles(points: THREE.Vector3[] | undefined, active?: number) {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (this.handles) {
+      this.handles.parent?.remove(this.handles);
+      this.handles.traverse((o) => { if (o instanceof THREE.Points) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
+      this.handles = undefined;
+    }
+    if (points?.length && g && this.map) {
+      const canvas = this.map.getCanvas();
+      const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+      const root = new THREE.Group();
+      const layer = (pts: THREE.Vector3[], size: number, color: number, order: number) => {
+        const p = new THREE.Points(new THREE.BufferGeometry().setFromPoints(pts),
+          new THREE.PointsMaterial({ color, size: size * dpr, sizeAttenuation: false, depthTest: false, depthWrite: false, transparent: true }));
+        p.renderOrder = order;
+        p.frustumCulled = false;
+        root.add(p);
+      };
+      // Белая окантовка — квадрат крупнее под цветным
+      layer(points, 9, 0xffffff, 1005);
+      layer(points, 6, 0x2563eb, 1006);
+      if (active !== undefined && points[active]) {
+        layer([points[active]], 13, 0xffffff, 1007);
+        layer([points[active]], 9, 0xf97316, 1008);
+      }
+      g.scene.add(root);
+      this.handles = root;
+    }
+    this.map?.triggerRepaint();
+  }
+
   /** Набросок контура; open — просто ломаная (без замыкания и заливки: стороны угла поворота). */
   setDrawPreview(points: THREE.Vector3[] | undefined, closed = false, open = false) {
     const g = this.groups.get(FOCUS_GROUP);

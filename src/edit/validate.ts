@@ -383,7 +383,7 @@ function crosses(a: number[], b: number[], c: number[], d: number[]): boolean {
 }
 
 /** Самопересечение кольца (несмежные стороны пересекаются); до 2000 вершин — дальше не проверяем. */
-function selfIntersects(r: [number, number][]): boolean {
+export function selfIntersects(r: [number, number][]): boolean {
   const n = r.length;
   if (n < 4 || n > 2000) return false;
   for (let i = 0; i < n; i++) {

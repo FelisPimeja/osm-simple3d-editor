@@ -119,6 +119,7 @@ export class PushTool {
   get active() { return this.state !== 'off'; }
 
   start() {
+    this.glue = loadGlue(); // переключатель общий с «Формой»
     this.state = 'pick';
     this.updateVcb();
     this.onState(tr('Клик по крыше — тянем верх, по стене — стену; Shift+клик — задняя грань (дно или дальняя стена). Esc — выйти.'));

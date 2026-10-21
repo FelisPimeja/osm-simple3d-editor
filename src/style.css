@@ -41,6 +41,7 @@ html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
 .vcb[hidden] { display: none; }
 .vcb-label, .vcb-axis { color: #666; font-size: 12px; }
 .vcb-axis.vcb-linked { color: #7c3aed; font-weight: 600; }
+.vcb-axis.vcb-error { color: #dc2626; font-weight: 600; }
 .vcb-value { min-width: 60px; text-align: right; font: 600 14px ui-monospace, monospace; }
 .vcb-value.typed { color: #1d4ed8; }
 .vcb-units { display: inline-flex; margin-left: 4px; border: 1px solid #d1d5db; border-radius: 4px; overflow: hidden; align-self: center; }

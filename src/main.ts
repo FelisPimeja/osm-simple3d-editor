@@ -6,7 +6,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
-import { setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, type Issue } from './edit/validate';
+import { setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, selfIntersects, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -47,6 +47,7 @@ import type { Pt } from './render/building-geometry';
 import { MeasureTool } from './edit/measure-tool';
 import { OffsetTool, type OffsetTarget } from './edit/offset-tool';
 import { setToolCursor, type ToolCursor } from './view/cursors';
+import { ShapeTool, type ShapeTarget } from './edit/shape-tool';
 import { PAINT_TAGS, PaintTool, type PaintFace, type PaintSample } from './edit/paint-tool';
 import { Eyedropper, glPixels, pickFieldHint } from './edit/eyedropper';
 import { openColourPopover } from './edit/colour-popover';
@@ -1071,6 +1072,16 @@ map.on('click', (e) => {
     if (!splitTool.click(p) && splitTool.state === 'pick') { splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); select(undefined); }
     return;
   }
+  if (shapeTool.active) {
+    const p: [number, number] = [e.point.x, e.point.y];
+    // Не по вершине выделенной части — выбрать объект под курсором (мимо — снять выделение), инструмент остаётся
+    if (!shapeTool.click(p)) {
+      const key = resolveClick(e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point));
+      select(key && focus?.members.includes(key) ? key : undefined);
+    }
+    updateSnap(p);
+    return;
+  }
   if (pushTool.active) {
     const p: [number, number] = [e.point.x, e.point.y];
     // Мимо объектов при невыбранной грани — выключить инструмент
@@ -1717,7 +1728,7 @@ function exitFocus() {
   focusDated.clear();
   session.dropViewActions();
   overpassLayer.setHover(undefined);
-  moveTool.stop();
+  moveTool.stop(); shapeTool.stop();
   pushTool.stop();
   splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
@@ -1862,6 +1873,7 @@ window.addEventListener('blur', () => { overpassLayer.snapsSuspended = false; })
 
 function updateSnapMarker(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
+  if (point && shapeTool.active) shapeTool.move(point);
   if (point && pushTool.state === 'push') pushTool.move(point);
   if (pushTool.state === 'pick') pushTool.hover(point, shiftHeld);
   if (point && splitTool.state === 'cut') splitTool.move(point);
@@ -1869,9 +1881,10 @@ function updateSnapMarker(point: [number, number] | undefined) {
   if (point && measureTool.active) measureTool.move(point);
   if (point && rotateTool.active) rotateTool.move(point);
   if (point && offsetTool.active) offsetTool.move(point);
-  if (pushTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || copyPick) {
+  if (pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || copyPick) {
     // Рассечение: подсвечиваем вершины и середины рёбер объектов (концы разреза)
     currentSnap = pushTool.active ? (pushTool.state === 'push' ? pushTool.snap : undefined)
+      : shapeTool.active ? (shapeTool.state === 'drag' && point ? shapeTool.snap : undefined)
       : drawTool.active ? (point ? drawTool.snap : undefined)
       : measureTool.active ? (point ? measureTool.snap : undefined)
       : rotateTool.active ? (point ? rotateTool.snap : undefined)
@@ -1943,7 +1956,7 @@ function startRotate() {
   if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
     return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
   }
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   rotateTool.start(keys);
 }
 
@@ -1963,7 +1976,7 @@ function squareSelected() {
   if (features.some((f) => !nodeIds(f))) {
     return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
   }
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
   // Новые места узлов; узел, общий у двух выделенных частей, — среднее их вариантов
   const acc = new Map<number, { x: number; y: number; n: number }>();
@@ -2080,6 +2093,33 @@ function startPush() {
   pushTool.start();
 }
 
+// Инструмент «Форма» (V): вершины контура выделенной части — только в плане
+const shapeBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="shape"]')!;
+const shapeTool = new ShapeTool(overpassLayer, map.getContainer(),
+  () => (selection.length === 1 && focus?.members.includes(selection[0]) && !hiddenInFocus(selection[0]) ? selection[0] : undefined),
+  (key) => {
+    const f = entity(key) as Feature3D | undefined;
+    if (!f?.polygons) return;
+    const h = computeHeights(f.tags);
+    return { min: h.min, top: Math.max(h.min, h.wallTop) };
+  },
+  () => new Set([...shapePreviewed, ...selection]),
+  previewShape, commitShape,
+  (hint, error) => {
+    shapeBtn.classList.toggle('active', shapeTool.active);
+    syncCursor();
+    toolHint(hint, error);
+  });
+shapeBtn.addEventListener('click', () => (shapeTool.active ? shapeTool.stop() : startShape()));
+
+function startShape() {
+  if (!focus) return;
+  moveTool.stop(); pushTool.stop();
+  splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
+  drawTool.stop();
+  shapeTool.start();
+}
+
 // Инструмент «Рассечь»: прямой разрез верхней грани делит путь на два (больший сохраняет историю)
 const splitBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="split"]')!;
 const splitTool = new SplitTool(overpassLayer, () => selectedKey, () => focus?.members ?? [], splitReason, splitFeature, (hint, error) => {
@@ -2091,7 +2131,7 @@ splitBtn.addEventListener('click', () => (splitTool.active ? splitTool.stop() : 
 
 function startSplit() {
   if (!focus) return;
-  moveTool.stop();
+  moveTool.stop(); shapeTool.stop();
   pushTool.stop();
   drawTool.stop();
   measureTool.stop(); rotateTool.stop();
@@ -2114,7 +2154,7 @@ measureBtn.addEventListener('click', () => (measureTool.active ? measureTool.sto
 function startDirectionPick(form: HTMLFormElement) {
   if (!focus) { setStatus(tr('Направление двумя точками задаётся в режиме здания.')); return; }
   const keys = form.dataset.keys ? form.dataset.keys.split(' ') : [form.dataset.key!];
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop(); offsetTool.stop(); rotateTool.stop(); measureTool.stop();
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop(); offsetTool.stop(); rotateTool.stop(); measureTool.stop();
   measureTool.startDirection((deg) => {
     const value = String(deg);
     const edits = keys.filter((k) => session.get(k) && session.get(k)!.tags['roof:direction'] !== value)
@@ -2127,7 +2167,7 @@ function startDirectionPick(form: HTMLFormElement) {
 
 function startMeasure() {
   if (!focus) return;
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop(); offsetTool.stop(); rotateTool.stop();
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop(); offsetTool.stop(); rotateTool.stop();
   measureTool.start();
 }
 
@@ -2166,7 +2206,7 @@ paintBtn.addEventListener('click', () => (paintTool.active ? paintTool.stop() : 
 
 function startPaint() {
   if (!focus) return;
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); rotateTool.stop(); offsetTool.stop();
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); rotateTool.stop(); offsetTool.stop();
   paintTool.start();
 }
 
@@ -2292,7 +2332,7 @@ function faceTarget(key: string, at: [number, number], z: number): OffsetTarget 
 
 function startOffset() {
   if (!focus) return;
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop();
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop();
   offsetTool.start();
 }
 
@@ -2383,7 +2423,7 @@ infoEl.addEventListener('click', (e) => {
 /** Курсор над картой — по включённому инструменту; у заливки — пипетка, пока нет образца или зажат Ctrl/Cmd/Alt. */
 let pickModifier = false;
 function syncCursor() {
-  const tool: ToolCursor | undefined = moveTool.active ? 'move' : rotateTool.active ? 'rotate' : pushTool.active ? 'push' : splitTool.active ? 'split'
+  const tool: ToolCursor | undefined = moveTool.active ? 'move' : rotateTool.active ? 'rotate' : pushTool.active ? 'push' : shapeTool.active ? 'shape' : splitTool.active ? 'split'
     : drawTool.active ? drawTool.shape : measureTool.active ? 'measure' : offsetTool.active ? 'offset'
     : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : undefined;
   setToolCursor(map.getCanvasContainer(), fieldPick ? 'pick' : tool);
@@ -2403,12 +2443,12 @@ window.addEventListener('blur', () => { pickModifier = false; syncCursor(); });
  * (перемещение в режиме здания включено всегда) — можно: иначе в режиме здания не доходили бы правки из JOSM.
  */
 function toolBusy(): boolean {
-  return moveTool.state === 'move' || pushTool.state === 'push' || rotateTool.state === 'ref' || rotateTool.state === 'rotate'
+  return moveTool.state === 'move' || pushTool.state === 'push' || shapeTool.state === 'drag' || rotateTool.state === 'ref' || rotateTool.state === 'rotate'
     || offsetTool.state === 'offset' || splitTool.state === 'cut' || drawTool.active || measureTool.state === 'second' || !!copyPick;
 }
 
 function toolActive(): boolean {
-  return moveTool.active || pushTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || paintTool.active || offsetTool.active || !!copyPick;
+  return moveTool.active || pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || paintTool.active || offsetTool.active || !!copyPick;
 }
 
 // Инструменты «Прямоугольник» (R) и «Полигон» (L): новая часть здания — плоский контур нулевой толщины
@@ -2609,7 +2649,7 @@ function toggleDraw(shape: DrawShape) {
 
 function startDraw(shape: DrawShape) {
   if (!focus) return;
-  moveTool.stop();
+  moveTool.stop(); shapeTool.stop();
   pushTool.stop();
   splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.begin(shape);
@@ -2736,7 +2776,7 @@ function copySelected() {
     items.push({ tags: { ...f.tags }, polygons: f.polygons.map((p) => ({ outer: p.outer.map((c) => [...c] as LonLat), inners: [] })) });
   }
   if (!items.length) return setStatus(keys.length ? tr('Копируются только части-пути (не контур здания и не мультиполигоны).') : tr('Выберите части здания, затем Ctrl+C.'), true);
-  moveTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   copyPick = { items };
   setStatus(skipped
     ? tr('Копирование ({n}, пропущено {skipped} — контур или мультиполигон): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.', { n: items.length, skipped })
@@ -2803,7 +2843,7 @@ function pasteClipboard() {
   renderSelected();
   const b = overpassLayer.focusToLocal(clipboard.base.lngLat);
   if (!b) return;
-  pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  pushTool.stop(); shapeTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   moveTool.drag(keys, new THREE.Vector3(b[0], b[1], clipboard.base.z),
     tr('Вставка ({n}): кликните, куда поставить базовую точку. Shift/стрелки — ось, число + Enter — сдвиг. Esc — отмена вставки.', { n: keys.length }),
     () => setStatus(tr('Вставлено частей: {n}.', { n: keys.length })),
@@ -3731,6 +3771,125 @@ function commitPush(t: PushTarget, dz: number) {
     : tr('Стена {key} сдвинута на {d} м{levels}.', params));
 }
 
+// ── «Форма»: сдвиг вершины контура ──
+
+type ShapeVertex = { f: Feature3D; ring: LonLat[]; ids: number[]; id: number };
+
+/** Захваченная вершина в данных: объект, кольцо (координаты и id узлов) и id узла. */
+function shapeVertex(t: ShapeTarget): ShapeVertex | undefined {
+  const f = entity(t.key) as Feature3D | undefined;
+  if (!f?.polygons) return;
+  adoptNodeIds(f);
+  const p = f.polygons[t.poly];
+  const ring = t.ring ? p?.inners[t.ring - 1] : p?.outer;
+  const ids = t.ring ? p?.innerIds?.[t.ring - 1] : p?.outerIds;
+  if (!ring?.[t.i] || !ids || ids.length !== ring.length) return;
+  return { f, ring, ids, id: ids[t.i] };
+}
+
+/** Новое место вершины: прежнее + сдвиг в плане. */
+function shapeAt(v: ShapeVertex, t: ShapeTarget, offset: THREE.Vector3): LonLat {
+  const [x, y] = overpassLayer.focusToLocal(v.ring[t.i])!;
+  return overpassLayer.focusToLngLat(x + offset.x, y + offset.y)!;
+}
+
+/** Почему вершину нельзя поставить в at: совпала с соседней или контур пересекает сам себя. */
+function shapeProblem(v: ShapeVertex, t: ShapeTarget, at: LonLat): string | undefined {
+  const pts = v.ring.map((c, k) => overpassLayer.focusToLocal(k === t.i ? at : c)!);
+  const n = pts.length, [x, y] = pts[t.i];
+  for (const k of [t.i - 1 + n, t.i + 1]) {
+    const [qx, qy] = pts[k % n];
+    if (Math.hypot(qx - x, qy - y) < 0.05) return tr('Вершина совпала с соседней — слияние вершин пока не поддерживается.');
+  }
+  if (selfIntersects(pts)) return tr('Контур пересекает сам себя.');
+}
+
+/**
+ * Сдвиг вершины «с соседями»: узел едет на новое место, соседи с этим узлом — следом. Чужие узлы на обеих
+ * сторонах у вершины (Т-образные стыки, не в нашем кольце) остаются на тех же местах сторон. Узел → координаты.
+ */
+function shapeMoves(v: ShapeVertex, t: ShapeTarget, at: LonLat): Map<number, LonLat> {
+  const moves = new Map<number, LonLat>([[v.id, at]]);
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  const n = v.ring.length;
+  const [ax, ay] = local(v.ring[t.i]), [bx, by] = local(at);
+  const ends = [local(v.ring[(t.i - 1 + n) % n]), local(v.ring[(t.i + 1) % n])];
+  const own = new Set(v.ids);
+  for (const g of liveFeatures()) for (const r of g.polygons) {
+    const rings: [LonLat[], number[] | undefined][] = [[r.outer, r.outerIds], ...r.inners.map((c, k): [LonLat[], number[] | undefined] => [c, r.innerIds?.[k]])];
+    for (const [ring, rids] of rings) rids?.forEach((id, k) => {
+      if (own.has(id) || moves.has(id)) return;
+      const [px, py] = local(ring[k]);
+      for (const [qx, qy] of ends) {
+        const ex = ax - qx, ey = ay - qy, len = Math.hypot(ex, ey);
+        if (len < 1e-6) continue;
+        const s = ((px - qx) * ex + (py - qy) * ey) / (len * len);
+        if (Math.abs((px - qx) * ey - (py - qy) * ex) / len >= 1e-3 || s <= 1e-6 || s >= 1 - 1e-6) continue;
+        moves.set(id, overpassLayer.focusToLngLat(qx + s * (bx - qx), qy + s * (by - qy))!);
+        break;
+      }
+    });
+  }
+  return moves;
+}
+
+/** Сдвиг вершины «отдельно»: общий с соседями узел остаётся им, у части на новом месте — новый узел. */
+function shapeSeparateEdits(v: ShapeVertex, t: ShapeTarget, at: LonLat): ObjectEdit[] | string {
+  if (!nodesOutside(new Set([v.f.key])).has(v.id)) return nodeMoveEdits(new Map([[v.id, at]]));
+  const fresh = nextNewId--;
+  const ids = v.ids.map((n, k) => (k === t.i ? fresh : n));
+  const coords = v.ring.map((c, k) => (k === t.i ? at : c));
+  return topologyEdits([{ f: v.f, rewrites: [{ poly: t.poly, ring: t.ring, ids, coords }] }], [], new Map([[fresh, at]]));
+}
+
+/** Объекты, перестроенные превью «Формы» (сама часть и соседи), — вернуть их при сбросе превью. */
+let shapePreviewed: string[] = [];
+
+function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string | undefined {
+  const live = new Map(liveFeatures().map((g) => [g.key, g] as const));
+  const restore = (keep: Set<string>) => {
+    for (const k of shapePreviewed) { const g = live.get(k); if (!keep.has(k) && g) overpassLayer.previewFocusFeature(g); }
+    shapePreviewed = shapePreviewed.filter((k) => keep.has(k));
+  };
+  shapeTool.linked = 0;
+  overpassLayer.setLinked([]);
+  const v = shapeVertex(t);
+  if (!v || !offset) { restore(new Set()); return; }
+  const at = shapeAt(v, t, offset);
+  const edits = nodeMoveEdits(shapeTool.glue ? shapeMoves(v, t, at) : new Map([[v.id, at]]), true);
+  if (typeof edits === 'string') { restore(new Set()); return edits; }
+  const keys = new Set<string>();
+  for (const x of edits) {
+    const g = x.key === v.f.key ? v.f : live.get(x.key);
+    // «Отдельно» соседи остаются на месте — в превью только сама часть
+    if (!x.polygons || !g || (!shapeTool.glue && x.key !== v.f.key)) continue;
+    keys.add(x.key);
+    overpassLayer.previewFocusFeature({ ...g, polygons: x.polygons });
+  }
+  restore(keys);
+  shapePreviewed = [...keys];
+  const neighbours = shapePreviewed.filter((k) => k !== v.f.key);
+  overpassLayer.setLinked(neighbours);
+  shapeTool.linked = neighbours.length;
+  return shapeProblem(v, t, at);
+}
+
+function commitShape(t: ShapeTarget, offset: THREE.Vector3) {
+  const v = shapeVertex(t);
+  if (!v || (v.f.type === 'relation' && !relWays(v.f))) {
+    return setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
+  }
+  const at = shapeAt(v, t, offset);
+  const problem = shapeProblem(v, t, at);
+  if (problem) return setStatus(problem, true);
+  const edits = shapeTool.glue ? nodeMoveEdits(shapeMoves(v, t, at)) : shapeSeparateEdits(v, t, at);
+  if (typeof edits === 'string') return setStatus(edits, true);
+  session.editMany(edits);
+  const neighbours = edits.filter((e) => e.polygons && e.key !== t.key).length;
+  setStatus(tr('Вершина {key} сдвинута на {d} м', { key: t.key, d: offset.length().toFixed(2) })
+    + (neighbours ? tr(', соседи с общими узлами подтянуты следом: {n}', { n: neighbours }) : '') + tr('. Отменить — Ctrl+Z.'));
+}
+
 /** Значения для setTags: новые и удалённые (undefined) теги. */
 function diffTags(before: Record<string, string>, after: Record<string, string>): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = {};
@@ -3811,7 +3970,7 @@ function startMove() {
   if (!doors.length && features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
     return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
   }
-  pushTool.stop();
+  pushTool.stop(); shapeTool.stop();
   splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   // Без выделения инструмент сначала ждёт клика по объекту (см. обработчик клика)
@@ -3936,7 +4095,7 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && toolActive() && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     e.stopImmediatePropagation();
-    moveTool.stop();
+    moveTool.stop(); shapeTool.stop();
     pushTool.stop();
     splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
     drawTool.stop();
@@ -3946,7 +4105,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape' && copyPick) { e.preventDefault(); e.stopImmediatePropagation(); cancelCopyPick(); return; }
   if (trackKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
-  if (moveTool.key(e) || pushTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e) || paintTool.key(e) || offsetTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+  if (moveTool.key(e) || pushTool.key(e) || shapeTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e) || paintTool.key(e) || offsetTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   // S — привязки вкл/выкл, в том числе посреди перемещения или вытягивания
   if (focus && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
@@ -4003,6 +4162,7 @@ document.addEventListener('keydown', (e) => {
   if (!focus || e.ctrlKey || e.metaKey || e.altKey) return;
   const action = e.code === 'KeyM' && !e.shiftKey ? 'move'
     : e.code === 'KeyP' && !e.shiftKey ? 'push'
+    : e.code === 'KeyV' && !e.shiftKey ? 'shape'
     : e.code === 'KeyK' && !e.shiftKey ? 'split'
     : e.code === 'KeyT' && !e.shiftKey ? 'measure'
     : e.code === 'KeyB' && !e.shiftKey ? 'paint'
@@ -4018,12 +4178,12 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   closeCtxMenu();
   cancelCopyPick();
-  if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'split') startSplit();
+  if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'shape') startShape(); else if (action === 'split') startSplit();
   else if (action === 'rotate') startRotate(); else if (action === 'square') squareSelected();
   else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);
 }, { capture: true });
-document.addEventListener('keyup', (e) => { offsetTool.key(e); splitTool.key(e); if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e)) e.preventDefault(); });
+document.addEventListener('keyup', (e) => { offsetTool.key(e); splitTool.key(e); shapeTool.key(e); if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e)) e.preventDefault(); });
 
 /** Здания тайлов под точкой; до загрузки стиля слоёв ещё нет — тогда пусто (иначе MapLibre бросает ошибку). */
 function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
@@ -4217,6 +4377,7 @@ function select(key: string | undefined): boolean {
   if (key) clearTileHighlight();
   paintSelection();
   renderSelected();
+  if (shapeTool.active) shapeTool.refresh();
   return !!key;
 }
 
@@ -6399,6 +6560,12 @@ const HELP: Record<string, HelpTopic> = {
     tr('Число + Enter — сдвиг (минус — внутрь или вниз); Tab — метры или этажи.'),
     tr('Привязка к точке другого объекта выравнивает грань по ней. Esc — отмена.'),
   ] },
+  shape: { title: tr('Форма (V)'), desc: tr('Правит контур выделенной части по вершинам: вершина едет только в плане, объём и крыша перестраиваются.'), items: [
+    tr('Клик по вершине выделенной части (на любой высоте ребра стены) — захват, второй клик — применить.'),
+    tr('Движение прилипает к осям здания и продолжениям сторон у вершины; Shift держит направление.'),
+    tr('Число + Enter — сдвиг в метрах; D — общие узлы с соседями или отдельно.'),
+    tr('Клик не по вершине — выбрать другой объект. Esc — отмена.'),
+  ] },
   split: { title: tr('Рассечь (K)'), desc: tr('Прямым разрезом делит верхнюю грань части на две части с теми же тегами.'), items: [
     tr('Клик по ребру верхней грани — начало разреза, клик по другому ребру той же грани — конец.'),
     tr('Разрез идёт прямо и целиком внутри контура; часть делится на две.'),
@@ -6452,7 +6619,7 @@ function renderHelp() {
   helpPanel.hidden = !helpShown;
   for (const b of helpBtns) b.classList.toggle('active', helpShown);
   if (!helpShown) return;
-  const key = moveTool.active ? 'move' : rotateTool.active ? 'rotate' : pushTool.active ? 'push' : splitTool.active ? 'split'
+  const key = moveTool.active ? 'move' : rotateTool.active ? 'rotate' : pushTool.active ? 'push' : shapeTool.active ? 'shape' : splitTool.active ? 'split'
     : drawTool.active ? drawTool.shape : measureTool.active ? 'measure' : offsetTool.active ? 'offset'
     : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : focus ? 'focus' : 'map';
   if (key === helpTopic) return;
@@ -7110,6 +7277,8 @@ function onSessionChange(keys: string[]) {
   }
   renderChanges();
   renderOutliner();
+  // Высоты или контур поменялись (правка в свойствах, undo) — маркеры вершин «Формы» на новые места
+  if (shapeTool.active) shapeTool.refresh();
 }
 
 const editsHistory = document.getElementById('edits-history')!;

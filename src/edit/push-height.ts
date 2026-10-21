@@ -44,20 +44,22 @@ export function pushHeightTags(tags: Record<string, string>, face: PushFace, dz:
   return out;
 }
 
-/** Ниже этого крыша ручкой не опускается: ноль — это уже flat, а форму меняют в свойствах. */
-export const MIN_ROOF_HEIGHT = 0.1;
+/** Ниже этого крыша ручкой не опускается: до нуля можно — крыша той же формы, но плоская. */
+export const MIN_ROOF_HEIGHT = 0;
 
 /**
  * Высота крыши на dz (ручка крыши «Формы»): верх стен стоит, height (если задан) растёт вместе с крышей.
- * roof:height — в метрах; крыша, размеченная только roof:levels, — целыми этажами (не меньше одного).
+ * roof:height — в метрах; крыша, размеченная только roof:levels, — целыми этажами (до нуля).
  */
 export function roofHeightTags(tags: Record<string, string>, dz: number): Record<string, string> {
   const h = computeHeights(tags), out = { ...tags };
   const fmt = (n: number) => String(Math.round(n * 100) / 100);
   let roof = Math.max(MIN_ROOF_HEIGHT, h.roofHeight + dz);
   if (tags['roof:levels'] !== undefined && tags['roof:height'] === undefined) {
-    const n = Math.max(1, Math.round(roof / LEVEL_HEIGHT));
+    const n = Math.max(0, Math.round(roof / LEVEL_HEIGHT));
     out['roof:levels'] = String(n);
+    // roof:levels=0 высоту не задаёт (рисуется высота по умолчанию) — ноль ставим явно
+    if (!n) out['roof:height'] = '0';
     roof = n * LEVEL_HEIGHT;
   } else out['roof:height'] = fmt(roof);
   if (tags.height !== undefined) out.height = fmt(h.wallTop + roof);

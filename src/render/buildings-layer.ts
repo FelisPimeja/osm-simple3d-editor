@@ -2117,8 +2117,10 @@ export class BuildingsLayer implements CustomLayerInterface {
       return [{ kind: 'center' as SnapKind, key: d.key, p }, ...[0, 1, 2, 3].flatMap(i => radius ? [{ kind: 'vertex' as SnapKind, key: d.key,
         p: p.clone().add(new THREE.Vector3(Math.cos(i * Math.PI / 2) * radius, Math.sin(i * Math.PI / 2) * radius, 0)) }] : [])];
     }) : [];
-    for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...doorPoints, ...(opts.extra ?? [])]) {
-      if (off.has(s.kind) || !filter(s.key) || opts.skip?.(s.p, s.key, s.kind)) continue;
+    // Свои точки инструмента (extra) — мимо фильтра объектов: инструмент сам решил, что они нужны
+    const extra = new Set(opts.extra ?? []);
+    for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...doorPoints, ...extra]) {
+      if (off.has(s.kind) || (!extra.has(s) && !filter(s.key)) || opts.skip?.(s.p, s.key, s.kind)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;
       const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
@@ -2435,6 +2437,14 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (!out.some((q) => q.distanceToSquared(p) < 0.01)) out.push(p);
     }
     return out;
+  }
+
+  /** Точки привязки объекта сцены режима здания (вершины, середины, центры) по текущей геометрии. */
+  focusSnapPoints(key: string): NonNullable<SnapOpts['extra']> {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g) return [];
+    this.snaps ??= collectSnaps(g);
+    return this.snaps.points.filter((s) => s.key === key).map((s) => ({ kind: s.kind, key: s.key, p: s.p.clone(), label: s.label }));
   }
 
   /** Метры сцены режима → координаты. */

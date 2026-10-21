@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import type { BuildingsLayer, SnapHit, SnapOpts } from '../render/buildings-layer';
 import { LEVEL_HEIGHT } from '../osm/heights';
 import { levelsNote } from './push-height';
 import { tr, trn } from '../i18n';
@@ -55,6 +55,11 @@ export class PushTool {
   unitConstraint?: (t: PushTarget) => PushUnits | undefined;
   onUnitBlocked?: () => void;
   private outlined = false;
+  /**
+   * Точки привязки самой части в исходном виде, кроме точек тянущейся грани: в превью часть перестраивается,
+   * и грань прилипала бы сама к себе — поэтому свои точки берём на момент захвата.
+   */
+  private ownSnaps: NonNullable<SnapOpts['extra']> = [];
 
   constructor(
     private readonly layer: BuildingsLayer,
@@ -198,6 +203,7 @@ export class PushTool {
       this.hover(undefined, false);
       if (t.face === 'side' && !this.allowSide(t)) return true;
       this.target = t;
+      this.ownSnaps = this.ownSnapPoints(t);
       const locked = this.unitConstraint?.(t);
       if (locked) this.units = locked;
       this.dz = 0;
@@ -219,10 +225,21 @@ export class PushTool {
     return false;
   }
 
+  /** Свои точки части, которые не едут вместе с гранью t (центры — едут всегда). */
+  private ownSnapPoints(t: PushTarget): NonNullable<SnapOpts['extra']> {
+    const face = this.faceOutline?.(t)[0];
+    if (!face?.length) return [];
+    const [a, b] = face;
+    const moves = (p: THREE.Vector3) => t.face === 'top' ? p.z >= a.z - 1e-3
+      : t.face === 'bottom' ? p.z <= a.z + 1e-3
+      : segDist([p.x, p.y], [a.x, a.y], [b.x, b.y]) < 1e-2;
+    return this.layer.focusSnapPoints(t.key).filter((s) => s.kind !== 'center' && s.kind !== 'shape' && !moves(s.p));
+  }
+
   move(point: [number, number]) {
     if (this.state !== 'push' || !this.target) return;
     const t = this.target;
-    this.snap = this.layer.snapAt(point, (k) => k !== t.key, undefined, { noEdge: true });
+    this.snap = this.layer.snapAt(point, (k) => k !== t.key, undefined, { noEdge: true, extra: this.ownSnaps });
     // Направление движения: вертикаль для верха/низа, нормаль стены для боковой грани
     const dir = t.edge ? t.edge.n : new THREE.Vector3(0, 0, 1);
     let d: number;

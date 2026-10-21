@@ -92,12 +92,14 @@ const useWorker = typeof Worker !== 'undefined';
 function startWorker() {
   worker = new Worker(new URL('./skeleton-worker.ts', import.meta.url), { type: 'module' });
   workerReady = false;
-  worker.onmessage = (e: MessageEvent<{ id: number; skeleton: Skeleton | null } | { ready: true }>) => {
+  worker.onmessage = (e: MessageEvent<{ id: number; skeleton: Skeleton | null; broken?: boolean } | { ready: true }>) => {
     if ('ready' in e.data) {
       workerReady = true;
       if (current) armTimer(current);
       return;
     }
+    // WASM в воркере упал на вырожденном контуре — дальше он не считает: следующий контур возьмёт новый воркер
+    if (e.data.broken) { worker?.terminate(); worker = undefined; }
     if (!current || e.data.id !== current.id) return;
     finish(current, e.data.skeleton);
   };

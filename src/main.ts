@@ -1784,7 +1784,8 @@ const SNAP_LABELS = { vertex: tr('Вершина'), midpoint: tr('Середин
 let currentSnap: SnapHit | undefined;
 
 function updateSnap(point: [number, number] | undefined) {
-  const tracking = !!focus && toolActive();
+  // Пока «Форма» тянет вершину, откладывание выключено: цифры — сдвигу вершины, а не оси якоря
+  const tracking = !!focus && toolActive() && shapeTool.state !== 'drag';
   if (!tracking && (overpassLayer.tracking || trackTyped)) { overpassLayer.clearTracking(); trackTyped = ''; trackAxis = undefined; }
   overpassLayer.trackingEnabled = tracking;
   updateSnapMarker(point);
@@ -1923,6 +1924,13 @@ map.on('click', () => {
 });
 map.on('mousemove', (e) => { lastPointer = [e.point.x, e.point.y]; updateSnap(lastPointer); });
 map.on('movestart', () => { if (moveTool.state !== 'move') updateSnap(undefined); });
+// Камера повернулась — заслонённость маркеров «Формы» поменялась: перерисовать (не чаще раза за кадр)
+let shapeRedrawQueued = false;
+map.on('move', () => {
+  if (!shapeTool.active || shapeRedrawQueued) return;
+  shapeRedrawQueued = true;
+  requestAnimationFrame(() => { shapeRedrawQueued = false; shapeTool.redraw(); });
+});
 map.getCanvasContainer().addEventListener('mouseleave', () => updateSnap(undefined));
 
 // --- Инструменты режима здания ---
@@ -4005,6 +4013,11 @@ function removeShapeVertex(t: ShapeTarget, merged: boolean) {
 /** Объекты, перестроенные превью «Формы» (сама часть и соседи), — вернуть их при сбросе превью. */
 let shapePreviewed: string[] = [];
 
+/** Теги для ручки крыши (высота крыши) или верха стен (высота стен — как «Вытянуть» за верх, крыша не меняется). */
+function shapeHeightTags(f: Feature3D, t: ShapeTarget, dz: number): Record<string, string> {
+  return t.roof ? roofHeightTags(f.tags, dz) : pushHeightTags(f.tags, 'top', dz, 'm', isFreshFlat(f.tags, f.version));
+}
+
 function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string | undefined {
   const live = new Map(liveFeatures().map((g) => [g.key, g] as const));
   const restore = (keep: Set<string>) => {
@@ -4015,8 +4028,8 @@ function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string
   overpassLayer.setLinked([]);
   const f = live.get(t.key);
   if (!f || !offset) { restore(new Set()); return; }
-  if (t.roof) {
-    overpassLayer.previewFocusFeature({ ...f, tags: roofHeightTags(f.tags, offset.z) });
+  if (t.roof || t.eave) {
+    overpassLayer.previewFocusFeature({ ...f, tags: shapeHeightTags(f, t, offset.z) });
     restore(new Set([t.key]));
     shapePreviewed = [t.key];
     return;
@@ -4045,10 +4058,11 @@ function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
   const fail = (msg: string) => { setStatus(msg, true); return false; };
   const f = entity(t.key) as Feature3D | undefined;
   if (!f?.polygons) return false;
-  if (t.roof) {
-    const tags = roofHeightTags(f.tags, offset.z);
+  if (t.roof || t.eave) {
+    const tags = shapeHeightTags(f, t, offset.z), h = computeHeights(tags);
     session.setTags(t.key, diffTags(f.tags, tags));
-    setStatus(tr('Высота крыши {key}: {h} м. Отменить — Ctrl+Z.', { key: t.key, h: computeHeights(tags).roofHeight.toFixed(2) }));
+    setStatus(t.roof ? tr('Высота крыши {key}: {h} м. Отменить — Ctrl+Z.', { key: t.key, h: h.roofHeight.toFixed(2) })
+      : tr('Высота стен {key}: {h} м. Отменить — Ctrl+Z.', { key: t.key, h: (h.wallTop - h.min).toFixed(2) }));
     return true;
   }
   const noIds = tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
@@ -6760,6 +6774,7 @@ const HELP: Record<string, HelpTopic> = {
     tr('Del — удалить вершину под курсором; вершина, подведённая к соседней, сливается с ней.'),
     tr('Shift+клик по вершине или Shift+рамка — выбрать несколько вершин основания: захват любой двигает все, Del удаляет все.'),
     tr('Бирюзовые ручки крыши (конёк, вершина) — только вверх или вниз: верх стен стоит, меняется высота крыши.'),
+    tr('Фиолетовые ручки верха стен — только вверх или вниз: меняется высота стен, крыша едет целиком.'),
     tr('Клик не по вершине — выбрать другой объект. Esc — отмена.'),
   ] },
   split: { title: tr('Рассечь (K)'), desc: tr('Прямым разрезом делит верхнюю грань части на две части с теми же тегами.'), items: [

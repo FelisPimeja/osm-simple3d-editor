@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import type { BuildingsLayer, SnapHit, SnapOpts } from '../render/buildings-layer';
 import { tr, trn } from '../i18n';
 import { MIN_ROOF_HEIGHT } from './push-height';
 
@@ -22,15 +22,18 @@ const GLUE_STORAGE = 'push-glue';
  * Захваченная вершина: объект, полигон, кольцо (0 — внешнее, 1… — дыры), номер вершины и точка захвата (метры сцены).
  * insert — захвачена точка на стороне i → i+1 (её положение на стороне, 0…1): там встанет новая вершина.
  * roof — захвачена ручка крыши (верхняя точка): сдвиг только по вертикали, меняется высота крыши; poly, ring, i не нужны.
+ * eave — захвачена ручка верха стен (основание крыши): по вертикали, меняется высота стен, крыша едет целиком.
  * also — другие вершины, выбранные рамкой: едут (удаляются) вместе с захваченной.
  */
-export interface ShapeTarget { key: string; poly: number; ring: number; i: number; from: THREE.Vector3; insert?: number; roof?: boolean; also?: ShapeVert[] }
+export interface ShapeTarget { key: string; poly: number; ring: number; i: number; from: THREE.Vector3; insert?: number; roof?: boolean; eave?: boolean; also?: ShapeVert[] }
 
 /** Вершина кольца: полигон, кольцо (0 — внешнее), номер. */
 export interface ShapeVert { poly: number; ring: number; i: number }
 const vertKey = (v: ShapeVert) => `${v.poly}:${v.ring}:${v.i}`;
+/** Ниже этого стены ручкой верха не опускаются. */
+const MIN_WALL_HEIGHT = 0.2;
 
-type Hover = { index?: number; point?: THREE.Vector3; roof?: number };
+type Hover = { index?: number; point?: THREE.Vector3; roof?: number; eave?: number };
 
 /** Направления, к которым прилипает движение: оси здания и стороны у вершины. */
 type Dir = { v: THREE.Vector3; name: string; axis?: 0 | 1 };
@@ -49,6 +52,7 @@ type Dir = { v: THREE.Vector3; name: string; axis?: 0 | 1 };
  * Del — удалить вершину под курсором (или захваченную).
  * Ручки крыши (конёк, вершина пирамиды или купола, верхнее ребро односкатной) — только по вертикали: верх стен стоит,
  * меняется высота крыши (не ниже MIN_ROOF_HEIGHT); привязка к точке другого объекта — по её высоте.
+ * Ручки верха стен (середины сторон по верху стены) — тоже по вертикали: меняется высота стен, крыша не меняется.
  * Общие с соседями узлы (D): «с соседями» — соседи тянутся следом, «отдельно» — у части новый узел.
  * Esc — отмена, повторный Esc — выйти. Пересчёт геометрии, проверка и правки — снаружи (preview, commit).
  */
@@ -196,7 +200,7 @@ export class ShapeTool {
       this.showHandles();
       return true;
     }
-    const hit = v ?? this.roofAt(point) ?? this.edgeAt(point);
+    const hit = v ?? this.roofAt(point) ?? this.eaveAt(point) ?? this.edgeAt(point);
     if (!hit) { this.picked.clear(); return false; }
     const t = hit.target;
     // Захват одной из выбранных — едут все выбранные; иначе выбор сбрасывается
@@ -230,6 +234,8 @@ export class ShapeTool {
     this.updateVcb();
     this.say(hit.target.roof
       ? tr('Ведите курсор вверх или вниз: верх стен стоит, меняется высота крыши. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.')
+      : hit.target.eave
+      ? tr('Ведите курсор вверх или вниз: меняется высота стен, крыша едет целиком. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.')
       : tr('Ведите курсор: вершина едет в плане, прилипает к осям здания и сторонам у вершины. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.'));
   }
 
@@ -237,19 +243,18 @@ export class ShapeTool {
     this.lastPoint = point;
     if (this.state === 'pick') {
       const h = this.hoverAt(point);
-      if (h?.index !== this.hover?.index || h?.roof !== this.hover?.roof || !samePoint(h?.point, this.hover?.point)) { this.hover = h; this.showHandles(); }
+      if (h?.index !== this.hover?.index || h?.roof !== this.hover?.roof || h?.eave !== this.hover?.eave || !samePoint(h?.point, this.hover?.point)) { this.hover = h; this.showHandles(); }
       return;
     }
     const t = this.target;
     if (this.state !== 'drag' || !t) return;
-    if (t.roof) { this.moveRoof(point, t); return; }
+    if (t.roof || t.eave) { this.moveVertical(point, t); return; }
     const ray = this.layer.focusRay(point);
     const dirs = this.dirs(t);
     if (!ray) return;
-    const moving = this.moving();
     const near = t.insert === undefined && !t.also?.length ? this.neighbourAt(point, t) : undefined;
     this.merge = !!near;
-    this.snap = near ? undefined : this.layer.snapAt(point, (k) => !moving.has(k), undefined, { from: t.from });
+    this.snap = near ? undefined : this.layer.snapAt(point, undefined, undefined, { from: t.from, skip: this.snapSkip(t) });
     let dir = this.locked;
     const offset = new THREE.Vector3();
     if (near) {
@@ -300,7 +305,7 @@ export class ShapeTool {
         : first && key ? { key, ...first, from: new THREE.Vector3(), also: rest }
         : this.lastPoint ? this.vertexAt(this.lastPoint)?.target : undefined;
       this.picked.clear();
-      if (!t || t.insert !== undefined || t.roof) { this.showHandles(); return true; }
+      if (!t || t.insert !== undefined || t.roof || t.eave) { this.showHandles(); return true; }
       if (this.state === 'drag') { this.cancelDrag(); this.state = 'pick'; }
       this.remove(t, false);
       this.refresh();
@@ -320,7 +325,7 @@ export class ShapeTool {
       const dist = Number(this.typed);
       if (!this.typed || !Number.isFinite(dist) || !this.target) return true;
       // Крыша — число со знаком по вертикали
-      if (this.target.roof) { this.apply(new THREE.Vector3(0, 0, this.clampRoof(this.target, dist))); return true; }
+      if (this.target.roof || this.target.eave) { this.apply(new THREE.Vector3(0, 0, this.clampVertical(this.target, dist))); return true; }
       // Направление — прилипшее (в сторону курсора) или текущее направление движения
       let v: THREE.Vector3;
       if (this.dir) v = this.dir.v.clone().multiplyScalar(this.offset.dot(this.dir.v) < 0 ? -1 : 1);
@@ -358,24 +363,67 @@ export class ShapeTool {
     this.merge = false;
   }
 
-  /** Ручка крыши: только по вертикали (по лучу курсора или к высоте точки другого объекта). */
-  private moveRoof(point: [number, number], t: ShapeTarget) {
+  /** Перерисовать маркеры (камера повернулась — заслонённость поменялась). */
+  redraw() {
+    if (this.active) this.showHandles();
+  }
+
+  /**
+   * Привязки во время сдвига вершин: ко всему, в том числе к самой части, кроме едущих вершин и рёбер у них
+   * (в превью они уже на новом месте — вершина прилипала бы сама к себе) и центра самой части (он едет вместе с ней).
+   */
+  private snapSkip(t: ShapeTarget): SnapOpts['skip'] {
+    const at = [...this.origin.values()].map(([x, y]) => [x + this.offset.x, y + this.offset.y]);
+    // Точка, к которой прилипли в прошлый раз: вершина теперь стоит в ней же — не отбрасывать, иначе привязка мигает
+    const kept = this.snap?.local;
+    return (p, key, kind) => (key === t.key && (kind === 'center' || kind === 'shape'))
+      || (at.some(([x, y]) => Math.abs(p.x - x) < 1e-2 && Math.abs(p.y - y) < 1e-2)
+        && !(kind !== 'edge' && kept && p.distanceToSquared(kept) < 1e-6));
+  }
+
+  /** Ручка крыши или верха стен: только по вертикали (по лучу курсора или к высоте точки другого объекта). */
+  private moveVertical(point: [number, number], t: ShapeTarget) {
     const ray = this.layer.focusRay(point);
     if (!ray) return;
     const moving = this.moving();
     this.snap = this.layer.snapAt(point, (k) => !moving.has(k), undefined, { noEdge: true });
     const dz = this.snap ? this.snap.local.z - t.from.z : closestOnLine(ray, t.from, new THREE.Vector3(0, 0, 1));
-    this.offset.set(0, 0, this.clampRoof(t, dz));
+    this.offset.set(0, 0, this.clampVertical(t, dz));
     this.problem = this.preview(t, this.offset);
     this.showHandles();
     this.layer.setMoveGuide({ from: t.from, to: t.from.clone().add(this.offset), axis: 2, gizmoScale: 0.375 });
     this.updateVcb();
   }
 
-  /** Крыша не ниже MIN_ROOF_HEIGHT. */
-  private clampRoof(t: ShapeTarget, dz: number): number {
+  /** Крыша не ниже MIN_ROOF_HEIGHT, стены не ниже MIN_WALL_HEIGHT. */
+  private clampVertical(t: ShapeTarget, dz: number): number {
     const w = this.walls(t.key);
-    return w ? Math.max(dz, MIN_ROOF_HEIGHT - w.roof) : dz;
+    if (!w) return dz;
+    return Math.max(dz, t.roof ? MIN_ROOF_HEIGHT - w.roof : w.min + MIN_WALL_HEIGHT - w.top);
+  }
+
+  /** Ручки верха стен: середины сторон по верху стены; у плоского контура без высоты — нет. */
+  private eavePoints(key: string): THREE.Vector3[] {
+    const polys = this.layer.focusPolygons(key);
+    const w = this.walls(key);
+    if (!polys || !w || w.top - w.min < MIN_WALL_HEIGHT) return [];
+    const z = w.top + (this.state === 'drag' && this.target?.eave ? this.offset.z : 0);
+    return polys.flatMap((p) => [p.outer, ...p.inners].flatMap((r) => r.map(([ax, ay], i) => {
+      const [bx, by] = r[(i + 1) % r.length];
+      return new THREE.Vector3((ax + bx) / 2, (ay + by) / 2, z);
+    })));
+  }
+
+  private eaveAt(point: [number, number]): { target: ShapeTarget; index: number } | undefined {
+    const key = this.selected();
+    const pts = key ? this.eavePoints(key) : [];
+    let best: { index: number; d: number } | undefined;
+    pts.forEach((p, i) => {
+      const q = this.layer.focusProject(p);
+      const d = q ? Math.hypot(q[0] - point[0], q[1] - point[1]) : Infinity;
+      if (d <= GRAB_PX && (!best || d < best.d)) best = { index: i, d };
+    });
+    return best && key ? { target: { key, poly: 0, ring: 0, i: 0, eave: true, from: pts[best.index].clone() }, index: best.index } : undefined;
   }
 
   /** Ручка крыши под курсором: верхняя точка крыши выделенной части или конёк между двумя такими точками. */
@@ -445,7 +493,9 @@ export class ShapeTool {
     // Ручки крыши — по текущей (в том числе предварительной) геометрии; захваченная или под курсором — выделена
     const roof = this.layer.focusRoofTop(key);
     const roofActive = t?.roof ? nearest(roof, t.from.clone().add(this.offset)) : !t ? this.hover?.roof : undefined;
-    this.layer.setHandles(pts, active, { points: roof, active: roofActive });
+    const eave = this.eavePoints(key);
+    const eaveActive = t?.eave ? nearest(eave, t.from) : !t ? this.hover?.eave : undefined;
+    this.layer.setHandles(pts, active, { points: roof, active: roofActive }, { points: eave, active: eaveActive });
   }
 
   private hoverAt(point: [number, number]): Hover | undefined {
@@ -453,6 +503,8 @@ export class ShapeTool {
     if (v) return { index: v.index };
     const r = this.roofAt(point);
     if (r) return { roof: r.index };
+    const ev = this.eaveAt(point);
+    if (ev) return { eave: ev.index };
     const e = this.edgeAt(point);
     return e ? { point: e.target.from } : undefined;
   }
@@ -579,13 +631,14 @@ export class ShapeTool {
     const glue = `<span class="vcb-units" title="${tr('Общие с соседями узлы: «с соседями» — соседи тянутся следом, «отдельно» — часть отделяется от них (D)')}">${[true, false]
       .map((on) => `<button type="button" data-glue="${on ? 'on' : 'off'}"${on === this.glue ? ' class="active"' : ''}>${on ? tr('с соседями') : tr('отдельно')}</button>`).join('')}</span>`;
     if (this.state !== 'drag') { this.vcb.innerHTML = `<span class="vcb-label">${tr('Вершина')}</span>${glue}`; return; }
-    if (this.target?.roof) {
+    if (this.target?.roof || this.target?.eave) {
       const w = this.walls(this.target.key);
-      const dz = this.offset.z;
+      const dz = this.offset.z, roof = !!this.target.roof;
       const value = this.typed || (dz >= 0 ? '+' : '') + dz.toFixed(2);
-      const roof = w ? `<span class="vcb-axis">${tr('высота крыши {h} м', { h: (w.roof + dz).toFixed(2) })}</span>` : '';
-      this.vcb.innerHTML = `<span class="vcb-label">${tr('Крыша')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
-        <span class="vcb-axis">${this.snap ? tr('до точки') : tr('по вертикали')}</span>${roof}`;
+      const info = !w ? '' : `<span class="vcb-axis">${roof ? tr('высота крыши {h} м', { h: (w.roof + dz).toFixed(2) })
+        : tr('высота стен {h} м', { h: (w.top - w.min + dz).toFixed(2) })}</span>`;
+      this.vcb.innerHTML = `<span class="vcb-label">${roof ? tr('Крыша') : tr('Верх стен')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
+        <span class="vcb-axis">${this.snap ? tr('до точки') : tr('по вертикали')}</span>${info}`;
       return;
     }
     const d = this.locked ?? this.dir;

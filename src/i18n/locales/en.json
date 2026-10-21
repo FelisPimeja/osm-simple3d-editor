@@ -1047,5 +1047,10 @@
   "Удалено вершин {key}: {n}": "Vertices of {key} deleted: {n}",
   "Вершины {key} ({n}) сдвинуты на {d} м": "Vertices of {key} ({n}) moved by {d} m",
   "Клик по стороне у основания — новая вершина ровно на стороне; дальше её можно отвести (Esc — оставить на стороне).": "Click a side at the base to add a vertex exactly on it; then you can move it away (Esc keeps it on the side).",
-  "Shift+клик по вершине или Shift+рамка — выбрать несколько вершин основания: захват любой двигает все, Del удаляет все.": "Shift+click a vertex or Shift+drag a box to select several base vertices: grabbing any moves them all, Del deletes them all."
+  "Shift+клик по вершине или Shift+рамка — выбрать несколько вершин основания: захват любой двигает все, Del удаляет все.": "Shift+click a vertex or Shift+drag a box to select several base vertices: grabbing any moves them all, Del deletes them all.",
+  "Ведите курсор вверх или вниз: меняется высота стен, крыша едет целиком. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.": "Move the cursor up or down: the wall height changes, the roof moves as a whole. Click — apply, number + Enter — offset in metres, Esc — cancel.",
+  "высота стен {h} м": "wall height {h} m",
+  "Верх стен": "Wall top",
+  "Высота стен {key}: {h} м. Отменить — Ctrl+Z.": "Wall height of {key}: {h} m. Undo — Ctrl+Z.",
+  "Фиолетовые ручки верха стен — только вверх или вниз: меняется высота стен, крыша едет целиком.": "Purple wall-top handles move only up or down: the wall height changes, the roof moves as a whole."
 }

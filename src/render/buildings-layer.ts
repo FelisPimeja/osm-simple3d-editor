@@ -2079,14 +2079,14 @@ export class BuildingsLayer implements CustomLayerInterface {
   /**
    * opts.from — последняя точка инструмента: от неё ищем основание перпендикуляра на ребре.
    * opts.noEdge — без точки на ребре (вытягиванию нужны высоты, а не произвольные точки вертикальных рёбер).
+   * opts.skip — какие точки (и рёбра с таким концом) не брать: например, едущие вершины и их стороны.
    */
   snapAt(point: [number, number], filter: (key: string) => boolean = () => true, radius = SNAP_RADIUS_PX,
-    opts: { from?: THREE.Vector3; noEdge?: boolean } = {}): SnapHit | undefined {
+    opts: SnapOpts = {}): SnapHit | undefined {
     return timed('привязки: поиск', () => this.findSnap(point, filter, radius, opts));
   }
 
-  private findSnap(point: [number, number], filter: (key: string) => boolean, radius: number,
-    opts: { from?: THREE.Vector3; noEdge?: boolean }): SnapHit | undefined {
+  private findSnap(point: [number, number], filter: (key: string) => boolean, radius: number, opts: SnapOpts): SnapHit | undefined {
     if (!this.snapsEnabled || this.snapsSuspended) return;
     const g = this.groups.get(FOCUS_GROUP);
     if (!this.focused || !g || !this.map || !this.lastMain) return;
@@ -2118,7 +2118,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         p: p.clone().add(new THREE.Vector3(Math.cos(i * Math.PI / 2) * radius, Math.sin(i * Math.PI / 2) * radius, 0)) }] : [])];
     }) : [];
     for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...doorPoints]) {
-      if (off.has(s.kind) || !filter(s.key)) continue;
+      if (off.has(s.kind) || !filter(s.key) || opts.skip?.(s.p, s.key, s.kind)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;
       const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
@@ -2142,7 +2142,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const [id, until] of this.armedEdges) if (until < now) this.armedEdges.delete(id);
     let hovered: { id: string; d: number } | undefined;
     if (ray) for (const e of [...this.snaps.edges, ...this.indoorSnaps.edges]) {
-      if (!filter(e.key)) continue;
+      if (!filter(e.key) || opts.skip?.(e.a, e.key, 'edge') || opts.skip?.(e.b, e.key, 'edge')) continue;
       if (opts.from && !off.has('perpendicular')) {
         ab.subVectors(e.b, e.a);
         const l2 = ab.lengthSq();
@@ -2887,10 +2887,11 @@ export class BuildingsLayer implements CustomLayerInterface {
   private handles?: THREE.Group;
   /**
    * Маркеры вершин (инструмент «Форма»): квадраты поверх всей геометрии, active — захваченная или под курсором
-   * (крупнее, другим цветом; может быть несколько — выбранные рамкой); roof — ручки крыши (другим цветом).
+   * (крупнее, другим цветом; может быть несколько — выбранные рамкой); roof — ручки крыши, eave — верха стен (своими цветами).
    * Заслонённые геометрией (в том числе стенами самого объекта) — полые и бледные. undefined — убрать.
    */
-  setHandles(points: THREE.Vector3[] | undefined, active?: number | number[], roof?: { points: THREE.Vector3[]; active?: number }) {
+  setHandles(points: THREE.Vector3[] | undefined, active?: number | number[], roof?: { points: THREE.Vector3[]; active?: number },
+    eave?: { points: THREE.Vector3[]; active?: number }) {
     const g = this.groups.get(FOCUS_GROUP);
     if (this.handles) {
       this.handles.parent?.remove(this.handles);
@@ -2927,8 +2928,10 @@ export class BuildingsLayer implements CustomLayerInterface {
       };
       marks(points, 6, 0x2563eb, 1005);
       if (roof?.points.length) marks(roof.points, 8, 0x0d9488, 1005);
+      if (eave?.points.length) marks(eave.points, 7, 0x7c3aed, 1005);
       const hot = [...(typeof active === 'number' ? [active] : active ?? []).map((i) => points[i]),
-        ...(roof?.active !== undefined ? [roof.points[roof.active]] : [])].filter(Boolean);
+        ...(roof?.active !== undefined ? [roof.points[roof.active]] : []),
+        ...(eave?.active !== undefined ? [eave.points[eave.active]] : [])].filter(Boolean);
       if (hot.length) marks(hot, 9, 0xf97316, 1007);
       g.scene.add(root);
       this.handles = root;
@@ -4574,6 +4577,7 @@ interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3; label?: str
 interface SnapEdge { key: string; a: THREE.Vector3; b: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 /** along — у продолжения ребра: конец ребра, от которого идёт продолжение (для пунктира). */
+export interface SnapOpts { from?: THREE.Vector3; noEdge?: boolean; skip?: (p: THREE.Vector3, key: string, kind: SnapKind) => boolean }
 export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number]; along?: THREE.Vector3; label?: string; /** У оси откладывания — расстояние от якоря со знаком. */ dist?: number }
 const SNAP_RADIUS_PX = 12;
 /** Длина стрелок осей в начале координат здания, м — одна клетка сетки. */

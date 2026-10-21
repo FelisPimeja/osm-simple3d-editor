@@ -19,7 +19,11 @@ void ready.then(() => self.postMessage({ ready: true }));
 
 self.onmessage = async (e: MessageEvent<{ id: number; rings: number[][][]; stabilize: boolean }>) => {
   const b = await ready;
-  let skeleton: unknown = null;
-  try { skeleton = e.data.stabilize ? buildStableSkeleton(b as Parameters<typeof buildStableSkeleton>[0], e.data.rings) : b.buildFromPolygon(e.data.rings); } catch { /* CGAL не справился — крыша будет плоской */ }
-  self.postMessage({ id: e.data.id, skeleton });
+  let skeleton: unknown = null, broken = false;
+  try { skeleton = e.data.stabilize ? buildStableSkeleton(b as Parameters<typeof buildStableSkeleton>[0], e.data.rings) : b.buildFromPolygon(e.data.rings); } catch (err) {
+    // CGAL не справился — крыша будет плоской. Аварийный выход WASM (assert на вырожденном контуре) оставляет модуль
+    // сломанным: дальше все крыши были бы плоскими — просим главный поток заменить воркер
+    broken = err instanceof WebAssembly.RuntimeError || /Abort/.test(String(err));
+  }
+  self.postMessage({ id: e.data.id, skeleton, broken });
 };

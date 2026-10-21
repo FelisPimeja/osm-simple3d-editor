@@ -2422,20 +2422,35 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   /**
    * Верхние точки сгенерированной крыши объекта (конёк, вершина пирамиды или купола, верхнее ребро односкатной),
-   * метры сцены режима здания; пусто — крыши выше стен нет.
+   * метры сцены режима здания; у крыши нулевой высоты непустой формы — те же места на уровне верха стен.
+   * Пусто — крыша плоская.
    */
   focusRoofTop(key: string): THREE.Vector3[] {
-    const it = this.groups.get(FOCUS_GROUP)?.byKey.get(key);
-    if (!it || it.box.isEmpty()) return [];
-    const pos = it.positions;
+    const g = this.groups.get(FOCUS_GROUP);
+    const it = g?.byKey.get(key);
+    if (!g || !it || it.box.isEmpty()) return [];
+    let pos: ArrayLike<number> = it.positions;
+    let from = it.wallVertices * 3;
     const wallTop = Math.min(computeHeights(it.tags).wallTop, it.box.max.z);
     let top = -Infinity;
-    for (let i = it.wallVertices * 3; i < pos.length; i += 3) top = Math.max(top, pos[i + 2]);
-    if (!(top > wallTop + 0.05)) return [];
+    for (let i = from; i < pos.length; i += 3) top = Math.max(top, pos[i + 2]);
+    // Крыша нулевой высоты непустой формы: где был бы конёк — по пробной крыше высотой 1 м (в сцену не идёт),
+    // точки — на уровне верха стен: за них конёк вытягивают обратно
+    let flatten = false;
+    if (!(top > wallTop + 0.05)) {
+      const prep = prepItem(g, it.feature);
+      if (prep.heights.roofShape === 'flat') return [];
+      pos = buildTriangles(prep.polys, { ...prep.heights, top: prep.heights.wallTop + 1, roofHeight: 1 }, prep.tags).roof;
+      from = 0;
+      top = -Infinity;
+      for (let i = 0; i < pos.length; i += 3) top = Math.max(top, pos[i + 2]);
+      if (!(top > prep.heights.wallTop + 0.05)) return [];
+      flatten = true;
+    }
     const out: THREE.Vector3[] = [];
-    for (let i = it.wallVertices * 3; i < pos.length; i += 3) {
+    for (let i = from; i < pos.length; i += 3) {
       if (pos[i + 2] < top - 0.05) continue;
-      const p = new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]);
+      const p = new THREE.Vector3(pos[i], pos[i + 1], flatten ? wallTop : pos[i + 2]);
       if (!out.some((q) => q.distanceToSquared(p) < 0.01)) out.push(p);
     }
     return out;

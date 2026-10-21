@@ -2080,7 +2080,10 @@ pushTool.faceOutline = (t) => {
   const ring = t.edge!.ring ? p?.inners[t.edge!.ring - 1] : p?.outer;
   if (!ring) return [];
   const [a, b] = [ring[t.edge!.i], ring[(t.edge!.i + 1) % ring.length]];
-  return [[new THREE.Vector3(a[0], a[1], h.min), new THREE.Vector3(b[0], b[1], h.min), new THREE.Vector3(b[0], b[1], h.wallTop), new THREE.Vector3(a[0], a[1], h.wallTop)]];
+  // Над стеной — фронтон (или высокая сторона односкатной крыши): стена тянется вместе с ним
+  const gable = overpassLayer.focusWallProfile(t.key, a, b, h.wallTop);
+  return [[new THREE.Vector3(a[0], a[1], h.min), new THREE.Vector3(b[0], b[1], h.min), new THREE.Vector3(b[0], b[1], h.wallTop),
+    ...gable, new THREE.Vector3(a[0], a[1], h.wallTop)]];
 };
 // Shift в «Вытянуть»: подсветить заднюю грань под курсором, пока клавиша зажата
 let shiftHeld = false;

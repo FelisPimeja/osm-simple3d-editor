@@ -2439,6 +2439,39 @@ export class BuildingsLayer implements CustomLayerInterface {
     return out;
   }
 
+  /**
+   * Профиль над стеной a–b объекта (метры сцены): точки его геометрии выше верха стен, лежащие в вертикальной плоскости
+   * стены (фронтон двускатной крыши, высокая сторона односкатной), — верхняя огибающая, от b к a. Пусто — над стеной
+   * ничего нет (вальма уходит от стены).
+   */
+  focusWallProfile(key: string, a: Pt, b: Pt, wallTop: number): THREE.Vector3[] {
+    const it = this.groups.get(FOCUS_GROUP)?.byKey.get(key);
+    const ex = b[0] - a[0], ey = b[1] - a[1], len = Math.hypot(ex, ey);
+    if (!it || len < 1e-6) return [];
+    const pos = it.positions;
+    const pts: { s: number; z: number }[] = [];
+    for (let i = 0; i < pos.length; i += 3) {
+      const z = pos[i + 2];
+      if (z <= wallTop + 0.05) continue;
+      const dx = pos[i] - a[0], dy = pos[i + 1] - a[1];
+      const s = (dx * ex + dy * ey) / (len * len);
+      if (Math.abs(dx * ey - dy * ex) / len < 0.05 && s > -1e-3 && s < 1 + 1e-3) pts.push({ s, z });
+    }
+    // Верхняя огибающая (монотонная цепь): внутренние точки треугольников фронтона не нужны
+    pts.sort((p, q) => p.s - q.s || p.z - q.z);
+    const hull: { s: number; z: number }[] = [];
+    for (const p of pts) {
+      const last = hull[hull.length - 1];
+      if (last && Math.abs(last.s - p.s) < 1e-6 && Math.abs(last.z - p.z) < 1e-6) continue; // та же точка соседних треугольников
+      while (hull.length >= 2) {
+        const o = hull[hull.length - 2], q = hull[hull.length - 1];
+        if ((q.s - o.s) * (p.z - o.z) - (q.z - o.z) * (p.s - o.s) >= 0) hull.pop(); else break;
+      }
+      hull.push(p);
+    }
+    return hull.reverse().map(({ s, z }) => new THREE.Vector3(a[0] + s * ex, a[1] + s * ey, z));
+  }
+
   /** Точки привязки объекта сцены режима здания (вершины, середины, центры) по текущей геометрии. */
   focusSnapPoints(key: string): NonNullable<SnapOpts['extra']> {
     const g = this.groups.get(FOCUS_GROUP);

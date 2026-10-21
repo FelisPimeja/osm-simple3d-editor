@@ -39,7 +39,7 @@ import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuil
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
-import { pushHeightTags, lockedPushUnits, isFreshFlat } from './edit/push-height';
+import { pushHeightTags, lockedPushUnits, isFreshFlat, roofHeightTags } from './edit/push-height';
 import { SplitTool, type CutPoint } from './edit/split-tool';
 import { insertInLine, insertInRing, restructureRing, type Insert, type RingWay } from './edit/topology';
 import { MAX_DEVIATION_DEG, orthogonalize } from './edit/orthogonalize';
@@ -2101,7 +2101,7 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(),
     const f = entity(key) as Feature3D | undefined;
     if (!f?.polygons) return;
     const h = computeHeights(f.tags);
-    return { min: h.min, top: Math.max(h.min, h.wallTop) };
+    return { min: h.min, top: Math.max(h.min, h.wallTop), roof: h.roofHeight };
   },
   () => new Set([...shapePreviewed, ...selection]),
   previewShape, commitShape, removeShapeVertex,
@@ -3995,6 +3995,14 @@ function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string
   };
   shapeTool.linked = 0;
   overpassLayer.setLinked([]);
+  if (t.roof) {
+    const f = live.get(t.key);
+    if (!f || !offset) { restore(new Set()); return; }
+    overpassLayer.previewFocusFeature({ ...f, tags: roofHeightTags(f.tags, offset.z) });
+    restore(new Set([t.key]));
+    shapePreviewed = [t.key];
+    return;
+  }
   const r = shapeRing(t);
   if (!r || !offset) { restore(new Set()); return; }
   const at = shapeAt(r, t, offset);
@@ -4016,6 +4024,13 @@ function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string
 }
 
 function commitShape(t: ShapeTarget, offset: THREE.Vector3) {
+  if (t.roof) {
+    const f = entity(t.key) as Feature3D | undefined;
+    if (!f) return;
+    const tags = roofHeightTags(f.tags, offset.z);
+    session.setTags(t.key, diffTags(f.tags, tags));
+    return setStatus(tr('Высота крыши {key}: {h} м. Отменить — Ctrl+Z.', { key: t.key, h: computeHeights(tags).roofHeight.toFixed(2) }));
+  }
   const r = shapeRing(t);
   if (!r || (r.f.type === 'relation' && !relWays(r.f))) {
     return setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
@@ -6710,6 +6725,7 @@ const HELP: Record<string, HelpTopic> = {
     tr('Движение прилипает к осям здания и продолжениям сторон у вершины; Shift держит направление.'),
     tr('Число + Enter — сдвиг в метрах; D — общие узлы с соседями или отдельно.'),
     tr('Del — удалить вершину под курсором; вершина, подведённая к соседней, сливается с ней.'),
+    tr('Бирюзовые ручки крыши (конёк, вершина) — только вверх или вниз: верх стен стоит, меняется высота крыши.'),
     tr('Клик не по вершине — выбрать другой объект. Esc — отмена.'),
   ] },
   split: { title: tr('Рассечь (K)'), desc: tr('Прямым разрезом делит верхнюю грань части на две части с теми же тегами.'), items: [

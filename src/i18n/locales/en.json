@@ -1029,7 +1029,6 @@
   "Число + Enter — сдвиг в метрах; D — общие узлы с соседями или отдельно.": "Number + Enter — offset in metres; D — shared nodes: with neighbours or detached.",
   "Клик не по вершине — выбрать другой объект. Esc — отмена.": "Click away from a vertex to select another object. Esc — cancel.",
   "Форма: вершины контура выделенной части (V)": "Shape: outline vertices of the selected part (V)",
-  "Форма: кликните по вершине выделенной части (на любой высоте ребра стены) или по стороне — новая вершина. Клик по другому объекту — выбрать его. Esc — выйти.": "Shape: click a vertex of the selected part (at any height of the wall edge) or a side to add a vertex. Click another object to select it. Esc — exit.",
   "перпендикуляр к стороне": "perpendicular to side",
   "Новая вершина {key} сдвинута на {d} м": "New vertex of {key} moved by {d} m",
   "Новая вершина на стороне {key}": "New vertex on a side of {key}",
@@ -1041,5 +1040,10 @@
   "Вершина {key} удалена": "Vertex of {key} deleted",
   ", у соседей с общим узлом — тоже: {n}": ", also from neighbours sharing the node: {n}",
   "Del — удалить вершину под курсором; вершина, подведённая к соседней, сливается с ней.": "Del — delete the vertex under the cursor; a vertex brought to its neighbour merges with it.",
-  "Клик по стороне у основания — новая вершина в этой точке, сразу в сдвиг; клик без движения — просто вставить.": "Click a side at the base to add a vertex there and move it right away; click without moving to just insert it."
+  "Клик по стороне у основания — новая вершина в этой точке, сразу в сдвиг; клик без движения — просто вставить.": "Click a side at the base to add a vertex there and move it right away; click without moving to just insert it.",
+  "Форма: кликните по вершине выделенной части (на любой высоте ребра стены), по стороне — новая вершина, по ручке крыши — её высота. Клик по другому объекту — выбрать его. Esc — выйти.": "Shape: click a vertex of the selected part (at any height of the wall edge), a side to add a vertex, or a roof handle to change its height. Click another object to select it. Esc — exit.",
+  "Бирюзовые ручки крыши (конёк, вершина) — только вверх или вниз: верх стен стоит, меняется высота крыши.": "Teal roof handles (ridge, apex) move only up or down: the wall top stays, the roof height changes.",
+  "Ведите курсор вверх или вниз: верх стен стоит, меняется высота крыши. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.": "Move the cursor up or down: the wall top stays, the roof height changes. Click — apply, number + Enter — offset in metres, Esc — cancel.",
+  "высота крыши {h} м": "roof height {h} m",
+  "Высота крыши {key}: {h} м. Отменить — Ctrl+Z.": "Roof height of {key}: {h} m. Undo — Ctrl+Z."
 }

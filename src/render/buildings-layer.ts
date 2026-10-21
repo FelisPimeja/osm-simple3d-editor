@@ -2416,6 +2416,27 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.updateHiddenEdges();
   }
 
+  /**
+   * Верхние точки сгенерированной крыши объекта (конёк, вершина пирамиды или купола, верхнее ребро односкатной),
+   * метры сцены режима здания; пусто — крыши выше стен нет.
+   */
+  focusRoofTop(key: string): THREE.Vector3[] {
+    const it = this.groups.get(FOCUS_GROUP)?.byKey.get(key);
+    if (!it || it.box.isEmpty()) return [];
+    const pos = it.positions;
+    const wallTop = Math.min(computeHeights(it.tags).wallTop, it.box.max.z);
+    let top = -Infinity;
+    for (let i = it.wallVertices * 3; i < pos.length; i += 3) top = Math.max(top, pos[i + 2]);
+    if (!(top > wallTop + 0.05)) return [];
+    const out: THREE.Vector3[] = [];
+    for (let i = it.wallVertices * 3; i < pos.length; i += 3) {
+      if (pos[i + 2] < top - 0.05) continue;
+      const p = new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]);
+      if (!out.some((q) => q.distanceToSquared(p) < 0.01)) out.push(p);
+    }
+    return out;
+  }
+
   /** Метры сцены режима → координаты. */
   /**
    * Стена или колонна плана этажа под курсором: луч против их вертикальных граней (от пола до среза) и крышек
@@ -2866,9 +2887,9 @@ export class BuildingsLayer implements CustomLayerInterface {
   private handles?: THREE.Group;
   /**
    * Маркеры вершин (инструмент «Форма»): квадраты поверх всей геометрии, active — захваченная или под курсором
-   * (крупнее, другим цветом). undefined — убрать.
+   * (крупнее, другим цветом); roof — ручки крыши (другим цветом). undefined — убрать.
    */
-  setHandles(points: THREE.Vector3[] | undefined, active?: number) {
+  setHandles(points: THREE.Vector3[] | undefined, active?: number, roof?: { points: THREE.Vector3[]; active?: number }) {
     const g = this.groups.get(FOCUS_GROUP);
     if (this.handles) {
       this.handles.parent?.remove(this.handles);
@@ -2889,9 +2910,14 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Белая окантовка — квадрат крупнее под цветным
       layer(points, 9, 0xffffff, 1005);
       layer(points, 6, 0x2563eb, 1006);
-      if (active !== undefined && points[active]) {
-        layer([points[active]], 13, 0xffffff, 1007);
-        layer([points[active]], 9, 0xf97316, 1008);
+      if (roof?.points.length) {
+        layer(roof.points, 11, 0xffffff, 1005);
+        layer(roof.points, 8, 0x0d9488, 1006);
+      }
+      const hot = active !== undefined ? points[active] : roof?.active !== undefined ? roof.points[roof.active] : undefined;
+      if (hot) {
+        layer([hot], 13, 0xffffff, 1007);
+        layer([hot], 9, 0xf97316, 1008);
       }
       g.scene.add(root);
       this.handles = root;

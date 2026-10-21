@@ -272,6 +272,9 @@
 
 ### Другие примеры геометрии крыш
 
+- [ ] Изучить [ProposedRoofLines](https://wiki.openstreetmap.org/wiki/ProposedRoofLines): `roof:ridge=yes`, `roof:edge=yes`, `roof:apex=yes`, роли `ridge`/`edge` в `type=building`, способы задания высот и совместимость с `roof:shape`. Оценить поддержку чтения и построения, затем возможность редактирования. Это исследование, без обещания реализации и сроков. Повод: [MaestroGlanz, №45](https://community.openstreetmap.org/t/148767/45) и [№50](https://community.openstreetmap.org/t/148767/50), [St. Oswald, relation/10828887](https://www.openstreetmap.org/relation/10828887). Текущий редактор roof lines не использует. Taginfo на 2026-10-20: ridge=yes — 21 463 элемента, edge=yes — 15 053, apex=yes — 114 (не число зданий).
+- [ ] По примеру [way/780970072](https://www.openstreetmap.org/way/780970072) проверить вариант разметки хора двумя частями: `gabled` + `apse_gabled`. Текущее построение `side_hipped` даёт три плоскости, а ожидаемая апсида — веер скатов; это само по себе не доказывает ошибку реализации `side_hipped`. `apse_gabled` пока не поддерживается. Разбор выполнен, ответ подготовлен; сроки поддержки не обещаны.
+
 Источник: [MaestroGlanz](https://community.openstreetmap.org/u/MaestroGlanz), [пост №34](https://community.openstreetmap.org/t/148767/34).
 
 - [ ] Разобрать [первый пример](https://felispimeja.github.io/osm-simple3d-editor/?server=osm#18.38/47.869739/12.647845/13.6/57), который пользователь сравнивает с F4map. Учесть разбор [kaposts](https://community.openstreetmap.org/u/kaposts) в [№35](https://community.openstreetmap.org/t/148767/35): `height=6` при `min_height=48` противоречат друг другу. Не считать результат F4map эталоном для некорректных тегов; проверить наше отображение и диагностику.

@@ -6897,7 +6897,9 @@ function renderSelectedImpl() {
   const r = selectedKey ? overpass.get(selectedKey) ?? (own?.polygons ? { feature: own, roofApproximated: false } : undefined) : undefined;
   if (!r && focus && !selection.length) { infoEl.innerHTML = describeFocus(focus); return; }
   // В режиме здания подсказка о группе не нужна (выход — Esc и панель частей); «Исключить» — под свойствами
-  infoEl.innerHTML = r ? (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + excludeButton() : '';
+  // Здание без отношения (контур с частями внутри) — та же шапка, что у отношения
+  const header = r && !focus && highlightKeys(r.feature.key).length > 1 ? buildingHeader((session.get(r.feature.key)?.tags ?? r.feature.tags).name, session.get(r.feature.key)?.tags ?? r.feature.tags) : '';
+  infoEl.innerHTML = r ? header + (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + excludeButton() : '';
 }
 
 // Рендер: часть без своих цветов/формы крыши/материалов берёт их у контура, затем у отношения
@@ -6988,13 +6990,16 @@ function outlineTags(g: BuildingGroup): Record<string, string> | undefined {
   return (session.get(key) ?? overpass.findFeature(key))?.tags;
 }
 
+/** Шапка здания: название и адрес (у отношения — с контура). */
+function buildingHeader(name: string | undefined, t: Record<string, string> | undefined): string {
+  const addr = t && [t['addr:street'], t['addr:housenumber']].filter(Boolean).join(', ');
+  return `${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}${addr ? `<p class="hint">${esc(addr)}</p>` : ''}`;
+}
+
 function describeGroup(g: BuildingGroup): string {
   const t = outlineTags(g);
-  const name = g.tags.name ?? t?.name;
-  const addr = t && [t['addr:street'], t['addr:housenumber']].filter(Boolean).join(', ');
   return `
-    ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
-    ${addr ? `<p class="hint">${esc(addr)}</p>` : ''}
+    ${buildingHeader(g.tags.name ?? t?.name, t)}
     <h2>type=building — <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>${g.version ? ` v${g.version}` : ''}</h2>
     <p class="hint">${tr('Членов: {n}. Двойной клик по зданию — режим одного здания.', { n: g.members.length })}
       ${tr('Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.')}</p>

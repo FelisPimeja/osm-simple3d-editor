@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit, SnapOpts } from '../render/buildings-layer';
 import { tr, trn } from '../i18n';
 import { MIN_ROOF_HEIGHT } from './push-height';
+import { LEVEL_HEIGHT } from '../osm/heights';
 
 type Pt = [number, number];
 
@@ -80,6 +81,14 @@ export class ShapeTool {
   private pickedKey?: string;
   /** Места едущих вершин до сдвига (превью двигает саму геометрию слоя). */
   private origin = new Map<string, [number, number]>();
+  /** Свои точки привязки на время сдвига: середины сторон в исходном виде (в превью стороны уже сдвинуты). */
+  private extraSnaps: NonNullable<SnapOpts['extra']> = [];
+  /** Шаг сдвига по вертикали: высота задана только этажами — целыми этажами. */
+  private step?: number;
+  /** Высота задана только этажами: пояснение (меняется целыми этажами, как перейти на метры); undefined — в метрах. */
+  levelLock?: (t: ShapeTarget) => string | undefined;
+  /** Какие теги и как изменит сдвиг ручки крыши или верха стен на dz — для панели во время сдвига. */
+  tagChanges?: (t: ShapeTarget, dz: number) => string;
   private lastPoint?: [number, number];
   private readonly vcb: HTMLDivElement;
 
@@ -212,22 +221,33 @@ export class ShapeTool {
     if (t.insert !== undefined) {
       // Новая вершина — сразу ровно на стороне; дальше её можно отвести, как обычную (Esc оставит на стороне)
       if (!this.commit(t, new THREE.Vector3())) return true;
-      this.beginDrag({ key: t.key, poly: t.poly, ring: t.ring, i: t.i + 1, from: t.from });
+      this.beginDrag({ key: t.key, poly: t.poly, ring: t.ring, i: t.i + 1, from: t.from }, true);
       return true;
     }
     this.beginDrag(t);
     return true;
   }
 
-  private beginDrag(t: ShapeTarget) {
+  /** inserted — вершина только что вставлена на сторону: её середина в исходном виде — тоже привязка. */
+  private beginDrag(t: ShapeTarget, inserted = false) {
     const hit = { target: t };
     this.target = hit.target;
     this.origin.clear();
+    this.extraSnaps = [];
     const polys = this.layer.focusPolygons(t.key);
-    if (t.insert === undefined && !t.roof) for (const v of [t, ...(t.also ?? [])]) {
-      const p = polys?.[v.poly], at = (v.ring ? p?.inners[v.ring - 1] : p?.outer)?.[v.i];
-      if (at) this.origin.set(vertKey(v), at);
+    if (t.insert === undefined && !t.roof && !t.eave) for (const v of [t, ...(t.also ?? [])]) {
+      const p = polys?.[v.poly], ring = v.ring ? p?.inners[v.ring - 1] : p?.outer, at = ring?.[v.i];
+      if (!ring || !at) continue;
+      this.origin.set(vertKey(v), at);
+      const n = ring.length, prev = ring[(v.i - 1 + n) % n], next = ring[(v.i + 1) % n];
+      const mid = (a: [number, number], b: [number, number]) => new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, t.from.z);
+      const label = tr('Середина исходной стороны');
+      this.extraSnaps.push({ kind: 'midpoint', key: t.key, p: mid(at, prev), label }, { kind: 'midpoint', key: t.key, p: mid(at, next), label });
+      if (inserted) this.extraSnaps.push({ kind: 'midpoint', key: t.key, p: mid(prev, next), label });
     }
+    const note = t.roof || t.eave ? this.levelLock?.(t) : undefined;
+    this.step = note ? LEVEL_HEIGHT : undefined;
+    const units = note ? tr('в этажах') : tr('в метрах');
     this.offset.set(0, 0, 0);
     this.dir = this.locked = undefined;
     this.typed = '';
@@ -235,11 +255,12 @@ export class ShapeTool {
     this.state = 'drag';
     this.layer.setMoveGuide({ from: hit.target.from, gizmoScale: 0.375 });
     this.updateVcb();
-    this.say(hit.target.roof
-      ? tr('Ведите курсор вверх или вниз: верх стен стоит, меняется высота крыши. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.')
+    this.say((hit.target.roof
+      ? tr('Ведите курсор вверх или вниз: верх стен стоит, меняется высота крыши. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.', { units })
       : hit.target.eave
-      ? tr('Ведите курсор вверх или вниз: меняется высота стен, крыша едет целиком. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.')
-      : tr('Ведите курсор: вершина едет в плане, прилипает к осям здания и сторонам у вершины. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.'));
+      ? tr('Ведите курсор вверх или вниз: меняется высота стен, крыша едет целиком. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.', { units })
+      : tr('Ведите курсор: вершина едет в плане, прилипает к осям здания и сторонам у вершины. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.'))
+      + (note ? ' ' + note : ''));
   }
 
   move(point: [number, number]) {
@@ -257,7 +278,10 @@ export class ShapeTool {
     if (!ray) return;
     const near = t.insert === undefined && !t.also?.length ? this.neighbourAt(point, t) : undefined;
     this.merge = !!near;
-    this.snap = near ? undefined : this.layer.snapAt(point, undefined, undefined, { from: t.from, skip: this.snapSkip(t) });
+    const prev = this.snap;
+    this.snap = near ? undefined : this.layer.snapAt(point, undefined, undefined, { from: t.from, skip: this.snapSkip(t), extra: this.extraSnaps });
+    // Привязка на прежнем месте — та же цель (сама вершина стоит там же; подпись — от цели, а не «Вершина»)
+    if (this.snap && prev && this.snap.local.distanceToSquared(prev.local) < 1e-6) this.snap = { ...prev, point: this.snap.point };
     let dir = this.locked;
     const offset = new THREE.Vector3();
     if (near) {
@@ -328,7 +352,8 @@ export class ShapeTool {
       const dist = Number(this.typed);
       if (!this.typed || !Number.isFinite(dist) || !this.target) return true;
       // Крыша — число со знаком по вертикали
-      if (this.target.roof || this.target.eave) { this.apply(new THREE.Vector3(0, 0, this.clampVertical(this.target, dist))); return true; }
+      // В этажах — число этажей
+      if (this.target.roof || this.target.eave) { this.apply(new THREE.Vector3(0, 0, this.clampVertical(this.target, this.step ? dist * this.step : dist))); return true; }
       // Направление — прилипшее (в сторону курсора) или текущее направление движения
       let v: THREE.Vector3;
       if (this.dir) v = this.dir.v.clone().multiplyScalar(this.offset.dot(this.dir.v) < 0 ? -1 : 1);
@@ -398,11 +423,13 @@ export class ShapeTool {
     this.updateVcb();
   }
 
-  /** Крыша не ниже MIN_ROOF_HEIGHT, стены не ниже MIN_WALL_HEIGHT. */
+  /** Крыша не ниже MIN_ROOF_HEIGHT, стены не ниже MIN_WALL_HEIGHT; в этажах — целыми этажами. */
   private clampVertical(t: ShapeTarget, dz: number): number {
     const w = this.walls(t.key);
     if (!w) return dz;
-    return Math.max(dz, t.roof ? MIN_ROOF_HEIGHT - w.roof : w.min + MIN_WALL_HEIGHT - w.top);
+    const lower = t.roof ? MIN_ROOF_HEIGHT - w.roof : w.min + MIN_WALL_HEIGHT - w.top;
+    if (!this.step) return Math.max(dz, lower);
+    return Math.max(Math.round(dz / this.step), Math.ceil(lower / this.step - 1e-6)) * this.step;
   }
 
   /** Ручки верха стен: вершины по верху стены; у плоского контура без высоты — нет. */
@@ -499,6 +526,7 @@ export class ShapeTool {
   }
 
   private hoverAt(point: [number, number]): Hover | undefined {
+    this.snap = undefined;
     const ev = this.eaveAt(point);
     if (ev) return { eave: ev.index };
     const v = this.vertexAt(point);
@@ -506,6 +534,7 @@ export class ShapeTool {
     const r = this.roofAt(point);
     if (r) return { roof: r.index };
     const e = this.edgeAt(point);
+    this.snap = e?.snap;
     return e ? { point: e.target.from } : undefined;
   }
 
@@ -513,7 +542,7 @@ export class ShapeTool {
    * Точка на стороне выделенной части под курсором: сторона — у основания (там же, где маркеры), точка — пересечение
    * луча курсора с горизонталью основания, спроецированное на сторону. Концы сторон — вершины, не тут.
    */
-  private edgeAt(point: [number, number]): { target: ShapeTarget } | undefined {
+  private edgeAt(point: [number, number]): { target: ShapeTarget; snap?: SnapHit } | undefined {
     const key = this.selected();
     const polys = key ? this.layer.focusPolygons(key) : undefined;
     const w = key ? this.walls(key) : undefined;
@@ -536,7 +565,23 @@ export class ShapeTool {
         best = { target: { key, poly, ring, i, insert: s, from: new THREE.Vector3(ax + s * ex, ay + s * ey, z) }, d };
       }
     })));
-    return best;
+    if (!best) return;
+    // Привязка, лежащая на этой стороне (её середина, чужая вершина на ней): новая вершина встанет точно в неё
+    const b: { target: ShapeTarget; snap?: SnapHit } = best;
+    const snap = this.layer.snapAt(point, undefined, undefined, { noEdge: true });
+    const r = polys[b.target.poly], rr = b.target.ring ? r.inners[b.target.ring - 1] : r.outer;
+    const [ax, ay] = rr[b.target.i], [bx, by] = rr[(b.target.i + 1) % rr.length];
+    const ex = bx - ax, ey = by - ay, l2 = ex * ex + ey * ey;
+    if (snap && l2 > 1e-8) {
+      const s = ((snap.local.x - ax) * ex + (snap.local.y - ay) * ey) / l2;
+      const off = Math.abs((snap.local.x - ax) * ey - (snap.local.y - ay) * ex) / Math.sqrt(l2);
+      if (off < 0.05 && s > EDGE_END && s < 1 - EDGE_END) {
+        b.target.insert = s;
+        b.target.from.set(ax + s * ex, ay + s * ey, w.min);
+        b.snap = snap;
+      }
+    }
+    return b;
   }
 
   /** Вершина выделенной части под курсором: ближайшее на экране вертикальное ребро стены (низ — верх). */
@@ -633,12 +678,14 @@ export class ShapeTool {
     if (this.state !== 'drag') { this.vcb.innerHTML = `<span class="vcb-label">${tr('Вершина')}</span>${glue}`; return; }
     if (this.target?.roof || this.target?.eave) {
       const w = this.walls(this.target.key);
-      const dz = this.offset.z, roof = !!this.target.roof;
-      const value = this.typed || (dz >= 0 ? '+' : '') + dz.toFixed(2);
+      const dz = this.offset.z, roof = !!this.target.roof, step = this.step;
+      const value = this.typed || (dz >= 0 ? '+' : '') + (step ? String(Math.round(dz / step)) : dz.toFixed(2));
       const info = !w ? '' : `<span class="vcb-axis">${roof ? tr('высота крыши {h} м', { h: (w.roof + dz).toFixed(2) })
         : tr('высота стен {h} м', { h: (w.top - w.min + dz).toFixed(2) })}</span>`;
-      this.vcb.innerHTML = `<span class="vcb-label">${roof ? tr('Крыша') : tr('Верх стен')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
-        <span class="vcb-axis">${this.snap ? tr('до точки') : tr('по вертикали')}</span>${info}`;
+      // Какие теги меняются — видно до применения
+      const changes = this.tagChanges?.(this.target, dz);
+      this.vcb.innerHTML = `<span class="vcb-label">${roof ? tr('Крыша') : tr('Верх стен')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${step ? tr('эт.') : tr('м')}
+        <span class="vcb-axis">${this.snap ? tr('до точки') : tr('по вертикали')}</span>${info}${changes ? `<span class="vcb-axis vcb-tags">${changes}</span>` : ''}`;
       return;
     }
     const d = this.locked ?? this.dir;

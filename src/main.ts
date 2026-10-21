@@ -39,7 +39,7 @@ import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuil
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
-import { pushHeightTags, lockedPushUnits, isFreshFlat, roofHeightTags } from './edit/push-height';
+import { pushHeightTags, lockedPushUnits, isFreshFlat, roofHeightTags, levelsNote } from './edit/push-height';
 import { SplitTool, type CutPoint } from './edit/split-tool';
 import { insertInLine, insertInRing, restructureRing, type Insert, type RingWay } from './edit/topology';
 import { MAX_DEVIATION_DEG, orthogonalize } from './edit/orthogonalize';
@@ -1885,7 +1885,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
   if (pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || copyPick) {
     // Рассечение: подсвечиваем вершины и середины рёбер объектов (концы разреза)
     currentSnap = pushTool.active ? (pushTool.state === 'push' ? pushTool.snap : undefined)
-      : shapeTool.active ? (shapeTool.state === 'drag' && point ? shapeTool.snap : undefined)
+      : shapeTool.active ? (point ? shapeTool.snap : undefined)
       : drawTool.active ? (point ? drawTool.snap : undefined)
       : measureTool.active ? (point ? measureTool.snap : undefined)
       : rotateTool.active ? (point ? rotateTool.snap : undefined)
@@ -2095,7 +2095,7 @@ window.addEventListener('blur', () => { shiftHeld = false; if (pushTool.state ==
 
 function startPush() {
   if (!focus) return;
-  moveTool.stop();
+  moveTool.stop(); shapeTool.stop();
   splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   pushTool.start();
@@ -2120,6 +2120,20 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(),
     toolHint(hint, error);
   });
 shapeBtn.addEventListener('click', () => (shapeTool.active ? shapeTool.stop() : startShape()));
+// Высота только в этажах — ручки ходят целыми этажами, и об этом говорим прямо
+shapeTool.levelLock = (t) => {
+  const f = entity(t.key) as Feature3D | undefined;
+  if (!f) return;
+  if (t.roof) return f.tags['roof:levels'] !== undefined && f.tags['roof:height'] === undefined ? levelsNote('roof:levels', 'roof:height') : undefined;
+  return lockedPushUnits(f.tags, f.version) === 'levels' ? levelsNote('building:levels', 'height') : undefined;
+};
+// Что меняет сдвиг ручки: «тег: было → станет» для панели инструмента
+shapeTool.tagChanges = (t, dz) => {
+  const f = entity(t.key) as Feature3D | undefined;
+  if (!f) return '';
+  const after = shapeHeightTags(f, t, dz);
+  return Object.entries(diffTags(f.tags, after)).map(([k, v]) => `${esc(k)}: ${esc(f.tags[k] ?? '—')} → ${esc(v ?? '—')}`).join(' · ');
+};
 
 /**
  * Пока «Форма» включена — режим контуров (соседи одними рёбрами, выделенная часть с заливкой), чтобы было видно
@@ -4015,7 +4029,7 @@ let shapePreviewed: string[] = [];
 
 /** Теги для ручки крыши (высота крыши) или верха стен (высота стен — как «Вытянуть» за верх, крыша не меняется). */
 function shapeHeightTags(f: Feature3D, t: ShapeTarget, dz: number): Record<string, string> {
-  return t.roof ? roofHeightTags(f.tags, dz) : pushHeightTags(f.tags, 'top', dz, 'm', isFreshFlat(f.tags, f.version));
+  return t.roof ? roofHeightTags(f.tags, dz) : pushHeightTags(f.tags, 'top', dz, lockedPushUnits(f.tags, f.version) ?? 'm', isFreshFlat(f.tags, f.version));
 }
 
 function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string | undefined {

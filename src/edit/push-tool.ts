@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import { LEVEL_HEIGHT } from '../osm/heights';
+import { levelsNote } from './push-height';
 import { tr, trn } from '../i18n';
 
 export type PushUnits = 'm' | 'levels';
@@ -205,11 +206,13 @@ export class PushTool {
       this.guide();
       this.updateVcb();
       const units = this.units === 'levels' ? tr('в этажах') : tr('в метрах');
-      this.onState(t.face === 'side'
+      // Высота только в этажах — сказать прямо, почему верх ходит шагом в этаж и как перейти на метры
+      const note = locked === 'levels' && t.face === 'top' ? ' ' + levelsNote('building:levels', 'height') : '';
+      this.onState((t.face === 'side'
         ? tr('Тянем стену: ведите курсор наружу или внутрь. Клик — применить, число + Enter — в метрах, D — с соседями или отдельно, Esc — отмена.')
         : t.face === 'top'
           ? tr('Тянем верх: ведите курсор вверх или вниз. Клик — применить, число + Enter — {units}, Tab — единицы, Esc — отмена.', { units })
-          : tr('Тянем низ: ведите курсор вверх или вниз. Клик — применить, число + Enter — {units}, Tab — единицы, Esc — отмена.', { units }));
+          : tr('Тянем низ: ведите курсор вверх или вниз. Клик — применить, число + Enter — {units}, Tab — единицы, Esc — отмена.', { units })) + note);
       return true;
     }
     if (this.state === 'push') { this.apply(this.dz); return true; }

@@ -1,4 +1,5 @@
 import { computeHeights, LEVEL_HEIGHT } from '../osm/heights';
+import { tr } from '../i18n';
 import type { PushFace, PushUnits } from './push-tool';
 
 /** Drawn contours carry a temporary height at their drawing plane. */
@@ -61,4 +62,10 @@ export function roofHeightTags(tags: Record<string, string>, dz: number): Record
   } else out['roof:height'] = fmt(roof);
   if (tags.height !== undefined) out.height = fmt(h.wallTop + roof);
   return out;
+}
+
+/** Пояснение: высота задана только этажами (levelsTag) — меняется целыми этажами; чтобы в метрах — задать metresTag. */
+export function levelsNote(levelsTag: string, metresTag: string): string {
+  return tr('Высота задана этажами ({levels}) — меняется только целыми этажами. Чтобы менять в метрах, задайте высоту в метрах ({metres}).',
+    { levels: levelsTag, metres: metresTag });
 }

@@ -1041,16 +1041,18 @@
   "Del — удалить вершину под курсором; вершина, подведённая к соседней, сливается с ней.": "Del — delete the vertex under the cursor; a vertex brought to its neighbour merges with it.",
   "Форма: кликните по вершине выделенной части (на любой высоте ребра стены), по стороне — новая вершина, по ручке крыши — её высота. Клик по другому объекту — выбрать его. Esc — выйти.": "Shape: click a vertex of the selected part (at any height of the wall edge), a side to add a vertex, or a roof handle to change its height. Click another object to select it. Esc — exit.",
   "Бирюзовые ручки крыши (конёк, вершина) — только вверх или вниз: верх стен стоит, меняется высота крыши.": "Teal roof handles (ridge, apex) move only up or down: the wall top stays, the roof height changes.",
-  "Ведите курсор вверх или вниз: верх стен стоит, меняется высота крыши. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.": "Move the cursor up or down: the wall top stays, the roof height changes. Click — apply, number + Enter — offset in metres, Esc — cancel.",
   "высота крыши {h} м": "roof height {h} m",
   "Высота крыши {key}: {h} м. Отменить — Ctrl+Z.": "Roof height of {key}: {h} m. Undo — Ctrl+Z.",
   "Удалено вершин {key}: {n}": "Vertices of {key} deleted: {n}",
   "Вершины {key} ({n}) сдвинуты на {d} м": "Vertices of {key} ({n}) moved by {d} m",
   "Клик по стороне у основания — новая вершина ровно на стороне; дальше её можно отвести (Esc — оставить на стороне).": "Click a side at the base to add a vertex exactly on it; then you can move it away (Esc keeps it on the side).",
   "Shift+клик по вершине или Shift+рамка — выбрать несколько вершин основания: захват любой двигает все, Del удаляет все.": "Shift+click a vertex or Shift+drag a box to select several base vertices: grabbing any moves them all, Del deletes them all.",
-  "Ведите курсор вверх или вниз: меняется высота стен, крыша едет целиком. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.": "Move the cursor up or down: the wall height changes, the roof moves as a whole. Click — apply, number + Enter — offset in metres, Esc — cancel.",
   "высота стен {h} м": "wall height {h} m",
   "Верх стен": "Wall top",
   "Высота стен {key}: {h} м. Отменить — Ctrl+Z.": "Wall height of {key}: {h} m. Undo — Ctrl+Z.",
-  "Фиолетовые ручки верха стен — только вверх или вниз: меняется высота стен, крыша едет целиком.": "Purple wall-top handles move only up or down: the wall height changes, the roof moves as a whole."
+  "Фиолетовые ручки верха стен — только вверх или вниз: меняется высота стен, крыша едет целиком.": "Purple wall-top handles move only up or down: the wall height changes, the roof moves as a whole.",
+  "Высота задана этажами ({levels}) — меняется только целыми этажами. Чтобы менять в метрах, задайте высоту в метрах ({metres}).": "The height is set in levels ({levels}), so it changes only by whole levels. To change it in metres, set the height in metres ({metres}).",
+  "Середина исходной стороны": "Midpoint of original side",
+  "Ведите курсор вверх или вниз: верх стен стоит, меняется высота крыши. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.": "Move the cursor up or down: the wall top stays, the roof height changes. Click — apply, number + Enter — offset {units}, Esc — cancel.",
+  "Ведите курсор вверх или вниз: меняется высота стен, крыша едет целиком. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.": "Move the cursor up or down: the wall height changes, the roof moves as a whole. Click — apply, number + Enter — offset {units}, Esc — cancel."
 }

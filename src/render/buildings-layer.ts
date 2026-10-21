@@ -2117,7 +2117,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       return [{ kind: 'center' as SnapKind, key: d.key, p }, ...[0, 1, 2, 3].flatMap(i => radius ? [{ kind: 'vertex' as SnapKind, key: d.key,
         p: p.clone().add(new THREE.Vector3(Math.cos(i * Math.PI / 2) * radius, Math.sin(i * Math.PI / 2) * radius, 0)) }] : [])];
     }) : [];
-    for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...doorPoints]) {
+    for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...doorPoints, ...(opts.extra ?? [])]) {
       if (off.has(s.kind) || !filter(s.key) || opts.skip?.(s.p, s.key, s.kind)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;
@@ -4577,7 +4577,16 @@ interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3; label?: str
 interface SnapEdge { key: string; a: THREE.Vector3; b: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 /** along — у продолжения ребра: конец ребра, от которого идёт продолжение (для пунктира). */
-export interface SnapOpts { from?: THREE.Vector3; noEdge?: boolean; skip?: (p: THREE.Vector3, key: string, kind: SnapKind) => boolean }
+/**
+ * Параметры поиска привязки: from — последняя точка инструмента (перпендикуляры); noEdge — без точек на рёбрах;
+ * skip — какие точки (и рёбра с таким концом) не брать; extra — свои точки инструмента (например, середины сторон
+ * до правки), наравне с точками сцены.
+ */
+export interface SnapOpts {
+  from?: THREE.Vector3; noEdge?: boolean;
+  skip?: (p: THREE.Vector3, key: string, kind: SnapKind) => boolean;
+  extra?: { kind: SnapKind; key: string; p: THREE.Vector3; label?: string }[];
+}
 export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number]; along?: THREE.Vector3; label?: string; /** У оси откладывания — расстояние от якоря со знаком. */ dist?: number }
 const SNAP_RADIUS_PX = 12;
 /** Длина стрелок осей в начале координат здания, м — одна клетка сетки. */

@@ -5,7 +5,7 @@ import { tr, trn } from '../i18n';
 import { idFieldLabel, idOptions, valueLabels } from '../osm/presets';
 import { parseDate } from '../osm/dates';
 
-type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour' | 'combo' | 'date';
+type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour' | 'combo' | 'date' | 'edtf';
 
 interface Field {
   tag: string;
@@ -22,6 +22,8 @@ interface Field {
   placeholder?: string;
   /** Только на OpenHistoricalMap (setDateFields); заданное значение показываем везде. */
   dated?: boolean;
+  /** Пустое поле подсказывает значение здания (контура/отношения): серым, Tab — подставить. */
+  suggest?: boolean;
 }
 
 /** Частые значения building:part (taginfo) с подписями; можно ввести и своё. */
@@ -89,8 +91,10 @@ const FIELDS = ([
   { tag: 'roof:orientation', label: tr('Конёк'), type: 'select', options: ['along', 'across'] },
   { tag: 'building:colour', label: tr('Цвет стен'), type: 'colour' },
   { tag: 'roof:colour', type: 'colour' },
-  { tag: 'start_date', label: tr('Существует с'), type: 'date', placeholder: tr('ГГГГ-ММ-ДД'), dated: true },
-  { tag: 'end_date', label: tr('Существует до'), type: 'date', placeholder: tr('ГГГГ-ММ-ДД'), dated: true },
+  { tag: 'start_date', label: tr('Существует с'), type: 'date', placeholder: tr('ГГГГ-ММ-ДД'), dated: true, suggest: true },
+  { tag: 'start_date:edtf', label: tr('Существует с (EDTF)'), type: 'edtf', placeholder: tr('1850~, 1850/1855, 185X'), dated: true, suggest: true },
+  { tag: 'end_date', label: tr('Существует до'), type: 'date', placeholder: tr('ГГГГ-ММ-ДД'), dated: true, suggest: true },
+  { tag: 'end_date:edtf', label: tr('Существует до (EDTF)'), type: 'edtf', placeholder: tr('1850~, 1850/1855, 185X'), dated: true, suggest: true },
 ] as Field[]).map((f) => ({
   ...f,
   label: f.label ?? idFieldLabel(f.tag) ?? f.tag,
@@ -133,6 +137,8 @@ function isValid(type: FieldType, v: string): boolean {
     case 'colour': return CSS.supports('color', v.split(';')[0].trim());
     // Даты OSM: год (до н. э. — с минусом), ГГГГ-ММ, ГГГГ-ММ-ДД, ~1850 (примерно), 1850s (десятилетие)
     case 'date': return /^(~?-?\d{1,4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?|\d{3}0s)$/.test(v) && !!parseDate(v);
+    // EDTF (ISO 8601-2): 1850~, 1850?, 1850%, 185X, 1850/1855, ../1900, [1850,1860], 1850-21 (весна) — проверяем только алфавит
+    case 'edtf': return /^[-+0-9XYSEu~?%/.,\[\]{}:T ]+$/.test(v) && /\d/.test(v);
     default: return true;
   }
 }
@@ -165,6 +171,15 @@ const ICON_INHERIT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
 
 /** Значок «по умолчанию» — пунктирный круг. */
 const ICON_DEFAULT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="2 2.2"><circle cx="8" cy="8" r="5.5"/></svg>';
+
+/** Значок «подсказка: Tab — подставить» — стрелка к упору. */
+const ICON_SUGGEST = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h9M8 5l3 3-3 3"/><path d="M13.5 4v8"/></svg>';
+
+/** Подсказка значения тега из источников (дата здания у части): первое заданное. */
+function suggestion(tag: string, sources: InheritSource[]): { value: string; from: InheritSource } | undefined {
+  const from = sources.find((s) => s.tags[tag]?.trim());
+  return from && { value: from.tags[tag].trim(), from };
+}
 
 const num = (v: number) => String(Math.round(v * 100) / 100);
 
@@ -204,8 +219,12 @@ function defaultValues(effective: Record<string, string>): Record<string, { valu
   return out;
 }
 
-/** HTML формы тегов для объекта. sources — откуда показывать унаследованные значения (по порядку). */
-export function renderTagForm(key: string, session: EditSession, sources: InheritSource[] = []): string {
+/**
+ * HTML формы тегов для объекта. sources — откуда показывать унаследованные значения (по порядку);
+ * suggest — откуда подсказывать значения полей с suggest (даты здания); only — показать только эти поля.
+ */
+export function renderTagForm(key: string, session: EditSession, sources: InheritSource[] = [],
+  opts: { suggest?: InheritSource[]; only?: (tag: string) => boolean } = {}): string {
   const f = session.get(key);
   if (!f) return '';
   const orig = session.originalTags(key) ?? {};
@@ -214,6 +233,7 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   const shape = f.tags['roof:shape'] ?? sources.map((s) => s.tags['roof:shape']).find((v) => v !== undefined);
   const defaults = defaultValues({ ...f.tags, ...inheritedTags(f.tags, sources.map((s) => s.tags)) });
   const rows = FIELDS.filter((field) => {
+    if (opts.only && !opts.only(field.tag)) return false;
     if (field.tag === 'building:part' && f.tags['building:part'] === undefined) return false; // только у частей
     if (field.dated && !dateFields && f.tags[field.tag] === undefined) return false;
     const only = SHAPE_ONLY[field.tag];
@@ -233,10 +253,14 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
     const defHint = def ? tr('Не задано — редактор рисует со значением по умолчанию {value} ({why}). В OSM ничего не записывается: чтобы закрепить, введите значение.',
       { value: def.value, why: def.why }) : '';
     if (from) inheritedAny.push(field.label!.replace(/,.*$/, '').toLowerCase());
-    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || defHint || was || field.tag)}"`;
-    const shown = inherited ?? def?.value;
-    const grey = inherited ? ' class="inherited"' : def ? ' class="inherited defaulted"' : '';
-    const badge = (input: string) => withBadge(input, hint || defHint, def ? ICON_DEFAULT : ICON_INHERIT);
+    // Подсказка (дата здания): не наследуется, а предлагается — Tab подставляет
+    const sug = !value && field.suggest ? suggestion(field.tag, opts.suggest ?? []) : undefined;
+    const sugHint = sug ? tr('Не задано — у {source}: {value}. Tab — подставить.', { source: sug.from.label, value: sug.value }) : '';
+    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || defHint || sugHint || was || field.tag)}"${
+      sug ? ` data-suggest="${esc(sug.value)}"` : ''}`;
+    const shown = inherited ?? def?.value ?? sug?.value;
+    const grey = inherited ? ' class="inherited"' : def ? ' class="inherited defaulted"' : sug ? ' class="suggested"' : '';
+    const badge = (input: string) => withBadge(input, hint || defHint || sugHint, def ? ICON_DEFAULT : sug ? ICON_SUGGEST : ICON_INHERIT);
     let control: string;
     if (field.type === 'select') {
       // Нестандартное значение из данных тоже показываем, чтобы не потерять его
@@ -251,7 +275,7 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
       control = `<span class="colour-field"><input type="color" value="${toHex(value || shown)}" data-picker-for="${esc(field.tag)}"${grey} />
         ${badge(`<input type="text" ${common} value="${esc(value)}" placeholder="${esc(shown ?? tr('#rrggbb или имя'))}" />`)}</span>`;
     } else {
-      control = badge(`<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common} value="${esc(value)}" placeholder="${esc(shown ?? field.placeholder ?? '')}" />`);
+      control = badge(`<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${sug ? grey : ''} value="${esc(value)}" placeholder="${esc(shown ?? field.placeholder ?? '')}" />`);
       if (field.type === 'direction') control = directionField(control);
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
@@ -272,8 +296,11 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   return `<form class="tag-form" data-key="${esc(key)}" onsubmit="return false">${legacy}${warn}${rows}${revert}</form>`;
 }
 
-/** Форма тегов для нескольких объектов: общее значение или «разные» серым; правка — сразу для всех. */
-export function renderMultiTagForm(keys: string[], session: EditSession): string {
+/**
+ * Форма тегов для нескольких объектов: общее значение или «разные» серым; правка — сразу для всех.
+ * suggestFor — откуда подсказывать даты каждому объекту (см. renderTagForm).
+ */
+export function renderMultiTagForm(keys: string[], session: EditSession, suggestFor: (key: string) => InheritSource[] = () => []): string {
   const feats = keys.map((k) => session.get(k)).filter((f): f is NonNullable<typeof f> => !!f);
   if (!feats.length) return '';
   const values = (tag: string) => [...new Set(feats.map((f) => f.tags[tag] ?? ''))];
@@ -288,6 +315,15 @@ export function renderMultiTagForm(keys: string[], session: EditSession): string
     const mixed = vs.length > 1;
     const value = mixed ? '' : vs[0];
     const changed = feats.some((f) => session.isChanged(f.key, field.tag));
+    // Подсказка — если у всех пустых одна и та же, а заданные с ней совпадают; Tab заполнит пустые
+    const empty = field.suggest ? feats.filter((f) => !f.tags[field.tag]) : [];
+    const sugs = [...new Set(empty.map((f) => suggestion(field.tag, suggestFor(f.key))?.value ?? ''))];
+    const sug = sugs.length === 1 && sugs[0] && vs.every((v) => !v || v === sugs[0]) ? sugs[0] : undefined;
+    if (sug) {
+      const tip = tr('Не задано у {n} из {total} — у здания: {value}. Tab — подставить.', { n: empty.length, total: feats.length, value: sug });
+      const control = withBadge(`<input type="text" data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(tip)}" data-suggest="${esc(sug)}" class="suggested" value="" placeholder="${esc(sug)}" />`, tip, ICON_SUGGEST);
+      return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
+    }
     const shown = mixed ? tr('разные: {values}', { values: `${vs.map((v) => v || '—').slice(0, 6).join(', ')}${vs.length > 6 ? '…' : ''}` }) : '';
     const tip = mixed ? `${shown}${NUMERIC.has(field.type) ? tr('. Число — всем одно значение; =+1, =-2, =*2, =/8 — к значению каждого') : ''}` : field.tag;
     const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(tip)}"`;
@@ -440,6 +476,14 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     const shown = filterCombo(ul, input.value);
     ul.hidden = !input.value.trim() || !shown.length || (shown.length === 1 && shown[0].dataset.value === input.value.trim());
     shown[0]?.classList.toggle('active', !!input.value.trim());
+  });
+  // Tab в пустом поле с подсказкой — подставить её; фокус уходит дальше обычным Tab
+  // (перерисовка формы после правки возвращает его в поле с тем же тегом)
+  container.addEventListener('keydown', (e) => {
+    const input = e.target as HTMLInputElement;
+    if (e.key !== 'Tab' || e.shiftKey || !input.dataset.suggest || input.value) return;
+    input.value = input.dataset.suggest;
+    setTimeout(() => commit(input)); // после перехода фокуса: перерисовка вернёт его в следующее поле
   });
   container.addEventListener('keydown', (e) => {
     const field = (e.target as Element).closest('.combo-field');

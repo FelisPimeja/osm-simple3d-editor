@@ -237,6 +237,8 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .inherit-field input::placeholder { color: #9ca3af; }
 .inherit-badge { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: #9ca3af; pointer-events: none; }
 .inherit-badge svg { width: 14px; height: 14px; display: block; }
+/* Подсказка значения (дата здания у части): серым, Tab — подставить */
+.tag-row input.suggested::placeholder { color: #9ca3af; font-style: italic; }
 .colour-field input[type="color"].inherited { opacity: .55; }
 .colour-field input[type="color"].picking { outline: 2px solid #2563eb; outline-offset: 1px; }
 /* Окно выбора цвета (src/edit/colour-popover.ts) */

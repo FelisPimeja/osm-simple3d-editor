@@ -6822,7 +6822,7 @@ function renderMulti() {
   infoEl.innerHTML = `
     <h2>${tr('Выделено: {n}', { n: selection.length })}</h2>
     <ul class="change-list">${list}</ul>
-    ${renderMultiTagForm(selection.filter((k) => session.get(k)?.tags.type !== 'building'), session)}
+    ${renderMultiTagForm(selection.filter((k) => session.get(k)?.tags.type !== 'building'), session, dateSources)}
     ${drill ? excludeButton() : addPlan ? `<p><button type="button" data-add-selected-parts ${'reason' in addPlan ? 'disabled' : ''}>${tr('Добавить выбранные части в отношение')}</button></p>` : `<p><button type="button" data-merge ${'reason' in plan ? 'disabled' : ''}>${tr('Объединить в здание')}</button></p>`}
     ${drill ? '' : addPlan ? 'reason' in addPlan ? `<p class="hint">${esc(addPlan.reason)}</p>` : `<p class="hint">${tr('В {key} будут добавлены части: {n}.', { key: esc(addPlan.group.key), n: addPlan.parts.length })}</p>` : 'reason' in plan ? `<p class="hint">${esc(plan.reason)}</p>` : plan.syntheticOutline ? `<p class="hint">${tr('Будет создан общий контур по выбранным зданиям; объёмы станут частями: {n}.', { n: plan.members.length })}</p>` : `<p class="hint">${tr('Будет создано отношение type=building: контур {outline} и частей {n}.', {
       outline: esc(plan.members[0].key), n: plan.members.filter((m) => m.role === 'part').length })}</p>`}
@@ -6840,7 +6840,7 @@ function renderSelected() {
 function renderSelectedImpl() {
   if (addingTo) return renderAdding();
   if (selection.length > 1) return renderMulti();
-  const form = selectedKey ? renderTagForm(selectedKey, session, inheritSources(selectedKey)) : undefined;
+  const form = selectedKey ? renderTagForm(selectedKey, session, inheritSources(selectedKey), { suggest: dateSources(selectedKey) }) : undefined;
   const g = selectedKey ? editGroups.get(selectedKey) : undefined;
   // Отношение type=building — только контейнер: высоты, крыша и прочее живут на контуре и частях
   if (g) { infoEl.innerHTML = describeGroup(g); return; }
@@ -6892,6 +6892,20 @@ function inheritSources(key: string): InheritSource[] {
   return out;
 }
 
+/**
+ * Откуда подсказывать даты (start_date / end_date, OHM): части — контур, затем отношение;
+ * контуру — отношение, отношению — контур. Не наследование: значение лишь предлагается в поле.
+ */
+function dateSources(key: string): InheritSource[] {
+  const g = groupOf(key);
+  if (!g) return [];
+  const outline = g.members.find((_, i) => g.roles[i] === 'outline');
+  const t = outline && outline !== key ? outlineTags(g) : undefined;
+  const out: InheritSource[] = t ? [{ label: tr('контура {key}', { key: outline! }), tags: t }] : [];
+  if (g.key !== key && !isSolo(g)) out.push({ label: tr('отношения {key}', { key: g.key }), tags: g.tags });
+  return out;
+}
+
 /** Панель режима одного здания, пока ничего не выделено. */
 function describeFocus(g: BuildingGroup): string {
   const name = g.tags.name ?? outlineTags(g)?.name;
@@ -6937,7 +6951,14 @@ function describeGroup(g: BuildingGroup): string {
     <p class="hint">${tr('Членов: {n}. Двойной клик по зданию — режим одного здания.', { n: g.members.length })}
       ${tr('Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.')}</p>
     <p><button type="button" data-add-parts>${tr('Добавить части')}</button></p>
+    ${groupDateForm(g)}
     ${tagTable(g.tags)}`;
+}
+
+/** Даты отношения (OHM): только поля дат, с подсказкой от контура. */
+function groupDateForm(g: BuildingGroup): string {
+  if (isSolo(g) || !entity(g.key)) return '';
+  return renderTagForm(g.key, session, [], { suggest: dateSources(g.key), only: (tag) => /^(start|end)_date/.test(tag) });
 }
 
 /** После правки тегов: пересобрать меши, обновить панель и список изменений. */

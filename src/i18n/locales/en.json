@@ -1005,5 +1005,10 @@
   "От вершины": "From vertex",
   "Отложенная точка": "Offset point",
   "Enter — отложить точку, минус — в обратную сторону, Esc — сбросить": "Enter — place point, minus — opposite direction, Esc — reset",
-  "Откладывание от вершины": "Offset from vertex"
+  "Откладывание от вершины": "Offset from vertex",
+  "1850~, 1850/1855, 185X": "1850~, 1850/1855, 185X",
+  "Существует с (EDTF)": "Exists from (EDTF)",
+  "Существует до (EDTF)": "Exists until (EDTF)",
+  "Не задано — у {source}: {value}. Tab — подставить.": "Not set — {source} has: {value}. Tab to fill in.",
+  "Не задано у {n} из {total} — у здания: {value}. Tab — подставить.": "Not set on {n} of {total} — building has: {value}. Tab to fill in."
 }

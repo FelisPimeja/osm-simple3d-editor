@@ -89,7 +89,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   } else if (axis && AXIS_PLANE_SHAPES.has(shape)) {
     addAxisPlanesRoof(roof, walls, single!.outer, axis, shape, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across', tags['roof:direction']);
   } else if (axis && shape === 'saltbox') {
-    addSaltboxRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across', tags['roof:direction']);
+    addSaltboxRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, saltboxAcross(axis, tags), tags['roof:direction']);
   } else if (axis && shape === 'half-hipped') {
     addHalfHippedRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across');
   } else if (axis) {
@@ -400,6 +400,21 @@ function addHalfHippedRoof(roof: number[], walls: number[], ring: Pt[], ax: Rect
     rising([-along[0], -along[1]], halfL, zc),
   ];
   addPlanesRoof(roof, walls, ring, planes, z0, top);
+}
+
+/**
+ * Конёк saltbox поперёк длинной стороны? По roof:orientation, а без него — по roof:direction: длинный скат смотрит
+ * в direction, конёк ему перпендикулярен (иначе направление выбирало бы лишь одну из двух сторон).
+ */
+function saltboxAcross(ax: RectAxis, tags: Record<string, string>): boolean {
+  const o = tags['roof:orientation'];
+  if (o === 'across' || o === 'along') return o === 'across';
+  const v = tags['roof:direction'];
+  const deg = v === undefined ? NaN : CARDINAL[v.toUpperCase()] ?? Number(v);
+  if (!Number.isFinite(deg)) return false;
+  const rad = (deg * Math.PI) / 180;
+  // Скат вдоль оси прямоугольника — конёк поперёк неё
+  return Math.abs(Math.sin(rad) * ax.dir[0] + Math.cos(rad) * ax.dir[1]) > Math.SQRT1_2;
 }
 
 /** Смещение конька saltbox от середины, в долях полуширины. */

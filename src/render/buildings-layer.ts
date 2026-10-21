@@ -2903,14 +2903,33 @@ export class BuildingsLayer implements CustomLayerInterface {
    * (если closed) и полупрозрачная заливка, когда точек ≥ 3. Поверх геометрии.
    */
   private outline: Line2[] = [];
+  private outlineFill?: THREE.Mesh;
   /**
    * Жирная обводка замкнутых контуров поверх всего — например, грань, от которой пойдёт отступ (с дворами);
-   * dashed — пунктиром (задняя грань «Вытянуть» с Shift).
+   * dashed — пунктиром (задняя грань «Вытянуть» с Shift); fill — ещё и полупрозрачная заливка грани (кольца в одной
+   * плоскости; кольцо внутри другого — дыра).
    */
-  setOutline(rings: THREE.Vector3[][] | undefined, widthPx = 3, dashed = false) {
+  setOutline(rings: THREE.Vector3[][] | undefined, widthPx = 3, dashed = false, fill = false) {
     const g = this.groups.get(FOCUS_GROUP);
     for (const l of this.outline) { l.parent?.remove(l); l.geometry.dispose(); l.material.dispose(); }
     this.outline = [];
+    if (this.outlineFill) {
+      this.outlineFill.parent?.remove(this.outlineFill);
+      this.outlineFill.geometry.dispose();
+      (this.outlineFill.material as THREE.Material).dispose();
+      this.outlineFill = undefined;
+    }
+    if (rings && g && fill) {
+      const geo = planarFill(rings);
+      if (geo) {
+        const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x1d4ed8, transparent: true, opacity: 0.22,
+          depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
+        mesh.renderOrder = 1003;
+        mesh.frustumCulled = false;
+        g.scene.add(mesh);
+        this.outlineFill = mesh;
+      }
+    }
     if (rings && g && this.map) {
       const canvas = this.map.getCanvas();
       const dpr = canvas.width / Math.max(1, canvas.clientWidth);
@@ -4737,6 +4756,44 @@ const AXIS_COLOURS = [0xd43a3a, 0x3fa34d, 0x3a52b4]; // x, y, z — как в 3D
  * Значок инструмента рисуется поверх геометрии (без проверки глубины), чтобы не терялся за стенами;
  * occluded (начало координат на сетке) — модель его закрывает, а сквозь неё он лишь слегка просвечивает.
  */
+/**
+ * Треугольники плоской грани из колец (метры сцены): плоскость — по первому кольцу (метод Ньюэлла), кольцо внутри
+ * другого — дыра в нём. undefined — колец нет или они вырождены.
+ */
+function planarFill(rings: THREE.Vector3[][]): THREE.BufferGeometry | undefined {
+  const first = rings.find((r) => r.length >= 3);
+  if (!first) return;
+  const n = new THREE.Vector3();
+  first.forEach((p, i) => {
+    const q = first[(i + 1) % first.length];
+    n.x += (p.y - q.y) * (p.z + q.z); n.y += (p.z - q.z) * (p.x + q.x); n.z += (p.x - q.x) * (p.y + q.y);
+  });
+  if (n.lengthSq() < 1e-12) return;
+  n.normalize();
+  const u = new THREE.Vector3().crossVectors(Math.abs(n.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0), n).normalize();
+  const v = new THREE.Vector3().crossVectors(n, u);
+  const flat = rings.filter((r) => r.length >= 3).map((r) => ({ pts3: r, pts: r.map((p) => new THREE.Vector2(p.dot(u), p.dot(v))) }));
+  const inside = (q: THREE.Vector2, r: THREE.Vector2[]) => {
+    let c = false;
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+      if ((r[i].y > q.y) !== (r[j].y > q.y) && q.x < ((r[j].x - r[i].x) * (q.y - r[i].y)) / (r[j].y - r[i].y) + r[i].x) c = !c;
+    }
+    return c;
+  };
+  const positions: number[] = [];
+  flat.forEach((ring, i) => {
+    if (flat.some((o, j) => j !== i && inside(ring.pts[0], o.pts))) return; // дыра — уйдёт в свой внешний контур
+    const holes = flat.filter((o, j) => j !== i && inside(o.pts[0], ring.pts));
+    const all = [ring, ...holes];
+    const verts = all.flatMap((r) => r.pts3);
+    for (const t of THREE.ShapeUtils.triangulateShape(ring.pts, holes.map((h) => h.pts))) {
+      for (const k of t) positions.push(verts[k].x, verts[k].y, verts[k].z);
+    }
+  });
+  if (!positions.length) return;
+  return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+}
+
 function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH, occluded = false, free?: readonly number[]): THREE.Object3D {
   const r = len * 0.012, head = len * 0.12;
   const root = new THREE.Group();

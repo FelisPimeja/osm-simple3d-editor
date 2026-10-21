@@ -19,7 +19,7 @@ function build(shape, direction, orientation, footprint = polygons) {
 }
 
 for (const shape of ['side_hipped', 'side_half-hipped']) {
-  test(`${shape}: compass directions follow a rotated footprint, numeric angles stay exact`, () => {
+  test(`${shape}: compass and approximate numeric directions follow a rotated footprint`, () => {
     const angle = 20 * Math.PI / 180;
     const rotate = ([x,y]) => [x*Math.cos(angle)-y*Math.sin(angle), x*Math.sin(angle)+y*Math.cos(angle)];
     const footprint = [{ outer: polygons[0].outer.map(rotate), inners: [] }];
@@ -32,7 +32,20 @@ for (const shape of ['side_hipped', 'side_half-hipped']) {
         assert.ok(Math.abs(actual[i]-x)<1e-5 && Math.abs(actual[i+1]-y)<1e-5 && Math.abs(actual[i+2]-expected[i+2])<1e-5, direction);
       }
     }
-    assert.notDeepEqual(build(shape, 'N', undefined, footprint).roof, build(shape, '0', undefined, footprint).roof);
+    for (const [compass, bearings] of [
+      ['N', ['0', '5', '340', '360']],
+      ['E', ['90', '95', '70']],
+      ['S', ['180', '185', '160']],
+      ['W', ['270', '275', '250']],
+    ]) {
+      for (const bearing of bearings) {
+        const expected = build(shape, compass, undefined, footprint);
+        const actual = build(shape, bearing, undefined, footprint);
+        assert.deepEqual(actual.roof, expected.roof, bearing);
+        assert.deepEqual(actual.walls, expected.walls, bearing);
+        assert.deepEqual(build(shape, bearing, 'across', footprint).roof, expected.roof, bearing);
+      }
+    }
   });
   test(`${shape}: cardinal directions put the gable opposite the hip`, () => {
     for (const [direction, dx, dy] of [['N',0,1],['E',1,0],['S',0,-1],['W',-1,0]]) {

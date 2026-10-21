@@ -208,7 +208,9 @@ export class ShapeTool {
     if (this.state !== 'pick') return false;
     // У верхнего конца ребра — ручка верха стен, а не вершина
     const eave = this.eaveAt(point);
-    const v = eave ? undefined : this.vertexAt(point);
+    // Курсор прямо на ручке крыши — она важнее вершины, чьё ребро стены проходит рядом на экране
+    const roof = eave ? undefined : this.roofAt(point);
+    const v = eave || roof?.onPoint ? undefined : this.vertexAt(point);
     if (v && shift) {
       const k = vertKey(v.target);
       if (this.picked.has(k)) this.picked.delete(k); else this.picked.set(k, { poly: v.target.poly, ring: v.target.ring, i: v.target.i });
@@ -216,7 +218,7 @@ export class ShapeTool {
       this.showHandles();
       return true;
     }
-    const hit = eave ?? v ?? this.roofAt(point) ?? this.edgeAt(point);
+    const hit = eave ?? v ?? roof ?? this.edgeAt(point);
     if (!hit) { this.picked.clear(); return false; }
     const t = hit.target;
     // Захват одной из выбранных — едут все выбранные; иначе выбор сбрасывается
@@ -467,7 +469,7 @@ export class ShapeTool {
   }
 
   /** Ручка крыши под курсором: верхняя точка крыши выделенной части или конёк между двумя такими точками. */
-  private roofAt(point: [number, number]): { target: ShapeTarget; index: number } | undefined {
+  private roofAt(point: [number, number]): { target: ShapeTarget; index: number; onPoint: boolean } | undefined {
     const key = this.selected();
     const pts = key ? this.layer.focusRoofTop(key) : [];
     if (!key || !pts.length) return;
@@ -478,12 +480,13 @@ export class ShapeTool {
       const d = Math.hypot(q[0] - point[0], q[1] - point[1]);
       if (d <= GRAB_PX && (!best || d < best.d)) best = { index: i, d, from: pts[i].clone() };
     });
+    const onPoint = !!best;
     // Конёк — отрезок между двумя верхними точками: взять можно за любую его точку
     if (!best && pts.length === 2 && px[0] && px[1]) {
       const { d, s } = segDist(point, px[0], px[1]);
       if (d <= GRAB_PX) best = { index: s < 0.5 ? 0 : 1, d, from: pts[0].clone().lerp(pts[1], s) };
     }
-    return best && { target: { key, poly: 0, ring: 0, i: 0, roof: true, from: best.from }, index: best.index };
+    return best && { target: { key, poly: 0, ring: 0, i: 0, roof: true, from: best.from }, index: best.index, onPoint };
   }
 
   /** Курсор у точки захвата (на экране) — сдвига ещё нет. */
@@ -542,9 +545,10 @@ export class ShapeTool {
     this.snap = undefined;
     const ev = this.eaveAt(point);
     if (ev) return { eave: ev.index };
+    const r = this.roofAt(point);
+    if (r?.onPoint) return { roof: r.index };
     const v = this.vertexAt(point);
     if (v) return { index: v.index };
-    const r = this.roofAt(point);
     if (r) return { roof: r.index };
     const e = this.edgeAt(point);
     this.snap = e?.snap;

@@ -2104,7 +2104,7 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(),
     return { min: h.min, top: Math.max(h.min, h.wallTop) };
   },
   () => new Set([...shapePreviewed, ...selection]),
-  previewShape, commitShape,
+  previewShape, commitShape, removeShapeVertex,
   (hint, error) => {
     shapeBtn.classList.toggle('active', shapeTool.active);
     syncCursor();
@@ -3911,6 +3911,77 @@ function shapePreviewPolygons(r: ShapeRing, t: ShapeTarget, at: LonLat): Map<str
     if (changed) out.set(g.key, polygons);
   }
   return out;
+}
+
+/**
+ * Убрать узел id отовсюду: из колец всех объектов и из путей-членов (соседи с этим узлом — тоже). Строка — почему нельзя
+ * (в кольце осталось бы меньше трёх вершин). Узел без ссылок и тегов при отправке удаляется.
+ */
+function nodeRemoveEdits(id: number): ObjectEdit[] | string {
+  const out: ObjectEdit[] = [];
+  const live = liveFeatures();
+  for (const g of live) {
+    if (!g.polygons.some((p) => [p.outerIds, ...(p.innerIds ?? [])].some((ids) => ids?.includes(id)))) continue;
+    if (!entity(g.key)) return tr('{key}: нет в данных.', { key: g.key });
+    let small = false;
+    const cut = (cs: LonLat[], ids: number[] | undefined): [LonLat[], number[] | undefined] => {
+      if (!ids?.includes(id)) return [cs, ids];
+      const keep = ids.map((n, k) => (n === id ? -1 : k)).filter((k) => k >= 0);
+      if (keep.length < 3) small = true;
+      return [keep.map((k) => cs[k]), keep.map((k) => ids[k])];
+    };
+    const polygons = g.polygons.map((p) => {
+      const [outer, outerIds] = cut(p.outer, p.outerIds);
+      const inn = p.inners.map((c, k) => cut(c, p.innerIds?.[k]));
+      return { ...p, outer, outerIds, inners: inn.map((x) => x[0]), innerIds: p.innerIds ? inn.map((x) => x[1]!) : undefined };
+    });
+    if (small) return tr('{key}: в кольце останется меньше трёх вершин.', { key: g.key });
+    out.push({ key: g.key, polygons });
+  }
+  // Пути-члены мультиполигонов: узел убирается из списка узлов (путь не режется)
+  const coords = new Map<number, LonLat>();
+  const ways = new Map<number, { nodes: number[]; tags: Record<string, string> }>();
+  for (const g of live) {
+    for (const p of g.polygons) {
+      p.outerIds?.forEach((n, i) => coords.set(n, p.outer[i]));
+      p.inners.forEach((r, j) => p.innerIds?.[j]?.forEach((n, i) => coords.set(n, r[i])));
+    }
+    for (const w of g.ways ?? []) if (!ways.has(w.id)) ways.set(w.id, { nodes: w.nodes, tags: w.tags ?? {} });
+  }
+  for (const t of session.lineEntities()) ways.set(Number(t.key.split('/')[1]), { nodes: t.line!.ids, tags: t.tags });
+  for (const [wid, w] of ways) {
+    if (!w.nodes.includes(id)) continue;
+    const closed = w.nodes.length > 1 && w.nodes[0] === w.nodes[w.nodes.length - 1];
+    let nodes = w.nodes.filter((n) => n !== id);
+    if (closed && nodes.length && nodes[0] !== nodes[nodes.length - 1]) nodes = [...nodes, nodes[0]];
+    if (nodes.length < 2) return tr('{key}: в пути останется меньше двух узлов.', { key: `way/${wid}` });
+    const key = `way/${wid}`;
+    const known = session.get(key);
+    if (known && !known.line) continue; // сам по себе здание или часть — уже в правке колец выше
+    if (nodes.some((n) => !coords.has(n))) return tr('{key}: нет данных пути way/{ref} — перезагрузите видимые тайлы.', { key, ref: wid });
+    if (!known) session.track({ key, version: 0, tags: { ...w.tags }, line: { ids: w.nodes, coords: w.nodes.map((n) => coords.get(n)!) } });
+    out.push({ key, line: { ids: nodes, coords: nodes.map((n) => coords.get(n)!) } });
+  }
+  return out;
+}
+
+/** Удалить вершину t: «с соседями» (или узел только наш) — отовсюду, «отдельно» — только из своего кольца. */
+function removeShapeVertex(t: ShapeTarget, merged: boolean) {
+  const r = shapeRing(t);
+  if (!r || (r.f.type === 'relation' && !relWays(r.f))) {
+    return setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
+  }
+  if (r.ids.length <= 3) return setStatus(tr('{key}: в кольце останется меньше трёх вершин.', { key: t.key }), true);
+  const id = r.ids[t.i];
+  const after = { poly: t.poly, ring: t.ring, ids: r.ids.filter((_, k) => k !== t.i), coords: r.ring.filter((_, k) => k !== t.i) };
+  if (selfIntersects(after.coords.map((c) => overpassLayer.focusToLocal(c)!))) return setStatus(tr('Без этой вершины контур пересекает сам себя.'), true);
+  const edits = shapeTool.glue || !nodesOutside(new Set([r.f.key])).has(id) ? nodeRemoveEdits(id)
+    : topologyEdits([{ f: r.f, rewrites: [after] }], [], new Map());
+  if (typeof edits === 'string') return setStatus(edits, true);
+  session.editMany(edits);
+  const neighbours = edits.filter((e) => e.polygons && e.key !== t.key).length;
+  setStatus((merged ? tr('Вершина {key} слита с соседней', { key: t.key }) : tr('Вершина {key} удалена', { key: t.key }))
+    + (neighbours ? tr(', у соседей с общим узлом — тоже: {n}', { n: neighbours }) : '') + tr('. Отменить — Ctrl+Z.'));
 }
 
 /** Объекты, перестроенные превью «Формы» (сама часть и соседи), — вернуть их при сбросе превью. */
@@ -6635,9 +6706,10 @@ const HELP: Record<string, HelpTopic> = {
   ] },
   shape: { title: tr('Форма (V)'), desc: tr('Правит контур выделенной части по вершинам: вершина едет только в плане, объём и крыша перестраиваются.'), items: [
     tr('Клик по вершине выделенной части (на любой высоте ребра стены) — захват, второй клик — применить.'),
-    tr('Клик по стороне (верх или низ стены) — новая вершина в этой точке, сразу в сдвиг; клик без движения — просто вставить.'),
+    tr('Клик по стороне у основания — новая вершина в этой точке, сразу в сдвиг; клик без движения — просто вставить.'),
     tr('Движение прилипает к осям здания и продолжениям сторон у вершины; Shift держит направление.'),
     tr('Число + Enter — сдвиг в метрах; D — общие узлы с соседями или отдельно.'),
+    tr('Del — удалить вершину под курсором; вершина, подведённая к соседней, сливается с ней.'),
     tr('Клик не по вершине — выбрать другой объект. Esc — отмена.'),
   ] },
   split: { title: tr('Рассечь (K)'), desc: tr('Прямым разрезом делит верхнюю грань части на две части с теми же тегами.'), items: [

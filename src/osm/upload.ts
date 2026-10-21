@@ -324,6 +324,12 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
     for (const n of w.nodes) dropNodes.add(n);
   }
 
+  // Узлы, убранные из наших путей (удалённые вершины контура), — кандидаты на удаление, как и узлы убранных путей
+  for (const e of edits) {
+    if (!e.wayNodes || e.created || e.deleted) continue;
+    const now = new Set(e.wayNodes.after);
+    for (const n of e.wayNodes.before) if (n > 0 && !now.has(n)) dropNodes.add(n);
+  }
   // Узлы: новые без ссылок не создаём, старые без ссылок и тегов — удаляем (if-unused)
   const used = new Set<number>();
   for (const p of payload) if (p.element.type === 'way' && !p.deleted) for (const n of p.element.nodes) used.add(n);

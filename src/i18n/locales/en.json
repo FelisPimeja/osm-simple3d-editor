@@ -1033,5 +1033,13 @@
   "перпендикуляр к стороне": "perpendicular to side",
   "Новая вершина {key} сдвинута на {d} м": "New vertex of {key} moved by {d} m",
   "Новая вершина на стороне {key}": "New vertex on a side of {key}",
-  "Клик по стороне (верх или низ стены) — новая вершина в этой точке, сразу в сдвиг; клик без движения — просто вставить.": "Click a side (top or bottom of the wall) to add a vertex there and move it right away; click without moving to just insert it."
+  "слить с соседней": "merge with neighbour",
+  "{key}: в кольце останется меньше трёх вершин.": "{key}: fewer than three vertices would remain in the ring.",
+  "{key}: в пути останется меньше двух узлов.": "{key}: fewer than two nodes would remain in the way.",
+  "Без этой вершины контур пересекает сам себя.": "Without this vertex the outline intersects itself.",
+  "Вершина {key} слита с соседней": "Vertex of {key} merged with its neighbour",
+  "Вершина {key} удалена": "Vertex of {key} deleted",
+  ", у соседей с общим узлом — тоже: {n}": ", also from neighbours sharing the node: {n}",
+  "Del — удалить вершину под курсором; вершина, подведённая к соседней, сливается с ней.": "Del — delete the vertex under the cursor; a vertex brought to its neighbour merges with it.",
+  "Клик по стороне у основания — новая вершина в этой точке, сразу в сдвиг; клик без движения — просто вставить.": "Click a side at the base to add a vertex there and move it right away; click without moving to just insert it."
 }

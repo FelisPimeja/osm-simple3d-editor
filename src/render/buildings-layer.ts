@@ -2714,7 +2714,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       hidden.renderOrder = 999; // после зданий: глубина уже записана
       out.push(hidden);
     }
-    if (this.wireframe && selected.length && this.map) {
+    // Видимые рёбра выделенного — толстой синей обводкой: в режиме контуров и в обычном режиме здания
+    if ((this.wireframe || inFocus) && selected.length && this.map) {
       // Толстые линии (полосы из треугольников) — их можно сдвинуть к камере: поверх серых рёбер на том же месте,
       // но за гранями, которые их закрывают
       const canvas = this.map.getCanvas();
@@ -2729,6 +2730,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       lines.frustumCulled = false;
       lines.renderOrder = 998; // после серых рёбер
       out.push(lines);
+    }
+    // Заливка выделенного — только в режиме контуров (в обычном у граней своя)
+    if (this.wireframe && selected.length) {
       const fill = new THREE.BufferGeometry();
       const pos = new Float32Array(selected.reduce((n, it) => n + it.positions.length, 0));
       let o = 0;

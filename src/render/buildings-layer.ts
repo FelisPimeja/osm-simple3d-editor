@@ -247,6 +247,8 @@ const WIRE_EDGE_OPACITY = 0.9;
 /** Рёбра выделенного в режиме контуров: цвет и толщина, px. */
 const SELECTED_EDGE_COLOUR = 0x2563eb;
 const SELECTED_EDGE_WIDTH_PX = 2;
+/** То же в обычном режиме (с заливкой): тоньше — грани и так видны. */
+const SELECTED_EDGE_WIDTH_SOLID_PX = 1;
 /**
  * Заливка выделенного в режиме контуров: полупрозрачная голубая, только ближние грани (глубина та же, что у граней,
  * которые пишет DEPTH_ONLY_MATERIAL, — те же polygonOffset).
@@ -2722,7 +2724,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const dpr = canvas.width / Math.max(1, canvas.clientWidth);
       const geo = new LineSegmentsGeometry();
       geo.setPositions(edgeLines(selected, EDGE_MATERIAL).geometry.getAttribute('position').array as Float32Array);
-      const mat = new LineMaterial({ color: SELECTED_EDGE_COLOUR, linewidth: SELECTED_EDGE_WIDTH_PX * dpr, depthWrite: false,
+      const mat = new LineMaterial({ color: SELECTED_EDGE_COLOUR, linewidth: (this.wireframe ? SELECTED_EDGE_WIDTH_PX : SELECTED_EDGE_WIDTH_SOLID_PX) * dpr, depthWrite: false,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 });
       mat.clippingPlanes = MATERIAL.clippingPlanes;
       mat.resolution.set(canvas.width, canvas.height);

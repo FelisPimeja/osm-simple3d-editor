@@ -9,6 +9,8 @@ OpenGeofiction's API may return 403 to Chrome, Safari, or Edge requests from thi
 
 Open the editor: https://felispimeja.github.io/osm-simple3d-editor/
 
+Usage statistics (changesets, users, edited keys; updated daily): https://felispimeja.github.io/osm-simple3d-stats/
+
 ## Features
 
 - 3D view of buildings and building parts on a MapLibre map, with roofs (flat, pyramidal, gabled, hipped and more).

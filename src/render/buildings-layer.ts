@@ -2271,15 +2271,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     return new THREE.Vector3(o[0] + x[0] * u + y[0] * w, o[1] + x[1] * u + y[1] * w, 0);
   }
 
-  /** Точка привязки заслонена геометрией сцены (между ней и камерой есть грань). */
-  private snapHidden(p: THREE.Vector3, px: [number, number]): boolean {
+  /** Точка привязки заслонена геометрией сцены (между ней и камерой есть грань); skip — объект, который не в счёт. */
+  private snapHidden(p: THREE.Vector3, px: [number, number], skip?: string): boolean {
     const ray = this.focusRay(px), g = this.groups.get(FOCUS_GROUP);
     if (!ray || !g) return false;
     const toSnap = ray.origin.distanceTo(p);
     const limit = toSnap - Math.max(0.05, toSnap * 0.002);
     const cut = this.level ? (this.levelCut ?? this.level.cut) + 1e-3 : Infinity;
     for (const it of g.items) {
-      if (g.hidden.has(it.feature.key) || strokeOnly(g,it) || it.box.min.z > cut || !ray.intersectsBox(it.box)) continue;
+      if (it.feature.key === skip || g.hidden.has(it.feature.key) || strokeOnly(g,it) || it.box.min.z > cut || !ray.intersectsBox(it.box)) continue;
       if (occludedByTriangles(it.positions,ray,limit,cut)) return true;
       // Дно здания не входит в буфер стен и крыши.
       if (Math.abs(ray.direction.z) > 1e-6 && it.box.min.z <= cut) {
@@ -2887,9 +2887,10 @@ export class BuildingsLayer implements CustomLayerInterface {
   private handles?: THREE.Group;
   /**
    * Маркеры вершин (инструмент «Форма»): квадраты поверх всей геометрии, active — захваченная или под курсором
-   * (крупнее, другим цветом); roof — ручки крыши (другим цветом). undefined — убрать.
+   * (крупнее, другим цветом); roof — ручки крыши (другим цветом). Маркеры за другими объектами (не owner) — бледнее.
+   * undefined — убрать.
    */
-  setHandles(points: THREE.Vector3[] | undefined, active?: number, roof?: { points: THREE.Vector3[]; active?: number }) {
+  setHandles(points: THREE.Vector3[] | undefined, active?: number, roof?: { points: THREE.Vector3[]; active?: number }, owner?: string) {
     const g = this.groups.get(FOCUS_GROUP);
     if (this.handles) {
       this.handles.parent?.remove(this.handles);
@@ -2900,20 +2901,33 @@ export class BuildingsLayer implements CustomLayerInterface {
       const canvas = this.map.getCanvas();
       const dpr = canvas.width / Math.max(1, canvas.clientWidth);
       const root = new THREE.Group();
-      const layer = (pts: THREE.Vector3[], size: number, color: number, order: number) => {
+      const layer = (pts: THREE.Vector3[], size: number, color: number, order: number, opacity = 1) => {
+        if (!pts.length) return;
         const p = new THREE.Points(new THREE.BufferGeometry().setFromPoints(pts),
-          new THREE.PointsMaterial({ color, size: size * dpr, sizeAttenuation: false, depthTest: false, depthWrite: false, transparent: true }));
+          new THREE.PointsMaterial({ color, size: size * dpr, sizeAttenuation: false, depthTest: false, depthWrite: false, transparent: true, opacity }));
         p.renderOrder = order;
         p.frustumCulled = false;
         root.add(p);
       };
+      // Заслонённые чужими объектами — бледнее (видно, что за ними, но не спутать с открытыми)
+      const split = (pts: THREE.Vector3[]) => {
+        const open: THREE.Vector3[] = [], hidden: THREE.Vector3[] = [];
+        for (const p of pts) {
+          const px = this.focusProject(p);
+          (px && this.snapHidden(p, px, owner) ? hidden : open).push(p);
+        }
+        return { open, hidden };
+      };
       // Белая окантовка — квадрат крупнее под цветным
-      layer(points, 9, 0xffffff, 1005);
-      layer(points, 6, 0x2563eb, 1006);
-      if (roof?.points.length) {
-        layer(roof.points, 11, 0xffffff, 1005);
-        layer(roof.points, 8, 0x0d9488, 1006);
-      }
+      const marks = (pts: THREE.Vector3[], size: number, color: number) => {
+        const { open, hidden } = split(pts);
+        layer(hidden, size + 3, 0xffffff, 1005, 0.35);
+        layer(hidden, size, color, 1006, 0.35);
+        layer(open, size + 3, 0xffffff, 1005);
+        layer(open, size, color, 1006);
+      };
+      marks(points, 6, 0x2563eb);
+      if (roof?.points.length) marks(roof.points, 8, 0x0d9488);
       const hot = active !== undefined ? points[active] : roof?.active !== undefined ? roof.points[roof.active] : undefined;
       if (hot) {
         layer([hot], 13, 0xffffff, 1007);

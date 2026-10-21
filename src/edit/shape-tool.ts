@@ -365,7 +365,7 @@ export class ShapeTool {
     // Ручки крыши — по текущей (в том числе предварительной) геометрии; захваченная или под курсором — выделена
     const roof = this.layer.focusRoofTop(key);
     const roofActive = t?.roof ? nearest(roof, t.from.clone().add(this.offset)) : !t ? this.hover?.roof : undefined;
-    this.layer.setHandles(pts, active, { points: roof, active: roofActive });
+    this.layer.setHandles(pts, active, { points: roof, active: roofActive }, key);
   }
 
   private hoverAt(point: [number, number]): Hover | undefined {

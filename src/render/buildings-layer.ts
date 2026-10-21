@@ -2906,10 +2906,9 @@ export class BuildingsLayer implements CustomLayerInterface {
   private outlineFill?: THREE.Mesh;
   /**
    * Жирная обводка замкнутых контуров поверх всего — например, грань, от которой пойдёт отступ (с дворами);
-   * dashed — пунктиром (задняя грань «Вытянуть» с Shift); fill — ещё и полупрозрачная заливка грани (кольца в одной
-   * плоскости; кольцо внутри другого — дыра).
+   * widthPx 0 — без обводки; fill — полупрозрачная заливка грани (кольца в одной плоскости; кольцо внутри другого — дыра).
    */
-  setOutline(rings: THREE.Vector3[][] | undefined, widthPx = 3, dashed = false, fill = false) {
+  setOutline(rings: THREE.Vector3[][] | undefined, widthPx = 3, fill = false) {
     const g = this.groups.get(FOCUS_GROUP);
     for (const l of this.outline) { l.parent?.remove(l); l.geometry.dispose(); l.material.dispose(); }
     this.outline = [];
@@ -2930,19 +2929,16 @@ export class BuildingsLayer implements CustomLayerInterface {
         this.outlineFill = mesh;
       }
     }
-    if (rings && g && this.map) {
+    if (rings && g && this.map && widthPx > 0) {
       const canvas = this.map.getCanvas();
       const dpr = canvas.width / Math.max(1, canvas.clientWidth);
       for (const points of rings) {
         if (points.length < 2) continue;
         const geo = new LineGeometry();
         geo.setPositions([...points, points[0]].flatMap((p) => [p.x, p.y, p.z]));
-        const mat = new LineMaterial({ color: 0x2563eb, linewidth: widthPx * dpr, depthTest: false, depthWrite: false, transparent: true,
-          // Штрихи — как у скрытых рёбер выделенного
-          ...(dashed ? { dashed: true, dashSize: 0.25, gapSize: 0.15 } : {}) });
+        const mat = new LineMaterial({ color: 0x2563eb, linewidth: widthPx * dpr, depthTest: false, depthWrite: false, transparent: true });
         mat.resolution.set(canvas.width, canvas.height);
         const line = new Line2(geo, mat);
-        if (dashed) line.computeLineDistances();
         line.renderOrder = 1004;
         line.frustumCulled = false;
         g.scene.add(line);

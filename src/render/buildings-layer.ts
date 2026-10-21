@@ -2626,9 +2626,9 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /**
-   * Рёбра выделенного в группе — только в режиме контуров (в обычном выделение видно по заливке, а пунктир на
-   * сложных зданиях дорог). Скрытые — пунктиром: в режиме здания у выделенного и наведённого, на карте — у
-   * выделенного; видимые рёбра выделенного — синие.
+   * Рёбра выделенного в группе. Скрытые — пунктиром: в режиме здания всегда (у выделенного, в режиме контуров —
+   * и у наведённого), на карте — только в режиме контуров (там выделение видно по заливке, а пунктир на сложных
+   * зданиях дорог). Видимые рёбра выделенного — синие, в режиме контуров.
    */
   private updateSelEdges(g: MeshGroup) {
     for (const o of this.selEdges.get(g) ?? []) {
@@ -2642,9 +2642,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     const pick = (keys: Iterable<string>) => [...new Set(keys)].filter((k) => !g.hidden.has(k)).map((k) => g.byKey.get(k))
       .filter((it): it is Item => !!it && !strokeOnly(g, it));
     const selected = pick(this.selected);
-    const dashed = inFocus ? pick([...this.selected, ...(this.hovered ? [this.hovered] : [])]) : selected;
+    const dashed = inFocus && this.wireframe ? pick([...this.selected, ...(this.hovered ? [this.hovered] : [])]) : selected;
     const out: (THREE.LineSegments | LineSegments2 | THREE.Mesh)[] = [];
-    if (this.wireframe && dashed.length) {
+    if ((this.wireframe || inFocus) && dashed.length) {
       const hidden = edgeLines(dashed, inFocus ? HIDDEN_EDGE_MATERIAL : MAP_HIDDEN_EDGE_MATERIAL);
       hidden.computeLineDistances();
       hidden.renderOrder = 999; // после зданий: глубина уже записана

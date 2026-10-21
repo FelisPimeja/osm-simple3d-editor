@@ -52,7 +52,8 @@ type Dir = { v: THREE.Vector3; name: string; axis?: 0 | 1 };
  * Del — удалить вершину под курсором (или захваченную).
  * Ручки крыши (конёк, вершина пирамиды или купола, верхнее ребро односкатной) — только по вертикали: верх стен стоит,
  * меняется высота крыши (не ниже MIN_ROOF_HEIGHT); привязка к точке другого объекта — по её высоте.
- * Ручки верха стен (середины сторон по верху стены) — тоже по вертикали: меняется высота стен, крыша не меняется.
+ * Ручки верха стен (вершины по верху стены) — тоже по вертикали: меняется высота стен, крыша не меняется. У верхнего
+ * конца вертикального ребра ручка верха стен важнее вершины: вершину берут ниже по ребру или у основания.
  * Общие с соседями узлы (D): «с соседями» — соседи тянутся следом, «отдельно» — у части новый узел.
  * Esc — отмена, повторный Esc — выйти. Пересчёт геометрии, проверка и правки — снаружи (preview, commit).
  */
@@ -192,7 +193,9 @@ export class ShapeTool {
       return true;
     }
     if (this.state !== 'pick') return false;
-    const v = this.vertexAt(point);
+    // У верхнего конца ребра — ручка верха стен, а не вершина
+    const eave = this.eaveAt(point);
+    const v = eave ? undefined : this.vertexAt(point);
     if (v && shift) {
       const k = vertKey(v.target);
       if (this.picked.has(k)) this.picked.delete(k); else this.picked.set(k, { poly: v.target.poly, ring: v.target.ring, i: v.target.i });
@@ -200,7 +203,7 @@ export class ShapeTool {
       this.showHandles();
       return true;
     }
-    const hit = v ?? this.roofAt(point) ?? this.eaveAt(point) ?? this.edgeAt(point);
+    const hit = eave ?? v ?? this.roofAt(point) ?? this.edgeAt(point);
     if (!hit) { this.picked.clear(); return false; }
     const t = hit.target;
     // Захват одной из выбранных — едут все выбранные; иначе выбор сбрасывается
@@ -303,7 +306,7 @@ export class ShapeTool {
       const key = this.selected();
       const t = this.state === 'drag' ? this.target
         : first && key ? { key, ...first, from: new THREE.Vector3(), also: rest }
-        : this.lastPoint ? this.vertexAt(this.lastPoint)?.target : undefined;
+        : this.lastPoint && !this.eaveAt(this.lastPoint) ? this.vertexAt(this.lastPoint)?.target : undefined;
       this.picked.clear();
       if (!t || t.insert !== undefined || t.roof || t.eave) { this.showHandles(); return true; }
       if (this.state === 'drag') { this.cancelDrag(); this.state = 'pick'; }
@@ -402,16 +405,13 @@ export class ShapeTool {
     return Math.max(dz, t.roof ? MIN_ROOF_HEIGHT - w.roof : w.min + MIN_WALL_HEIGHT - w.top);
   }
 
-  /** Ручки верха стен: середины сторон по верху стены; у плоского контура без высоты — нет. */
+  /** Ручки верха стен: вершины по верху стены; у плоского контура без высоты — нет. */
   private eavePoints(key: string): THREE.Vector3[] {
     const polys = this.layer.focusPolygons(key);
     const w = this.walls(key);
     if (!polys || !w || w.top - w.min < MIN_WALL_HEIGHT) return [];
     const z = w.top + (this.state === 'drag' && this.target?.eave ? this.offset.z : 0);
-    return polys.flatMap((p) => [p.outer, ...p.inners].flatMap((r) => r.map(([ax, ay], i) => {
-      const [bx, by] = r[(i + 1) % r.length];
-      return new THREE.Vector3((ax + bx) / 2, (ay + by) / 2, z);
-    })));
+    return polys.flatMap((p) => [p.outer, ...p.inners].flatMap((r) => r.map(([x, y]) => new THREE.Vector3(x, y, z))));
   }
 
   private eaveAt(point: [number, number]): { target: ShapeTarget; index: number } | undefined {
@@ -499,12 +499,12 @@ export class ShapeTool {
   }
 
   private hoverAt(point: [number, number]): Hover | undefined {
+    const ev = this.eaveAt(point);
+    if (ev) return { eave: ev.index };
     const v = this.vertexAt(point);
     if (v) return { index: v.index };
     const r = this.roofAt(point);
     if (r) return { roof: r.index };
-    const ev = this.eaveAt(point);
-    if (ev) return { eave: ev.index };
     const e = this.edgeAt(point);
     return e ? { point: e.target.from } : undefined;
   }

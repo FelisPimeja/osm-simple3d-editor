@@ -2107,10 +2107,22 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(),
   previewShape, commitShape, removeShapeVertex,
   (hint, error) => {
     shapeBtn.classList.toggle('active', shapeTool.active);
+    shapeWireframe(shapeTool.active);
     syncCursor();
     toolHint(hint, error);
   });
 shapeBtn.addEventListener('click', () => (shapeTool.active ? shapeTool.stop() : startShape()));
+
+/**
+ * Пока «Форма» включена — режим контуров (соседи одними рёбрами, выделенная часть с заливкой), чтобы было видно
+ * основание и вершины за соседями. Только на время инструмента: настройка не меняется, при выходе — как было
+ * (или как пользователь переключил W за это время).
+ */
+let shapeWire = false;
+function shapeWireframe(on: boolean) {
+  if (on && !shapeWire && !buildingsView.wireframe) { shapeWire = true; overpassLayer.setWireframe(true); }
+  else if (!on && shapeWire) { shapeWire = false; overpassLayer.setWireframe(buildingsView.wireframe); }
+}
 
 function startShape() {
   if (!focus) return;

@@ -27,8 +27,8 @@ const EDGE_EPS = 0.15;
 /**
  * Инструмент «Вытянуть» (как Push/Pull в SketchUp):
  * 1. клик по крыше — тянем верх (height); по стене — эту стену наружу/внутрь (два узла контура);
- *    по нижней грани — низ (min_height). Shift — задняя грань под курсором: дно или дальняя стена
- *    (пока Shift зажат, эта грань обведена контуром);
+ *    по нижней грани — низ (min_height). Shift — задняя грань под курсором: дно или дальняя стена.
+ *    Грань, которую возьмёт клик, обведена: передняя — сплошной линией, задняя (Shift) — пунктиром;
  * 2. движение курсора — верх/низ едут по вертикали, стена — по своей нормали; привязка к точке
  *    другого объекта выравнивает грань по ней;
  * 3. второй клик — применить; число + Enter — сдвиг в метрах или этажах (минус — внутрь/вниз). Esc — отмена.
@@ -54,7 +54,8 @@ export class PushTool {
   faceOutline?: (t: PushTarget) => THREE.Vector3[][];
   unitConstraint?: (t: PushTarget) => PushUnits | undefined;
   onUnitBlocked?: () => void;
-  private outlined = false;
+  /** Какая грань сейчас обведена (пусто — никакая). */
+  private outlined = '';
   /**
    * Точки привязки самой части в исходном виде, кроме точек тянущейся грани: в превью часть перестраивается,
    * и грань прилипала бы сама к себе — поэтому свои точки берём на момент захвата.
@@ -187,12 +188,17 @@ export class PushTool {
    * Подсветка контуром грани, которую возьмёт клик с Shift (задняя грань под курсором): пока инструмент ждёт
    * клика и Shift зажат. Без Shift или point — снять.
    */
+  /**
+   * Грань, которую возьмёт клик, обведена: передняя — сплошной линией, задняя (Shift) — пунктиром.
+   * Обводка перестраивается, только когда меняется грань.
+   */
   hover(point: [number, number] | undefined, back: boolean) {
-    const t = this.state === 'pick' && back && point ? this.faceAt(point, true) : undefined;
+    const t = this.state === 'pick' && point ? this.faceAt(point, back) : undefined;
+    const id = t ? `${t.key}:${t.face}:${t.edge ? `${t.edge.poly}:${t.edge.ring}:${t.edge.i}` : ''}:${back}` : '';
+    if (id === this.outlined) return;
+    this.outlined = id;
     const rings = t && this.faceOutline?.(t);
-    if (!rings?.length && !this.outlined) return;
-    this.outlined = !!rings?.length;
-    this.layer.setOutline(rings?.length ? rings : undefined);
+    this.layer.setOutline(rings?.length ? rings : undefined, 2, back);
   }
 
   /** back — Shift: задняя грань под курсором. */

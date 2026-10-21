@@ -2870,8 +2870,11 @@ export class BuildingsLayer implements CustomLayerInterface {
    * (если closed) и полупрозрачная заливка, когда точек ≥ 3. Поверх геометрии.
    */
   private outline: Line2[] = [];
-  /** Жирная обводка замкнутых контуров поверх всего — например, грань, от которой пойдёт отступ (с дворами). */
-  setOutline(rings: THREE.Vector3[][] | undefined, widthPx = 3) {
+  /**
+   * Жирная обводка замкнутых контуров поверх всего — например, грань, от которой пойдёт отступ (с дворами);
+   * dashed — пунктиром (задняя грань «Вытянуть» с Shift).
+   */
+  setOutline(rings: THREE.Vector3[][] | undefined, widthPx = 3, dashed = false) {
     const g = this.groups.get(FOCUS_GROUP);
     for (const l of this.outline) { l.parent?.remove(l); l.geometry.dispose(); l.material.dispose(); }
     this.outline = [];
@@ -2882,9 +2885,11 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (points.length < 2) continue;
         const geo = new LineGeometry();
         geo.setPositions([...points, points[0]].flatMap((p) => [p.x, p.y, p.z]));
-        const mat = new LineMaterial({ color: 0x2563eb, linewidth: widthPx * dpr, depthTest: false, depthWrite: false, transparent: true });
+        const mat = new LineMaterial({ color: 0x2563eb, linewidth: widthPx * dpr, depthTest: false, depthWrite: false, transparent: true,
+          ...(dashed ? { dashed: true, dashSize: 0.5, gapSize: 0.3 } : {}) });
         mat.resolution.set(canvas.width, canvas.height);
         const line = new Line2(geo, mat);
+        if (dashed) line.computeLineDistances();
         line.renderOrder = 1004;
         line.frustumCulled = false;
         g.scene.add(line);

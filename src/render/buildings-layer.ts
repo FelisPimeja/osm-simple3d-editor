@@ -3720,12 +3720,15 @@ export class BuildingsLayer implements CustomLayerInterface {
   private applyStrokes(g: MeshGroup) {
     g.disposeStrokes();
     const lines: number[] = [], colors: number[] = [];
+    const focusGroup = g === this.groups.get(FOCUS_GROUP);
     for (const it of g.items) {
-      if (!(strokeOnly(g, it) || thinItem(it)) || g.hidden.has(it.feature.key)) continue;
+      // Голый контур отношения в просмотре не рисуется объёмом — только тонкой обводкой
+      const bare = !focusGroup && this.viewHidden.has(it.feature.key);
+      if (!bare && (!(strokeOnly(g, it) || thinItem(it)) || g.hidden.has(it.feature.key))) continue;
       // Оболочка этажей: плоский объект целиком внутри соседних частей (навес в объёме подиума) — без обводки
       if (!strokeOnly(g, it) && it.full?.positions.length && !it.positions.length) continue;
       const c = this.selected.has(it.feature.key) || this.hovered === it.feature.key ? STROKE_SELECTED : STROKE_COLOUR;
-      const z = it.box.isEmpty() ? g.footprint : it.box.max.z;
+      const z = bare || it.box.isEmpty() ? g.footprint : it.box.max.z;
       for (const p of it.feature.polygons) {
         for (const ring of [p.outer, ...p.inners]) {
           const pts = ring.map(g.toLocal);
@@ -3765,11 +3768,15 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   private issueLevels = new Map<string, 'error' | 'warning'>();
+  /** Области проблем (непокрытый частями участок контура) — заливкой на земле. */
+  private issueAreas: IssueArea[] = [];
+  private issueFills = new WeakMap<MeshGroup, THREE.Mesh[]>();
   private issueEdges = new WeakMap<MeshGroup, LineSegments2[]>();
 
   /** Подсветить рёбрами объёмы с проблемами проверки (пусто — снять). */
-  setIssueHighlight(levels: Map<string, 'error' | 'warning'>) {
+  setIssueHighlight(levels: Map<string, 'error' | 'warning'>, areas: IssueArea[] = []) {
     this.issueLevels = levels;
+    this.issueAreas = areas;
     for (const g of this.activeGroups()) this.applyIssueEdges(g);
     this.map?.triggerRepaint();
   }
@@ -3874,17 +3881,41 @@ export class BuildingsLayer implements CustomLayerInterface {
   private applyIssueEdges(g: MeshGroup) {
     for (const l of this.issueEdges.get(g) ?? []) { l.geometry.dispose(); l.material.dispose(); g.scene.remove(l); }
     this.issueEdges.delete(g);
+    for (const m of this.issueFills.get(g) ?? []) { m.geometry.dispose(); (m.material as THREE.Material).dispose(); g.scene.remove(m); }
+    this.issueFills.delete(g);
     if (!this.issueLevels.size || !this.map) return;
+    const fills: THREE.Mesh[] = [];
+    for (const a of this.issueAreas) {
+      if (!g.byKey.has(a.key)) continue;
+      const pos: number[] = [];
+      const z = g.footprint + 0.05;
+      for (const p of a.polygons) {
+        const outer = p.outer.map((c) => new THREE.Vector2(...g.toLocal(c))), holes = p.inners.map((r) => r.map((c) => new THREE.Vector2(...g.toLocal(c))));
+        const pts = [outer, ...holes].flat();
+        for (const t of THREE.ShapeUtils.triangulateShape(outer, holes)) for (const i of t) pos.push(pts[i].x, pts[i].y, z);
+      }
+      if (!pos.length) continue;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: ISSUE_COLOUR[a.level], transparent: true, opacity: 0.35,
+        side: THREE.DoubleSide, depthWrite: false }));
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 9;
+      g.scene.add(mesh);
+      fills.push(mesh);
+    }
+    if (fills.length) this.issueFills.set(g, fills);
     const canvas = this.map.getCanvas();
     const dpr = canvas.width / Math.max(1, canvas.clientWidth);
     const out: LineSegments2[] = [];
     for (const level of ['warning', 'error'] as const) {
-      const items = g.items.filter((it) => this.issueLevels.get(it.feature.key) === level && !g.hidden.has(it.feature.key) && it.positions.length);
+      // Объём — по рёбрам; скрытый или плоский контур (под частями, голый контур отношения) — по кольцам на земле
+      const items = g.items.filter((it) => this.issueLevels.get(it.feature.key) === level);
       if (!items.length) continue;
-      for (const it of items) it.edges ??= itemEdges(it);
-      const pos = new Float32Array(items.reduce((n, it) => n + it.edges!.length, 0));
+      const segs = items.map((it) => (strokeOnly(g, it) || g.hidden.has(it.feature.key) || !it.positions.length ? ringSegments(g, it, g.footprint) : (it.edges ??= itemEdges(it))));
+      const pos = new Float32Array(segs.reduce((n, e) => n + e.length, 0));
       let o = 0;
-      for (const it of items) { pos.set(it.edges!, o); o += it.edges!.length; }
+      for (const e of segs) { pos.set(e, o); o += e.length; }
       const make = (width: number, xray: boolean) => {
         const geo = new LineSegmentsGeometry();
         geo.setPositions(pos);
@@ -4768,6 +4799,19 @@ function roofPartBottomless(tags: Record<string, string>): boolean {
 }
 
 /** Контур под частями (и голый контур в режиме здания): только обводка — заливку всё равно закрывают части. */
+/** Подсвечиваемая область проблемы проверки. */
+export interface IssueArea { key: string; level: 'error' | 'warning'; polygons: Polygon[] }
+
+/** Рёбра колец контура объекта на высоте z (пары точек). */
+function ringSegments(g: MeshGroup, it: Item, z: number): Float32Array {
+  const out: number[] = [];
+  for (const p of it.feature.polygons) for (const ring of [p.outer, ...p.inners]) {
+    const pts = ring.map(g.toLocal);
+    for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; out.push(a[0], a[1], z, b[0], b[1], z); }
+  }
+  return new Float32Array(out);
+}
+
 function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
 }

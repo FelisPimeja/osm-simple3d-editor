@@ -1010,5 +1010,8 @@
   "Существует с (EDTF)": "Exists from (EDTF)",
   "Существует до (EDTF)": "Exists until (EDTF)",
   "Не задано — у {source}: {value}. Tab — подставить.": "Not set — {source} has: {value}. Tab to fill in.",
-  "Не задано у {n} из {total} — у здания: {value}. Tab — подставить.": "Not set on {n} of {total} — building has: {value}. Tab to fill in."
+  "Не задано у {n} из {total} — у здания: {value}. Tab — подставить.": "Not set on {n} of {total} — building has: {value}. Tab to fill in.",
+  "Часть здания внутри контура отношения {relation}, но не входит в него — добавьте её в отношение с ролью part.": "Building part lies inside the outline of {relation} but is not its member — add it to the relation with role part.",
+  "добавить в {relation} (part)": "add to {relation} (part)",
+  "Часть стоит внутри {other} и до {seat} м скрыта в её объёме — объёмы накладываются. Начните её с верха {other}: min_height={seat}.": "The part stands inside {other} and is hidden in its volume up to {seat} m — the volumes overlap. Start it at the top of {other}: min_height={seat}."
 }

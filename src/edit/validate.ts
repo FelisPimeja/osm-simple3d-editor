@@ -21,6 +21,8 @@ export interface Issue {
   text: string;
   /** Второй объект (пересечение объёмов). */
   other?: string;
+  /** Область проблемы для подсветки заливкой (участок контура, не покрытый частями). */
+  area?: Polygon[];
   /** Однозначное исправление: новые значения тегов объекта key (undefined — удалить тег). */
   fix?: Fix;
 }
@@ -33,6 +35,8 @@ export interface Fix {
   createRelation?: { outline: string; parts: string[] };
   /** Исключить объект из указанного отношения type=building. */
   removeFromGroup?: string;
+  /** Добавить объект в указанное отношение type=building с ролью part. */
+  addToGroup?: string;
   /** Разделить объект по этажам: он остаётся на level из tags, копии (те же узлы или члены) — с этими level. */
   splitLevels?: string[];
   /** Копии пути — на новых узлах в тех же точках (ось эскалатора не должна связывать этажи общими узлами). */
@@ -61,6 +65,9 @@ const REMOTE_PART_GAP = 20;
 const DUPLICATE_SHARE = 0.98;
 /** …а в плане — от этой доли каждой: схожие, но разные ярусы не считаем дублями. */
 const DUPLICATE_PLAN = 0.99;
+/** Скрытый низ части: доля её площади внутри охватывающей части и наименьшая скрытая высота, м. */
+const HIDDEN_BASE_PLAN = 0.98;
+const HIDDEN_BASE_MIN = 1;
 
 const KNOWN_ROOFS = new Set(ROOF_SHAPES);
 const LENGTH_TAGS = ['height', 'min_height', 'roof:height'];
@@ -340,9 +347,10 @@ export function validateStackedEscalators(features: IndoorFeature[]): Issue[] {
 }
 
 /** Локальная проекция в метры вокруг точки (для площадей и пересечений в пределах здания). */
-function projector(origin: LonLat): (c: LonLat) => [number, number] {
+function projector(origin: LonLat): ((c: LonLat) => [number, number]) & { back: (c: number[]) => LonLat } {
   const kx = Math.cos((origin[1] * Math.PI) / 180) * 111320, ky = 110540;
-  return ([x, y]) => [(x - origin[0]) * kx, (y - origin[1]) * ky];
+  return Object.assign(([x, y]: LonLat): [number, number] => [(x - origin[0]) * kx, (y - origin[1]) * ky],
+    { back: ([x, y]: number[]): LonLat => [origin[0] + x / kx, origin[1] + y / ky] });
 }
 
 function ringArea(r: [number, number][]): number {
@@ -500,10 +508,12 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
     // вырез первого этажа под нависающими этажами (аркада, навес над входом) — не пропущенная часть
     const coverParts = parts.filter((f) => !broken.has(f.key));
     if (coverParts.length && outlineArea > 0) {
-      const missing = safe(() => multiArea(polygonClipping.difference(o, polygonClipping.union(multi(coverParts[0]), ...coverParts.slice(1).map(multi)))));
-      if (missing !== undefined && missing > 1 && missing > outlineArea * 0.001) {
+      const gap = safe(() => polygonClipping.difference(o, polygonClipping.union(multi(coverParts[0]), ...coverParts.slice(1).map(multi))));
+      const missing = gap && multiArea(gap);
+      if (gap && missing !== undefined && missing > 1 && missing > outlineArea * 0.001) {
+        const ring = (r: number[][]) => r.slice(0, -1).map(p.back);
         out.push({ key: outline.key, level: 'warning', code: 'coverage', text: tr('Части не покрывают {pct}% контура — этот участок не нарисован. Добавьте недостающую часть или проверьте роли в отношении.',
-          { pct: Math.round((missing / outlineArea) * 100) }) });
+          { pct: Math.round((missing / outlineArea) * 100) }), area: gap.map(([outer, ...holes]) => ({ outer: ring(outer), inners: holes.map(ring) })) });
       }
     }
     // Высота контура — максимум по частям (Key:building:part)
@@ -538,6 +548,36 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
     const h = computeHeights(f.tags);
     return { f, w, s, e, n, min: h.min, top: h.top, area: multiArea(multi(f)) };
   });
+
+  // Скрытый низ: часть в плане внутри другой части, начинается не ниже неё, а её стены до верха стен той
+  // скрыты в её объёме (шатёр на основании, фронтоны у шатра). Начать часть с верха охватывающей —
+  // объёмы не накладываются. Висящая часть (выше) внутри приподнятой — то же: её низ сажаем на верх стен
+  // охватывающей, если она и правда стоит в ней (а не только задевает), и вместо «висящей» — это исправление
+  const floating = new Map(out.filter((i) => i.code === 'floating').map((i) => [i.key, i]));
+  for (const a of boxes) {
+    const ha = computeHeights(a.f.tags);
+    if (ha.source === 'default' || a.f.tags['building:min_level'] !== undefined || a.area <= 0) continue;
+    let seat = -Infinity, on: string | undefined;
+    for (const b of boxes) {
+      if (b === a || b.f.tags['building:part'] === 'roof' || b.w > a.w + 0.5 || b.e < a.e - 0.5 || b.s > a.s + 0.5 || b.n < a.n - 0.5) continue;
+      const hb = computeHeights(b.f.tags);
+      if (hb.source === 'default' || (hb.min > ha.min + 0.1 && !floating.has(a.f.key))) continue;
+      const level = Math.min(hb.wallTop, ha.wallTop);
+      // Низ уже на этой высоте, или часть целиком внутри (тогда она не видна вовсе — другой разговор)
+      if (level <= Math.max(seat, ha.min + HIDDEN_BASE_MIN) || ha.top <= hb.wallTop + 0.5) continue;
+      const x = safe(() => multiArea(polygonClipping.intersection(multi(a.f), multi(b.f))));
+      if (x === undefined || x < a.area * HIDDEN_BASE_PLAN) continue;
+      seat = level; on = b.f.key;
+    }
+    if (!on) continue;
+    const hanging = floating.get(a.f.key);
+    if (hanging) out.splice(out.indexOf(hanging), 1);
+    const v = fmt(seat);
+    out.push({ key: a.f.key, other: on, level: 'warning', code: 'hidden-base',
+      text: tr('Часть стоит внутри {other} и до {seat} м скрыта в её объёме — объёмы накладываются. Начните её с верха {other}: min_height={seat}.', { other: on, seat: v }),
+      // При этажности низ задают и этажами — тут одного min_height мало, пусть решает человек
+      ...(a.f.tags['building:levels'] === undefined ? { fix: { label: `min_height=${v}`, tags: { min_height: v } } } : {}) });
+  }
   for (let i = 0; i < boxes.length; i++) {
     const a = boxes[i];
     for (let j = i + 1; j < boxes.length; j++) {

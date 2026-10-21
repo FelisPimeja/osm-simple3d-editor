@@ -5727,7 +5727,43 @@ function visibleMapIssues(): Issue[] {
   issues.push(...duplicateIssues([...seen].map((k) => byKey.get(k)!), rendered));
   issues.push(...orphanPartIssues(singles));
   issues.push(...timed('проверка зданий без отношения', () => implicitIssues(singles), (r) => `${r.length}`));
+  issues.push(...timed('проверка частей вне отношения', () => strayPartIssues(singles), (r) => `${r.length}`));
   return issues;
+}
+
+/**
+ * Части вне отношений внутри контура (роль outline) отношения type=building: забыли добавить в отношение.
+ * Если ближе (меньше) объемлющий контур без отношения — это здание без отношения, его ловит implicitIssues.
+ */
+function strayPartIssues(scope: Feature3D[]): Issue[] {
+  const parts = scope.filter((f) => f.kind === 'part' && f.polygons.length && !f.tags.building && !groupOf(f.key) && !session.isDeleted(f.key));
+  if (!parts.length) return [];
+  const isOutline = (b: Feature3D) => !!b.tags.building && b.tags.building !== 'no' && !b.tags['building:part'];
+  const area = (b: Feature3D) => { const r = bboxOf(b); return (r.e - r.w) * (r.n - r.s); };
+  const all = [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)]
+    .filter((f) => f.polygons?.length && !session.isDeleted(f.key) && isOutline(f))
+    .map((f) => (session.has(f.key) ? (session.get(f.key) as Feature3D | undefined) ?? f : f))
+    .filter((f) => f.polygons?.length);
+  const out: Issue[] = [];
+  for (const p of parts) {
+    const c = pointOnSurface(p.polygons[0]);
+    const host = all.filter((b) => { const r = bboxOf(b); return b.key !== p.key && c[0] >= r.w && c[0] <= r.e && c[1] >= r.s && c[1] <= r.n && insideFeature(c, b); })
+      .sort((a, b) => area(a) - area(b))[0];
+    const g = host && groupOf(host.key);
+    if (!g || isSolo(g) || !g.members.some((k, i) => k === host.key && g.roles[i] === 'outline')) continue;
+    out.push({ key: p.key, level: 'warning', code: 'stray-part',
+      text: tr('Часть здания внутри контура отношения {relation}, но не входит в него — добавьте её в отношение с ролью part.', { relation: g.key }),
+      fix: { label: tr('добавить в {relation} (part)', { relation: g.key }), tags: {}, addToGroup: g.key } });
+  }
+  return out;
+}
+
+/** Части вне отношений внутри контура отношения g (для режима здания). */
+function strayPartsOf(g: BuildingGroup): Issue[] {
+  if (isSolo(g)) return [];
+  const outline = groupFeatures(g).find((f) => g.members.some((k, i) => k === f.key && g.roles[i] === 'outline'));
+  if (!outline?.polygons.length) return [];
+  return strayPartIssues(looseFeatures(bboxOf(outline)));
 }
 
 /** Здания без отношения (контур и части внутри) среди объектов scope — предложение собрать отношение. */
@@ -5767,7 +5803,7 @@ function duplicateIssues(scope: Feature3D[], all: Feature3D[]): Issue[] {
 
 /** Принадлежность проблемы зданию для группировки в режиме карты. */
 function issueBuildingKey(issue: Issue): string {
-  return groupOf(issue.key)?.key ?? issue.fix?.removeFromGroup ?? issue.key;
+  return groupOf(issue.key)?.key ?? issue.fix?.removeFromGroup ?? issue.fix?.addToGroup ?? issue.key;
 }
 
 function scheduleMapIssues() {
@@ -5789,7 +5825,7 @@ function issueMark(list: Issue[] | undefined): string {
 
 /** Панель «Проверка»: проблемы здания режима здания, клик — выделить объект (Shift — оба пересекающихся). */
 function renderIssues() {
-  const simpleIssues = focus ? [...buildingIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : [])] : [];
+  const simpleIssues = focus ? [...buildingIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : strayPartsOf(focus))] : [];
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding ? buildingIndoor(focusedBuilding) : [];
   const indoorIssues = focusedBuilding ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding))), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
@@ -5854,6 +5890,7 @@ function syncIssueFilter() {
 
 /** «Подсветить все»: рёбра объёмов с проблемами (ошибка важнее предупреждения). */
 let highlightedIssueLevels = new Map<string, 'error' | 'warning'>();
+let highlightedIssueAreas = new Set<Issue>();
 function highlightIssues() {
   const levels = new Map<string, 'error' | 'warning'>();
   const selected = shownIssues.filter((issue) => selectedIssueIds.has(issueId(issue)));
@@ -5864,9 +5901,11 @@ function highlightIssues() {
   const indoorKeys = focus ? [...levels.keys()].filter((key) => !!buildingIndoorFor(key)) : [];
   overpassLayer.setIndoorIssueHighlight(indoorKeys);
   indoorPois.setIssueHighlight(indoorKeys);
-  if (levels.size === highlightedIssueLevels.size && [...levels].every(([key, level]) => highlightedIssueLevels.get(key) === level)) return;
+  if (levels.size === highlightedIssueLevels.size && [...levels].every(([key, level]) => highlightedIssueLevels.get(key) === level)
+    && active.filter((i) => i.area).every((i) => highlightedIssueAreas.has(i)) && highlightedIssueAreas.size === active.filter((i) => i.area).length) return;
+  highlightedIssueAreas = new Set(active.filter((i) => i.area));
   highlightedIssueLevels = levels;
-  overpassLayer.setIssueHighlight(levels);
+  overpassLayer.setIssueHighlight(levels, active.filter((i) => i.area).map((i) => ({ key: i.key, level: i.level, polygons: i.area! })));
 }
 
 function syncSelectedIssues() {
@@ -5893,6 +5932,7 @@ function applyFixes(list: Issue[]) {
   list = list.filter((i) => !i.fix?.splitLevels);
   const tags = new Map<string, Record<string, string>>();
   const removals = new Map<string, Set<string>>();
+  const additions = new Map<string, Set<string>>();
   for (const i of list) {
     let f = entity(i.key);
     if (!f && focus) {
@@ -5907,6 +5947,7 @@ function applyFixes(list: Issue[]) {
       keys.add(i.key);
       removals.set(i.fix.removeFromGroup, keys);
     }
+    if (i.fix.addToGroup) (additions.get(i.fix.addToGroup) ?? additions.set(i.fix.addToGroup, new Set()).get(i.fix.addToGroup)!).add(i.key);
   }
   if (!tags.size) return;
   const edits: ObjectEdit[] = [...tags].map(([key, t]) => ({ key, tags: t }));
@@ -5914,9 +5955,16 @@ function applyFixes(list: Issue[]) {
     const b = i.fix?.createRelation;
     if (b && !groupOf(b.outline)) { const g = implicitRelation(b.outline, b.parts); edits.push({ key: g.key, create: g }); }
   }
-  for (const [key, keys] of removals) {
+  for (const key of new Set([...removals.keys(), ...additions.keys()])) {
     const group = entity(key) as EditGroup | undefined;
-    if (group) edits.push({ key, tags: { ...group.tags }, members: group.relMembers.filter((m) => !keys.has(`${m.type}/${m.ref}`)) });
+    if (!group) continue;
+    const gone = removals.get(key) ?? new Set<string>();
+    const have = new Set(group.relMembers.map((m) => `${m.type}/${m.ref}`));
+    const added = [...additions.get(key) ?? []].filter((k) => !have.has(k)).map((k) => {
+      const [type, ref] = k.split('/');
+      return { type: type as 'way' | 'relation', ref: Number(ref), role: 'part' };
+    });
+    edits.push({ key, tags: { ...group.tags }, members: [...group.relMembers.filter((m) => !gone.has(`${m.type}/${m.ref}`)), ...added] });
   }
   session.editMany(edits);
   setStatus(list.length > 1 ? tr('Применено исправлений: {n} (объектов: {objects}).', { n: list.length, objects: tags.size }) : tr('Исправлено: {fix}.', { fix: list[0].fix!.label }));

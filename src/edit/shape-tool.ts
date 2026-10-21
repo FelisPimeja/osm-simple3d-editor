@@ -31,6 +31,8 @@ export interface ShapeTarget { key: string; poly: number; ring: number; i: numbe
 /** Вершина кольца: полигон, кольцо (0 — внешнее), номер. */
 export interface ShapeVert { poly: number; ring: number; i: number }
 const vertKey = (v: ShapeVert) => `${v.poly}:${v.ring}:${v.i}`;
+/** Оси, по которым ходят ручки: вершины основания — в плане, верх стен и крыша — по вертикали. */
+const PLAN = [0, 1] as const, VERTICAL = [2] as const;
 /** Ниже этого стены ручкой верха не опускаются. */
 const MIN_WALL_HEIGHT = 0.2;
 
@@ -79,6 +81,8 @@ export class ShapeTool {
   /** Вершины, выбранные Shift+кликом или рамкой (у объекта pickedKey). */
   private picked = new Map<string, ShapeVert>();
   private pickedKey?: string;
+  /** Точка захвата в плоскости основания (под курсором в момент захвата). */
+  private grabBase = new THREE.Vector3();
   /** Места едущих вершин до сдвига (превью двигает саму геометрию слоя). */
   private origin = new Map<string, [number, number]>();
   /** Свои точки привязки на время сдвига: середины сторон в исходном виде (в превью стороны уже сдвинуты). */
@@ -230,6 +234,14 @@ export class ShapeTool {
 
   /** inserted — вершина только что вставлена на сторону: её середина в исходном виде — тоже привязка. */
   private beginDrag(t: ShapeTarget, inserted = false) {
+    // Вершина основания — только в плане: за что бы её ни взяли (ребро стены на любой высоте), движение — в плоскости
+    // основания, где маркеры
+    const base = !t.roof && !t.eave ? this.walls(t.key)?.min : undefined;
+    if (base !== undefined) t.from = t.from.clone().setZ(base);
+    // Где луч курсора в момент захвата пересёк плоскость основания: сдвиг — от неё (иначе вершина, взятая за ребро
+    // стены выше основания, прыгнула бы под курсор на земле)
+    const ray = this.lastPoint && this.layer.focusRay(this.lastPoint);
+    this.grabBase = (ray && ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -t.from.z), new THREE.Vector3())) || t.from.clone();
     const hit = { target: t };
     this.target = hit.target;
     this.origin.clear();
@@ -253,7 +265,8 @@ export class ShapeTool {
     this.typed = '';
     this.problem = undefined;
     this.state = 'drag';
-    this.layer.setMoveGuide({ from: hit.target.from, gizmoScale: 0.375 });
+    // Оси, по которым ручка не ходит, — серые: у вершин основания — вертикаль, у верха стен и крыши — горизонтали
+    this.layer.setMoveGuide({ from: hit.target.from, gizmoScale: 0.375, free: base !== undefined ? PLAN : VERTICAL });
     this.updateVcb();
     this.say((hit.target.roof
       ? tr('Ведите курсор вверх или вниз: верх стен стоит, меняется высота крыши. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.', { units })
@@ -290,14 +303,14 @@ export class ShapeTool {
     } else if (this.snap) {
       offset.subVectors(this.snap.local, t.from).setZ(0);
       if (dir) offset.copy(dir.v).multiplyScalar(offset.dot(dir.v));
-    } else if (this.nearGrab(point, t)) {
+    } else if (this.nearGrab(point)) {
       // Курсор у точки захвата — вершина стоит (повторный клик на месте её не сдвигает)
     } else {
-      dir ??= this.inferDir(point, t.from, dirs);
-      if (dir) offset.copy(dir.v).multiplyScalar(closestOnLine(ray, t.from, dir.v));
+      dir ??= this.inferDir(point, this.grabBase, dirs);
+      if (dir) offset.copy(dir.v).multiplyScalar(closestOnLine(ray, this.grabBase, dir.v));
       else {
         const hit = ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -t.from.z), new THREE.Vector3());
-        if (hit) offset.subVectors(hit, t.from).setZ(0);
+        if (hit) offset.subVectors(hit, this.grabBase).setZ(0);
       }
     }
     this.dir = dir;
@@ -419,7 +432,7 @@ export class ShapeTool {
     this.offset.set(0, 0, this.clampVertical(t, dz));
     this.problem = this.preview(t, this.offset);
     this.showHandles();
-    this.layer.setMoveGuide({ from: t.from, to: t.from.clone().add(this.offset), axis: 2, gizmoScale: 0.375 });
+    this.layer.setMoveGuide({ from: t.from, to: t.from.clone().add(this.offset), axis: 2, gizmoScale: 0.375, free: VERTICAL });
     this.updateVcb();
   }
 
@@ -474,8 +487,8 @@ export class ShapeTool {
   }
 
   /** Курсор у точки захвата (на экране) — сдвига ещё нет. */
-  private nearGrab(point: [number, number], t: ShapeTarget): boolean {
-    const s0 = this.layer.focusProject(t.from);
+  private nearGrab(point: [number, number]): boolean {
+    const s0 = this.layer.focusProject(this.grabBase);
     return !!s0 && Math.hypot(point[0] - s0[0], point[1] - s0[1]) < MIN_DRAG_PX;
   }
 
@@ -667,7 +680,7 @@ export class ShapeTool {
     // Сторона у вершины — своя ось x по ней (цвет оси x)
     const axes = d && d.axis === undefined ? { x: [d.v.x, d.v.y] as Pt, y: [-d.v.y, d.v.x] as Pt } : undefined;
     const axis = d ? (d.axis ?? 0) : undefined;
-    this.layer.setMoveGuide({ from: t.from, to, axis, locked: this.locked ? axis : undefined, axes, gizmoScale: 0.375 });
+    this.layer.setMoveGuide({ from: t.from, to, axis, locked: this.locked ? axis : undefined, axes, gizmoScale: 0.375, free: PLAN });
   }
 
   private updateVcb() {

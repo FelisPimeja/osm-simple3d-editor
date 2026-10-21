@@ -2831,8 +2831,8 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Направляющие инструмента перемещения: значок осей в точке захвата и линия до текущей точки
    * (цветом оси, если движение по оси). undefined — убрать.
    */
-  /** Значок осей в точке захвата и пунктир к курсору; axes — свои оси вместо осей здания (например, по ребру). */
-  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; path?: THREE.Vector3[]; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2; axes?: { x: Pt; y: Pt }; dashSize?: number; gapSize?: number; gizmoScale?: number } | undefined) {
+  /** Значок осей в точке захвата и пунктир к курсору; axes — свои оси вместо осей здания (например, по ребру); free — доступные оси. */
+  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; path?: THREE.Vector3[]; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2; axes?: { x: Pt; y: Pt }; dashSize?: number; gapSize?: number; gizmoScale?: number; free?: readonly (0 | 1 | 2)[] } | undefined) {
     const g = this.groups.get(FOCUS_GROUP);
     if (this.moveGuide) {
       this.moveGuide.parent?.remove(this.moveGuide);
@@ -2842,7 +2842,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (guide && g && this.focusAxes) {
       const root = new THREE.Group();
       const frame = { ...this.focusAxes, ...(guide.axes ?? {}), origin: [guide.from.x, guide.from.y] as Pt };
-      const gizmo = axesGizmo(frame, guide.locked, TOOL_AXES_LENGTH * (guide.gizmoScale ?? 1));
+      const gizmo = axesGizmo(frame, guide.locked, TOOL_AXES_LENGTH * (guide.gizmoScale ?? 1), false, guide.free);
       gizmo.matrix.elements[14] = guide.from.z; // значок на высоте точки захвата
       root.add(gizmo);
       if (guide.to) {
@@ -4699,7 +4699,7 @@ const AXIS_COLOURS = [0xd43a3a, 0x3fa34d, 0x3a52b4]; // x, y, z — как в 3D
  * Значок инструмента рисуется поверх геометрии (без проверки глубины), чтобы не терялся за стенами;
  * occluded (начало координат на сетке) — модель его закрывает, а сквозь неё он лишь слегка просвечивает.
  */
-function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH, occluded = false): THREE.Object3D {
+function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH, occluded = false, free?: readonly number[]): THREE.Object3D {
   const r = len * 0.012, head = len * 0.12;
   const root = new THREE.Group();
   // Базис: x, y — оси здания на земле, z — вверх
@@ -4710,8 +4710,8 @@ function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH, occlud
   const dirs = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
   const up = new THREE.Vector3(0, 1, 0); // цилиндр и конус в three.js вытянуты по y
   dirs.forEach((d, i) => {
-    // Ось зафиксирована — остальные серые и бледные
-    const dim = locked !== undefined && locked !== i;
+    // Ось зафиксирована — остальные серые и бледные; free — по каким осям вообще можно двигать (остальные серые)
+    const dim = locked !== undefined ? locked !== i : !!free && !free.includes(i);
     const colour = dim ? AXIS_DIM_COLOUR : AXIS_COLOURS[i];
     const mat = new THREE.MeshBasicMaterial({ color: colour, depthTest: false, depthWrite: false, transparent: true, opacity: dim ? 0.45 : 1 });
     const q = new THREE.Quaternion().setFromUnitVectors(up, d);

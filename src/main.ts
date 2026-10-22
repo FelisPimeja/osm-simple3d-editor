@@ -3154,9 +3154,9 @@ function splitFeatureIn(key: string, a: CutPoint, b: CutPoint, bends: [number, n
     return cutHoleIn(key, a.poly, [a.p, ...bends], pending, a);
   }
   if (a.ring || b.ring) {
-    if (a.ring !== b.ring) return tr('Разрез от внутреннего кольца до внешнего (или до другого внутреннего) грань не делит — начните и закончите его на одном кольце.');
     if (solo) return tr('Резать у внутреннего кольца отдельного здания пока нельзя: сначала рассеките его на части.');
-    return splitAtHole(f, g!, a, b, bends);
+    // Между разными кольцами: делит грань, только если кольца уже соприкасаются (кусок между ними замыкается)
+    return a.ring !== b.ring ? splitBetweenRings(f, g!, a, b, bends) : splitAtHole(f, g!, a, b, bends);
   }
   const ids = poly.outerIds!;
   const local = poly.outer.map((c) => overpassLayer.focusToLocal(c)!);
@@ -3396,6 +3396,118 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
   edits.push(groupMembersEdit(g!, [...g!.relMembers.map((m) => (m.type === 'way' && m.ref === f.id && m.role === 'part' ? relPart : m)), innerPart]));
   session.editMany(edits);
   done(rel.key);
+  return;
+}
+
+/** Ширина полосы вдоль разреза, которую вычитаем из грани, чтобы узнать, на сколько кусков он её делит, м. */
+const CUT_STRIP_M = 0.002;
+
+/**
+ * Разрез между разными кольцами (внутреннее — внешнее, два внутренних). Грань делится, только если кольца уже
+ * соприкасаются: из грани вычитается тонкая полоса вдоль разреза, кусков должно стать ровно два. Вершины кусков
+ * сопоставляются с узлами (прежние, концы и изгибы разреза), больший кусок остаётся частью — её внутренние
+ * кольца перестраиваются (касавшиеся сливаются в одно через место отрезанного куска), меньший — новая часть.
+ */
+function splitBetweenRings(f: Feature3D, g: EditGroup, a: CutPoint, b: CutPoint, bends: [number, number][]): string | undefined {
+  const noDivide = tr('Разрез от внутреннего кольца до внешнего (или до другого внутреннего) грань не делит — начните и закончите его на одном кольце.');
+  const poly = f.polygons[a.poly];
+  if (f.type !== 'relation' || !poly.outerIds || !poly.innerIds) return noDivide;
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  const ringIds = [poly.outerIds, ...poly.innerIds];
+  const rings = [poly.outer, ...poly.inners].map((r) => r.map(local));
+  const path = [a.p, ...bends, b.p];
+  const near = (p: [number, number], q: [number, number]) => Math.hypot(p[0] - q[0], p[1] - q[1]) < 0.05;
+  for (let j = 0; j < path.length - 1; j++) {
+    const u = path[j], v = path[j + 1];
+    if (near(u, v)) return tr('Соседние точки разреза совпадают.');
+    const mid: [number, number] = [(u[0] + v[0]) / 2, (u[1] + v[1]) / 2];
+    if (!inLocalRing(mid, rings[0]) || rings.slice(1).some((h) => inLocalRing(mid, h))) return tr('Разрез проходит снаружи грани.');
+    for (const r of rings) for (let i = 0; i < r.length; i++) {
+      if (segCross(u, v, r[i], r[(i + 1) % r.length])) return tr('Разрез пересекает стороны контура.');
+    }
+    for (let i = 0; i < j - 1; i++) if (segCross(u, v, path[i], path[i + 1])) return tr('Разрез пересекает сам себя.');
+  }
+
+  // Узлы концов разреза: вершина — прежний узел, точка на стороне — новый (вставляется и в соседей)
+  const coord = new Map<number, LonLat>();
+  [poly.outer, ...poly.inners].forEach((r, ri) => ringIds[ri].forEach((id, i) => coord.set(id, r[i])));
+  const known: { id: number; p: [number, number] }[] = rings.flatMap((r, ri) => r.map((p, i) => ({ id: ringIds[ri][i], p })));
+  const fresh: FreshNode[] = [];
+  for (const c of [a, b]) {
+    if (c.vertex !== undefined) continue;
+    const ids = ringIds[c.ring], id = nextNewId--;
+    fresh.push({ id, p: c.p, u: ids[c.edge], v: ids[(c.edge + 1) % ids.length] });
+    known.push({ id, p: c.p });
+    coord.set(id, overpassLayer.focusToLngLat(c.p[0], c.p[1])!);
+  }
+  for (const p of bends) {
+    const id = nextNewId--;
+    known.push({ id, p });
+    coord.set(id, overpassLayer.focusToLngLat(p[0], p[1])!);
+  }
+
+  // Полоса вдоль разреза (с запасом за концы), вычтенная из грани
+  const strip = path.slice(1).map((v, j) => {
+    const u = path[j], len = Math.hypot(v[0] - u[0], v[1] - u[1]);
+    const dx = (v[0] - u[0]) / len, dy = (v[1] - u[1]) / len, w = CUT_STRIP_M / 2;
+    const a0: [number, number] = [u[0] - dx * w, u[1] - dy * w], b0: [number, number] = [v[0] + dx * w, v[1] + dy * w];
+    const ring: [number, number][] = [[a0[0] - dy * w, a0[1] + dx * w], [b0[0] - dy * w, b0[1] + dx * w], [b0[0] + dy * w, b0[1] - dx * w], [a0[0] + dy * w, a0[1] - dx * w]];
+    return [[...ring, ring[0]]];
+  });
+  let pieces: ReturnType<typeof polygonClipping.difference>;
+  try {
+    pieces = polygonClipping.difference([rings.map((r) => [...r, r[0]] as [number, number][])], ...strip as [number, number][][][]);
+  } catch { return tr('Не удалось разрезать грань.'); }
+  if (pieces.length !== 2) return noDivide;
+
+  // Вершины кусков — в узлы; совпавшие подряд (две стороны полосы у одного конца) — один узел
+  const toIds = (r: [number, number][]): number[] | undefined => {
+    const out: number[] = [];
+    for (const q of r.slice(0, -1)) {
+      let best: { id: number; d: number } | undefined;
+      for (const k of known) { const d = Math.hypot(k.p[0] - q[0], k.p[1] - q[1]); if (!best || d < best.d) best = { id: k.id, d }; }
+      if (!best || best.d > 0.01) return;
+      if (out.at(-1) !== best.id) out.push(best.id);
+    }
+    while (out.length > 1 && out[0] === out.at(-1)) out.pop();
+    return out.length >= 3 ? out : undefined;
+  };
+  const mapped = pieces.map((p) => p.map(toIds));
+  if (mapped.some((p) => p.some((r) => !r))) return tr('Не удалось разрезать грань.');
+  const area = (p: (typeof pieces)[number]) => ringArea(p[0].slice(0, -1) as [number, number][]) - p.slice(1).reduce((s, r) => s + ringArea(r.slice(0, -1) as [number, number][]), 0);
+  const [ki, pi] = area(pieces[0]) >= area(pieces[1]) ? [0, 1] : [1, 0];
+  const keep = mapped[ki] as number[][], piece = mapped[pi] as number[][];
+  if (piece.length > 1) return tr('Внутри отрезаемого куска есть другое внутреннее кольцо — так резать пока нельзя.');
+  const sameSet = (x: number[], y: number[]) => x.length === y.length && x.every((id) => y.includes(id));
+  if (!sameSet(keep[0], poly.outerIds)) return tr('Не удалось разрезать грань.');
+
+  // Внутренние кольца остающейся части: прежнее без изменений — как было; новое — переписывает первое из прежних,
+  // чьи узлы в нём, а остальные такие прежние (слитые в него) из полигона убираются
+  const rewrites: RingRewrite[] = [];
+  const consumed = new Set<number>();
+  for (const r of keep.slice(1)) {
+    const olds = poly.innerIds.map((ids, j) => ({ ids, j })).filter(({ ids }) => ids.every((id) => r.includes(id)));
+    if (olds.length === 1 && sameSet(olds[0].ids, r)) continue;
+    if (!olds.length) return tr('Не удалось разрезать грань.');
+    rewrites.push({ poly: a.poly, ring: olds[0].j + 1, ids: r, coords: r.map((id) => coord.get(id)!) });
+    for (const o of olds.slice(1)) consumed.add(o.j);
+  }
+  const edits = topologyEdits([{ f, rewrites }], freshInserts(fresh, coord), coord);
+  if (typeof edits === 'string') return edits;
+  if (consumed.size) {
+    const e = edits.find((x) => x.key === f.key);
+    if (e?.polygons) e.polygons = e.polygons.map((p, i) => (i !== a.poly ? p
+      : { ...p, inners: p.inners.filter((_, j) => !consumed.has(j)), innerIds: p.innerIds?.filter((_, j) => !consumed.has(j)) }));
+  }
+  const wayId = nextNewId--;
+  const tags = copyTags(f);
+  delete tags.type;
+  const ids = piece[0];
+  const created: Feature3D = { key: `way/${wayId}`, type: 'way', id: wayId, version: 0, kind: f.kind, tags,
+    polygons: [{ outer: ids.map((id) => coord.get(id)!), inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
+  session.editMany([...edits, { key: created.key, create: created }, groupMembersEdit(g, [...g.relMembers, { type: 'way', ref: wayId, role: 'part' }])]);
+  select(created.key);
+  setStatus(tr('Рассечено: {key} и новая часть {part}.', { key: f.key, part: created.key }));
   return;
 }
 

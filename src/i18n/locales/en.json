@@ -1087,5 +1087,6 @@
   "Клик по части — выделить её, Shift — несколько. Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.": "Click a part to select it, Shift for several. Double-click a part to isolate it; double-click outside the building to show all parts or exit.",
   "Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, I — изолировать выделенные, Shift+H — показать все.": "Space: turn the tool off. G: grid, S: snapping, H: hide a part, I: isolate selected, Shift+H: show all.",
   "Выделите части (Shift+клик — несколько), затем I — изолировать их.": "Select parts (Shift+click for several), then press I to isolate them.",
-  "Изолировано частей: {n}. Двойной клик по пустому месту или Shift+H — показать все, Ctrl+Z — отменить.": "Isolated parts: {n}. Double-click empty space or press Shift+H to show all, Ctrl+Z to undo."
+  "Изолировано частей: {n}. Двойной клик по пустому месту или Shift+H — показать все, Ctrl+Z — отменить.": "Isolated parts: {n}. Double-click empty space or press Shift+H to show all, Ctrl+Z to undo.",
+  "Не удалось разрезать грань.": "Could not split the face."
 }

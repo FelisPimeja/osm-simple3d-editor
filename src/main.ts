@@ -2874,7 +2874,8 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
   const ll = ring.map(lngLat);
   const pad = 2e-5;
   const [w, so, e, n] = [Math.min(...ll.map((c) => c[0])) - pad, Math.min(...ll.map((c) => c[1])) - pad, Math.max(...ll.map((c) => c[0])) + pad, Math.max(...ll.map((c) => c[1])) + pad];
-  const near = (c: LonLat) => c[0] >= w && c[0] <= e && c[1] >= so && c[1] <= n;
+  // Сторона рядом — её габариты пересекают габариты контура (у длинной стороны концы бывают далеко)
+  const near = (a: LonLat, b: LonLat) => Math.max(a[0], b[0]) >= w && Math.min(a[0], b[0]) <= e && Math.max(a[1], b[1]) >= so && Math.min(a[1], b[1]) <= n;
   const rings: { ids: number[]; pts: [number, number][]; coords: LonLat[] }[] = [];
   const seen = new Set<string>();
   for (const f of [...focus.members.map((k) => entity(k) as Feature3D | undefined), ...overpass.allFeatures()]) {
@@ -2883,11 +2884,12 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
     const cur = (session.has(f.key) ? session.get(f.key) as Feature3D : f);
     adoptNodeIds(cur);
     for (const p of cur.polygons) {
-      if (!p.outerIds || !p.outer.some(near)) continue;
+      if (!p.outerIds || !p.outer.some((c, i) => near(c, p.outer[(i + 1) % p.outer.length]))) continue;
       rings.push({ ids: p.outerIds, coords: p.outer, pts: p.outer.map((c) => overpassLayer.focusToLocal(c)!) });
     }
   }
-  const coord = new Map<number, LonLat>();
+  // Координаты узлов соседних колец — для вставки новых узлов на их стороны
+  const coord = new Map<number, LonLat>(rings.flatMap((r) => r.ids.map((id, i) => [id, r.coords[i]] as const)));
   const fresh: FreshNode[] = [];
   const ids = ring.map((q, i) => {
     for (const r of rings) {
@@ -3612,10 +3614,24 @@ function insertIntoNeighbours(key: string, fresh: FreshNode[], coord: Map<number
   return typeof edits === 'string' ? edits : edits.filter((e) => e.key !== key);
 }
 
-/** Новые узлы на сторонах как вставки: положение t на стороне u→v. */
+/** Координаты узлов всех колец объектов. */
+function nodeCoordsOf(features: Feature3D[]): Map<number, LonLat> {
+  const out = new Map<number, LonLat>();
+  for (const f of features) for (const p of f.polygons) {
+    p.outerIds?.forEach((id, i) => out.set(id, p.outer[i]));
+    p.innerIds?.forEach((r, j) => r.forEach((id, i) => out.set(id, p.inners[j][i])));
+  }
+  return out;
+}
+
+/** Новые узлы на сторонах как вставки: положение t на стороне u→v (координаты концов — из coord или объектов). */
 function freshInserts(fresh: FreshNode[], coord: Map<number, LonLat>): Insert[] {
+  let all: Map<number, LonLat> | undefined;
+  const at = (id: number) => coord.get(id) ?? (all ??= nodeCoordsOf(liveFeatures())).get(id);
   return fresh.map((x) => {
-    const u = overpassLayer.focusToLocal(coord.get(x.u)!)!, v = overpassLayer.focusToLocal(coord.get(x.v)!)!;
+    const cu = at(x.u), cv = at(x.v);
+    if (!cu || !cv) return { id: x.id, u: x.u, v: x.v }; // без положения — вставится по порядку
+    const u = overpassLayer.focusToLocal(cu)!, v = overpassLayer.focusToLocal(cv)!;
     const dx = v[0] - u[0], dy = v[1] - u[1];
     return { id: x.id, u: x.u, v: x.v, t: ((x.p[0] - u[0]) * dx + (x.p[1] - u[1]) * dy) / (dx * dx + dy * dy || 1) };
   });

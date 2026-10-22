@@ -2449,6 +2449,27 @@ export class BuildingsLayer implements CustomLayerInterface {
       ? rank(x) - rank(y) || (x.key === y.key ? faceRank(x) - faceRank(y) : 0) || x.t - y.t : x.t - y.t));
   }
 
+  /**
+   * Попадания луча в плоские следы сцены режима здания (контур под частями — focusRayHits их не видит): верх следа
+   * внутри контура. Для «Рассечь» — кольцо можно начать и в контуре здания.
+   */
+  focusFlatHits(point: [number, number]): FocusHit[] {
+    const g = this.groups.get(FOCUS_GROUP);
+    const ray = this.focusRay(point);
+    if (!g || !ray || Math.abs(ray.direction.z) < 1e-6) return [];
+    const out: FocusHit[] = [];
+    for (const it of g.items) {
+      if (g.hidden.has(it.feature.key) || !strokeOnly(g, it) || it.box.isEmpty()) continue;
+      const t = (it.box.max.z - ray.origin.z) / ray.direction.z;
+      if (!(t > 0)) continue;
+      const q = ray.at(t, new THREE.Vector3());
+      const inside = it.feature.polygons.some((poly) => pointInLocalRing([q.x, q.y], poly.outer.map(g.toLocal))
+        && !poly.inners.some((r) => pointInLocalRing([q.x, q.y], r.map(g.toLocal))));
+      if (inside) out.push({ key: it.feature.key, t, local: q, face: 'roof' });
+    }
+    return out;
+  }
+
   /** Контуры объекта сцены режима здания в метрах (для работы с рёбрами). */
   focusPolygons(key: string): { outer: Pt[]; inners: Pt[][] }[] | undefined {
     const g = this.groups.get(FOCUS_GROUP);
@@ -3494,7 +3515,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv);
       const far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
       const ray = new THREE.Ray(near, far.sub(near).normalize());
-      if (!ray.intersectsBox(groupBox(g))) continue;
+      // Плоские следы (контур под частями) в меш не входят — их габариты проверяем отдельно: клик внутри следа выделяет его
+      if (!ray.intersectsBox(groupBox(g)) && !g.items.some((it) => strokeOnly(g, it) && !g.hidden.has(it.feature.key) && ray.intersectsBox(it.box))) continue;
       // Сначала габариты зданий, треугольники — только у задетых
       let groupBest: { item: Item; dist: number; p: THREE.Vector3 } | undefined;
       for (const item of g.items) {

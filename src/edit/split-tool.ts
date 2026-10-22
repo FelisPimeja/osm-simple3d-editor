@@ -72,7 +72,8 @@ export class SplitTool {
 
   click(point: [number, number]): boolean {
     if (this.state === 'pick') {
-      const hits = this.layer.focusRayHits(point);
+      // Плоский контур здания (outline под частями) — тоже: в нём вырезают кольцо
+      const hits = [...this.layer.focusRayHits(point), ...this.layer.focusFlatHits(point)].sort((a, b) => a.t - b.t);
       const preferred = this.selected();
       const keys = [...new Set([...(preferred ? [preferred] : []), ...hits.map((h) => h.key), ...this.members()])];
       if (!keys.length) return false;

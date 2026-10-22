@@ -4267,6 +4267,7 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
     else { add(at); put(ids[k], was[k]); }
   }
   const norm = mergeTouchingRings(f, { poly: edge.poly, ring: edge.ring, ids: outIds, coords: outC });
+  if (norm.error) return norm.error;
   const edits = topologyEdits([{ f, rewrites: norm.rewrites }], [...inserts, ...norm.inserts], new Map([...fresh, ...moved]));
   if (typeof edits === 'string') return edits;
   dropRings(edits, f.key, edge.poly, norm.consumed);
@@ -4363,7 +4364,7 @@ function dropRings(edits: ObjectEdit[], key: string, poly: number, consumed: num
  * в него, а кольца, у которых теперь общая сторона (дворы сошлись по отрезку), сливаются в одно — общие стороны
  * взаимно уничтожаются. Иначе у мультиполигона два кольца с общим отрезком: так нельзя, и крыша рисуется с изъянами.
  */
-function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewrite[]; consumed: number[]; inserts: Insert[]; holes?: { ids: number[]; coords: LonLat[] }[] } {
+function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewrite[]; consumed: number[]; inserts: Insert[]; holes?: { ids: number[]; coords: LonLat[] }[]; error?: string } {
   const p = f.polygons[rw.poly];
   if (!rw.ring) return tidyOuter(f, rw);
   if (!p?.innerIds) return { rewrites: [rw], consumed: [], inserts: [] };
@@ -4412,7 +4413,8 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
       break;
     }
   }
-  const { inserts, extra } = splitSelfTouching(me);
+  const { inserts, extra: split } = splitSelfTouching(me);
+  const extra = [...split];
   // Вершины правленого кольца (и отделившихся от него) на сторонах других — и в них (без Т-стыков)
   for (const o of rings) for (const m of [me, ...extra]) {
     if (o === me) continue;
@@ -4451,7 +4453,21 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
     const next = new Map<number, number>();
     let fork = false;
     for (const [u, v] of left) { if (next.has(u)) fork = true; next.set(u, v); }
-    if (fork) continue; // развилка — слияние неоднозначно, оставляем как есть
+    if (fork) {
+      // Кольца ещё и касаются в точке: обход по самому левому повороту — кольца (против часовой) остаются
+      // дворами, касающимися в точках; обходимое по часовой — островок стены между дворами, держится на точке
+      const loops = traceLoops(left, coordOf);
+      if (!loops) continue;
+      if (loops.some((l) => !l.ccw)) return { rewrites: [rw], consumed: [], inserts: [],
+        error: tr('Стена ложится на сторону соседнего двора, и между дворами остаётся кусок стены, который держится на одной точке, — так вытянуть нельзя.') };
+      const sorted = loops.map((l) => l.ids).sort((x, y) => Math.abs(ringArea(y.map((id) => local(coordOf.get(id)!)))) - Math.abs(ringArea(x.map((id) => local(coordOf.get(id)!)))));
+      me.ids = sorted[0];
+      me.coords = me.ids.map((id) => coordOf.get(id)!);
+      extra.push(...sorted.slice(1).map((ids) => ({ ids, coords: ids.map((id) => coordOf.get(id)!) })));
+      consumed.push(o.ring);
+      o.changed = false;
+      continue;
+    }
     const ids = [left[0][0]];
     for (let id = next.get(ids[0])!; id !== ids[0] && ids.length <= left.length; id = next.get(id)!) ids.push(id);
     if (ids.length !== left.length) continue; // распалось на несколько колец
@@ -4464,6 +4480,37 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
     ...(consumed.length ? { absorbs: consumed } : {}), ...(extra.length ? { extra } : {}) }];
   for (const o of rings) if (o !== me && o.changed && !consumed.includes(o.ring)) rewrites.push({ poly: rw.poly, ring: o.ring, ids: o.ids, coords: o.coords });
   return { rewrites, consumed, inserts };
+}
+
+/**
+ * Кольца из направленных сторон (кольца против часовой): в узле-развилке — самый левый поворот, так касающиеся
+ * в точке кольца не слипаются. ccw — обход против часовой. undefined — не сошлось или кольцо с повтором узла.
+ */
+function traceLoops(edges: (readonly [number, number])[], coordOf: Map<number, LonLat>): { ids: number[]; ccw: boolean }[] | undefined {
+  const xy = (id: number) => overpassLayer.focusToLocal(coordOf.get(id)!)!;
+  const list = edges.map(([u, v]) => ({ u, v, used: false }));
+  const loops: { ids: number[]; ccw: boolean }[] = [];
+  for (const first of list) {
+    if (first.used) continue;
+    first.used = true;
+    const ids = [first.u];
+    let cur = first;
+    while (cur.v !== first.u) {
+      const outs = list.filter((x) => !x.used && x.u === cur.v);
+      if (!outs.length || ids.length > list.length) return;
+      const [px, py] = xy(cur.u), [cx, cy] = xy(cur.v);
+      const turn = (x: typeof cur) => { const [nx, ny] = xy(x.v); const ax = cx - px, ay = cy - py, bx = nx - cx, by = ny - cy; return Math.atan2(ax * by - ay * bx, ax * bx + ay * by); };
+      const next = outs.reduce((best, x) => (turn(x) > turn(best) ? x : best));
+      next.used = true;
+      ids.push(cur.v);
+      cur = next;
+    }
+    if (new Set(ids).size !== ids.length || ids.length < 3) return;
+    let a = 0;
+    for (let i = 0, j = ids.length - 1; i < ids.length; j = i++) { const [xi, yi] = xy(ids[i]), [xj, yj] = xy(ids[j]); a += (xj - xi) * (yj + yi); }
+    loops.push({ ids, ccw: a > 0 });
+  }
+  return loops;
 }
 
 /**

@@ -1098,5 +1098,6 @@
   "{key}: внутреннее кольцо удалено. Отменить — Ctrl+Z.": "{key}: inner ring removed. Undo — Ctrl+Z.",
   "Больше на 1": "Up by 1",
   "Меньше на 1": "Down by 1",
-  "Сомкнуть вырез во двор у отдельного здания пока нельзя — сначала соберите отношение здания.": "Closing a notch into a courtyard isn't supported for a standalone building yet \u2014 build the building relation first."
+  "Сомкнуть вырез во двор у отдельного здания пока нельзя — сначала соберите отношение здания.": "Closing a notch into a courtyard isn't supported for a standalone building yet \u2014 build the building relation first.",
+  "Стена ложится на сторону соседнего двора, и между дворами остаётся кусок стены, который держится на одной точке, — так вытянуть нельзя.": "The wall lands on a side of the neighbouring courtyard and leaves a piece of wall between the courtyards hanging on a single point \u2014 this push is not possible."
 }

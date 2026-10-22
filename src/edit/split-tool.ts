@@ -320,8 +320,19 @@ export class SplitTool {
     const s = this.layer.snapAt(point, undefined, undefined, { from: prev && at(prev), extra, dir: ax && new THREE.Vector3(ax[0], ax[1], 0) });
     const flat = s && s.kind !== 'center' && Math.abs(s.local.z - this.z) < 0.05 ? s : undefined;
     if (this.shift) {
-      const q: Pt | undefined = flat ? [flat.local.x, flat.local.y] : raw;
-      return q && this.axisPoint(q);
+      // Точка остаётся на оси, а привязка к точке (вершина, середина…) ставит её вровень с этой точкой:
+      // маркер — с типом привязки, пунктир — от привязанной точки к точке на оси. «На ребре» и продолжение
+      // ребра на ось не проецируются — их точка на оси не та, что под курсором
+      const use = flat && !LINE_SNAPS.has(flat.kind) ? flat : undefined;
+      const q: Pt | undefined = use ? [use.local.x, use.local.y] : raw;
+      if (!q) return;
+      const r = this.axisPoint(q);
+      if (use) {
+        const p = at(r);
+        this.snap = Math.hypot(r[0] - q[0], r[1] - q[1]) > 0.01
+          ? { ...use, local: p, point: this.layer.focusProject(p) ?? use.point, along: use.local.clone() } : use;
+      }
+      return r;
     }
     this.axis = undefined;
     const use = (h: SnapHit): Pt => { this.snap = h; return [h.local.x, h.local.y]; };
@@ -497,6 +508,8 @@ export class SplitTool {
 
 /** Привязки, которые важнее линий выравнивания. */
 const STRONG_SNAPS = new Set<SnapHit['kind']>(['vertex', 'midpoint', 'perpendicular', 'tracked']);
+/** Привязки к линии (точка под курсором на ребре или его продолжении) — с осью Shift не совмещаются. */
+const LINE_SNAPS = new Set<SnapHit['kind']>(['edge', 'extension']);
 /** Как близко к линии выравнивания курсор ловится на неё, px. */
 const INFER_RADIUS_PX = 8;
 

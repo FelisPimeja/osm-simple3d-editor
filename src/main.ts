@@ -2063,6 +2063,9 @@ function squareSelected() {
     + (skewed ? tr(', пропущено {n} (стороны далеки от прямых углов)', { n: skewed }) : '') + tr('. Отменить — Ctrl+Z.'));
 }
 
+/** Цвет и материал: при объединении частей не заданный у части берётся у той, где задан. */
+const LOOK_TAGS = /^(building:colou?r|building:material|roof:colou?r|roof:material|colou?r|material)$/;
+
 // «Объединить» (J): выделенные части с одинаковыми тегами объёма — в одну, одним шагом истории
 const mergeBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="merge"]')!;
 mergeBtn.addEventListener('click', () => mergeSelected());
@@ -2094,10 +2097,13 @@ function mergeIn(pending: EditGroup | undefined): string | undefined {
   if (parts.some((f) => f.type === 'relation' && (f.tags.type !== 'multipolygon' || !relWays(f)))) {
     return tr('Для объединения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
   }
-  // Теги объёма должны совпадать: иначе неясно, чьи высоты и крышу оставить
+  // Теги объёма должны совпадать: иначе неясно, чьи высоты и крышу оставить. Цвет и материал, заданные
+  // только у части частей, не мешают — объединённая часть возьмёт их оттуда (различаться могут лишь заданные)
   const volume = (f: Feature3D) => Object.fromEntries(Object.entries(f.tags).filter(([k]) => PART_TAGS.test(k)));
   const vols = parts.map(volume);
-  const differ = [...new Set(vols.flatMap(Object.keys))].filter((k) => vols.some((v) => v[k] !== vols[0][k])).sort();
+  const differ = [...new Set(vols.flatMap(Object.keys))].filter((k) => (LOOK_TAGS.test(k)
+    ? new Set(vols.map((v) => v[k]).filter((x) => x !== undefined)).size > 1
+    : vols.some((v) => v[k] !== vols[0][k]))).sort();
   if (differ.length) {
     return tr('Объединять можно части с одинаковыми тегами объёма, различаются: {tags}.',
       { tags: differ.map((k) => `${k} (${vols.map((v) => v[k] ?? '—').join(' / ')})`).join(', ') });
@@ -2138,6 +2144,10 @@ function mergeIn(pending: EditGroup | undefined): string | undefined {
     outerIds: outer.map((n) => n.id), innerIds: inners.map((r) => r.map((n) => n.id)) };
 
   const keeper = parts.reduce((a, b) => (netArea(b) > netArea(a) ? b : a));
+  // Цвет и материал, которых у остающейся части нет, — от той, где они заданы
+  const look: Record<string, string> = {};
+  for (const v of vols) for (const [k, x] of Object.entries(v)) if (LOOK_TAGS.test(k) && keeper.tags[k] === undefined) look[k] = x;
+  const keeperTags = { ...keeper.tags, ...look };
   const others = parts.filter((f) => f !== keeper);
   const edits: ObjectEdit[] = others.map((f) => ({ key: f.key, delete: true }));
   let result = keeper.key;
@@ -2149,14 +2159,14 @@ function mergeIn(pending: EditGroup | undefined): string | undefined {
   };
 
   if (keeper.type === 'way' && !inners.length) {
-    edits.push({ key: keeper.key, polygons: [polygon] });
+    edits.push({ key: keeper.key, polygons: [polygon], tags: keeperTags });
   } else if (keeper.type === 'way') {
     // Дыра — путь становится внешним кольцом мультиполигона, теги переезжают на отношение
     const ways = [{ id: keeper.id, role: 'outer', nodes: closed(outer).ids }, ...inners.map((r) => newWay(r, 'inner'))];
     const relId = nextNewId--;
     const relMembers = ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }));
     const rel: Feature3D & { relMembers: OsmMember[] } = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, kind: keeper.kind,
-      tags: { type: 'multipolygon', ...keeper.tags }, polygons: [polygon], hasParts: false, ways, relMembers };
+      tags: { type: 'multipolygon', ...keeperTags }, polygons: [polygon], hasParts: false, ways, relMembers };
     edits.push({ key: rel.key, create: rel });
     edits.push({ key: keeper.key, tags: {}, polygons: [], line: closed(outer) });
     groupMembers = groupMembers?.map((m) => (m.type === 'way' && m.ref === keeper.id ? { type: 'relation' as const, ref: relId, role: m.role } : m));
@@ -2200,7 +2210,7 @@ function mergeIn(pending: EditGroup | undefined): string | undefined {
     for (const m of innerMembers) kept.add(m.id);
     // Прежние пути, что больше не на кольцах, — удаляем (если без тегов: иначе это чей-то объект)
     for (const m of own) if (!kept.has(m.ref) && !Object.keys(tagsOf(m.ref) ?? {}).length) edits.push({ key: track(m.ref), delete: true });
-    edits.push({ key: keeper.key, polygons: [polygon], members: [...members.filter((m) => m.type !== 'way'),
+    edits.push({ key: keeper.key, polygons: [polygon], tags: keeperTags, members: [...members.filter((m) => m.type !== 'way'),
       ...res.members.map((m) => ({ type: 'way' as const, ref: m.id, role: m.role })),
       ...innerMembers.map((m) => ({ type: 'way' as const, ref: m.id, role: m.role }))] });
   }

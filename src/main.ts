@@ -3122,6 +3122,13 @@ function splitFeatureIn(key: string, a: CutPoint, b: CutPoint, bends: [number, n
   if (a.poly !== b.poly) return tr('Начало и конец разреза должны быть на одной грани.');
   const poly = f.polygons[a.poly];
   if (!poly) return tr('Грань не найдена.');
+  // Разрез вернулся в свою начальную точку — кольцо, касающееся контура в ней (так в мультиполигоне можно)
+  const sameSpot = a.ring === b.ring && (a.vertex !== undefined ? a.vertex === b.vertex
+    : b.vertex === undefined && a.edge === b.edge && Math.hypot(a.p[0] - b.p[0], a.p[1] - b.p[1]) < 0.05);
+  if (sameSpot) {
+    if (bends.length < 2) return tr('Начало и конец разреза совпадают.');
+    return cutHoleIn(key, a.poly, [a.p, ...bends], pending, a);
+  }
   if (a.ring || b.ring) {
     if (a.ring !== b.ring) return tr('Разрез от внутреннего кольца до внешнего (или до другого внутреннего) грань не делит — начните и закончите его на одном кольце.');
     if (solo) return tr('Резать у внутреннего кольца отдельного здания пока нельзя: сначала рассеките его на части.');
@@ -3230,8 +3237,11 @@ function cutHole(key: string, polyIndex: number, ring: [number, number][]): stri
   return result;
 }
 
-/** Почему кольцо ring нельзя вырезать из полигона (метры сцены); undefined — можно. */
-function holeError(poly: Polygon, ring: [number, number][]): string | undefined {
+/**
+ * Почему кольцо ring нельзя вырезать из полигона (метры сцены); undefined — можно. touch — первая точка кольца
+ * лежит на контуре (кольцо касается его в ней одной: так в мультиполигоне можно).
+ */
+function holeError(poly: Polygon, ring: [number, number][], touch = false): string | undefined {
   const outer = poly.outer.map((c) => overpassLayer.focusToLocal(c)!);
   const holes = poly.inners.map((h) => h.map((c) => overpassLayer.focusToLocal(c)!));
   const n = ring.length;
@@ -3241,34 +3251,66 @@ function holeError(poly: Polygon, ring: [number, number][]): string | undefined 
     if (i === 0 && j === n - 1) continue;
     if (segCross(...seg(ring, i), ...seg(ring, j))) return tr('Кольцо пересекает само себя.');
   }
+  const atTouch = (p: [number, number]) => touch && Math.hypot(p[0] - ring[0][0], p[1] - ring[0][1]) < 0.05;
   for (const r of [outer, ...holes]) {
     for (let i = 0; i < n; i++) for (let j = 0; j < r.length; j++) {
       const [a, b] = seg(ring, i), [c, d] = seg(r, j);
-      if (segCross(a, b, c, d) || segDist2(a, c, d) < 0.05 || segDist2(c, a, b) < 0.05) {
+      if (segCross(a, b, c, d) || (segDist2(a, c, d) < 0.05 && !atTouch(a)) || (segDist2(c, a, b) < 0.05 && !atTouch(c))) {
         return tr('Кольцо касается контура или пересекает его — оно должно лежать внутри грани.');
       }
     }
   }
-  if (ring.some((p) => !inLocalRing(p, outer) || holes.some((h) => inLocalRing(p, h)))) return tr('Кольцо должно лежать внутри грани.');
-  if (holes.some((h) => inLocalRing(h[0], ring))) return tr('Внутри кольца уже есть внутреннее кольцо — так вырезать пока нельзя.');
+  if (ring.some((p) => !atTouch(p) && (!inLocalRing(p, outer) || holes.some((h) => inLocalRing(p, h))))) return tr('Кольцо должно лежать внутри грани.');
+  if (holes.some((h) => { const q = h.find((p) => !atTouch(p)); return !!q && inLocalRing(q, ring); })) {
+    return tr('Внутри кольца уже есть внутреннее кольцо — так вырезать пока нельзя.');
+  }
   return;
 }
 
-function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pending: EditGroup | undefined): string | undefined {
+/**
+ * touch — первая точка кольца на контуре (разрез вернулся в свою начальную точку): кольцо касается контура в этом
+ * узле — прежнем, если это вершина, или новом на стороне (он вставляется и в соседей с этой стороной).
+ */
+function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pending: EditGroup | undefined, touch?: CutPoint): string | undefined {
   const f = entity(key) as Feature3D | undefined;
   const solo = isSolo(focus) && !pending;
   const g = pending ?? (focus && !solo ? (entity(focus.key) as EditGroup | undefined) : undefined);
   if (!f || (!g && !solo)) return tr('Объект не найден.');
-  const poly = f.polygons[polyIndex];
+  let polygons = f.polygons;
+  const edits: ObjectEdit[] = [];
+  let touchId: number | undefined, touchAt: LonLat | undefined;
+  if (touch) {
+    const tp = polygons[polyIndex];
+    const rIds = touch.ring ? tp?.innerIds?.[touch.ring - 1] : tp?.outerIds;
+    const rCoords = touch.ring ? tp?.inners[touch.ring - 1] : tp?.outer;
+    if (!rIds || !rCoords) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+    if (touch.vertex !== undefined) { touchId = rIds[touch.vertex]; touchAt = rCoords[touch.vertex]; }
+    else {
+      // Новый узел на стороне — в контур этого объекта и во все пути и объекты с этой стороной
+      touchId = nextNewId--;
+      touchAt = overpassLayer.focusToLngLat(ring[0][0], ring[0][1])!;
+      const coord = new Map<number, LonLat>([[touchId, touchAt]]);
+      for (const p of polygons) {
+        p.outerIds?.forEach((id, i) => coord.set(id, p.outer[i]));
+        p.innerIds?.forEach((r, j) => r.forEach((id, i) => coord.set(id, p.inners[j][i])));
+      }
+      const fresh = [{ id: touchId, p: ring[0], u: rIds[touch.edge], v: rIds[(touch.edge + 1) % rIds.length] }];
+      const inserted = topologyEdits([], freshInserts(fresh, coord), coord);
+      if (typeof inserted === 'string') return inserted;
+      polygons = inserted.find((e) => e.key === f.key)?.polygons ?? polygons;
+      edits.push(...inserted.filter((e) => e.key !== f.key));
+    }
+  }
+  const poly = polygons[polyIndex];
   if (!poly?.outerIds) return tr('Грань не найдена.');
-  const err = holeError(poly, ring);
+  const err = holeError(poly, ring, !!touch);
   if (err) return err;
 
-  const coords = ring.map((p) => overpassLayer.focusToLngLat(p[0], p[1])!);
-  const ids = ring.map(() => nextNewId--);
+  const coords = ring.map((p, i) => (i === 0 && touchAt ? touchAt : overpassLayer.focusToLngLat(p[0], p[1])!));
+  const ids = ring.map((_, i) => (i === 0 && touchId !== undefined ? touchId : nextNewId--));
   const innerWay = nextNewId--;
-  const edits: ObjectEdit[] = [{ key: `way/${innerWay}`, create: { key: `way/${innerWay}`, version: 0, tags: {},
-    line: { ids: [...ids, ids[0]], coords: [...coords, coords[0]] } } }];
+  edits.push({ key: `way/${innerWay}`, create: { key: `way/${innerWay}`, version: 0, tags: {},
+    line: { ids: [...ids, ids[0]], coords: [...coords, coords[0]] } } });
   const withHole: Polygon = { ...poly, inners: [...poly.inners, coords], innerIds: [...(poly.innerIds ?? []), ids] };
   // Внутренняя часть — на тех же узлах, что и внутренний путь
   const partTags: Record<string, string> = solo ? { 'building:part': 'yes' } : copyTags(f);
@@ -3291,7 +3333,7 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
     if (solo) return tr('Кольцо в отдельном здании-мультиполигоне пока не вырезается: сначала рассеките его на части.');
     const members = (f as Tagged).relMembers ?? session.get(f.key)?.relMembers;
     if (!members) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
-    edits.push({ key: f.key, polygons: f.polygons.map((p, i) => (i === polyIndex ? withHole : p)), members: [...members, innerMember] });
+    edits.push({ key: f.key, polygons: polygons.map((p, i) => (i === polyIndex ? withHole : p)), members: [...members, innerMember] });
     edits.push(groupMembersEdit(g!, [...g!.relMembers, innerPart]));
     session.editMany(edits);
     done(f.key);
@@ -3316,6 +3358,8 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
     const building: EditGroup = { key: `relation/${id}`, type: 'relation', id, version: 0, tags: { type: 'building' },
       members: members.map((m) => `${m.type}/${m.ref}`), roles: members.map((m) => m.role), relMembers: members };
     edits.push({ key: building.key, create: building });
+    // Новый узел касания на стороне контура — и в самом контуре
+    if (polygons !== f.polygons) edits.push({ key: f.key, polygons });
     editGroups.set(building.key, building);
     session.editMany(edits);
     enterFocus(building);

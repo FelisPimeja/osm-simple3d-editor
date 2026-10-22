@@ -3098,13 +3098,18 @@ function splitReason(key: string): string | undefined {
   const f = entity(key) as Feature3D | undefined;
   if (!f?.polygons) return tr('Объект не найден.');
   if (f.type === 'relation' && (f.tags.type !== 'multipolygon' || !relWays(f))) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
-  const role = focus.roles[focus.members.indexOf(key)];
-  if (role === 'outline') return tr('Контур здания (outline) не режем — только части.');
+  // Контур здания (outline): только вырезать кольцо (splitFeatureIn), плоскому следу крыша не мешает
+  const outline = isOutlineIn(focus, key);
   const shape = f.tags['roof:shape'];
   const h = computeHeights(f.tags);
-  if (shape && shape !== 'flat' && h.top - h.min > 0.1) return tr('Резать можно плоский объект или с плоской крышей, здесь roof:shape={shape}.', { shape });
+  if (!(outline && overpassLayer.focusFlat(key)) && shape && shape !== 'flat' && h.top - h.min > 0.1) return tr('Резать можно плоский объект или с плоской крышей, здесь roof:shape={shape}.', { shape });
   if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
   return;
+}
+
+/** key — контур (роль outline) здания g. */
+function isOutlineIn(g: BuildingGroup | undefined, key: string): boolean {
+  return !!g && g.members.some((k, i) => k === key && g.roles[i] === 'outline');
 }
 
 /** Теги, которые не копируем во вторую половину отдельного здания: они бы задвоились. */
@@ -3174,6 +3179,8 @@ function splitFeatureIn(key: string, a: CutPoint, b: CutPoint, bends: [number, n
     if (bends.length < 2) return tr('Начало и конец разреза совпадают.');
     return cutHoleIn(key, a.poly, [a.p, ...bends], pending, a);
   }
+  // Контур на два не делим: у здания был бы второй outline или кусок вне контура
+  if (isOutlineIn(focus, key)) return tr('Контур здания (outline) на части не делится — только вырезать внутреннее кольцо: кликните внутри грани или вернитесь разрезом в начальную точку.');
   if (a.ring || b.ring) {
     if (solo) return tr('Резать у внутреннего кольца отдельного здания пока нельзя: сначала рассеките его на части.');
     // Между разными кольцами: делит грань, только если кольца уже соприкасаются (кусок между ними замыкается)
@@ -3350,6 +3357,8 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
   if (!poly?.outerIds) return tr('Грань не найдена.');
   const err = holeError(poly, ring, !!touch);
   if (err) return err;
+  // Контур здания (outline): только дыра — внутри не здание, новой части там нет
+  const outline = isOutlineIn(focus, key);
 
   const coords = ring.map((p, i) => (i === 0 && touchAt ? touchAt : overpassLayer.focusToLngLat(p[0], p[1])!));
   const ids = ring.map((_, i) => (i === 0 && touchId !== undefined ? touchId : nextNewId--));
@@ -3364,11 +3373,16 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
   const partId = nextNewId--;
   const inner: Feature3D = { key: `way/${partId}`, type: 'way', id: partId, version: 0, kind: solo ? 'part' : f.kind, tags: partTags,
     polygons: [{ outer: coords, inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
-  edits.push({ key: inner.key, create: inner });
+  if (!outline) edits.push({ key: inner.key, create: inner });
   const innerPart = { type: 'way' as const, ref: partId, role: 'part' };
   const innerMember = { type: 'way' as const, ref: innerWay, role: 'inner' };
 
   const done = (outer: string) => {
+    if (outline) {
+      select(outer);
+      setStatus(tr('Вырезано кольцо: у контура здания {key} — внутренний двор.', { key: outer }));
+      return;
+    }
     select(inner.key);
     setStatus(tr('Вырезано кольцо: у {key} дыра, внутри — новая часть {part}. Удалите её (Del) — будет двор, или тяните (P) — башня, атриум.',
       { key: outer, part: inner.key }));
@@ -3379,7 +3393,8 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
     const members = (f as Tagged).relMembers ?? session.get(f.key)?.relMembers;
     if (!members) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
     edits.push({ key: f.key, polygons: polygons.map((p, i) => (i === polyIndex ? withHole : p)), members: [...members, innerMember] });
-    edits.push(groupMembersEdit(g!, [...g!.relMembers, innerPart]));
+    if (!outline) edits.push(groupMembersEdit(g!, [...g!.relMembers, innerPart]));
+    else if (!session.get(g!.key)) edits.push(groupMembersEdit(g!, g!.relMembers));
     session.editMany(edits);
     done(f.key);
     return;
@@ -3414,7 +3429,9 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
 
   // Теги переезжают на отношение; путь остаётся внешним кольцом (без своей геометрии здания)
   edits.push({ key: f.key, tags: {}, polygons: [], line: { ids: outerNodes, coords: [...poly.outer, poly.outer[0]] } });
-  edits.push(groupMembersEdit(g!, [...g!.relMembers.map((m) => (m.type === 'way' && m.ref === f.id && m.role === 'part' ? relPart : m)), innerPart]));
+  const relOutline = { type: 'relation' as const, ref: relId, role: 'outline' };
+  const moved = g!.relMembers.map((m) => (m.type !== 'way' || m.ref !== f.id ? m : m.role === 'part' ? relPart : m.role === 'outline' ? relOutline : m));
+  edits.push(groupMembersEdit(g!, outline ? moved : [...moved, innerPart]));
   session.editMany(edits);
   done(rel.key);
   return;

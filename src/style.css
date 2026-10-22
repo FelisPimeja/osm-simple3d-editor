@@ -235,6 +235,16 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .colour-field input[type="color"] { width: 32px; height: 26px; padding: 0; border: 1px solid #ccc; border-radius: 4px; flex: none; }
 .tag-form [data-revert] { justify-self: start; margin-top: 4px; }
 .inherit-field { position: relative; display: block; flex: 1; min-width: 0; }
+/* Поле этажей со стрелками ±1 (как у спиннера): справа в поле, одна над другой */
+.step-field { position: relative; display: block; flex: 1; min-width: 0; }
+.step-field input[type="text"] { padding-right: 22px; }
+.step-field .inherit-field input { padding-right: 40px; }
+.step-field .inherit-badge { right: 24px; }
+.step-btns { position: absolute; top: 1px; right: 1px; bottom: 1px; width: 18px; display: flex; flex-direction: column; border-left: 1px solid #e5e7eb; }
+#info .step-btn, .step-btn { flex: 1; min-height: 0; padding: 0; border: 0; border-radius: 0; cursor: pointer; background: transparent no-repeat center / 8px 5px; }
+#info .step-btn:hover, .step-btn:hover { background-color: #eef2f7; }
+#info .step-btn[data-step="1"], .step-btn[data-step="1"] { border-radius: 0 3px 0 0; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 5l4-4 4 4' fill='none' stroke='%23555' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+#info .step-btn[data-step="-1"], .step-btn[data-step="-1"] { border-radius: 0 0 3px 0; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23555' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
 .inherit-field input { width: 100%; box-sizing: border-box; padding-right: 24px; }
 .inherit-field input::placeholder { color: #9ca3af; }
 .inherit-badge { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: #9ca3af; pointer-events: none; }

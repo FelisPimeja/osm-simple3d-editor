@@ -285,6 +285,7 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
     } else {
       control = badge(`<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${sug ? grey : ''} value="${esc(value)}" placeholder="${esc(shown ?? field.placeholder ?? '')}" />`);
       if (field.type === 'direction') control = directionField(control);
+      if (field.type === 'int') control = stepper(control);
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
   }).join('');
@@ -350,6 +351,7 @@ export function renderMultiTagForm(keys: string[], session: EditSession, suggest
     } else {
       control = `<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${cls} value="${esc(value)}" placeholder="${esc(mixed ? tr('разные') : field.placeholder ?? '')}" />`;
       if (field.type === 'direction') control = directionField(control);
+      if (field.type === 'int') control = stepper(control);
     }
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
   }).join('');
@@ -394,6 +396,12 @@ function directionField(input: string): string {
 function withBadge(input: string, hint: string, icon = ICON_INHERIT): string {
   if (!hint) return input;
   return `<span class="inherit-field" title="${esc(hint)}">${input}<span class="inherit-badge">${icon}</span></span>`;
+}
+
+/** Целое (этажи): стрелки ±1 справа в поле. */
+function stepper(input: string): string {
+  return `<span class="step-field">${input}<span class="step-btns"><button type="button" class="step-btn" data-step="1" tabindex="-1" title="${tr('Больше на 1')}"></button>`
+    + `<button type="button" class="step-btn" data-step="-1" tabindex="-1" title="${tr('Меньше на 1')}"></button></span></span>`;
 }
 
 /** Обработчики формы (делегирование на контейнер; вешается один раз). */
@@ -520,6 +528,24 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     } else if (e.key === 'Enter') ul.hidden = true;
   });
   container.addEventListener('click', (e) => {
+    // Стрелки целого поля: ±1 от своего значения, а без него — от показанного серым (унаследованного, по умолчанию);
+    // у нескольких объектов — формула =+1 / =-1 к значению каждого
+    const step = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-step]');
+    const stepInput = step?.closest('.step-field')?.querySelector<HTMLInputElement>('input[data-tag]');
+    if (step && stepInput) {
+      e.preventDefault();
+      const d = Number(step.dataset.step);
+      if (stepInput.closest<HTMLFormElement>('.tag-form')?.dataset.keys) stepInput.value = d > 0 ? '=+1' : '=-1';
+      else {
+        const base = Number.parseInt(stepInput.value || stepInput.placeholder, 10);
+        const next = (Number.isFinite(base) ? base : 0) + d;
+        // Этажей и этажей в крыше меньше нуля не бывает; нижний этаж бывает подземным
+        if (next < 0 && stepInput.dataset.tag !== 'building:min_level') return;
+        stepInput.value = String(next);
+      }
+      commit(stepInput);
+      return;
+    }
     const fix = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-fix-material]');
     const fixForm = fix?.closest<HTMLFormElement>('.tag-form');
     const s = session();

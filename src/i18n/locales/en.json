@@ -1095,5 +1095,7 @@
   "нет — только контур": "none — outline only",
   "Контур здания (outline) на части не делится — только вырезать внутреннее кольцо: кликните внутри грани или вернитесь разрезом в начальную точку.": "The building outline can't be split into parts — only an inner ring can be cut: click inside the face or bring the cut back to its starting point.",
   "Вырезано кольцо: у контура здания {key} — внутренний двор.": "Ring cut: the building outline {key} now has a courtyard.",
-  "{key}: внутреннее кольцо удалено. Отменить — Ctrl+Z.": "{key}: inner ring removed. Undo — Ctrl+Z."
+  "{key}: внутреннее кольцо удалено. Отменить — Ctrl+Z.": "{key}: inner ring removed. Undo — Ctrl+Z.",
+  "Больше на 1": "Up by 1",
+  "Меньше на 1": "Down by 1"
 }

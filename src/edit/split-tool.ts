@@ -116,9 +116,8 @@ export class SplitTool {
         this.useCandidate(candidate);
         this.candidates = [];
       }
-      const c = this.cutPointAt(point);
+      const { end: c, q } = this.cutEnd(point);
       if (!c) {
-        const q = this.pointAt(point);
         const polygon = this.layer.focusPolygons(this.target)?.[this.start.poly];
         if (q && polygon && insideRing(q, polygon.outer) && !polygon.inners.some((hole) => insideRing(q, hole))
           && Math.hypot(q[0] - (this.bends.at(-1) ?? this.start.p)[0], q[1] - (this.bends.at(-1) ?? this.start.p)[1]) > 0.05) {
@@ -150,8 +149,53 @@ export class SplitTool {
       const candidate = this.candidateAt(point);
       if (candidate) this.useCandidate(candidate);
     }
-    const c = this.cutPointAt(point);
-    this.guide(c?.p ?? this.pointAt(point));
+    const { end, q } = this.cutEnd(point);
+    this.guide(end?.p ?? q);
+  }
+
+  /**
+   * Конец разреза под курсором: клик по ребру (без Shift — по самому курсору) или точка, где следующий отрезок
+   * (с привязками и осью Shift) доходит до стороны контура или пересекает её, — иначе q, следующий изгиб.
+   */
+  private cutEnd(point: [number, number]): { end?: CutPoint; q?: Pt } {
+    const c = this.shift ? undefined : this.cutPointAt(point);
+    if (c) return { end: c, q: c.p };
+    const q = this.pointAt(point);
+    const end = q && this.crossing(q);
+    if (end && Math.hypot(end.p[0] - q[0], end.p[1] - q[1]) > 0.05) this.snap = undefined; // привязка осталась за стороной
+    return { end, q };
+  }
+
+  /** Первая точка, где отрезок от предыдущей точки разреза до q касается стороны контура или пересекает её. */
+  private crossing(q: Pt): CutPoint | undefined {
+    if (!this.start || !this.target) return;
+    const ring = this.layer.focusPolygons(this.target)?.[this.start.poly]?.outer;
+    if (!ring) return;
+    const prev = this.bends.at(-1) ?? this.start.p;
+    const rx = q[0] - prev[0], ry = q[1] - prev[1];
+    let best: { s: number; c: CutPoint } | undefined;
+    const take = (s: number, edge: number, p: Pt) => {
+      if (Math.hypot(p[0] - prev[0], p[1] - prev[1]) <= 0.05 || (best && best.s <= s)) return;
+      const a = ring[edge], b = ring[(edge + 1) % ring.length];
+      const vertex = Math.hypot(p[0] - a[0], p[1] - a[1]) < 0.05 ? edge : Math.hypot(p[0] - b[0], p[1] - b[1]) < 0.05 ? (edge + 1) % ring.length : undefined;
+      best = { s, c: { poly: this.start!.poly, edge, p: vertex === undefined ? p : ring[vertex], vertex } };
+    };
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i], b = ring[(i + 1) % ring.length];
+      const ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey;
+      if (!l2) continue;
+      // Конец отрезка на самой стороне
+      const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * ex + (q[1] - a[1]) * ey) / l2));
+      const foot: Pt = [a[0] + t * ex, a[1] + t * ey];
+      if (Math.hypot(q[0] - foot[0], q[1] - foot[1]) < 0.05) take(1, i, foot);
+      // Пересечение отрезка со стороной
+      const den = rx * ey - ry * ex;
+      if (Math.abs(den) < 1e-12) continue;
+      const wx = a[0] - prev[0], wy = a[1] - prev[1];
+      const sp = (wx * ey - wy * ex) / den, u = (wx * ry - wy * rx) / den;
+      if (sp > 0 && sp <= 1 && u >= 0 && u <= 1) take(sp, i, [prev[0] + sp * rx, prev[1] + sp * ry]);
+    }
+    return best?.c;
   }
 
   private useCandidate(candidate: Candidate) {
@@ -372,15 +416,24 @@ export class SplitTool {
 
   /** Точка разреза на ребре: привязка к вершине/середине или ближайшая точка ребра в пределах допуска. */
   private cutPointAt(point: [number, number], onlyPoly?: number): CutPoint | undefined {
-    const polygons = this.target ? this.layer.focusPolygons(this.target) : undefined;
-    if (!polygons) return;
+    if (!this.target) return;
     // Перпендикуляр к ребру строится от последней точки текущего сегмента.
     const previous = this.bends.at(-1) ?? this.start?.p;
     const from = previous && new THREE.Vector3(previous[0], previous[1], this.z);
     const snap = this.snap = this.layer.snapAt(point, (k) => k === this.target, undefined, { from });
     const onTop = snap && Math.abs(snap.local.z - this.z) < 0.05 && snap.kind !== 'center';
-    const q: Pt | undefined = onTop ? [snap.local.x, snap.local.y] : this.planePoint(point);
-    if (!q) return;
+    const best = (onTop ? this.nearestEdge([snap.local.x, snap.local.y], point, true, onlyPoly) : undefined)
+      ?? this.nearestEdge(this.planePoint(point), point, false, onlyPoly);
+    if (!best) return;
+    const { d: _d, ...c } = best;
+    void _d;
+    return c;
+  }
+
+  /** Ближайшая к q точка стороны контура: exact — q уже точка привязки (до 5 см), иначе — до EDGE_PX на экране. */
+  private nearestEdge(q: Pt | undefined, point: [number, number], exact: boolean, onlyPoly?: number): (CutPoint & { d: number }) | undefined {
+    const polygons = this.target ? this.layer.focusPolygons(this.target) : undefined;
+    if (!q || !polygons) return;
     // Допуск — на экране: в метрах он рос с расстоянием, и издали на небольшой крыше любой клик был «у ребра»
     const px = (p: Pt) => {
       const sp = this.layer.focusProject(new THREE.Vector3(p[0], p[1], this.z));
@@ -396,17 +449,14 @@ export class SplitTool {
         if (!l2) continue;
         const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2));
         const p: Pt = [a[0] + t * dx, a[1] + t * dy];
-        const d = onTop ? Math.hypot(q[0] - p[0], q[1] - p[1]) : px(p);
-        if ((onTop ? d < 0.05 : d <= EDGE_PX) && (!best || d < best.d)) {
+        const d = exact ? Math.hypot(q[0] - p[0], q[1] - p[1]) : px(p);
+        if ((exact ? d < 0.05 : d <= EDGE_PX) && (!best || d < best.d)) {
           const vertex = t * Math.sqrt(l2) < 0.05 ? i : (1 - t) * Math.sqrt(l2) < 0.05 ? (i + 1) % ring.length : undefined;
           best = { poly, edge: i, p: vertex === undefined ? p : ring[vertex], vertex, d };
         }
       }
     }
-    if (!best) return;
-    const { d: _d, ...c } = best;
-    void _d;
-    return c;
+    return best;
   }
 
   private guide(to: Pt | undefined) {

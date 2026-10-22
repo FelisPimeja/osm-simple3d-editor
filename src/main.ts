@@ -4271,6 +4271,10 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
   if (typeof edits === 'string') return edits;
   dropRings(edits, f.key, edge.poly, norm.consumed);
   pruneMembers(edits, f);
+  if (norm.holes) {
+    const err = addHoles(edits, f, edge.poly, norm.holes);
+    if (err) return err;
+  }
   return edits;
 }
 
@@ -4359,9 +4363,10 @@ function dropRings(edits: ObjectEdit[], key: string, poly: number, consumed: num
  * в него, а кольца, у которых теперь общая сторона (дворы сошлись по отрезку), сливаются в одно — общие стороны
  * взаимно уничтожаются. Иначе у мультиполигона два кольца с общим отрезком: так нельзя, и крыша рисуется с изъянами.
  */
-function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewrite[]; consumed: number[]; inserts: Insert[] } {
+function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewrite[]; consumed: number[]; inserts: Insert[]; holes?: { ids: number[]; coords: LonLat[] }[] } {
   const p = f.polygons[rw.poly];
-  if (!rw.ring || !p?.innerIds) return { rewrites: [rw], consumed: [], inserts: [] };
+  if (!rw.ring) return tidyOuter(f, rw);
+  if (!p?.innerIds) return { rewrites: [rw], consumed: [], inserts: [] };
   const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
   type R = { ring: number; ids: number[]; coords: LonLat[]; changed: boolean };
   const rings: R[] = p.inners.map((cs, j) => (j + 1 === rw.ring
@@ -4462,6 +4467,95 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
 }
 
 /**
+ * Внешнее кольцо после «Вытянуть»: совпавшие вершины — один узел (прежний), шипы долой; щель, сомкнутая до нуля
+ * (сторону выреза дотянули до противоположной), отделяет дыру — она в holes (внутренним кольцом её делает addHoles).
+ * Распалось на несколько внешних — как было (отклонит ringsClash).
+ */
+function tidyOuter(f: Feature3D, rw: RingRewrite): { rewrites: RingRewrite[]; consumed: number[]; inserts: Insert[]; holes?: { ids: number[]; coords: LonLat[] }[] } {
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  const near = (a: LonLat, b: LonLat) => { const p = local(a), q = local(b); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 0.01; };
+  const me = { ids: [...rw.ids], coords: [...rw.coords] };
+  const old = new Set(f.polygons[rw.poly]?.outerIds ?? []);
+  const outside = nodesOutside(new Set([f.key]));
+  for (let i = 0; i < me.ids.length; i++) for (let j = i + 1; j < me.ids.length; j++) {
+    if (me.ids[i] === me.ids[j] || !near(me.coords[i], me.coords[j])) continue;
+    const x = me.ids[i], y = me.ids[j];
+    const keepY = (outside.has(y) && !outside.has(x)) || (old.has(y) && !old.has(x));
+    const [from, to] = keepY ? [x, y] : [y, x];
+    const at = me.coords[me.ids.indexOf(to)];
+    me.ids.forEach((id, k) => { if (id === from) { me.ids[k] = to; me.coords[k] = at; } });
+  }
+  // Сторона нулевой длины (A, A) и шип туда-обратно (A, B, A) — убрать, пока есть
+  for (let changed = true; changed && me.ids.length > 3;) {
+    changed = false;
+    const n = me.ids.length;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, k = (i + 2) % n;
+      const cut = me.ids[i] === me.ids[j] ? [j] : me.ids[i] === me.ids[k] ? [j, k] : undefined;
+      if (!cut) continue;
+      for (const x of cut.sort((u, v) => v - u)) { me.ids.splice(x, 1); me.coords.splice(x, 1); }
+      changed = true;
+      break;
+    }
+  }
+  const { inserts, extra, holes } = splitSelfTouching(me, true);
+  if (extra.length) return { rewrites: [rw], consumed: [], inserts: [] };
+  // Узел, которого ещё нет на сервере, оставшийся на прямой (бывшее устье щели), никому больше не нужен — убрать
+  if (holes.length) {
+    const inHoles = new Set(holes.flatMap((h) => h.ids));
+    for (let i = 0; me.ids.length > 3 && i < me.ids.length;) {
+      const n = me.ids.length, id = me.ids[i];
+      const a = local(me.coords[(i - 1 + n) % n]), b = local(me.coords[i]), c = local(me.coords[(i + 1) % n]);
+      if (id < 0 && !outside.has(id) && !inHoles.has(id) && segDist2(b, a, c) < 0.01) { me.ids.splice(i, 1); me.coords.splice(i, 1); } else i++;
+    }
+  }
+  return { rewrites: [{ ...rw, ids: me.ids, coords: me.coords }], consumed: [], inserts, ...(holes.length ? { holes } : {}) };
+}
+
+/**
+ * Дыры, отделившиеся от внешнего кольца (щель сомкнули), — внутренними кольцами полигона poly: у мультиполигона —
+ * новые внутренние пути, путь (часть здания) становится внешним кольцом нового мультиполигона, как при вырезе кольца.
+ * Строка — почему нельзя.
+ */
+function addHoles(edits: ObjectEdit[], f: Feature3D, poly: number, holes: { ids: number[]; coords: LonLat[] }[]): string | undefined {
+  const own = edits.find((x) => x.key === f.key) ?? edits[edits.push({ key: f.key }) - 1];
+  const polygons = own.polygons ?? f.polygons;
+  const p = polygons[poly];
+  if (!p?.outerIds) return tr('В кеше нет id узлов этого объекта.');
+  const inner = holes.map((h) => {
+    const id = nextNewId--;
+    const line = { ids: [...h.ids, h.ids[0]], coords: [...h.coords, h.coords[0]] };
+    edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line } });
+    return { id, role: 'inner', nodes: line.ids };
+  });
+  const withHoles = polygons.map((q, i) => (i === poly
+    ? { ...q, inners: [...q.inners, ...holes.map((h) => h.coords)], innerIds: [...(q.innerIds ?? []), ...holes.map((h) => h.ids)] } : q));
+  const innerMembers = inner.map((w) => ({ type: 'way' as const, ref: w.id, role: 'inner' }));
+  if (f.type === 'relation') {
+    const members = own.members ?? (f as Tagged).relMembers ?? session.get(f.key)?.relMembers;
+    if (!members) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+    own.polygons = withHoles;
+    own.members = [...members, ...innerMembers];
+    return;
+  }
+  const g = focus && !isSolo(focus) ? (entity(focus.key) as EditGroup | undefined) : undefined;
+  if (!g || polygons.length !== 1) return tr('Сомкнуть вырез во двор у отдельного здания пока нельзя — сначала соберите отношение здания.');
+  // Путь — внешнее кольцо нового мультиполигона, теги переезжают на отношение
+  const outer = { ids: [...p.outerIds, p.outerIds[0]], coords: [...p.outer, p.outer[0]] };
+  const relId = nextNewId--;
+  const ways = [{ id: f.id, role: 'outer', nodes: outer.ids }, ...inner];
+  const relMembers = ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }));
+  const rel: Feature3D & { relMembers: OsmMember[] } = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, kind: f.kind,
+    tags: { type: 'multipolygon', ...f.tags }, polygons: withHoles, hasParts: false, ways, relMembers };
+  edits.push({ key: rel.key, create: rel });
+  own.tags = {};
+  own.polygons = [];
+  own.line = outer;
+  edits.push(groupMembersEdit(g, g.relMembers.map((m) => (m.type === 'way' && m.ref === f.id ? { type: 'relation' as const, ref: relId, role: m.role } : m))));
+  return;
+}
+
+/**
  * Вершина кольца легла на его же сторону (выступ двора дотянули до противоположной стены) — двор перегорожен.
  * Вершина вставляется в сторону (inserts — и в пути с ней), встречные стороны перемычки взаимно уничтожаются,
  * оставшиеся стороны собираются в кольца (в узле-развилке — самый левый поворот для кольца против часовой,
@@ -4469,7 +4563,7 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
  * (выступ, перекрытый стеной, — это стена, а не двор), и схлопнутые — долой. Самое большое остаётся в r,
  * остальные — extra. Кольцо с повтором узла всё равно осталось — его отклонит ringsClash.
  */
-function splitSelfTouching(r: { ids: number[]; coords: LonLat[] }): { inserts: Insert[]; extra: { ids: number[]; coords: LonLat[] }[] } {
+function splitSelfTouching(r: { ids: number[]; coords: LonLat[] }, keepHoles = false): { inserts: Insert[]; extra: { ids: number[]; coords: LonLat[] }[]; holes: { ids: number[]; coords: LonLat[] }[] } {
   const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
   const n = r.ids.length, pts = r.coords.map(local);
   const ids: number[] = [], coords: LonLat[] = [], inserts: Insert[] = [];
@@ -4490,7 +4584,7 @@ function splitSelfTouching(r: { ids: number[]; coords: LonLat[] }): { inserts: I
       inserts.push({ id: r.ids[k], u: r.ids[u], v: r.ids[v], t });
     }
   }
-  if (new Set(ids).size === ids.length) return { inserts: [], extra: [] };
+  if (new Set(ids).size === ids.length) return { inserts: [], extra: [], holes: [] };
   const at = new Map(ids.map((id, i) => [id, coords[i]] as const));
   const xy = new Map(ids.map((id, i) => [id, local(coords[i])] as const));
   const signed = (ring: number[]) => { let s = 0; for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) s += (xy.get(ring[j])![0] - xy.get(ring[i])![0]) * (xy.get(ring[j])![1] + xy.get(ring[i])![1]); return s / 2; };
@@ -4520,17 +4614,18 @@ function splitSelfTouching(r: { ids: number[]; coords: LonLat[] }): { inserts: I
       }
       loops.push(loop);
     }
-    return loops.filter((l) => l.length >= 3 && Math.sign(signed(l)) === sign && Math.abs(signed(l)) >= COLLAPSED_HOLE_M2);
+    return loops.filter((l) => l.length >= 3 && Math.abs(signed(l)) >= COLLAPSED_HOLE_M2);
   };
   const simple = (ls: number[][] | undefined) => !!ls && ls.every((l) => new Set(l).size === l.length);
   const first = trace(sign > 0), second = simple(first) ? undefined : trace(sign < 0);
-  const loops = simple(first) || !simple(second) ? first : second;
-  if (!loops) return { inserts: [], extra: [] }; // не сошлось — как было
-  const kept = loops.sort((x, y) => Math.abs(signed(y)) - Math.abs(signed(x)));
+  const all = simple(first) || !simple(second) ? first : second;
+  if (!all) return { inserts: [], extra: [], holes: [] }; // не сошлось — как было
+  // Обходимые в ту же сторону — кольца; в обратную — у двора это стена, у внешнего кольца (keepHoles) — дыра
+  const kept = all.filter((l) => Math.sign(signed(l)) === sign).sort((x, y) => Math.abs(signed(y)) - Math.abs(signed(x)));
   const ring = (l: number[]) => ({ ids: l, coords: l.map((id) => at.get(id)!) });
   r.ids = kept[0] ?? [];
   r.coords = r.ids.map((id) => at.get(id)!);
-  return { inserts, extra: kept.slice(1).map(ring) };
+  return { inserts, extra: kept.slice(1).map(ring), holes: keepHoles ? all.filter((l) => Math.sign(signed(l)) !== sign).map(ring) : [] };
 }
 
 /**
@@ -4690,6 +4785,9 @@ function commitPush(t: PushTarget, dz: number) {
     const own = edits.find((e) => e.key === t.key)?.polygons;
     if (own && ringsClash(own)) return setStatus(tr('Стена заходит в соседний двор или пересекает другие стены части — так вытянуть нельзя.'), true);
     session.editMany(edits);
+    // Вырез сомкнули во двор — путь стал внешним кольцом нового мультиполигона: выделить его
+    const rel = edits.find((e) => e.create && e.key.startsWith('relation/') && (e.create as Feature3D).ways?.some((w) => w.id === f.id && w.role === 'outer'));
+    if (rel) select(rel.key);
   }
   else session.setTags(t.key, diffTags(f.tags, pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version))));
   const levels = t.face !== 'side' && pushTool.units === 'levels' ? ' ' + tr('({n} эт.)', { n: `${dz >= 0 ? '+' : ''}${Math.round(dz / LEVEL_HEIGHT)}` }) : '';

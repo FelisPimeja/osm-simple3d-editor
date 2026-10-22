@@ -1097,5 +1097,6 @@
   "Вырезано кольцо: у контура здания {key} — внутренний двор.": "Ring cut: the building outline {key} now has a courtyard.",
   "{key}: внутреннее кольцо удалено. Отменить — Ctrl+Z.": "{key}: inner ring removed. Undo — Ctrl+Z.",
   "Больше на 1": "Up by 1",
-  "Меньше на 1": "Down by 1"
+  "Меньше на 1": "Down by 1",
+  "Сомкнуть вырез во двор у отдельного здания пока нельзя — сначала соберите отношение здания.": "Closing a notch into a courtyard isn't supported for a standalone building yet \u2014 build the building relation first."
 }

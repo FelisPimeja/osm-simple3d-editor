@@ -51,7 +51,8 @@ interface Entry {
   before: Tags | null; after: Tags | null;
   mBefore?: OsmMember[]; mAfter?: OsmMember[];
   gBefore?: Polygon[]; gAfter?: Polygon[];
-  lBefore?: Line; lAfter?: Line;
+  /** null — пути-члена не было (правка его добавила): отмена его убирает. */
+  lBefore?: Line | null; lAfter?: Line;
 }
 /** Действие интерфейса в общей истории (скрытие частей и т. п.): данные не меняет, но отменяется так же. */
 export interface ViewAction { undo(): void; redo(): void }
@@ -157,7 +158,7 @@ export class EditSession {
       const tags = e.tags ?? f.tags;
       step.push({ key: e.key, before: { ...f.tags }, after: { ...tags },
         ...(e.polygons ? { gBefore: f.polygons, gAfter: e.polygons } : {}),
-        ...(e.line ? { lBefore: f.line, lAfter: e.line } : {}),
+        ...(e.line ? { lBefore: f.line ?? null, lAfter: e.line } : {}),
         ...(e.members ? { mBefore: f.relMembers, mAfter: e.members } : {}) });
     }
     if (step.length) this.push(step);
@@ -451,11 +452,12 @@ export class EditSession {
     this.onChange([...new Set(step.map((e) => e.key))]);
   }
 
-  private apply(key: string, tags: Tags | null, members?: OsmMember[], polygons?: Polygon[], line?: Line) {
+  private apply(key: string, tags: Tags | null, members?: OsmMember[], polygons?: Polygon[], line?: Line | null) {
     const f = this.features.get(key)!;
     if (members) f.relMembers = members;
     if (polygons) f.polygons = polygons;
     if (line) f.line = line;
+    else if (line === null) delete f.line;
     if (this.created.has(key)) {
       if (tags) this.alive.add(key);
       else { this.alive.delete(key); return; }

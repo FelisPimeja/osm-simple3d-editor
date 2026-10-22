@@ -2148,7 +2148,7 @@ function startShape() {
 
 // Инструмент «Рассечь»: прямой разрез верхней грани делит путь на два (больший сохраняет историю)
 const splitBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="split"]')!;
-const splitTool = new SplitTool(overpassLayer, () => selectedKey, () => focus?.members ?? [], splitReason, splitFeature, (hint, error) => {
+const splitTool = new SplitTool(overpassLayer, () => selectedKey, () => focus?.members ?? [], splitReason, splitFeature, cutHole, (hint, error) => {
   splitBtn.classList.toggle('active', splitTool.active);
   syncCursor();
   toolHint(hint, error);
@@ -3044,6 +3044,120 @@ function splitFeatureIn(key: string, a: CutPoint, b: CutPoint, bends: [number, n
   setStatus(neighbours.size
     ? tr('Рассечено: {key} и новая часть {part}, узлы добавлены в соседей: {n}.', { key, part: created.key, n: neighbours.size })
     : tr('Рассечено: {key} и новая часть {part}.', { key, part: created.key }));
+  return;
+}
+
+/**
+ * «Рассечь» кольцом: полигон polyIndex объекта key получает дыру ring (метры сцены), внутри — новая часть с теми
+ * же тегами на тех же узлах. Путь-часть становится мультиполигоном (путь — внешнее кольцо без тегов, теги — на
+ * отношении); у мультиполигона просто добавляется внутренний путь. Отдельное здание без частей — как у разреза:
+ * контур остаётся, часть с дырой и внутренняя — в новом отношении здания. Одним шагом истории.
+ */
+function cutHole(key: string, polyIndex: number, ring: [number, number][]): string | undefined {
+  const pending = isSolo(focus) && focus!.roles.includes('part') ? implicitRelation(focus!.members[0], implicitParts(focus!)) : undefined;
+  const result = cutHoleIn(key, polyIndex, ring, pending);
+  if (pending && !session.get(pending.key)) editGroups.delete(pending.key);
+  return result;
+}
+
+/** Почему кольцо ring нельзя вырезать из полигона (метры сцены); undefined — можно. */
+function holeError(poly: Polygon, ring: [number, number][]): string | undefined {
+  const outer = poly.outer.map((c) => overpassLayer.focusToLocal(c)!);
+  const holes = poly.inners.map((h) => h.map((c) => overpassLayer.focusToLocal(c)!));
+  const n = ring.length;
+  if (n < 3 || ringArea(ring) < 0.01) return tr('Кольцу нужно хотя бы три точки.');
+  const seg = (r: [number, number][], i: number): [[number, number], [number, number]] => [r[i], r[(i + 1) % r.length]];
+  for (let i = 0; i < n; i++) for (let j = i + 2; j < n; j++) {
+    if (i === 0 && j === n - 1) continue;
+    if (segCross(...seg(ring, i), ...seg(ring, j))) return tr('Кольцо пересекает само себя.');
+  }
+  for (const r of [outer, ...holes]) {
+    for (let i = 0; i < n; i++) for (let j = 0; j < r.length; j++) {
+      const [a, b] = seg(ring, i), [c, d] = seg(r, j);
+      if (segCross(a, b, c, d) || segDist2(a, c, d) < 0.05 || segDist2(c, a, b) < 0.05) {
+        return tr('Кольцо касается контура или пересекает его — оно должно лежать внутри грани.');
+      }
+    }
+  }
+  if (ring.some((p) => !inLocalRing(p, outer) || holes.some((h) => inLocalRing(p, h)))) return tr('Кольцо должно лежать внутри грани.');
+  if (holes.some((h) => inLocalRing(h[0], ring))) return tr('Внутри кольца уже есть внутреннее кольцо — так вырезать пока нельзя.');
+  return;
+}
+
+function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pending: EditGroup | undefined): string | undefined {
+  const f = entity(key) as Feature3D | undefined;
+  const solo = isSolo(focus) && !pending;
+  const g = pending ?? (focus && !solo ? (entity(focus.key) as EditGroup | undefined) : undefined);
+  if (!f || (!g && !solo)) return tr('Объект не найден.');
+  const poly = f.polygons[polyIndex];
+  if (!poly?.outerIds) return tr('Грань не найдена.');
+  const err = holeError(poly, ring);
+  if (err) return err;
+
+  const coords = ring.map((p) => overpassLayer.focusToLngLat(p[0], p[1])!);
+  const ids = ring.map(() => nextNewId--);
+  const innerWay = nextNewId--;
+  const edits: ObjectEdit[] = [{ key: `way/${innerWay}`, create: { key: `way/${innerWay}`, version: 0, tags: {},
+    line: { ids: [...ids, ids[0]], coords: [...coords, coords[0]] } } }];
+  const withHole: Polygon = { ...poly, inners: [...poly.inners, coords], innerIds: [...(poly.innerIds ?? []), ids] };
+  // Внутренняя часть — на тех же узлах, что и внутренний путь
+  const partTags: Record<string, string> = solo ? { 'building:part': 'yes' } : copyTags(f);
+  if (solo) for (const [tag, value] of Object.entries(f.tags)) if (PART_TAGS.test(tag)) partTags[tag] = value;
+  delete partTags.type;
+  const partId = nextNewId--;
+  const inner: Feature3D = { key: `way/${partId}`, type: 'way', id: partId, version: 0, kind: solo ? 'part' : f.kind, tags: partTags,
+    polygons: [{ outer: coords, inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
+  edits.push({ key: inner.key, create: inner });
+  const innerPart = { type: 'way' as const, ref: partId, role: 'part' };
+  const innerMember = { type: 'way' as const, ref: innerWay, role: 'inner' };
+
+  const done = (outer: string) => {
+    select(inner.key);
+    setStatus(tr('Вырезано кольцо: у {key} дыра, внутри — новая часть {part}. Удалите её (Del) — будет двор, или тяните (P) — башня, атриум.',
+      { key: outer, part: inner.key }));
+  };
+
+  if (f.type === 'relation') {
+    if (solo) return tr('Кольцо в отдельном здании-мультиполигоне пока не вырезается: сначала рассеките его на части.');
+    const members = (f as Tagged).relMembers ?? session.get(f.key)?.relMembers;
+    if (!members) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+    edits.push({ key: f.key, polygons: f.polygons.map((p, i) => (i === polyIndex ? withHole : p)), members: [...members, innerMember] });
+    edits.push(groupMembersEdit(g!, [...g!.relMembers, innerPart]));
+    session.editMany(edits);
+    done(f.key);
+    return;
+  }
+
+  // Путь — внешнее кольцо нового мультиполигона
+  const outerNodes = [...poly.outerIds, poly.outerIds[0]];
+  const relId = nextNewId--;
+  const relMembers = [{ type: 'way' as const, ref: f.id, role: 'outer' }, innerMember];
+  const tags = solo ? { ...partTags } : { ...f.tags };
+  const rel: Feature3D & { relMembers: typeof relMembers } = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0,
+    kind: solo ? 'part' : f.kind, tags: { type: 'multipolygon', ...tags }, polygons: [withHole], hasParts: false,
+    ways: [{ id: f.id, role: 'outer', nodes: outerNodes }, { id: innerWay, role: 'inner', nodes: [...ids, ids[0]] }], relMembers };
+  edits.push({ key: rel.key, create: rel });
+  const relPart = { type: 'relation' as const, ref: relId, role: 'part' };
+
+  if (solo) {
+    // Отдельное здание остаётся контуром; часть с дырой (на его же пути) и внутренняя — в новом отношении
+    const id = nextNewId--;
+    const members: OsmMember[] = [{ type: 'way', ref: f.id, role: 'outline' }, relPart, innerPart];
+    const building: EditGroup = { key: `relation/${id}`, type: 'relation', id, version: 0, tags: { type: 'building' },
+      members: members.map((m) => `${m.type}/${m.ref}`), roles: members.map((m) => m.role), relMembers: members };
+    edits.push({ key: building.key, create: building });
+    editGroups.set(building.key, building);
+    session.editMany(edits);
+    enterFocus(building);
+    done(rel.key);
+    return;
+  }
+
+  // Теги переезжают на отношение; путь остаётся внешним кольцом (без своей геометрии здания)
+  edits.push({ key: f.key, tags: {}, polygons: [], line: { ids: outerNodes, coords: [...poly.outer, poly.outer[0]] } });
+  edits.push(groupMembersEdit(g!, [...g!.relMembers.map((m) => (m.type === 'way' && m.ref === f.id && m.role === 'part' ? relPart : m)), innerPart]));
+  session.editMany(edits);
+  done(rel.key);
   return;
 }
 

@@ -586,7 +586,6 @@
   "Угол": "Angle",
   "шаг {step}° (Shift)": "{step}° step (Shift)",
   "против часовой": "counterclockwise",
-  "Рассечь: кликните по ребру верхней грани — начало разреза. Esc — выйти.": "Split: click an edge of the top face to start the cut. Esc to exit.",
   "Общее ребро: кликните внутри нужной грани, чтобы выбрать направление разреза.": "Shared edge: click inside the face you want to cut to choose the direction.",
   "Кликайте внутри грани для изгибов разреза; клик по другому ребру завершит его. Shift — держать ось. Esc — отмена.": "Click inside the face to add bends; click another edge to finish the cut. Shift holds an axis. Esc cancels.",
   "Добавлена точка разреза. Продолжайте внутри грани или кликните по ребру для завершения.": "Cut point added. Continue inside the face or click an edge to finish.",
@@ -1054,5 +1053,16 @@
   "Высота задана этажами ({levels}) — меняется только целыми этажами. Чтобы менять в метрах, задайте высоту в метрах ({metres}).": "The height is set in levels ({levels}), so it changes only by whole levels. To change it in metres, set the height in metres ({metres}).",
   "Середина исходной стороны": "Midpoint of original side",
   "Ведите курсор вверх или вниз: верх стен стоит, меняется высота крыши. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.": "Move the cursor up or down: the wall top stays, the roof height changes. Click — apply, number + Enter — offset {units}, Esc — cancel.",
-  "Ведите курсор вверх или вниз: меняется высота стен, крыша едет целиком. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.": "Move the cursor up or down: the wall height changes, the roof moves as a whole. Click — apply, number + Enter — offset {units}, Esc — cancel."
+  "Ведите курсор вверх или вниз: меняется высота стен, крыша едет целиком. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.": "Move the cursor up or down: the wall height changes, the roof moves as a whole. Click — apply, number + Enter — offset {units}, Esc — cancel.",
+  "Рассечь: кликните по ребру верхней грани — начало разреза, или внутри грани — замкнутое кольцо (двор, башня). Esc — выйти.": "Split: click an edge of the top face to start a cut, or inside the face to draw a closed ring (courtyard, tower). Esc to exit.",
+  "Кольцо: кликайте внутри грани, клик в первую точку замкнёт его. Shift — держать ось. Backspace — убрать точку, Esc — отмена.": "Ring: click inside the face; clicking the first point closes it. Shift holds the axis. Backspace removes a point, Esc cancels.",
+  "Точки кольца — внутри верхней грани, не на её рёбрах.": "Ring points must be inside the top face, not on its edges.",
+  "Кликните в первую точку, чтобы замкнуть кольцо, или продолжайте. Backspace — убрать точку.": "Click the first point to close the ring, or keep going. Backspace removes a point.",
+  "Кольцу нужно хотя бы три точки.": "A ring needs at least three points.",
+  "Кольцо пересекает само себя.": "The ring crosses itself.",
+  "Кольцо касается контура или пересекает его — оно должно лежать внутри грани.": "The ring touches or crosses the outline — it must lie inside the face.",
+  "Кольцо должно лежать внутри грани.": "The ring must lie inside the face.",
+  "Внутри кольца уже есть внутреннее кольцо — так вырезать пока нельзя.": "There is already an inner ring inside this ring — this cut isn't supported yet.",
+  "Вырезано кольцо: у {key} дыра, внутри — новая часть {part}. Удалите её (Del) — будет двор, или тяните (P) — башня, атриум.": "Ring cut: {key} now has a hole with a new part {part} inside. Delete it (Del) for a courtyard, or pull it (P) for a tower or atrium.",
+  "Кольцо в отдельном здании-мультиполигоне пока не вырезается: сначала рассеките его на части.": "Rings can't be cut into a standalone multipolygon building yet: split it into parts first."
 }

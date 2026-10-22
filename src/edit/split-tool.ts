@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import type { BuildingsLayer, FocusHit, SnapHit } from '../render/buildings-layer';
 import { tr } from '../i18n';
 
 type Pt = [number, number];
@@ -13,6 +13,8 @@ type Candidate = { key: string; z: number; start: CutPoint };
  * 1. клик по ребру верхней грани (вершины и середины — с привязкой) — начало разреза;
  * 2. клики внутри грани добавляют изгибы, клик по ребру завершает разрез.
  *    Shift привязывает следующую точку к оси вдоль начального ребра или перпендикулярно ему.
+ * Первый клик внутри грани (не у ребра) — замкнутое кольцо: точки внутри грани, клик в первую точку
+ * его замыкает — объект получает дыру, внутри — новая часть (двор, башня, атриум).
  * Что можно резать и как делить данные — решают eligible и split снаружи. Esc — отмена.
  */
 export class SplitTool {
@@ -22,6 +24,8 @@ export class SplitTool {
   /** Несколько частей на начальном ребре: ждём направления первого сегмента. */
   private candidates: Candidate[] = [];
   private bends: Pt[] = [];
+  /** Замкнутое кольцо внутри грани: объект, его полигон и точки. */
+  private loop?: { key: string; poly: number; pts: Pt[] };
   /** Привязка последнего пересчёта точки разреза — для маркера. */
   snap?: SnapHit;
   private z = 0;
@@ -41,6 +45,8 @@ export class SplitTool {
     /** Почему объект нельзя резать (undefined — можно). */
     private readonly eligible: (key: string) => string | undefined,
     private readonly split: (key: string, a: CutPoint, b: CutPoint, bends: Pt[]) => string | undefined,
+    /** Вырезать кольцо ring (метры сцены) из полигона poly объекта key. */
+    private readonly hole: (key: string, poly: number, ring: Pt[]) => string | undefined,
     private readonly onState: (hint: string, error?: boolean) => void,
   ) {}
 
@@ -48,7 +54,7 @@ export class SplitTool {
 
   begin() {
     this.state = 'pick';
-    this.onState(tr('Рассечь: кликните по ребру верхней грани — начало разреза. Esc — выйти.'));
+    this.onState(tr('Рассечь: кликните по ребру верхней грани — начало разреза, или внутри грани — замкнутое кольцо (двор, башня). Esc — выйти.'));
   }
 
   stop() {
@@ -80,6 +86,7 @@ export class SplitTool {
       if (!candidates.length) {
         this.target = undefined;
         if (!hits.length) return false;
+        if (this.startLoop(point, hits[0])) return true;
         this.onState(reason ?? tr('Кликните точно по ребру верхней грани (вершины и середины подсвечиваются).'), true);
         return true;
       }
@@ -94,6 +101,7 @@ export class SplitTool {
         : tr('Кликайте внутри грани для изгибов разреза; клик по другому ребру завершит его. Shift — держать ось. Esc — отмена.'));
       return true;
     }
+    if (this.state === 'cut' && this.loop) return this.loopClick(point);
     if (this.state === 'cut' && this.target && this.start) {
       if (this.candidates.length) {
         const candidate = this.candidateAt(point);
@@ -126,6 +134,11 @@ export class SplitTool {
 
   move(point: [number, number]) {
     this.lastPoint = point;
+    if (this.state === 'cut' && this.loop) {
+      const raw = this.planePoint(point);
+      this.guide(this.closesLoop(point) ? this.loop.pts[0] : raw ? this.axisPoint(raw) : undefined);
+      return;
+    }
     if (this.state !== 'cut' || !this.start) return;
     if (this.candidates.length) {
       const candidate = this.candidateAt(point);
@@ -162,9 +175,73 @@ export class SplitTool {
     return matches.length === 1 ? matches[0] : undefined;
   }
 
+  /** Начать кольцо: первый клик — на плоской верхней грани разрешённого объекта, внутри контура. */
+  private startLoop(point: [number, number], hit: FocusHit): boolean {
+    const key = hit.key;
+    const box = this.layer.focusItemBox(key);
+    const polygons = this.layer.focusPolygons(key);
+    if (this.eligible(key) || !box || !polygons || hit.face !== 'roof' || Math.abs(hit.local.z - box.max.z) > 0.05) return false;
+    this.z = box.max.z;
+    const q = this.planePoint(point);
+    const poly = q ? polygons.findIndex((p) => insideRing(q, p.outer) && !p.inners.some((h) => insideRing(q, h))) : -1;
+    if (!q || poly < 0) return false;
+    // Оси — по ближайшей стороне контура
+    const ring = polygons[poly].outer;
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < ring.length; i++) {
+      const d = segDist(q, ring[i], ring[(i + 1) % ring.length]);
+      if (d < bd) { bd = d; best = i; }
+    }
+    const a = ring[best], b = ring[(best + 1) % ring.length];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    this.axes = { x: [(b[0] - a[0]) / l, (b[1] - a[1]) / l], y: [-(b[1] - a[1]) / l, (b[0] - a[0]) / l] };
+    this.axis = this.locked = undefined;
+    this.target = key;
+    this.loop = { key, poly, pts: [q] };
+    this.state = 'cut';
+    this.guide(q);
+    this.onState(tr('Кольцо: кликайте внутри грани, клик в первую точку замкнёт его. Shift — держать ось. Backspace — убрать точку, Esc — отмена.'));
+    return true;
+  }
+
+  private loopClick(point: [number, number]): boolean {
+    const loop = this.loop!;
+    if (loop.pts.length >= 3 && this.closesLoop(point)) {
+      const err = this.hole(loop.key, loop.poly, loop.pts);
+      if (err) { this.onState(err, true); return true; }
+      this.cancel();
+      this.begin();
+      return true;
+    }
+    const raw = this.planePoint(point);
+    const q = raw ? this.axisPoint(raw) : undefined;
+    const polygon = this.layer.focusPolygons(loop.key)?.[loop.poly];
+    const last = loop.pts.at(-1)!;
+    if (!q || !polygon || !insideRing(q, polygon.outer) || polygon.inners.some((h) => insideRing(q, h))) {
+      this.onState(tr('Точки кольца — внутри верхней грани, не на её рёбрах.'), true);
+      return true;
+    }
+    if (Math.hypot(q[0] - last[0], q[1] - last[1]) <= 0.05) return true;
+    loop.pts.push(q);
+    this.axis = this.locked = undefined;
+    this.guide(q);
+    this.onState(loop.pts.length >= 3
+      ? tr('Кликните в первую точку, чтобы замкнуть кольцо, или продолжайте. Backspace — убрать точку.')
+      : tr('Кольцо: кликайте внутри грани, клик в первую точку замкнёт его. Shift — держать ось. Backspace — убрать точку, Esc — отмена.'));
+    return true;
+  }
+
+  /** Курсор у первой точки кольца (на экране). */
+  private closesLoop(point: [number, number]): boolean {
+    const first = this.loop?.pts[0];
+    if (!first || this.loop!.pts.length < 3) return false;
+    const s = this.layer.focusProject(new THREE.Vector3(first[0], first[1], this.z));
+    return !!s && Math.hypot(s[0] - point[0], s[1] - point[1]) < CLOSE_RADIUS_PX;
+  }
+
   /** Привязать промежуточную точку к выбранной Shift оси от предыдущей точки. */
   private axisPoint(q: Pt): Pt {
-    const s = this.bends.at(-1) ?? this.start?.p, ax = this.axes;
+    const s = this.loop?.pts.at(-1) ?? this.bends.at(-1) ?? this.start?.p, ax = this.axes;
     this.axis = undefined;
     if (!this.shift || !s || !ax) return q;
     const d: Pt = [q[0] - s[0], q[1] - s[1]];
@@ -186,6 +263,13 @@ export class SplitTool {
       this.shift = e.type === 'keydown';
       this.locked = this.shift && this.state === 'cut' ? this.axis ?? this.locked : undefined;
       if (this.state === 'cut' && this.lastPoint) this.move(this.lastPoint);
+      return true;
+    }
+    if (e.type === 'keydown' && e.key === 'Backspace' && this.loop) {
+      if (this.loop.pts.length > 1) this.loop.pts.pop();
+      else { this.cancel(); this.begin(); return true; }
+      this.axis = this.locked = undefined;
+      if (this.lastPoint) this.move(this.lastPoint); else this.guide(this.loop.pts.at(-1));
       return true;
     }
     if (e.type !== 'keydown' || e.key !== 'Escape') return false;
@@ -241,6 +325,11 @@ export class SplitTool {
   }
 
   private guide(to: Pt | undefined) {
+    if (this.loop) {
+      const [first, ...rest] = this.loop.pts.map((p) => new THREE.Vector3(p[0], p[1], this.z));
+      this.layer.setMoveGuide({ from: first, to: to ? new THREE.Vector3(to[0], to[1], this.z) : undefined, path: rest, axis: this.axis, locked: this.locked, axes: this.axes, dashSize: 0.2, gapSize: 0.12 });
+      return;
+    }
     if (!this.start) return;
     const from = new THREE.Vector3(this.start.p[0], this.start.p[1], this.z);
     this.layer.setMoveGuide({ from, to: to ? new THREE.Vector3(to[0], to[1], this.z) : undefined, path: this.bends.map((p) => new THREE.Vector3(p[0], p[1], this.z)), axis: this.axis, locked: this.locked, axes: this.axes, dashSize: 0.2, gapSize: 0.12 });
@@ -250,6 +339,7 @@ export class SplitTool {
     this.layer.setMoveGuide(undefined);
     this.target = undefined;
     this.start = undefined;
+    this.loop = undefined;
     this.candidates = [];
     this.bends = [];
     this.axes = this.axis = this.locked = undefined;
@@ -257,6 +347,15 @@ export class SplitTool {
     this.lastPoint = undefined;
     this.snap = undefined;
   }
+}
+
+/** Радиус «попал в первую точку кольца», px. */
+const CLOSE_RADIUS_PX = 12;
+
+function segDist([px, py]: Pt, [ax, ay]: Pt, [bx, by]: Pt): number {
+  const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+  return Math.hypot(px - ax - t * dx, py - ay - t * dy);
 }
 
 function insideRing([x, y]: Pt, ring: Pt[]): boolean {

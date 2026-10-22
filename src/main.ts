@@ -3683,10 +3683,12 @@ function splitMultipolygon(f: Feature3D, group: EditGroup | undefined, polyIndex
   const partWays = restructureRing(afterKeep, part.outerIds!, 'outer', () => nextNewId--);
   const createdWays = [...keepWays.created, ...partWays.created];
   const finalLines = new Map([...keepWays.lines, ...partWays.lines]);
-  const pieces = new Map<number, number[]>();
-  for (const result of [keepWays, partWays]) for (const [id, ids] of result.pieces) {
-    if (id > 0) pieces.set(id, [...(pieces.get(id) ?? []), ...ids]);
-  }
+  // Исходный путь → все его куски. И созданные в сессии пути (линия прошлого разреза — общая с соседней частью),
+  // и кусок первого прохода, разрезанный вторым: сосед получает всё, что было его путём
+  const split = new Map<number, number[]>();
+  for (const result of [keepWays, partWays]) for (const [id, ids] of result.pieces) split.set(id, [...(split.get(id) ?? []), ...ids]);
+  const allPieces = (id: number): number[] => (split.get(id) ?? []).flatMap((x) => [x, ...allPieces(x)]);
+  const pieces = new Map(sourceWays.filter((w) => split.has(w.id)).map((w) => [w.id, allPieces(w.id)] as const));
   for (const w of createdWays) {
     const nodes = finalLines.get(w.id) ?? w.nodes;
     lineNodes.set(w.id, nodes);

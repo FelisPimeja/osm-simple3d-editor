@@ -4181,6 +4181,10 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
   const { ids, was, i, j } = e;
   const n = ids.length;
   const shared = nodesOutside(new Set([f.key]));
+  // Узел, общий с другим кольцом этой же части (дворы, касающиеся в точке), — тоже общий: двигать его нельзя
+  f.polygons.forEach((p, pi) => [p.outerIds, ...(p.innerIds ?? [])].forEach((r, ri) => {
+    if (pi !== edge.poly || ri !== edge.ring) for (const id of r ?? []) shared.add(id);
+  }));
   const outIds: number[] = [], outC: LonLat[] = [], inserts: Insert[] = [], fresh = new Map<number, LonLat>();
   const put = (id: number, c: LonLat) => { outIds.push(id); outC.push(c); };
   const add = (c: LonLat) => { const id = nextNewId--; fresh.set(id, c); put(id, c); return id; };
@@ -4223,6 +4227,12 @@ function gluedSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, e: 
   const others = nodeMoveEdits(moves);
   if (typeof others === 'string') return others;
   const byKey = new Map(edits.map((x) => [x.key, x] as const));
+  // Сдвинутые узлы — и в других кольцах этой части (узел, где касаются дворы)
+  const own = byKey.get(f.key);
+  if (own?.polygons) {
+    const ring = (cs: LonLat[], ids: number[] | undefined) => cs.map((c, k) => (ids && moves.get(ids[k])) || c);
+    own.polygons = own.polygons.map((p) => ({ ...p, outer: ring(p.outer, p.outerIds), inners: p.inners.map((r, k) => ring(r, p.innerIds?.[k])) }));
+  }
   for (const o of others) {
     if (o.key === f.key) continue;
     const x = byKey.get(o.key);

@@ -4506,33 +4506,43 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
 
 /**
  * Кольца из направленных сторон (кольца против часовой): в узле-развилке — самый левый поворот, так касающиеся
- * в точке кольца не слипаются. ccw — обход против часовой. undefined — не сошлось или кольцо с повтором узла.
+ * в точке кольца не слипаются; обход, вернувшийся в пройденный узел, отделяет петлю. ccw — обход против часовой.
+ * undefined — не сошлось.
  */
 function traceLoops(edges: (readonly [number, number])[], coordOf: Map<number, LonLat>): { ids: number[]; ccw: boolean }[] | undefined {
   const xy = (id: number) => overpassLayer.focusToLocal(coordOf.get(id)!)!;
   const list = edges.map(([u, v]) => ({ u, v, used: false }));
-  const loops: { ids: number[]; ccw: boolean }[] = [];
+  const found: number[][] = [];
   for (const first of list) {
     if (first.used) continue;
     first.used = true;
     const ids = [first.u];
     let cur = first;
-    while (cur.v !== first.u) {
-      const outs = list.filter((x) => !x.used && x.u === cur.v);
-      if (!outs.length || ids.length > list.length) return;
-      const [px, py] = xy(cur.u), [cx, cy] = xy(cur.v);
+    for (let steps = 0; ; steps++) {
+      if (steps > list.length) return;
+      const at = cur.v;
+      // Вернулись в пройденный узел (касание в точке) — петля от него отделяется, обход идёт дальше
+      const k = ids.indexOf(at);
+      if (k >= 0) {
+        found.push(ids.splice(k));
+        if (!ids.length) break;
+      }
+      ids.push(at);
+      const outs = list.filter((x) => !x.used && x.u === at);
+      if (!outs.length) return;
+      const [px, py] = xy(cur.u), [cx, cy] = xy(at);
       const turn = (x: typeof cur) => { const [nx, ny] = xy(x.v); const ax = cx - px, ay = cy - py, bx = nx - cx, by = ny - cy; return Math.atan2(ax * by - ay * bx, ax * bx + ay * by); };
       const next = outs.reduce((best, x) => (turn(x) > turn(best) ? x : best));
       next.used = true;
-      ids.push(cur.v);
       cur = next;
     }
-    if (new Set(ids).size !== ids.length || ids.length < 3) return;
+  }
+  if (found.some((ids) => ids.length < 3)) return;
+  return found.map((ids) => {
     let a = 0;
     for (let i = 0, j = ids.length - 1; i < ids.length; j = i++) { const [xi, yi] = xy(ids[i]), [xj, yj] = xy(ids[j]); a += (xj - xi) * (yj + yi); }
-    loops.push({ ids, ccw: a > 0 });
-  }
-  return loops;
+    return { ids, ccw: a > 0 };
+  });
 }
 
 /**

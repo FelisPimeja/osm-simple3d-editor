@@ -326,6 +326,8 @@ class MeshGroup {
   contacts?: Contacts;
   /** Обводки контуров под частями (в просмотре вместо заливки). */
   strokes?: THREE.LineSegments;
+  /** Выделенный плоский след в режиме здания: толстая обводка и полупрозрачная заливка. */
+  strokeSelected: (LineSegments2 | THREE.Mesh)[] = [];
   /** Из чего посчитана оболочка (исходные треугольники, скрытые и плоские объекты, стекло) — не пересчитывать зря. */
   shellOf?: { bases: Float32Array[]; hidden: string };
   /** Оболочка для планов этажей (buildShell) и по каким данным посчитана — между переключениями этажей не пересчитывается. */
@@ -381,6 +383,8 @@ class MeshGroup {
   }
 
   disposeStrokes() {
+    for (const o of this.strokeSelected) { this.scene.remove(o); o.geometry.dispose(); (o.material as THREE.Material).dispose(); }
+    this.strokeSelected = [];
     if (!this.strokes) return;
     this.strokes.geometry.dispose();
     this.scene.remove(this.strokes);
@@ -3982,6 +3986,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.disposeStrokes();
     const lines: number[] = [], colors: number[] = [];
     const focusGroup = g === this.groups.get(FOCUS_GROUP);
+    // Выделенный плоский след в режиме здания: тонкую линию трудно разглядеть — толще и с заливкой
+    const fat: number[] = [], fill: number[] = [];
     for (const it of g.items) {
       // Голый контур отношения в просмотре не рисуется объёмом — только тонкой обводкой
       const bare = !focusGroup && this.viewHidden.has(it.feature.key);
@@ -3990,16 +3996,35 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (!strokeOnly(g, it) && it.full?.positions.length && !it.positions.length) continue;
       const c = this.selected.has(it.feature.key) || this.hovered === it.feature.key ? STROKE_SELECTED : STROKE_COLOUR;
       const z = bare || it.box.isEmpty() ? g.footprint : it.box.max.z;
+      const selected = focusGroup && strokeOnly(g, it) && this.selected.has(it.feature.key);
       for (const p of it.feature.polygons) {
         for (const ring of [p.outer, ...p.inners]) {
           const pts = ring.map(g.toLocal);
           for (let i = 0; i < pts.length; i++) {
             const a = pts[i], b = pts[(i + 1) % pts.length];
-            lines.push(a[0], a[1], z, b[0], b[1], z);
-            colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+            (selected ? fat : lines).push(a[0], a[1], z, b[0], b[1], z);
+            if (!selected) colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
           }
         }
+        if (selected) fill.push(...bottomTriangles([{ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }], z));
       }
+    }
+    if (fat.length) {
+      const canvas = this.map!.getCanvas();
+      const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+      const geo = new LineSegmentsGeometry();
+      geo.setPositions(fat);
+      const mat = new LineMaterial({ color: STROKE_SELECTED.getHex(), linewidth: SELECTED_STROKE_PX * dpr });
+      mat.resolution.set(canvas.width, canvas.height);
+      const line = new LineSegments2(geo, mat);
+      line.frustumCulled = false;
+      const fg = new THREE.BufferGeometry();
+      fg.setAttribute('position', new THREE.Float32BufferAttribute(fill, 3));
+      const mesh = new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ color: STROKE_SELECTED, transparent: true, opacity: SELECTED_FILL_OPACITY,
+        side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+      mesh.frustumCulled = false;
+      g.strokeSelected = [line, mesh];
+      g.scene.add(line, mesh);
     }
     if (!lines.length) return;
     const geom = new THREE.BufferGeometry();
@@ -5144,6 +5169,8 @@ function thinItem(it: Item): boolean {
 }
 const STROKE_COLOUR = new THREE.Color(0x8a8a8a);
 const STROKE_SELECTED = new THREE.Color('#2f7cff');
+/** Обводка выделенного плоского следа в режиме здания, px, и непрозрачность его заливки. */
+const SELECTED_STROKE_PX = 2, SELECTED_FILL_OPACITY = 0.18;
 const STROKE_MATERIAL = new THREE.LineBasicMaterial({ vertexColors: true });
 
 /** Высота плоского следа на земле, м: чуть выше земли, чтобы не мерцать с подложкой. */

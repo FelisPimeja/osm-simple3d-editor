@@ -2700,9 +2700,25 @@ function openRectFlyout(btn: HTMLButtonElement, start: () => void) {
     if (!(drawTool.active && drawTool.shape === 'rect')) start();
   });
   btn.after(fly);
-  const r = btn.getBoundingClientRect(), pr = btn.offsetParent!.getBoundingClientRect();
-  fly.style.top = `${r.top - pr.top}px`;
+  placeFlyout(fly, btn);
   rectFlyout = fly;
+}
+
+/** Отступ всплывашки от краёв окна, px. */
+const FLYOUT_MARGIN = 8;
+
+/**
+ * Всплывашка у кнопки — вровень с ней, но целиком в окне: у нижнего края сдвигается вверх, а не выше окна —
+ * ограничивается по высоте с прокруткой внутри (иначе у страницы появляется прокрутка).
+ */
+function placeFlyout(fly: HTMLElement, btn: HTMLElement) {
+  const pr = btn.offsetParent!.getBoundingClientRect();
+  const want = btn.getBoundingClientRect().top;
+  fly.style.maxHeight = `${innerHeight - 2 * FLYOUT_MARGIN}px`;
+  fly.style.overflowY = 'auto';
+  const h = fly.getBoundingClientRect().height;
+  const top = Math.max(FLYOUT_MARGIN, Math.min(want, innerHeight - FLYOUT_MARGIN - h));
+  fly.style.top = `${top - pr.top}px`;
 }
 for (const [btn, start] of [[rectBtn, () => startDraw('rect')], [mapRectBtn, () => startSketch('rect')]] as const) {
   // Стрелка — до обработчика кнопки (capture), чтобы клик по ней не включал инструмент
@@ -2753,8 +2769,7 @@ for (const [btn, start] of [[circleBtn, () => startDraw('circle')], [mapCircleBt
       if (!(drawTool.active && drawTool.shape === 'circle')) start();
     });
     btn.after(fly);
-    const r = btn.getBoundingClientRect(), pr = btn.offsetParent!.getBoundingClientRect();
-    fly.style.top = `${r.top - pr.top}px`;
+    placeFlyout(fly, btn);
     rectFlyout = fly;
   }, true);
 }
@@ -7196,8 +7211,8 @@ snapsBtn.addEventListener('click', (e) => {
   snapsFlyout = document.createElement('div');
   snapsFlyout.className = 'tool-flyout snaps-flyout';
   snapsBtn.after(snapsFlyout);
-  snapsFlyout.style.top = `${snapsBtn.offsetTop}px`;
   renderSnapsFlyout();
+  placeFlyout(snapsFlyout, snapsBtn);
   snapsFlyout.addEventListener('click', (ev) => {
     if (!(ev.target as HTMLElement).closest('[data-snap-all]')) return;
     overpassLayer.snapKindsOff.clear();

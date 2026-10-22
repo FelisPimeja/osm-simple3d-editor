@@ -4186,6 +4186,8 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
     if (pi !== edge.poly || ri !== edge.ring) for (const id of r ?? []) shared.add(id);
   }));
   const outIds: number[] = [], outC: LonLat[] = [], inserts: Insert[] = [], fresh = new Map<number, LonLat>();
+  /** Сдвинутые прежние узлы — их новые места нужны и путям-членам. */
+  const moved = new Map<number, LonLat>();
   const put = (id: number, c: LonLat) => { outIds.push(id); outC.push(c); };
   const add = (c: LonLat) => { const id = nextNewId--; fresh.set(id, c); put(id, c); return id; };
   /** Положение c на прямой a→b: t (0 — a, 1 — b) и отступ от прямой, м. */
@@ -4200,7 +4202,7 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
     const at = k === i ? e.a : e.b;
     // Угол на прямой с соседней стороной — старый остаётся, новый рядом (поперечная сторона)
     if (k === i ? e.keepA : e.keepB) { if (k === i) { put(ids[k], was[k]); add(at); } else { add(at); put(ids[k], was[k]); } continue; }
-    if (!shared.has(ids[k])) { put(ids[k], at); continue; } // свободный угол — просто сдвинуть
+    if (!shared.has(ids[k])) { put(ids[k], at); moved.set(ids[k], at); continue; } // свободный угол — просто сдвинуть
     // Соседняя сторона: у начала стены — предыдущая, у конца — следующая
     const nb = k === i ? (i - 1 + n) % n : (j + 1) % n;
     const { t, off } = along(was[nb], was[k], at);
@@ -4211,7 +4213,7 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
     else { add(at); put(ids[k], was[k]); }
   }
   const norm = mergeTouchingRings(f, { poly: edge.poly, ring: edge.ring, ids: outIds, coords: outC });
-  const edits = topologyEdits([{ f, rewrites: norm.rewrites }], inserts, fresh);
+  const edits = topologyEdits([{ f, rewrites: norm.rewrites }], inserts, new Map([...fresh, ...moved]));
   if (typeof edits !== 'string') dropRings(edits, f.key, edge.poly, norm.consumed);
   return edits;
 }
@@ -4238,6 +4240,25 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
     ? { ring: rw.ring, ids: [...rw.ids], coords: [...rw.coords], changed: true }
     : { ring: j + 1, ids: [...p.innerIds![j]], coords: [...cs], changed: false }));
   const me = rings.find((r) => r.ring === rw.ring)!;
+  const near = (a: LonLat, b: LonLat) => { const p = local(a), q = local(b); return Math.hypot(p[0] - q[0], p[1] - q[1]) < 0.01; };
+  // Вершина правленого кольца на месте вершины другого (стену дотянули до угла соседнего двора) — тот же узел
+  me.ids.forEach((id, vi) => {
+    for (const o of rings) {
+      if (o === me || o.ids.includes(id)) continue;
+      const k = o.coords.findIndex((c) => near(c, me.coords[vi]));
+      if (k >= 0) { me.ids[vi] = o.ids[k]; me.coords[vi] = o.coords[k]; return; }
+    }
+  });
+  // Совпавшие соседние вершины (сторона нулевой длины) — одна; остаётся та, что нужна другим кольцам
+  const inOthers = (id: number) => rings.some((o) => o !== me && o.ids.includes(id));
+  for (let i = 0; me.ids.length > 3 && i < me.ids.length;) {
+    const j = (i + 1) % me.ids.length;
+    if (me.ids[i] === me.ids[j] || near(me.coords[i], me.coords[j])) {
+      const drop = inOthers(me.ids[j]) && !inOthers(me.ids[i]) ? i : j;
+      me.ids.splice(drop, 1);
+      me.coords.splice(drop, 1);
+    } else i++;
+  }
   // Вершины правленого кольца на сторонах других — и в них (без Т-стыков)
   for (const o of rings) {
     if (o === me) continue;

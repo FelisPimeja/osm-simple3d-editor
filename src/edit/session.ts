@@ -187,14 +187,15 @@ export class EditSession {
   /** Список узлов пути (замкнутый) — только у путей из одного кольца. */
   private wayNodes(key: string): { before: number[]; after: number[] } | undefined {
     const f = this.features.get(key);
+    const ring = (ps: Polygon[] | undefined) => (ps?.length === 1 && ps[0].outerIds ? [...ps[0].outerIds, ps[0].outerIds[0]] : undefined);
     if (f?.line) {
       const after = f.line.ids;
-      const before = this.created.has(key) ? [] : this.originalLine.get(key)?.ids;
+      // Путь-здание, ставший путём-членом мультиполигона: «было» — его кольцо
+      const before = this.created.has(key) ? [] : this.originalLine.get(key)?.ids ?? ring(this.originalGeometry.get(key));
       if (!before || (before.length === after.length && before.every((id, i) => id === after[i]))) return;
       return { before, after };
     }
     if (!f?.polygons || !key.startsWith('way/')) return;
-    const ring = (ps: Polygon[] | undefined) => (ps?.length === 1 && ps[0].outerIds ? [...ps[0].outerIds, ps[0].outerIds[0]] : undefined);
     const after = ring(f.polygons);
     if (!after) return;
     const before = this.created.has(key) ? [] : ring(this.originalGeometry.get(key));

@@ -2051,6 +2051,155 @@ function squareSelected() {
     + (skewed ? tr(', пропущено {n} (стороны далеки от прямых углов)', { n: skewed }) : '') + tr('. Отменить — Ctrl+Z.'));
 }
 
+// «Объединить» (J): выделенные части с одинаковыми тегами объёма — в одну, одним шагом истории
+const mergeBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="merge"]')!;
+mergeBtn.addEventListener('click', () => mergeSelected());
+
+function mergeSelected() {
+  if (!focus) return;
+  const pending = isSolo(focus) && focus.roles.includes('part') ? implicitRelation(focus.members[0], implicitParts(focus)) : undefined;
+  const err = mergeIn(pending);
+  if (pending && !session.get(pending.key)) editGroups.delete(pending.key);
+  if (err) setStatus(err, true);
+}
+
+/**
+ * Объединение выделенных частей: контур — polygonClipping.union, узлы — прежние там, где совпадают; узлы, что
+ * остались на прямой и никому больше не нужны, убираются. Id сохраняет большая по площади часть, остальные
+ * удаляются. Дыра в объединении — мультиполигон (путь становится его внешним кольцом). Строка — ошибка.
+ */
+function mergeIn(pending: EditGroup | undefined): string | undefined {
+  const solo = isSolo(focus) && !pending;
+  const g = pending ?? (!solo ? (entity(focus!.key) as EditGroup | undefined) : undefined);
+  const keys = selection.filter((k) => focus!.members.includes(k) && !hiddenInFocus(k));
+  if (keys.length < 2) return tr('Выделите две или больше частей (Shift+клик), затем «Объединить».');
+  if (keys.some((k) => focus!.roles[focus!.members.indexOf(k)] !== 'part')) return tr('Объединять можно только части, контур здания (outline) — нет.');
+  const features = keys.map((k) => entity(k) as Feature3D | undefined);
+  if (features.some((f) => !f?.polygons?.length || !nodeIds(f))) {
+    return tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+  }
+  const parts = features as Feature3D[];
+  if (parts.some((f) => f.type === 'relation' && (f.tags.type !== 'multipolygon' || !relWays(f)))) {
+    return tr('Для объединения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+  }
+  // Теги объёма должны совпадать: иначе неясно, чьи высоты и крышу оставить
+  const volume = (f: Feature3D) => Object.fromEntries(Object.entries(f.tags).filter(([k]) => PART_TAGS.test(k)));
+  const vols = parts.map(volume);
+  const differ = [...new Set(vols.flatMap(Object.keys))].filter((k) => vols.some((v) => v[k] !== vols[0][k])).sort();
+  if (differ.length) {
+    return tr('Объединять можно части с одинаковыми тегами объёма, различаются: {tags}.',
+      { tags: differ.map((k) => `${k} (${vols.map((v) => v[k] ?? '—').join(' / ')})`).join(', ') });
+  }
+
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  const netArea = (f: Feature3D) => f.polygons.reduce((s, p) => s + ringArea(p.outer.map(local)) - p.inners.reduce((t, h) => t + ringArea(h.map(local)), 0), 0);
+  const shapes = parts.map((f) => f.polygons.map((p) => [p.outer, ...p.inners].map((r) => {
+    const q = r.map(local);
+    return [...q, q[0]];
+  })));
+  let union: ReturnType<typeof polygonClipping.union>;
+  try { union = polygonClipping.union(shapes[0], ...shapes.slice(1)); } catch { return tr('Не удалось объединить контуры.'); }
+  if (union.length !== 1) return tr('Части не соприкасаются: объединить можно только части с общей стороной.');
+
+  // Вершины объединения — прежние узлы, где совпадают, иначе новые
+  type N = { id: number; c: LonLat; p: [number, number] };
+  const known: N[] = [];
+  for (const f of parts) for (const p of f.polygons) {
+    p.outerIds!.forEach((id, i) => known.push({ id, c: p.outer[i], p: local(p.outer[i]) }));
+    p.inners.forEach((r, j) => p.innerIds![j].forEach((id, i) => known.push({ id, c: r[i], p: local(r[i]) })));
+  }
+  const outsiders = nodesOutside(new Set(keys));
+  const toRing = (r: [number, number][]): N[] => {
+    const out: N[] = r.slice(0, -1).map((q) => known.find((n) => Math.hypot(n.p[0] - q[0], n.p[1] - q[1]) < SHARE_EPS)
+      ?? { id: nextNewId--, c: overpassLayer.focusToLngLat(q[0], q[1])!, p: q });
+    // Повторы и узлы на прямой (бывшие концы общих сторон) — убираем, если они не нужны соседям
+    for (let i = 0; out.length > 3 && i < out.length;) {
+      const a = out[(i - 1 + out.length) % out.length], b = out[i], c = out[(i + 1) % out.length];
+      if (b.id === a.id || (!outsiders.has(b.id) && segDist2(b.p, a.p, c.p) < 0.01)) { out.splice(i, 1); i = Math.max(0, i - 1); } else i++;
+    }
+    return out;
+  };
+  const [outer, ...inners] = union[0].map(toRing);
+  if (outer.length < 3 || inners.some((r) => r.length < 3)) return tr('Не удалось объединить контуры.');
+  const closed = (r: N[]) => ({ ids: [...r.map((n) => n.id), r[0].id], coords: [...r.map((n) => n.c), r[0].c] });
+  const polygon: Polygon = { outer: outer.map((n) => n.c), inners: inners.map((r) => r.map((n) => n.c)),
+    outerIds: outer.map((n) => n.id), innerIds: inners.map((r) => r.map((n) => n.id)) };
+
+  const keeper = parts.reduce((a, b) => (netArea(b) > netArea(a) ? b : a));
+  const others = parts.filter((f) => f !== keeper);
+  const edits: ObjectEdit[] = others.map((f) => ({ key: f.key, delete: true }));
+  let result = keeper.key;
+  let groupMembers = g?.relMembers.filter((m) => !others.some((f) => f.key === `${m.type}/${m.ref}`));
+  const newWay = (r: N[], role: string) => {
+    const id = nextNewId--;
+    edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line: closed(r) } });
+    return { id, role, nodes: closed(r).ids };
+  };
+
+  if (keeper.type === 'way' && !inners.length) {
+    edits.push({ key: keeper.key, polygons: [polygon] });
+  } else if (keeper.type === 'way') {
+    // Дыра — путь становится внешним кольцом мультиполигона, теги переезжают на отношение
+    const ways = [{ id: keeper.id, role: 'outer', nodes: closed(outer).ids }, ...inners.map((r) => newWay(r, 'inner'))];
+    const relId = nextNewId--;
+    const relMembers = ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }));
+    const rel: Feature3D & { relMembers: OsmMember[] } = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, kind: keeper.kind,
+      tags: { type: 'multipolygon', ...keeper.tags }, polygons: [polygon], hasParts: false, ways, relMembers };
+    edits.push({ key: rel.key, create: rel });
+    edits.push({ key: keeper.key, tags: {}, polygons: [], line: closed(outer) });
+    groupMembers = groupMembers?.map((m) => (m.type === 'way' && m.ref === keeper.id ? { type: 'relation' as const, ref: relId, role: m.role } : m));
+    result = rel.key;
+  } else {
+    // Мультиполигон: внешнее кольцо — из его путей (restructureRing), внутренние — прежние пути, если кольцо то же
+    const members = (keeper as Tagged).relMembers ?? session.get(keeper.key)?.relMembers;
+    if (!members) return tr('Для объединения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+    const lineNodes = new Map((keeper.ways ?? []).map((w) => [w.id, w.nodes] as const));
+    for (const line of session.lineEntities()) lineNodes.set(Number(line.key.split('/')[1]), line.line!.ids);
+    const own = members.filter((m) => m.type === 'way');
+    if (own.some((m) => !lineNodes.has(m.ref))) return tr('Для объединения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+    const shared = liveFeatures().find((o) => o.type === 'relation' && !keys.includes(o.key) && relWays(o)?.some((w) => own.some((m) => m.ref === w.id)));
+    if (shared) return tr('Путь мультиполигона {key} входит и в {other} — объединить пока нельзя.', { key: keeper.key, other: shared.key });
+    const tagsOf = (id: number) => session.get(`way/${id}`)?.tags ?? keeper.ways?.find((w) => w.id === id)?.tags;
+    const sourceWays: RingWay[] = own.filter((m) => m.role !== 'inner').map((m) => ({ id: m.ref, role: m.role, nodes: lineNodes.get(m.ref)!, tags: tagsOf(m.ref) }));
+    const res = restructureRing(sourceWays, polygon.outerIds!, 'outer', () => nextNewId--);
+    const kept = new Set(res.members.map((m) => m.id));
+    const at = new Map(known.map((n) => [n.id, n.c] as const));
+    for (const n of [...outer, ...inners.flat()]) at.set(n.id, n.c);
+    const line = (ids: number[]) => ({ ids, coords: ids.map((id) => at.get(id)!) });
+    for (const w of res.created) {
+      if (!kept.has(w.id)) continue; // кусок вне нового кольца — никому не нужен
+      edits.push({ key: `way/${w.id}`, create: { key: `way/${w.id}`, version: 0, tags: { ...(w.tags ?? {}) }, line: line(w.nodes),
+        ...(w.splitFrom !== undefined && w.splitFrom > 0 ? { splitFrom: w.splitFrom } : {}) } });
+    }
+    const track = (id: number) => {
+      const key = `way/${id}`;
+      if (!session.has(key)) session.track({ key, version: 0, tags: { ...(tagsOf(id) ?? {}) }, line: line(lineNodes.get(id)!) });
+      return key;
+    };
+    for (const [id, nodes] of res.lines) edits.push({ key: track(id), line: line(nodes) });
+    const innerMembers: { id: number; role: string }[] = [];
+    for (const r of inners) {
+      const ring = new Set(r.map((n) => n.id));
+      const same = own.filter((m) => m.role === 'inner' && lineNodes.get(m.ref)!.every((id) => ring.has(id)));
+      const covered = new Set(same.flatMap((m) => lineNodes.get(m.ref)!));
+      if (same.length && covered.size === ring.size) innerMembers.push(...same.map((m) => ({ id: m.ref, role: 'inner' })));
+      else innerMembers.push(newWay(r, 'inner'));
+    }
+    for (const m of innerMembers) kept.add(m.id);
+    // Прежние пути, что больше не на кольцах, — удаляем (если без тегов: иначе это чей-то объект)
+    for (const m of own) if (!kept.has(m.ref) && !Object.keys(tagsOf(m.ref) ?? {}).length) edits.push({ key: track(m.ref), delete: true });
+    edits.push({ key: keeper.key, polygons: [polygon], members: [...members.filter((m) => m.type !== 'way'),
+      ...res.members.map((m) => ({ type: 'way' as const, ref: m.id, role: m.role })),
+      ...innerMembers.map((m) => ({ type: 'way' as const, ref: m.id, role: m.role }))] });
+  }
+  if (g && groupMembers) edits.push(groupMembersEdit(g, groupMembers));
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  session.editMany(edits);
+  select(result);
+  setStatus(tr('Объединено частей: {n} → {key}. Отменить — Ctrl+Z.', { n: parts.length, key: result }));
+  return;
+}
+
 // Инструмент «Вытянуть»: верх/низ по вертикали (height / min_height) и стены по нормали (узлы контура)
 const pushBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="push"]')!;
 const pushTool = new PushTool(overpassLayer, map.getContainer(),
@@ -4488,6 +4637,7 @@ document.addEventListener('keydown', (e) => {
     : e.code === 'KeyO' && !e.shiftKey ? 'offset'
     : e.code === 'KeyQ' && !e.shiftKey ? 'rotate'
     : e.code === 'KeyA' && !e.shiftKey ? 'square'
+    : e.code === 'KeyJ' && !e.shiftKey ? 'merge'
     : e.code === 'KeyH' ? (e.shiftKey ? 'show-all' : 'hide')
     : e.code === 'KeyR' && !e.shiftKey ? 'rect'
     : e.code === 'KeyL' && !e.shiftKey ? 'polygon'
@@ -4498,7 +4648,7 @@ document.addEventListener('keydown', (e) => {
   closeCtxMenu();
   cancelCopyPick();
   if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'shape') startShape(); else if (action === 'split') startSplit();
-  else if (action === 'rotate') startRotate(); else if (action === 'square') squareSelected();
+  else if (action === 'rotate') startRotate(); else if (action === 'square') squareSelected(); else if (action === 'merge') mergeSelected();
   else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);
 }, { capture: true });
@@ -6863,7 +7013,7 @@ const HELP: Record<string, HelpTopic> = {
   focus: { title: tr('Режим здания'), desc: tr('Одно здание отдельно от карты: его части, контур и правка геометрии инструментами слева.'), items: [
     tr('Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.'),
     tr('Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.'),
-    tr('M — переместить, Q — повернуть, A — выровнять углы (90°), P — вытянуть, K — рассечь, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.'),
+    tr('M — переместить, Q — повернуть, A — выровнять углы (90°), P — вытянуть, K — рассечь, J — объединить, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.'),
     tr('Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, Shift+H — показать все.'),
     tr('Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.'),
     tr('Esc — снять выделение, ещё раз — назад к карте; двойной клик мимо здания — тоже к карте.'),
@@ -6897,10 +7047,10 @@ const HELP: Record<string, HelpTopic> = {
     tr('Фиолетовые ручки верха стен — только вверх или вниз: меняется высота стен, крыша едет целиком.'),
     tr('Клик не по вершине — выбрать другой объект. Esc — отмена.'),
   ] },
-  split: { title: tr('Рассечь (K)'), desc: tr('Прямым разрезом делит верхнюю грань части на две части с теми же тегами.'), items: [
-    tr('Клик по ребру верхней грани — начало разреза, клик по другому ребру той же грани — конец.'),
-    tr('Разрез идёт прямо и целиком внутри контура; часть делится на две.'),
-    tr('Esc — отмена.'),
+  split: { title: tr('Рассечь (K)'), desc: tr('Делит верхнюю грань части на две части с теми же тегами или вырезает в ней кольцо — дыру с новой частью внутри.'), items: [
+    tr('Клик по ребру верхней грани — начало разреза, клики внутри грани — изгибы, клик по другому ребру той же грани — конец.'),
+    tr('Первый клик внутри грани (не у ребра) — замкнутое кольцо: клик в первую точку его замыкает. Внутреннюю часть удалите (Del) — двор, или вытяните (P) — башня, атриум.'),
+    tr('Backspace — убрать последнюю точку кольца, Shift — держать ось. Esc — отмена.'),
   ] },
   rect: { title: tr('Прямоугольник (R)'), desc: tr('Рисует новую часть — плоский прямоугольный контур; потом её можно вытянуть (P). На карте — новое отдельное здание.'), items: [
     tr('Клики — точки прямоугольника на земле или на плоской крыше (по первому клику).'),

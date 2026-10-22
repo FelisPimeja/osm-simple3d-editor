@@ -307,7 +307,9 @@ export class SplitTool {
       ...(i ? [{ kind: 'midpoint' as const, key, p: at([(p[0] + own[i - 1][0]) / 2, (p[1] + own[i - 1][1]) / 2]) }] : []),
     ]);
     const prev = own.at(-1);
-    const s = this.layer.snapAt(point, undefined, undefined, { from: prev && at(prev), extra });
+    // С Shift линия идёт по зафиксированной оси — перпендикуляр из якоря опускается на неё
+    const ax = this.shift && this.locked !== undefined && this.axes ? (this.locked ? this.axes.y : this.axes.x) : undefined;
+    const s = this.layer.snapAt(point, undefined, undefined, { from: prev && at(prev), extra, dir: ax && new THREE.Vector3(ax[0], ax[1], 0) });
     const flat = s && s.kind !== 'center' && Math.abs(s.local.z - this.z) < 0.05 ? s : undefined;
     if (this.shift) {
       const q: Pt | undefined = flat ? [flat.local.x, flat.local.y] : raw;

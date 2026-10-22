@@ -2096,8 +2096,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     const m = this.lastMain.clone().multiply(g.model);
     const canvas = this.map.getCanvas();
     const v = new THREE.Vector4();
-    let best: { s: SnapPoint; d: number; px: [number, number]; along?: THREE.Vector3 } | undefined;
-    const near: { s: SnapPoint; d: number; px: [number, number]; along?: THREE.Vector3 }[] = [];
+    /** virtual — построение пользователя (оси якоря, перпендикуляр из него): видно сквозь геометрию. */
+    type Near = { s: SnapPoint; d: number; px: [number, number]; along?: THREE.Vector3; virtual?: boolean };
+    let best: Near | undefined;
+    const near: Near[] = [];
     const off = this.snapKindsOff;
     this.indoorSnaps ??= (() => {
       const points: SnapPoint[] = [], edges: SnapEdge[] = [];
@@ -2210,6 +2212,26 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (px && d <= Math.min(radius, TRACK_RADIUS_PX)) near.push({ s: { kind: 'tracking', key: track.key, p: onSeg.clone(), axis: i, dist }, d: d + SNAP_PRIORITY.tracking * 6, px, along: track.anchor.clone() });
       });
     }
+    // Перпендикуляр из якоря на линию от from (по оси Shift или к курсору): основание — угол 90° у линии
+    if (track && opts.from && ray && !off.has('perpendicular')) {
+      const a = opts.from, b = track.anchor;
+      let d = opts.dir?.clone().setZ(0);
+      if (!d && Math.abs(ray.direction.z) > 1e-6) {
+        const t = (a.z - ray.origin.z) / ray.direction.z;
+        if (t > 0) d = ray.at(t, new THREE.Vector3()).sub(a).setZ(0);
+      }
+      if (d && d.lengthSq() > 1e-8) {
+        d.normalize();
+        const s = (b.x - a.x) * d.x + (b.y - a.y) * d.y;
+        const c = new THREE.Vector3(a.x + d.x * s, a.y + d.y * s, a.z);
+        // Не у самой from и не когда якорь на линии (основание совпало бы с ним)
+        if (Math.abs(s) > 0.05 && Math.hypot(b.x - c.x, b.y - c.y) > 0.05) {
+          const px = toPx(c);
+          const dist = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
+          if (px && dist <= radius) near.push({ s: { kind: 'perpendicular', key: track.key, p: c }, d: dist + SNAP_PRIORITY.perpendicular * 6, px, along: b.clone(), virtual: true });
+        }
+      }
+    }
     // Узел сетки основания (земля, вдоль осей здания) под курсором
     const grid = !off.has('grid') && filter(GRID_SNAP_KEY) && !this.sketching && this.gridVisible ? this.gridSnap(point) : undefined; // в наброске сетки не видно
     if (grid) {
@@ -2224,7 +2246,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const c of near.sort((a, b) => a.d - b.d)) {
       if (best && c.d >= best.d) continue;
       // Оси и отложенная точка — построения пользователя: видны сквозь геометрию
-      if (c.s.kind !== 'tracking' && c.s.kind !== 'tracked' && this.snapHidden(c.s.p, c.px)) c.d += SNAP_HIDDEN_PENALTY_PX;
+      if (!c.virtual && c.s.kind !== 'tracking' && c.s.kind !== 'tracked' && this.snapHidden(c.s.p, c.px)) c.d += SNAP_HIDDEN_PENALTY_PX;
       if (!best || c.d < best.d) best = c;
     }
     if (track) { track.axis = best?.s.kind === 'tracking' ? best.s.axis : undefined; track.dist = best?.s.dist; }
@@ -4685,6 +4707,8 @@ interface SnapEdge { key: string; a: THREE.Vector3; b: THREE.Vector3 }
  */
 export interface SnapOpts {
   from?: THREE.Vector3; noEdge?: boolean;
+  /** Направление линии от from (ось, зафиксированная Shift); без него — от from к курсору. */
+  dir?: THREE.Vector3;
   skip?: (p: THREE.Vector3, key: string, kind: SnapKind) => boolean;
   extra?: { kind: SnapKind; key: string; p: THREE.Vector3; label?: string }[];
 }
@@ -4711,7 +4735,7 @@ const EXTENSION_TTL_MS = 4000;
 /** Курсор «над ребром» — ближе этого к нему на экране, px. */
 const EXTENSION_HOVER_PX = 6;
 /** Сколько держать курсор над вершиной, чтобы откладывать от неё по осям, мс. */
-const TRACK_ARM_MS = 2000;
+const TRACK_ARM_MS = 1000;
 /** Длина осей откладывания в обе стороны от якоря, м. */
 const TRACK_M = 100;
 /** Ось откладывания ловит курсор ближе этого, px. */

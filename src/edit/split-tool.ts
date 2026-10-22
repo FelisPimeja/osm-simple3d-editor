@@ -5,8 +5,14 @@ import { tr } from '../i18n';
 
 type Pt = [number, number];
 
-/** Точка разреза на контуре: сторона (i → i+1), положение на ней и, если попали в вершину, её номер. */
-export interface CutPoint { poly: number; edge: number; p: Pt; vertex?: number }
+/**
+ * Точка разреза на контуре: кольцо (0 — внешнее, k — внутреннее k-1), сторона (i → i+1), положение на ней
+ * и, если попали в вершину, её номер.
+ */
+export interface CutPoint { poly: number; ring: number; edge: number; p: Pt; vertex?: number }
+
+/** Кольца полигона по номеру: 0 — внешнее, дальше — внутренние. */
+const ringsOf = (p: { outer: Pt[]; inners: Pt[][] }) => [p.outer, ...p.inners];
 type Candidate = { key: string; z: number; start: CutPoint };
 
 /**
@@ -169,32 +175,34 @@ export class SplitTool {
   /** Первая точка, где отрезок от предыдущей точки разреза до q касается стороны контура или пересекает её. */
   private crossing(q: Pt): CutPoint | undefined {
     if (!this.start || !this.target) return;
-    const ring = this.layer.focusPolygons(this.target)?.[this.start.poly]?.outer;
-    if (!ring) return;
+    const polygon = this.layer.focusPolygons(this.target)?.[this.start.poly];
+    if (!polygon) return;
     const prev = this.bends.at(-1) ?? this.start.p;
     const rx = q[0] - prev[0], ry = q[1] - prev[1];
     let best: { s: number; c: CutPoint } | undefined;
-    const take = (s: number, edge: number, p: Pt) => {
-      if (Math.hypot(p[0] - prev[0], p[1] - prev[1]) <= 0.05 || (best && best.s <= s)) return;
-      const a = ring[edge], b = ring[(edge + 1) % ring.length];
-      const vertex = Math.hypot(p[0] - a[0], p[1] - a[1]) < 0.05 ? edge : Math.hypot(p[0] - b[0], p[1] - b[1]) < 0.05 ? (edge + 1) % ring.length : undefined;
-      best = { s, c: { poly: this.start!.poly, edge, p: vertex === undefined ? p : ring[vertex], vertex } };
-    };
-    for (let i = 0; i < ring.length; i++) {
-      const a = ring[i], b = ring[(i + 1) % ring.length];
-      const ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey;
-      if (!l2) continue;
-      // Конец отрезка на самой стороне
-      const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * ex + (q[1] - a[1]) * ey) / l2));
-      const foot: Pt = [a[0] + t * ex, a[1] + t * ey];
-      if (Math.hypot(q[0] - foot[0], q[1] - foot[1]) < 0.05) take(1, i, foot);
-      // Пересечение отрезка со стороной
-      const den = rx * ey - ry * ex;
-      if (Math.abs(den) < 1e-12) continue;
-      const wx = a[0] - prev[0], wy = a[1] - prev[1];
-      const sp = (wx * ey - wy * ex) / den, u = (wx * ry - wy * rx) / den;
-      if (sp > 0 && sp <= 1 && u >= 0 && u <= 1) take(sp, i, [prev[0] + sp * rx, prev[1] + sp * ry]);
-    }
+    ringsOf(polygon).forEach((ring, ri) => {
+      const take = (s: number, edge: number, p: Pt) => {
+        if (Math.hypot(p[0] - prev[0], p[1] - prev[1]) <= 0.05 || (best && best.s <= s)) return;
+        const a = ring[edge], b = ring[(edge + 1) % ring.length];
+        const vertex = Math.hypot(p[0] - a[0], p[1] - a[1]) < 0.05 ? edge : Math.hypot(p[0] - b[0], p[1] - b[1]) < 0.05 ? (edge + 1) % ring.length : undefined;
+        best = { s, c: { poly: this.start!.poly, ring: ri, edge, p: vertex === undefined ? p : ring[vertex], vertex } };
+      };
+      for (let i = 0; i < ring.length; i++) {
+        const a = ring[i], b = ring[(i + 1) % ring.length];
+        const ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey;
+        if (!l2) continue;
+        // Конец отрезка на самой стороне
+        const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * ex + (q[1] - a[1]) * ey) / l2));
+        const foot: Pt = [a[0] + t * ex, a[1] + t * ey];
+        if (Math.hypot(q[0] - foot[0], q[1] - foot[1]) < 0.05) take(1, i, foot);
+        // Пересечение отрезка со стороной
+        const den = rx * ey - ry * ex;
+        if (Math.abs(den) < 1e-12) continue;
+        const wx = a[0] - prev[0], wy = a[1] - prev[1];
+        const sp = (wx * ey - wy * ex) / den, u = (wx * ry - wy * rx) / den;
+        if (sp > 0 && sp <= 1 && u >= 0 && u <= 1) take(sp, i, [prev[0] + sp * rx, prev[1] + sp * ry]);
+      }
+    });
     return best?.c;
   }
 
@@ -202,7 +210,7 @@ export class SplitTool {
     this.target = candidate.key;
     this.z = candidate.z;
     this.start = candidate.start;
-    const ring = this.layer.focusPolygons(candidate.key)![candidate.start.poly].outer;
+    const ring = ringsOf(this.layer.focusPolygons(candidate.key)![candidate.start.poly])[candidate.start.ring];
     const a = ring[candidate.start.edge], b = ring[(candidate.start.edge + 1) % ring.length];
     const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
     this.axes = { x: [(b[0] - a[0]) / l, (b[1] - a[1]) / l], y: [-(b[1] - a[1]) / l, (b[0] - a[0]) / l] };
@@ -444,19 +452,20 @@ export class SplitTool {
     let best: CutPoint & { d: number } | undefined;
     for (let poly = 0; poly < polygons.length; poly++) {
       if ((this.start && poly !== this.start.poly) || (onlyPoly !== undefined && poly !== onlyPoly)) continue;
-      const ring = polygons[poly].outer;
-      for (let i = 0; i < ring.length; i++) {
-        const a = ring[i], b = ring[(i + 1) % ring.length];
-        const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
-        if (!l2) continue;
-        const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2));
-        const p: Pt = [a[0] + t * dx, a[1] + t * dy];
-        const d = exact ? Math.hypot(q[0] - p[0], q[1] - p[1]) : px(p);
-        if ((exact ? d < 0.05 : d <= EDGE_PX) && (!best || d < best.d)) {
-          const vertex = t * Math.sqrt(l2) < 0.05 ? i : (1 - t) * Math.sqrt(l2) < 0.05 ? (i + 1) % ring.length : undefined;
-          best = { poly, edge: i, p: vertex === undefined ? p : ring[vertex], vertex, d };
+      ringsOf(polygons[poly]).forEach((ring, ri) => {
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i], b = ring[(i + 1) % ring.length];
+          const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+          if (!l2) continue;
+          const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2));
+          const p: Pt = [a[0] + t * dx, a[1] + t * dy];
+          const d = exact ? Math.hypot(q[0] - p[0], q[1] - p[1]) : px(p);
+          if ((exact ? d < 0.05 : d <= EDGE_PX) && (!best || d < best.d)) {
+            const vertex = t * Math.sqrt(l2) < 0.05 ? i : (1 - t) * Math.sqrt(l2) < 0.05 ? (i + 1) % ring.length : undefined;
+            best = { poly, ring: ri, edge: i, p: vertex === undefined ? p : ring[vertex], vertex, d };
+          }
         }
-      }
+      });
     }
     return best;
   }

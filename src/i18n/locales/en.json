@@ -1076,5 +1076,11 @@
   "Объединить выделенные части с одинаковыми тегами объёма (J)": "Merge the selected parts with the same volume tags (J)",
   "Точка разреза": "Cut point",
   "Пересечение": "Intersection",
-  "От точки разреза": "From cut point"
+  "От точки разреза": "From cut point",
+  "Разрез от внутреннего кольца до внешнего (или до другого внутреннего) грань не делит — начните и закончите его на одном кольце.": "A cut from an inner ring to the outer one (or to another inner ring) does not divide the face — start and finish it on the same ring.",
+  "Резать у внутреннего кольца отдельного здания пока нельзя: сначала рассеките его на части.": "Cutting at an inner ring of a standalone building is not supported yet: split it into parts first.",
+  "Разрез проходит снаружи грани.": "The cut runs outside the face.",
+  "Разрез касается внутреннего кольца не концом.": "The cut touches the inner ring somewhere other than its ends.",
+  "Разрез идёт по стороне кольца — отрезать нечего.": "The cut runs along a side of the ring; nothing to cut off.",
+  "Внутри отрезаемого куска есть другое внутреннее кольцо — так резать пока нельзя.": "The piece being cut off contains another inner ring — this cut is not supported yet."
 }

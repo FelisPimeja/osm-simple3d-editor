@@ -3122,6 +3122,11 @@ function splitFeatureIn(key: string, a: CutPoint, b: CutPoint, bends: [number, n
   if (a.poly !== b.poly) return tr('Начало и конец разреза должны быть на одной грани.');
   const poly = f.polygons[a.poly];
   if (!poly) return tr('Грань не найдена.');
+  if (a.ring || b.ring) {
+    if (a.ring !== b.ring) return tr('Разрез от внутреннего кольца до внешнего (или до другого внутреннего) грань не делит — начните и закончите его на одном кольце.');
+    if (solo) return tr('Резать у внутреннего кольца отдельного здания пока нельзя: сначала рассеките его на части.');
+    return splitAtHole(f, g!, a, b, bends);
+  }
   const ids = poly.outerIds!;
   const local = poly.outer.map((c) => overpassLayer.focusToLocal(c)!);
   const n = local.length;
@@ -3323,6 +3328,88 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
   edits.push(groupMembersEdit(g!, [...g!.relMembers.map((m) => (m.type === 'way' && m.ref === f.id && m.role === 'part' ? relPart : m)), innerPart]));
   session.editMany(edits);
   done(rel.key);
+  return;
+}
+
+/**
+ * Разрез с обоими концами на одном внутреннем кольце: кусок между разрезом и кольцом — новая часть (путь),
+ * а внутреннее кольцо исходной части обходит его (пути-члены перестраивает topologyEdits). Строка — ошибка.
+ */
+function splitAtHole(f: Feature3D, g: EditGroup, a: CutPoint, b: CutPoint, bends: [number, number][]): string | undefined {
+  const poly = f.polygons[a.poly];
+  const k = a.ring - 1;
+  const hIds = poly.innerIds?.[k];
+  if (!hIds || f.type !== 'relation') return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  const outer = poly.outer.map(local);
+  const holes = poly.inners.map((h) => h.map(local));
+  const hole = holes[k], n = hole.length;
+  if (a.vertex !== undefined && a.vertex === b.vertex) return tr('Начало и конец разреза совпадают.');
+  const path = [a.p, ...bends, b.p];
+  const near = (p: [number, number], q: [number, number]) => Math.hypot(p[0] - q[0], p[1] - q[1]) < 0.05;
+  for (let j = 0; j < path.length - 1; j++) {
+    const u = path[j], v = path[j + 1];
+    if (near(u, v)) return tr('Соседние точки разреза совпадают.');
+    const mid: [number, number] = [(u[0] + v[0]) / 2, (u[1] + v[1]) / 2];
+    if (!inLocalRing(mid, outer) || holes.some((h) => inLocalRing(mid, h))) return tr('Разрез проходит снаружи грани.');
+    for (let i = 0; i < outer.length; i++) if (segCross(u, v, outer[i], outer[(i + 1) % outer.length])) return tr('Разрез пересекает стороны контура.');
+    for (let h = 0; h < holes.length; h++) {
+      const r = holes[h];
+      for (let i = 0; i < r.length; i++) {
+        const p = r[i], q = r[(i + 1) % r.length];
+        if (segCross(u, v, p, q)) return tr('Разрез пересекает внутреннее кольцо.');
+        // Касаться кольца можно только концами разреза на нём
+        const isEnd = (x: [number, number]) => h === k && (near(x, a.p) || near(x, b.p));
+        if ((segDist2(p, u, v) < 0.05 && !isEnd(p)) || (segDist2(u, p, q) < 0.05 && !isEnd(u)) || (segDist2(v, p, q) < 0.05 && !isEnd(v))) {
+          return tr('Разрез касается внутреннего кольца не концом.');
+        }
+      }
+    }
+    for (let i = 0; i < j - 1; i++) if (segCross(u, v, path[i], path[i + 1])) return tr('Разрез пересекает сам себя.');
+  }
+
+  // Кольцо с новыми узлами концов разреза: вставляем с конца, чтобы номера сторон не съезжали
+  type V = { p: [number, number]; id: number };
+  const ring: V[] = hole.map((p, i) => ({ p, id: hIds[i] }));
+  const fresh: FreshNode[] = [];
+  const cuts = [a, b].map((c) => ({ c, id: c.vertex !== undefined ? hIds[c.vertex] : nextNewId-- }));
+  for (const { c, id } of [...cuts].sort((x, y) => y.c.edge - x.c.edge ||
+    Math.hypot(y.c.p[0] - hole[y.c.edge][0], y.c.p[1] - hole[y.c.edge][1]) - Math.hypot(x.c.p[0] - hole[x.c.edge][0], x.c.p[1] - hole[x.c.edge][1]))) {
+    if (c.vertex !== undefined) continue;
+    ring.splice(c.edge + 1, 0, { p: c.p, id });
+    fresh.push({ id, p: c.p, u: hIds[c.edge], v: hIds[(c.edge + 1) % n] });
+  }
+  const ia = ring.findIndex((v) => v.id === cuts[0].id), ib = ring.findIndex((v) => v.id === cuts[1].id);
+  const walk = (from: number, to: number) => {
+    const out: V[] = [];
+    for (let i = from; ; i = (i + 1) % ring.length) { out.push(ring[i]); if (i === to) break; }
+    return out;
+  };
+  const interior: V[] = bends.map((p) => ({ p, id: nextNewId-- }));
+  const l1 = [...walk(ia, ib), ...interior.slice().reverse()];
+  const l2 = [...walk(ib, ia), ...interior];
+  // Один из обходов — кусок между разрезом и кольцом, другой — он вместе с дырой (новое внутреннее кольцо)
+  const [piece, grown] = ringArea(l1.map((v) => v.p)) <= ringArea(l2.map((v) => v.p)) ? [l1, l2] : [l2, l1];
+  if (piece.length < 3 || ringArea(piece.map((v) => v.p)) < 0.01) return tr('Разрез идёт по стороне кольца — отрезать нечего.');
+  if (holes.some((h, j) => j !== k && inLocalRing(h[0], piece.map((v) => v.p)))) return tr('Внутри отрезаемого куска есть другое внутреннее кольцо — так резать пока нельзя.');
+
+  const coord = new Map<number, LonLat>();
+  for (const p of f.polygons) {
+    p.outerIds?.forEach((id, i) => coord.set(id, p.outer[i]));
+    p.innerIds?.forEach((r, j) => r.forEach((id, i) => coord.set(id, p.inners[j][i])));
+  }
+  for (const v of [...fresh, ...interior]) coord.set(v.id, overpassLayer.focusToLngLat(v.p[0], v.p[1])!);
+  const edits = topologyEdits([{ f, rewrites: [{ poly: a.poly, ring: a.ring, ids: grown.map((v) => v.id), coords: grown.map((v) => coord.get(v.id)!) }] }],
+    freshInserts(fresh, coord), coord);
+  if (typeof edits === 'string') return edits;
+  const wayId = nextNewId--;
+  const tags = copyTags(f);
+  delete tags.type;
+  const created: Feature3D = { key: `way/${wayId}`, type: 'way', id: wayId, version: 0, kind: f.kind, tags,
+    polygons: [{ outer: piece.map((v) => coord.get(v.id)!), inners: [], outerIds: piece.map((v) => v.id), innerIds: [] }], hasParts: false };
+  session.editMany([...edits, { key: created.key, create: created }, groupMembersEdit(g, [...g.relMembers, { type: 'way', ref: wayId, role: 'part' }])]);
+  select(created.key);
+  setStatus(tr('Рассечено: {key} и новая часть {part}.', { key: f.key, part: created.key }));
   return;
 }
 
@@ -3736,6 +3823,8 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
   }
 
   const pieces = new Map<number, number[]>();
+  /** Пути-члены, ушедшие с колец и больше никому не нужные, — удалить. */
+  const dropped = new Set<number>();
   for (const { f, rewrites } of items) {
     edit(f.key).polygons = f.polygons.map((p, pi) => {
       const q = withInserts(p);
@@ -3765,9 +3854,18 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
         if (nodes.every((id) => allowed.has(id))) ringWays.push({ id: m.ref, role: m.role, nodes, tags: ways.get(m.ref)?.tags });
       }
       const res = restructureRing(ringWays, r.ids, role, () => nextNewId--);
+      // Кусок пути, ушедший с кольца, нужен только соседям с этим путём; нет их — он лишний (путь без тегов и без отношений)
+      const inRing = new Set(res.members.map((m) => m.id));
+      const shared = (orig: number) => live.some((g) => g.type === 'relation' && g.key !== f.key && relWays(g)?.some((w) => w.id === orig));
+      const orphan = new Set(res.created.filter((c) => c.splitFrom !== undefined && !inRing.has(c.id) && !shared(c.splitFrom)).map((c) => c.id));
+      // Путь целиком ушёл с кольца и без тегов — тоже лишний
+      for (const w of ringWays) if (!inRing.has(w.id) && !res.lines.has(w.id) && !shared(w.id) && !Object.keys(w.tags ?? {}).length) dropped.add(w.id);
       for (const [id, nodes] of res.lines) lines.set(id, nodes);
-      for (const c of res.created) { lines.set(c.id, c.nodes); created.set(c.id, { tags: c.tags, splitFrom: c.splitFrom }); }
-      for (const [orig, ids] of res.pieces) pieces.set(orig, [...(pieces.get(orig) ?? []), ...ids]);
+      for (const c of res.created) if (!orphan.has(c.id)) { lines.set(c.id, c.nodes); created.set(c.id, { tags: c.tags, splitFrom: c.splitFrom }); }
+      for (const [orig, ids] of res.pieces) {
+        const keep = ids.filter((id) => !orphan.has(id));
+        if (keep.length) pieces.set(orig, [...(pieces.get(orig) ?? []), ...keep]);
+      }
       const ringIds = new Set(ringWays.map((w) => w.id));
       const keep = new Set(res.members.map((m) => m.id));
       members = [
@@ -3810,6 +3908,13 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
       session.track({ key, version: 0, tags: { ...w.tags }, line: { ids: w.nodes, coords: w.nodes.map(at) } });
     }
     out.push({ key, line });
+  }
+  for (const id of dropped) {
+    if (lines.has(id)) continue;
+    const key = `way/${id}`, w = ways.get(id);
+    if (!w) continue;
+    if (!session.has(key)) session.track({ key, version: 0, tags: { ...w.tags }, line: { ids: w.nodes, coords: w.nodes.map(at) } });
+    out.push({ key, delete: true });
   }
   return out;
 }

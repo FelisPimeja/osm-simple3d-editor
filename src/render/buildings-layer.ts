@@ -2696,6 +2696,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.hidden.clear();
     for (const k of keys) g.hidden.add(k);
     this.snaps = undefined;
+    // Соприкасающиеся грани — без скрытых: части, у которых контакты поменялись, пересобираем
+    if (g.contacts) {
+      g.contacts = buildContacts(g, g.items.map((it) => it.feature));
+      for (let i = 0; i < g.items.length; i++) {
+        const it = g.items[i];
+        if (contactKeys(g, it.feature) === it.contacts) continue;
+        const item = buildItem(g, it.feature);
+        if (it.edges) item.edges = itemEdges(item);
+        g.items[i] = item;
+        g.byKey.set(item.feature.key, item);
+      }
+    }
     this.rebuildGeometry(g);
     this.updateHiddenEdges();
     this.map?.triggerRepaint();
@@ -5127,7 +5139,8 @@ function buildContacts(g: MeshGroup, features: Iterable<Feature3D>): Contacts {
     (m.get(k) ?? m.set(k, []).get(k)!).push(face);
   };
   for (const f of features) {
-    if (!shouldRender(f)) continue;
+    // Скрытые (глазик, изоляция) не стоят на крышах: иначе под ними у соседа вместо крыши — плита перекрытия
+    if (!shouldRender(f) || g.hidden.has(f.key)) continue;
     const prep = prepItem(g, f);
     const top = hasFlatTop(prep), bottom = hasBottom(prep);
     if (!top && !bottom) continue;

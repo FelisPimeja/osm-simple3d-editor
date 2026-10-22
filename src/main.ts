@@ -4210,7 +4210,79 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
     } else if (k === i) { put(ids[k], was[k]); add(at); } // наружу: старый угол остаётся, новый — следом
     else { add(at); put(ids[k], was[k]); }
   }
-  return topologyEdits([{ f, rewrites: [{ poly: edge.poly, ring: edge.ring, ids: outIds, coords: outC }] }], inserts, fresh);
+  const norm = mergeTouchingRings(f, { poly: edge.poly, ring: edge.ring, ids: outIds, coords: outC });
+  const edits = topologyEdits([{ f, rewrites: norm.rewrites }], inserts, fresh);
+  if (typeof edits !== 'string') dropRings(edits, f.key, edge.poly, norm.consumed);
+  return edits;
+}
+
+/** Убрать из полигона poly объекта key в правках внутренние кольца consumed (номера, как ring). */
+function dropRings(edits: ObjectEdit[], key: string, poly: number, consumed: number[]) {
+  if (!consumed.length) return;
+  const e = edits.find((x) => x.key === key);
+  if (e?.polygons) e.polygons = e.polygons.map((p, i) => (i !== poly ? p
+    : { ...p, inners: p.inners.filter((_, j) => !consumed.includes(j + 1)), innerIds: p.innerIds?.filter((_, j) => !consumed.includes(j + 1)) }));
+}
+
+/**
+ * Внутренние кольца части после правки кольца rw: вершина rw на стороне другого внутреннего кольца вставляется и
+ * в него, а кольца, у которых теперь общая сторона (дворы сошлись по отрезку), сливаются в одно — общие стороны
+ * взаимно уничтожаются. Иначе у мультиполигона два кольца с общим отрезком: так нельзя, и крыша рисуется с изъянами.
+ */
+function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewrite[]; consumed: number[] } {
+  const p = f.polygons[rw.poly];
+  if (!rw.ring || !p?.innerIds) return { rewrites: [rw], consumed: [] };
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  type R = { ring: number; ids: number[]; coords: LonLat[]; changed: boolean };
+  const rings: R[] = p.inners.map((cs, j) => (j + 1 === rw.ring
+    ? { ring: rw.ring, ids: [...rw.ids], coords: [...rw.coords], changed: true }
+    : { ring: j + 1, ids: [...p.innerIds![j]], coords: [...cs], changed: false }));
+  const me = rings.find((r) => r.ring === rw.ring)!;
+  // Вершины правленого кольца на сторонах других — и в них (без Т-стыков)
+  for (const o of rings) {
+    if (o === me) continue;
+    me.ids.forEach((id, vi) => {
+      if (o.ids.includes(id)) return;
+      const q = local(me.coords[vi]);
+      for (let e = 0; e < o.ids.length; e++) {
+        const a = local(o.coords[e]), b = local(o.coords[(e + 1) % o.ids.length]);
+        if (segDist2(q, a, b) < 0.01 && Math.hypot(q[0] - a[0], q[1] - a[1]) > 0.01 && Math.hypot(q[0] - b[0], q[1] - b[1]) > 0.01) {
+          o.ids.splice(e + 1, 0, id);
+          o.coords.splice(e + 1, 0, me.coords[vi]);
+          o.changed = true;
+          break;
+        }
+      }
+    });
+  }
+  // Кольца с общей стороной — слить: одинаково ориентированные кольца проходят её навстречу, такие пары убираем
+  const consumed: number[] = [];
+  const coordOf = new Map<number, LonLat>();
+  for (const r of rings) r.ids.forEach((id, i) => coordOf.set(id, r.coords[i]));
+  const ccw = (r: R) => { let a = 0; const pts = r.coords.map(local); for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += (pts[j][0] - pts[i][0]) * (pts[j][1] + pts[i][1]); return a > 0; };
+  const edgesOf = (r: R) => { const ids = ccw(r) ? r.ids : [...r.ids].reverse(); return ids.map((u, i) => [u, ids[(i + 1) % ids.length]] as const); };
+  for (const o of rings) {
+    if (o === me) continue;
+    const mine = edgesOf(me), theirs = edgesOf(o);
+    const back = new Set(theirs.map(([u, v]) => `${v},${u}`));
+    if (!mine.some(([u, v]) => back.has(`${u},${v}`))) continue;
+    const fwd = new Set(mine.map(([u, v]) => `${u},${v}`));
+    const left = [...mine.filter(([u, v]) => !back.has(`${u},${v}`)), ...theirs.filter(([u, v]) => !fwd.has(`${v},${u}`))];
+    const next = new Map<number, number>();
+    let fork = false;
+    for (const [u, v] of left) { if (next.has(u)) fork = true; next.set(u, v); }
+    if (fork) continue; // развилка — слияние неоднозначно, оставляем как есть
+    const ids = [left[0][0]];
+    for (let id = next.get(ids[0])!; id !== ids[0] && ids.length <= left.length; id = next.get(id)!) ids.push(id);
+    if (ids.length !== left.length) continue; // распалось на несколько колец
+    me.ids = ids;
+    me.coords = ids.map((id) => coordOf.get(id)!);
+    consumed.push(o.ring);
+    o.changed = false;
+  }
+  const rewrites: RingRewrite[] = [{ poly: rw.poly, ring: me.ring, ids: me.ids, coords: me.coords, ...(consumed.length ? { absorbs: consumed } : {}) }];
+  for (const o of rings) if (o !== me && o.changed && !consumed.includes(o.ring)) rewrites.push({ poly: rw.poly, ring: o.ring, ids: o.ids, coords: o.coords });
+  return { rewrites, consumed };
 }
 
 /**

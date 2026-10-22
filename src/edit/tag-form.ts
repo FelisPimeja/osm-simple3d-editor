@@ -226,7 +226,7 @@ function defaultValues(effective: Record<string, string>): Record<string, { valu
  * suggest — откуда подсказывать значения полей с suggest (даты здания); only — показать только эти поля.
  */
 export function renderTagForm(key: string, session: EditSession, sources: InheritSource[] = [],
-  opts: { suggest?: InheritSource[]; only?: (tag: string) => boolean } = {}): string {
+  opts: { suggest?: InheritSource[]; only?: (tag: string) => boolean; outline?: boolean } = {}): string {
   const f = session.get(key);
   if (!f) return '';
   const orig = session.originalTags(key) ?? {};
@@ -236,7 +236,8 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   const defaults = defaultValues({ ...f.tags, ...inheritedTags(f.tags, sources.map((s) => s.tags)) });
   const rows = FIELDS.filter((field) => {
     if (opts.only && !opts.only(field.tag)) return false;
-    if (field.tag === 'building:part' && f.tags['building:part'] === undefined) return false; // только у частей
+    // Только у частей; у контура здания (outline) — всегда: building:part делает его и частью (рисуется объёмом)
+    if (field.tag === 'building:part' && f.tags['building:part'] === undefined && !opts.outline) return false;
     if (field.dated && !dateFields && f.tags[field.tag] === undefined) return false;
     const only = SHAPE_ONLY[field.tag];
     // Уже заданное значение показываем всегда — чтобы его было видно и можно было удалить
@@ -252,6 +253,7 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
       { source: from.label, tag: `${field.tag}=${inherited}` }) : '';
     // Нет ни своего, ни унаследованного — значение, с которым редактор рисует по умолчанию (серым, с пояснением)
     const def = !value && !from ? defaults[field.tag] : undefined;
+    const outlinePart = opts.outline && field.tag === 'building:part';
     const defHint = def ? tr('Не задано — редактор рисует со значением по умолчанию {value} ({why}). В OSM ничего не записывается: чтобы закрепить, введите значение.',
       { value: def.value, why: def.why }) : '';
     if (from) inheritedAny.push(field.label!.replace(/,.*$/, '').toLowerCase());
@@ -271,6 +273,10 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
       control = badge(`<select ${common}${grey}><option value="">${esc(shown ?? '—')}</option>${options
         .map((o) => `<option value="${esc(o)}"${o === value ? ' selected' : ''}>${esc(o)}</option>`)
         .join('')}</select>`);
+    } else if (outlinePart) {
+      // Пусто у контура — тег удаляется (контур без объёма), а не building:part=yes, как у части
+      const tip = tr('Контур здания с building:part — ещё и часть: рисуется объёмом. Пусто — только контур, без объёма.');
+      control = combo(field, `${common.replace(/title="[^"]*"/, `title="${esc(tip)}"`)} data-empty-removes`, value, tr('нет — только контур'), '', undefined);
     } else if (field.type === 'combo') {
       control = badge(combo(field, common, value, shown ?? field.placeholder ?? '—', grey, shown));
     } else if (field.type === 'colour') {
@@ -414,7 +420,7 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
       const tags = { ...f.tags };
       // Пустая «Часть здания» — по умолчанию yes (без тега объект перестал бы быть частью)
       const empty = FIELDS.find((x) => x.tag === tag)?.empty;
-      if (v.trim()) tags[tag] = v.trim(); else if (empty) tags[tag] = empty; else delete tags[tag];
+      if (v.trim()) tags[tag] = v.trim(); else if (empty && !('emptyRemoves' in input.dataset)) tags[tag] = empty; else delete tags[tag];
       return tags[tag] === f.tags[tag] ? [] : [{ key, tags }];
     });
     if (edits.length === 1 && keys.length === 1) s.setTags(edits[0].key, { [tag]: edits[0].tags[tag] });

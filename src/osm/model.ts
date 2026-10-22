@@ -167,6 +167,12 @@ export function isBareOutlineTags(tags: Record<string, string>): boolean {
   return tags.height === undefined && tags['building:levels'] === undefined && (part === undefined || part === 'no');
 }
 
+/** Контур здания с building:part — одновременно и часть (рисуется объёмом). */
+export function isOutlinePart(tags: Record<string, string>): boolean {
+  const part = tags['building:part'];
+  return part !== undefined && part !== 'no';
+}
+
 export function kindOf(tags?: Record<string, string>): Feature3D['kind'] | undefined {
   if (!tags) return;
   if (tags['building:part'] && tags['building:part'] !== 'no') return 'part';
@@ -402,6 +408,8 @@ export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[
   }
   for (const b of targets) {
     if (b.kind !== 'building') continue;
+    // Контур с building:part — сам тоже часть: рисуется объёмом, хоть внутри и другие части
+    if (isOutlinePart(b.tags)) { b.hasParts = false; continue; }
     const heights = computeHeights(b.tags);
     const top = heights.top;
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;

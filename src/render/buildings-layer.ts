@@ -2465,6 +2465,24 @@ export class BuildingsLayer implements CustomLayerInterface {
     return this.groups.get(FOCUS_GROUP)?.byKey.get(key)?.box;
   }
 
+  /** Сменить плоские следы сцены режима здания (контур получил или потерял building:part); вернёт, чьи сменились — их перестроить. */
+  setFocusFlat(flat: Iterable<string>): string[] {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g) return [];
+    const next = new Set(flat);
+    const changed = [...new Set([...g.flat, ...next])].filter((k) => g.flat.has(k) !== next.has(k));
+    g.flat.clear();
+    for (const k of next) g.flat.add(k);
+    return changed;
+  }
+
+  /** Плоский след в сцене режима здания (контур под частями): высоты у него нет. */
+  focusFlat(key: string): boolean {
+    const g = this.groups.get(FOCUS_GROUP);
+    const it = g?.byKey.get(key);
+    return !!g && !!it && strokeOnly(g, it);
+  }
+
   /** Временно перестроить объект сцены режима здания по другим тегам (превью инструмента «Вытянуть»). */
   previewFocusFeature(f: Feature3D) {
     const g = this.groups.get(FOCUS_GROUP);

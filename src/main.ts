@@ -25,7 +25,7 @@ import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback'
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
 import { mapillary } from './view/mapillary';
-import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
+import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
@@ -1479,9 +1479,28 @@ function groupFeatures(g: BuildingGroup): Feature3D[] {
   // Не нарисованные объёмом (подземные) — из загруженных данных
   return g.members.map((k, i) => {
     const f = (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature ?? overpass.findFeature(k);
-    const kind = g.roles[i] === 'part' ? 'part' : g.roles[i] === 'outline' ? 'building' : undefined;
-    return f && kind && f.kind !== kind ? { ...f, kind } : f;
+    return f && focusFeature(g, f, g.roles[i]);
   }).filter((f): f is Feature3D => !!f);
+}
+
+/**
+ * Член группы для сцены режима здания: вид — по роли; контур с building:part (не входящий ещё и ролью part) —
+ * объёмом, остальные контуры при частях — плоским следом (hasParts у объекта сессии мог устареть после правки тегов).
+ */
+function focusFeature(g: BuildingGroup, f: Feature3D, role = g.roles[g.members.indexOf(f.key)]): Feature3D {
+  const kind = role === 'part' ? 'part' : role === 'outline' ? 'building' : undefined;
+  const hasParts = role === 'outline' ? !outlineVolume(g, f.key, f.tags) && (f.hasParts || g.roles.includes('part')) : f.hasParts;
+  return (kind && f.kind !== kind) || hasParts !== f.hasParts ? { ...f, kind: kind ?? f.kind, hasParts } : f;
+}
+
+/** Объект на месте в сцене режима здания (превью инструментов, правка тегов) — с видом и следом по роли. */
+function previewFocus(f: Feature3D) {
+  overpassLayer.previewFocusFeature(focus ? focusFeature(focus, f) : f);
+}
+
+/** Контур рисуется своим объёмом: у него building:part, и он не входит в отношение ещё и ролью part (тогда объём — у той). */
+function outlineVolume(g: BuildingGroup, key: string, tags: Record<string, string> | undefined): boolean {
+  return !!tags && isOutlinePart(tags) && !g.members.some((k, i) => k === key && g.roles[i] === 'part');
 }
 
 /** Контуры отношения без своей высоты — в режиме здания рисуются плоским полигоном. */
@@ -1491,7 +1510,8 @@ function bareOutlines(g: BuildingGroup): string[] {
     const t = entity(k)?.tags;
     // Контур нового отношения, покрытый частями (рассекли отдельное здание), — плоским следом; часть
     // поменьше (надстройка, пристройка) — нет: объём по-прежнему задаёт контур
-    return !!t && (isBareOutlineTags(t) || ((g.id < 0 || isSolo(g)) && outlineCovered(g, k)));
+    // Контур, входящий ещё и ролью part, — тоже: объём рисует его копия-часть
+    return !!t && !outlineVolume(g, k, t) && (isBareOutlineTags(t) || isOutlinePart(t) || ((g.id < 0 || isSolo(g)) && outlineCovered(g, k)));
   });
 }
 
@@ -2281,6 +2301,8 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(),
   (key) => {
     const f = entity(key) as Feature3D | undefined;
     if (!f?.polygons) return;
+    // Плоский след (контур без building:part под частями) — высоту не рисуем, ручек высоты нет
+    if (overpassLayer.focusFlat(key)) return { min: 0, top: 0, roof: 0 };
     const h = computeHeights(f.tags);
     return { min: h.min, top: Math.max(h.min, h.wallTop), roof: h.roofHeight };
   },
@@ -4608,11 +4630,11 @@ function previewPush(t: PushTarget, dz: number | undefined) {
   if (!f) return;
   const restore = (keep: Set<string>) => {
     const live = pushPreviewed.length ? new Map(liveFeatures().map((g) => [g.key, g] as const)) : undefined;
-    for (const k of pushPreviewed) { const g = live?.get(k); if (!keep.has(k) && g) overpassLayer.previewFocusFeature(g); }
+    for (const k of pushPreviewed) { const g = live?.get(k); if (!keep.has(k) && g) previewFocus(g); }
     pushPreviewed = pushPreviewed.filter((k) => keep.has(k));
   };
   pushTool.linked = 0;
-  if (dz === undefined) { restore(new Set()); overpassLayer.setLinked([]); return overpassLayer.previewFocusFeature(f); }
+  if (dz === undefined) { restore(new Set()); overpassLayer.setLinked([]); return previewFocus(f); }
   overpassLayer.setLinked([]);
   if (t.face === 'side' && pushTool.glue) {
     const e = pushSideEnds(f, t.edge!, dz);
@@ -4621,12 +4643,12 @@ function previewPush(t: PushTarget, dz: number | undefined) {
       const live = new Map(liveFeatures().map((g) => [g.key, g] as const));
       // Сам объект — со своими новыми углами (у углов на прямой с соседней стороной — старый и новый)
       const keys = new Set<string>([f.key]);
-      overpassLayer.previewFocusFeature({ ...f, polygons: pushSidePolygons(f, t.edge!, dz) });
+      previewFocus({ ...f, polygons: pushSidePolygons(f, t.edge!, dz) });
       for (const x of edits) {
         const g = live.get(x.key);
         if (x.key === f.key || !x.polygons || !g) continue;
         keys.add(x.key);
-        overpassLayer.previewFocusFeature({ ...g, polygons: x.polygons });
+        previewFocus({ ...g, polygons: x.polygons });
       }
       restore(keys);
       pushPreviewed = [...keys].filter((k) => k !== t.key);
@@ -4636,7 +4658,7 @@ function previewPush(t: PushTarget, dz: number | undefined) {
       return;
     }
   }
-  overpassLayer.previewFocusFeature(t.face === 'side'
+  previewFocus(t.face === 'side'
     ? { ...f, polygons: pushSidePolygons(f, t.edge!, dz) }
     : { ...f, tags: pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version)) });
 }
@@ -4893,7 +4915,7 @@ function shapeHeightTags(f: Feature3D, t: ShapeTarget, dz: number): Record<strin
 function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string | undefined {
   const live = new Map(liveFeatures().map((g) => [g.key, g] as const));
   const restore = (keep: Set<string>) => {
-    for (const k of shapePreviewed) { const g = live.get(k); if (!keep.has(k) && g) overpassLayer.previewFocusFeature(g); }
+    for (const k of shapePreviewed) { const g = live.get(k); if (!keep.has(k) && g) previewFocus(g); }
     shapePreviewed = shapePreviewed.filter((k) => keep.has(k));
   };
   shapeTool.linked = 0;
@@ -4901,7 +4923,7 @@ function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string
   const f = live.get(t.key);
   if (!f || !offset) { restore(new Set()); return; }
   if (t.roof || t.eave) {
-    overpassLayer.previewFocusFeature({ ...f, tags: shapeHeightTags(f, t, offset.z) });
+    previewFocus({ ...f, tags: shapeHeightTags(f, t, offset.z) });
     restore(new Set([t.key]));
     shapePreviewed = [t.key];
     return;
@@ -4916,7 +4938,7 @@ function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string
     // «Отдельно» соседи остаются на месте — в превью только сама часть
     if (!x.polygons || !g || (!shapeTool.glue && x.key !== t.key)) continue;
     keys.add(x.key);
-    overpassLayer.previewFocusFeature({ ...g, polygons: x.polygons });
+    previewFocus({ ...g, polygons: x.polygons });
   }
   restore(keys);
   shapePreviewed = [...keys];
@@ -8191,7 +8213,9 @@ function renderSelected() {
 function renderSelectedImpl() {
   if (addingTo) return renderAdding();
   if (selection.length > 1) return renderMulti();
-  const form = selectedKey ? renderTagForm(selectedKey, session, inheritSources(selectedKey), { suggest: dateSources(selectedKey) }) : undefined;
+  const og = selectedKey ? groupOf(selectedKey) : undefined;
+  const outline = !!og && og.members.some((k, i) => k === selectedKey && og.roles[i] === 'outline');
+  const form = selectedKey ? renderTagForm(selectedKey, session, inheritSources(selectedKey), { suggest: dateSources(selectedKey), outline }) : undefined;
   const g = selectedKey ? editGroups.get(selectedKey) : undefined;
   // Отношение type=building — только контейнер: высоты, крыша и прочее живут на контуре и частях
   if (g) { infoEl.innerHTML = describeGroup(g); return; }
@@ -8360,9 +8384,15 @@ function onSessionChange(keys: string[]) {
   // Сцену режима здания обновляем напрямую: refreshFeatures доходит до неё только через тайлы, где объект
   // нарисован, а части здания могут лежать в тайле, который сейчас не показан (тогда правка «не применялась»)
   if (focus && !keys.includes(focus.key)) {
+    // Контур получил building:part — объёмом (и виден), потерял — плоским следом
+    const bare = bareOutlines(focus);
+    for (const k of overpassLayer.setFocusFlat(bare)) {
+      affected.add(k);
+      if (!bare.includes(k)) focusHidden.delete(k);
+    }
     for (const k of affected) {
       const f = focus.members.includes(k) ? session.get(k) as Feature3D | undefined : undefined;
-      if (f?.polygons) overpassLayer.previewFocusFeature(f);
+      if (f?.polygons) previewFocus(f);
     }
     // Правка start_date / end_date могла убрать часть из года слайдера времени или вернуть
     syncFocusHidden(true);

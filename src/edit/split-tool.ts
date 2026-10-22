@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { LngLat } from 'maplibre-gl';
 import type { BuildingsLayer, FocusHit, SnapHit } from '../render/buildings-layer';
 import { tr } from '../i18n';
 
@@ -111,8 +112,7 @@ export class SplitTool {
       }
       const c = this.cutPointAt(point);
       if (!c) {
-        const raw = this.planePoint(point);
-        const q = raw ? this.axisPoint(raw) : undefined;
+        const q = this.pointAt(point);
         const polygon = this.layer.focusPolygons(this.target)?.[this.start.poly];
         if (q && polygon && insideRing(q, polygon.outer) && !polygon.inners.some((hole) => insideRing(q, hole))
           && Math.hypot(q[0] - (this.bends.at(-1) ?? this.start.p)[0], q[1] - (this.bends.at(-1) ?? this.start.p)[1]) > 0.05) {
@@ -135,8 +135,8 @@ export class SplitTool {
   move(point: [number, number]) {
     this.lastPoint = point;
     if (this.state === 'cut' && this.loop) {
-      const raw = this.planePoint(point);
-      this.guide(this.closesLoop(point) ? this.loop.pts[0] : raw ? this.axisPoint(raw) : undefined);
+      const q = this.pointAt(point);
+      this.guide(this.closesLoop(point) ? this.loop.pts[0] : q);
       return;
     }
     if (this.state !== 'cut' || !this.start) return;
@@ -145,8 +145,7 @@ export class SplitTool {
       if (candidate) this.useCandidate(candidate);
     }
     const c = this.cutPointAt(point);
-    const raw = c?.p ?? this.planePoint(point);
-    this.guide(c?.p ?? (raw ? this.axisPoint(raw) : undefined));
+    this.guide(c?.p ?? this.pointAt(point));
   }
 
   private useCandidate(candidate: Candidate) {
@@ -213,8 +212,7 @@ export class SplitTool {
       this.begin();
       return true;
     }
-    const raw = this.planePoint(point);
-    const q = raw ? this.axisPoint(raw) : undefined;
+    const q = this.pointAt(point);
     const polygon = this.layer.focusPolygons(loop.key)?.[loop.poly];
     const last = loop.pts.at(-1)!;
     if (!q || !polygon || !insideRing(q, polygon.outer) || polygon.inners.some((h) => insideRing(q, h))) {
@@ -237,6 +235,85 @@ export class SplitTool {
     if (!first || this.loop!.pts.length < 3) return false;
     const s = this.layer.focusProject(new THREE.Vector3(first[0], first[1], this.z));
     return !!s && Math.hypot(s[0] - point[0], s[1] - point[1]) < CLOSE_RADIUS_PX;
+  }
+
+  /** Точки разреза или кольца, поставленные до сих пор. */
+  private ownPoints(): Pt[] {
+    return this.loop ? this.loop.pts : this.start ? [this.start.p, ...this.bends] : [];
+  }
+
+  /**
+   * Следующая точка разреза или кольца: с Shift — по оси от предыдущей; иначе привязка на этой плоскости (точки
+   * объектов и самого разреза), пересечение или одна из линий выравнивания от точек разреза, иначе курсор.
+   */
+  private pointAt(point: [number, number]): Pt | undefined {
+    this.snap = undefined;
+    const raw = this.planePoint(point);
+    const own = this.ownPoints();
+    const key = this.target ?? '';
+    const at = (p: Pt) => new THREE.Vector3(p[0], p[1], this.z);
+    const extra = own.flatMap((p, i) => [
+      { kind: 'vertex' as const, key, p: at(p), label: tr('Точка разреза') },
+      ...(i ? [{ kind: 'midpoint' as const, key, p: at([(p[0] + own[i - 1][0]) / 2, (p[1] + own[i - 1][1]) / 2]) }] : []),
+    ]);
+    const prev = own.at(-1);
+    const s = this.layer.snapAt(point, undefined, undefined, { from: prev && at(prev), extra });
+    const flat = s && s.kind !== 'center' && Math.abs(s.local.z - this.z) < 0.05 ? s : undefined;
+    if (this.shift) {
+      const q: Pt | undefined = flat ? [flat.local.x, flat.local.y] : raw;
+      return q && this.axisPoint(q);
+    }
+    this.axis = undefined;
+    const use = (h: SnapHit): Pt => { this.snap = h; return [h.local.x, h.local.y]; };
+    if (flat && STRONG_SNAPS.has(flat.kind)) return use(flat);
+    const inferred = raw && this.inference(point, raw, own);
+    if (inferred) return use(inferred);
+    if (flat) return use(flat);
+    return raw;
+  }
+
+  /**
+   * Линии выравнивания от точек разреза: вдоль осей и вдоль первого отрезка и перпендикулярно ему. Курсор у двух
+   * линий разных направлений — их пересечение (угол прямоугольника), у одной — точка на ней.
+   */
+  private inference(point: [number, number], raw: Pt, own: Pt[]): SnapHit | undefined {
+    if (!own.length) return;
+    const dirs: Pt[] = [];
+    const add = (u: Pt) => { if (!dirs.some((d) => Math.abs(d[0] * u[1] - d[1] * u[0]) < 0.02)) dirs.push(u); };
+    if (this.axes) { add(this.axes.x); add(this.axes.y); }
+    if (own.length >= 2) {
+      const dx = own[1][0] - own[0][0], dy = own[1][1] - own[0][1], l = Math.hypot(dx, dy);
+      if (l > 1e-6) { add([dx / l, dy / l]); add([-dy / l, dx / l]); }
+    }
+    const at = (p: Pt) => new THREE.Vector3(p[0], p[1], this.z);
+    const screen = (p: Pt) => {
+      const px = this.layer.focusProject(at(p));
+      return px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
+    };
+    const lines: { o: Pt; u: Pt; foot: Pt; d: number }[] = [];
+    for (const o of own) for (const u of dirs) {
+      const t = (raw[0] - o[0]) * u[0] + (raw[1] - o[1]) * u[1];
+      if (Math.abs(t) < 0.3) continue; // у самой точки линии сходятся — не мешаем
+      const foot: Pt = [o[0] + u[0] * t, o[1] + u[1] * t];
+      const d = screen(foot);
+      if (d <= INFER_RADIUS_PX) lines.push({ o, u, foot, d });
+    }
+    if (!lines.length) return;
+    lines.sort((a, b) => a.d - b.d);
+    const hit = (p: Pt, kind: SnapHit['kind'], label: string, along: Pt): SnapHit | undefined => {
+      const px = this.layer.focusProject(at(p));
+      const ll = this.layer.focusToLngLat(p[0], p[1]);
+      return px && ll ? { kind, key: this.target ?? '', local: at(p), lngLat: new LngLat(ll[0], ll[1]), altitude: this.z, point: px, along: at(along), label } : undefined;
+    };
+    for (let i = 0; i < lines.length; i++) for (let j = i + 1; j < lines.length; j++) {
+      const a = lines[i], b = lines[j];
+      const cross = a.u[0] * b.u[1] - a.u[1] * b.u[0];
+      if (Math.abs(cross) < 0.02) continue;
+      const t = ((b.o[0] - a.o[0]) * b.u[1] - (b.o[1] - a.o[1]) * b.u[0]) / cross;
+      const p: Pt = [a.o[0] + a.u[0] * t, a.o[1] + a.u[1] * t];
+      if (screen(p) <= INFER_RADIUS_PX * 1.5) return hit(p, 'tracked', tr('Пересечение'), a.o);
+    }
+    return hit(lines[0].foot, 'extension', tr('От точки разреза'), lines[0].o);
   }
 
   /** Привязать промежуточную точку к выбранной Shift оси от предыдущей точки. */
@@ -327,12 +404,12 @@ export class SplitTool {
   private guide(to: Pt | undefined) {
     if (this.loop) {
       const [first, ...rest] = this.loop.pts.map((p) => new THREE.Vector3(p[0], p[1], this.z));
-      this.layer.setMoveGuide({ from: first, to: to ? new THREE.Vector3(to[0], to[1], this.z) : undefined, path: rest, axis: this.axis, locked: this.locked, axes: this.axes, dashSize: 0.2, gapSize: 0.12 });
+      this.layer.setMoveGuide({ from: first, to: to ? new THREE.Vector3(to[0], to[1], this.z) : undefined, path: rest, axis: this.axis, locked: this.locked, axes: this.axes, dashSize: 0.2, gapSize: 0.12, widthPx: 2.5 });
       return;
     }
     if (!this.start) return;
     const from = new THREE.Vector3(this.start.p[0], this.start.p[1], this.z);
-    this.layer.setMoveGuide({ from, to: to ? new THREE.Vector3(to[0], to[1], this.z) : undefined, path: this.bends.map((p) => new THREE.Vector3(p[0], p[1], this.z)), axis: this.axis, locked: this.locked, axes: this.axes, dashSize: 0.2, gapSize: 0.12 });
+    this.layer.setMoveGuide({ from, to: to ? new THREE.Vector3(to[0], to[1], this.z) : undefined, path: this.bends.map((p) => new THREE.Vector3(p[0], p[1], this.z)), axis: this.axis, locked: this.locked, axes: this.axes, dashSize: 0.2, gapSize: 0.12, widthPx: 2.5 });
   }
 
   private cancel() {
@@ -348,6 +425,11 @@ export class SplitTool {
     this.snap = undefined;
   }
 }
+
+/** Привязки, которые важнее линий выравнивания. */
+const STRONG_SNAPS = new Set<SnapHit['kind']>(['vertex', 'midpoint', 'perpendicular', 'tracked']);
+/** Как близко к линии выравнивания курсор ловится на неё, px. */
+const INFER_RADIUS_PX = 8;
 
 /** Радиус «попал в первую точку кольца», px. */
 const CLOSE_RADIUS_PX = 12;

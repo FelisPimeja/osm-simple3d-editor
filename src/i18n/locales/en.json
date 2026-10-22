@@ -1074,5 +1074,8 @@
   "Клик по ребру верхней грани — начало разреза, клики внутри грани — изгибы, клик по другому ребру той же грани — конец.": "Click an edge of the top face to start the cut, click inside the face to add bends, click another edge of the same face to finish.",
   "Первый клик внутри грани (не у ребра) — замкнутое кольцо: клик в первую точку его замыкает. Внутреннюю часть удалите (Del) — двор, или вытяните (P) — башня, атриум.": "A first click inside the face (away from the edges) starts a closed ring; clicking the first point closes it. Delete the inner part (Del) for a courtyard, or push it (P) for a tower or atrium.",
   "Backspace — убрать последнюю точку кольца, Shift — держать ось. Esc — отмена.": "Backspace removes the last ring point, Shift holds the axis. Esc cancels.",
-  "Объединить выделенные части с одинаковыми тегами объёма (J)": "Merge the selected parts with the same volume tags (J)"
+  "Объединить выделенные части с одинаковыми тегами объёма (J)": "Merge the selected parts with the same volume tags (J)",
+  "Точка разреза": "Cut point",
+  "Пересечение": "Intersection",
+  "От точки разреза": "From cut point"
 }

@@ -4050,6 +4050,7 @@ function commitPush(t: PushTarget, dz: number) {
   if (t.face === 'side') {
     const edits = pushSideEdits(f, t.edge!, dz);
     if (typeof edits === 'string') return setStatus(edits, true);
+    dropCollapsedHoles(edits);
     session.editMany(edits);
   }
   else session.setTags(t.key, diffTags(f.tags, pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version))));
@@ -4108,15 +4109,16 @@ const shapeMoved = (rings: ShapeRings, offset: THREE.Vector3) =>
   rings.map((r) => ({ ...r, coords: r.coords.map((c, k) => (r.ks.includes(k) ? shapeShift(c, offset) : c)) }));
 
 /** Почему так нельзя: две соседние вершины совпали или контур пересекает сам себя. */
-function shapeProblem(rings: { coords: LonLat[] }[]): string | undefined {
-  for (const r of rings) {
-    const pts = r.coords.map((c) => overpassLayer.focusToLocal(c)!);
-    const n = pts.length;
-    for (let k = 0; k < n; k++) {
-      const [ax, ay] = pts[k], [bx, by] = pts[(k + 1) % n];
-      if (Math.hypot(bx - ax, by - ay) < 0.05) return tr('Вершина совпала с соседней — слияние вершин пока не поддерживается.');
+function shapeProblem(rings: { coords: LonLat[] }[], before: { coords: LonLat[] }[]): string | undefined {
+  const short = (pts: Pt[], k: number) => Math.hypot(pts[(k + 1) % pts.length][0] - pts[k][0], pts[(k + 1) % pts.length][1] - pts[k][1]) < 0.05;
+  for (let ri = 0; ri < rings.length; ri++) {
+    const pts = rings[ri].coords.map((c) => overpassLayer.focusToLocal(c)!);
+    const was = before[ri].coords.map((c) => overpassLayer.focusToLocal(c)!);
+    // Вырожденное уже до правки (схлопнутая дыра, совпавшие узлы в данных) — не мешает его исправлять
+    for (let k = 0; k < pts.length; k++) {
+      if (short(pts, k) && !short(was, k)) return tr('Вершина совпала с соседней — слияние вершин пока не поддерживается.');
     }
-    if (selfIntersects(pts)) return tr('Контур пересекает сам себя.');
+    if (selfIntersects(pts) && !selfIntersects(was)) return tr('Контур пересекает сам себя.');
   }
 }
 
@@ -4266,12 +4268,14 @@ function removeShapeVertex(t: ShapeTarget, merged: boolean) {
   }
   const after = rings.map((r) => ({ poly: r.poly, ring: r.ring, ids: r.ids.filter((_, k) => !r.ks.includes(k)), coords: r.coords.filter((_, k) => !r.ks.includes(k)) }));
   if (after.some((r) => r.ids.length < 3)) return setStatus(tr('{key}: в кольце останется меньше трёх вершин.', { key: t.key }), true);
-  if (after.some((r) => selfIntersects(r.coords.map((c) => overpassLayer.focusToLocal(c)!)))) return setStatus(tr('Без этой вершины контур пересекает сам себя.'), true);
+  if (after.some((r, i) => selfIntersects(r.coords.map((c) => overpassLayer.focusToLocal(c)!))
+    && !selfIntersects(rings[i].coords.map((c) => overpassLayer.focusToLocal(c)!)))) return setStatus(tr('Без этой вершины контур пересекает сам себя.'), true);
   const ids = new Set(rings.flatMap((r) => r.ks.map((k) => r.ids[k])));
   const outside = nodesOutside(new Set([f.key]));
   const edits = shapeTool.glue || ![...ids].some((n) => outside.has(n)) ? nodeRemoveEdits(ids)
     : topologyEdits([{ f, rewrites: after }], [], new Map());
   if (typeof edits === 'string') return setStatus(edits, true);
+  dropCollapsedHoles(edits);
   session.editMany(edits);
   const neighbours = edits.filter((e) => e.polygons && e.key !== t.key).length;
   setStatus((merged ? tr('Вершина {key} слита с соседней', { key: t.key })
@@ -4320,7 +4324,7 @@ function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string
   const neighbours = shapePreviewed.filter((k) => k !== t.key);
   overpassLayer.setLinked(neighbours);
   shapeTool.linked = neighbours.length;
-  return shapeProblem(shapeMoved(rings, offset));
+  return shapeProblem(shapeMoved(rings, offset), rings);
 }
 
 function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
@@ -4344,11 +4348,12 @@ function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
   } else {
     const rings = shapeRings(f, t);
     if (!rings) return fail(noIds);
-    const problem = shapeProblem(shapeMoved(rings, offset));
+    const problem = shapeProblem(shapeMoved(rings, offset), rings);
     if (problem) return fail(problem);
     edits = shapeTool.glue ? nodeMoveEdits(shapeMoves(rings, offset)) : shapeSeparateEdits(f, rings, offset);
   }
   if (typeof edits === 'string') return fail(edits);
+  dropCollapsedHoles(edits);
   session.editMany(edits);
   const neighbours = edits.filter((e) => e.polygons && e.key !== t.key).length;
   const n = 1 + (t.also?.length ?? 0), d = offset.length().toFixed(2);
@@ -4356,6 +4361,53 @@ function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
     : n > 1 ? tr('Вершины {key} ({n}) сдвинуты на {d} м', { key: t.key, n, d }) : tr('Вершина {key} сдвинута на {d} м', { key: t.key, d }))
     + (neighbours ? tr(', соседи с общими узлами подтянуты следом: {n}', { n: neighbours }) : '') + tr('. Отменить — Ctrl+Z.'));
   return true;
+}
+
+/** Площадь кольца, м², меньше которой дыра считается схлопнутой (стену двора дотянули до противоположной). */
+const COLLAPSED_HOLE_M2 = 0.05;
+
+/**
+ * Дыры, схлопнутые правкой (площадь почти ноль — осталась бы линия), — убрать из полигонов; у мультиполигона
+ * уходят и пути этих колец (без тегов — удаляются). Правит edits на месте.
+ */
+function dropCollapsedHoles(edits: ObjectEdit[]) {
+  for (const e of [...edits]) {
+    if (!e.polygons || e.delete) continue;
+    const dead: number[][] = [];
+    e.polygons = e.polygons.map((p) => {
+      const keep = p.inners.map((r) => ringArea(r.map((c) => overpassLayer.focusToLocal(c)!)) >= COLLAPSED_HOLE_M2);
+      if (keep.every(Boolean)) return p;
+      p.innerIds?.forEach((ids, k) => { if (!keep[k]) dead.push(ids); });
+      return { ...p, inners: p.inners.filter((_, k) => keep[k]), innerIds: p.innerIds?.filter((_, k) => keep[k]) };
+    });
+    if (!dead.length || !e.key.startsWith('relation/')) continue;
+    const f = entity(e.key) as Feature3D | undefined;
+    const members = e.members ?? (f as Tagged | undefined)?.relMembers ?? session.get(e.key)?.relMembers;
+    if (!members) continue;
+    // Узлы путей — с учётом правок этого же шага
+    const lineNodes = new Map((f?.ways ?? []).map((w) => [w.id, w.nodes] as const));
+    for (const l of session.lineEntities()) lineNodes.set(Number(l.key.split('/')[1]), l.line!.ids);
+    for (const x of edits) if (x.line && x.key.startsWith('way/')) lineNodes.set(Number(x.key.split('/')[1]), x.line.ids);
+    const deadNodes = new Set(dead.flat());
+    const gone = new Set(members.filter((m) => m.type === 'way' && m.role === 'inner'
+      && lineNodes.get(m.ref)?.every((id) => deadNodes.has(id))).map((m) => m.ref));
+    if (!gone.size) continue;
+    e.members = members.filter((m) => m.type !== 'way' || !gone.has(m.ref));
+    for (const id of gone) {
+      const key = `way/${id}`;
+      const at = edits.findIndex((x) => x.key === key);
+      if (at >= 0) edits.splice(at, 1);
+      const tags = session.get(key)?.tags ?? f?.ways?.find((w) => w.id === id)?.tags ?? {};
+      if (Object.keys(tags).length) continue;
+      if (!session.has(key)) {
+        const nodes = lineNodes.get(id)!;
+        const coords = new Map<number, LonLat>();
+        for (const p of f?.polygons ?? []) p.innerIds?.forEach((ids, k) => ids.forEach((n, i) => coords.set(n, p.inners[k][i])));
+        session.track({ key, version: 0, tags: {}, line: { ids: nodes, coords: nodes.map((n) => coords.get(n)!) } });
+      }
+      edits.push({ key, delete: true });
+    }
+  }
 }
 
 /** Значения для setTags: новые и удалённые (undefined) теги. */

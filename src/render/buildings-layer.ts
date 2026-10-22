@@ -2886,7 +2886,9 @@ export class BuildingsLayer implements CustomLayerInterface {
    * (цветом оси, если движение по оси). undefined — убрать.
    */
   /** Значок осей в точке захвата и пунктир к курсору; axes — свои оси вместо осей здания (например, по ребру); free — доступные оси. */
-  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; path?: THREE.Vector3[]; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2; axes?: { x: Pt; y: Pt }; dashSize?: number; gapSize?: number; gizmoScale?: number; free?: readonly (0 | 1 | 2)[] } | undefined) {
+  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; path?: THREE.Vector3[]; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2; axes?: { x: Pt; y: Pt }; dashSize?: number; gapSize?: number; gizmoScale?: number; free?: readonly (0 | 1 | 2)[];
+    /** Толщина линии, px (по умолчанию — тонкая линия WebGL). */
+    widthPx?: number } | undefined) {
     const g = this.groups.get(FOCUS_GROUP);
     if (this.moveGuide) {
       this.moveGuide.parent?.remove(this.moveGuide);
@@ -2899,7 +2901,21 @@ export class BuildingsLayer implements CustomLayerInterface {
       const gizmo = axesGizmo(frame, guide.locked, TOOL_AXES_LENGTH * (guide.gizmoScale ?? 1), false, guide.free);
       gizmo.matrix.elements[14] = guide.from.z; // значок на высоте точки захвата
       root.add(gizmo);
-      if (guide.to) {
+      if (guide.to && guide.widthPx && this.map) {
+        // Толстая пунктирная линия (Line2): тонкую на светлой крыше почти не видно
+        const canvas = this.map.getCanvas();
+        const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+        const geo = new LineGeometry();
+        geo.setPositions([guide.from, ...(guide.path ?? []), guide.to].flatMap((p) => [p.x, p.y, p.z]));
+        const mat = new LineMaterial({ color: guide.axis === undefined ? 0x1d4ed8 : AXIS_COLOURS[guide.axis], linewidth: guide.widthPx * dpr,
+          dashed: true, dashSize: guide.dashSize ?? 0.5, gapSize: guide.gapSize ?? 0.3, depthTest: false, depthWrite: false, transparent: true });
+        mat.resolution.set(canvas.width, canvas.height);
+        const line = new Line2(geo, mat);
+        line.computeLineDistances();
+        line.renderOrder = 1002;
+        line.frustumCulled = false;
+        root.add(line);
+      } else if (guide.to) {
         const line = new THREE.Line(
           new THREE.BufferGeometry().setFromPoints([guide.from, ...(guide.path ?? []), guide.to]),
           new THREE.LineDashedMaterial({ color: guide.axis === undefined ? 0x333333 : AXIS_COLOURS[guide.axis], dashSize: guide.dashSize ?? 0.5, gapSize: guide.gapSize ?? 0.3,

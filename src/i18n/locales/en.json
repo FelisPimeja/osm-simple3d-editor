@@ -309,7 +309,6 @@
   "Одно здание отдельно от карты: его части, контур и правка геометрии инструментами слева.": "One building apart from the map: its parts, outline and geometry editing with the tools on the left.",
   "Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.": "Click: select a part, Shift+click: add to selection, Alt+click: next one under the cursor.",
   "Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.": "Drag with the right or middle mouse button (or Ctrl+left): orbit around the point under the cursor.",
-  "Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, Shift+H — показать все.": "Space: turn the tool off. G: grid, S: snapping, H: hide a part, Shift+H: show all.",
   "Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.": "Ctrl+C / Ctrl+V: copy and paste parts, Delete: delete, Ctrl+Z: undo.",
   "Сдвигает выделенные части по горизонтали или вертикали, как Move в SketchUp. Общие с соседями углы заменяются новыми узлами, чтобы не было нахлёстов.": "Moves the selected parts horizontally or vertically, like Move in SketchUp. Corners shared with neighbors are replaced with new nodes to avoid overlaps.",
   "Клик по точке выделенной части — точка захвата, второй клик — применить; выделенные части едут вместе.": "Click a point of a selected part to grab it, click again to apply; all selected parts move together.",
@@ -1085,5 +1084,8 @@
   "Показаны все части. Двойной клик по пустому месту ещё раз — выйти из режима здания.": "All parts shown. Double-click empty space again to exit building mode.",
   "Двойной клик по части — изолировать её (остальные скрыты); двойной клик мимо здания — показать все части, а если скрытых нет — назад к карте.": "Double-click a part to isolate it (the rest are hidden); double-click outside the building to show all parts, or, if none are hidden, to go back to the map.",
   "Esc — снять выделение, ещё раз — назад к карте.": "Esc clears the selection; press it again to go back to the map.",
-  "Клик по части — выделить её, Shift — несколько. Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.": "Click a part to select it, Shift for several. Double-click a part to isolate it; double-click outside the building to show all parts or exit."
+  "Клик по части — выделить её, Shift — несколько. Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.": "Click a part to select it, Shift for several. Double-click a part to isolate it; double-click outside the building to show all parts or exit.",
+  "Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, I — изолировать выделенные, Shift+H — показать все.": "Space: turn the tool off. G: grid, S: snapping, H: hide a part, I: isolate selected, Shift+H: show all.",
+  "Выделите части (Shift+клик — несколько), затем I — изолировать их.": "Select parts (Shift+click for several), then press I to isolate them.",
+  "Изолировано частей: {n}. Двойной клик по пустому месту или Shift+H — показать все, Ctrl+Z — отменить.": "Isolated parts: {n}. Double-click empty space or press Shift+H to show all, Ctrl+Z to undo."
 }

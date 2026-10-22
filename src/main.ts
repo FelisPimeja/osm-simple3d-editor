@@ -4871,6 +4871,7 @@ document.addEventListener('keydown', (e) => {
     : e.code === 'KeyA' && !e.shiftKey ? 'square'
     : e.code === 'KeyJ' && !e.shiftKey ? 'merge'
     : e.code === 'KeyH' ? (e.shiftKey ? 'show-all' : 'hide')
+    : e.code === 'KeyI' && !e.shiftKey ? 'isolate'
     : e.code === 'KeyR' && !e.shiftKey ? 'rect'
     : e.code === 'KeyL' && !e.shiftKey ? 'polygon'
     : e.code === 'KeyC' && !e.shiftKey ? 'circle'
@@ -7182,7 +7183,7 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
   ctxMenu.innerHTML = where === 'empty' ? `
     ${showAll}${snaps}${yandex}${exit}` : `
     <li><button type="button" data-ctx="hide"${anyShown ? '' : ' disabled'}>${tr('Скрыть объекты')}${n}${kbd('H')}</button></li>
-    <li><button type="button" data-ctx="isolate"${keys.length && focus.members.some((k) => !keys.includes(k) && !focusHidden.has(k)) ? '' : ' disabled'}>${tr('Изолировать')}${n}</button></li>
+    <li><button type="button" data-ctx="isolate"${keys.length && focus.members.some((k) => !keys.includes(k) && !focusHidden.has(k)) ? '' : ' disabled'}>${tr('Изолировать')}${n}${kbd('I')}</button></li>
     ${inScene
       ? showAll
       : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>${tr('Показать объекты')}${n}</button></li>`}
@@ -7246,7 +7247,7 @@ const HELP: Record<string, HelpTopic> = {
     tr('Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.'),
     tr('Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.'),
     tr('M — переместить, Q — повернуть, A — выровнять углы (90°), P — вытянуть, K — рассечь, J — объединить, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.'),
-    tr('Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, Shift+H — показать все.'),
+    tr('Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, I — изолировать выделенные, Shift+H — показать все.'),
     tr('Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.'),
     tr('Двойной клик по части — изолировать её (остальные скрыты); двойной клик мимо здания — показать все части, а если скрытых нет — назад к карте.'),
     tr('Esc — снять выделение, ещё раз — назад к карте.'),
@@ -7433,7 +7434,9 @@ function focusAction(action: string) {
   if (action === 'snaps') return toggleSnaps();
   // Изолировать — скрыть все части, кроме выделенных (выделенные при этом показать)
   if (action === 'isolate') {
-    if (keys.length) changeFocusHidden(new Set(focus.members.filter((k) => !keys.includes(k))));
+    if (!keys.length) return setStatus(tr('Выделите части (Shift+клик — несколько), затем I — изолировать их.'));
+    changeFocusHidden(new Set(focus.members.filter((k) => !keys.includes(k))));
+    setStatus(tr('Изолировано частей: {n}. Двойной клик по пустому месту или Shift+H — показать все, Ctrl+Z — отменить.', { n: keys.length }));
     return;
   }
   const next = new Set(focusHidden);

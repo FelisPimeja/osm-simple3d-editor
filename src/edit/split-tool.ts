@@ -147,7 +147,7 @@ export class SplitTool {
     this.lastPoint = point;
     if (this.state === 'cut' && this.loop) {
       const q = this.pointAt(point);
-      this.guide(this.closesLoop(point) ? this.loop.pts[0] : q);
+      this.guide(this.closesLoop(point, q) ? this.loop.pts[0] : q);
       return;
     }
     if (this.state !== 'cut' || !this.start) return;
@@ -263,7 +263,7 @@ export class SplitTool {
 
   private loopClick(point: [number, number]): boolean {
     const loop = this.loop!;
-    if (loop.pts.length >= 3 && this.closesLoop(point)) {
+    if (loop.pts.length >= 3 && this.closesLoop(point, this.pointAt(point))) {
       const err = this.hole(loop.key, loop.poly, loop.pts);
       if (err) { this.onState(err, true); return true; }
       this.cancel();
@@ -288,9 +288,14 @@ export class SplitTool {
   }
 
   /** Курсор у первой точки кольца (на экране). */
-  private closesLoop(point: [number, number]): boolean {
+  /**
+   * Клик замыкает кольцо: курсор у первой точки на экране. С осью Shift — только если точка на оси q сама
+   * попала в первую: курсор у первой точки тогда — привязка (перпендикуляр из неё на ось), а не замыкание.
+   */
+  private closesLoop(point: [number, number], q?: Pt): boolean {
     const first = this.loop?.pts[0];
     if (!first || this.loop!.pts.length < 3) return false;
+    if (this.shift && this.locked !== undefined) return !!q && Math.hypot(q[0] - first[0], q[1] - first[1]) < 0.05;
     const s = this.layer.focusProject(new THREE.Vector3(first[0], first[1], this.z));
     return !!s && Math.hypot(s[0] - point[0], s[1] - point[1]) < CLOSE_RADIUS_PX;
   }

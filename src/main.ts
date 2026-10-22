@@ -2172,33 +2172,29 @@ function mergeIn(pending: EditGroup | undefined): string | undefined {
     groupMembers = groupMembers?.map((m) => (m.type === 'way' && m.ref === keeper.id ? { type: 'relation' as const, ref: relId, role: m.role } : m));
     result = rel.key;
   } else {
-    // Мультиполигон: внешнее кольцо — из его путей (restructureRing), внутренние — прежние пути, если кольцо то же
+    // Мультиполигон: внешнее кольцо — через topologyEdits (пути, общие с соседями, режутся, куски — соседям; пути
+    // удаляемых частей берутся в кольцо, а не дублируются), внутренние — прежние пути, если кольцо то же
     const members = (keeper as Tagged).relMembers ?? session.get(keeper.key)?.relMembers;
-    if (!members) return tr('Для объединения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+    if (!members || keeper.polygons.length !== 1) return tr('Для объединения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
     const lineNodes = new Map((keeper.ways ?? []).map((w) => [w.id, w.nodes] as const));
     for (const line of session.lineEntities()) lineNodes.set(Number(line.key.split('/')[1]), line.line!.ids);
     const own = members.filter((m) => m.type === 'way');
     if (own.some((m) => !lineNodes.has(m.ref))) return tr('Для объединения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
-    const shared = liveFeatures().find((o) => o.type === 'relation' && !keys.includes(o.key) && relWays(o)?.some((w) => own.some((m) => m.ref === w.id)));
-    if (shared) return tr('Путь мультиполигона {key} входит и в {other} — объединить пока нельзя.', { key: keeper.key, other: shared.key });
-    const tagsOf = (id: number) => session.get(`way/${id}`)?.tags ?? keeper.ways?.find((w) => w.id === id)?.tags;
-    const sourceWays: RingWay[] = own.filter((m) => m.role !== 'inner').map((m) => ({ id: m.ref, role: m.role, nodes: lineNodes.get(m.ref)!, tags: tagsOf(m.ref) }));
-    const res = restructureRing(sourceWays, polygon.outerIds!, 'outer', () => nextNewId--);
-    const kept = new Set(res.members.map((m) => m.id));
     const at = new Map(known.map((n) => [n.id, n.c] as const));
     for (const n of [...outer, ...inners.flat()]) at.set(n.id, n.c);
-    const line = (ids: number[]) => ({ ids, coords: ids.map((id) => at.get(id)!) });
-    for (const w of res.created) {
-      if (!kept.has(w.id)) continue; // кусок вне нового кольца — никому не нужен
-      edits.push({ key: `way/${w.id}`, create: { key: `way/${w.id}`, version: 0, tags: { ...(w.tags ?? {}) }, line: line(w.nodes),
-        ...(w.splitFrom !== undefined && w.splitFrom > 0 ? { splitFrom: w.splitFrom } : {}) } });
-    }
+    const gone = new Set(others.map((f) => f.key));
+    const adopt = others.flatMap((f) => (f.type === 'relation' ? relWays(f)?.filter((w) => w.role !== 'inner').map((w) => w.id) ?? [] : []));
+    const topo = topologyEdits([{ f: keeper, rewrites: [{ poly: 0, ring: 0, ids: polygon.outerIds!, coords: polygon.outer, adopt }] }], [], at, gone);
+    if (typeof topo === 'string') return topo;
+    const mine = topo.find((e) => e.key === keeper.key)!;
+    edits.push(...topo.filter((e) => e !== mine));
+    const tagsOf = (id: number) => session.get(`way/${id}`)?.tags ?? keeper.ways?.find((w) => w.id === id)?.tags;
     const track = (id: number) => {
       const key = `way/${id}`;
-      if (!session.has(key)) session.track({ key, version: 0, tags: { ...(tagsOf(id) ?? {}) }, line: line(lineNodes.get(id)!) });
+      const ids = lineNodes.get(id)!;
+      if (!session.has(key)) session.track({ key, version: 0, tags: { ...(tagsOf(id) ?? {}) }, line: { ids, coords: ids.map((n) => at.get(n)!) } });
       return key;
     };
-    for (const [id, nodes] of res.lines) edits.push({ key: track(id), line: line(nodes) });
     const innerMembers: { id: number; role: string }[] = [];
     for (const r of inners) {
       const ring = new Set(r.map((n) => n.id));
@@ -2207,11 +2203,14 @@ function mergeIn(pending: EditGroup | undefined): string | undefined {
       if (same.length && covered.size === ring.size) innerMembers.push(...same.map((m) => ({ id: m.ref, role: 'inner' })));
       else innerMembers.push(newWay(r, 'inner'));
     }
-    for (const m of innerMembers) kept.add(m.id);
-    // Прежние пути, что больше не на кольцах, — удаляем (если без тегов: иначе это чей-то объект)
-    for (const m of own) if (!kept.has(m.ref) && !Object.keys(tagsOf(m.ref) ?? {}).length) edits.push({ key: track(m.ref), delete: true });
-    edits.push({ key: keeper.key, polygons: [polygon], tags: keeperTags, members: [...members.filter((m) => m.type !== 'way'),
-      ...res.members.map((m) => ({ type: 'way' as const, ref: m.id, role: m.role })),
+    // Прежние внутренние пути, что больше не на кольцах, — удаляем (если без тегов и не нужны другим отношениям)
+    const usedElsewhere = (id: number) => liveFeatures().some((o) => o.type === 'relation' && o.key !== keeper.key && !gone.has(o.key) && relWays(o)?.some((w) => w.id === id));
+    for (const m of own) {
+      if (m.role !== 'inner' || innerMembers.some((x) => x.id === m.ref) || Object.keys(tagsOf(m.ref) ?? {}).length || usedElsewhere(m.ref)) continue;
+      edits.push({ key: track(m.ref), delete: true });
+    }
+    edits.push({ ...mine, polygons: [polygon], tags: keeperTags, members: [
+      ...(mine.members ?? members).filter((m) => m.type !== 'way' || m.role !== 'inner'),
       ...innerMembers.map((m) => ({ type: 'way' as const, ref: m.id, role: m.role }))] });
   }
   if (g && groupMembers) edits.push(groupMembersEdit(g, groupMembers));
@@ -3966,6 +3965,8 @@ interface RingRewrite {
   absorbs?: number[];
   /** Кольцо распалось (двор перегородили): остальные куски — новыми внутренними кольцами этого полигона. */
   extra?: { ids: number[]; coords: LonLat[] }[];
+  /** Пути других (уходящих) отношений, которые можно взять в кольцо, а не рисовать там новые (объединение частей). */
+  adopt?: number[];
 }
 
 /** Объекты с геометрией как сейчас (правки сессии поверх данных) и созданные в сессии. */
@@ -3994,11 +3995,14 @@ function nodesOutside(skip: Set<string>): Set<number> {
  * Правки (одним шагом истории) для новых колец объектов items и вставки новых узлов в общие стороны.
  * Строка — почему нельзя.
  */
-function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inserts: Insert[], newCoords: Map<number, LonLat>): ObjectEdit[] | string {
-  const live = liveFeatures();
+function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inserts: Insert[], newCoords: Map<number, LonLat>,
+  /** Объекты, удаляемые этим же шагом: им не нужны ни куски путей, ни сами пути. */
+  gone = new Set<string>()): ObjectEdit[] | string {
+  const all = liveFeatures();
+  const live = all.filter((g) => !gone.has(g.key));
   const coords = new Map<number, LonLat>();
   const ways = new Map<number, { nodes: number[]; tags: Record<string, string> }>();
-  for (const g of live) {
+  for (const g of all) {
     for (const p of g.polygons) {
       p.outerIds?.forEach((id, i) => coords.set(id, p.outer[i]));
       p.inners.forEach((r, j) => p.innerIds?.[j]?.forEach((id, i) => coords.set(id, r[i])));
@@ -4059,11 +4063,12 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
       const old = r.ring ? p.innerIds?.[r.ring - 1] : p.outerIds;
       if (!old) return tr('{key}: в кеше нет id узлов.', { key: f.key });
       // Узлы, вставленные этим же шагом в пути кольца, — тоже свои (даже если с отпавшей части кольца)
+      const adopted = (r.adopt ?? []).filter((id) => !members.some((m) => m.type === 'way' && m.ref === id));
       const allowed = new Set([...old, ...r.ids, ...inserts.map((x) => x.id), ...(r.extra ?? []).flatMap((x) => x.ids),
-        ...(r.absorbs ?? []).flatMap((k) => p.innerIds?.[k - 1] ?? [])]);
+        ...(r.absorbs ?? []).flatMap((k) => p.innerIds?.[k - 1] ?? []), ...adopted.flatMap((id) => lineOf(id) ?? [])]);
       const role = r.ring ? 'inner' : 'outer';
       const ringWays: RingWay[] = [];
-      for (const m of members) {
+      for (const m of [...members, ...adopted.map((ref) => ({ type: 'way' as const, ref, role }))]) {
         if (m.type !== 'way' || (m.role === 'inner') !== (role === 'inner')) continue;
         const nodes = lineOf(m.ref);
         if (!nodes) return tr('{key}: нет данных пути way/{ref} — перезагрузите видимые тайлы.', { key: f.key, ref: m.ref });
@@ -4084,9 +4089,10 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
       }
       const ringIds = new Set(ringWays.map((w) => w.id));
       const keep = new Set(res.members.map((m) => m.id));
+      const had = new Set(members.filter((m) => m.type === 'way').map((m) => m.ref));
       members = [
         ...members.filter((m) => m.type !== 'way' || !ringIds.has(m.ref) || keep.has(m.ref)),
-        ...res.members.filter((m) => !ringIds.has(m.id)).map((m) => ({ type: 'way' as const, ref: m.id, role: m.role })),
+        ...res.members.filter((m) => !had.has(m.id)).map((m) => ({ type: 'way' as const, ref: m.id, role: m.role })),
       ];
     }
     edit(f.key).members = members;

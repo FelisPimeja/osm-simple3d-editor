@@ -1065,7 +1065,6 @@
   "Объединять можно части с одинаковыми тегами объёма, различаются: {tags}.": "Only parts with the same volume tags can be merged; these differ: {tags}.",
   "Не удалось объединить контуры.": "Couldn't merge the outlines.",
   "Части не соприкасаются: объединить можно только части с общей стороной.": "The parts don't touch: only parts that share a side can be merged.",
-  "Путь мультиполигона {key} входит и в {other} — объединить пока нельзя.": "A way of multipolygon {key} also belongs to {other} — merging isn't supported yet.",
   "Объединено частей: {n} → {key}. Отменить — Ctrl+Z.": "Merged {n} parts → {key}. Undo with Ctrl+Z.",
   "M — переместить, Q — повернуть, A — выровнять углы (90°), P — вытянуть, K — рассечь, J — объединить, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.": "M — move, Q — rotate, A — square corners (90°), P — push, K — split, J — merge, R / L / C / N — new part (rectangle, polygon, circle, regular polygon), O — offset, T — tape measure, B — paint.",
   "Делит верхнюю грань части на две части с теми же тегами или вырезает в ней кольцо — дыру с новой частью внутри.": "Splits a part's top face into two parts with the same tags, or cuts a ring into it — a hole with a new part inside.",

@@ -51,12 +51,13 @@ const edgeKey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
  * Пути кольца мультиполигона под новое кольцо ring (узлы по порядку, без повтора первого).
  * Путь целиком на кольце — остаётся; целиком вне — уходит из кольца (остаётся соседям); частично —
  * режется по границам, наши куски — в кольцо (первый сохраняет id пути). Стороны кольца, которых нет
- * ни в одном пути, — новые пути (по одному на непрерывный участок).
+ * ни в одном пути, — новые пути (по одному на непрерывный участок). Кольцо может распасться на несколько
+ * (loops — список колец): пути режутся по всем сразу.
  */
-export function restructureRing(ways: RingWay[], ring: number[], role: string, alloc: () => number): Restructured {
-  const n = ring.length;
+export function restructureRing(ways: RingWay[], ring: number[] | number[][], role: string, alloc: () => number): Restructured {
+  const loops = typeof ring[0] === 'number' ? [ring as number[]] : (ring as number[][]);
   const edges = new Set<string>();
-  for (let i = 0; i < n; i++) edges.add(edgeKey(ring[i], ring[(i + 1) % n]));
+  for (const r of loops) r.forEach((a, i) => edges.add(edgeKey(a, r[(i + 1) % r.length])));
   const covered = new Set<string>();
   const res: Restructured = { members: [], lines: new Map(), created: [], pieces: new Map() };
   const cover = (nodes: number[]) => { for (let j = 1; j < nodes.length; j++) covered.add(edgeKey(nodes[j - 1], nodes[j])); };
@@ -93,20 +94,25 @@ export function restructureRing(ways: RingWay[], ring: number[], role: string, a
   }
 
   // Непокрытые стороны — новые пути по непрерывным участкам
-  const free = ring.map((a, i) => !covered.has(edgeKey(a, ring[(i + 1) % n])));
-  if (free.every(Boolean)) {
-    const id = alloc();
-    res.created.push({ id, nodes: [...ring, ring[0]] });
-    res.members.push({ id, role });
-  } else {
-    for (let i = 0; i < n; i++) {
-      if (!free[i] || free[(i - 1 + n) % n]) continue; // начало участка
-      const nodes = [ring[i]];
-      for (let j = i; free[j % n]; j++) nodes.push(ring[(j + 1) % n]);
+  for (const ring of loops) addFree(ring);
+  return res;
+
+  function addFree(ring: number[]) {
+    const n = ring.length;
+    const free = ring.map((a, i) => !covered.has(edgeKey(a, ring[(i + 1) % n])));
+    if (free.every(Boolean)) {
       const id = alloc();
-      res.created.push({ id, nodes });
+      res.created.push({ id, nodes: [...ring, ring[0]] });
       res.members.push({ id, role });
+    } else {
+      for (let i = 0; i < n; i++) {
+        if (!free[i] || free[(i - 1 + n) % n]) continue; // начало участка
+        const nodes = [ring[i]];
+        for (let j = i; free[j % n]; j++) nodes.push(ring[(j + 1) % n]);
+        const id = alloc();
+        res.created.push({ id, nodes });
+        res.members.push({ id, role });
+      }
     }
   }
-  return res;
 }

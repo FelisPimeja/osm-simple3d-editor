@@ -54,6 +54,14 @@ export class ConflictError extends Error {
   }
 }
 
+/** Мультиполигоны, у которых после правок разомкнулись кольца: отправка остановлена, чтобы не испортить данные. */
+export class BrokenRingsError extends Error {
+  constructor(readonly broken: { key: string; nodes: number[] }[]) {
+    super(tr('У мультиполигонов разомкнуты кольца — {list}. Это ошибка редактора: правки не отправлены, отмените последние шаги с этими частями.',
+      { list: broken.map((b) => `${b.key}${b.nodes.length ? ` (${tr('разрыв у узлов {ids}', { ids: b.nodes.join(', ') })})` : ''}`).join('; ') }));
+  }
+}
+
 export class OsmApiError extends Error {
   constructor(readonly status: number, text: string) {
     super(`OSM API ${status}: ${text}`);
@@ -248,6 +256,8 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   for (const n of dropNodes.values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
   if (conflicts.length) throw new ConflictError(conflicts);
   const dropped = await settleTopology(edits, payload, fresh, onStatus);
+  const broken = await brokenRings(payload, fresh);
+  if (broken.length) throw new BrokenRingsError(broken);
 
   onStatus(tr('Открываем changeset…'));
   const changesetXml = `<osm><changeset>${tagsXml({
@@ -268,6 +278,57 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
 }
 
 type Payload = Parameters<typeof buildOsmChange>[0];
+
+/**
+ * Узлы разрыва колец мультиполигона: у замкнутых колец каждой роли (outer/inner) любой конец незамкнутого пути
+ * встречается чётное число раз. undefined — нет данных какого-то пути (удалён, не загружен).
+ */
+export function ringGaps(members: OsmMember[], nodesOf: (ref: number) => number[] | undefined): number[] | undefined {
+  const gaps: number[] = [];
+  for (const inner of [false, true]) {
+    const ends = new Map<number, number>();
+    for (const m of members) {
+      if (m.type !== 'way' || (m.role === 'inner') !== inner) continue;
+      const nodes = nodesOf(m.ref);
+      if (!nodes?.length) return;
+      if (nodes[0] === nodes[nodes.length - 1]) continue;
+      for (const id of [nodes[0], nodes[nodes.length - 1]]) ends.set(id, (ends.get(id) ?? 0) + 1);
+    }
+    for (const [id, n] of ends) if (n % 2) gaps.push(id);
+  }
+  return gaps;
+}
+
+/**
+ * Мультиполигоны пакета, кольца которых после правок разомкнуты, а до них (на сервере) были замкнуты или которых
+ * не было: созданные и с изменённым составом или путями. Уже сломанные до нас данные отправку не останавливают.
+ */
+async function brokenRings(payload: Payload, fresh: Map<string, OsmWay | OsmRelation | VersionedNode>): Promise<{ key: string; nodes: number[] }[]> {
+  const ways = new Map<number, number[] | null>();
+  for (const p of payload) if (p.element.type === 'way') ways.set(p.element.id, p.deleted ? null : p.element.nodes);
+  const rels = payload.filter((p) => p.element.type === 'relation' && !p.deleted && (p.tags.type ?? p.element.tags?.type) === 'multipolygon')
+    .map((p) => ({ rel: p.element as OsmRelation, created: !!p.created, before: fresh.get(`relation/${p.element.id}`) as OsmRelation | undefined }))
+    .filter(({ rel, created, before }) => created || !before
+      || JSON.stringify(before.members) !== JSON.stringify(rel.members)
+      || rel.members.some((m) => m.type === 'way' && ways.has(m.ref)));
+  if (!rels.length) return [];
+  // Пути с сервера: не входящие в пакет (для «после») и все прежние (для «до»)
+  const need = new Set<string>();
+  for (const { rel, before } of rels) {
+    for (const m of rel.members) if (m.type === 'way' && m.ref > 0 && !ways.has(m.ref)) need.add(`way/${m.ref}`);
+    for (const m of before?.members ?? []) if (m.type === 'way' && m.ref > 0) need.add(`way/${m.ref}`);
+  }
+  const server = need.size ? await fetchElements([...need], api()) : new Map();
+  const serverNodes = (ref: number) => { const w = server.get(`way/${ref}`); return w?.type === 'way' ? w.nodes : undefined; };
+  const out: { key: string; nodes: number[] }[] = [];
+  for (const { rel, before } of rels) {
+    const after = ringGaps(rel.members, (ref) => (ways.has(ref) ? ways.get(ref) ?? undefined : serverNodes(ref)));
+    if (after && !after.length) continue;
+    if (before && ringGaps(before.members, serverNodes)?.length) continue; // было сломано и до нас
+    out.push({ key: `relation/${rel.id}`, nodes: after ?? [] });
+  }
+  return out;
+}
 
 /**
  * Топология после разрезания путей (правка контуров без нахлёстов):

@@ -701,6 +701,8 @@
   "Не удалось получить токен: {status} {text}": "Failed to get a token: {status} {text}",
   "OpenStreetMap (тестовый)": "OpenStreetMap (test)",
   "Конфликт правок: {list}": "Edit conflict: {list}",
+  "У мультиполигонов разомкнуты кольца — {list}. Это ошибка редактора: правки не отправлены, отмените последние шаги с этими частями.": "Multipolygon rings are not closed — {list}. This is an editor bug: nothing was uploaded; undo your last steps on these parts.",
+  "разрыв у узлов {ids}": "gap at nodes {ids}",
   "Нужно войти в {server}.": "Please log in to {server}.",
   "Получаем текущие версии объектов…": "Fetching current object versions…",
   "Лимит скачивания OSM API исчерпан — ждём {seconds} с и повторяем…": "OSM API download limit reached — waiting {seconds} s and retrying…",

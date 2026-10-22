@@ -89,7 +89,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   } else if (shape === 'cone') {
     for (const p of polygons) addPyramid(roof, p.outer, h.wallTop, h.top);
   } else if (shape === 'apse_gabled') {
-    addApse(roof, walls, single!.outer, h.wallTop, h.top);
+    addApse(roof, walls, single!.outer, h.wallTop, h.top, tags['roof:direction']);
   } else if (axis && AXIS_PLANE_SHAPES.has(shape)) {
     addAxisPlanesRoof(roof, walls, single!.outer, axis, shape, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across', tags['roof:direction']);
   } else if (axis && shape === 'saltbox') {
@@ -170,13 +170,24 @@ function addPyramid(out: number[], ring: Pt[], z0: number, z1: number) {
 /**
  * Апсида (apse_gabled): полуконус, примыкающий к двускатной крыше. Плоский торец — над самой длинной
  * стороной контура (вертикальный фронтон), вершина — над её серединой, от неё скаты к остальным сторонам.
+ * roof:direction — куда спускается скат (как у односкатной): торец — на стороне, что смотрит в обратную
+ * сторону; из таких — самая длинная с поправкой на угол (длина × косинус).
  */
-function addApse(roof: number[], walls: number[], ring: Pt[], z0: number, z1: number) {
-  let k = 0, best = -1;
+function addApse(roof: number[], walls: number[], ring: Pt[], z0: number, z1: number, direction?: string) {
+  const deg = direction === undefined ? NaN : CARDINAL[direction.trim().toUpperCase()] ?? Number(direction);
+  const rad = (deg * Math.PI) / 180;
+  // Торец смотрит против ската; x — восток, y — север
+  const back: Pt | undefined = Number.isFinite(deg) ? [-Math.sin(rad), -Math.cos(rad)] : undefined;
+  let area = 0;
+  for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; area += a[0] * b[1] - b[0] * a[1]; }
+  let k = 0, best = -Infinity;
   for (let i = 0; i < ring.length; i++) {
     const a = ring[i], b = ring[(i + 1) % ring.length];
-    const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    if (l > best) { best = l; k = i; }
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const l = Math.hypot(dx, dy);
+    // Внешняя нормаль стороны: у кольца против часовой — справа от направления обхода
+    const score = back && l > 0 ? (area >= 0 ? dy * back[0] - dx * back[1] : dx * back[1] - dy * back[0]) : l;
+    if (score > best) { best = score; k = i; }
   }
   const a = ring[k], b = ring[(k + 1) % ring.length];
   const apex: V3 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, z1];

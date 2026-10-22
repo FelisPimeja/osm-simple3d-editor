@@ -160,7 +160,7 @@ const INHERITABLE_SET = new Set<string>(INHERITABLE);
 
 /** Поля только для некоторых форм крыши (рендер их учитывает только там). */
 const SHAPE_ONLY: Record<string, string[]> = {
-  'roof:direction': ['skillion', 'saltbox', 'side_hipped', 'side_half-hipped'],
+  'roof:direction': ['skillion', 'saltbox', 'side_hipped', 'side_half-hipped', 'apse_gabled'],
   'roof:orientation': ['gabled', 'hipped', 'half-hipped', 'gambrel', 'round', 'saltbox', 'bellcast_gable', 'side_hipped',
     'side_half-hipped', 'hipped-and-gabled', 'crosspitched', 'sawtooth', 'butterfly', 'gabled_row', 'double_saltbox'],
 };

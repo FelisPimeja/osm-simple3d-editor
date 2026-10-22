@@ -522,10 +522,42 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.updateHiddenEdges();
   }
 
+  /** Значки осей сцены режима здания, которые масштабируются под экран каждый кадр. */
+  private gizmos = new Set<THREE.Object3D>();
+
+  private trackGizmo(o: THREE.Object3D): THREE.Object3D {
+    this.gizmos.add(o);
+    return o;
+  }
+
+  /** Длина стрелок — px пикселей: метров на пиксель у начала значка — по самой длинной на экране из трёх осей. */
+  private scaleGizmos() {
+    if (!this.gizmos.size) return;
+    const project = this.focusProjector();
+    if (!project) return;
+    const p = new THREE.Vector3();
+    for (const o of this.gizmos) {
+      // Значок убрали со сцены (сменился инструмент, вышли из режима здания) — больше не следим
+      let root: THREE.Object3D = o;
+      while (root.parent) root = root.parent;
+      if (!(root instanceof THREE.Scene)) { this.gizmos.delete(o); continue; }
+      const { px, origin, arrows } = o.userData.gizmo as { px: number; origin: THREE.Vector3; arrows: THREE.Object3D };
+      const a = project(origin);
+      if (!a) continue;
+      let best = 0;
+      for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+        const b = project(p.set(origin.x + d[0], origin.y + d[1], origin.z + d[2]));
+        if (b) best = Math.max(best, Math.hypot(b[0] - a[0], b[1] - a[1]));
+      }
+      if (best > 1e-6) arrows.scale.setScalar(px / best);
+    }
+  }
+
   private renderGroups(options: CustomRenderMethodInput, pass: RenderPass = 'all') {
     const renderer = this.renderer!;
     const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
     this.lastMain = main.clone();
+    this.scaleGizmos();
     // Дальняя плоскость MapLibre рассчитана на землю: подземные этажи при наклоне камеры срезаются ею.
     // Сжимаем глубину: ближняя плоскость та же, дальняя — втрое дальше (ndc' = (ndc − 1) / 2)
     const e = main.elements;
@@ -632,7 +664,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     gridFrame.visible = this.gridVisible;
     this.gridFrame = gridFrame;
     g.scene.add(ground, gridFrame);
-    if (this.focusAxes) g.scene.add(axesGizmo(this.focusAxes, undefined, AXES_LENGTH, true));
+    if (this.focusAxes) g.scene.add(this.trackGizmo(axesGizmo(this.focusAxes, { px: AXES_PX, occluded: true, faint: true })));
     this.install(FOCUS_GROUP, g);
     this.updateHiddenEdges();
     this.applyLevel();
@@ -2932,9 +2964,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (guide && g && this.focusAxes) {
       const root = new THREE.Group();
       const frame = { ...this.focusAxes, ...(guide.axes ?? {}), origin: [guide.from.x, guide.from.y] as Pt };
-      const gizmo = axesGizmo(frame, guide.locked, TOOL_AXES_LENGTH * (guide.gizmoScale ?? 1), false, guide.free);
-      gizmo.matrix.elements[14] = guide.from.z; // значок на высоте точки захвата
-      root.add(gizmo);
+      // Значок на высоте точки захвата; gizmoScale — доля обычного размера (у вершины — меньше), но не мельче половины
+      const gizmo = axesGizmo(frame, { px: TOOL_AXES_PX * Math.max(guide.gizmoScale ?? 1, 0.5), z: guide.from.z, locked: guide.locked, free: guide.free });
+      root.add(this.trackGizmo(gizmo));
       if (guide.to && guide.widthPx && this.map) {
         // Толстая пунктирная линия (Line2): тонкую на светлой крыше почти не видно
         const canvas = this.map.getCanvas();
@@ -4727,9 +4759,11 @@ export interface SnapOpts {
 export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number]; along?: THREE.Vector3; label?: string; /** У оси откладывания — расстояние от якоря со знаком. */ dist?: number }
 const SNAP_RADIUS_PX = 12;
 /** Длина стрелок осей в начале координат здания, м — одна клетка сетки. */
-const AXES_LENGTH = 10;
+const AXES_PX = 56;
 /** Длина стрелок осей у точки захвата инструментов, м. */
-const TOOL_AXES_LENGTH = 2;
+const TOOL_AXES_PX = 72;
+/** Начало координат здания — бледнее значка инструмента. */
+const FAINT_AXES_OPACITY = 0.7;
 /** Привязки выделенного объекта «ближе» на столько px. */
 const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
@@ -4864,21 +4898,31 @@ function planarFill(rings: THREE.Vector3[][]): THREE.BufferGeometry | undefined 
   return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 }
 
-function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH, occluded = false, free?: readonly number[]): THREE.Object3D {
-  const r = len * 0.012, head = len * 0.12;
+/**
+ * Стрелки осей постоянного экранного размера: геометрия единичной длины в дочерней группе, которую каждый кадр
+ * масштабирует scaleGizmos (длина стрелки — px пикселей при любом приближении). Направляющая зафиксированной оси —
+ * в метрах, не масштабируется. faint — бледнее (начало координат здания не спорит со значком инструмента).
+ */
+function axesGizmo(frame: LocalFrame, opts: { px: number; z?: number; locked?: number; occluded?: boolean; free?: readonly number[]; faint?: boolean }): THREE.Object3D {
+  const { locked, occluded = false, free } = opts;
+  const len = 1, r = len * 0.012, head = len * 0.12;
   const root = new THREE.Group();
   // Базис: x, y — оси здания на земле, z — вверх
   root.matrixAutoUpdate = false;
   root.matrix.makeBasis(
     new THREE.Vector3(frame.x[0], frame.x[1], 0), new THREE.Vector3(frame.y[0], frame.y[1], 0), new THREE.Vector3(0, 0, 1),
-  ).setPosition(frame.origin[0], frame.origin[1], 0);
+  ).setPosition(frame.origin[0], frame.origin[1], opts.z ?? 0);
+  const arrows = new THREE.Group();
+  root.add(arrows);
+  root.userData.gizmo = { px: opts.px, origin: new THREE.Vector3(frame.origin[0], frame.origin[1], opts.z ?? 0), arrows };
+  const fade = opts.faint ? FAINT_AXES_OPACITY : 1;
   const dirs = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
   const up = new THREE.Vector3(0, 1, 0); // цилиндр и конус в three.js вытянуты по y
   dirs.forEach((d, i) => {
     // Ось зафиксирована — остальные серые и бледные; free — по каким осям вообще можно двигать (остальные серые)
     const dim = locked !== undefined ? locked !== i : !!free && !free.includes(i);
     const colour = dim ? AXIS_DIM_COLOUR : AXIS_COLOURS[i];
-    const mat = new THREE.MeshBasicMaterial({ color: colour, depthTest: false, depthWrite: false, transparent: true, opacity: dim ? 0.45 : 1 });
+    const mat = new THREE.MeshBasicMaterial({ color: colour, depthTest: false, depthWrite: false, transparent: true, opacity: (dim ? 0.45 : 1) * fade });
     const q = new THREE.Quaternion().setFromUnitVectors(up, d);
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len - head, 8), mat);
     shaft.quaternion.copy(q);
@@ -4888,7 +4932,7 @@ function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH, occlud
     tip.position.copy(d).multiplyScalar(len - head / 2);
     const neg = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), d.clone().multiplyScalar(-len * 0.6)]),
-      new THREE.LineBasicMaterial({ color: colour, depthTest: false, depthWrite: false, transparent: true, opacity: dim ? 0.25 : 0.5 }),
+      new THREE.LineBasicMaterial({ color: colour, depthTest: false, depthWrite: false, transparent: true, opacity: (dim ? 0.25 : 0.5) * fade }),
     );
     // Зафиксированная ось — длинная направляющая в обе стороны
     if (locked === i) {
@@ -4901,7 +4945,7 @@ function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH, occlud
     }
     for (const o of [shaft, tip, neg]) {
       o.renderOrder = 1001;
-      root.add(o);
+      arrows.add(o);
       if (!occluded) continue;
       // Видимая часть — с проверкой глубины; закрытая моделью — бледной копией поверх
       // (материал у стержня и наконечника общий — копия со своими параметрами)
@@ -4911,7 +4955,7 @@ function axesGizmo(frame: LocalFrame, locked?: number, len = AXES_LENGTH, occlud
       const ghost = o.clone() as typeof o;
       (ghost as THREE.Mesh).material = ghostMat;
       ghost.renderOrder = 1002;
-      root.add(ghost);
+      arrows.add(ghost);
       mat.depthTest = true;
     }
   });

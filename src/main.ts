@@ -3482,14 +3482,24 @@ function splitBetweenRings(f: Feature3D, g: EditGroup, a: CutPoint, b: CutPoint,
   if (!sameSet(keep[0], poly.outerIds)) return tr('Не удалось разрезать грань.');
 
   // Внутренние кольца остающейся части: прежнее без изменений — как было; новое — переписывает первое из прежних,
-  // чьи узлы в нём, а остальные такие прежние (слитые в него) из полигона убираются
+  // что в нём оказались (по площади: вершины прежнего, например угол выреза в Г-образном дворе, могут уйти
+  // внутрь нового), а остальные такие прежние (слитые в него) из полигона убираются
+  const at = new Map(known.map((k) => [k.id, k.p] as const));
+  const closedPts = (ids: number[]) => { const r = ids.map((id) => at.get(id)!); return [[...r, r[0]]] as [number, number][][]; };
+  const inside = (old: number[], r: number[]) => {
+    try {
+      const common = polygonClipping.intersection(closedPts(old), closedPts(r));
+      const s = common.reduce((t, p) => t + ringArea(p[0].slice(0, -1) as [number, number][]) - p.slice(1).reduce((u, h) => u + ringArea(h.slice(0, -1) as [number, number][]), 0), 0);
+      return s >= 0.9 * ringArea(old.map((id) => at.get(id)!));
+    } catch { return old.every((id) => r.includes(id)); }
+  };
   const rewrites: RingRewrite[] = [];
   const consumed = new Set<number>();
   for (const r of keep.slice(1)) {
-    const olds = poly.innerIds.map((ids, j) => ({ ids, j })).filter(({ ids }) => ids.every((id) => r.includes(id)));
+    const olds = poly.innerIds.map((ids, j) => ({ ids, j })).filter(({ ids }) => inside(ids, r));
     if (olds.length === 1 && sameSet(olds[0].ids, r)) continue;
     if (!olds.length) return tr('Не удалось разрезать грань.');
-    rewrites.push({ poly: a.poly, ring: olds[0].j + 1, ids: r, coords: r.map((id) => coord.get(id)!) });
+    rewrites.push({ poly: a.poly, ring: olds[0].j + 1, ids: r, coords: r.map((id) => coord.get(id)!), absorbs: olds.slice(1).map((o) => o.j + 1) });
     for (const o of olds.slice(1)) consumed.add(o.j);
   }
   const edits = topologyEdits([{ f, rewrites }], freshInserts(fresh, coord), coord);
@@ -3948,7 +3958,11 @@ function allowPushSide(t: PushTarget): boolean {
 // новом кольце, режутся (свои куски — себе, остальное — соседям), новые стороны — новыми путями.
 
 /** Новое кольцо объекта: узлы по порядку (новые — отрицательные id) и их координаты. */
-interface RingRewrite { poly: number; ring: number; ids: number[]; coords: LonLat[] }
+interface RingRewrite {
+  poly: number; ring: number; ids: number[]; coords: LonLat[];
+  /** Внутренние кольца (номера, как ring), слитые в это: их пути-члены тоже перестраиваются под новое кольцо. */
+  absorbs?: number[];
+}
 
 /** Объекты с геометрией как сейчас (правки сессии поверх данных) и созданные в сессии. */
 function liveFeatures(): Feature3D[] {
@@ -4038,7 +4052,7 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
       const p = f.polygons[r.poly];
       const old = r.ring ? p.innerIds?.[r.ring - 1] : p.outerIds;
       if (!old) return tr('{key}: в кеше нет id узлов.', { key: f.key });
-      const allowed = new Set([...old, ...r.ids]);
+      const allowed = new Set([...old, ...r.ids, ...(r.absorbs ?? []).flatMap((k) => p.innerIds?.[k - 1] ?? [])]);
       const role = r.ring ? 'inner' : 'outer';
       const ringWays: RingWay[] = [];
       for (const m of members) {

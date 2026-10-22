@@ -12,6 +12,7 @@ import { createServer } from 'vite';
 
 const L = 20, W = 10;
 const rect = [[0, 0], [L, 0], [L, W], [0, W]];
+const apse = Array.from({ length: 13 }, (_, i) => [L / 2 + 6 * Math.cos(Math.PI / 2 + i / 12 * Math.PI), W / 2 + 6 * Math.sin(Math.PI / 2 + i / 12 * Math.PI)]);
 const circle = Array.from({ length: 24 }, (_, i) => [L / 2 + 6 * Math.cos(i / 24 * 2 * Math.PI), W / 2 + 6 * Math.sin(i / 24 * 2 * Math.PI)]);
 /** Форма → высота крыши (стены 5 м), контур, криволинейная ли поверхность. */
 const SHAPES = {
@@ -19,6 +20,7 @@ const SHAPES = {
   crosspitched: [5.5, [[3, 0], [17, 0], [17, W], [3, W]]], sawtooth: [2.2, rect], butterfly: [1.6, rect],
   cone: [9, circle, true], saltbox: [5.5, rect],
   gabled_row: [3, rect], double_saltbox: [5.5, rect], quadruple_saltbox: [5.5, rect],
+  apse_gabled: [6, apse, true],
 };
 
 const ex = [14.4 / L, -4.2 / L], ey = [-5.6 / W, -4.2 / W], ez = [0, -0.92];

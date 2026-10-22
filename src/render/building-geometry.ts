@@ -22,7 +22,7 @@ export interface BuildingTriangles {
   pending?: boolean;
 }
 
-const SUPPORTED_ANY_POLYGON = new Set(['flat', 'pyramidal', 'cone', 'dome', 'onion', 'skillion']);
+const SUPPORTED_ANY_POLYGON = new Set(['flat', 'pyramidal', 'cone', 'dome', 'onion', 'skillion', 'apse_gabled']);
 const SUPPORTED_QUAD = new Set(['gabled', 'hipped']);
 /** Крыши по straight skeleton на контурах любой формы (gabled/hipped на четырёхугольниках — свой код). */
 const SKELETON_SHAPES = new Set(['gabled', 'hipped', 'round', 'gambrel', 'mansard', 'half-hipped', 'saltbox', 'bellcast_gable', 'side_hipped', 'side_half-hipped', 'hipped-and-gabled',
@@ -88,6 +88,8 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
     addDome(roof, single!.outer, h.wallTop, h.top, shape === 'onion');
   } else if (shape === 'cone') {
     for (const p of polygons) addPyramid(roof, p.outer, h.wallTop, h.top);
+  } else if (shape === 'apse_gabled') {
+    addApse(roof, walls, single!.outer, h.wallTop, h.top);
   } else if (axis && AXIS_PLANE_SHAPES.has(shape)) {
     addAxisPlanesRoof(roof, walls, single!.outer, axis, shape, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across', tags['roof:direction']);
   } else if (axis && shape === 'saltbox') {
@@ -162,6 +164,27 @@ function addPyramid(out: number[], ring: Pt[], z0: number, z1: number) {
     const a = ring[i];
     const b = ring[(i + 1) % ring.length];
     tri(out, [a[0], a[1], z0], [b[0], b[1], z0], [cx, cy, z1]);
+  }
+}
+
+/**
+ * Апсида (apse_gabled): полуконус, примыкающий к двускатной крыше. Плоский торец — над самой длинной
+ * стороной контура (вертикальный фронтон), вершина — над её серединой, от неё скаты к остальным сторонам.
+ */
+function addApse(roof: number[], walls: number[], ring: Pt[], z0: number, z1: number) {
+  let k = 0, best = -1;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i], b = ring[(i + 1) % ring.length];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (l > best) { best = l; k = i; }
+  }
+  const a = ring[k], b = ring[(k + 1) % ring.length];
+  const apex: V3 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, z1];
+  tri(walls, [a[0], a[1], z0], [b[0], b[1], z0], apex);
+  for (let i = 0; i < ring.length; i++) {
+    if (i === k) continue;
+    const p = ring[i], q = ring[(i + 1) % ring.length];
+    tri(roof, [p[0], p[1], z0], [q[0], q[1], z0], apex);
   }
 }
 

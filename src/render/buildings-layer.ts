@@ -4251,7 +4251,7 @@ function edgeLines(items: Item[], material: THREE.LineBasicMaterial): THREE.Line
  * пирамид угол между стеной и скатом меньше порога, и без этого граница стен пропадает.
  */
 /** Крыши с кривыми поверхностями (купол, луковица, бочка): их грани — аппроксимация, изломы не рисуем. */
-const CURVED_ROOFS = new Set(['dome', 'onion', 'round', 'cone', 'conical', 'spherical']);
+const CURVED_ROOFS = new Set(['dome', 'onion', 'round', 'cone', 'conical', 'spherical', 'apse_gabled']);
 const PLANAR_ROOF_EDGE_ANGLE = 6;
 const WALL_ROOF_EDGE_ANGLE = 1;
 

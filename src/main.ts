@@ -1204,10 +1204,22 @@ function cyclePick(p: { x: number; y: number }): string | undefined {
 map.on('dblclick', (e) => {
   const key = overpassLayer.pick(e.point);
   if (focus) {
-    // Двойной клик мимо здания — назад к карте
+    // Двойной клик по части — изолировать её; мимо — показать скрытые, а если скрытых нет — назад к карте
     e.preventDefault();
     if (toolActive()) return;
-    if (!key) closeFocus();
+    if (key && inFocus(key)) {
+      if (focus.members.every((k) => k === key || focusHidden.has(k))) return; // уже изолирована
+      changeFocusHidden(new Set(focus.members.filter((k) => k !== key)));
+      setStatus(tr('Изолирована часть {key}. Двойной клик по пустому месту — показать все части, Ctrl+Z — отменить.', { key }));
+      return;
+    }
+    if (key) return;
+    if (focusHidden.size) {
+      changeFocusHidden(new Set());
+      setStatus(tr('Показаны все части. Двойной клик по пустому месту ещё раз — выйти из режима здания.'));
+      return;
+    }
+    closeFocus();
     return;
   }
   const k = key ?? undergroundAt(e.point, e.lngLat);
@@ -7210,7 +7222,8 @@ const HELP: Record<string, HelpTopic> = {
     tr('M — переместить, Q — повернуть, A — выровнять углы (90°), P — вытянуть, K — рассечь, J — объединить, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.'),
     tr('Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, Shift+H — показать все.'),
     tr('Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.'),
-    tr('Esc — снять выделение, ещё раз — назад к карте; двойной клик мимо здания — тоже к карте.'),
+    tr('Двойной клик по части — изолировать её (остальные скрыты); двойной клик мимо здания — показать все части, а если скрытых нет — назад к карте.'),
+    tr('Esc — снять выделение, ещё раз — назад к карте.'),
   ] },
   move: { title: tr('Переместить (M)'), desc: tr('Сдвигает выделенные части по горизонтали или вертикали, как Move в SketchUp. Общие с соседями углы заменяются новыми узлами, чтобы не было нахлёстов.'), items: [
     tr('Клик по точке выделенной части — точка захвата, второй клик — применить; выделенные части едут вместе.'),
@@ -7805,7 +7818,7 @@ function describeFocus(g: BuildingGroup): string {
     <h2>${tr('Режим здания')}</h2>
     ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
     <p class="hint">${tr('{link}, членов: {n}.', { link: `<a href="${server().web}/${isSolo(g) ? g.members[0] : g.key}" target="_blank" rel="noopener">${isSolo(g) ? g.members[0] : g.key}</a>`, n: g.members.length })}
-      ${tr('Клик по части — выделить её, Shift — несколько. Двойной клик мимо здания — выход.')}</p>
+      ${tr('Клик по части — выделить её, Shift — несколько. Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.')}</p>
     ${outlineWarning(g)}
     ${implicitWarning(g)}
     ${focusExitButton('Esc')}`;

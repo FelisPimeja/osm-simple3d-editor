@@ -160,7 +160,6 @@
   "Не удалось определить внутренние пути мультиполигона для разреза.": "Could not identify the multipolygon inner ways for the cut.",
   "Для соседнего отношения нужны пути-члены — перезагрузите видимые тайлы.": "The neighboring relation's member ways are needed. Reload the visible tiles.",
   "Не удалось собрать пути разрезанного мультиполигона.": "Could not assemble the split multipolygon member ways.",
-  "Контур здания (outline) не режем — только части.": "The building outline (outline) is not split, only parts.",
   "Резать можно плоский объект или с плоской крышей, здесь roof:shape={shape}.": "Only flat objects or ones with a flat roof can be split; this one has roof:shape={shape}.",
   "В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.": "The cache has no node ids for this object. Click “Reload visible tiles” in the graphics settings.",
   "Начало и конец разреза совпадают.": "The cut starts and ends at the same point.",
@@ -1091,5 +1090,10 @@
   "Выделите части (Shift+клик — несколько), затем I — изолировать их.": "Select parts (Shift+click for several), then press I to isolate them.",
   "Изолировано частей: {n}. Двойной клик по пустому месту или Shift+H — показать все, Ctrl+Z — отменить.": "Isolated parts: {n}. Double-click empty space or press Shift+H to show all, Ctrl+Z to undo.",
   "Не удалось разрезать грань.": "Could not split the face.",
-  "Стена заходит в соседний двор или пересекает другие стены части — так вытянуть нельзя.": "The wall would run into the neighbouring courtyard or cross other walls of the part — this push is not possible."
+  "Стена заходит в соседний двор или пересекает другие стены части — так вытянуть нельзя.": "The wall would run into the neighbouring courtyard or cross other walls of the part — this push is not possible.",
+  "Контур здания с building:part — ещё и часть: рисуется объёмом. Пусто — только контур, без объёма.": "A building outline with building:part is also a part and is drawn as a volume. Empty — outline only, no volume.",
+  "нет — только контур": "none — outline only",
+  "Контур здания (outline) на части не делится — только вырезать внутреннее кольцо: кликните внутри грани или вернитесь разрезом в начальную точку.": "The building outline can't be split into parts — only an inner ring can be cut: click inside the face or bring the cut back to its starting point.",
+  "Вырезано кольцо: у контура здания {key} — внутренний двор.": "Ring cut: the building outline {key} now has a courtyard.",
+  "{key}: внутреннее кольцо удалено. Отменить — Ctrl+Z.": "{key}: inner ring removed. Undo — Ctrl+Z."
 }

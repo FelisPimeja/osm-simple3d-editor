@@ -4905,6 +4905,16 @@ function removeShapeVertex(t: ShapeTarget, merged: boolean) {
     return setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
   }
   const after = rings.map((r) => ({ poly: r.poly, ring: r.ring, ids: r.ids.filter((_, k) => !r.ks.includes(k)), coords: r.coords.filter((_, k) => !r.ks.includes(k)) }));
+  // Внутреннее кольцо вырождается в линию (слили вершины треугольника) — убираем кольцо целиком
+  const collapsed = after.filter((r) => r.ring > 0 && r.ids.length < 3);
+  if (collapsed.length && collapsed.length === after.length && f.type === 'relation') {
+    const gone = (pi: number, k: number) => collapsed.some((r) => r.poly === pi && r.ring === k + 1);
+    // Кольцо в точку: dropCollapsedHoles уберёт его из полигона, путь — из членов отношения
+    const edits: ObjectEdit[] = [{ key: f.key, polygons: f.polygons.map((p, pi) => ({ ...p, inners: p.inners.map((r, k) => (gone(pi, k) ? r.map(() => r[0]) : r)) })) }];
+    dropCollapsedHoles(edits);
+    session.editMany(edits);
+    return setStatus(tr('{key}: внутреннее кольцо удалено. Отменить — Ctrl+Z.', { key: t.key }));
+  }
   if (after.some((r) => r.ids.length < 3)) return setStatus(tr('{key}: в кольце останется меньше трёх вершин.', { key: t.key }), true);
   if (after.some((r, i) => selfIntersects(r.coords.map((c) => overpassLayer.focusToLocal(c)!))
     && !selfIntersects(rings[i].coords.map((c) => overpassLayer.focusToLocal(c)!)))) return setStatus(tr('Без этой вершины контур пересекает сам себя.'), true);

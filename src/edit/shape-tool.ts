@@ -500,7 +500,8 @@ export class ShapeTool {
     const p = this.layer.focusPolygons(t.key)?.[t.poly];
     const ring = p && (t.ring ? p.inners[t.ring - 1] : p.outer);
     const w = this.walls(t.key);
-    if (!ring || ring.length <= 3 || !w) return;
+    // У треугольника внешнего кольца сливать нечего; внутреннее при слиянии удаляется целиком
+    if (!ring || (ring.length <= 3 && !t.ring) || !w) return;
     for (const k of [t.i - 1 + ring.length, t.i + 1]) {
       const [x, y] = ring[k % ring.length];
       const a = this.layer.focusProject(new THREE.Vector3(x, y, w.min));

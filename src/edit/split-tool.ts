@@ -72,11 +72,17 @@ export class SplitTool {
       if (!keys.length) return false;
       const candidates: Candidate[] = [];
       let reason: string | undefined;
+      const ray = this.layer.focusRay(point);
       for (const key of keys) {
         const why = this.eligible(key);
         if (why) { if (hits.some((h) => h.key === key)) reason ??= why; continue; }
         const box = this.layer.focusItemBox(key);
         if (!box) continue;
+        // Верх, заслонённый ближней поверхностью (часть под крышей другой), — не кандидат: его ребро не видно
+        if (ray && hits.length && key !== hits[0].key && Math.abs(ray.direction.z) > 1e-6) {
+          const t = (box.max.z - ray.origin.z) / ray.direction.z;
+          if (t > hits[0].t + 0.05) continue;
+        }
         this.target = key;
         this.z = box.max.z;
         for (let poly = 0; poly < (this.layer.focusPolygons(key)?.length ?? 0); poly++) {
@@ -375,9 +381,11 @@ export class SplitTool {
     const onTop = snap && Math.abs(snap.local.z - this.z) < 0.05 && snap.kind !== 'center';
     const q: Pt | undefined = onTop ? [snap.local.x, snap.local.y] : this.planePoint(point);
     if (!q) return;
-    const ray = this.layer.focusRay(point);
-    const dist = ray ? ray.origin.distanceTo(new THREE.Vector3(q[0], q[1], this.z)) : 50;
-    const tol = onTop ? 0.05 : Math.max(0.3, dist * 0.015);
+    // Допуск — на экране: в метрах он рос с расстоянием, и издали на небольшой крыше любой клик был «у ребра»
+    const px = (p: Pt) => {
+      const sp = this.layer.focusProject(new THREE.Vector3(p[0], p[1], this.z));
+      return sp ? Math.hypot(sp[0] - point[0], sp[1] - point[1]) : Infinity;
+    };
     let best: CutPoint & { d: number } | undefined;
     for (let poly = 0; poly < polygons.length; poly++) {
       if ((this.start && poly !== this.start.poly) || (onlyPoly !== undefined && poly !== onlyPoly)) continue;
@@ -388,8 +396,8 @@ export class SplitTool {
         if (!l2) continue;
         const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2));
         const p: Pt = [a[0] + t * dx, a[1] + t * dy];
-        const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
-        if (d < tol && (!best || d < best.d)) {
+        const d = onTop ? Math.hypot(q[0] - p[0], q[1] - p[1]) : px(p);
+        if ((onTop ? d < 0.05 : d <= EDGE_PX) && (!best || d < best.d)) {
           const vertex = t * Math.sqrt(l2) < 0.05 ? i : (1 - t) * Math.sqrt(l2) < 0.05 ? (i + 1) % ring.length : undefined;
           best = { poly, edge: i, p: vertex === undefined ? p : ring[vertex], vertex, d };
         }
@@ -430,6 +438,9 @@ export class SplitTool {
 const STRONG_SNAPS = new Set<SnapHit['kind']>(['vertex', 'midpoint', 'perpendicular', 'tracked']);
 /** Как близко к линии выравнивания курсор ловится на неё, px. */
 const INFER_RADIUS_PX = 8;
+
+/** Как близко к ребру верхней грани на экране клик считается кликом по ребру, px. */
+const EDGE_PX = 8;
 
 /** Радиус «попал в первую точку кольца», px. */
 const CLOSE_RADIUS_PX = 12;

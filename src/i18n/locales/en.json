@@ -171,7 +171,6 @@
   "Разрез идёт по стороне контура — делить нечего.": "The cut runs along a side of the outline; nothing to split.",
   "Рассечено: {key} и новая часть {part}, узлы добавлены в соседей: {n}.": "Split: {key} and new part {part}; nodes added to neighbors: {n}.",
   "Рассечено: {key} и новая часть {part}.": "Split: {key} and new part {part}.",
-  "Ребро общее с мультиполигоном {key} — резать через него пока нельзя.": "The edge is shared with multipolygon {key}; cutting through it is not supported yet.",
   "Части не соприкасаются с контуром: контур из нескольких кусков (мультиполигон) пока не поддерживается — соедините части.": "The parts do not touch the outline: an outline of several pieces (multipolygon) is not supported yet. Connect the parts.",
   "Не удалось построить контур.": "Could not build the outline.",
   "Контур здания — не простой путь: обновить его пока нельзя.": "The building outline is not a simple way, so it cannot be updated yet.",

@@ -2895,7 +2895,7 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
   if (new Set(ids).size !== ids.length) return tr('Две точки контура попали в один узел.');
   const wayId = nextNewId--;
   const key = `way/${wayId}`;
-  const neighbours = fresh.length ? insertIntoNeighbours(key, fresh, coord) : new Map<string, Feature3D['polygons']>();
+  const neighbours = insertIntoNeighbours(key, fresh, coord);
   if (typeof neighbours === 'string') return neighbours;
   const fmt = (v: number) => String(Math.round(v * 100) / 100);
   // Всё нарисованное в режиме здания — части этого здания (и снаружи контура: контур потом расширяется
@@ -2906,7 +2906,7 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
     polygons: [{ outer: ids.map((id) => coord.get(id)!), inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
   const edits: Parameters<typeof session.editMany>[0] = [
     { key, create: part },
-    ...[...neighbours].map(([k, polygons]) => ({ key: k, polygons })),
+    ...neighbours,
   ];
   const group = attachParts(edits, [wayId]);
   if (typeof group === 'string') return group;
@@ -3201,12 +3201,13 @@ function splitFeatureIn(key: string, a: CutPoint, b: CutPoint, bends: [number, n
   session.editMany([
     { key, polygons: [keepPoly] },
     { key: created.key, create: created },
-    ...[...neighbours].map(([k, polygons]) => ({ key: k, polygons })),
+    ...neighbours,
     groupMembersEdit(g!, members),
   ]);
   select(created.key);
-  setStatus(neighbours.size
-    ? tr('Рассечено: {key} и новая часть {part}, узлы добавлены в соседей: {n}.', { key, part: created.key, n: neighbours.size })
+  const touched = neighbours.filter((e) => e.polygons).length;
+  setStatus(touched
+    ? tr('Рассечено: {key} и новая часть {part}, узлы добавлены в соседей: {n}.', { key, part: created.key, n: touched })
     : tr('Рассечено: {key} и новая часть {part}.', { key, part: created.key }));
   return;
 }
@@ -3346,11 +3347,7 @@ function splitMultipolygon(f: Feature3D, group: EditGroup | undefined, polyIndex
     .some((ways) => !ways.length)) return tr('Не удалось определить внутренние пути мультиполигона для разреза.');
   const partInner = partInnerGroups.flat();
   const at = (id: number) => coord.get(id)!;
-  const insertions: Insert[] = fresh.map((x) => {
-    const u = overpassLayer.focusToLocal(at(x.u))!, v = overpassLayer.focusToLocal(at(x.v))!;
-    const dx = v[0] - u[0], dy = v[1] - u[1];
-    return { id: x.id, u: x.u, v: x.v, t: ((x.p[0] - u[0]) * dx + (x.p[1] - u[1]) * dy) / (dx * dx + dy * dy) };
-  });
+  const insertions = freshInserts(fresh, coord);
   const propagated = topologyEdits([], insertions, coord);
   if (typeof propagated === 'string') return propagated;
   const edits = new Map(propagated.map((e) => [e.key, e] as const));
@@ -3461,43 +3458,24 @@ function splitMultipolygon(f: Feature3D, group: EditGroup | undefined, polyIndex
 
 type FreshNode = { id: number; p: [number, number]; u: number; v: number };
 
-/** Соседи с тем же отрезком u–v: вставить в них новые узлы разреза. Строка — ошибка. */
-function insertIntoNeighbours(key: string, fresh: FreshNode[], coord: Map<number, LonLat>): Map<string, Feature3D['polygons']> | string {
-  const neighbours = new Map<string, Feature3D['polygons']>();
-  // Новые пути сессии (нарисованные, отрезанные) — тоже соседи.
-  for (const o of [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)]) {
-    if (o.key === key) continue;
-    const cur = session.has(o.key) ? (session.get(o.key) as Feature3D | undefined)?.polygons : o.polygons;
-    if (!cur) continue;
-    let changed = false;
-    const insert = (r: LonLat[], rid: number[] | undefined): [LonLat[], number[] | undefined] => {
-      if (!rid) return [r, rid];
-      const out = r.slice(), outIds = rid.slice();
-      for (let i = rid.length - 1; i >= 0; i--) {
-        const j = (i + 1) % rid.length;
-        const matches = fresh.filter((x) => (rid[i] === x.u && rid[j] === x.v) || (rid[i] === x.v && rid[j] === x.u));
-        if (!matches.length) continue;
-        const origin = overpassLayer.focusToLocal(r[i])!;
-        matches.sort((x, y) => Math.hypot(x.p[0] - origin[0], x.p[1] - origin[1]) - Math.hypot(y.p[0] - origin[0], y.p[1] - origin[1]));
-        out.splice(i + 1, 0, ...matches.map((x) => coord.get(x.id)!));
-        outIds.splice(i + 1, 0, ...matches.map((x) => x.id));
-        changed = true;
-      }
-      return [out, outIds];
-    };
-    const next = cur.map((p) => {
-      const [outer, outerIds] = insert(p.outer, p.outerIds);
-      const inn = p.inners.map((r, k) => insert(r, p.innerIds?.[k]));
-      return { ...p, outer, outerIds, inners: inn.map((x2) => x2[0]), innerIds: p.innerIds ? inn.map((x2) => x2[1]!) : p.innerIds };
-    });
-    if (!changed) continue;
-    // Узлы мультиполигона живут в его путях-членах, которых у нас нет отдельно — такое ребро не трогаем
-    if (!o.key.startsWith('way/')) return tr('Ребро общее с мультиполигоном {key} — резать через него пока нельзя.', { key: o.key });
-    entity(o.key);
-    neighbours.set(o.key, next);
-  }
+/**
+ * Новые узлы fresh на сторонах u–v — во все объекты с этой стороной и в пути-члены мультиполигонов (через
+ * topologyEdits: пути, в которых сторона, получают узел, контуры отношений — тоже). Правки самого key не
+ * входят: его контур собирает вызывающий. Строка — ошибка.
+ */
+function insertIntoNeighbours(key: string, fresh: FreshNode[], coord: Map<number, LonLat>): ObjectEdit[] | string {
+  if (!fresh.length) return [];
+  const edits = topologyEdits([], freshInserts(fresh, coord), coord);
+  return typeof edits === 'string' ? edits : edits.filter((e) => e.key !== key);
+}
 
-  return neighbours;
+/** Новые узлы на сторонах как вставки: положение t на стороне u→v. */
+function freshInserts(fresh: FreshNode[], coord: Map<number, LonLat>): Insert[] {
+  return fresh.map((x) => {
+    const u = overpassLayer.focusToLocal(coord.get(x.u)!)!, v = overpassLayer.focusToLocal(coord.get(x.v)!)!;
+    const dx = v[0] - u[0], dy = v[1] - u[1];
+    return { id: x.id, u: x.u, v: x.v, t: ((x.p[0] - u[0]) * dx + (x.p[1] - u[1]) * dy) / (dx * dx + dy * dy || 1) };
+  });
 }
 
 /** Допуск «часть внутри контура», м: общие стороны и узлы, погрешность координат. */
@@ -3649,7 +3627,7 @@ function splitSolo(f: Feature3D, whole: Polygon, a: Polygon, b: Polygon, fresh: 
     ...(f.type === 'way' ? [{ key: f.key, polygons: [whole] }] : []),
     ...parts.map((p) => ({ key: p.key, create: p })),
     { key: group.key, create: group },
-    ...[...neighbours].map(([k, polygons]) => ({ key: k, polygons })),
+    ...neighbours,
   ]);
   enterFocus(group);
   select(parts[0].key);

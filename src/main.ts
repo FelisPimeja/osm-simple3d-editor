@@ -4267,7 +4267,6 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
     else { add(at); put(ids[k], was[k]); }
   }
   const norm = mergeTouchingRings(f, { poly: edge.poly, ring: edge.ring, ids: outIds, coords: outC });
-  if (norm.error) return norm.error;
   const edits = topologyEdits([{ f, rewrites: norm.rewrites }], [...inserts, ...norm.inserts], new Map([...fresh, ...moved]));
   if (typeof edits === 'string') return edits;
   dropRings(edits, f.key, edge.poly, norm.consumed);
@@ -4276,7 +4275,29 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
     const err = addHoles(edits, f, edge.poly, norm.holes);
     if (err) return err;
   }
+  if (norm.islands) {
+    const err = addIslands(edits, f, norm.islands);
+    if (err) return err;
+  }
   return edits;
+}
+
+/**
+ * Островки стены между слитыми дворами (держатся на точке) — отдельными внешними кольцами мультиполигона:
+ * новый полигон и новый внешний путь на тех же узлах (прежние куски внутренних путей с них уже сняты).
+ */
+function addIslands(edits: ObjectEdit[], f: Feature3D, islands: { ids: number[]; coords: LonLat[] }[]): string | undefined {
+  const own = edits.find((x) => x.key === f.key) ?? edits[edits.push({ key: f.key }) - 1];
+  const members = own.members ?? (f as Tagged).relMembers ?? session.get(f.key)?.relMembers;
+  if (f.type !== 'relation' || !members) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+  const outer = islands.map((h) => {
+    const id = nextNewId--;
+    edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line: { ids: [...h.ids, h.ids[0]], coords: [...h.coords, h.coords[0]] } } });
+    return { type: 'way' as const, ref: id, role: 'outer' };
+  });
+  own.polygons = [...(own.polygons ?? f.polygons), ...islands.map((h) => ({ outer: h.coords, inners: [], outerIds: h.ids, innerIds: [] }))];
+  own.members = [...members, ...outer];
+  return;
 }
 
 /**
@@ -4364,7 +4385,7 @@ function dropRings(edits: ObjectEdit[], key: string, poly: number, consumed: num
  * в него, а кольца, у которых теперь общая сторона (дворы сошлись по отрезку), сливаются в одно — общие стороны
  * взаимно уничтожаются. Иначе у мультиполигона два кольца с общим отрезком: так нельзя, и крыша рисуется с изъянами.
  */
-function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewrite[]; consumed: number[]; inserts: Insert[]; holes?: { ids: number[]; coords: LonLat[] }[]; error?: string } {
+function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewrite[]; consumed: number[]; inserts: Insert[]; holes?: { ids: number[]; coords: LonLat[] }[]; islands?: { ids: number[]; coords: LonLat[] }[] } {
   const p = f.polygons[rw.poly];
   if (!rw.ring) return tidyOuter(f, rw);
   if (!p?.innerIds) return { rewrites: [rw], consumed: [], inserts: [] };
@@ -4439,6 +4460,7 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
   }
   // Кольца с общей стороной — слить: одинаково ориентированные кольца проходят её навстречу, такие пары убираем
   const consumed: number[] = [];
+  const islands: { ids: number[]; coords: LonLat[] }[] = [];
   const coordOf = new Map<number, LonLat>();
   for (const r of rings) r.ids.forEach((id, i) => coordOf.set(id, r.coords[i]));
   const ccw = (r: R) => { let a = 0; const pts = r.coords.map(local); for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += (pts[j][0] - pts[i][0]) * (pts[j][1] + pts[i][1]); return a > 0; };
@@ -4455,12 +4477,12 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
     for (const [u, v] of left) { if (next.has(u)) fork = true; next.set(u, v); }
     if (fork) {
       // Кольца ещё и касаются в точке: обход по самому левому повороту — кольца (против часовой) остаются
-      // дворами, касающимися в точках; обходимое по часовой — островок стены между дворами, держится на точке
+      // дворами, касающимися в точках; обходимое по часовой — островок стены между дворами, держится на точке:
+      // он — отдельным внешним кольцом (addIslands)
       const loops = traceLoops(left, coordOf);
-      if (!loops) continue;
-      if (loops.some((l) => !l.ccw)) return { rewrites: [rw], consumed: [], inserts: [],
-        error: tr('Стена ложится на сторону соседнего двора, и между дворами остаётся кусок стены, который держится на одной точке, — так вытянуть нельзя.') };
-      const sorted = loops.map((l) => l.ids).sort((x, y) => Math.abs(ringArea(y.map((id) => local(coordOf.get(id)!)))) - Math.abs(ringArea(x.map((id) => local(coordOf.get(id)!)))));
+      if (!loops || !loops.some((l) => l.ccw)) continue;
+      islands.push(...loops.filter((l) => !l.ccw).map((l) => ({ ids: l.ids, coords: l.ids.map((id) => coordOf.get(id)!) })));
+      const sorted = loops.filter((l) => l.ccw).map((l) => l.ids).sort((x, y) => Math.abs(ringArea(y.map((id) => local(coordOf.get(id)!)))) - Math.abs(ringArea(x.map((id) => local(coordOf.get(id)!)))));
       me.ids = sorted[0];
       me.coords = me.ids.map((id) => coordOf.get(id)!);
       extra.push(...sorted.slice(1).map((ids) => ({ ids, coords: ids.map((id) => coordOf.get(id)!) })));
@@ -4479,7 +4501,7 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
   const rewrites: RingRewrite[] = [{ poly: rw.poly, ring: me.ring, ids: me.ids, coords: me.coords,
     ...(consumed.length ? { absorbs: consumed } : {}), ...(extra.length ? { extra } : {}) }];
   for (const o of rings) if (o !== me && o.changed && !consumed.includes(o.ring)) rewrites.push({ poly: rw.poly, ring: o.ring, ids: o.ids, coords: o.coords });
-  return { rewrites, consumed, inserts };
+  return { rewrites, consumed, inserts, ...(islands.length ? { islands } : {}) };
 }
 
 /**

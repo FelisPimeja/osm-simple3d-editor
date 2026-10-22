@@ -1088,5 +1088,6 @@
   "Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, I — изолировать выделенные, Shift+H — показать все.": "Space: turn the tool off. G: grid, S: snapping, H: hide a part, I: isolate selected, Shift+H: show all.",
   "Выделите части (Shift+клик — несколько), затем I — изолировать их.": "Select parts (Shift+click for several), then press I to isolate them.",
   "Изолировано частей: {n}. Двойной клик по пустому месту или Shift+H — показать все, Ctrl+Z — отменить.": "Isolated parts: {n}. Double-click empty space or press Shift+H to show all, Ctrl+Z to undo.",
-  "Не удалось разрезать грань.": "Could not split the face."
+  "Не удалось разрезать грань.": "Could not split the face.",
+  "Стена заходит в соседний двор или пересекает другие стены части — так вытянуть нельзя.": "The wall would run into the neighbouring courtyard or cross other walls of the part — this push is not possible."
 }

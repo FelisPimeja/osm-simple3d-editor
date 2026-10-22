@@ -4214,8 +4214,80 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
   }
   const norm = mergeTouchingRings(f, { poly: edge.poly, ring: edge.ring, ids: outIds, coords: outC });
   const edits = topologyEdits([{ f, rewrites: norm.rewrites }], inserts, new Map([...fresh, ...moved]));
-  if (typeof edits !== 'string') dropRings(edits, f.key, edge.poly, norm.consumed);
+  if (typeof edits === 'string') return edits;
+  dropRings(edits, f.key, edge.poly, norm.consumed);
+  pruneMembers(edits, f);
   return edits;
+}
+
+/**
+ * Пути-члены мультиполигона f, ни одна сторона которых больше не на кольцах (кольцо схлопнулось, слилось),
+ * — из отношения долой; без тегов и не нужные другим отношениям — удалить (созданные этим же шагом — не создавать).
+ */
+function pruneMembers(edits: ObjectEdit[], f: Feature3D) {
+  if (f.type !== 'relation') return;
+  const e = edits.find((x) => x.key === f.key);
+  const polygons = e?.polygons ?? f.polygons;
+  const members = e?.members ?? (f as Tagged).relMembers ?? session.get(f.key)?.relMembers;
+  if (!members) return;
+  const ek = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
+  const ringEdges = new Set<string>();
+  for (const p of polygons) for (const ids of [p.outerIds, ...(p.innerIds ?? [])]) ids?.forEach((u, i) => ringEdges.add(ek(u, ids[(i + 1) % ids.length])));
+  const lineNodes = new Map((f.ways ?? []).map((w) => [w.id, w.nodes] as const));
+  for (const l of session.lineEntities()) lineNodes.set(Number(l.key.split('/')[1]), l.line!.ids);
+  for (const x of edits) {
+    const line = x.line ?? x.create?.line;
+    if (line && x.key.startsWith('way/')) lineNodes.set(Number(x.key.split('/')[1]), line.ids);
+  }
+  const off = (ref: number) => {
+    const ids = lineNodes.get(ref);
+    return !!ids && ids.slice(1).every((b, i) => !ringEdges.has(ek(ids[i], b)) || ids[i] === b);
+  };
+  const gone = members.filter((m) => m.type === 'way' && off(m.ref)).map((m) => m.ref);
+  if (!gone.length) return;
+  const others = liveFeatures().filter((g) => g.type === 'relation' && g.key !== f.key);
+  const edit = e ?? (edits.push({ key: f.key }), edits[edits.length - 1]);
+  edit.members = members.filter((m) => m.type !== 'way' || !gone.includes(m.ref));
+  for (const id of gone) {
+    const key = `way/${id}`;
+    const at = edits.findIndex((x) => x.key === key);
+    const created = at >= 0 && edits[at].create;
+    if (at >= 0) edits.splice(at, 1);
+    if (created || others.some((g) => relWays(g)?.some((w) => w.id === id))) continue;
+    const t = session.get(key);
+    if (Object.keys(t?.tags ?? {}).length) continue;
+    if (!t) {
+      const nodes = lineNodes.get(id)!;
+      const coords = nodeCoordsOf([f]);
+      session.track({ key, version: 0, tags: {}, line: { ids: nodes, coords: nodes.map((n) => coords.get(n)!) } });
+    }
+    edits.push({ key, delete: true });
+  }
+}
+
+/**
+ * Кольца полигонов части после правки пересекаются или внутренние наезжают друг на друга — правку не применять:
+ * у мультиполигона так нельзя (касаться кольца могут только в точке или, слившись, — уже одним кольцом).
+ */
+function ringsClash(polygons: Polygon[]): boolean {
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  for (const p of polygons) {
+    const rings = [p.outer, ...p.inners].map((r) => r.map(local));
+    for (let i = 0; i < rings.length; i++) for (let j = i; j < rings.length; j++) {
+      const a = rings[i], b = rings[j];
+      for (let x = 0; x < a.length; x++) for (let y = 0; y < b.length; y++) {
+        if (i === j && (Math.abs(x - y) <= 1 || Math.abs(x - y) === a.length - 1)) continue;
+        if (segCross(a[x], a[(x + 1) % a.length], b[y], b[(y + 1) % b.length])) return true;
+      }
+    }
+    for (let i = 1; i < rings.length; i++) for (let j = i + 1; j < rings.length; j++) {
+      try {
+        const common = polygonClipping.intersection([[...rings[i], rings[i][0]]], [[...rings[j], rings[j][0]]]);
+        if (common.reduce((s, q) => s + ringArea(q[0].slice(0, -1) as [number, number][]), 0) > 0.01) return true;
+      } catch { /* вырожденные — не мешаем */ }
+    }
+  }
+  return false;
 }
 
 /** Убрать из полигона poly объекта key в правках внутренние кольца consumed (номера, как ring). */
@@ -4249,15 +4321,35 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
       if (k >= 0) { me.ids[vi] = o.ids[k]; me.coords[vi] = o.coords[k]; return; }
     }
   });
-  // Совпавшие соседние вершины (сторона нулевой длины) — одна; остаётся та, что нужна другим кольцам
+  // Совпавшие вершины самого кольца (стену дотянули до его же угла) — один узел: прежний или нужный другим кольцам
   const inOthers = (id: number) => rings.some((o) => o !== me && o.ids.includes(id));
-  for (let i = 0; me.ids.length > 3 && i < me.ids.length;) {
-    const j = (i + 1) % me.ids.length;
-    if (me.ids[i] === me.ids[j] || near(me.coords[i], me.coords[j])) {
-      const drop = inOthers(me.ids[j]) && !inOthers(me.ids[i]) ? i : j;
-      me.ids.splice(drop, 1);
-      me.coords.splice(drop, 1);
-    } else i++;
+  const old = new Set(p.innerIds[rw.ring - 1]);
+  const keep = (x: number, y: number) => (inOthers(y) && !inOthers(x)) || (old.has(y) && !old.has(x));
+  for (let i = 0; i < me.ids.length; i++) for (let j = i + 1; j < me.ids.length; j++) {
+    if (me.ids[i] === me.ids[j] || !near(me.coords[i], me.coords[j])) continue;
+    const [from, to] = keep(me.ids[i], me.ids[j]) ? [me.ids[i], me.ids[j]] : [me.ids[j], me.ids[i]];
+    const at = me.coords[me.ids.indexOf(to)];
+    me.ids.forEach((id, k) => { if (id === from) { me.ids[k] = to; me.coords[k] = at; } });
+  }
+  // Сторона нулевой длины (A, A), «шип» туда-обратно по узлам (A, B, A) и по прямой (B за A и C на одной прямой:
+  // стену дотянули до параллельной стены) — убрать, пока есть
+  const reverses = (a: LonLat, b: LonLat, c: LonLat) => {
+    const [ax, ay] = local(a), [bx, by] = local(b), [cx, cy] = local(c);
+    const ux = bx - ax, uy = by - ay, vx = cx - bx, vy = cy - by, lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy);
+    return lu > 1e-6 && lv > 1e-6 && Math.abs(ux * vy - uy * vx) / (lu * lv) < 0.01 && ux * vx + uy * vy < 0;
+  };
+  for (let changed = true; changed && me.ids.length > 3;) {
+    changed = false;
+    const n = me.ids.length;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, k = (i + 2) % n;
+      const cut = me.ids[i] === me.ids[j] ? [j] : me.ids[i] === me.ids[k] ? [j, k]
+        : reverses(me.coords[i], me.coords[j], me.coords[k]) && !inOthers(me.ids[j]) ? [j] : undefined;
+      if (!cut) continue;
+      for (const x of cut.sort((u, v) => v - u)) { me.ids.splice(x, 1); me.coords.splice(x, 1); }
+      changed = true;
+      break;
+    }
   }
   // Вершины правленого кольца на сторонах других — и в них (без Т-стыков)
   for (const o of rings) {
@@ -4275,6 +4367,11 @@ function mergeTouchingRings(f: Feature3D, rw: RingRewrite): { rewrites: RingRewr
         }
       }
     });
+  }
+  // Кольцо схлопнулось (стену дотянули до противоположной) — убрать целиком; его пути-члены уберёт pruneMembers
+  if (me.ids.length < 3 || ringArea(me.coords.map(local)) < COLLAPSED_HOLE_M2) {
+    const rewrites = rings.filter((o) => o !== me && o.changed).map((o) => ({ poly: rw.poly, ring: o.ring, ids: o.ids, coords: o.coords }));
+    return { rewrites, consumed: [me.ring] };
   }
   // Кольца с общей стороной — слить: одинаково ориентированные кольца проходят её навстречу, такие пары убираем
   const consumed: number[] = [];
@@ -4460,6 +4557,8 @@ function commitPush(t: PushTarget, dz: number) {
     const edits = pushSideEdits(f, t.edge!, dz);
     if (typeof edits === 'string') return setStatus(edits, true);
     dropCollapsedHoles(edits);
+    const own = edits.find((e) => e.key === t.key)?.polygons;
+    if (own && ringsClash(own)) return setStatus(tr('Стена заходит в соседний двор или пересекает другие стены части — так вытянуть нельзя.'), true);
     session.editMany(edits);
   }
   else session.setTags(t.key, diffTags(f.tags, pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version))));

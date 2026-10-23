@@ -67,7 +67,7 @@ function notify() {
     lastNotify = performance.now();
     for (const cb of listeners) cb();
   };
-  if (!queue.length && !current) {
+  if (!queue.length && !current && !lookupBusy) {
     // Всё посчитано — сразу (в следующем кадре), отменяя отложенное
     clearTimeout(notifyTimer);
     notifyTimer = undefined;
@@ -75,6 +75,8 @@ function notify() {
     return;
   }
   if (notifyTimer) return;
+  // Ещё читаем кеш, а воркер стоит: дождаться конца чтения (последняя пачка вызовет notify сама)
+  if (lookupBusy && !queue.length && !current) return;
   notifyTimer = setTimeout(fire, Math.max(0, lastNotify + NOTIFY_MS - performance.now()));
 }
 
@@ -177,19 +179,24 @@ const storeKey = (key: string) => `${STORE_VERSION}:${hashKey(key)}`;
 
 /** Контуры, которые ищутся в постоянном кеше (одной транзакцией за раз); не найденные уходят в воркер. */
 let lookups: Job[] = [];
-let lookupScheduled = false;
+/** Чтение идёт или запланировано: новые контуры копятся до его конца — иначе сотни мелких чтений
+ * (здания строятся порциями), и после каждого тайлы пересобираются. */
+let lookupBusy = false;
+/** За текущую серию чтений что-то нашлось — уведомить подписчиков, когда серия закончится. */
+let lookupHits = false;
+/** Сколько копить контуры перед чтением, мс: порции построения тайла успевают добавить свои. */
+const LOOKUP_DELAY_MS = 50;
 
 function scheduleLookup(job: Job) {
   lookups.push(job);
-  if (lookupScheduled) return;
-  lookupScheduled = true;
-  setTimeout(() => void runLookups(), 0);
+  if (lookupBusy) return;
+  lookupBusy = true;
+  setTimeout(() => void runLookups(), LOOKUP_DELAY_MS);
 }
 
 async function runLookups() {
   const batch = lookups;
   lookups = [];
-  lookupScheduled = false;
   const t = performance.now();
   const db = await openStore();
   const found = new Map<string, Skeleton>();
@@ -211,8 +218,13 @@ async function runLookups() {
     const s = found.get(job.key);
     if (s) { queued.delete(job.key); remember(job.key, s); } else queue.push(job);
   }
+  // Пока читали, накопились новые контуры — следующее чтение; иначе чтение закончено
+  lookupHits ||= found.size > 0;
+  if (lookups.length) setTimeout(() => void runLookups(), LOOKUP_DELAY_MS);
+  else lookupBusy = false;
   pumpWorker();
-  if (found.size) notify();
+  if (lookupHits) notify();
+  if (!lookupBusy) lookupHits = false;
 }
 
 let saves: [string, Skeleton][] = [];

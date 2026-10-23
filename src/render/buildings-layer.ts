@@ -480,9 +480,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.lastMain = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
     // Подложки: в режиме здания — его и общие, на карте (и в наброске на ней) — общие; список задаёт main.ts
     const underlays = this.underlays.size > 0;
+    // В режиме контуров грани невидимы, но пишут глубину (прячут задние рёбра) — стоящие подложки рисуем до зданий,
+    // иначе грани вырезали бы в них дыры; подложки глубину не пишут, рёбра остаются поверх
+    const overFirst = this.visible && this.wireframe;
     if (underlays) this.underlays.render(depthMain(options), 'under');
+    if (underlays && overFirst) this.underlays.render(depthMain(options), 'over');
     if (this.visible) timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
-    if (underlays) this.underlays.render(depthMain(options), 'over');
+    if (underlays && !overFirst) this.underlays.render(depthMain(options), 'over');
   }
 
   /** Куда рисуются группы: буфер прозрачного слоя или сама карта. */

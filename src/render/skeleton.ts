@@ -7,6 +7,7 @@
  * Без Worker (node, тесты) — считаем в том же потоке, как раньше.
  */
 import type { Pt } from './building-geometry';
+import { recordMs } from '../perf';
 import { buildStableSkeleton } from './skeleton-stabilize';
 
 export interface Skeleton {
@@ -78,7 +79,7 @@ function notify() {
 
 // ---- Воркер с очередью и сторожевым таймером
 
-interface Job { id: number; key: string; rings: number[][][]; stabilize: boolean }
+interface Job { id: number; key: string; rings: number[][][]; stabilize: boolean; started?: number }
 const queue: Job[] = [];
 const queued = new Set<string>();
 let worker: Worker | undefined;
@@ -92,10 +93,13 @@ const useWorker = typeof Worker !== 'undefined';
 function startWorker() {
   worker = new Worker(new URL('./skeleton-worker.ts', import.meta.url), { type: 'module' });
   workerReady = false;
+  const spawned = performance.now();
   worker.onmessage = (e: MessageEvent<{ id: number; skeleton: Skeleton | null; broken?: boolean } | { ready: true }>) => {
     if ('ready' in e.data) {
       workerReady = true;
-      if (current) armTimer(current);
+      recordMs('скелеты: запуск воркера (WASM)', performance.now() - spawned);
+      // Контур ждал загрузки WASM — его время считаем с этого момента
+      if (current) { current.started = performance.now(); armTimer(current); }
       return;
     }
     // WASM в воркере упал на вырожденном контуре — дальше он не считает: следующий контур возьмёт новый воркер
@@ -143,6 +147,7 @@ function rememberTimeout(key: string) {
 function finish(job: Job, s: Skeleton | null) {
   clearTimeout(timer);
   current = undefined;
+  if (job.started !== undefined) recordMs(s === null ? 'скелет крыши (воркер, без результата)' : 'скелет крыши (воркер)', performance.now() - job.started, `${size(job)} вершин`);
   queued.delete(job.key);
   remember(job.key, s);
   pumpWorker();
@@ -157,6 +162,7 @@ function pumpWorker() {
   let best = 0;
   for (let i = 1; i < queue.length; i++) if (size(queue[i]) < size(queue[best])) best = i;
   current = queue.splice(best, 1)[0];
+  current.started = performance.now();
   if (workerReady) armTimer(current);
   worker!.postMessage({ id: current.id, rings: current.rings, stabilize: current.stabilize });
 }

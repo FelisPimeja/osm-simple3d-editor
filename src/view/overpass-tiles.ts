@@ -7,7 +7,7 @@ import { RequestPool } from '../osm/request-pool';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
 import { TileStore, type TileVia } from './tile-store';
-import { timed } from '../perf';
+import { timed, timedAsync } from '../perf';
 import { josmLayer } from '../osm/josm';
 import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type TreePoint, type WoodArea } from '../osm/trees';
 import { scatterTreesAsync, TreeGroup } from '../render/trees';
@@ -472,7 +472,7 @@ export class OverpassTiles {
   private async lookup(key: string) {
     this.cache.set(key, { state: 'lookup' });
     // Слой JOSM в IndexedDB не кладём: он меняется вместе с правками в JOSM
-    const stored = this.source?.josm ? undefined : await this.store.get(key);
+    const stored = this.source?.josm ? undefined : await timedAsync('тайлы: чтение из IndexedDB', this.store.get(key));
     if (this.cache.get(key)?.state !== 'lookup') return; // за время поиска ушли с тайла
     if (stored) {
       // Запись из кеша старше отправленных правок (её успели перезаписать данными до правки) — обновить в фоне

@@ -1,10 +1,11 @@
 /**
  * Логирование производительности: медленные операции и зависания главного потока.
  * Включается в консоли: localStorage['osm3d.perf'] = '1' (и перезагрузка); в dev-сборке включено всегда.
- * Сводка — perfReport() в консоли (в dev).
+ * Сводка — perfReport() в консоли (в dev); после первой загрузки печатается сама.
  */
 
 const ENABLED = (() => {
+  if (typeof window === 'undefined') return false; // тесты в Node
   try { return import.meta.env?.DEV || localStorage.getItem('osm3d.perf') === '1'; } catch { return false; }
 })();
 
@@ -14,7 +15,19 @@ const SLOW_MS = 30;
 interface Stat { count: number; total: number; max: number }
 const stats = new Map<string, Stat>();
 
+/** Отметка времени последней замеренной операции (мс от начала загрузки страницы). */
+let lastActivity = 0;
+let loadReported = false;
+let tilesStarted = false;
+let quietTimer: ReturnType<typeof setTimeout> | undefined;
+/** Сколько тишины считать «загрузка закончилась», мс. */
+const QUIET_MS = 3000;
+
 function record(label: string, ms: number, detail?: string) {
+  lastActivity = performance.now();
+  // Тишину считаем только после того, как пошли тайлы: до этого грузятся стиль карты и шрифты
+  if (/тайлы|треугольники/.test(label)) tilesStarted = true;
+  if (!loadReported && tilesStarted) { clearTimeout(quietTimer); quietTimer = setTimeout(reportLoad, QUIET_MS); }
   const s = stats.get(label) ?? stats.set(label, { count: 0, total: 0, max: 0 }).get(label)!;
   s.count++;
   s.total += ms;
@@ -31,12 +44,44 @@ export function timed<T>(label: string, fn: () => T, detail?: (r: T) => string):
   return r;
 }
 
+/** Замер асинхронной операции или стадии, засечённой вручную (no-op, если логирование выключено). */
+export function recordMs(label: string, ms: number, detail?: string) {
+  if (ENABLED) record(label, ms, detail);
+}
+
+/** Замер промиса: время от вызова до результата. */
+export async function timedAsync<T>(label: string, p: Promise<T>): Promise<T> {
+  if (!ENABLED) return p;
+  const t = performance.now();
+  const r = await p;
+  record(label, performance.now() - t);
+  return r;
+}
+
+/**
+ * Первая загрузка закончилась (QUIET_MS без замеренных операций): сводка в консоль. Время — от начала
+ * загрузки страницы до последней операции; суммы асинхронных стадий (IndexedDB, воркеры) идут параллельно
+ * с основным потоком и могут перекрываться.
+ */
+function reportLoad() {
+  if (loadReported) return;
+  loadReported = true;
+  console.info(`[perf] загрузка: последняя операция через ${(lastActivity / 1000).toFixed(1)} с после открытия страницы`);
+  loadSummary = { lastActivityMs: Math.round(lastActivity), rows: perfReport() };
+  Object.assign(window, { perfLoad: loadSummary });
+}
+
 export function perfReport() {
   const rows = [...stats].map(([label, s]) => ({
     label, count: s.count, 'total, мс': Math.round(s.total), 'avg, мс': +(s.total / s.count).toFixed(1), 'max, мс': Math.round(s.max),
   }));
-  console.table(rows.sort((a, b) => b['total, мс'] - a['total, мс']));
+  rows.sort((a, b) => b['total, мс'] - a['total, мс']);
+  console.table(rows);
+  return rows;
 }
+
+/** Сводка первой загрузки (для чтения из консоли или автотестов): undefined, пока загрузка не закончилась. */
+export let loadSummary: { lastActivityMs: number; rows: ReturnType<typeof perfReport> } | undefined;
 
 export function perfReset() {
   stats.clear();

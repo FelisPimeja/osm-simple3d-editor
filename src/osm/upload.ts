@@ -89,7 +89,20 @@ export function buildOsmChange(edits: { element: OsmWay | OsmRelation | (OsmNode
   };
   // Новые: узлы, затем пути, затем отношения — на них ссылаются следующие
   const rank = { node: 0, way: 1, relation: 2 } as const;
-  const create = edits.filter((e) => e.created).sort((x, y) => rank[x.element.type] - rank[y.element.type]).map(xml).join('');
+  const created = edits.filter((e) => e.created).sort((x, y) => rank[x.element.type] - rank[y.element.type]);
+  // Новые отношения в новых (здание −1 с частью-мультиполигоном −57): сервер читает <create> по порядку —
+  // вложенное отношение раньше того, кто на него ссылается
+  const rels = new Map(created.filter((e) => e.element.type === 'relation').map((e) => [e.element.id, e]));
+  const ordered: typeof created = [], seen = new Set<number>();
+  const visit = (e: (typeof created)[number]) => {
+    if (seen.has(e.element.id)) return;
+    seen.add(e.element.id);
+    if (e.element.type === 'relation') for (const m of e.element.members) { const r = m.type === 'relation' ? rels.get(m.ref) : undefined; if (r) visit(r); }
+    ordered.push(e);
+  };
+  for (const e of created) if (e.element.type !== 'relation') ordered.push(e);
+  for (const e of rels.values()) visit(e);
+  const create = ordered.map(xml).join('');
   const modify = edits.filter((e) => !e.created && !e.deleted).map(xml).join('');
   // Удаление: сначала отношения, затем пути, затем узлы. if-unused — то, что ещё кем-то используется
   // (узел в чужом пути, путь в чужом отношении), сервер молча оставляет, а не отклоняет весь пакет

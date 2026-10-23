@@ -5,6 +5,7 @@
  * это замораживало карту. skeletonOf синхронный: отдаёт готовый скелет из кеша или 'pending' и ставит
  * контур в очередь; по готовности вызываются подписчики onSkeletons — слои пересобирают ждавшие здания.
  * Без Worker (node, тесты) — считаем в том же потоке, как раньше.
+ * Посчитанные скелеты хранятся в IndexedDB и при следующей загрузке берутся оттуда, без воркера.
  */
 import type { Pt } from './building-geometry';
 import { recordMs } from '../perf';
@@ -144,12 +145,125 @@ function rememberTimeout(key: string) {
   try { localStorage.setItem(FAILED_KEY, JSON.stringify(failed)); } catch { /* не критично */ }
 }
 
+// ---- Постоянный кеш скелетов (IndexedDB)
+
+/**
+ * Скелет зависит только от контура (в локальных координатах группы), поэтому его можно хранить между
+ * перезагрузками: без кеша тёплая загрузка снова считает сотни крыш в воркере (десятки секунд) и каждый
+ * раз пересобирает тайлы по мере готовности. Версию поднимать при изменении алгоритма (воркер,
+ * skeleton-stabilize) — старые записи просто перестанут находиться и вытеснятся.
+ */
+const STORE_VERSION = 1;
+const STORE_DB = 'osm-simple3d-skeletons';
+const STORE = 'skeletons';
+/** Сколько скелетов хранить; при превышении удаляются самые давние. */
+const STORE_MAX = 50000;
+
+interface StoredSkeleton { s: Skeleton; at: number }
+
+let storeDb: Promise<IDBDatabase | undefined> | undefined;
+function openStore(): Promise<IDBDatabase | undefined> {
+  storeDb ??= new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(STORE_DB, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE).createIndex('at', 'at');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = req.onblocked = () => resolve(undefined);
+    } catch { resolve(undefined); }
+  });
+  return storeDb;
+}
+const storeKey = (key: string) => `${STORE_VERSION}:${hashKey(key)}`;
+
+/** Контуры, которые ищутся в постоянном кеше (одной транзакцией за раз); не найденные уходят в воркер. */
+let lookups: Job[] = [];
+let lookupScheduled = false;
+
+function scheduleLookup(job: Job) {
+  lookups.push(job);
+  if (lookupScheduled) return;
+  lookupScheduled = true;
+  setTimeout(() => void runLookups(), 0);
+}
+
+async function runLookups() {
+  const batch = lookups;
+  lookups = [];
+  lookupScheduled = false;
+  const t = performance.now();
+  const db = await openStore();
+  const found = new Map<string, Skeleton>();
+  if (db) {
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(STORE, 'readonly');
+        const st = tx.objectStore(STORE);
+        for (const job of batch) {
+          const r = st.get(storeKey(job.key));
+          r.onsuccess = () => { const rec = r.result as StoredSkeleton | undefined; if (rec) found.set(job.key, rec.s); };
+        }
+        tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
+      } catch { resolve(); }
+    });
+  }
+  recordMs('скелеты: чтение из IndexedDB', performance.now() - t, `${found.size} из ${batch.length}`);
+  for (const job of batch) {
+    const s = found.get(job.key);
+    if (s) { queued.delete(job.key); remember(job.key, s); } else queue.push(job);
+  }
+  pumpWorker();
+  if (found.size) notify();
+}
+
+let saves: [string, Skeleton][] = [];
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let savedSinceTrim = 0;
+
+/** Записать посчитанный скелет (пачками, чтобы не открывать транзакцию на каждую крышу). */
+function persist(key: string, s: Skeleton) {
+  saves.push([storeKey(key), s]);
+  saveTimer ??= setTimeout(() => void flushSaves(), 1000);
+}
+
+async function flushSaves() {
+  const batch = saves;
+  saves = [];
+  saveTimer = undefined;
+  const db = await openStore();
+  if (!db || !batch.length) return;
+  try {
+    const tx = db.transaction(STORE, 'readwrite');
+    const st = tx.objectStore(STORE);
+    const at = Date.now();
+    for (const [k, s] of batch) st.put({ s, at } satisfies StoredSkeleton, k);
+    savedSinceTrim += batch.length;
+    if (savedSinceTrim > 1000) { savedSinceTrim = 0; trimStore(st); }
+  } catch { /* квота или закрытая база — не критично */ }
+}
+
+/** Удалить самые давние записи сверх STORE_MAX. */
+function trimStore(st: IDBObjectStore) {
+  const count = st.count();
+  count.onsuccess = () => {
+    let extra = count.result - STORE_MAX;
+    if (extra <= 0) return;
+    const cur = st.index('at').openCursor();
+    cur.onsuccess = () => {
+      const c = cur.result;
+      if (!c || extra-- <= 0) return;
+      c.delete();
+      c.continue();
+    };
+  };
+}
+
 function finish(job: Job, s: Skeleton | null) {
   clearTimeout(timer);
   current = undefined;
   if (job.started !== undefined) recordMs(s === null ? 'скелет крыши (воркер, без результата)' : 'скелет крыши (воркер)', performance.now() - job.started, `${size(job)} вершин`);
   queued.delete(job.key);
   remember(job.key, s);
+  if (s) persist(job.key, s);
   pumpWorker();
   notify();
 }
@@ -211,8 +325,8 @@ export function skeletonOf(outer: Pt[], inners: Pt[][], stabilize = false): Skel
   if (failedSet.has(hashKey(key))) { remember(key, null); return null; }
   if (!queued.has(key)) {
     queued.add(key);
-    queue.push({ id: nextId++, key, rings, stabilize });
-    pumpWorker();
+    // Сначала постоянный кеш: при тёплой загрузке почти все крыши находятся там, воркер не нужен
+    scheduleLookup({ id: nextId++, key, rings, stabilize });
   }
   return 'pending';
 }

@@ -682,3 +682,8 @@ body.mobile #issues-panel { display: none !important; }
 .panoramax-seg button { flex: 1 0 auto; width: auto; height: auto; border: 0 !important; background: #fff; padding: 3px 8px; white-space: nowrap; font: inherit; cursor: pointer; color: #374151; }
 .panoramax-seg button + button { border-left: 1px solid #d1d5db !important; }
 .panoramax-seg button.active { background: #dbeafe; color: #1e3a8a; }
+/* Подложки здания в меню слоёв */
+.underlay-menu[hidden] { display: none; }
+.basemap-menu label.underlay-row { min-width: 0; }
+.underlay-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.underlay-add { margin-bottom: 2px; }

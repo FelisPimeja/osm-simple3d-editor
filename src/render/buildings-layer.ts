@@ -21,6 +21,7 @@ import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } 
 import { timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
 import { setTreesMonochrome, setTreesSeasonal, type TreeGroup } from './trees';
+import { UnderlayMeshes } from './underlay-meshes';
 
 const DEFAULT_WALL = '#ffffff';
 const DEFAULT_ROOF = '#ffffff';
@@ -400,6 +401,17 @@ class MeshGroup {
 }
 
 /**
+ * Матрица проекции MapLibre для отрисовки. Дальняя плоскость MapLibre рассчитана на землю: подземные этажи при
+ * наклоне камеры срезаются ею. Сжимаем глубину: ближняя плоскость та же, дальняя — втрое дальше (ndc' = (ndc − 1) / 2).
+ */
+function depthMain(options: CustomRenderMethodInput): THREE.Matrix4 {
+  const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
+  const e = main.elements;
+  for (let c = 0; c < 4; c++) e[c * 4 + 2] = 0.5 * e[c * 4 + 2] - 0.5 * e[c * 4 + 3];
+  return main;
+}
+
+/**
  * Custom layer MapLibre, рисующий здания OSM через three.js.
  * Здания разбиты на группы (область редактирования, тайлы данных API), у каждой свой origin —
  * так координаты остаются маленькими и точными для float32.
@@ -439,11 +451,15 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Точки привязки режима одного здания (в метрах сцены режима); undefined — пересчитать. */
   private snaps?: { points: SnapPoint[]; edges: SnapEdge[] };
 
+  /** Подложки пользователя в режиме здания — под зданиями (рисуются первыми). */
+  readonly underlays = new UnderlayMeshes(() => this.map?.triggerRepaint());
+
   constructor(readonly id: string) {}
 
   onAdd(map: MlMap, gl: WebGL2RenderingContext) {
     this.map = map;
     this.renderer = new THREE.WebGLRenderer({ canvas: map.getCanvas(), context: gl, antialias: true });
+    this.underlays.attach(this.renderer);
     this.renderer.autoClear = false;
     this.renderer.localClippingEnabled = true; // срез здания выше выбранного этажа
   }
@@ -455,7 +471,9 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   render(_gl: WebGL2RenderingContext, options: CustomRenderMethodInput) {
-    if (!this.visible || !this.renderer) return;
+    if (!this.renderer) return;
+    if (this.focused && !this.sketching && this.underlays.size) this.underlays.render(depthMain(options));
+    if (!this.visible) return;
     timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
   }
 
@@ -559,13 +577,9 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   private renderGroups(options: CustomRenderMethodInput, pass: RenderPass = 'all') {
     const renderer = this.renderer!;
-    const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
-    this.lastMain = main.clone();
+    this.lastMain = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
     this.scaleGizmos();
-    // Дальняя плоскость MapLibre рассчитана на землю: подземные этажи при наклоне камеры срезаются ею.
-    // Сжимаем глубину: ближняя плоскость та же, дальняя — втрое дальше (ndc' = (ndc − 1) / 2)
-    const e = main.elements;
-    for (let c = 0; c < 4; c++) e[c * 4 + 2] = 0.5 * e[c * 4 + 2] - 0.5 * e[c * 4 + 3];
+    const main = depthMain(options);
     let triangles = 0;
     for (const g of this.activeGroups()) {
       // Выбор и камера берут projectionMatrix с глубиной MapLibre — сжатая только на время отрисовки

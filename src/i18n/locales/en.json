@@ -1098,5 +1098,15 @@
   "{key}: внутреннее кольцо удалено. Отменить — Ctrl+Z.": "{key}: inner ring removed. Undo — Ctrl+Z.",
   "Больше на 1": "Up by 1",
   "Меньше на 1": "Down by 1",
-  "Сомкнуть вырез во двор у отдельного здания пока нельзя — сначала соберите отношение здания.": "Closing a notch into a courtyard isn't supported for a standalone building yet \u2014 build the building relation first."
+  "Сомкнуть вырез во двор у отдельного здания пока нельзя — сначала соберите отношение здания.": "Closing a notch into a courtyard isn't supported for a standalone building yet — build the building relation first.",
+  "картинка": "image",
+  "Подложку не удалось сохранить в браузере — после перезагрузки её не будет.": "Couldn't save the underlay in the browser — it will be gone after a reload.",
+  "Не открылось как картинка (PNG, JPG, WebP, SVG): {names}": "Couldn't open as an image (PNG, JPG, WebP, SVG): {names}",
+  "Подложкой можно добавить картинку: PNG, JPG, WebP, SVG.": "Only images can be added as an underlay: PNG, JPG, WebP, SVG.",
+  "Подложки здания": "Building underlays",
+  "Добавить картинку…": "Add image…",
+  "Скан плана, чертёж, фасад (PNG, JPG, WebP, SVG). Можно и перетащить файл на карту или вставить Ctrl+V": "A floor plan scan, drawing or facade (PNG, JPG, WebP, SVG). You can also drop a file onto the map or paste it with Ctrl+V",
+  "Картинки хранятся только в этом браузере. Обводите только то, на что у вас есть права.": "Images are stored only in this browser. Trace only what you have the rights to.",
+  "Настройки подложки: прозрачность, удаление": "Underlay settings: transparency, removal",
+  "Удалить подложку из этого браузера": "Remove the underlay from this browser"
 }

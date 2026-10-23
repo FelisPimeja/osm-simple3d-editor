@@ -339,8 +339,9 @@ export class ShapeTool {
       return true;
     }
     if (e.code === 'KeyD' && !e.ctrlKey && !e.metaKey && !e.altKey) { this.setGlue(!this.glue); return true; }
-    // Del (на Mac — Backspace) — удалить вершину под курсором; посреди сдвига — захваченную (Backspace там стирает число)
-    if (e.key === 'Delete' || (e.key === 'Backspace' && this.state === 'pick')) {
+    // Del (на Mac — Backspace) — удалить вершину под курсором или выбранные; посреди сдвига — захваченную
+    // (Backspace там сначала стирает набранное число, а когда его нет — удаляет вершину)
+    if (e.key === 'Delete' || (e.key === 'Backspace' && (this.state === 'pick' || !this.typed))) {
       const [first, ...rest] = this.state === 'pick' ? [...this.picked.values()] : [];
       const key = this.selected();
       const t = this.state === 'drag' ? this.target

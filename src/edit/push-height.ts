@@ -1,11 +1,11 @@
-import { computeHeights, LEVEL_HEIGHT } from '../osm/heights';
+import { computeHeights, LEVEL_HEIGHT, type Heights } from '../osm/heights';
 import { tr } from '../i18n';
 import type { PushFace, PushUnits } from './push-tool';
 
 /** Drawn contours carry a temporary height at their drawing plane. */
-export function isFreshFlat(tags: Record<string, string>, version: number): boolean {
-  const h = computeHeights(tags);
-  return version === 0 && Math.abs(h.top - h.min) < 1e-6;
+export function isFreshFlat(tags: Record<string, string>, version: number, h: Heights = computeHeights(tags)): boolean {
+  // Нарисованный только что — или нарисованный плоским (часть без высоты в режиме здания)
+  return (version === 0 || h.source === 'default') && Math.abs(h.top - h.min) < 1e-6;
 }
 
 export function lockedPushUnits(tags: Record<string, string>, version: number): PushUnits | undefined {
@@ -14,8 +14,9 @@ export function lockedPushUnits(tags: Record<string, string>, version: number): 
   return meters === levels ? undefined : meters ? 'm' : 'levels';
 }
 
-export function pushHeightTags(tags: Record<string, string>, face: PushFace, dz: number, units: PushUnits, fresh = false): Record<string, string> {
-  const h = computeHeights(tags), out = { ...tags };
+/** h — высоты, как объект нарисован (часть без высоты в режиме здания — плоская), по умолчанию — по тегам. */
+export function pushHeightTags(tags: Record<string, string>, face: PushFace, dz: number, units: PushUnits, fresh = false, h: Heights = computeHeights(tags)): Record<string, string> {
+  const out = { ...tags };
   const fmt = (n: number) => String(Math.round(n * 100) / 100);
   const levels = units === 'levels';
   if (face === 'top') {

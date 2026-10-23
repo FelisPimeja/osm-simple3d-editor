@@ -2464,7 +2464,7 @@ pushTool.faceOutline = (t) => {
   const f = entity(t.key) as Feature3D | undefined;
   const polys = overpassLayer.focusPolygons(t.key);
   if (!f || !polys) return [];
-  const h = computeHeights(f.tags);
+  const h = drawnHeights(f);
   const at = (z: number) => (r: [number, number][]) => r.map(([x, y]) => new THREE.Vector3(x, y, z));
   if (t.face !== 'side') return polys.flatMap((p) => [p.outer, ...p.inners].map(at(t.face === 'top' ? h.wallTop : h.min)));
   const p = polys[t.edge!.poly];
@@ -2487,6 +2487,16 @@ for (const type of ['keydown', 'keyup'] as const) {
 }
 window.addEventListener('blur', () => { shiftHeld = false; if (pushTool.state === 'pick') pushTool.hover(undefined, false); });
 
+/**
+ * Высоты объекта, как он нарисован в режиме здания: часть без height и этажей там плоская (см. noDefaultHeight
+ * в слое) — инструменты меряют от её основания, а не от высоты по умолчанию.
+ */
+function drawnHeights(f: Feature3D) {
+  const h = computeHeights(f.tags);
+  if (!focus || f.kind !== 'part' || h.source !== 'default') return h;
+  return { ...h, wallTop: h.min, top: h.min, roofHeight: 0, roofShape: 'flat' };
+}
+
 function startPush() {
   if (!focus) return;
   moveTool.stop(); shapeTool.stop();
@@ -2504,7 +2514,7 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(),
     if (!f?.polygons) return;
     // Плоский след (контур без building:part под частями) — высоту не рисуем, ручек высоты нет
     if (overpassLayer.focusFlat(key)) return { min: 0, top: 0, roof: 0 };
-    const h = computeHeights(f.tags);
+    const h = drawnHeights(f);
     return { min: h.min, top: Math.max(h.min, h.wallTop), roof: h.roofHeight };
   },
   () => new Set([...shapePreviewed, ...selection]),
@@ -5006,7 +5016,7 @@ function clampPush(t: PushTarget, dz: number): number {
   const f = entity(t.key) as Feature3D | undefined;
   if (!f) return 0;
   if (t.face === 'side') return dz;
-  const h = computeHeights(f.tags);
+  const h = drawnHeights(f);
   // Верх не ниже низа + крыша + запас; низ — не ниже земли и не выше верха стен минус запас
   let lower = t.face === 'top' ? h.min + h.roofHeight + MIN_THICKNESS - h.top : -h.min;
   let upper = t.face === 'top' ? Infinity : h.wallTop - MIN_THICKNESS - h.min;
@@ -5052,7 +5062,7 @@ function previewPush(t: PushTarget, dz: number | undefined) {
   }
   previewFocus(t.face === 'side'
     ? { ...f, polygons: pushSidePolygons(f, t.edge!, dz) }
-    : { ...f, tags: pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version)) });
+    : { ...f, tags: pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version, drawnHeights(f)), drawnHeights(f)) });
 }
 
 function commitPush(t: PushTarget, dz: number) {
@@ -5069,7 +5079,7 @@ function commitPush(t: PushTarget, dz: number) {
     const rel = edits.find((e) => e.create && e.key.startsWith('relation/') && (e.create as Feature3D).ways?.some((w) => w.id === f.id && w.role === 'outer'));
     if (rel) select(rel.key);
   }
-  else session.setTags(t.key, diffTags(f.tags, pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version))));
+  else session.setTags(t.key, diffTags(f.tags, pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version, drawnHeights(f)), drawnHeights(f))));
   const levels = t.face !== 'side' && pushTool.units === 'levels' ? ' ' + tr('({n} эт.)', { n: `${dz >= 0 ? '+' : ''}${Math.round(dz / LEVEL_HEIGHT)}` }) : '';
   const params = { key: t.key, d: `${dz >= 0 ? '+' : ''}${dz.toFixed(2)}`, levels };
   setStatus(t.face === 'top' ? tr('Верх {key} сдвинут на {d} м{levels}.', params)

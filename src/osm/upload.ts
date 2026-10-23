@@ -345,10 +345,18 @@ async function brokenRings(payload: Payload, fresh: Map<string, OsmWay | OsmRela
 async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<string, OsmWay | OsmRelation | VersionedNode>, onStatus: (s: string) => void): Promise<Set<string>> {
   const dropped = new Set<string>();
   const editKeys = new Set(edits.map((e) => e.key));
+  // Кусок нового пути (разрезали уже разрезанное, splitFrom < 0) — ведём по цепочке до серверного пути:
+  // в его отношения идут все куски цепочки; запрашивать отношения нового пути у сервера нельзя (id < 0 — 404)
+  const parentOf = new Map<number, number>();
+  for (const e of edits) if (e.created?.type === 'way' && e.splitFrom !== undefined) parentOf.set(e.created.id, e.splitFrom);
+  const rootOf = (id: number): number | undefined => {
+    for (let i = 0; id < 0 && i < 100; i++) { const up = parentOf.get(id); if (up === undefined) return undefined; id = up; }
+    return id > 0 ? id : undefined;
+  };
   const splits = new Map<number, number[]>();
   for (const e of edits) {
-    // Разрезан новый путь (ещё не на сервере, id < 0) — его отношений на сервере нет, они среди наших правок
-    if (e.created?.type === 'way' && e.splitFrom !== undefined && e.splitFrom > 0) splits.set(e.splitFrom, [...(splits.get(e.splitFrom) ?? []), e.created.id]);
+    const root = e.created?.type === 'way' && e.splitFrom !== undefined ? rootOf(e.splitFrom) : undefined;
+    if (root !== undefined) splits.set(root, [...(splits.get(root) ?? []), e.created!.id]);
   }
   if (splits.size) onStatus(tr('Проверяем отношения разрезанных путей…'));
   const patched = new Map<number, OsmRelation>();
@@ -369,7 +377,7 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
     const p = payload[i];
     if (!p.created || p.element.type !== 'way') continue;
     const e = edits.find((x) => x.created?.id === p.element.id && x.created.type === 'way');
-    if (e?.splitFrom === undefined || e.splitFrom < 0 || wayRefs.has(p.element.id)) continue; // кусок нового пути — не «осиротевший»
+    if (e?.splitFrom === undefined || rootOf(e.splitFrom) === undefined || wayRefs.has(p.element.id)) continue;
     payload.splice(i, 1);
     dropped.add(e.key);
     for (const n of p.element.nodes) if (n > 0) dropNodes.add(n);

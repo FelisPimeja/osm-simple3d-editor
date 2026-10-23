@@ -325,6 +325,8 @@ class MeshGroup {
   footprint = FOOTPRINT_HEIGHT;
   /** Рисовать плоским следом независимо от высоты (голый контур в режиме здания). */
   readonly flat = new Set<string>();
+  /** Сцена режима здания: части без высоты и этажей — плоские, независимо от настройки высоты по умолчанию. */
+  noDefaultHeight = false;
   /** Плоские верхи и дна объектов — чтобы не рисовать совпадающие грани соседних частей. */
   contacts?: Contacts;
   /** Обводки контуров под частями (в просмотре вместо заливки). */
@@ -658,6 +660,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const c = lock ? new THREE.Vector2(...lock.center) : box.getCenter(new THREE.Vector2());
     const g = new MeshGroup([c.x, c.y]);
     g.footprint = 0; // объекты нулевой высоты — точно на своём уровне: к ним привязываются следующие
+    g.noDefaultHeight = true;
     for (const k of flat) g.flat.add(k);
     g.contacts = buildContacts(g, features);
     for (const f of features) if (shouldRender(f)) this.addItem(g, f);
@@ -5276,9 +5279,9 @@ function prepItem(g: MeshGroup, f: Feature3D) {
   const polys = f.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
   let heights = computeHeights(tags);
   // Контур под частями и здания нулевой высоты — плоский след на земле: видно и можно выделить;
-  // без высоты и этажей — тоже, если высоту по умолчанию выключили в настройках
+  // без высоты и этажей — тоже, если высоту по умолчанию выключили в настройках; части в режиме здания — всегда
   const flat = f.hasParts || g.flat.has(f.key);
-  const unraised = !raiseDefault && heights.source === 'default';
+  const unraised = heights.source === 'default' && (!raiseDefault || (g.noDefaultHeight && f.kind === 'part'));
   if (flat || unraised || heights.top - heights.min < MIN_THICKNESS) {
     const min = flat ? 0 : heights.min;
     heights = { ...heights, min, wallTop: min + g.footprint, top: min + g.footprint, roofShape: 'flat', roofHeight: 0 };

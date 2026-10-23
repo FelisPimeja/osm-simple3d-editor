@@ -3287,7 +3287,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.pending.set(key, token);
     const g = new MeshGroup(center);
     const todo = features.filter(shouldRender);
-    g.contacts = buildContacts(g, todo);
+    g.contacts = timed(`${this.id}: стыки тайла`, () => buildContacts(g, todo));
     let i = 0;
     while (i < todo.length) {
       await new Promise(requestAnimationFrame);
@@ -3667,7 +3667,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const item = timed('здание: треугольники', () => buildItem(g, f), () => describeFeature(f));
     this.shapeSigs.set(item, shapeSig(f));
     // Контуры включены — считаем рёбра здесь, в порционной сборке, а не разом при слиянии
-    if (this.graphics.edges) item.edges = itemEdges(item);
+    if (this.graphics.edges) item.edges = timed('здание: рёбра', () => itemEdges(item));
     g.byKey.set(f.key, item);
     g.items.push(item);
   }
@@ -5407,18 +5407,20 @@ function contactKeys(g: MeshGroup, f: Feature3D): string {
 }
 
 function buildItem(g: MeshGroup, f: Feature3D): Item {
-  const prep = prepItem(g, f);
+  const prep = timed('здание: подготовка', () => prepItem(g, f));
   const { tags, polys, heights, flat } = prep;
   const box2 = new THREE.Box2();
   for (const p of polys) for (const [x, y] of p.outer) box2.expandByPoint(new THREE.Vector2(x, y));
-  const tri = buildTriangles(polys, heights, tags);
+  const tri = timed('здание: стены и крыша', () => buildTriangles(polys, heights, tags));
   // Плоская крыша, на которой стоят другие части: закрытый ими участок — уже не крыша, а перекрытие между
   // частями (видно сквозь стекло) — рисуем его плитой перекрытия, остальное — крышей
   let joint: number[] = [];
   if (g.contacts && hasFlatTop(prep) && tri.roof.length) {
-    const faces = contactFaces(g.contacts.bottoms, f.key, heights.wallTop, box2);
-    const rest = subtractFaces(polys, faces), covered = rest && coveredBy(polys, faces);
-    if (rest && covered) { tri.roof = bottomTriangles(rest, heights.wallTop); joint = bottomTriangles(covered, heights.wallTop); }
+    timed('здание: перекрытие под частями', () => {
+      const faces = contactFaces(g.contacts!.bottoms, f.key, heights.wallTop, box2);
+      const rest = subtractFaces(polys, faces), covered = rest && coveredBy(polys, faces);
+      if (rest && covered) { tri.roof = bottomTriangles(rest, heights.wallTop); joint = bottomTriangles(covered, heights.wallTop); }
+    });
   }
   // Часть-кровля сохраняет короткую боковую стенку и дно. wall=no убирает стенку;
   // прозрачная кровля остаётся без дна. Явные height/min_height задают толщину.
@@ -5428,12 +5430,14 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // Участки, лежащие на плоских крышах других частей, вырезаем: совпадающие грани мерцают, а дно стеклянной части
   // просвечивает поверх крыши. Крышу оставляем — она и есть перекрытие между частями (видна сквозь стекло)
   if (hasBottom(prep)) {
-    const rest = g.contacts && subtractFaces(polys, contactFaces(g.contacts.tops, f.key, heights.min, box2));
-    tri.walls.push(...bottomTriangles(rest ?? polys, heights.min));
+    timed('здание: дно', () => {
+      const rest = g.contacts && subtractFaces(polys, contactFaces(g.contacts.tops, f.key, heights.min, box2));
+      tri.walls.push(...bottomTriangles(rest ?? polys, heights.min));
+    });
   }
   // Стеклянный фасад: внутри видны перекрытия — плиты на границах этажей (непрозрачные, после крыши)
   const glassWalls = isGlass(roofPartWallMaterial(tags));
-  const floors = [...joint, ...(glassWalls && !flat && !roofOnly ? floorSlabs(polys, heights, tags, levelGridFor(f)?.map((l) => ({ z: l.z, holes: l.holes.map((p) => p.map((r) => r.map(g.toLocal))), mask: l.mask?.map((p) => p.map((r) => r.map(g.toLocal))) }))) : [])];
+  const floors = [...joint, ...(glassWalls && !flat && !roofOnly ? timed('здание: перекрытия за стеклом', () => floorSlabs(polys, heights, tags, levelGridFor(f)?.map((l) => ({ z: l.z, holes: l.holes.map((p) => p.map((r) => r.map(g.toLocal))), mask: l.mask?.map((p) => p.map((r) => r.map(g.toLocal))) })))) : [])];
   const positions = new Float32Array(tri.walls.length + tri.roof.length + floors.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);

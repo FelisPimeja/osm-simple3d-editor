@@ -23,7 +23,7 @@ let quietTimer: ReturnType<typeof setTimeout> | undefined;
 /** Сколько тишины считать «загрузка закончилась», мс. */
 const QUIET_MS = 3000;
 
-function record(label: string, ms: number, detail?: string) {
+function record(label: string, ms: number, detail?: string | (() => string)) {
   lastActivity = performance.now();
   // Тишину считаем только с первой сборки зданий: до неё грузятся стиль карты, шрифты, база и ответы API
   if (label.includes('треугольники')) tilesStarted = true;
@@ -32,7 +32,8 @@ function record(label: string, ms: number, detail?: string) {
   s.count++;
   s.total += ms;
   s.max = Math.max(s.max, ms);
-  if (ms >= SLOW_MS) console.warn(`[perf] ${label}: ${ms.toFixed(0)} мс${detail ? ` (${detail})` : ''}`);
+  // Подпись считается только для медленных: у быстрых (тысячи зданий) это лишняя работа
+  if (ms >= SLOW_MS) { const d = typeof detail === 'function' ? detail() : detail; console.warn(`[perf] ${label}: ${ms.toFixed(0)} мс${d ? ` (${d})` : ''}`); }
 }
 
 /** Замер синхронной операции. detail — строка или функция от результата (например, число объектов). */
@@ -40,7 +41,7 @@ export function timed<T>(label: string, fn: () => T, detail?: (r: T) => string):
   if (!ENABLED) return fn();
   const t = performance.now();
   const r = fn();
-  record(label, performance.now() - t, detail?.(r));
+  record(label, performance.now() - t, detail && (() => detail(r)));
   return r;
 }
 

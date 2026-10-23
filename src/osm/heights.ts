@@ -48,15 +48,19 @@ export function roofShapeOf(tags: Record<string, string>): string {
   return ROOF_SYNONYMS[v] ?? v;
 }
 
+/** Высота скатной крыши по тегам (roof:height, иначе roof:levels, иначе типичная) — без поправок на высоту объекта. */
+export function roofHeightOf(tags: Record<string, string>): number {
+  const roofLevels = parseNum(tags['roof:levels']);
+  return parseLength(tags['roof:height']) ?? (roofLevels !== undefined && roofLevels > 0 ? roofLevels * LEVEL_HEIGHT : DEFAULT_ROOF_HEIGHT);
+}
+
 export function computeHeights(tags: Record<string, string>): Heights {
   const roofShape = roofShapeOf(tags);
   const levels = parseNum(tags['building:levels']);
   const minLevel = parseNum(tags['building:min_level']);
   const roofLevels = parseNum(tags['roof:levels']);
 
-  let roofHeight = roofShape === 'flat'
-    ? 0
-    : parseLength(tags['roof:height']) ?? (roofLevels !== undefined && roofLevels > 0 ? roofLevels * LEVEL_HEIGHT : DEFAULT_ROOF_HEIGHT);
+  let roofHeight = roofShape === 'flat' ? 0 : roofHeightOf(tags);
   let min = parseLength(tags.min_height) ?? (minLevel !== undefined ? minLevel * LEVEL_HEIGHT : 0);
 
   const height = parseLength(tags.height);

@@ -1,6 +1,7 @@
 import type { OsmMember } from '../osm/api';
 import type { LonLat, Polygon } from '../osm/model';
 import { tr } from '../i18n';
+import { apseDirection } from '../osm/apse';
 
 export type Tags = Record<string, string>;
 
@@ -448,6 +449,12 @@ export class EditSession {
       if (c.relMembers) this.originalMembers.set(c.key, []);
       this.created.add(c.key);
       step = [{ key: c.key, before: null, after: { ...c.tags } }, ...step];
+    }
+    // Апсида без roof:direction — пишем то, что построено: другие редакторы угадывают торец иначе
+    for (const e of step) {
+      if (!e.after || e.after['roof:direction'] !== undefined) continue;
+      const dir = apseDirection(e.after, e.gAfter ?? this.features.get(e.key)?.polygons);
+      if (dir !== undefined) e.after = { ...e.after, 'roof:direction': dir };
     }
     this.undoStack.push(step);
     this.redoStack = [];

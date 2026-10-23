@@ -128,7 +128,12 @@
     </div>
   </aside>
   <aside id="info-panel" class="panel">
-    <header class="panel-head"><h1>Свойства</h1><button type="button" class="collapse-btn" title="Свернуть" aria-expanded="true"></button></header>
+    <header class="panel-head"><h1>Свойства</h1>
+      <span id="tags-clip" class="head-tools" hidden>
+        <button type="button" class="icon-btn" data-copy-tags title="Копировать теги"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="9.5" height="9.5" rx="1.5"/><path d="M13 7V5a1.5 1.5 0 0 0-1.5-1.5h-6A1.5 1.5 0 0 0 4 5v6.5A1.5 1.5 0 0 0 5.5 13H7"/></svg></button>
+        <button type="button" class="icon-btn" data-paste-tags title="Вставить теги"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4H6a1.5 1.5 0 0 0-1.5 1.5v10A1.5 1.5 0 0 0 6 17h8a1.5 1.5 0 0 0 1.5-1.5v-10A1.5 1.5 0 0 0 14 4h-1.5"/><rect x="7.5" y="2.5" width="5" height="3" rx="1"/><path d="M7.5 10.5l2 2 3.5-4"/></svg></button>
+      </span>
+      <button type="button" class="collapse-btn" title="Свернуть" aria-expanded="true"></button></header>
     <div class="panel-body"><div id="info"></div></div>
   </aside>
   <aside id="edits-panel" class="panel collapsed" data-auto-collapse>

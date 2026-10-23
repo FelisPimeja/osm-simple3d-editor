@@ -503,6 +503,12 @@ if (server().imagery) registerSetting({
 });
 
 const infoEl = document.getElementById('info')!;
+// Копировать и вставить теги — кнопки в шапке «Свойств» (обработчики — у renderSelected)
+const tagsClip = document.getElementById('tags-clip')!;
+const copyTagsBtn = tagsClip.querySelector<HTMLButtonElement>('[data-copy-tags]')!;
+const pasteTagsBtn = tagsClip.querySelector<HTMLButtonElement>('[data-paste-tags]')!;
+/** Скопированные теги и откуда. */
+let copiedTags: { from: string; tags: Record<string, string> } | undefined;
 
 // Сворачивание панелей в заголовок; состояние запоминается.
 function setCollapsed(panel: HTMLElement, collapsed: boolean) {
@@ -2191,7 +2197,11 @@ const moveTool = new MoveTool(overpassLayer, map.getContainer(), commitMove, (hi
   toolHint(hint);
 });
 
-moveBtn.addEventListener('click', () => (moveTool.active ? moveTool.stop() : startMove()));
+moveBtn.addEventListener('click', () => {
+  if (entranceDrag) cancelEntranceDrag();
+  else if (moveTool.active) moveTool.stop();
+  else if (!startEntranceDrag('pick')) startMove();
+});
 
 // Инструмент «Повернуть» (Q): вокруг вертикальной оси на угол (курсором с прилипанием к 15° или числом)
 const rotateBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="rotate"]')!;
@@ -2864,7 +2874,7 @@ infoEl.addEventListener('click', (e) => {
 /** Курсор над картой — по включённому инструменту; у заливки — пипетка, пока нет образца или зажат Ctrl/Cmd/Alt. */
 let pickModifier = false;
 function syncCursor() {
-  const tool: ToolCursor | undefined = moveTool.active ? 'move' : rotateTool.active ? 'rotate' : pushTool.active ? 'push' : shapeTool.active ? 'shape' : splitTool.active ? 'split'
+  const tool: ToolCursor | undefined = moveTool.active || entranceDrag ? 'move' : rotateTool.active ? 'rotate' : pushTool.active ? 'push' : shapeTool.active ? 'shape' : splitTool.active ? 'split'
     : drawTool.active ? drawTool.shape : measureTool.active ? 'measure' : offsetTool.active ? 'offset'
     : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : undefined;
   setToolCursor(map.getCanvasContainer(), fieldPick ? 'pick' : tool);
@@ -5338,6 +5348,7 @@ function startEntranceDrag(phase: 'pick' | 'move' = 'move'): boolean {
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   entranceDrag = { id: selectedEntrance, phase };
+  syncEntranceTool();
   setStatus(phase === 'pick' ? tr('Переместить вход: кликните по его точке у основания стены, затем — по месту на стене. Esc — отмена.')
     : tr('Ведите курсор по стене здания — вход едет за ним. Клик — поставить, Esc — отмена.'));
   return true;
@@ -5347,6 +5358,13 @@ function cancelEntranceDrag() {
   if (!entranceDrag) return;
   entranceDrag = undefined;
   overpassLayer.previewEntrance(undefined);
+  syncEntranceTool();
+}
+
+/** Перенос входа — тот же «Переместить»: кнопка нажата, курсор со значком перемещения. */
+function syncEntranceTool() {
+  moveBtn.classList.toggle('active', moveTool.active || !!entranceDrag);
+  syncCursor();
 }
 
 function moveEntrance(point: [number, number]) {
@@ -8914,8 +8932,43 @@ function renderSelected() {
   outlineOverlay = undefined;
   try {
     renderSelectedImpl();
-  } finally { overpassLayer.setOverlay(outlineOverlay); }
+  } finally { overpassLayer.setOverlay(outlineOverlay); updateTagsClip(); }
 }
+
+// Копировать и вставить теги (кнопки в шапке «Свойств»): все теги одного объекта — на выбранные другие
+/** Не переносятся: type задаёт устройство отношения (мультиполигон, здание), а не свойства объекта. */
+const UNCOPIED_TAGS = new Set(['type']);
+
+/** Выбранные объекты, теги которых можно копировать и менять (в сессии). */
+const tagClipKeys = () => selection.filter((k) => session.get(k));
+
+function updateTagsClip() {
+  const keys = tagClipKeys();
+  tagsClip.hidden = !keys.length && !copiedTags;
+  copyTagsBtn.disabled = keys.length !== 1;
+  pasteTagsBtn.disabled = !copiedTags || !keys.length || (keys.length === 1 && keys[0] === copiedTags.from);
+  pasteTagsBtn.title = copiedTags ? tr('Вставить теги {key} ({n})', { key: copiedTags.from, n: Object.keys(copiedTags.tags).length }) : tr('Вставить теги');
+}
+
+tagsClip.addEventListener('click', (e) => {
+  e.stopPropagation(); // не сворачивать панель
+  const t = e.target as HTMLElement;
+  const keys = tagClipKeys();
+  if (t.closest('[data-copy-tags]') && keys.length === 1) {
+    const tags = Object.fromEntries(Object.entries(session.get(keys[0])!.tags).filter(([k]) => !UNCOPIED_TAGS.has(k)));
+    copiedTags = { from: keys[0], tags };
+    setStatus(trn(Object.keys(tags).length, 'Скопирован {n} тег {key}.|Скопировано {n} тега {key}.|Скопировано {n} тегов {key}.', { key: keys[0] }));
+  } else if (t.closest('[data-paste-tags]') && copiedTags) {
+    const from = copiedTags;
+    const edits = keys.filter((k) => k !== from.from).flatMap((key) => {
+      const cur = session.get(key)!.tags, tags = { ...cur, ...from.tags };
+      return Object.keys(from.tags).some((k) => cur[k] !== tags[k]) ? [{ key, tags }] : [];
+    });
+    if (!edits.length) setStatus(tr('Теги уже такие же.'));
+    else { session.editMany(edits); setStatus(trn(edits.length, 'Теги {from} вставлены в {n} объект. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объекта. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объектов. Отменить — Ctrl+Z.', { from: from.from })); }
+  }
+  updateTagsClip();
+});
 
 function renderSelectedImpl() {
   if (selectedEntrance !== undefined) return renderEntrance(selectedEntrance);

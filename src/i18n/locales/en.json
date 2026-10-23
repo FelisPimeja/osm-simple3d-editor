@@ -1150,5 +1150,11 @@
   "Сюда вход не поставить — выберите другую стену.": "The entrance can't go here — pick another wall.",
   "Перенос входа отменён.": "Entrance move cancelled.",
   "Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.": "Move along the building walls: click the entrance point at the foot of the wall (or press M, then click it) — it follows the cursor, click to place, Esc to cancel.",
-  "Переместить вход: кликните по его точке у основания стены, затем — по месту на стене. Esc — отмена.": "Move the entrance: click its point at the foot of the wall, then click a spot on the wall. Esc to cancel."
+  "Переместить вход: кликните по его точке у основания стены, затем — по месту на стене. Esc — отмена.": "Move the entrance: click its point at the foot of the wall, then click a spot on the wall. Esc to cancel.",
+  "Вставить теги {key} ({n})": "Paste tags from {key} ({n})",
+  "Вставить теги": "Paste tags",
+  "Копировать теги": "Copy tags",
+  "Скопирован {n} тег {key}.|Скопировано {n} тега {key}.|Скопировано {n} тегов {key}.": "Copied {n} tag from {key}.|Copied {n} tags from {key}.",
+  "Теги уже такие же.": "The tags are already the same.",
+  "Теги {from} вставлены в {n} объект. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объекта. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объектов. Отменить — Ctrl+Z.": "Tags from {from} pasted into {n} object. Undo — Ctrl+Z.|Tags from {from} pasted into {n} objects. Undo — Ctrl+Z."
 }

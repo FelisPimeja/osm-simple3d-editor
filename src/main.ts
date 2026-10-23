@@ -1672,6 +1672,8 @@ function implicitWarning(g: BuildingGroup): string {
 function groupFeatures(g: BuildingGroup): Feature3D[] {
   // Не нарисованные объёмом (подземные) — из загруженных данных
   return g.members.map((k, i) => {
+    // Удалённый в сессии — нет (иначе подставился бы загруженный исходник: виден, но не выделяется)
+    if (session.isDeleted(k)) return undefined;
     const f = (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature ?? overpass.findFeature(k);
     return f && focusFeature(g, f, g.roles[i]);
   }).filter((f): f is Feature3D => !!f);

@@ -7553,13 +7553,32 @@ function issueBuildingKey(issue: Issue): string {
   return groupOf(issue.key)?.key ?? issue.fix?.removeFromGroup ?? issue.fix?.addToGroup ?? issue.key;
 }
 
+/** Пауза без новых зданий и сдвигов карты, после которой считается проверка карты, мс. */
+const MAP_ISSUES_QUIET_MS = 400;
+/** Дольше этого от первого запроса проверку не откладываем (тайлы идут непрерывно), мс. */
+const MAP_ISSUES_MAX_WAIT_MS = 3000;
+let mapIssuesSince = 0;
+
+/**
+ * Проверка карты (сотни мс на плотном районе) — когда всё улеглось: пока приходят тайлы и строятся здания,
+ * каждый приход сдвигает её, а запуск — в простое браузера. Раньше она шла через 150 мс после каждого
+ * тайла и отнимала у загрузки секунды основного потока.
+ */
 function scheduleMapIssues() {
-  if (focus || mapIssuesTimer) return;
+  if (focus) return;
   mapIssuesDirty = true;
+  const now = performance.now();
+  if (!mapIssuesTimer) mapIssuesSince = now;
+  clearTimeout(mapIssuesTimer);
+  const wait = Math.max(0, Math.min(MAP_ISSUES_QUIET_MS, mapIssuesSince + MAP_ISSUES_MAX_WAIT_MS - now));
   mapIssuesTimer = setTimeout(() => {
-    mapIssuesTimer = undefined;
-    if (!focus) renderIssues();
-  }, 150);
+    const run = () => {
+      mapIssuesTimer = undefined;
+      if (!focus) renderIssues();
+    };
+    if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 1000 });
+    else run();
+  }, wait);
 }
 map.on('moveend', scheduleMapIssues);
 

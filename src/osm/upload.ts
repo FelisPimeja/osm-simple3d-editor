@@ -193,14 +193,19 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   const nodes = moves.length ? await fetchNodes([...new Set(moves.map((m) => m.id))], api()) : new Map();
   const near = (a: number, b: number) => Math.abs(a - b) < 1e-7;
   const movedIds = new Set<number>();
+  const failedIds = new Set<number>();
   for (const m of moves) {
-    // Один узел может быть сдвинут в нескольких объектах (перемещали вместе)
-    if (movedIds.has(m.id)) continue;
+    // Один узел может быть сдвинут в нескольких объектах (путь и его мультиполигон, перемещали вместе):
+    // отправляется один раз, а сохранённой геометрия считается у всех — иначе у второго объекта остаётся
+    // старое «было», и следующая отправка видит конфликт «узел уже сдвинут» (своим же changeset)
+    if (movedIds.has(m.id)) { if (!failedIds.has(m.id)) geometrySaved.add(m.key); continue; }
     movedIds.add(m.id);
+    failedIds.add(m.id);
     const n = nodes.get(m.id);
     if (!n) { conflicts.push({ key: m.key, tags: [tr('узел {id} удалён на сервере', { id: m.id })] }); continue; }
     if (!near(n.lon, m.from[0]) || !near(n.lat, m.from[1])) { conflicts.push({ key: m.key, tags: [tr('узел {id} уже сдвинут', { id: m.id })] }); continue; }
     payload.push({ element: { ...n, lon: m.to[0], lat: m.to[1] }, tags: n.tags ?? {} });
+    failedIds.delete(m.id);
     geometrySaved.add(m.key);
   }
   // Новые узлы — первыми в <create>: на них ссылаются пути того же changeset

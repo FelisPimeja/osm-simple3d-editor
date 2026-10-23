@@ -412,12 +412,14 @@ function stepper(input: string): string {
 /**
  * Крыша — поверх фасада: при выборе скатной формы вместо плоской и при смене roof:height верх стен остаётся
  * на месте, а height растёт на высоту крыши (по схеме height — до конька, и крыша иначе съедала бы фасад).
- * Только при заданном height: без него верх и так считается от этажей плюс крыша.
+ * Без height, но с этажами — при выборе формы height записываем: этажи плюс крыша (дальше правки идут как с height).
  */
 function roofOnTop(before: Record<string, string>, after: Record<string, string>, tag: string) {
-  if (parseLength(before.height) === undefined || before['building:part'] === 'roof' || before.building === 'roof') return;
+  if (before['building:part'] === 'roof' || before.building === 'roof') return;
+  const height = parseLength(before.height) !== undefined;
+  if (!height && before['building:levels'] === undefined) return;
   const pitched = roofShapeOf(after) !== 'flat';
-  const apply = tag === 'roof:shape' ? pitched && roofShapeOf(before) === 'flat' : tag === 'roof:height' && pitched;
+  const apply = tag === 'roof:shape' ? pitched && roofShapeOf(before) === 'flat' : tag === 'roof:height' && pitched && height;
   if (apply) after.height = num(computeHeights(before).wallTop + roofHeightOf(after));
 }
 

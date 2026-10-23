@@ -260,6 +260,7 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   for (const n of dropNodes.values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
   if (conflicts.length) throw new ConflictError(conflicts);
   const dropped = await settleTopology(edits, payload, fresh, onStatus);
+  dropDanglingMembers(payload);
   const broken = await brokenRings(payload, fresh);
   if (broken.length) throw new BrokenRingsError(broken);
 
@@ -282,6 +283,26 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
 }
 
 type Payload = Parameters<typeof buildOsmChange>[0];
+
+/**
+ * Участники отношений, которых в пакете не будет: новые (id < 0), не создаваемые в нём, и удаляемые в нём же.
+ * Сервер отклонил бы весь пакет («Placeholder … not found», «still used by»), а такой участник — след правки
+ * в сессии (удалённая новая часть осталась в составе здания): убираем его из состава.
+ */
+function dropDanglingMembers(payload: Payload) {
+  const id = (type: string, ref: number) => `${type}/${ref}`;
+  const created = new Set(payload.filter((p) => p.created && !p.deleted).map((p) => id(p.element.type, p.element.id)));
+  const deleted = new Set(payload.filter((p) => p.deleted).map((p) => id(p.element.type, p.element.id)));
+  for (const p of payload) {
+    if (p.element.type !== 'relation' || p.deleted) continue;
+    const rel = p.element;
+    const keep = rel.members.filter((m) => (m.ref < 0 ? created.has(id(m.type, m.ref)) : !deleted.has(id(m.type, m.ref))));
+    if (keep.length === rel.members.length) continue;
+    console.warn('[upload] из состава убраны отсутствующие участники', id('relation', rel.id),
+      rel.members.filter((m) => !keep.includes(m)).map((m) => id(m.type, m.ref)));
+    p.element = { ...rel, members: keep };
+  }
+}
 
 /**
  * Узлы разрыва колец мультиполигона: у замкнутых колец каждой роли (outer/inner) любой конец незамкнутого пути

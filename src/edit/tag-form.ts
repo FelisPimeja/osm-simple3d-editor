@@ -474,6 +474,8 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     if (btn) { closeCombos(ul); filterCombo(ul, ''); ul.hidden = !ul.hidden; if (!ul.hidden) input.focus(); return; }
     ul.hidden = true;
     input.value = li!.dataset.value!;
+    // Выбор из списка завершает ввод: фокус снимаем, чтобы горячие клавиши (W, …) не печатались в поле
+    input.blur();
     commit(input);
   });
   document.addEventListener('mousedown', (e) => { if (!(e.target as Element).closest?.('.combo-field')) closeCombos(); });
@@ -530,6 +532,7 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
       const input = field.querySelector<HTMLInputElement>('input')!;
       input.value = shown[i].dataset.value!;
       ul.hidden = true;
+      input.blur();
       commit(input);
     } else if (e.key === 'Enter') ul.hidden = true;
   });

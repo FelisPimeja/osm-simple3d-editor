@@ -25,8 +25,8 @@ const QUIET_MS = 3000;
 
 function record(label: string, ms: number, detail?: string) {
   lastActivity = performance.now();
-  // Тишину считаем только после того, как пошли тайлы: до этого грузятся стиль карты и шрифты
-  if (/тайлы|треугольники/.test(label)) tilesStarted = true;
+  // Тишину считаем только с первой сборки зданий: до неё грузятся стиль карты, шрифты, база и ответы API
+  if (label.includes('треугольники')) tilesStarted = true;
   if (!loadReported && tilesStarted) { clearTimeout(quietTimer); quietTimer = setTimeout(reportLoad, QUIET_MS); }
   const s = stats.get(label) ?? stats.set(label, { count: 0, total: 0, max: 0 }).get(label)!;
   s.count++;

@@ -4929,16 +4929,17 @@ function collectSnaps(g: MeshGroup): { points: SnapPoint[]; edges: SnapEdge[] } 
   const edges: SnapEdge[] = [];
   const seen = new Set<string>();
   const addEdge = (key: string, ax: number, ay: number, az: number, bx: number, by: number, bz: number) => {
-    // Общие рёбра соседних частей — одно (в любом направлении)
+    // Повтор ребра у того же объекта — одно (в любом направлении). Общие рёбра соседних частей — у каждой свои:
+    // инструмент может исключить свой объект (перемещение), и общее ребро не должно пропасть вместе с ним
     const p = `${ax.toFixed(2)}:${ay.toFixed(2)}:${az.toFixed(2)}`, q = `${bx.toFixed(2)}:${by.toFixed(2)}:${bz.toFixed(2)}`;
-    const id = `e:${p < q ? p + q : q + p}`;
+    const id = `e:${key}:${p < q ? p + q : q + p}`;
     if (seen.has(id)) return;
     seen.add(id);
     edges.push({ key, a: new THREE.Vector3(ax, ay, az), b: new THREE.Vector3(bx, by, bz) });
   };
   const add = (kind: SnapKind, key: string, x: number, y: number, z: number, label?: string) => {
-    // Общие вершины соседних частей — одна точка
-    const id = `${kind}:${x.toFixed(2)}:${y.toFixed(2)}:${z.toFixed(2)}`;
+    // Повтор точки у того же объекта — одна; общие вершины соседних частей — у каждой своя (см. addEdge)
+    const id = `${kind}:${key}:${x.toFixed(2)}:${y.toFixed(2)}:${z.toFixed(2)}`;
     if (seen.has(id)) return;
     seen.add(id);
     out.push({ kind, key, p: new THREE.Vector3(x, y, z), label });

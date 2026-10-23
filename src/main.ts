@@ -7453,18 +7453,23 @@ function strayPartIssues(scope: Feature3D[]): Issue[] {
   const parts = scope.filter((f) => f.kind === 'part' && f.polygons.length && !f.tags.building && !groupOf(f.key) && !session.isDeleted(f.key));
   if (!parts.length) return [];
   const isOutline = (b: Feature3D) => !!b.tags.building && b.tags.building !== 'no' && !b.tags['building:part'];
-  const area = (b: Feature3D) => { const r = bboxOf(b); return (r.e - r.w) * (r.n - r.s); };
+  // Рамки контуров считаем один раз: точку части сначала проверяем по рамке, полигон — только у попавших
   const all = [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)]
     .filter((f) => f.polygons?.length && !session.isDeleted(f.key) && isOutline(f))
     .map((f) => (session.has(f.key) ? (session.get(f.key) as Feature3D | undefined) ?? f : f))
-    .filter((f) => f.polygons?.length);
+    .filter((f) => f.polygons?.length)
+    .map((b) => { const r = bboxOf(b); return { b, r, area: (r.e - r.w) * (r.n - r.s) }; });
   const out: Issue[] = [];
   for (const p of parts) {
     const c = pointOnSurface(p.polygons[0]);
-    const host = all.filter((b) => { const r = bboxOf(b); return b.key !== p.key && c[0] >= r.w && c[0] <= r.e && c[1] >= r.s && c[1] <= r.n && insideFeature(c, b); })
-      .sort((a, b) => area(a) - area(b))[0];
-    const g = host && groupOf(host.key);
-    if (!g || isSolo(g) || !g.members.some((k, i) => k === host.key && g.roles[i] === 'outline')) continue;
+    let host: Feature3D | undefined, best = Infinity;
+    for (const { b, r, area } of all) {
+      if (area >= best || b.key === p.key || c[0] < r.w || c[0] > r.e || c[1] < r.s || c[1] > r.n) continue;
+      if (insideFeature(c, b)) { host = b; best = area; }
+    }
+    if (!host) continue;
+    const hostKey = host.key, g = groupOf(hostKey);
+    if (!g || isSolo(g) || !g.members.some((k, i) => k === hostKey && g.roles[i] === 'outline')) continue;
     out.push({ key: p.key, level: 'warning', code: 'stray-part',
       text: tr('Часть здания внутри контура отношения {relation}, но не входит в него — добавьте её в отношение с ролью part.', { relation: g.key }),
       fix: { label: tr('добавить в {relation} (part)', { relation: g.key }), tags: {}, addToGroup: g.key } });

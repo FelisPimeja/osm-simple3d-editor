@@ -317,6 +317,8 @@ class MeshGroup {
   readonly byKey = new Map<string, Item>();
   mesh?: THREE.Mesh;
   edges?: THREE.LineSegments;
+  /** Слитая геометрия устарела: слой скрыт, пересборка отложена до показа. */
+  stale = false;
   /** Скрытые (только для показа) объекты: не рисуются, не выбираются, без привязок. */
   readonly hidden = new Set<string>();
   /** Толщина плоского следа, м: на карте — чуть выше подложки, в режиме здания подложки нет — ноль. */
@@ -3504,6 +3506,7 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   setVisible(visible: boolean) {
     this.visible = visible;
+    if (visible) for (const g of this.groups.values()) if (g.stale) this.rebuildGeometry(g);
     this.map?.triggerRepaint();
   }
 
@@ -3714,6 +3717,9 @@ export class BuildingsLayer implements CustomLayerInterface {
   private doorCuts = new WeakMap<Item, { source: Float32Array; wallVertices: number; entries: Map<string, { positions: Float32Array; wallVertices: number }> }>();
 
   private rebuildGeometry(g: MeshGroup) {
+    // Скрытый слой на карте не рисуется — не сливаем геометрию зря, соберём при показе
+    if (!this.visible && !this.focused) { g.stale = true; return; }
+    g.stale = false;
     g.disposeMesh();
     for (const it of g.items) {
       const source = this.doorCutSources.get(it);

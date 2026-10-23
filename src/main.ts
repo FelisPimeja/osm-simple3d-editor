@@ -623,9 +623,9 @@ const underlayMenu = new UnderlayMenu({
   change: (changed) => {
     // Из меню — только видимость и прозрачность: положение могла сдвинуть панель подгонки
     const cur = focusUnderlays?.find((x) => x.id === changed.id);
-    const u = cur ? { ...cur, visible: changed.visible, opacity: changed.opacity } : changed;
+    const u = cur ? { ...cur, visible: changed.visible, opacity: changed.opacity, level: changed.level } : changed;
     underlayPanel.update(u);
-    replaceUnderlay(u);
+    replaceUnderlay(u, u.level !== cur?.level);
     scheduleUnderlaySave(u);
   },
   adjust: (u) => {
@@ -649,6 +649,7 @@ const underlayPanel = new UnderlayPanel(map, {
   focusToLocal: (p) => overpassLayer.focusToLocal(p),
   focusToLngLat: (x, y) => overpassLayer.focusToLngLat(x, y),
   snapAt: (p) => overpassLayer.snapAt(p),
+  elevation: (u) => underlayElevation(u) ?? 0,
 }, {
   change: (u) => replaceUnderlay(u),
   close: (u, done) => {
@@ -658,18 +659,43 @@ const underlayPanel = new UnderlayPanel(map, {
   },
 });
 
-/** Подложка изменилась: в списке и на сцене (меню не пересобирать — ползунок может быть под мышью). */
-function replaceUnderlay(u: Underlay) {
+/** Подложка изменилась: в списке и на сцене (меню — только если menu: ползунок может быть под мышью). */
+function replaceUnderlay(u: Underlay, menu = false) {
   focusUnderlays = focusUnderlays?.map((x) => (x.id === u.id ? u : x));
-  showUnderlays(false);
+  showUnderlays(menu);
+}
+
+/** Этажи здания режима — для подложек этажей (отметки полов); сигнатура — показывать заново, только если поменялись. */
+let underlayLevels: Level[] = [];
+let underlayLevelsSig = '';
+function syncUnderlayLevels(levels: Level[]) {
+  const sig = `${currentLevel}|${levels.map((l) => `${l.n}:${l.floor}`).join(',')}`;
+  underlayLevels = levels;
+  if (sig === underlayLevelsSig) return;
+  underlayLevelsSig = sig;
+  showUnderlays();
+}
+
+/** Отметка подложки: у подложки этажа — пол этажа; undefined — этажа нет в здании. */
+function underlayElevation(u: Underlay): number | undefined {
+  return u.level === undefined ? u.elevation : underlayLevels.find((l) => l.n === u.level)?.floor;
 }
 
 /** Показать подложки здания режима (слой и меню); menu = false — меню не пересобирать (ползунок под мышью). */
 function showUnderlays(menu = true) {
   const list = focus ? focusUnderlays ?? [] : [];
-  if (menu) underlayMenu.set(focus ? list : undefined);
-  overpassLayer.underlays.set(list);
-  if (list.some((u) => u.visible)) usedUnderlay = true;
+  if (menu) underlayMenu.set(focus ? list : undefined, underlayLevels.map((l) => ({ n: l.n, label: LEVEL_NAME(l.n) })), currentLevel);
+  // Подложка этажа — только на выбранном этаже, на отметке его пола
+  const shown = list.flatMap((u) => {
+    if (u.level === undefined) return [u];
+    const elevation = u.level === currentLevel ? underlayElevation(u) : undefined;
+    return elevation === undefined ? [] : [{ ...u, elevation }];
+  });
+  overpassLayer.underlays.set(shown);
+  if (shown.some((u) => u.visible)) usedUnderlay = true;
+  // Подгоняемую подложку больше не видно (сменили этаж) — подгонку закончить
+  const fitting = underlayPanel.id;
+  if (fitting && !shown.some((u) => u.id === fitting)) underlayPanel.hide();
 }
 
 /** Загрузить подложки здания режима (при входе в здание). */
@@ -701,7 +727,8 @@ async function addUnderlays(files: File[]) {
   const outline = groupFeatures(focus).flatMap((f) => (f.polygons ?? []).flatMap((p) => p.outer));
   const bad: string[] = [];
   for (const file of files) {
-    const u = await createUnderlay(file, key, outline);
+    // Выбран этаж — подложка этого этажа
+    const u = await createUnderlay(file, key, outline, currentLevel);
     if (focus?.key !== key) return;
     if (!u) { bad.push(file.name || tr('картинка')); continue; }
     focusUnderlays = [...(focusUnderlays ?? []), u];
@@ -7063,6 +7090,8 @@ function renderLevelsImpl() {
     if (levelsFocusKey !== undefined) { linkLevel = undefined; setLevelParam(undefined); } // вышли из режима здания
     currentLevel = levelsFocusKey = undefined;
     levelSignature = '';
+    underlayLevels = [];
+    underlayLevelsSig = '';
     return;
   }
   if (levelsFocusKey !== focus.key) {
@@ -7078,6 +7107,7 @@ function renderLevelsImpl() {
   if (currentLevel !== undefined && !levels.some((l) => l.n === currentLevel)) currentLevel = undefined;
   // Пока этаж из ссылки не появился в панели — он остаётся в адресе
   setLevelParam(currentLevel ?? linkLevel);
+  syncUnderlayLevels(levels);
   levelsCount.textContent = levels.length ? `(${levels.length})` : '';
   const planned = plannedLevels(focus, levels, indoor);
   levelsEl.innerHTML = levels.length

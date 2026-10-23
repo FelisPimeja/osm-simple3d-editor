@@ -699,3 +699,6 @@ body.mobile #issues-panel { display: none !important; }
 .underlay-fit { width: 100%; margin: 4px 0 0; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
 .underlay-fit:hover { background: #f3f4f6; }
 .underlay-fit.active { background: #e8f0ff; border-color: #2f7cff; color: #1d4ed8; }
+.underlay-row.away .underlay-name { color: #9ca3af; }
+.underlay-level { flex: none; padding: 0 4px; border-radius: 3px; background: #f3f4f6; color: #4b5563; font-size: 11px; }
+.basemap-menu .underlay-level-row select { flex: 1; min-width: 0; font: inherit; }

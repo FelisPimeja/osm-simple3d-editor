@@ -472,9 +472,10 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   render(_gl: WebGL2RenderingContext, options: CustomRenderMethodInput) {
     if (!this.renderer) return;
-    if (this.focused && !this.sketching && this.underlays.size) this.underlays.render(depthMain(options));
-    if (!this.visible) return;
-    timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
+    const underlays = this.focused && !this.sketching && this.underlays.size > 0;
+    if (underlays) this.underlays.render(depthMain(options), 'under');
+    if (this.visible) timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
+    if (underlays) this.underlays.render(depthMain(options), 'over');
   }
 
   /** Куда рисуются группы: буфер прозрачного слоя или сама карта. */

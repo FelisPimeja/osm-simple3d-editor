@@ -6,7 +6,8 @@
  *    (сдвиг, поворот и единый масштаб); концы прилипают к привязкам здания;
  *  - поля: поворот (азимут верха картинки, °), ширина (м), зеркально.
  * «Подтвердить» — оставить, Esc или × — вернуть как было до открытия.
- * Пока подложки только горизонтальные: всё считается в плоскости z = отметка подложки (оси сцены режима здания).
+ * Пока подложки только горизонтальные: всё считается в плоскости z = отметка подложки (оси сцены режима здания;
+ * у подложки этажа — его пол).
  */
 import * as THREE from 'three';
 import type { Map as MlMap, MapMouseEvent } from 'maplibre-gl';
@@ -24,6 +25,8 @@ export interface UnderlayScene {
   focusToLocal(p: LonLat): Pt | undefined;
   focusToLngLat(x: number, y: number): LonLat | undefined;
   snapAt(point: Pt): SnapHit | undefined;
+  /** Отметка подложки, м (у подложки этажа — пол этажа). */
+  elevation(u: Underlay): number;
 }
 
 export interface UnderlayPanelHooks {
@@ -233,7 +236,7 @@ export class UnderlayPanel {
   private onPlane(pt: Pt, u = this.u): Pt | undefined {
     const ray = this.scene.focusRay(pt);
     if (!ray || !u || Math.abs(ray.direction.z) < 1e-9) return;
-    const t = (u.elevation - ray.origin.z) / ray.direction.z;
+    const t = (this.scene.elevation(u) - ray.origin.z) / ray.direction.z;
     if (t < 0) return;
     const p = ray.at(t, new THREE.Vector3());
     return [p.x, p.y];
@@ -354,7 +357,7 @@ export class UnderlayPanel {
     const u = this.u, project = this.scene.focusProjector(), cs = u && this.corners(u);
     if (!project || !cs) return;
     return cs.find((c) => {
-      const s = project(new THREE.Vector3(c[0], c[1], u.elevation));
+      const s = project(new THREE.Vector3(c[0], c[1], this.scene.elevation(u)));
       return s && Math.hypot(s[0] - pt[0], s[1] - pt[1]) <= HANDLE_PX;
     });
   }
@@ -423,7 +426,7 @@ export class UnderlayPanel {
     const svg = this.svg, u = this.u, project = this.scene.focusProjector();
     const cs = u && this.corners(u);
     if (!u || !project || !cs) { svg.replaceChildren(); return; }
-    const z = u.elevation;
+    const z = this.scene.elevation(u);
     const scr = (p: Pt) => project(new THREE.Vector3(p[0], p[1], z));
     const ring = cs.map(scr);
     const parts: string[] = [];

@@ -1,13 +1,18 @@
 /**
- * Подложки пользователя в сцене three: прямоугольник с картинкой на месте подложки. Рисуются до зданий и не пишут
- * глубину — как снимок под зданиями: видны сквозь прозрачные здания и в режиме контуров, здания их закрывают.
+ * Подложки пользователя в сцене three: прямоугольник с картинкой на месте подложки. Глубину не пишут.
+ * На земле — рисуются до зданий, как снимок: видны сквозь прозрачные здания и в режиме контуров, здания их закрывают.
+ * Подложка этажа — после зданий, чуть выше пола, с проверкой глубины: поверх заливки помещений (план виден сквозь
+ * то, что по нему нарисовано), но за стенами, которые ближе к камере.
  */
 import * as THREE from 'three';
 import { MercatorCoordinate } from 'maplibre-gl';
 import { decodeImage, type Underlay } from '../view/underlays';
 
-/** Горизонтальная подложка чуть ниже своей отметки — не спорит по глубине с полом и сеткой. */
+/** Горизонтальная подложка на земле — чуть ниже своей отметки: не спорит по глубине с полом и сеткой. */
 const FLAT_OFFSET = -0.03;
+/** Подложка этажа — чуть выше пола (поверх заливки помещений). */
+const FLOOR_OFFSET = 0.03;
+
 /** Большая сторона текстуры и число пикселей — не больше (оригинал хранится целиком). */
 const MAX_SIDE = 8192;
 const MAX_PIXELS = 24e6;
@@ -62,7 +67,8 @@ export class UnderlayMeshes {
     const s = c.meterInMercatorCoordinateUnits();
     // Локальная система в метрах: x — восток, y — север, z — вверх (как у групп зданий)
     e.model.makeTranslation(c.x, c.y, 0).scale(new THREE.Vector3(s, -s, s));
-    mesh.position.set(0, 0, u.elevation + (u.tilt === 0 ? FLAT_OFFSET : 0));
+    mesh.position.set(0, 0, u.elevation + (u.tilt !== 0 ? 0 : u.level === undefined ? FLAT_OFFSET : FLOOR_OFFSET));
+    mesh.material.depthTest = u.level !== undefined;
     mesh.rotation.set(u.tilt, 0, u.rotation, 'ZXY');
     mesh.scale.set(u.width * u.scale * (u.mirror ? -1 : 1), u.height * u.scale, 1);
     mesh.material.opacity = u.opacity;
@@ -105,12 +111,15 @@ export class UnderlayMeshes {
 
   get size() { return this.entries.size; }
 
-  /** Нарисовать подложки (main — матрица проекции MapLibre, как у групп зданий). */
-  render(main: THREE.Matrix4) {
+  /**
+   * Нарисовать подложки (main — матрица проекции MapLibre, как у групп зданий): pass 'under' — на земле (до зданий),
+   * 'over' — этажей (после зданий).
+   */
+  render(main: THREE.Matrix4, pass: 'under' | 'over') {
     const renderer = this.renderer;
     if (!renderer) return;
     for (const e of this.entries.values()) {
-      if (!e.mesh.visible || !e.mesh.material.visible) continue;
+      if (!e.mesh.visible || !e.mesh.material.visible || (e.u.level !== undefined) !== (pass === 'over')) continue;
       e.camera.projectionMatrix.copy(main).multiply(e.model);
       renderer.resetState();
       renderer.render(e.scene, e.camera);

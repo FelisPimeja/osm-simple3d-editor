@@ -20,8 +20,10 @@ export interface Underlay {
   height: number;
   /** Центр картинки на местности. */
   center: LonLat;
-  /** Высота центра над землёй, м. */
+  /** Высота центра над землёй, м (у подложки этажа — не используется: она на отметке пола этажа). */
   elevation: number;
+  /** Этаж (`level`): видна только на нём, на отметке его пола; undefined — на земле, видна всегда. */
+  level?: number;
   /** Метров на пиксель оригинала. */
   scale: number;
   /** Поворот оси X картинки от востока против часовой, рад. */
@@ -139,7 +141,7 @@ export function fitToBuilding(points: LonLat[], width: number, height: number): 
 }
 
 /** Новая подложка здания из файла; undefined — файл не картинка или не открылся. */
-export async function createUnderlay(file: File | Blob, building: string, outline: LonLat[]): Promise<Underlay | undefined> {
+export async function createUnderlay(file: File | Blob, building: string, outline: LonLat[], level?: number): Promise<Underlay | undefined> {
   if (!isUnderlayFile(file)) return;
   let img: HTMLImageElement;
   try { img = await decodeImage(file); } catch { return; }
@@ -151,6 +153,6 @@ export async function createUnderlay(file: File | Blob, building: string, outlin
     name: (file as File).name || 'image',
     building, blob: file, width, height,
     ...fit,
-    elevation: 0, tilt: 0, mirror: false, opacity: 0.5, visible: true, added: Date.now(),
+    elevation: 0, level, tilt: 0, mirror: false, opacity: 0.5, visible: true, added: Date.now(),
   };
 }

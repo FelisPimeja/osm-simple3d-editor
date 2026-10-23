@@ -1108,7 +1108,6 @@
   "Скан плана, чертёж, фасад (PNG, JPG, WebP, SVG). Можно и перетащить файл на карту или вставить Ctrl+V": "A floor plan scan, drawing or facade (PNG, JPG, WebP, SVG). You can also drop a file onto the map or paste it with Ctrl+V",
   "Картинки хранятся только в этом браузере. Обводите только то, на что у вас есть права.": "Images are stored only in this browser. Trace only what you have the rights to.",
   "Удалить подложку из этого браузера": "Remove the underlay from this browser",
-  "Настройки подложки: прозрачность, подгонка, удаление": "Underlay settings: transparency, fitting, removal",
   "Подогнать": "Fit",
   "Сдвинуть, повернуть и растянуть мышью, числами или по двум точкам": "Move, rotate and scale with the mouse, by numbers or by two points",
   "Поворот": "Rotation",
@@ -1126,5 +1125,9 @@
   "Щёлкните, где эта точка должна быть.": "Click where this point belongs.",
   "Щёлкните вторую точку на картинке.": "Click the second point on the image.",
   "Щёлкните, где вторая точка должна быть.": "Click where the second point belongs.",
-  "Подложка здания: {name}": "Underlay: {name}"
+  "Подложка здания: {name}": "Underlay: {name}",
+  "видна на этаже: {level}": "shown on floor: {level}",
+  "Настройки подложки: прозрачность, этаж, подгонка, удаление": "Underlay settings: transparency, floor, fitting, removal",
+  "Подложка этажа лежит на отметке его пола и видна, только когда этот этаж выбран в панели этажей": "A floor underlay lies at that floor's elevation and is shown only when the floor is selected in the Floors panel",
+  "На земле": "On the ground"
 }

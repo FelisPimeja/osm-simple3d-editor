@@ -1,6 +1,6 @@
 /**
  * Подложки здания в меню слоёв (только в режиме здания): галка видимости у каждой, настройки под стрелкой —
- * прозрачность и удаление; «Добавить картинку…» — выбор файлов.
+ * прозрачность, этаж, подгонка и удаление; «Добавить картинку…» — выбор файлов.
  */
 import { tr } from '../i18n';
 import { FOLD_SVG, MOVE_SVG } from './basemaps';
@@ -8,7 +8,7 @@ import { UNDERLAY_TYPES, type Underlay } from './underlays';
 
 export interface UnderlayMenuHooks {
   add(files: File[]): void;
-  /** Подложку изменили (видимость, прозрачность). */
+  /** Подложку изменили (видимость, прозрачность, этаж). */
   change(u: Underlay): void;
   remove(u: Underlay): void;
   /** Открыть панель подгонки (положение, поворот, масштаб). */
@@ -22,6 +22,9 @@ export class UnderlayMenu {
   /** Подложка с раскрытыми настройками. */
   private open?: string;
   private items: Underlay[] = [];
+  /** Этажи здания (подпись — как в панели этажей) и выбранный. */
+  private levels: { n: number; label: string }[] = [];
+  private current?: number;
 
   constructor(private readonly hooks: UnderlayMenuHooks) {
     const el = this.el = document.createElement('div');
@@ -57,12 +60,16 @@ export class UnderlayMenu {
     el.append(head, this.list, buttons, note);
   }
 
-  /** Подложки здания; undefined — не в режиме здания (секция скрыта). */
-  set(items: Underlay[] | undefined) {
+  /** Подложки здания; undefined — не в режиме здания (секция скрыта). levels — этажи здания, current — выбранный. */
+  set(items: Underlay[] | undefined, levels: { n: number; label: string }[] = [], current?: number) {
     this.el.hidden = !items;
     this.items = items ?? [];
+    this.levels = levels;
+    this.current = current;
     this.render();
   }
+
+  private levelLabel(n: number) { return this.levels.find((l) => l.n === n)?.label ?? `level=${n}`; }
 
   private render() {
     this.list.replaceChildren(...this.items.flatMap((u) => this.row(u)));
@@ -71,7 +78,11 @@ export class UnderlayMenu {
   private row(u: Underlay): HTMLElement[] {
     const row = document.createElement('label');
     row.className = 'basemap-overlay-sub underlay-row';
-    row.title = u.name;
+    // Подложка другого этажа сейчас не видна — бледнее
+    const away = u.level !== undefined && u.level !== this.current;
+    row.classList.toggle('away', away);
+    row.title = u.level === undefined ? u.name
+      : `${u.name} · ${tr('видна на этаже: {level}', { level: this.levelLabel(u.level) })}`;
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.checked = u.visible;
@@ -82,7 +93,7 @@ export class UnderlayMenu {
     const fold = document.createElement('button');
     fold.type = 'button';
     fold.className = 'basemap-offset-btn basemap-fold';
-    fold.title = tr('Настройки подложки: прозрачность, подгонка, удаление');
+    fold.title = tr('Настройки подложки: прозрачность, этаж, подгонка, удаление');
     fold.innerHTML = FOLD_SVG;
     fold.classList.toggle('open', this.open === u.id);
     fold.addEventListener('click', (e) => {
@@ -90,7 +101,14 @@ export class UnderlayMenu {
       this.open = this.open === u.id ? undefined : u.id;
       this.render();
     });
-    row.append(input, name, fold);
+    row.append(input, name);
+    if (u.level !== undefined) {
+      const lv = document.createElement('span');
+      lv.className = 'underlay-level';
+      lv.textContent = this.levelLabel(u.level);
+      row.append(lv);
+    }
+    row.append(fold);
     if (this.open !== u.id) return [row];
     const sec = document.createElement('div');
     sec.className = 'basemap-imagery';
@@ -117,6 +135,23 @@ export class UnderlayMenu {
       this.hooks.change(u);
     });
     alphaRow.append(tr('Прозрачность'), alpha, value);
+    // Этаж: на земле (видна всегда) или на отметке пола этажа (видна только на нём)
+    const levelRow = document.createElement('label');
+    levelRow.className = 'basemap-alpha underlay-level-row';
+    levelRow.title = tr('Подложка этажа лежит на отметке его пола и видна, только когда этот этаж выбран в панели этажей');
+    const select = document.createElement('select');
+    const opt = (value: string, text: string) => {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = text;
+      return o;
+    };
+    select.append(opt('', tr('На земле')), ...this.levels.map((l) => opt(String(l.n), l.label)));
+    // Этажа подложки больше нет в здании — всё равно показать его
+    if (u.level !== undefined && !this.levels.some((l) => l.n === u.level)) select.append(opt(String(u.level), `level=${u.level}`));
+    select.value = u.level === undefined ? '' : String(u.level);
+    select.addEventListener('change', () => this.hooks.change({ ...u, level: select.value === '' ? undefined : Number(select.value) }));
+    levelRow.append(tr('Этаж'), select);
     const buttons = document.createElement('div');
     buttons.className = 'basemap-shift-buttons';
     const remove = document.createElement('button');
@@ -135,7 +170,7 @@ export class UnderlayMenu {
     adjust.title = tr('Сдвинуть, повернуть и растянуть мышью, числами или по двум точкам');
     adjust.addEventListener('click', () => this.hooks.adjust(u));
     buttons.append(adjust, remove);
-    sec.append(alphaRow, buttons);
+    sec.append(alphaRow, levelRow, buttons);
     return [row, sec];
   }
 }

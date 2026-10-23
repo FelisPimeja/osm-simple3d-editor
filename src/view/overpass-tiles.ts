@@ -472,7 +472,7 @@ export class OverpassTiles {
   private async lookup(key: string) {
     this.cache.set(key, { state: 'lookup' });
     // Слой JOSM в IndexedDB не кладём: он меняется вместе с правками в JOSM
-    const stored = this.source?.josm ? undefined : await timedAsync('тайлы: чтение из IndexedDB', this.store.get(key));
+    const stored = this.source?.josm ? undefined : await timedAsync('тайлы: чтение из IndexedDB (с ожиданием)', this.store.get(key));
     if (this.cache.get(key)?.state !== 'lookup') return; // за время поиска ушли с тайла
     if (stored) {
       // Запись из кеша старше отправленных правок (её успели перезаписать данными до правки) — обновить в фоне

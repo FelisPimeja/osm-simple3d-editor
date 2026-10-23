@@ -1,3 +1,4 @@
+import { recordMs } from '../perf';
 import type { BuildingGroup, Feature3D, IndoorFeature } from '../osm/model';
 import type { TreeData } from '../osm/trees';
 import type { RoadWay } from '../osm/roads';
@@ -39,13 +40,14 @@ export class TileStore {
 
   private open(): Promise<IDBDatabase | undefined> {
     this.db ??= new Promise((resolve) => {
+      const t = performance.now();
       try {
         const req = indexedDB.open(this.dbName, 1);
         req.onupgradeneeded = () => {
           const store = req.result.createObjectStore(STORE, { keyPath: 'key' });
           store.createIndex('fetchedAt', 'fetchedAt');
         };
-        req.onsuccess = () => resolve(req.result);
+        req.onsuccess = () => { recordMs('тайлы: открытие IndexedDB', performance.now() - t); resolve(req.result); };
         req.onerror = () => { console.warn('IndexedDB недоступна:', req.error); resolve(undefined); };
         req.onblocked = () => resolve(undefined);
       } catch (err) {
@@ -57,7 +59,7 @@ export class TileStore {
   }
 
   async get(key: string): Promise<StoredTile | undefined> {
-    const rec = await this.request<TileRecord | undefined>('readonly', (s) => s.get(key));
+    const rec = await this.request<TileRecord | undefined>('readonly', (s) => s.get(key), 'тайлы: запрос к IndexedDB');
     if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: rec.fetchedAt, via: rec.via };
     if (rec?.format === 11) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
     if (rec?.format === 10) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
@@ -122,15 +124,17 @@ export class TileStore {
   }
 
   /** Выполняет запрос; undefined при любой ошибке. */
-  private async request<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest): Promise<T | undefined> {
+  /** label — замер самого запроса (от транзакции до ответа базы, без ожидания основного потока после него). */
+  private async request<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest, label?: string): Promise<T | undefined> {
     const db = await this.open();
     if (!db) return;
     return new Promise((resolve) => {
       try {
+        const t = performance.now();
         const tx = db.transaction(STORE, mode);
         const req = fn(tx.objectStore(STORE));
         let result: T | undefined;
-        req.onsuccess = () => { result = req.result as T; };
+        req.onsuccess = () => { result = req.result as T; if (label) recordMs(label, performance.now() - t); };
         tx.oncomplete = () => resolve(mode === 'readwrite' ? (result ?? (true as T)) : result);
         tx.onerror = tx.onabort = () => { console.warn('IndexedDB:', tx.error); resolve(undefined); };
       } catch (err) {

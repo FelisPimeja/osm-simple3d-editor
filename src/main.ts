@@ -66,6 +66,7 @@ import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from '.
 import { LOADER_TIMING, CUBE_SHAPES, MorphLoader } from './view/morph-loader';
 import { createUnderlay, deleteUnderlay, isUnderlayFile, loadUnderlays, saveUnderlay, type Underlay } from './view/underlays';
 import { UnderlayMenu } from './view/underlay-menu';
+import { UnderlayPanel } from './view/underlay-panel';
 
 // Статичная разметка index.html — до того, как код ниже начнёт менять тексты
 localizeDom(document.body);
@@ -619,12 +620,20 @@ let focusUnderlays: Underlay[] | undefined;
 let usedUnderlay = false;
 const underlayMenu = new UnderlayMenu({
   add: (files) => void addUnderlays(files),
-  change: (u) => {
-    focusUnderlays = focusUnderlays?.map((x) => (x.id === u.id ? u : x));
-    showUnderlays(false);
+  change: (changed) => {
+    // Из меню — только видимость и прозрачность: положение могла сдвинуть панель подгонки
+    const cur = focusUnderlays?.find((x) => x.id === changed.id);
+    const u = cur ? { ...cur, visible: changed.visible, opacity: changed.opacity } : changed;
+    underlayPanel.update(u);
+    replaceUnderlay(u);
     scheduleUnderlaySave(u);
   },
+  adjust: (u) => {
+    basemapCtrl?.closeMenu();
+    underlayPanel.show(u);
+  },
   remove: (u) => {
+    if (underlayPanel.id === u.id) underlayPanel.hide();
     focusUnderlays = focusUnderlays?.filter((x) => x.id !== u.id);
     clearTimeout(underlaySaves.get(u.id));
     underlaySaves.delete(u.id);
@@ -633,6 +642,27 @@ const underlayMenu = new UnderlayMenu({
   },
 });
 basemapCtrl?.addSection(underlayMenu.el);
+// Панель подгонки: правки сразу видны, в базу — по «Подтвердить» (отмена возвращает как было)
+const underlayPanel = new UnderlayPanel(map, {
+  focusRay: (p) => overpassLayer.focusRay(p),
+  focusProjector: () => overpassLayer.focusProjector(),
+  focusToLocal: (p) => overpassLayer.focusToLocal(p),
+  focusToLngLat: (x, y) => overpassLayer.focusToLngLat(x, y),
+  snapAt: (p) => overpassLayer.snapAt(p),
+}, {
+  change: (u) => replaceUnderlay(u),
+  close: (u, done) => {
+    replaceUnderlay(u);
+    if (done) scheduleUnderlaySave(u);
+    showUnderlays();
+  },
+});
+
+/** Подложка изменилась: в списке и на сцене (меню не пересобирать — ползунок может быть под мышью). */
+function replaceUnderlay(u: Underlay) {
+  focusUnderlays = focusUnderlays?.map((x) => (x.id === u.id ? u : x));
+  showUnderlays(false);
+}
 
 /** Показать подложки здания режима (слой и меню); menu = false — меню не пересобирать (ползунок под мышью). */
 function showUnderlays(menu = true) {
@@ -645,6 +675,7 @@ function showUnderlays(menu = true) {
 /** Загрузить подложки здания режима (при входе в здание). */
 async function loadFocusUnderlays() {
   const key = focus?.key;
+  underlayPanel.hide(); // подгонка подложки прежнего здания
   focusUnderlays = undefined;
   showUnderlays();
   if (!key) return;
@@ -1875,6 +1906,7 @@ function exitFocus() {
   restore(focusHiddenLayers.filter((l) => !TILE_LAYERS.includes(l.id)));
   focusHiddenLayers = [];
   offsetPanel.hide();
+  underlayPanel.hide();
   syncBasemapLayers();
   focusUnderlays = undefined;
   showUnderlays();

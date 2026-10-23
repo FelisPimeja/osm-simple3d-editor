@@ -277,7 +277,7 @@ export function storeBuildings(v: BuildingsView) {
 /** Стрелка раскрытия секции настроек слоя (вниз; раскрыта — повёрнута вверх). */
 export const FOLD_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.2 8 10.2 12 6.2"/></svg>';
 /** Значок инструмента смещения снимка: стрелки во все стороны. */
-const MOVE_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5v13M1.5 8h13M6 3.5 8 1.5l2 2M6 12.5l2 2 2-2M3.5 6 1.5 8l2 2M12.5 6l2 2-2 2"/></svg>';
+export const MOVE_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5v13M1.5 8h13M6 3.5 8 1.5l2 2M6 12.5l2 2 2-2M3.5 6 1.5 8l2 2M12.5 6l2 2-2 2"/></svg>';
 
 export class BasemapButton {
   private readonly btn: HTMLButtonElement;
@@ -562,6 +562,9 @@ export class BasemapButton {
     this.overlaysAt = last;
     this.sync();
   }
+
+  /** Закрыть меню (открыли инструмент из него). */
+  closeMenu() { this.toggleMenu(false); }
 
   /** Открыть меню с раскрытыми настройками выбранного снимка (после инструмента сдвига). */
   openImagery() {

@@ -3,7 +3,7 @@
  * прозрачность и удаление; «Добавить картинку…» — выбор файлов.
  */
 import { tr } from '../i18n';
-import { FOLD_SVG } from './basemaps';
+import { FOLD_SVG, MOVE_SVG } from './basemaps';
 import { UNDERLAY_TYPES, type Underlay } from './underlays';
 
 export interface UnderlayMenuHooks {
@@ -11,6 +11,8 @@ export interface UnderlayMenuHooks {
   /** Подложку изменили (видимость, прозрачность). */
   change(u: Underlay): void;
   remove(u: Underlay): void;
+  /** Открыть панель подгонки (положение, поворот, масштаб). */
+  adjust(u: Underlay): void;
 }
 
 export class UnderlayMenu {
@@ -80,7 +82,7 @@ export class UnderlayMenu {
     const fold = document.createElement('button');
     fold.type = 'button';
     fold.className = 'basemap-offset-btn basemap-fold';
-    fold.title = tr('Настройки подложки: прозрачность, удаление');
+    fold.title = tr('Настройки подложки: прозрачность, подгонка, удаление');
     fold.innerHTML = FOLD_SVG;
     fold.classList.toggle('open', this.open === u.id);
     fold.addEventListener('click', (e) => {
@@ -126,7 +128,13 @@ export class UnderlayMenu {
       if (this.open === u.id) this.open = undefined;
       this.hooks.remove(u);
     });
-    buttons.append(remove);
+    const adjust = document.createElement('button');
+    adjust.type = 'button';
+    adjust.className = 'basemap-shift-tool';
+    adjust.innerHTML = `${MOVE_SVG}<span>${tr('Подогнать')}</span>`;
+    adjust.title = tr('Сдвинуть, повернуть и растянуть мышью, числами или по двум точкам');
+    adjust.addEventListener('click', () => this.hooks.adjust(u));
+    buttons.append(adjust, remove);
     sec.append(alphaRow, buttons);
     return [row, sec];
   }

@@ -5256,6 +5256,14 @@ const STROKE_SELECTED = new THREE.Color('#2f7cff');
 /** Обводка выделенного плоского следа в режиме здания, px, и непрозрачность его заливки. */
 const SELECTED_STROKE_PX = 2, SELECTED_FILL_OPACITY = 0.18;
 const STROKE_MATERIAL = new THREE.LineBasicMaterial({ vertexColors: true });
+/**
+ * Обводка лежит в плоскости своей заливки, а заливку плоских объектов THIN_MATERIAL сдвигает к камере — без
+ * такого же сдвига она закрыла бы свою обводку. У линий polygonOffset нет: сдвигаем глубину в шейдере.
+ */
+STROKE_MATERIAL.onBeforeCompile = (shader) => {
+  shader.vertexShader = shader.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  gl_Position.z -= STROKE_DEPTH_BIAS * gl_Position.w;')
+    .replace('void main() {', 'const float STROKE_DEPTH_BIAS = 2e-5;\nvoid main() {');
+};
 
 /** Высота плоского следа на земле, м: чуть выше земли, чтобы не мерцать с подложкой. */
 const FOOTPRINT_HEIGHT = 0.1;

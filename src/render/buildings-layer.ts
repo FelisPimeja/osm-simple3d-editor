@@ -3554,13 +3554,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Узел в нескольких объектах (контур и часть, соседние части) — на самой низкой видимой стене
     const best = new Map<number, { place: EntrancePlace; rank: number }>();
     for (const it of g.items) {
-      if (g.hidden.has(it.feature.key) || thinItem(it)) continue;
+      if (thinItem(it)) continue;
       // Низ — по тегам, не по габаритам: пока часть пересобирается (крыша из воркера), box бывает пустым,
       // и вход перескакивал на соседнюю часть выше (на крышу нижней)
       const min = g.lift?.get(it.feature.key) ?? computeHeights(it.tags).min;
-      // Вход — у земли: решает самый низкий низ (контур под частями, хоть он и только обводка, ниже части
-      // на крыше соседней); обводка уступает объёму лишь на той же высоте
-      const rank = min + (strokeOnly(g, it) ? 1e-3 : 0);
+      // Вход — у земли: решает самый низкий низ. Контур под частями (только обводка, а в режиме здания и вовсе
+      // скрыт) ниже части-кровли, на которой узел тоже есть, — вход по нему; видимому объёму он уступает лишь
+      // на той же высоте
+      const rank = min + (strokeOnly(g, it) || g.hidden.has(it.feature.key) ? 1e-3 : 0);
       for (const p of it.feature.polygons) {
         const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));
         [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {

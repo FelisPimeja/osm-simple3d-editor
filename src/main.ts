@@ -8892,8 +8892,8 @@ function renderChanges() {
   undoBtn.disabled = !session.canUndo();
   redoBtn.disabled = !session.canRedo();
   editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : tr('· не выполнен вход');
-  // Появились правки — раскрываем панель, исчезли — сворачиваем; в остальное время решает пользователь
-  if (show !== editsHadContent) setCollapsed(editsPanel, !show);
+  // Список правок нужен редко — сама панель не раскрывается; правок не осталось — сворачиваем, в остальное время решает пользователь
+  if (show !== editsHadContent && !show) setCollapsed(editsPanel, true);
   editsHadContent = show;
   if (!show) { changesEl.innerHTML = ''; return; }
   const list = changes.map((c) => {
@@ -8939,7 +8939,7 @@ function renderJosmChanges() {
   const show = josmChanges.length > 0 || !editsHistory.hidden;
   changesEl.hidden = !show;
   editsCount.textContent = josmChanges.length ? `(${josmChanges.length})` : '';
-  if (show !== editsHadContent) setCollapsed(editsPanel, !show);
+  if (show !== editsHadContent && !show) setCollapsed(editsPanel, true);
   editsHadContent = show;
   if (!show) { changesEl.innerHTML = ''; return; }
   const label = { new: tr('новый'), modify: '', delete: tr('удалён') };

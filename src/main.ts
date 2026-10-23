@@ -308,7 +308,7 @@ function setBuildingsView(v: typeof buildingsView) {
   overpassLayer.setWireframe(v.wireframe);
   applyTileBuildingsView();
   syncWireBtn();
-  if (toggled && !focus) { mapIssuesDirty = true; renderIssues(); }
+  if (toggled && !focus) { mapIssuesDirty = true; renderIssues(); refreshOverpass(); scheduleIndoorBadges(); }
 }
 
 /** В режиме контуров рёбер у объёмов тайлов нет — только бледная заливка, чтобы было видно, что здесь здание. */
@@ -1033,7 +1033,8 @@ setInterval(() => {
 
 function refreshOverpass() {
   // В режиме здания окружение не видно — тайлы не грузим и не собираем (у горизонта их в кадре десятки)
-  if (!map.getLayer(overpassLayer.id) || focus) return;
+  // Слой зданий выключен — тоже: догрузим при включении
+  if (!map.getLayer(overpassLayer.id) || focus || !buildingsView.shown) return;
   timed('refreshOverpass', refreshOverpassImpl);
 }
 
@@ -6337,7 +6338,7 @@ function scheduleIndoorBadges() {
 function updateIndoorBadges() {
   const underground = hiddenUnderground();
   updateUndergroundOutlines(underground);
-  if (focus || map.getZoom() < BADGE_MIN_ZOOM) return indoorBadges.set([]);
+  if (focus || !buildingsView.shown || map.getZoom() < BADGE_MIN_ZOOM) return indoorBadges.set([]);
   const b = map.getBounds();
   const bbox: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
   const indoor = overpass.indoorIn(bbox).filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length);

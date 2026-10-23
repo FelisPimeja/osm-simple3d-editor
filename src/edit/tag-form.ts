@@ -394,7 +394,7 @@ const ICON_DIRECTION = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColo
 
 /** Поле направления с кнопкой инструмента «две точки в 3D». */
 function directionField(input: string): string {
-  return `<span class="direction-field">${input}<button type="button" class="direction-pick" data-pick-direction title="${esc(tr('Задать направление двумя точками в 3D'))}">${ICON_DIRECTION}</button></span>`;
+  return `<span class="direction-field">${input}<button type="button" class="direction-pick" data-pick-direction title="${esc(tr('Задать направление двумя точками в 3D (D)'))}">${ICON_DIRECTION}</button></span>`;
 }
 
 /** Поле со значком «унаследовано» справа (только если есть пояснение). */

@@ -2580,9 +2580,8 @@ const measureTool = new MeasureTool(overpassLayer, map.getContainer(), (hint) =>
 measureBtn.addEventListener('click', () => (measureTool.active ? measureTool.stop() : startMeasure()));
 
 /** Направление ската двумя точками в 3D — для объектов формы, где нажата кнопка у поля roof:direction. */
-function startDirectionPick(form: HTMLFormElement) {
+function startDirectionPick(keys: string[]) {
   if (!focus) { setStatus(tr('Направление двумя точками задаётся в режиме здания.')); return; }
-  const keys = form.dataset.keys ? form.dataset.keys.split(' ') : [form.dataset.key!];
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop(); offsetTool.stop(); rotateTool.stop(); measureTool.stop();
   measureTool.startDirection((deg) => {
     const value = String(deg);
@@ -5682,6 +5681,15 @@ document.addEventListener('keydown', (e) => {
     toggleGrid();
     return;
   }
+  // D — направление ската (roof:direction) двумя точками: только у выделенных зданий и частей, иначе ничего
+  if (e.code === 'KeyD' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const feats = selection.map((k) => entity(k) as Feature3D | undefined);
+    if (!feats.length || !feats.every((f) => f && (f.kind === 'building' || f.kind === 'part'))) return;
+    e.preventDefault();
+    closeCtxMenu();
+    if (measureTool.picking) measureTool.stop(); else startDirectionPick(selection);
+    return;
+  }
   // Ctrl/Cmd+C, Ctrl/Cmd+V — копировать и вставить части здания (по физической клавише — и в русской раскладке)
   // Выделен текст на странице (строка состояния, панель) — Ctrl+C копирует его, как обычно
   const textSelected = !!window.getSelection()?.toString();
@@ -5767,7 +5775,7 @@ infoEl.addEventListener('click', (e) => {
   if (!btn) return;
   if (btn.dataset.pickDirection !== undefined) {
     const form = btn.closest<HTMLFormElement>('.tag-form');
-    if (measureTool.picking) measureTool.stop(); else if (form) startDirectionPick(form);
+    if (measureTool.picking) measureTool.stop(); else if (form) startDirectionPick(form.dataset.keys ? form.dataset.keys.split(' ') : [form.dataset.key!]);
     return;
   }
   if (btn.dataset.merge !== undefined) return mergeIntoBuilding();
@@ -8113,7 +8121,7 @@ const HELP: Record<string, HelpTopic> = {
     tr('Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.'),
     tr('Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.'),
     tr('M — переместить, Q — повернуть, A — выровнять углы (90°), P — вытянуть, K — рассечь, J — объединить, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.'),
-    tr('Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, I — изолировать выделенные, Shift+H — показать все.'),
+    tr('Пробел — выключить инструмент. G — сетка, S — привязки, D — направление ската, H — скрыть часть, I — изолировать выделенные, Shift+H — показать все.'),
     tr('Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.'),
     tr('Двойной клик по части — изолировать её (остальные скрыты); двойной клик мимо здания — показать все части, а если скрытых нет — назад к карте.'),
     tr('Esc — снять выделение, ещё раз — назад к карте.'),

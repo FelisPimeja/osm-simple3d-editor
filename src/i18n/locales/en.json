@@ -934,7 +934,7 @@
   "Направление ската: кликните начальную точку — по её высоте строится направление. Esc — выйти.": "Roof direction: click the start point; the direction is drawn at its height. Esc to exit.",
   "Направление ската: кликните, куда смотрит скат. Esc — выйти.": "Roof direction: click where the slope faces. Esc to exit.",
   "Направление": "Direction",
-  "Задать направление двумя точками в 3D": "Set direction with two points in 3D",
+  "Задать направление двумя точками в 3D (D)": "Set direction with two points in 3D (D)",
   "Направление двумя точками задаётся в режиме здания.": "Two-point direction works in building mode.",
   "roof:direction={value}. Отменить — Ctrl+Z.": "roof:direction={value}. Undo with Ctrl+Z.",
   "roof:levels × {m} м": "roof:levels × {m} m",
@@ -1086,7 +1086,7 @@
   "Двойной клик по части — изолировать её (остальные скрыты); двойной клик мимо здания — показать все части, а если скрытых нет — назад к карте.": "Double-click a part to isolate it (the rest are hidden); double-click outside the building to show all parts, or, if none are hidden, to go back to the map.",
   "Esc — снять выделение, ещё раз — назад к карте.": "Esc clears the selection; press it again to go back to the map.",
   "Клик по части — выделить её, Shift — несколько. Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.": "Click a part to select it, Shift for several. Double-click a part to isolate it; double-click outside the building to show all parts or exit.",
-  "Пробел — выключить инструмент. G — сетка, S — привязки, H — скрыть часть, I — изолировать выделенные, Shift+H — показать все.": "Space: turn the tool off. G: grid, S: snapping, H: hide a part, I: isolate selected, Shift+H: show all.",
+  "Пробел — выключить инструмент. G — сетка, S — привязки, D — направление ската, H — скрыть часть, I — изолировать выделенные, Shift+H — показать все.": "Space: turn the tool off. G: grid, S: snapping, D: roof direction, H: hide a part, I: isolate selected, Shift+H: show all.",
   "Выделите части (Shift+клик — несколько), затем I — изолировать их.": "Select parts (Shift+click for several), then press I to isolate them.",
   "Изолировано частей: {n}. Двойной клик по пустому месту или Shift+H — показать все, Ctrl+Z — отменить.": "Isolated parts: {n}. Double-click empty space or press Shift+H to show all, Ctrl+Z to undo.",
   "Не удалось разрезать грань.": "Could not split the face.",
@@ -1141,5 +1141,7 @@
   "Общая подложка: видна на карте и в режиме любого здания": "Shared underlay: shown on the map and in any building",
   "В этом здании": "In this building",
   "На карте и во всех зданиях": "On the map and in all buildings",
-  "Видна": "Shown"
+  "Видна": "Shown",
+  "Не часть": "Not a part",
+  "Без ключа — удалить тег": "No key — remove the tag"
 }

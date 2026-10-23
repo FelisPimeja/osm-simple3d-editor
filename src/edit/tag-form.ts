@@ -27,6 +27,9 @@ interface Field {
 }
 
 /** Частые значения building:part (taginfo) с подписями; можно ввести и своё. */
+/** Значение в списке, означающее «удалить тег». */
+const REMOVE_VALUE = '-';
+
 const PART_VALUES: Record<string, string> = {
   yes: tr('Часть'), roof: tr('Крыша'), steps: tr('Ступени'), balcony: tr('Балкон'), deck: tr('Настил'), terrace: tr('Терраса'),
   column: tr('Колонна'), tower: tr('Башня'), bell_tower: tr('Колокольня'), porch: tr('Крыльцо'), veranda: tr('Веранда'),
@@ -81,7 +84,9 @@ const ROOF_ICONS: Record<string, string> = {
 
 /** Поля формы; чего не задано — из схемы iD: название, варианты, подписи вариантов. */
 const FIELDS = ([
-  { tag: 'building:part', type: 'combo', options: Object.keys(PART_VALUES), labels: PART_VALUES, placeholder: 'yes', empty: 'yes' },
+  // «-» — удалить ключ (объект перестаёт быть частью), no — явно не часть
+  { tag: 'building:part', type: 'combo', options: [...Object.keys(PART_VALUES), 'no', REMOVE_VALUE],
+    labels: { ...PART_VALUES, no: tr('Не часть'), [REMOVE_VALUE]: tr('Без ключа — удалить тег') }, placeholder: 'yes', empty: 'yes' },
   { tag: 'height', label: tr('Высота, м'), type: 'length', placeholder: tr('до верха крыши') },
   { tag: 'min_height', label: tr('Низ, м'), type: 'length' },
   { tag: 'building:levels', label: tr('Этажей'), type: 'int' },
@@ -428,7 +433,8 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
       const tags = { ...f.tags };
       // Пустая «Часть здания» — по умолчанию yes (без тега объект перестал бы быть частью)
       const empty = FIELDS.find((x) => x.tag === tag)?.empty;
-      if (v.trim()) tags[tag] = v.trim(); else if (empty && !('emptyRemoves' in input.dataset)) tags[tag] = empty; else delete tags[tag];
+      if (v.trim() === REMOVE_VALUE && tag === 'building:part') delete tags[tag];
+      else if (v.trim()) tags[tag] = v.trim(); else if (empty && !('emptyRemoves' in input.dataset)) tags[tag] = empty; else delete tags[tag];
       return tags[tag] === f.tags[tag] ? [] : [{ key, tags }];
     });
     if (edits.length === 1 && keys.length === 1) s.setTags(edits[0].key, { [tag]: edits[0].tags[tag] });

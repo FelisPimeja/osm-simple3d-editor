@@ -3,10 +3,12 @@
  * На земле — рисуются до зданий, как снимок: видны сквозь прозрачные здания и в режиме контуров, здания их закрывают.
  * Подложка этажа — после зданий, чуть выше пола, с проверкой глубины: поверх заливки помещений (план виден сквозь
  * то, что по нему нарисовано), но за стенами, которые ближе к камере.
+ * Стоящая (фасад, разрез) — тоже после зданий с проверкой глубины, но придвинута к камере (polygonOffset): видна
+ * и тогда, когда совпадает со стеной.
  */
 import * as THREE from 'three';
 import { MercatorCoordinate } from 'maplibre-gl';
-import { decodeImage, type Underlay } from '../view/underlays';
+import { decodeImage, isVertical, type Underlay } from '../view/underlays';
 
 /** Горизонтальная подложка на земле — чуть ниже своей отметки: не спорит по глубине с полом и сеткой. */
 const FLAT_OFFSET = -0.03;
@@ -16,6 +18,11 @@ const FLOOR_OFFSET = 0.03;
 /** Большая сторона текстуры и число пикселей — не больше (оригинал хранится целиком). */
 const MAX_SIDE = 8192;
 const MAX_PIXELS = 24e6;
+
+const X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
+const q = new THREE.Quaternion(), q2 = new THREE.Quaternion();
+/** Рисуется после зданий (с проверкой глубины): подложка этажа и стоящая. */
+const over = (u: Underlay) => u.level !== undefined || isVertical(u);
 
 interface Entry {
   u: Underlay;
@@ -67,9 +74,13 @@ export class UnderlayMeshes {
     const s = c.meterInMercatorCoordinateUnits();
     // Локальная система в метрах: x — восток, y — север, z — вверх (как у групп зданий)
     e.model.makeTranslation(c.x, c.y, 0).scale(new THREE.Vector3(s, -s, s));
-    mesh.position.set(0, 0, u.elevation + (u.tilt !== 0 ? 0 : u.level === undefined ? FLAT_OFFSET : FLOOR_OFFSET));
-    mesh.material.depthTest = u.level !== undefined;
-    mesh.rotation.set(u.tilt, 0, u.rotation, 'ZXY');
+    const vertical = isVertical(u);
+    mesh.position.set(0, 0, u.elevation + (vertical ? 0 : u.level === undefined ? FLAT_OFFSET : FLOOR_OFFSET));
+    // R_z(rotation)·R_x(tilt)·R_z(spin)
+    mesh.quaternion.setFromAxisAngle(Z, u.rotation).multiply(q.setFromAxisAngle(X, u.tilt)).multiply(q2.setFromAxisAngle(Z, u.spin ?? 0));
+    mesh.material.depthTest = over(u);
+    mesh.material.polygonOffset = vertical;
+    mesh.material.polygonOffsetFactor = mesh.material.polygonOffsetUnits = vertical ? -4 : 0;
     mesh.scale.set(u.width * u.scale * (u.mirror ? -1 : 1), u.height * u.scale, 1);
     mesh.material.opacity = u.opacity;
     mesh.visible = u.visible;
@@ -112,14 +123,14 @@ export class UnderlayMeshes {
   get size() { return this.entries.size; }
 
   /**
-   * Нарисовать подложки (main — матрица проекции MapLibre, как у групп зданий): pass 'under' — на земле (до зданий),
-   * 'over' — этажей (после зданий).
+   * Нарисовать подложки (main — матрица проекции MapLibre, как у групп зданий): pass 'under' — лежащие на земле
+   * (до зданий), 'over' — этажей и стоящие (после зданий).
    */
   render(main: THREE.Matrix4, pass: 'under' | 'over') {
     const renderer = this.renderer;
     if (!renderer) return;
     for (const e of this.entries.values()) {
-      if (!e.mesh.visible || !e.mesh.material.visible || (e.u.level !== undefined) !== (pass === 'over')) continue;
+      if (!e.mesh.visible || !e.mesh.material.visible || over(e.u) !== (pass === 'over')) continue;
       e.camera.projectionMatrix.copy(main).multiply(e.model);
       renderer.resetState();
       renderer.render(e.scene, e.camera);

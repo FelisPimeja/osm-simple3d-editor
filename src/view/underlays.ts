@@ -20,7 +20,7 @@ export interface Underlay {
   height: number;
   /** Центр картинки на местности. */
   center: LonLat;
-  /** Высота центра над землёй, м (у подложки этажа — не используется: она на отметке пола этажа). */
+  /** Высота центра над основанием (землёй или полом этажа), м; у лежащей — 0. */
   elevation: number;
   /** Этаж (`level`): видна только на нём, на отметке его пола; undefined — на земле, видна всегда. */
   level?: number;
@@ -30,6 +30,11 @@ export interface Underlay {
   rotation: number;
   /** Наклон вокруг оси X картинки, рад: 0 — лежит (план), π/2 — стоит (фасад, разрез). */
   tilt: number;
+  /**
+   * Поворот в плоскости стоящей картинки (вокруг её нормали), рад, против часовой, если смотреть на лицевую сторону;
+   * у лежащей не нужен (это rotation). Ориентация: R_z(rotation)·R_x(tilt)·R_z(spin).
+   */
+  spin?: number;
   /** Зеркально по X. */
   mirror: boolean;
   /** Непрозрачность, 0…1. */
@@ -38,6 +43,12 @@ export interface Underlay {
   /** Когда добавлена (мс) — порядок в списке. */
   added: number;
 }
+
+/** Стоит (фасад, разрез), а не лежит. */
+export const isVertical = (u: Underlay) => Math.abs(u.tilt) > 1e-6;
+/** Поворот картинки в её плоскости: у лежащей — rotation, у стоящей — spin. */
+export const planeAngle = (u: Underlay) => (isVertical(u) ? u.spin ?? 0 : u.rotation);
+export const withPlaneAngle = (u: Underlay, a: number): Underlay => (isVertical(u) ? { ...u, spin: a } : { ...u, rotation: a });
 
 /** Типы файлов, которые можно добавить подложкой. */
 export const UNDERLAY_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];

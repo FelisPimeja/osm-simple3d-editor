@@ -676,9 +676,10 @@ function syncUnderlayLevels(levels: Level[]) {
   showUnderlays();
 }
 
-/** Отметка подложки: у подложки этажа — пол этажа; undefined — этажа нет в здании. */
+/** Высота центра подложки над землёй: основание (земля или пол этажа) плюс её elevation; undefined — этажа нет в здании. */
 function underlayElevation(u: Underlay): number | undefined {
-  return u.level === undefined ? u.elevation : underlayLevels.find((l) => l.n === u.level)?.floor;
+  const base = u.level === undefined ? 0 : underlayLevels.find((l) => l.n === u.level)?.floor;
+  return base === undefined ? undefined : base + u.elevation;
 }
 
 /** Показать подложки здания режима (слой и меню); menu = false — меню не пересобирать (ползунок под мышью). */
@@ -687,8 +688,7 @@ function showUnderlays(menu = true) {
   if (menu) underlayMenu.set(focus ? list : undefined, underlayLevels.map((l) => ({ n: l.n, label: LEVEL_NAME(l.n) })), currentLevel);
   // Подложка этажа — только на выбранном этаже, на отметке его пола
   const shown = list.flatMap((u) => {
-    if (u.level === undefined) return [u];
-    const elevation = u.level === currentLevel ? underlayElevation(u) : undefined;
+    const elevation = u.level === undefined || u.level === currentLevel ? underlayElevation(u) : undefined;
     return elevation === undefined ? [] : [{ ...u, elevation }];
   });
   overpassLayer.underlays.set(shown);

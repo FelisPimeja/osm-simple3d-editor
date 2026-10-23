@@ -1129,5 +1129,12 @@
   "видна на этаже: {level}": "shown on floor: {level}",
   "Настройки подложки: прозрачность, этаж, подгонка, удаление": "Underlay settings: transparency, floor, fitting, removal",
   "Подложка этажа лежит на отметке его пола и видна, только когда этот этаж выбран в панели этажей": "A floor underlay lies at that floor's elevation and is shown only when the floor is selected in the Floors panel",
-  "На земле": "On the ground"
+  "На земле": "On the ground",
+  "Высота нижнего края картинки над землёй (у подложки этажа — над его полом)": "Height of the image's bottom edge above the ground (for a floor underlay — above that floor)",
+  "Вертикально": "Vertical",
+  "Поставить картинку вертикально (фасад, разрез): низ — на земле, ширина — вдоль её нижнего края": "Stand the image upright (facade, section): bottom on the ground, width along its bottom edge",
+  "Лицом на": "Facing",
+  "Куда обращена лицевая сторона картинки: азимут по часовой от севера": "Where the image's front side faces: azimuth clockwise from north",
+  "Щелчок по картинке — сдвинуть по горизонтали, по углу — повернуть вокруг вертикали (Shift — растянуть).": "Click the image to move it horizontally, a corner to rotate around the vertical (Shift — scale).",
+  "Ведите угол, щелчок — отпустить, Esc — вернуть. Shift — растянуть.": "Move the corner, click to release, Esc to revert. Shift — scale."
 }

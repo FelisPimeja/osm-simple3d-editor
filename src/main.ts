@@ -5614,13 +5614,14 @@ function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string
   }
   const rings = shapeRings(f, t);
   if (!rings) { restore(new Set()); return; }
-  const edits = nodeMoveEdits(shapeTool.glue ? shapeMoves(rings, offset) : shapeOwnMoves(rings, offset), true);
+  const glue = shapeGlued(rings);
+  const edits = nodeMoveEdits(glue ? shapeMoves(rings, offset) : shapeOwnMoves(rings, offset), true);
   if (typeof edits === 'string') { restore(new Set()); return edits; }
   const keys = new Set<string>();
   for (const x of edits) {
     const g = live.get(x.key);
     // «Отдельно» соседи остаются на месте — в превью только сама часть
-    if (!x.polygons || !g || (!shapeTool.glue && x.key !== t.key)) continue;
+    if (!x.polygons || !g || (!glue && x.key !== t.key)) continue;
     keys.add(x.key);
     previewFocus({ ...g, polygons: x.polygons });
   }
@@ -5630,6 +5631,16 @@ function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string
   overpassLayer.setLinked(neighbours);
   shapeTool.linked = neighbours.length;
   return shapeProblem(shapeMoved(rings, offset), rings);
+}
+
+/**
+ * Сдвиг вершин «с соседями»: так выбрано или среди вершин есть вход (entrance=*) — узел входа едет целиком
+ * (вместе с ним стены всех объектов), иначе «отдельно» вершина стала бы новым узлом, а вход остался на старом месте.
+ */
+function shapeGlued(rings: ShapeRings): boolean {
+  if (shapeTool.glue) return true;
+  const entrances = new Set(liveFeatures().flatMap((g) => g.entrances?.map((e) => e.id) ?? []));
+  return rings.some((r) => r.ks.some((k) => entrances.has(r.ids[k])));
 }
 
 function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
@@ -5655,7 +5666,7 @@ function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
     if (!rings) return fail(noIds);
     const problem = shapeProblem(shapeMoved(rings, offset), rings);
     if (problem) return fail(problem);
-    edits = shapeTool.glue ? nodeMoveEdits(shapeMoves(rings, offset)) : shapeSeparateEdits(f, rings, offset);
+    edits = shapeGlued(rings) ? nodeMoveEdits(shapeMoves(rings, offset)) : shapeSeparateEdits(f, rings, offset);
   }
   if (typeof edits === 'string') return fail(edits);
   dropCollapsedHoles(edits);

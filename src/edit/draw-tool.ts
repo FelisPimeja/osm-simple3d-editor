@@ -29,7 +29,8 @@ const AXIS_LOCK_DEG = 3;
 /** Клик ближе стольких px к первой точке замыкает полигон. */
 const CLOSE_PX = 10;
 /** Минимальная площадь контура, м². */
-const MIN_AREA = 0.5;
+/** Порог вырожденного контура, м² (точки на одной линии); колонну в 0,1 м² нарисовать можно. */
+const MIN_AREA = 1e-3;
 /** Круг при показе — гладкий (столько сторон), в данных — по допуску хорды. */
 const CIRCLE_PREVIEW = 72;
 /** Наибольшее отклонение сторон круга от окружности, м. */
@@ -566,12 +567,12 @@ export function circumcircle(a: Pt, b: Pt, c: Pt): { c: Pt; r: number } | undefi
   return { c: [x, y], r: Math.hypot(a[0] - x, a[1] - y) };
 }
 
-/** Контур годится для части: ≥ 3 точек, без самопересечений и не слишком мал. */
+/** Контур годится для части: ≥ 3 точек, без самопересечений и не вырожден. */
 export function validRing(ring: Pt[]): string | undefined {
   if (ring.length < 3) return tr('Нужно хотя бы три точки.');
   let s = 0;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) s += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
-  if (Math.abs(s / 2) < MIN_AREA) return tr('Слишком маленький контур (меньше {area} м²).', { area: MIN_AREA });
+  if (Math.abs(s / 2) < MIN_AREA) return tr('Контур вырожден: у него нет площади.');
   const n = ring.length;
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {

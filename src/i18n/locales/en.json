@@ -526,7 +526,7 @@
   "противоположный угол (число;число + Enter — ширина;глубина)": "opposite corner (number;number + Enter for width;depth)",
   "{mode} (Tab — сменить способ): {step}. Esc — {esc}.": "{mode} (Tab to switch method): {step}. Esc to {esc}.",
   "Нужно хотя бы три точки.": "At least three points are needed.",
-  "Слишком маленький контур (меньше {area} м²).": "The outline is too small (less than {area} m²).",
+  "Контур вырожден: у него нет площади.": "The outline is degenerate: it has no area.",
   "Стороны контура пересекаются.": "The outline’s sides intersect.",
   "Рулетка: кликните первую точку (привязки к вершинам, рёбрам, сетке). Esc — выйти.": "Tape measure: click the first point (snaps to vertices, edges, grid). Esc to exit.",
   "Рулетка: кликните вторую точку. Esc — отмена.": "Tape measure: click the second point. Esc to cancel.",

@@ -128,6 +128,12 @@ export class EditSession {
     return this.features.has(key);
   }
 
+  /** Существующие отслеживаемые отношения, в составе которых есть объект key. */
+  parentsOf(key: string): Tagged[] {
+    return [...this.features.values()].filter((f) => !this.deleted.has(f.key) &&
+      f.relMembers?.some((m) => `${m.type}/${m.ref}` === key));
+  }
+
   /** Заменить членов отношения (шаг истории). */
   setMembers(key: string, members: OsmMember[]) {
     const f = this.get(key);

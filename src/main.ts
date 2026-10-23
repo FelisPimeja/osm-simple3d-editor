@@ -1929,9 +1929,14 @@ function deleteSelected() {
   const err = keys.map(why).find(Boolean);
   if (err) return setStatus(err, true);
   const edits: Parameters<typeof session.editMany>[0] = keys.map((k) => { entity(k); return { key: k, delete: true }; });
-  if (focus && !isSolo(focus)) {
-    const g = entity(focus.key) as EditGroup | undefined;
-    if (g) edits.push({ key: g.key, members: g.relMembers.filter((m) => !keys.includes(`${m.type}/${m.ref}`)) });
+  // Удалённые объекты убираются из состава всех отношений: группы фокуса и любых отслеживаемых (в т. ч. новых)
+  const parents = new Map<string, Tagged>();
+  if (focus && !isSolo(focus)) { const g = entity(focus.key); if (g) parents.set(g.key, g); }
+  for (const k of keys) for (const p of session.parentsOf(k)) parents.set(p.key, p);
+  for (const p of parents.values()) {
+    if (keys.includes(p.key) || !p.relMembers) continue;
+    const members = p.relMembers.filter((m) => !keys.includes(`${m.type}/${m.ref}`));
+    if (members.length < p.relMembers.length) edits.push({ key: p.key, members });
   }
   // Удалили само отдельное здание (а не вставленную рядом копию) — выходим на карту
   const solo = isSolo(focus) && keys.includes(focus!.members[0]);

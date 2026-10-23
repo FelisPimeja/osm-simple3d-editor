@@ -4,8 +4,9 @@
  * В Simple 3D правила наследования нет — это соглашение рендереров (F4, Streets GL). Мы наследуем в рендере,
  * чтобы здание не выглядело серым, но при правке предупреждаем: свойства лучше задать на самой части.
  * Этажность и высоту не наследуем: по вики на контуре они — максимум по частям, а не значение для каждой.
+ * Форму крыши тоже: без roof:shape крыша части плоская, как велит Simple 3D.
  */
-export const INHERITABLE = ['building:colour', 'roof:colour', 'roof:shape', 'building:material', 'roof:material'] as const;
+export const INHERITABLE = ['building:colour', 'roof:colour', 'building:material', 'roof:material'] as const;
 
 /** Американское написание тоже встречается в данных. */
 const ALIASES: Record<string, string> = { 'building:colour': 'building:color', 'roof:colour': 'roof:color' };

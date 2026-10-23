@@ -236,8 +236,8 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   if (!f) return '';
   const orig = session.originalTags(key) ?? {};
   const inheritedAny: string[] = [];
-  // Форма крыши — своя или унаследованная: от неё зависит, нужны ли направление ската и конёк
-  const shape = f.tags['roof:shape'] ?? sources.map((s) => s.tags['roof:shape']).find((v) => v !== undefined);
+  // Форма крыши (не наследуется): от неё зависит, нужны ли направление ската и конёк
+  const shape = f.tags['roof:shape'];
   const defaults = defaultValues({ ...f.tags, ...inheritedTags(f.tags, sources.map((s) => s.tags)) });
   const rows = FIELDS.filter((field) => {
     if (opts.only && !opts.only(field.tag)) return false;

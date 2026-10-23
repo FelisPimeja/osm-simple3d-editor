@@ -68,7 +68,7 @@ function reportLoad() {
   loadReported = true;
   console.info(`[perf] загрузка: последняя операция через ${(lastActivity / 1000).toFixed(1)} с после открытия страницы`);
   loadSummary = { lastActivityMs: Math.round(lastActivity), rows: perfReport() };
-  Object.assign(window, { perfLoad: loadSummary });
+  if (typeof window !== 'undefined') Object.assign(window, { perfLoad: loadSummary }); // тесты убирают подставной window
 }
 
 export function perfReport() {

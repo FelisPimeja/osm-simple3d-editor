@@ -20,7 +20,11 @@ export interface Feature3D {
   hasParts: boolean;
   /** У мультиполигона — его пути-члены (для правки топологии); в старом кеше нет. */
   ways?: MemberWay[];
+  /** Узлы контура с entrance=* (вход на фасаде): id и теги узла. */
+  entrances?: Entrance[];
 }
+
+export interface Entrance { id: number; tags: Record<string, string> }
 
 /** Путь-член мультиполигона: id, роль, узлы (как в OSM, у замкнутого первый = последний) и теги. */
 export interface MemberWay { id: number; role: string; nodes: number[]; tags?: Record<string, string> }
@@ -184,7 +188,8 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
   const ways = new Map<number, OsmWay>();
   const relations: OsmRelation[] = [];
   for (const e of elements) {
-    if (e.type === 'node') nodes.set(e.id, e);
+    // Узел тоже приходит дважды (с тегами и голым после «>») — голая копия тегов не затирает
+    if (e.type === 'node') { if (!nodes.get(e.id)?.tags || e.tags) nodes.set(e.id, e); }
     // Путь может прийти дважды: с тегами (out body) и ещё раз голым (out skel после «>» от отношений,
     // членом которых он является) — голая копия не должна затирать теги, иначе части отношений пропадают
     else if (e.type === 'way') { if (!ways.get(e.id)?.tags || e.tags) ways.set(e.id, e); }
@@ -298,6 +303,11 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     features.push({ key, type: 'relation', id: r.id, version: r.version, tags: r.tags ?? {}, kind: kind!, polygons, hasParts: false, ways: memberWays });
   }
 
+  for (const f of features) {
+    const ids = new Set(f.polygons.flatMap((p) => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]));
+    const entrances = [...ids].flatMap((id) => { const t = nodes.get(id)?.tags; return t?.entrance ? [{ id, tags: t }] : []; });
+    if (entrances.length) f.entrances = entrances;
+  }
   markOutlinesWithParts(features, features, groups);
   return { features, groups, indoor, skipped };
 }

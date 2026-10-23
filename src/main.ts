@@ -34,7 +34,7 @@ import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
 import type { TreePoint } from './osm/trees';
 import { isBridge, isTunnel, roadLevel, type RoadWay } from './osm/roads';
-import { BuildingsLayer, TOILET_DOOR_WIDTH, isHiddenUnderground, setInheritance, setLevelGrid, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, type EntrancePlace, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
@@ -1251,6 +1251,7 @@ map.on('click', (e) => {
   // Этим нажатием пипетка взяла цвет — не выделять и не заливать
   if (performance.now() - eyedropper.pickedAt < 600) return;
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
+  if (entranceDrag) { commitEntrance(); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (measureTool.active) { measureTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (rotateTool.active) { rotateTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
@@ -1285,6 +1286,11 @@ map.on('click', (e) => {
   for (const p of photoLayers) {
     const picId = p.layer.pick(e.point);
     if (picId) { void photoViewer.open(p.layer, picId); return; }
+  }
+  // Вход на фасаде: клик — выбрать, клик по выбранному — перенести
+  if (focus && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
+    const id = overpassLayer.pickEntrance([e.point.x, e.point.y]);
+    if (id !== undefined) { if (id === selectedEntrance) startEntranceDrag(); else selectEntrance(id); return; }
   }
   if (moveTool.state === 'select') {
     const doorKey = overpassLayer.pickDoor([e.point.x, e.point.y]);
@@ -2112,6 +2118,7 @@ window.addEventListener('blur', () => { overpassLayer.snapsSuspended = false; })
 
 function updateSnapMarker(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
+  if (point && entranceDrag) moveEntrance(point);
   if (point && shapeTool.active) shapeTool.move(point);
   if (point && pushTool.state === 'push') pushTool.move(point);
   if (pushTool.state === 'pick') pushTool.hover(point, shiftHeld);
@@ -2881,7 +2888,7 @@ function toolBusy(): boolean {
 }
 
 function toolActive(): boolean {
-  return moveTool.active || pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || paintTool.active || offsetTool.active || !!copyPick;
+  return moveTool.active || pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || paintTool.active || offsetTool.active || !!copyPick || !!entranceDrag;
 }
 
 // Инструменты «Прямоугольник» (R) и «Полигон» (L): новая часть здания — плоский контур нулевой толщины
@@ -5297,6 +5304,192 @@ function nodeRemoveEdits(ids: Set<number>): ObjectEdit[] | string {
   return out;
 }
 
+/** Вход на фасаде (entrance=*), выбранный кликом в режиме здания: id узла. */
+let selectedEntrance: number | undefined;
+/** Куда встанет переносимый вход: сторона edge кольца ring полигона poly объекта key, точка at. */
+interface EntranceTarget { key: string; poly: number; ring: number; edge: number; at: LonLat; place: Omit<EntrancePlace, 'id'> }
+/** Перенос входа вдоль стен (M или клик по выбранному входу). */
+let entranceDrag: { id: number; target?: EntranceTarget } | undefined;
+
+function entranceTags(id: number): Record<string, string> | undefined {
+  for (const g of liveFeatures()) { const e = g.entrances?.find((x) => x.id === id); if (e) return e.tags; }
+}
+
+function selectEntrance(id: number) {
+  select(undefined);
+  selectedEntrance = id;
+  overpassLayer.setEntranceSelection(id);
+  renderSelected();
+}
+
+function renderEntrance(id: number) {
+  const t = entranceTags(id) ?? {};
+  const name = t.ref ? ` ${esc(t.ref)}` : t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : '';
+  infoEl.innerHTML = `<h2>${tr('Вход')}${name} — <a href="${server().web}/node/${id}" target="_blank" rel="noopener">node/${id}</a></h2>`
+    + `<p class="hint">${tr('M или клик по выбранному входу — перенести вдоль стен здания: вход едет за курсором, клик — поставить, Esc — отмена.')}</p>`
+    + `<details class="all-tags" open><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
+}
+
+function startEntranceDrag(): boolean {
+  if (selectedEntrance === undefined || !focus || !overpassLayer.focusEntrance(selectedEntrance)) return false;
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
+  drawTool.stop();
+  entranceDrag = { id: selectedEntrance };
+  setStatus(tr('Ведите курсор по стене здания — вход едет за ним. Клик — поставить, Esc — отмена.'));
+  return true;
+}
+
+function cancelEntranceDrag() {
+  if (!entranceDrag) return;
+  entranceDrag = undefined;
+  overpassLayer.previewEntrance(undefined);
+}
+
+function moveEntrance(point: [number, number]) {
+  const d = entranceDrag;
+  if (!d) return;
+  d.target = entranceTargetAt(point);
+  overpassLayer.previewEntrance(d.target ? { id: d.id, place: d.target.place } : undefined);
+}
+
+/** Сторона контура под курсором (стена, а мимо стен — ближайшая к точке на земле не дальше 3 м) и точка на ней. */
+function entranceTargetAt(point: [number, number]): EntranceTarget | undefined {
+  if (!focus) return;
+  const members = focus.members.filter((k) => !focusHidden.has(k));
+  const wall = overpassLayer.focusRayHits(point, (k) => members.includes(k)).find((h) => h.face === 'wall');
+  let at: [number, number];
+  if (wall) at = [wall.local.x, wall.local.y];
+  else {
+    const hit = overpassLayer.focusRay(point)?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), new THREE.Vector3());
+    if (!hit) return;
+    at = [hit.x, hit.y];
+  }
+  let best: { key: string; poly: number; ring: number; edge: number; s: number; d: number; rings: [number, number][][]; f: Feature3D } | undefined;
+  for (const key of wall ? [wall.key] : members) {
+    const f = entity(key) as Feature3D | undefined;
+    const polys = overpassLayer.focusPolygons(key);
+    if (!f?.polygons || !polys) continue;
+    polys.forEach((p, poly) => [p.outer, ...p.inners].forEach((r, ring) => r.forEach((a, edge) => {
+      const b = r[(edge + 1) % r.length], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+      if (!l2) return;
+      const s = Math.max(0, Math.min(1, ((at[0] - a[0]) * dx + (at[1] - a[1]) * dy) / l2));
+      const d = Math.hypot(a[0] + dx * s - at[0], a[1] + dy * s - at[1]);
+      if (!best || d < best.d) best = { key, poly, ring, edge, s, d, rings: [p.outer, ...p.inners] as [number, number][][], f };
+    })));
+  }
+  if (!best || (!wall && best.d > 3)) return;
+  const { rings, ring, edge, f } = best;
+  const a = rings[ring][edge], b = rings[ring][(edge + 1) % rings[ring].length];
+  // Вход целиком на стене: середина не ближе полуширины к углам
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]), m = len > 1 ? 0.5 / len : 0.5;
+  const s = Math.max(m, Math.min(1 - m, best.s));
+  const p: [number, number] = [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s];
+  const withP = rings.map((r, k) => (k === ring ? [...r.slice(0, edge + 1), p, ...r.slice(edge + 1)] : r));
+  const place = entrancePlace(withP, ring, edge + 1, computeHeights(f.tags).min);
+  const lonLat = overpassLayer.focusToLngLat(p[0], p[1]);
+  return place && lonLat ? { key: best.key, poly: best.poly, ring, edge, at: lonLat, place } : undefined;
+}
+
+function commitEntrance() {
+  const d = entranceDrag;
+  if (!d) return;
+  if (!d.target) return setStatus(tr('Наведите курсор на стену здания.'), true);
+  const edits = entranceMoveEdits(d.id, d.target);
+  if (typeof edits === 'string') return setStatus(edits, true);
+  cancelEntranceDrag();
+  session.editMany(edits);
+  setStatus(tr('Вход node/{id} перенесён. Отменить — Ctrl+Z.', { id: d.id }));
+}
+
+/**
+ * Перенос узла входа N на сторону контура: из старого места узел уходит (на прямой стене — просто убирается,
+ * на углу или стыке путей-членов вместо него — новый узел, форма не меняется) и встаёт на сторону во всех
+ * объектах и путях-членах с этой стороной. Теги узла не трогаем — он тот же.
+ */
+function entranceMoveEdits(n: number, t: EntranceTarget): ObjectEdit[] | string {
+  const f = entity(t.key) as Feature3D | undefined;
+  const p = f?.polygons?.[t.poly];
+  const rids = p && (t.ring ? p.innerIds?.[t.ring - 1] : p.outerIds);
+  if (!rids) return tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+  const live = liveFeatures();
+  const coords = new Map<number, LonLat>();
+  const ways = new Map<number, { nodes: number[]; tags: Record<string, string> }>();
+  for (const g of live) {
+    for (const q of g.polygons) {
+      q.outerIds?.forEach((id, i) => coords.set(id, q.outer[i]));
+      q.inners.forEach((r, j) => q.innerIds?.[j]?.forEach((id, i) => coords.set(id, r[i])));
+    }
+    for (const w of g.ways ?? []) if (!ways.has(w.id)) ways.set(w.id, { nodes: w.nodes, tags: w.tags ?? {} });
+  }
+  for (const l of session.lineEntities()) ways.set(Number(l.key.split('/')[1]), { nodes: l.line!.ids, tags: l.tags });
+  // Угол (узел не на прямой между соседями) или конец пути-члена — на старом месте остаётся новый узел k
+  const local = (id: number) => overpassLayer.focusToLocal(coords.get(id)!)!;
+  const corner = live.some((g) => g.polygons.some((q) => [q.outerIds, ...(q.innerIds ?? [])].some((r) => {
+    const i = r?.indexOf(n) ?? -1;
+    if (!r || i < 0) return false;
+    const [a, b, c] = [r[(i - 1 + r.length) % r.length], n, r[(i + 1) % r.length]].map(local);
+    const l = Math.hypot(c[0] - a[0], c[1] - a[1]);
+    const off = l ? Math.abs((c[0] - a[0]) * (a[1] - b[1]) - (a[0] - b[0]) * (c[1] - a[1])) / l : Infinity;
+    const along = (b[0] - a[0]) * (c[0] - a[0]) + (b[1] - a[1]) * (c[1] - a[1]);
+    // Вход ставят чуть мимо прямой (сантиметры) — это ещё прямая стена, не угол
+    return off > 0.2 || along < 0 || along > l * l;
+  })));
+  const k = corner || wayEndsAt(new Set([n])) ? nextNewId-- : undefined;
+  if (k !== undefined) coords.set(k, coords.get(n)!);
+  let u = rids[t.edge], v = rids[(t.edge + 1) % rids.length];
+  // Сторона у самого входа: после его ухода она — от соседа до соседа (или до нового узла на его месте)
+  if (u === n || v === n) {
+    const i = rids.indexOf(n), prev = rids[(i - 1 + rids.length) % rids.length], next = rids[(i + 1) % rids.length];
+    if (k !== undefined) { if (u === n) u = k; else v = k; } else if (u === n) u = prev; else v = next;
+  }
+  if (u === v) return tr('Сюда вход не поставить — выберите другую стену.');
+  const ins: Insert[] = [{ id: n, u, v }];
+  const at = (id: number) => (id === n ? t.at : coords.get(id)!);
+  const leave = (ids: number[]) => (k !== undefined ? ids.map((x) => (x === n ? k : x)) : ids.filter((x) => x !== n));
+  const out: ObjectEdit[] = [];
+  for (const g of live) {
+    let changed = false, small = false;
+    const ring = (cs: LonLat[], ids: number[] | undefined): [LonLat[], number[] | undefined] => {
+      if (!ids) return [cs, ids];
+      let r = ids.includes(n) ? leave(ids) : ids;
+      let c = r === ids ? cs : r.map((id) => coords.get(id)!);
+      const moved = insertInRing(r, c, ins, at);
+      if (moved) { r = moved.ids; c = moved.coords; }
+      if (r === ids) return [cs, ids];
+      changed = true;
+      if (r.length < 3) small = true;
+      return [c, r];
+    };
+    const polygons = g.polygons.map((q) => {
+      const [outer, outerIds] = ring(q.outer, q.outerIds);
+      const inn = q.inners.map((c, j) => ring(c, q.innerIds?.[j]));
+      return { ...q, outer, outerIds, inners: inn.map((x) => x[0]), innerIds: q.innerIds ? inn.map((x) => x[1]!) : undefined };
+    });
+    if (!changed) continue;
+    if (small) return tr('{key}: в кольце останется меньше трёх вершин.', { key: g.key });
+    if (!entity(g.key)) return tr('{key}: нет в данных.', { key: g.key });
+    out.push({ key: g.key, polygons });
+  }
+  for (const [wid, w] of ways) {
+    let nodes = w.nodes;
+    if (nodes.includes(n)) {
+      const closed = nodes.length > 1 && nodes[0] === nodes[nodes.length - 1];
+      nodes = leave(nodes);
+      if (closed && nodes[0] !== nodes[nodes.length - 1]) nodes = [...nodes, nodes[0]];
+    }
+    nodes = insertInLine(nodes, ins) ?? nodes;
+    if (nodes === w.nodes) continue;
+    if (nodes.length < 2) return tr('{key}: в пути останется меньше двух узлов.', { key: `way/${wid}` });
+    const key = `way/${wid}`, known = session.get(key);
+    if (known && !known.line) continue; // сам по себе здание или часть — уже в правке колец выше
+    if (nodes.some((id) => !coords.has(id) && id !== n)) return tr('{key}: нет данных пути way/{ref} — перезагрузите видимые тайлы.', { key, ref: wid });
+    if (!known) session.track({ key, version: 0, tags: { ...w.tags }, line: { ids: w.nodes, coords: w.nodes.map((id) => coords.get(id)!) } });
+    out.push({ key, line: { ids: nodes, coords: nodes.map(at) } });
+  }
+  return out;
+}
+
 /** Какой-то из узлов ids — конец незамкнутого пути-члена мультиполигона (из данных или сессии). */
 function wayEndsAt(ids: Set<number>): boolean {
   const ways = new Map<number, number[]>();
@@ -5704,9 +5897,11 @@ document.addEventListener('keydown', (e) => {
     splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
     drawTool.stop();
     cancelCopyPick();
+    cancelEntranceDrag();
     updateSnap(undefined);
     return;
   }
+  if (e.key === 'Escape' && entranceDrag) { e.preventDefault(); e.stopImmediatePropagation(); cancelEntranceDrag(); setStatus(tr('Перенос входа отменён.')); return; }
   if (e.key === 'Escape' && copyPick) { e.preventDefault(); e.stopImmediatePropagation(); cancelCopyPick(); return; }
   if (trackKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   if (moveTool.key(e) || pushTool.key(e) || shapeTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e) || paintTool.key(e) || offsetTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
@@ -5793,7 +5988,7 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   closeCtxMenu();
   cancelCopyPick();
-  if (action === 'move') startMove(); else if (action === 'push') startPush(); else if (action === 'shape') startShape(); else if (action === 'split') startSplit();
+  if (action === 'move') { if (!startEntranceDrag()) startMove(); } else if (action === 'push') startPush(); else if (action === 'shape') startShape(); else if (action === 'split') startSplit();
   else if (action === 'rotate') startRotate(); else if (action === 'square') squareSelected(); else if (action === 'merge') mergeSelected();
   else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);
@@ -5974,6 +6169,7 @@ function toolHint(hint: string | undefined, error = false) {
 
 /** Выделить объект (или группу); false — выделять нечего. */
 function select(key: string | undefined): boolean {
+  if (selectedEntrance !== undefined) { cancelEntranceDrag(); selectedEntrance = undefined; overpassLayer.setEntranceSelection(undefined); }
   clearTreeSelection();
   roadsLayer.select([]);
   roadSelection = [];
@@ -8712,6 +8908,7 @@ function renderSelected() {
 }
 
 function renderSelectedImpl() {
+  if (selectedEntrance !== undefined) return renderEntrance(selectedEntrance);
   if (addingTo) return renderAdding();
   if (selection.length > 1) return renderMulti();
   const og = selectedKey ? groupOf(selectedKey) : undefined;

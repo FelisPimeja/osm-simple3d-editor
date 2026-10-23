@@ -75,6 +75,14 @@ const DOOR_GEO = new THREE.SphereGeometry(0.08, 16, 8).scale(1, 1, 0.35);
 const DOOR_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000 });
 const DOOR_AXIS_MATERIAL = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.12, gapSize: 0.08, depthTest: false, depthWrite: false });
 const DOOR_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x2563eb });
+/** Вход на фасаде (entrance=*): белый прямоугольник 1×2 м чуть перед стеной, с тёмной обводкой. */
+const ENTRANCE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+const ENTRANCE_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x2563eb, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+const ENTRANCE_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
+export const ENTRANCE_WIDTH = 1;
+export const ENTRANCE_HEIGHT = 2;
+/** Насколько прямоугольник входа вынесен из плоскости стены, м. */
+const ENTRANCE_OFFSET = 0.03;
 /** Насколько близко к маркеру двери выбирает клик, px. */
 const DOOR_PICK_PX = 10;
 /** Полы помещений, коридоров и площадок — цвет вершин по виду. */
@@ -377,8 +385,19 @@ class MeshGroup {
 
   /** Стекло группы — прозрачное, поэтому отдельно от непрозрачной слитой геометрии. */
   glass?: THREE.Mesh;
+  /** Входы на фасадах (entrance=*) и где они стоят — для выбора кликом. */
+  entranceObj?: THREE.Group;
+  entrances: EntrancePlace[] = [];
+
+  disposeEntrances() {
+    if (!this.entranceObj) return;
+    this.scene.remove(this.entranceObj);
+    this.entranceObj.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose(); });
+    this.entranceObj = undefined;
+  }
 
   disposeMesh() {
+    this.disposeEntrances();
     this.disposeEdges();
     this.disposeStrokes();
     if (this.glass) { this.glass.geometry.dispose(); this.scene.remove(this.glass); this.glass = undefined; }
@@ -3475,6 +3494,100 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Деревья тайла (undefined — убрать). */
+  /** Выбранный вход (id узла) — синим. */
+  private entranceSelected?: number;
+  /** Перетаскиваемый вход: место на стене в метрах сцены режима здания. */
+  private entrancePreview?: { id: number; place: Omit<EntrancePlace, 'id'> };
+
+  setEntranceSelection(id: number | undefined) {
+    if (this.entranceSelected === id) return;
+    this.entranceSelected = id;
+    for (const g of this.groups.values()) if (g.entrances.length) this.applyEntrances(g);
+    this.map?.triggerRepaint();
+  }
+
+  previewEntrance(p: { id: number; place: Omit<EntrancePlace, 'id'> } | undefined) {
+    this.entrancePreview = p;
+    const g = this.groups.get(FOCUS_GROUP);
+    if (g) this.applyEntrances(g);
+    this.map?.triggerRepaint();
+  }
+
+  /** Вход на месте в сцене режима здания: id узла → где стоит. */
+  focusEntrance(id: number): EntrancePlace | undefined {
+    return this.groups.get(FOCUS_GROUP)?.entrances.find((e) => e.id === id);
+  }
+
+  /** Вход под курсором в режиме здания: id узла. */
+  pickEntrance(point: [number, number]): number | undefined {
+    const g = this.groups.get(FOCUS_GROUP), ray = this.focusRay(point);
+    if (!g || !ray) return;
+    let best: number | undefined, bestT = Infinity;
+    const hit = new THREE.Vector3();
+    for (const e of g.entrances) {
+      const n = new THREE.Vector3(e.n[0], e.n[1], 0);
+      const c = new THREE.Vector3(e.p[0] + e.n[0] * ENTRANCE_OFFSET, e.p[1] + e.n[1] * ENTRANCE_OFFSET, e.z);
+      if (!ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n, c), hit)) continue;
+      const u = (hit.x - c.x) * e.t[0] + (hit.y - c.y) * e.t[1], v = hit.z - e.z;
+      const t = hit.distanceTo(ray.origin);
+      // Чуть шире самого прямоугольника — попасть проще
+      if (Math.abs(u) <= ENTRANCE_WIDTH / 2 + 0.15 && v >= -0.15 && v <= ENTRANCE_HEIGHT + 0.15 && t < bestT) { best = e.id; bestT = t; }
+    }
+    return best;
+  }
+
+  /** Входы группы: у вершин контуров с entrance=* (по текущей геометрии — вершина едет, вход за ней). */
+  private applyEntrances(g: MeshGroup) {
+    g.disposeEntrances();
+    const tags = new Map<number, Record<string, string>>();
+    for (const it of g.items) for (const e of it.feature.entrances ?? []) tags.set(e.id, e.tags);
+    g.entrances = [];
+    if (!tags.size) return;
+    // Узел в нескольких объектах (контур и часть, соседние части) — на самой низкой видимой стене
+    const best = new Map<number, { place: EntrancePlace; rank: number }>();
+    for (const it of g.items) {
+      if (g.hidden.has(it.feature.key) || thinItem(it) || it.box.isEmpty()) continue;
+      const rank = it.box.min.z + (strokeOnly(g, it) ? 1e6 : 0);
+      for (const p of it.feature.polygons) {
+        const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));
+        [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
+          if (!tags.has(id) || (best.get(id)?.rank ?? Infinity) <= rank) return;
+          const place = entrancePlace(rings, r, i, it.box.min.z);
+          if (place) best.set(id, { place: { id, ...place }, rank });
+        }));
+      }
+    }
+    const preview = this.entrancePreview;
+    if (preview && g === this.groups.get(FOCUS_GROUP)) best.set(preview.id, { place: { id: preview.id, ...preview.place }, rank: -Infinity });
+    if (!best.size) return;
+    const root = new THREE.Group();
+    const plain: number[] = [], selected: number[] = [], lines: number[] = [];
+    for (const { place: e } of best.values()) {
+      g.entrances.push(e);
+      const out = e.id === this.entranceSelected ? selected : plain;
+      const w = ENTRANCE_WIDTH / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
+      const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w];
+      const z0 = e.z, z1 = e.z + ENTRANCE_HEIGHT;
+      out.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z1, a[0], a[1], z0, b[0], b[1], z1, a[0], a[1], z1);
+      lines.push(a[0], a[1], z0, a[0], a[1], z1, a[0], a[1], z1, b[0], b[1], z1, b[0], b[1], z1, b[0], b[1], z0);
+    }
+    for (const [pos, mat] of [[plain, ENTRANCE_MATERIAL], [selected, ENTRANCE_SELECTED_MATERIAL]] as const) {
+      if (!pos.length) continue;
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.frustumCulled = false;
+      root.add(mesh);
+    }
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+    const ls = new THREE.LineSegments(lg, ENTRANCE_LINE_MATERIAL);
+    ls.frustumCulled = false;
+    root.add(ls);
+    g.entranceObj = root;
+    g.scene.add(root);
+  }
+
   setTrees(key: string, trees: TreeGroup | undefined) {
     const old = this.trees.get(key);
     if (old === trees) return;
@@ -3819,6 +3932,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.mesh.frustumCulled = false; // своя матрица проекции — штатный culling не годится
     g.scene.add(g.mesh);
     timed('геометрия: стекло', () => this.rebuildGlass(g));
+    this.applyEntrances(g);
     this.paintGroup(g);
     timed('геометрия: рёбра', () => this.applyEdges(g));
     if (g === this.groups.get(FOCUS_GROUP)) this.attachUnderground();
@@ -5323,6 +5437,32 @@ function itemArea(g: MeshGroup, it: Item): number {
 function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
 }
+/** Вход на стене: точка у основания (м сцены), направление стены t и наружная нормаль n (единичные), низ z. */
+export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number }
+
+/**
+ * Место входа у вершины i кольца r (кольца в метрах сцены, 0 — внешнее): стена — по соседним вершинам
+ * (на углу — средняя), наружу — туда, где нет самого объекта.
+ */
+export function entrancePlace(rings: Pt[][], r: number, i: number, z: number): Omit<EntrancePlace, 'id'> | undefined {
+  const ring = rings[r], n = ring.length;
+  if (n < 3) return;
+  const p = ring[i];
+  let a: Pt | undefined, b: Pt | undefined;
+  for (let k = 1; k < n && !a; k++) { const q = ring[(i - k + n) % n]; if (Math.hypot(q[0] - p[0], q[1] - p[1]) > 1e-6) a = q; }
+  for (let k = 1; k < n && !b; k++) { const q = ring[(i + k) % n]; if (Math.hypot(q[0] - p[0], q[1] - p[1]) > 1e-6) b = q; }
+  if (!a || !b) return;
+  const unit = (x: number, y: number): Pt | undefined => { const l = Math.hypot(x, y); return l > 1e-9 ? [x / l, y / l] : undefined; };
+  const u1 = unit(p[0] - a[0], p[1] - a[1]), u2 = unit(b[0] - p[0], b[1] - p[1]);
+  if (!u1 || !u2) return;
+  const t = unit(u1[0] + u2[0], u1[1] + u2[1]) ?? u2;
+  let nrm: Pt = [t[1], -t[0]];
+  const probe: Pt = [p[0] + nrm[0] * 0.2, p[1] + nrm[1] * 0.2];
+  const inside = pointInLocalRing(probe, rings[0]) && !rings.slice(1).some((h) => pointInLocalRing(probe, h));
+  if (inside) nrm = [-nrm[0], -nrm[1]];
+  return { p, t, n: nrm, z };
+}
+
 /** Объект нулевой толщины (нарисованная часть до выдавливания): рёбер у него нет — обводим контур. */
 function thinItem(it: Item): boolean {
   return !it.box.isEmpty() && it.box.max.z - it.box.min.z < 1e-3;

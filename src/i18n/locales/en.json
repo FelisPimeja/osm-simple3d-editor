@@ -1103,7 +1103,6 @@
   "Подложку не удалось сохранить в браузере — после перезагрузки её не будет.": "Couldn't save the underlay in the browser — it will be gone after a reload.",
   "Не открылось как картинка (PNG, JPG, WebP, SVG): {names}": "Couldn't open as an image (PNG, JPG, WebP, SVG): {names}",
   "Подложкой можно добавить картинку: PNG, JPG, WebP, SVG.": "Only images can be added as an underlay: PNG, JPG, WebP, SVG.",
-  "Подложки здания": "Building underlays",
   "Добавить картинку…": "Add image…",
   "Скан плана, чертёж, фасад (PNG, JPG, WebP, SVG). Можно и перетащить файл на карту или вставить Ctrl+V": "A floor plan scan, drawing or facade (PNG, JPG, WebP, SVG). You can also drop a file onto the map or paste it with Ctrl+V",
   "Картинки хранятся только в этом браузере. Обводите только то, на что у вас есть права.": "Images are stored only in this browser. Trace only what you have the rights to.",
@@ -1127,7 +1126,6 @@
   "Щёлкните, где вторая точка должна быть.": "Click where the second point belongs.",
   "Подложка здания: {name}": "Underlay: {name}",
   "видна на этаже: {level}": "shown on floor: {level}",
-  "Настройки подложки: прозрачность, этаж, подгонка, удаление": "Underlay settings: transparency, floor, fitting, removal",
   "Подложка этажа лежит на отметке его пола и видна, только когда этот этаж выбран в панели этажей": "A floor underlay lies at that floor's elevation and is shown only when the floor is selected in the Floors panel",
   "На земле": "On the ground",
   "Высота нижнего края картинки над землёй (у подложки этажа — над его полом)": "Height of the image's bottom edge above the ground (for a floor underlay — above that floor)",
@@ -1136,5 +1134,12 @@
   "Лицом на": "Facing",
   "Куда обращена лицевая сторона картинки: азимут по часовой от севера": "Where the image's front side faces: azimuth clockwise from north",
   "Щелчок по картинке — сдвинуть по горизонтали, по углу — повернуть вокруг вертикали (Shift — растянуть).": "Click the image to move it horizontally, a corner to rotate around the vertical (Shift — scale).",
-  "Ведите угол, щелчок — отпустить, Esc — вернуть. Shift — растянуть.": "Move the corner, click to release, Esc to revert. Shift — scale."
+  "Ведите угол, щелчок — отпустить, Esc — вернуть. Shift — растянуть.": "Move the corner, click to release, Esc to revert. Shift — scale.",
+  "Свои подложки": "Own underlays",
+  "Настройки подложки: прозрачность, где видна, этаж, подгонка, удаление": "Underlay settings: transparency, where shown, floor, fitting, removal",
+  "на карте": "on map",
+  "Общая подложка: видна на карте и в режиме любого здания": "Shared underlay: shown on the map and in any building",
+  "В этом здании": "In this building",
+  "На карте и во всех зданиях": "On the map and in all buildings",
+  "Видна": "Shown"
 }

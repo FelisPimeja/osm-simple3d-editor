@@ -472,7 +472,10 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   render(_gl: WebGL2RenderingContext, options: CustomRenderMethodInput) {
     if (!this.renderer) return;
-    const underlays = this.focused && !this.sketching && this.underlays.size > 0;
+    // Проекция кадра — и для инструментов, когда слой зданий скрыт (подгонка подложки на карте)
+    this.lastMain = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
+    // Подложки: в режиме здания — его и общие, на карте (и в наброске на ней) — общие; список задаёт main.ts
+    const underlays = this.underlays.size > 0;
     if (underlays) this.underlays.render(depthMain(options), 'under');
     if (this.visible) timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
     if (underlays) this.underlays.render(depthMain(options), 'over');
@@ -2379,6 +2382,41 @@ export class BuildingsLayer implements CustomLayerInterface {
     const x = (point[0] / canvas.clientWidth) * 2 - 1, y = 1 - (point[1] / canvas.clientHeight) * 2;
     const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
     return new THREE.Ray(near, far.sub(near).normalize());
+  }
+
+  /**
+   * Локальная система в метрах вокруг origin (x — восток, y — север, z — вверх, как у групп) для инструментов вне
+   * режима здания: луч из камеры через точку экрана, проекция на экран, перевод координат.
+   */
+  geoFrame(origin: LonLat) {
+    const c = MercatorCoordinate.fromLngLat({ lng: origin[0], lat: origin[1] }, 0), s = c.meterInMercatorCoordinateUnits();
+    const model = new THREE.Matrix4().makeTranslation(c.x, c.y, 0).scale(new THREE.Vector3(s, -s, s));
+    const size = () => { const canvas = this.map!.getCanvas(); return [canvas.clientWidth, canvas.clientHeight]; };
+    return {
+      ray: (point: [number, number]): THREE.Ray | undefined => {
+        if (!this.map || !this.lastMain) return;
+        const [w, h] = size(), inv = this.lastMain.clone().multiply(model).invert();
+        const x = (point[0] / w) * 2 - 1, y = 1 - (point[1] / h) * 2;
+        const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+        return new THREE.Ray(near, far.sub(near).normalize());
+      },
+      projector: (): ((p: THREE.Vector3) => [number, number] | undefined) | undefined => {
+        if (!this.map || !this.lastMain) return;
+        const [w, h] = size(), m = this.lastMain.clone().multiply(model), v = new THREE.Vector4();
+        return (p) => {
+          v.set(p.x, p.y, p.z, 1).applyMatrix4(m);
+          return v.w <= 0 ? undefined : [(v.x / v.w + 1) / 2 * w, (1 - v.y / v.w) / 2 * h];
+        };
+      },
+      toLocal: ([lng, lat]: LonLat): Pt => {
+        const p = MercatorCoordinate.fromLngLat({ lng, lat }, 0);
+        return [(p.x - c.x) / s, -(p.y - c.y) / s];
+      },
+      toLngLat: (x: number, y: number): LonLat => {
+        const ll = new MercatorCoordinate(c.x + x * s, c.y - y * s, 0).toLngLat();
+        return [ll.lng, ll.lat];
+      },
+    };
   }
 
   /** Точка сцены режима одного здания на экране (px); undefined — за камерой. */

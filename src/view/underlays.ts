@@ -1,7 +1,8 @@
 /**
- * Подложки пользователя: свои картинки (сканы планов, чертежи, фасады) под зданием в режиме здания.
- * Каждая привязана к зданию (ключ группы) и видна только в его режиме. Хранятся в IndexedDB (своя база):
- * оригинал картинки и её положение; в OSM и на сервер ничего не уходит.
+ * Подложки пользователя: свои картинки (сканы планов, чертежи, фасады, схемы).
+ * Добавленная в режиме здания привязана к нему (ключ группы) и видна только в его режиме; добавленная на карте —
+ * общая: видна на карте и в режиме любого здания. Хранятся в IndexedDB (своя база): оригинал картинки и её
+ * положение; в OSM и на сервер ничего не уходит.
  */
 import { orientedFrame } from '../render/oriented-box';
 
@@ -11,8 +12,8 @@ export interface Underlay {
   id: string;
   /** Имя файла — подпись в списке и в source changeset. */
   name: string;
-  /** Ключ здания (группы), к которому привязана подложка. */
-  building: string;
+  /** Ключ здания (группы), к которому привязана подложка; undefined — общая (карта и все здания). */
+  building?: string;
   /** Оригинал картинки. */
   blob: Blob;
   /** Размер оригинала, px. */
@@ -22,7 +23,7 @@ export interface Underlay {
   center: LonLat;
   /** Высота центра над основанием (землёй или полом этажа), м; у лежащей — 0. */
   elevation: number;
-  /** Этаж (`level`): видна только на нём, на отметке его пола; undefined — на земле, видна всегда. */
+  /** Этаж (`level`; только у подложки здания): видна только на нём, на отметке его пола; undefined — на земле. */
   level?: number;
   /** Метров на пиксель оригинала. */
   scale: number;
@@ -69,14 +70,19 @@ async function database(): Promise<IDBDatabase | undefined> {
   });
 }
 
-/** Подложки здания по порядку добавления; без IndexedDB — пусто. */
-export async function loadUnderlays(building: string): Promise<Underlay[]> {
+/** Подложки здания (undefined — общие) по порядку добавления; без IndexedDB — пусто. */
+export async function loadUnderlays(building: string | undefined): Promise<Underlay[]> {
   const db = await database();
   if (!db) return [];
   return new Promise((resolve) => {
     try {
-      const request = db.transaction(STORE).objectStore(STORE).index('building').getAll(building);
-      request.onsuccess = () => { db.close(); resolve((request.result as Underlay[]).sort((a, b) => a.added - b.added)); };
+      // У общих ключа здания нет — в индекс они не попадают: берём все и отбираем
+      const store = db.transaction(STORE).objectStore(STORE);
+      const request = building === undefined ? store.getAll() : store.index('building').getAll(building);
+      request.onsuccess = () => {
+        db.close();
+        resolve((request.result as Underlay[]).filter((u) => u.building === building).sort((a, b) => a.added - b.added));
+      };
       request.onerror = () => { db.close(); resolve([]); };
     } catch { db.close(); resolve([]); }
   });
@@ -151,13 +157,25 @@ export function fitToBuilding(points: LonLat[], width: number, height: number): 
   return { center: [lng0 + cx / k, lat0 + cy / (R * Math.PI / 180)], scale, rotation };
 }
 
-/** Новая подложка здания из файла; undefined — файл не картинка или не открылся. */
-export async function createUnderlay(file: File | Blob, building: string, outline: LonLat[], level?: number): Promise<Underlay | undefined> {
+/**
+ * Первая расстановка на карте: в центре вида, по осям экрана (верх картинки — вверх экрана), половина вида.
+ * center — центр вида, mpp — метров на пиксель экрана там, bearing — поворот карты (°), view — размер вида, px.
+ */
+export function fitToView(center: LonLat, mpp: number, bearing: number, view: [number, number], width: number, height: number): Pick<Underlay, 'center' | 'scale' | 'rotation'> {
+  return { center, scale: Math.min(view[0] * mpp / 2 / width, view[1] * mpp / 2 / height), rotation: -bearing * Math.PI / 180 };
+}
+
+/**
+ * Новая подложка из файла; place — первая расстановка по размеру картинки (px), building — здание (undefined —
+ * общая), level — этаж. undefined — файл не картинка или не открылся.
+ */
+export async function createUnderlay(file: File | Blob, place: (width: number, height: number) => Pick<Underlay, 'center' | 'scale' | 'rotation'> | undefined,
+  building?: string, level?: number): Promise<Underlay | undefined> {
   if (!isUnderlayFile(file)) return;
   let img: HTMLImageElement;
   try { img = await decodeImage(file); } catch { return; }
   const [width, height] = imageSize(img);
-  const fit = fitToBuilding(outline, width, height);
+  const fit = place(width, height);
   if (!fit) return;
   return {
     id: crypto.randomUUID(),

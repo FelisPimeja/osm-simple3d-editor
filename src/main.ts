@@ -64,7 +64,7 @@ import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from '
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
 import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from './settings';
 import { LOADER_TIMING, CUBE_SHAPES, MorphLoader } from './view/morph-loader';
-import { createUnderlay, deleteUnderlay, isUnderlayFile, loadUnderlays, saveUnderlay, type Underlay } from './view/underlays';
+import { createUnderlay, deleteUnderlay, fitToBuilding, fitToView, isUnderlayFile, loadUnderlays, saveUnderlay, type Underlay } from './view/underlays';
 import { UnderlayMenu } from './view/underlay-menu';
 import { UnderlayPanel } from './view/underlay-panel';
 
@@ -613,27 +613,35 @@ let drill: BuildingGroup | undefined;
 /** Режим одного здания (группа, в которую вошли двойным кликом): окружение скрыто. */
 let focus: BuildingGroup | undefined;
 function syncIssuesAllSetting() { issuesAll.checked = storedIssuesAll(!!focus); }
-// Подложки пользователя (этап 20): картинки здания режима — в IndexedDB, показ — под зданиями слоя
+// Подложки пользователя (этап 20): свои картинки — в IndexedDB, показ — слоем зданий. Общие (добавлены на карте)
+// видны на карте и в режиме любого здания, подложки здания — только в его режиме
+/** Общие подложки (карта и все здания). */
+let sharedUnderlays: Underlay[] = [];
 /** Подложки здания режима; undefined — ещё не загружены или не в режиме здания. */
 let focusUnderlays: Underlay[] | undefined;
 /** С прошлой отправки были видны свои подложки — в теги changeset. */
 let usedUnderlay = false;
+/** Подложки, которые сейчас в работе: общие и (в режиме здания) этого здания. */
+const currentUnderlays = () => [...sharedUnderlays, ...(focus ? focusUnderlays ?? [] : [])];
 const underlayMenu = new UnderlayMenu({
   add: (files) => void addUnderlays(files),
   change: (changed) => {
-    // Из меню — только видимость и прозрачность: положение могла сдвинуть панель подгонки
-    const cur = focusUnderlays?.find((x) => x.id === changed.id);
-    const u = cur ? { ...cur, visible: changed.visible, opacity: changed.opacity, level: changed.level } : changed;
+    // Из меню — видимость, прозрачность, этаж и где видна: положение могла сдвинуть панель подгонки
+    const cur = currentUnderlays().find((x) => x.id === changed.id);
+    const u = cur ? { ...cur, visible: changed.visible, opacity: changed.opacity, level: changed.level, building: changed.building } : changed;
     underlayPanel.update(u);
-    replaceUnderlay(u, u.level !== cur?.level);
+    replaceUnderlay(u, u.level !== cur?.level || u.building !== cur?.building);
     scheduleUnderlaySave(u);
   },
   adjust: (u) => {
     basemapCtrl?.closeMenu();
+    // На карте сцены режима здания нет — своя система координат вокруг подложки
+    mapUnderlayFrame = focus ? undefined : overpassLayer.geoFrame(u.center);
     underlayPanel.show(u);
   },
   remove: (u) => {
     if (underlayPanel.id === u.id) underlayPanel.hide();
+    sharedUnderlays = sharedUnderlays.filter((x) => x.id !== u.id);
     focusUnderlays = focusUnderlays?.filter((x) => x.id !== u.id);
     clearTimeout(underlaySaves.get(u.id));
     underlaySaves.delete(u.id);
@@ -642,13 +650,15 @@ const underlayMenu = new UnderlayMenu({
   },
 });
 basemapCtrl?.addSection(underlayMenu.el);
+/** Система координат подгонки подложки на карте (вне режима здания). */
+let mapUnderlayFrame: ReturnType<typeof overpassLayer.geoFrame> | undefined;
 // Панель подгонки: правки сразу видны, в базу — по «Подтвердить» (отмена возвращает как было)
 const underlayPanel = new UnderlayPanel(map, {
-  focusRay: (p) => overpassLayer.focusRay(p),
-  focusProjector: () => overpassLayer.focusProjector(),
-  focusToLocal: (p) => overpassLayer.focusToLocal(p),
-  focusToLngLat: (x, y) => overpassLayer.focusToLngLat(x, y),
-  snapAt: (p) => overpassLayer.snapAt(p),
+  focusRay: (p) => (focus ? overpassLayer.focusRay(p) : mapUnderlayFrame?.ray(p)),
+  focusProjector: () => (focus ? overpassLayer.focusProjector() : mapUnderlayFrame?.projector()),
+  focusToLocal: (p) => (focus ? overpassLayer.focusToLocal(p) : mapUnderlayFrame?.toLocal(p)),
+  focusToLngLat: (x, y) => (focus ? overpassLayer.focusToLngLat(x, y) : mapUnderlayFrame?.toLngLat(x, y)),
+  snapAt: (p) => (focus ? overpassLayer.snapAt(p) : mapUnderlaySnap(p)),
   elevation: (u) => underlayElevation(u) ?? 0,
 }, {
   change: (u) => replaceUnderlay(u),
@@ -659,9 +669,22 @@ const underlayPanel = new UnderlayPanel(map, {
   },
 });
 
-/** Подложка изменилась: в списке и на сцене (меню — только если menu: ползунок может быть под мышью). */
+/** Привязка подгонки на карте: вершины и середины рёбер контуров зданий на земле (как у сдвига снимка). */
+function mapUnderlaySnap(pt: [number, number]): SnapHit | undefined {
+  const s = snapGround(pt), frame = mapUnderlayFrame;
+  if (!s || !frame) return;
+  const [x, y] = frame.toLocal([s.lngLat.lng, s.lngLat.lat]);
+  return { kind: s.kind as SnapKind, key: '', local: new THREE.Vector3(x, y, 0), lngLat: s.lngLat, altitude: 0, point: s.point, label: s.label };
+}
+
+/** Подложка изменилась: в своём списке и на сцене (меню — только если menu: ползунок может быть под мышью). */
 function replaceUnderlay(u: Underlay, menu = false) {
-  focusUnderlays = focusUnderlays?.map((x) => (x.id === u.id ? u : x));
+  sharedUnderlays = sharedUnderlays.filter((x) => x.id !== u.id);
+  focusUnderlays = focusUnderlays?.filter((x) => x.id !== u.id);
+  // Порядок — по времени добавления
+  const byAdded = (list: Underlay[]) => [...list, u].sort((a, b) => a.added - b.added);
+  if (u.building === undefined) sharedUnderlays = byAdded(sharedUnderlays);
+  else if (focusUnderlays && u.building === focus?.key) focusUnderlays = byAdded(focusUnderlays);
   showUnderlays(menu);
 }
 
@@ -682,10 +705,10 @@ function underlayElevation(u: Underlay): number | undefined {
   return base === undefined ? undefined : base + u.elevation;
 }
 
-/** Показать подложки здания режима (слой и меню); menu = false — меню не пересобирать (ползунок под мышью). */
+/** Показать подложки (слой и меню); menu = false — меню не пересобирать (ползунок под мышью). */
 function showUnderlays(menu = true) {
-  const list = focus ? focusUnderlays ?? [] : [];
-  if (menu) underlayMenu.set(focus ? list : undefined, underlayLevels.map((l) => ({ n: l.n, label: LEVEL_NAME(l.n) })), currentLevel);
+  const list = currentUnderlays();
+  if (menu) underlayMenu.set(list, focus?.key, focus ? underlayLevels.map((l) => ({ n: l.n, label: LEVEL_NAME(l.n) })) : [], currentLevel);
   // Подложка этажа — только на выбранном этаже, на отметке его пола
   const shown = list.flatMap((u) => {
     const elevation = u.level === undefined || u.level === currentLevel ? underlayElevation(u) : undefined;
@@ -693,7 +716,7 @@ function showUnderlays(menu = true) {
   });
   overpassLayer.underlays.set(shown);
   if (shown.some((u) => u.visible)) usedUnderlay = true;
-  // Подгоняемую подложку больше не видно (сменили этаж) — подгонку закончить
+  // Подгоняемую подложку больше не видно (сменили этаж, режим) — подгонку закончить
   const fitting = underlayPanel.id;
   if (fitting && !shown.some((u) => u.id === fitting)) underlayPanel.hide();
 }
@@ -701,7 +724,7 @@ function showUnderlays(menu = true) {
 /** Загрузить подложки здания режима (при входе в здание). */
 async function loadFocusUnderlays() {
   const key = focus?.key;
-  underlayPanel.hide(); // подгонка подложки прежнего здания
+  underlayPanel.hide(); // подгонка подложки прежнего здания или карты
   focusUnderlays = undefined;
   showUnderlays();
   if (!key) return;
@@ -712,6 +735,12 @@ async function loadFocusUnderlays() {
   showUnderlays();
 }
 
+// Общие подложки — сразу при запуске
+void loadUnderlays(undefined).then((list) => {
+  sharedUnderlays = [...list, ...sharedUnderlays.filter((u) => !list.some((x) => x.id === u.id))];
+  showUnderlays();
+});
+
 /** Запись подложки после правки — не чаще, мс (ползунок прозрачности). */
 const UNDERLAY_SAVE_MS = 400;
 const underlaySaves = new Map<string, ReturnType<typeof setTimeout>>();
@@ -720,33 +749,42 @@ function scheduleUnderlaySave(u: Underlay) {
   underlaySaves.set(u.id, setTimeout(() => { underlaySaves.delete(u.id); void saveUnderlay(u); }, UNDERLAY_SAVE_MS));
 }
 
-/** Добавить картинки подложками здания режима: вписаны в здание по его осям, полупрозрачные. */
+/** Метров на пиксель экрана в его центре (по горизонтали). */
+function metersPerPixel(): number {
+  const c = map.getCanvas(), x = c.clientWidth / 2, y = c.clientHeight / 2;
+  const a = map.unproject([x - 50, y]), b = map.unproject([x + 50, y]);
+  return a.distanceTo(b) / 100;
+}
+
+/**
+ * Добавить картинки подложками: в режиме здания — этого здания (вписаны в него по его осям; выбран этаж — этого
+ * этажа), на карте — общие (в центре вида, по осям экрана). Полупрозрачные.
+ */
 async function addUnderlays(files: File[]) {
   const key = focus?.key;
-  if (!focus || !key) return;
-  const outline = groupFeatures(focus).flatMap((f) => (f.polygons ?? []).flatMap((p) => p.outer));
+  const outline = focus ? groupFeatures(focus).flatMap((f) => (f.polygons ?? []).flatMap((p) => p.outer)) : [];
+  const c = map.getCenter(), canvas = map.getCanvas();
+  const view: [LonLat, number, number, [number, number]] = [[c.lng, c.lat], metersPerPixel(), map.getBearing(), [canvas.clientWidth, canvas.clientHeight]];
   const bad: string[] = [];
   for (const file of files) {
-    // Выбран этаж — подложка этого этажа
-    const u = await createUnderlay(file, key, outline, currentLevel);
-    if (focus?.key !== key) return;
+    const u = await createUnderlay(file, (w, h) => (key ? fitToBuilding(outline, w, h) : fitToView(...view, w, h)), key, key ? currentLevel : undefined);
+    if (focus?.key !== key) return; // за время чтения файла сменили режим
     if (!u) { bad.push(file.name || tr('картинка')); continue; }
-    focusUnderlays = [...(focusUnderlays ?? []), u];
-    showUnderlays();
+    replaceUnderlay(u, true);
     if (!await saveUnderlay(u)) setStatus(tr('Подложку не удалось сохранить в браузере — после перезагрузки её не будет.'), true);
   }
   if (bad.length) setStatus(tr('Не открылось как картинка (PNG, JPG, WebP, SVG): {names}', { names: bad.join(', ') }), true);
 }
 
-/** Картинки из перетаскивания или вставки (в режиме здания). */
+/** Картинки из перетаскивания или вставки: на карте — общие подложки, в режиме здания — его. */
 const underlayFiles = (data: DataTransfer | null) => [...data?.files ?? []].filter(isUnderlayFile);
 map.getCanvasContainer().addEventListener('dragover', (e) => {
-  if (!focus || ![...e.dataTransfer?.items ?? []].some((i) => i.kind === 'file')) return;
+  if (![...e.dataTransfer?.items ?? []].some((i) => i.kind === 'file')) return;
   e.preventDefault();
   e.dataTransfer!.dropEffect = 'copy';
 });
 map.getCanvasContainer().addEventListener('drop', (e) => {
-  if (!focus) return;
+  if (![...e.dataTransfer?.items ?? []].some((i) => i.kind === 'file')) return;
   const files = underlayFiles(e.dataTransfer);
   e.preventDefault();
   if (files.length) void addUnderlays(files);
@@ -754,7 +792,7 @@ map.getCanvasContainer().addEventListener('drop', (e) => {
 });
 document.addEventListener('paste', (e) => {
   const t = e.target as HTMLElement | null;
-  if (!focus || t?.closest('input, textarea, [contenteditable]')) return;
+  if (t?.closest('input, textarea, [contenteditable]')) return;
   const files = underlayFiles(e.clipboardData);
   if (!files.length) return;
   e.preventDefault();
@@ -9018,7 +9056,7 @@ async function doUpload() {
     // Отправлено — источники считаем заново, с того, что включено сейчас
     usedImagery.clear();
     usedStreet.clear();
-    usedUnderlay = !!focus && !!focusUnderlays?.some((u) => u.visible);
+    usedUnderlay = currentUnderlays().some((u) => u.visible);
     noteSources();
     // Временные id узлов и путей → настоящие: в геометрии, членах отношений и в отправленных полигонах
     const nodeIdMap = new Map<number, number>(), wayIdMap = new Map<number, number>();

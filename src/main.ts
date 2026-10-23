@@ -300,6 +300,7 @@ function syncPhotos() {
 }
 
 function setBuildingsView(v: typeof buildingsView) {
+  const toggled = buildingsView.shown !== v.shown;
   Object.assign(buildingsView, v);
   storeBuildings(buildingsView);
   overpassLayer.setVisible(v.shown);
@@ -307,6 +308,7 @@ function setBuildingsView(v: typeof buildingsView) {
   overpassLayer.setWireframe(v.wireframe);
   applyTileBuildingsView();
   syncWireBtn();
+  if (toggled && !focus) { mapIssuesDirty = true; renderIssues(); }
 }
 
 /** В режиме контуров рёбер у объёмов тайлов нет — только бледная заливка, чтобы было видно, что здесь здание. */
@@ -7543,7 +7545,9 @@ function renderIssues() {
   const indoorIssues = focusedBuilding ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding))), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
   const duplicates = focusedBuilding ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
   focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
-  if (!focus && mapIssuesDirty) { mapIssues = timed('проверка карты', visibleMapIssues, (r) => `${r.length}`); mapIssuesDirty = false; }
+  // Слой зданий выключен — проверку карты не считаем (пересчитаем, когда включат)
+  if (!focus && !buildingsView.shown) mapIssues = [];
+  else if (!focus && mapIssuesDirty) { mapIssues = timed('проверка карты', visibleMapIssues, (r) => `${r.length}`); mapIssuesDirty = false; }
   // Есть выбор — только проблемы выбранных объектов (в режиме здания само здание целиком не фильтрует)
   const picked = issueFilterKeys();
   if (focus) picked.delete(focus.key);

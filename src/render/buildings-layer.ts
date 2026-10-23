@@ -3530,7 +3530,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const canvas = this.map.getCanvas();
     const x = (px / canvas.clientWidth) * 2 - 1;
     const y = 1 - (py / canvas.clientHeight) * 2;
-    const depth = new Map<string, number>();
+    const depth = new Map<string, { d: number; dist: number; area: number }>();
     const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), hitPoint = new THREE.Vector3();
     for (const g of this.activeGroups()) {
       const m = g.camera.projectionMatrix;
@@ -3547,12 +3547,14 @@ export class BuildingsLayer implements CustomLayerInterface {
           a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
           if (!ray.intersectTriangle(a, b, c, false, hitPoint)) continue;
           if (this.hiddenByCut(g, hitPoint)) continue;
+          const dist = hitPoint.distanceTo(ray.origin);
           const d = hitPoint.applyMatrix4(m).z;
-          if (!(d >= (depth.get(key) ?? Infinity))) depth.set(key, d);
+          if (!(d >= (depth.get(key)?.d ?? Infinity))) depth.set(key, { d, dist, area: itemArea(g, item) });
         }
       }
     }
-    return [...depth.entries()].sort((p, q) => p[1] - q[1]).map(([k]) => k);
+    // Наложенные в одной плоскости (плоские следы друг на друге) — от меньшего по площади к большему
+    return [...depth.entries()].sort(([, p], [, q]) => (Math.abs(p.dist - q.dist) < TIE_DEPTH ? p.area - q.area || p.d - q.d : p.d - q.d)).map(([k]) => k);
   }
 
   /** Точка здания режима выше среза этажа: там геометрия отсечена и не видна — не попадание. */
@@ -3586,7 +3588,9 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (!ray.intersectTriangle(a, b, c, false, hitPoint)) continue;
           if (this.hiddenByCut(g, hitPoint)) continue;
           const dist = hitPoint.distanceTo(ray.origin);
-          if (!groupBest || dist < groupBest.dist) groupBest = { item, dist, p: hitPoint.clone() };
+          // В одной плоскости с уже найденным (наложенные плоские следы) — меньший по площади
+          const tie = groupBest && Math.abs(dist - groupBest.dist) < TIE_DEPTH;
+          if (!groupBest || (tie ? groupBest.item !== item && itemArea(g, item) < itemArea(g, groupBest.item) : dist < groupBest.dist)) groupBest = { item, dist, p: hitPoint.clone() };
         }
       }
       if (!groupBest) continue;
@@ -5244,6 +5248,21 @@ function ringSegments(g: MeshGroup, it: Item, z: number): Float32Array {
   return new Float32Array(out);
 }
 
+/** Площадь объекта в плане, м² (кеш по объекту): при наложении в одной плоскости первым выбирается меньший. */
+const areaCache = new WeakMap<Item, number>();
+function itemArea(g: MeshGroup, it: Item): number {
+  let a = areaCache.get(it);
+  if (a !== undefined) return a;
+  const ring = (r: [number, number][]) => {
+    let s = 0;
+    const pts = r.map(g.toLocal);
+    for (let i = 0; i < pts.length; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length]; s += x1 * y2 - x2 * y1; }
+    return Math.abs(s) / 2;
+  };
+  a = it.feature.polygons.reduce((n, p) => n + ring(p.outer) - p.inners.reduce((m, r) => m + ring(r), 0), 0);
+  areaCache.set(it, a);
+  return a;
+}
 function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
 }

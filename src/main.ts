@@ -1386,7 +1386,9 @@ function cyclePick(p: { x: number; y: number }): string | undefined {
   const resolved = (k: string) => focus || drill?.members.includes(k) ? k : groupOf(k)?.key ?? k;
   const uniq: string[] = [];
   for (const k of keys) if (!uniq.some((u) => resolved(u) === resolved(k))) uniq.push(k);
-  const i = same && altCycle!.keys.join() === uniq.join() ? (altCycle!.i + 1) % uniq.length : 0;
+  // Первый Alt+клик после обычного: верхний уже выделен — сразу следующий
+  const start = uniq.length > 1 && selection.length === 1 && resolved(uniq[0]) === selection[0] ? 1 : 0;
+  const i = same && altCycle!.keys.join() === uniq.join() ? (altCycle!.i + 1) % uniq.length : start;
   altCycle = { x: p.x, y: p.y, keys: uniq, i };
   setStatus(tr('Alt+клик: объект {i} из {n} под курсором.', { i: i + 1, n: uniq.length }));
   return uniq[i];

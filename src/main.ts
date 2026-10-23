@@ -4293,6 +4293,9 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
   }
 
   const pieces = new Map<number, number[]>();
+  /** Новые стороны колец (не куски): узлы в любом направлении → id. */
+  const freeWays = new Map<string, number>();
+  const lineKey = (nodes: number[]) => (nodes[0] <= nodes[nodes.length - 1] ? nodes : [...nodes].reverse()).join(',');
   /** Пути-члены, ушедшие с колец и больше никому не нужные, — удалить. */
   const dropped = new Set<number>();
   for (const { f, rewrites } of items) {
@@ -4329,6 +4332,14 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
         if (nodes.every((id) => allowed.has(id))) ringWays.push({ id: m.ref, role: m.role, nodes, tags: ways.get(m.ref)?.tags });
       }
       const res = restructureRing(ringWays, [r.ids, ...(r.extra ?? []).map((x) => x.ids)], role, () => nextNewId--);
+      // Новая сторона, которую этим же шагом уже завёл сосед (удалили общий узел у нескольких отношений), — его путь
+      for (const c of [...res.created]) {
+        if (c.splitFrom !== undefined) continue;
+        const same = freeWays.get(lineKey(c.nodes));
+        if (same === undefined) { freeWays.set(lineKey(c.nodes), c.id); continue; }
+        res.created.splice(res.created.indexOf(c), 1);
+        for (const m of res.members) if (m.id === c.id) m.id = same;
+      }
       // Кусок пути, ушедший с кольца, создаём всегда: путь может быть и в незагруженных отношениях (площадь,
       // территория) — при отправке кусок встанет во все отношения исходного на сервере, а не нужный никому отбросится
       const inRing = new Set(res.members.map((m) => m.id));
@@ -5286,6 +5297,36 @@ function nodeRemoveEdits(ids: Set<number>): ObjectEdit[] | string {
   return out;
 }
 
+/** Какой-то из узлов ids — конец незамкнутого пути-члена мультиполигона (из данных или сессии). */
+function wayEndsAt(ids: Set<number>): boolean {
+  const ways = new Map<number, number[]>();
+  for (const g of liveFeatures()) for (const w of g.ways ?? []) ways.set(w.id, w.nodes);
+  for (const t of session.lineEntities()) ways.set(Number(t.key.split('/')[1]), t.line!.ids);
+  for (const nodes of ways.values()) {
+    const a = nodes[0], b = nodes[nodes.length - 1];
+    if (a !== b && (ids.has(a) || ids.has(b))) return true;
+  }
+  return false;
+}
+
+/** Кольца всех объектов, где есть узлы ids, без этих узлов — для topologyEdits; строка — почему нельзя. */
+function removalRewrites(ids: Set<number>): { f: Feature3D; rewrites: RingRewrite[] }[] | string {
+  const out: { f: Feature3D; rewrites: RingRewrite[] }[] = [];
+  for (const g of liveFeatures()) {
+    const rewrites: RingRewrite[] = [];
+    g.polygons.forEach((p, poly) => [p.outerIds, ...(p.innerIds ?? [])].forEach((rids, ring) => {
+      if (!rids?.some((n) => ids.has(n))) return;
+      const coords = ring ? p.inners[ring - 1] : p.outer;
+      const keep = rids.map((n, k) => (ids.has(n) ? -1 : k)).filter((k) => k >= 0);
+      rewrites.push({ poly, ring, ids: keep.map((k) => rids[k]), coords: keep.map((k) => coords[k]) });
+    }));
+    if (!rewrites.length) continue;
+    if (rewrites.some((r) => r.ids.length < 3)) return tr('{key}: в кольце останется меньше трёх вершин.', { key: g.key });
+    out.push({ f: g, rewrites });
+  }
+  return out;
+}
+
 /** Удалить вершины t: «с соседями» (или узлы только наши) — отовсюду, «отдельно» — только из своих колец. */
 function removeShapeVertex(t: ShapeTarget, merged: boolean) {
   const f = entity(t.key) as Feature3D | undefined;
@@ -5309,8 +5350,14 @@ function removeShapeVertex(t: ShapeTarget, merged: boolean) {
     && !selfIntersects(rings[i].coords.map((c) => overpassLayer.focusToLocal(c)!)))) return setStatus(tr('Без этой вершины контур пересекает сам себя.'), true);
   const ids = new Set(rings.flatMap((r) => r.ks.map((k) => r.ids[k])));
   const outside = nodesOutside(new Set([f.key]));
-  const edits = shapeTool.glue || ![...ids].some((n) => outside.has(n)) ? nodeRemoveEdits(ids)
-    : topologyEdits([{ f, rewrites: after }], [], new Map());
+  const glued = shapeTool.glue || ![...ids].some((n) => outside.has(n));
+  // Узел на стыке путей-членов (у церкви из коротких путей — почти каждый) из путей не вычеркнуть: двухузловой
+  // путь выродится, у длинных кольцо разорвётся. Тогда перестраиваем кольца всех объектов с этим узлом:
+  // новая сторона — новым путём, старые пути остаются тем, кто их ещё держит (площадь и т. п.)
+  const removal = glued && wayEndsAt(ids) ? removalRewrites(ids) : undefined;
+  if (typeof removal === 'string') return setStatus(removal, true);
+  const edits = removal ? topologyEdits(removal, [], new Map())
+    : glued ? nodeRemoveEdits(ids) : topologyEdits([{ f, rewrites: after }], [], new Map());
   if (typeof edits === 'string') return setStatus(edits, true);
   dropCollapsedHoles(edits);
   session.editMany(edits);

@@ -4433,6 +4433,20 @@ function itemEdges(it: Item): Float32Array {
   return edges;
 }
 
+/**
+ * v.toFixed(2) из кеша: ключи вершин рёбер строятся из координат Float32Array, а они в здании и тайле
+ * повторяются — toFixed на каждую было заметной долей сборки рёбер. Строки те же, что у toFixed.
+ */
+const fixedCache = new Map<number, string>();
+function fixed2(v: number): string {
+  let s = fixedCache.get(v);
+  if (s === undefined) {
+    if (fixedCache.size > 200000) fixedCache.clear();
+    fixedCache.set(v, s = v.toFixed(2));
+  }
+  return s;
+}
+
 function computeItemEdges(it: Item): Float32Array {
   if (it.wallVertices * 3 >= it.positions.length) return edgePass(it.positions, [EDGE_ANGLE]).full[0];
   // Один проход по всей сетке: рёбра при обычном угле, острые стыки (стена/крыша) и — снимком на границе
@@ -4445,8 +4459,8 @@ function computeItemEdges(it: Item): Float32Array {
   const roof = !CURVED_ROOFS.has(it.tags['roof:shape'] ?? 'flat')
     ? edgePass(it.positions.subarray(it.wallVertices * 3), [PLANAR_ROOF_EDGE_ANGLE]).full[0] : new Float32Array();
   const key = (a: Float32Array, i: number) => {
-    const p = `${a[i].toFixed(2)},${a[i + 1].toFixed(2)},${a[i + 2].toFixed(2)}`;
-    const q = `${a[i + 3].toFixed(2)},${a[i + 4].toFixed(2)},${a[i + 5].toFixed(2)}`;
+    const p = `${fixed2(a[i])},${fixed2(a[i + 1])},${fixed2(a[i + 2])}`;
+    const q = `${fixed2(a[i + 3])},${fixed2(a[i + 4])},${fixed2(a[i + 5])}`;
     return p < q ? p + q : q + p;
   };
   // Стык стены с крышей и изломы скатов — только где грани не в одной плоскости: у вальмы и полувальмы
@@ -4458,8 +4472,9 @@ function computeItemEdges(it: Item): Float32Array {
   const extra: number[] = [];
   for (const src of [walls, roof]) {
     for (let i = 0; i < src.length; i += 6) {
-      if (seen.has(key(src, i)) || !creases.has(key(src, i))) continue;
-      seen.add(key(src, i));
+      const k = key(src, i);
+      if (seen.has(k) || !creases.has(k)) continue;
+      seen.add(k);
       for (let j = 0; j < 6; j++) extra.push(src[i + j]);
     }
   }
@@ -4477,7 +4492,7 @@ function computeItemEdges(it: Item): Float32Array {
 function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Array {
   const tris = positions.length / 9;
   const P = positions;
-  const vkey = (arr: ArrayLike<number>, o: number) => `${arr[o].toFixed(2)},${arr[o + 1].toFixed(2)},${arr[o + 2].toFixed(2)}`;
+  const vkey = (arr: ArrayLike<number>, o: number) => `${fixed2(arr[o])},${fixed2(arr[o + 1])},${fixed2(arr[o + 2])}`;
   const ekey = (k1: string, k2: string) => (k1 < k2 ? k1 + '|' + k2 : k2 + '|' + k1);
   // Точные стыки проверяем по нормалям тоже: стена и фронтон могут иметь
   // противоположный порядок вершин, и EdgesGeometry оставляет плоский стык.

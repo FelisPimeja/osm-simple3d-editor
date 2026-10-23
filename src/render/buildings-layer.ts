@@ -17,6 +17,7 @@ import { clipAbove, prepareSolid, trimCoplanarWalls, trimTriangles, type Prepare
 import { areaLedgeTriangles } from './area-ledge';
 import { floatingParts } from '../osm/floating';
 import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
+import { edgePass } from './edge-pass';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
@@ -4433,14 +4434,16 @@ function itemEdges(it: Item): Float32Array {
 }
 
 function computeItemEdges(it: Item): Float32Array {
-  const all = edgeSegments(it.positions, EDGE_ANGLE);
-  if (it.wallVertices * 3 >= it.positions.length) return all;
-  // Отдельно стены: их верхний край — граница (одна грань), EdgesGeometry отдаёт её при любом угле
-  const walls = edgeSegments(it.positions.subarray(0, it.wallVertices * 3), EDGE_ANGLE);
+  if (it.wallVertices * 3 >= it.positions.length) return edgePass(it.positions, [EDGE_ANGLE]).full[0];
+  // Один проход по всей сетке: рёбра при обычном угле, острые стыки (стена/крыша) и — снимком на границе
+  // стен — отдельно стены: их верхний край — граница (одна грань), он есть при любом угле
+  const pass = edgePass(it.positions, [EDGE_ANGLE, WALL_ROOF_EDGE_ANGLE], it.wallVertices);
+  const [all, sharp] = pass.full;
+  const walls = pass.prefix![0];
   // У плоских скатов скрываем лишь почти плоские стыки, сохраняя изломы мансарды. У кривых
   // (купол, луковица, бочка) не добавляем рёбра аппроксимации.
   const roof = !CURVED_ROOFS.has(it.tags['roof:shape'] ?? 'flat')
-    ? edgeSegments(it.positions.subarray(it.wallVertices * 3), PLANAR_ROOF_EDGE_ANGLE) : new Float32Array();
+    ? edgePass(it.positions.subarray(it.wallVertices * 3), [PLANAR_ROOF_EDGE_ANGLE]).full[0] : new Float32Array();
   const key = (a: Float32Array, i: number) => {
     const p = `${a[i].toFixed(2)},${a[i + 1].toFixed(2)},${a[i + 2].toFixed(2)}`;
     const q = `${a[i + 3].toFixed(2)},${a[i + 4].toFixed(2)},${a[i + 5].toFixed(2)}`;
@@ -4449,7 +4452,6 @@ function computeItemEdges(it: Item): Float32Array {
   // Стык стены с крышей и изломы скатов — только где грани не в одной плоскости: у вальмы и полувальмы
   // на неправильном контуре скат бывает вертикальным и продолжает стену — там ребра нет
   const creases = new Set<string>();
-  const sharp = edgeSegments(it.positions, WALL_ROOF_EDGE_ANGLE);
   for (let i = 0; i < sharp.length; i += 6) creases.add(key(sharp, i));
   const seen = new Set<string>();
   for (let i = 0; i < all.length; i += 6) seen.add(key(all, i));
@@ -4480,6 +4482,9 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
   // Точные стыки проверяем по нормалям тоже: стена и фронтон могут иметь
   // противоположный порядок вершин, и EdgesGeometry оставляет плоский стык.
   const shared = new Map<string, number[]>();
+  // Ключ вершины — один раз на вершину, а не на каждую сторону каждого треугольника
+  const vk: string[] = new Array(P.length / 3);
+  for (let v = 0; v < vk.length; v++) vk[v] = vkey(P, v * 3);
   const normals = new Float32Array(tris * 3);
   const triangleBounds = new Float64Array(tris * 6);
   // Вырожденные треугольники (у фронтонов над карнизом — нулевой высоты) не в счёт: нормаль у них случайная
@@ -4498,7 +4503,7 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
     if (l < 1e-3 * Math.max(ux * ux + uy * uy + uz * uz, vx * vx + vy * vy + vz * vz)) { degenerate[t] = 1; continue; }
     normals[t * 3] = nx / l; normals[t * 3 + 1] = ny / l; normals[t * 3 + 2] = nz / l;
     for (let k = 0; k < 3; k++) {
-      const key = ekey(vkey(P, o + k * 3), vkey(P, o + ((k + 1) % 3) * 3));
+      const key = ekey(vk[t * 3 + k], vk[t * 3 + (k + 1) % 3]);
       const list = shared.get(key) ?? [];
       list.push(t);
       shared.set(key, list);
@@ -4510,7 +4515,14 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
   // а на продолжении — две почти совпадающие плоскости.
   const split: number[] = [];
   const vertices = new Map<string, number>();
-  for (let o = 0; o < P.length; o += 3) vertices.set(vkey(P, o), o);
+  for (let o = 0; o < P.length; o += 3) vertices.set(vk[o / 3], o);
+  // Вершины по x: каждому отрезку — только попадающие в его габарит по x (двоичный поиск), а не все
+  const byX = [...vertices.values()].sort((a, b) => P[a] - P[b]);
+  const firstX = (x: number) => {
+    let lo = 0, hi = byX.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (P[byX[mid]] < x) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
   for (let i = 0; i < segs.length; i += 6) {
     const p = [segs[i], segs[i + 1], segs[i + 2]];
     const d = [segs[i + 3] - p[0], segs[i + 4] - p[1], segs[i + 5] - p[2]];
@@ -4519,7 +4531,8 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
     const cuts = [0, 1];
     const low = p.map((v, k) => Math.min(v, v + d[k]) - 0.001);
     const high = p.map((v, k) => Math.max(v, v + d[k]) + 0.001);
-    for (const o of vertices.values()) {
+    for (let n = firstX(low[0]); n < byX.length && P[byX[n]] <= high[0]; n++) {
+      const o = byX[n];
       if (P[o] < low[0] || P[o] > high[0] || P[o + 1] < low[1] || P[o + 1] > high[1] || P[o + 2] < low[2] || P[o + 2] > high[2]) continue;
       const t = d.reduce((s, v, k) => s + v * (P[o + k] - p[k]), 0) / (len * len);
       if (t * len < EPS || (1 - t) * len < EPS) continue;
@@ -4533,6 +4546,7 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
   }
   segs = new Float32Array(split);
   const keep: number[] = [];
+  const near = flatSeamGrid(triangleBounds, degenerate, tris, segs.length / 6, 4 * EPS);
   for (let i = 0; i < segs.length; i += 6) {
     const px = segs[i], py = segs[i + 1], pz = segs[i + 2];
     let dx = segs[i + 3] - px, dy = segs[i + 4] - py, dz = segs[i + 5] - pz;
@@ -4555,7 +4569,11 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
     const tm = len / 2;
     let first = -1, flat = true, count = 0;
     const mx = px + dx * tm, my = py + dy * tm, mz = pz + dz * tm;
-    for (let t = 0; t < tris && flat; t++) {
+    // Кандидаты по возрастанию номера — тот же порядок, что при полном переборе (first — первый подходящий)
+    const cands = near?.(mx, my);
+    const total = cands ? cands.length : tris;
+    for (let n = 0; n < total && flat; n++) {
+      const t = cands ? cands[n] : n;
       if (degenerate[t]) continue;
       const b = t * 6, margin = 2 * EPS;
       if (mx < triangleBounds[b] - margin || mx > triangleBounds[b + 3] + margin
@@ -4578,14 +4596,33 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
 }
 const FLAT_COS = Math.cos(THREE.MathUtils.degToRad(1));
 
-function edgeSegments(positions: Float32Array, angle: number): Float32Array {
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const edges = new THREE.EdgesGeometry(geom, angle);
-  const out = edges.getAttribute('position').array as Float32Array;
-  edges.dispose();
-  geom.dispose();
-  return out;
+/**
+ * Сетка треугольников по xy для поиска тех, на сторонах которых может лежать середина отрезка: у больших
+ * зданий (сотни треугольников и отрезков) полный перебор — квадратичный. Списки клеток идут по возрастанию
+ * номера треугольника. undefined — сетка не окупится, перебираем всё.
+ */
+function flatSeamGrid(bounds: Float64Array, degenerate: Uint8Array, tris: number, segs: number, margin: number):
+  ((x: number, y: number) => number[]) | undefined {
+  if (tris * segs < 5000) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let t = 0; t < tris; t++) {
+    if (degenerate[t]) continue;
+    x0 = Math.min(x0, bounds[t * 6]); y0 = Math.min(y0, bounds[t * 6 + 1]);
+    x1 = Math.max(x1, bounds[t * 6 + 3]); y1 = Math.max(y1, bounds[t * 6 + 4]);
+  }
+  if (!(x1 >= x0)) return;
+  const N = 16;
+  const cx = Math.max((x1 - x0) / N, 1e-6), cy = Math.max((y1 - y0) / N, 1e-6);
+  const cell = (v: number, o: number, c: number) => Math.min(N - 1, Math.max(0, Math.floor((v - o) / c)));
+  const cells: number[][] = Array.from({ length: N * N }, () => []);
+  for (let t = 0; t < tris; t++) {
+    if (degenerate[t]) continue;
+    const b = t * 6;
+    const i0 = cell(bounds[b] - margin, x0, cx), i1 = cell(bounds[b + 3] + margin, x0, cx);
+    const j0 = cell(bounds[b + 1] - margin, y0, cy), j1 = cell(bounds[b + 4] + margin, y0, cy);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) cells[j * N + i].push(t);
+  }
+  return (x, y) => cells[cell(y, y0, cy) * N + cell(x, x0, cx)];
 }
 
 /** Габариты всей группы — чтобы не перебирать здания тайлов, мимо которых луч проходит. */

@@ -1149,5 +1149,6 @@
   "Вход node/{id} перенесён. Отменить — Ctrl+Z.": "Entrance node/{id} moved. Undo — Ctrl+Z.",
   "Сюда вход не поставить — выберите другую стену.": "The entrance can't go here — pick another wall.",
   "Перенос входа отменён.": "Entrance move cancelled.",
-  "Клик по точке входа у основания стены (или M) — перенести вдоль стен здания: вход едет за курсором, клик — поставить, Esc — отмена.": "Click the entrance point at the foot of the wall (or press M) to move it along the building walls: it follows the cursor, click to place, Esc to cancel."
+  "Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.": "Move along the building walls: click the entrance point at the foot of the wall (or press M, then click it) — it follows the cursor, click to place, Esc to cancel.",
+  "Переместить вход: кликните по его точке у основания стены, затем — по месту на стене. Esc — отмена.": "Move the entrance: click its point at the foot of the wall, then click a spot on the wall. Esc to cancel."
 }

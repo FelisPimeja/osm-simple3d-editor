@@ -1251,7 +1251,7 @@ map.on('click', (e) => {
   // Этим нажатием пипетка взяла цвет — не выделять и не заливать
   if (performance.now() - eyedropper.pickedAt < 600) return;
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
-  if (entranceDrag) { commitEntrance(); return; }
+  if (entranceDrag) { commitEntrance([e.point.x, e.point.y]); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (measureTool.active) { measureTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (rotateTool.active) { rotateTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
@@ -5309,8 +5309,8 @@ function nodeRemoveEdits(ids: Set<number>): ObjectEdit[] | string {
 let selectedEntrance: number | undefined;
 /** Куда встанет переносимый вход: сторона edge кольца ring полигона poly объекта key, точка at. */
 interface EntranceTarget { key: string; poly: number; ring: number; edge: number; at: LonLat; place: Omit<EntrancePlace, 'id'> }
-/** Перенос входа вдоль стен (M или клик по выбранному входу). */
-let entranceDrag: { id: number; target?: EntranceTarget } | undefined;
+/** Перенос входа вдоль стен: pick — после M ждём клика по точке входа (как «Переместить» у других объектов), move — едет за курсором. */
+let entranceDrag: { id: number; phase: 'pick' | 'move'; target?: EntranceTarget } | undefined;
 
 function entranceTags(id: number): Record<string, string> | undefined {
   for (const g of liveFeatures()) { const e = g.entrances?.find((x) => x.id === id); if (e) return e.tags; }
@@ -5327,17 +5327,19 @@ function renderEntrance(id: number) {
   const t = entranceTags(id) ?? {};
   const name = t.ref ? ` ${esc(t.ref)}` : t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : '';
   infoEl.innerHTML = `<h2>${tr('Вход')}${name} — <a href="${server().web}/node/${id}" target="_blank" rel="noopener">node/${id}</a></h2>`
-    + `<p class="hint">${tr('Клик по точке входа у основания стены (или M) — перенести вдоль стен здания: вход едет за курсором, клик — поставить, Esc — отмена.')}</p>`
+    + `<p class="hint">${tr('Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.')}</p>`
     + `<details class="all-tags" open><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
 }
 
-function startEntranceDrag(): boolean {
+/** phase pick — M: сначала клик по точке входа; move — клик по точке уже был, вход сразу едет за курсором. */
+function startEntranceDrag(phase: 'pick' | 'move' = 'move'): boolean {
   if (selectedEntrance === undefined || !focus || !overpassLayer.focusEntrance(selectedEntrance)) return false;
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
-  entranceDrag = { id: selectedEntrance };
-  setStatus(tr('Ведите курсор по стене здания — вход едет за ним. Клик — поставить, Esc — отмена.'));
+  entranceDrag = { id: selectedEntrance, phase };
+  setStatus(phase === 'pick' ? tr('Переместить вход: кликните по его точке у основания стены, затем — по месту на стене. Esc — отмена.')
+    : tr('Ведите курсор по стене здания — вход едет за ним. Клик — поставить, Esc — отмена.'));
   return true;
 }
 
@@ -5349,7 +5351,7 @@ function cancelEntranceDrag() {
 
 function moveEntrance(point: [number, number]) {
   const d = entranceDrag;
-  if (!d) return;
+  if (!d || d.phase !== 'move') return;
   d.target = entranceTargetAt(point);
   overpassLayer.previewEntrance(d.target ? { id: d.id, place: d.target.place } : undefined);
 }
@@ -5392,9 +5394,16 @@ function entranceTargetAt(point: [number, number]): EntranceTarget | undefined {
   return place && lonLat ? { key: best.key, poly: best.poly, ring, edge, at: lonLat, place } : undefined;
 }
 
-function commitEntrance() {
+function commitEntrance(point: [number, number]) {
   const d = entranceDrag;
   if (!d) return;
+  if (d.phase === 'pick') {
+    // Мимо точки — перенос отменяется, вход остаётся выбранным (как у «Переместить»)
+    if (!overpassLayer.pickEntrancePoint(point)) { cancelEntranceDrag(); setStatus(tr('Перенос входа отменён.')); return; }
+    d.phase = 'move';
+    setStatus(tr('Ведите курсор по стене здания — вход едет за ним. Клик — поставить, Esc — отмена.'));
+    return;
+  }
   if (!d.target) return setStatus(tr('Наведите курсор на стену здания.'), true);
   const edits = entranceMoveEdits(d.id, d.target);
   if (typeof edits === 'string') return setStatus(edits, true);
@@ -5989,7 +5998,7 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   closeCtxMenu();
   cancelCopyPick();
-  if (action === 'move') { if (!startEntranceDrag()) startMove(); } else if (action === 'push') startPush(); else if (action === 'shape') startShape(); else if (action === 'split') startSplit();
+  if (action === 'move') { if (!startEntranceDrag('pick')) startMove(); } else if (action === 'push') startPush(); else if (action === 'shape') startShape(); else if (action === 'split') startSplit();
   else if (action === 'rotate') startRotate(); else if (action === 'square') squareSelected(); else if (action === 'merge') mergeSelected();
   else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);

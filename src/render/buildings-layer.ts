@@ -3607,6 +3607,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const ls = new THREE.LineSegments(lg, ENTRANCE_LINE_MATERIAL);
     ls.frustumCulled = false;
     root.add(ls);
+    // После граней зданий: в режиме контуров они пишут только глубину — обводки входов за стенами прячутся
+    root.renderOrder = 1;
     g.entranceObj = root;
     g.scene.add(root);
   }

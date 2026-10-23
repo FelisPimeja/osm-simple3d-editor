@@ -1287,10 +1287,11 @@ map.on('click', (e) => {
     const picId = p.layer.pick(e.point);
     if (picId) { void photoViewer.open(p.layer, picId); return; }
   }
-  // Вход на фасаде: клик — выбрать, клик по выбранному — перенести
+  // Вход на фасаде: клик — выбрать, клик по точке выбранного (узел у основания) — перенести
   if (focus && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
+    if (overpassLayer.pickEntrancePoint([e.point.x, e.point.y])) { startEntranceDrag(); return; }
     const id = overpassLayer.pickEntrance([e.point.x, e.point.y]);
-    if (id !== undefined) { if (id === selectedEntrance) startEntranceDrag(); else selectEntrance(id); return; }
+    if (id !== undefined) { if (id !== selectedEntrance) selectEntrance(id); return; }
   }
   if (moveTool.state === 'select') {
     const doorKey = overpassLayer.pickDoor([e.point.x, e.point.y]);
@@ -5326,7 +5327,7 @@ function renderEntrance(id: number) {
   const t = entranceTags(id) ?? {};
   const name = t.ref ? ` ${esc(t.ref)}` : t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : '';
   infoEl.innerHTML = `<h2>${tr('Вход')}${name} — <a href="${server().web}/node/${id}" target="_blank" rel="noopener">node/${id}</a></h2>`
-    + `<p class="hint">${tr('M или клик по выбранному входу — перенести вдоль стен здания: вход едет за курсором, клик — поставить, Esc — отмена.')}</p>`
+    + `<p class="hint">${tr('Клик по точке входа у основания стены (или M) — перенести вдоль стен здания: вход едет за курсором, клик — поставить, Esc — отмена.')}</p>`
     + `<details class="all-tags" open><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
 }

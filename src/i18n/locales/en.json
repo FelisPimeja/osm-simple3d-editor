@@ -1144,10 +1144,10 @@
   "Видна": "Shown",
   "Не часть": "Not a part",
   "Без ключа — удалить тег": "No key — remove the tag",
-  "M или клик по выбранному входу — перенести вдоль стен здания: вход едет за курсором, клик — поставить, Esc — отмена.": "M or click the selected entrance to move it along the building walls: it follows the cursor, click to place, Esc to cancel.",
   "Ведите курсор по стене здания — вход едет за ним. Клик — поставить, Esc — отмена.": "Move the cursor along a building wall — the entrance follows it. Click to place, Esc to cancel.",
   "Наведите курсор на стену здания.": "Point the cursor at a building wall.",
   "Вход node/{id} перенесён. Отменить — Ctrl+Z.": "Entrance node/{id} moved. Undo — Ctrl+Z.",
   "Сюда вход не поставить — выберите другую стену.": "The entrance can't go here — pick another wall.",
-  "Перенос входа отменён.": "Entrance move cancelled."
+  "Перенос входа отменён.": "Entrance move cancelled.",
+  "Клик по точке входа у основания стены (или M) — перенести вдоль стен здания: вход едет за курсором, клик — поставить, Esc — отмена.": "Click the entrance point at the foot of the wall (or press M) to move it along the building walls: it follows the cursor, click to place, Esc to cancel."
 }

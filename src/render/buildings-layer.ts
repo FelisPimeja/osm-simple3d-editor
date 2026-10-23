@@ -77,7 +77,7 @@ const DOOR_AXIS_MATERIAL = new THREE.LineDashedMaterial({ color: 0x2563eb, dashS
 const DOOR_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x2563eb });
 /** Вход на фасаде (entrance=*): белый прямоугольник 1×2 м чуть перед стеной, с тёмной обводкой. */
 const ENTRANCE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-const ENTRANCE_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x2563eb, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+const ENTRANCE_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x97beff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const ENTRANCE_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
 export const ENTRANCE_WIDTH = 1;
 export const ENTRANCE_HEIGHT = 2;
@@ -392,7 +392,7 @@ class MeshGroup {
   disposeEntrances() {
     if (!this.entranceObj) return;
     this.scene.remove(this.entranceObj);
-    this.entranceObj.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose(); });
+    this.entranceObj.traverse((o) => { if ((o instanceof THREE.Mesh || o instanceof THREE.LineSegments) && o.geometry !== DOOR_GEO) o.geometry.dispose(); });
     this.entranceObj = undefined;
   }
 
@@ -563,7 +563,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   private filterPass(g: MeshGroup, pass: RenderPass): () => void {
     if (pass === 'all') return () => {};
     DEPTH_ONLY_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
-    const swapped = [g.mesh, g.glass].filter((o): o is THREE.Mesh => !!o).map((o) => [o, o.material] as const);
+    const fills = g.entranceObj?.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh && !o.userData.entrancePoint) ?? [];
+    const swapped = [g.mesh, g.glass, ...fills].filter((o): o is THREE.Mesh => !!o).map((o) => [o, o.material] as const);
     for (const [o] of swapped) o.material = DEPTH_ONLY_MATERIAL;
     return () => { for (const [o, m] of swapped) o.material = m; };
   }
@@ -3518,6 +3519,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     return this.groups.get(FOCUS_GROUP)?.entrances.find((e) => e.id === id);
   }
 
+  /** Курсор у точки выбранного входа (узел у основания стены) — за неё вход переносят. */
+  pickEntrancePoint(point: [number, number]): boolean {
+    const e = this.entranceSelected === undefined ? undefined : this.focusEntrance(this.entranceSelected);
+    const px = e && this.focusProject(new THREE.Vector3(e.p[0], e.p[1], e.z + 0.04));
+    return !!px && Math.hypot(px[0] - point[0], px[1] - point[1]) <= DOOR_PICK_PX;
+  }
+
   /** Вход под курсором в режиме здания: id узла. */
   pickEntrance(point: [number, number]): number | undefined {
     const g = this.groups.get(FOCUS_GROUP), ray = this.focusRay(point);
@@ -3546,13 +3554,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Узел в нескольких объектах (контур и часть, соседние части) — на самой низкой видимой стене
     const best = new Map<number, { place: EntrancePlace; rank: number }>();
     for (const it of g.items) {
-      if (g.hidden.has(it.feature.key) || thinItem(it) || it.box.isEmpty()) continue;
-      const rank = it.box.min.z + (strokeOnly(g, it) ? 1e6 : 0);
+      if (g.hidden.has(it.feature.key) || thinItem(it)) continue;
+      // Низ — по тегам, не по габаритам: пока часть пересобирается (крыша из воркера), box бывает пустым,
+      // и вход перескакивал на соседнюю часть выше (на крышу нижней)
+      const min = g.lift?.get(it.feature.key) ?? computeHeights(it.tags).min;
+      // Вход — у земли: решает самый низкий низ (контур под частями, хоть он и только обводка, ниже части
+      // на крыше соседней); обводка уступает объёму лишь на той же высоте
+      const rank = min + (strokeOnly(g, it) ? 1e-3 : 0);
       for (const p of it.feature.polygons) {
         const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));
         [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
           if (!tags.has(id) || (best.get(id)?.rank ?? Infinity) <= rank) return;
-          const place = entrancePlace(rings, r, i, it.box.min.z);
+          const place = entrancePlace(rings, r, i, min);
           if (place) best.set(id, { place: { id, ...place }, rank });
         }));
       }
@@ -3578,6 +3591,15 @@ export class BuildingsLayer implements CustomLayerInterface {
       const mesh = new THREE.Mesh(geom, mat);
       mesh.frustumCulled = false;
       root.add(mesh);
+    }
+    // Выбранный — точка узла на контуре у основания (за неё вход и переносят), как у дверей на плане этажа
+    const sel = g.entrances.find((e) => e.id === this.entranceSelected);
+    if (sel) {
+      const dot = new THREE.Mesh(DOOR_GEO, DOOR_MATERIAL);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.025, 8, 24), DOOR_SELECTED_MATERIAL);
+      dot.position.set(sel.p[0], sel.p[1], sel.z + 0.04);
+      ring.position.set(sel.p[0], sel.p[1], sel.z + 0.08);
+      for (const o of [dot, ring]) { o.userData.entrancePoint = true; o.renderOrder = 5; o.frustumCulled = false; root.add(o); }
     }
     const lg = new THREE.BufferGeometry();
     lg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));

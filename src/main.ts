@@ -4329,18 +4329,15 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
         if (nodes.every((id) => allowed.has(id))) ringWays.push({ id: m.ref, role: m.role, nodes, tags: ways.get(m.ref)?.tags });
       }
       const res = restructureRing(ringWays, [r.ids, ...(r.extra ?? []).map((x) => x.ids)], role, () => nextNewId--);
-      // Кусок пути, ушедший с кольца, нужен только соседям с этим путём; нет их — он лишний (путь без тегов и без отношений)
+      // Кусок пути, ушедший с кольца, создаём всегда: путь может быть и в незагруженных отношениях (площадь,
+      // территория) — при отправке кусок встанет во все отношения исходного на сервере, а не нужный никому отбросится
       const inRing = new Set(res.members.map((m) => m.id));
       const shared = (orig: number) => live.some((g) => g.type === 'relation' && g.key !== f.key && relWays(g)?.some((w) => w.id === orig));
-      const orphan = new Set(res.created.filter((c) => c.splitFrom !== undefined && !inRing.has(c.id) && !shared(c.splitFrom)).map((c) => c.id));
-      // Путь целиком ушёл с кольца и без тегов — тоже лишний
+      // Путь целиком ушёл с кольца и без тегов — лишний (удаление if-unused: занятый чужим отношением сервер оставит)
       for (const w of ringWays) if (!inRing.has(w.id) && !res.lines.has(w.id) && !shared(w.id) && !Object.keys(w.tags ?? {}).length) dropped.add(w.id);
       for (const [id, nodes] of res.lines) lines.set(id, nodes);
-      for (const c of res.created) if (!orphan.has(c.id)) { lines.set(c.id, c.nodes); created.set(c.id, { tags: c.tags, splitFrom: c.splitFrom }); }
-      for (const [orig, ids] of res.pieces) {
-        const keep = ids.filter((id) => !orphan.has(id));
-        if (keep.length) pieces.set(orig, [...(pieces.get(orig) ?? []), ...keep]);
-      }
+      for (const c of res.created) { lines.set(c.id, c.nodes); created.set(c.id, { tags: c.tags, splitFrom: c.splitFrom }); }
+      for (const [orig, ids] of res.pieces) if (ids.length) pieces.set(orig, [...(pieces.get(orig) ?? []), ...ids]);
       const ringIds = new Set(ringWays.map((w) => w.id));
       const keep = new Set(res.members.map((m) => m.id));
       const had = new Set(members.filter((m) => m.type === 'way').map((m) => m.ref));

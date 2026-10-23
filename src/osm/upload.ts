@@ -278,6 +278,7 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   for (const n of dropNodes.values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
   if (conflicts.length) throw new ConflictError(conflicts);
   const dropped = await settleTopology(edits, payload, fresh, onStatus);
+  keepForeignMembers(payload, editKeys);
   dropDanglingMembers(payload);
   const broken = await brokenRings(payload, fresh);
   if (broken.length) throw new BrokenRingsError(broken);
@@ -301,6 +302,23 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
 }
 
 type Payload = Parameters<typeof buildOsmChange>[0];
+
+/**
+ * Путь, который мы удаляем (ушёл с колец наших зданий), но который в составе чужого отношения из пакета
+ * (площадь, куда вписаны куски разрезанного соседнего пути): if-unused его всё равно оставил бы, а
+ * dropDanglingMembers выкинул бы его из этого отношения — кольцо разомкнулось бы. Удаление снимаем.
+ */
+function keepForeignMembers(payload: Payload, editKeys: Set<string>) {
+  const used = new Set<number>();
+  for (const p of payload) {
+    if (p.element.type !== 'relation' || p.deleted || p.created || editKeys.has(`relation/${p.element.id}`)) continue;
+    for (const m of p.element.members) if (m.type === 'way') used.add(m.ref);
+  }
+  for (let i = payload.length - 1; i >= 0; i--) {
+    const p = payload[i];
+    if (p.deleted && p.element.type === 'way' && used.has(p.element.id)) payload.splice(i, 1);
+  }
+}
 
 /**
  * Участники отношений, которых в пакете не будет: новые (id < 0), не создаваемые в нём, и удаляемые в нём же.

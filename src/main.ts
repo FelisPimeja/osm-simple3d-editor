@@ -4371,7 +4371,7 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
     const key = `way/${id}`;
     const line = { ids: nodes, coords: nodes.map(at) };
     const c = created.get(id);
-    if (c) { out.push({ key, create: { key, version: 0, tags: { ...(c.tags ?? {}) }, line, splitFrom: c.splitFrom } }); continue; }
+    if (c) { out.push({ key, create: { key, version: 0, tags: { ...(c.tags ?? {}) }, line, ...(c.splitFrom !== undefined && c.splitFrom > 0 ? { splitFrom: c.splitFrom } : {}) } }); continue; }
     const known = session.get(key);
     if (known && !known.line) return tr('{key} — сам по себе здание или часть, его не разрезать.', { key });
     if (!known) {

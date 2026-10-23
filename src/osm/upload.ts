@@ -347,7 +347,8 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
   const editKeys = new Set(edits.map((e) => e.key));
   const splits = new Map<number, number[]>();
   for (const e of edits) {
-    if (e.created?.type === 'way' && e.splitFrom !== undefined) splits.set(e.splitFrom, [...(splits.get(e.splitFrom) ?? []), e.created.id]);
+    // Разрезан новый путь (ещё не на сервере, id < 0) — его отношений на сервере нет, они среди наших правок
+    if (e.created?.type === 'way' && e.splitFrom !== undefined && e.splitFrom > 0) splits.set(e.splitFrom, [...(splits.get(e.splitFrom) ?? []), e.created.id]);
   }
   if (splits.size) onStatus(tr('Проверяем отношения разрезанных путей…'));
   const patched = new Map<number, OsmRelation>();
@@ -368,7 +369,7 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
     const p = payload[i];
     if (!p.created || p.element.type !== 'way') continue;
     const e = edits.find((x) => x.created?.id === p.element.id && x.created.type === 'way');
-    if (e?.splitFrom === undefined || wayRefs.has(p.element.id)) continue;
+    if (e?.splitFrom === undefined || e.splitFrom < 0 || wayRefs.has(p.element.id)) continue; // кусок нового пути — не «осиротевший»
     payload.splice(i, 1);
     dropped.add(e.key);
     for (const n of p.element.nodes) if (n > 0) dropNodes.add(n);
@@ -379,7 +380,7 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
   for (const e of edits) {
     if (!e.members || !e.membersBefore || e.created || e.deleted) continue;
     const now = new Set(e.members.filter((m) => m.type === 'way').map((m) => m.ref));
-    for (const m of e.membersBefore) if (m.type === 'way' && !now.has(m.ref) && !wayRefs.has(m.ref) && !editKeys.has(`way/${m.ref}`)) removed.add(`way/${m.ref}`);
+    for (const m of e.membersBefore) if (m.type === 'way' && m.ref > 0 && !now.has(m.ref) && !wayRefs.has(m.ref) && !editKeys.has(`way/${m.ref}`)) removed.add(`way/${m.ref}`);
   }
   const removedWays = removed.size ? [...(await fetchElements([...removed], api())).values()]
     .filter((w): w is OsmWay => w.type === 'way' && !Object.keys(w.tags ?? {}).length) : [];

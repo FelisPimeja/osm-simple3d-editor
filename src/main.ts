@@ -10332,9 +10332,35 @@ editsClip.addEventListener('click', (e) => {
 });
 
 async function pasteEdits() {
+  let text: string;
+  try {
+    text = await navigator.clipboard.readText();
+  } catch {
+    // Чтение буфера запрещено (встроенные браузеры, без разрешения) — вставка в поле работает всегда
+    return askEditsText();
+  }
+  applyEditsText(text);
+}
+
+/** Поле для вставки JSON правок вручную (Cmd+V): вставка сразу применяется. */
+function askEditsText() {
+  showPopup(`<h3>${tr('Вставить правки')}</h3><p>${tr('Браузер не дал прочитать буфер обмена — вставьте скопированные правки сюда (Cmd+V / Ctrl+V).')}</p>
+    <textarea data-edits-text rows="6" style="width:100%;box-sizing:border-box;font:12px monospace"></textarea>`);
+  const area = popupEl.querySelector<HTMLTextAreaElement>('[data-edits-text]')!;
+  area.focus();
+  area.addEventListener('paste', (e) => {
+    const text = e.clipboardData?.getData('text/plain');
+    if (!text) return;
+    e.preventDefault();
+    showPopup('');
+    applyEditsText(text);
+  });
+}
+
+function applyEditsText(text: string) {
   let rec: { format?: string; server?: string; count?: number; data?: AutosaveData };
   try {
-    rec = JSON.parse(await navigator.clipboard.readText());
+    rec = JSON.parse(text);
   } catch (err) {
     return setStatus(tr('В буфере обмена нет правок: {err}', { err: (err as Error).message }), true);
   }

@@ -1166,5 +1166,7 @@
   "Правки скопированы для сервера «{from}», а открыт «{to}». Вставить всё равно?": "These edits were copied for the “{from}” server, but “{to}” is open. Paste anyway?",
   "Текущие правки ({n} объект) будут заменены вставленными. Продолжить?|Текущие правки ({n} объекта) будут заменены вставленными. Продолжить?|Текущие правки ({n} объектов) будут заменены вставленными. Продолжить?": "Your current edits ({n} object) will be replaced with the pasted ones. Continue?|Your current edits ({n} objects) will be replaced with the pasted ones. Continue?",
   "Копировать правки (JSON — для разбора ошибок)": "Copy edits (JSON, for debugging)",
-  "Вставить правки (заменят текущие)": "Paste edits (replaces current ones)"
+  "Вставить правки (заменят текущие)": "Paste edits (replaces current ones)",
+  "Вставить правки": "Paste edits",
+  "Браузер не дал прочитать буфер обмена — вставьте скопированные правки сюда (Cmd+V / Ctrl+V).": "The browser did not allow reading the clipboard. Paste the copied edits here (Cmd+V / Ctrl+V)."
 }

@@ -15,6 +15,11 @@ export interface CutPoint { poly: number; ring: number; edge: number; p: Pt; ver
 const ringsOf = (p: { outer: Pt[]; inners: Pt[][] }) => [p.outer, ...p.inners];
 type Candidate = { key: string; z: number; start: CutPoint };
 
+/** Горизонтальный разрез: высоты стен объекта в сцене (низ, верх) и отметки привязки по высоте (этажи, соседи). */
+export interface SideRange { lo: number; hi: number; marks: { z: number; label: string }[] }
+/** Точка на боковом (вертикальном) ребре: вершина контура и высота. */
+type SidePoint = { key: string; poly: number; ring: number; vertex: number; p: Pt; z: number; snap: SnapHit };
+
 /**
  * Инструмент «Рассечь»: ломаная от ребра к ребру делит верхнюю грань на две.
  * 1. клик по ребру верхней грани (вершины и середины — с привязкой) — начало разреза;
@@ -22,6 +27,8 @@ type Candidate = { key: string; z: number; start: CutPoint };
  *    Shift привязывает следующую точку к оси вдоль начального ребра или перпендикулярно ему.
  * Первый клик внутри грани (не у ребра) — замкнутое кольцо: точки внутри грани, клик в первую точку
  * его замыкает — объект получает дыру, внутри — новая часть (двор, башня, атриум).
+ * Клик по боковому (вертикальному) ребру — разрез по высоте: он идёт только горизонтально, на высоте клика
+ * (с привязкой к этажам и высотам соседних частей), и завершается кликом по другому боковому ребру того же объекта.
  * Что можно резать и как делить данные — решают eligible и split снаружи. Esc — отмена.
  */
 export class SplitTool {
@@ -33,6 +40,10 @@ export class SplitTool {
   private bends: Pt[] = [];
   /** Замкнутое кольцо внутри грани: объект, его полигон и точки. */
   private loop?: { key: string; poly: number; pts: Pt[] };
+  /** Разрез по высоте: начало на боковом ребре и конец под курсором (на другом боковом ребре). */
+  private side?: { start: SidePoint; end?: SidePoint };
+  /** Диапазоны стен объектов — на время движения мыши (каждый считает отметки по всем частям здания). */
+  private ranges = new Map<string, { at: number; range: SideRange | string }>();
   /** Привязка последнего пересчёта точки разреза — для маркера. */
   snap?: SnapHit;
   private z = 0;
@@ -54,6 +65,8 @@ export class SplitTool {
     private readonly split: (key: string, a: CutPoint, b: CutPoint, bends: Pt[]) => string | undefined,
     /** Вырезать кольцо ring (метры сцены) из полигона poly объекта key. */
     private readonly hole: (key: string, poly: number, ring: Pt[]) => string | undefined,
+    /** Разрез по высоте: диапазон стен объекта (строка — почему нельзя) и сам разрез на высоте z сцены. */
+    private readonly level: { range: (key: string) => SideRange | string; split: (key: string, z: number) => string | undefined },
     private readonly onState: (hint: string, error?: boolean) => void,
   ) {}
 
@@ -61,7 +74,7 @@ export class SplitTool {
 
   begin() {
     this.state = 'pick';
-    this.onState(tr('Рассечь: кликните по ребру верхней грани — начало разреза, или внутри грани — замкнутое кольцо (двор, башня). Esc — выйти.'));
+    this.onState(tr('Рассечь: кликните по ребру верхней грани — начало разреза, внутри грани — замкнутое кольцо (двор, башня), по боковому ребру — разрез по высоте. Esc — выйти.'));
   }
 
   stop() {
@@ -72,6 +85,16 @@ export class SplitTool {
 
   click(point: [number, number]): boolean {
     if (this.state === 'pick') {
+      const side = this.sideAt(point);
+      if (side) {
+        this.side = { start: side };
+        this.target = side.key;
+        this.z = side.z;
+        this.state = 'cut';
+        this.guide(side.p);
+        this.onState(tr('Разрез по высоте {h} м: кликните по другому боковому ребру этого объекта. Esc — отмена.', { h: side.z.toFixed(2) }));
+        return true;
+      }
       // Плоский контур здания (outline под частями) — тоже: в нём вырезают кольцо
       const hits = [...this.layer.focusRayHits(point), ...this.layer.focusFlatHits(point)].sort((a, b) => a.t - b.t);
       const preferred = this.selected();
@@ -116,6 +139,15 @@ export class SplitTool {
       return true;
     }
     if (this.state === 'cut' && this.loop) return this.loopClick(point);
+    if (this.state === 'cut' && this.side) {
+      const end = this.sideAt(point, this.side.start);
+      if (!end) { this.onState(tr('Разрез по высоте завершается на другом боковом ребре этого объекта.'), true); return true; }
+      const err = this.level.split(this.side.start.key, this.side.start.z);
+      if (err) { this.onState(err, true); return true; }
+      this.cancel();
+      this.begin();
+      return true;
+    }
     if (this.state === 'cut' && this.target && this.start) {
       if (this.candidates.length) {
         const candidate = this.candidateAt(point);
@@ -144,8 +176,19 @@ export class SplitTool {
     return false;
   }
 
+  /** Привязка под курсором до начала разреза: точка бокового ребра (разрез по высоте), иначе — нет своей. */
+  hover(point: [number, number]): SnapHit | undefined {
+    return this.state === 'pick' ? this.sideAt(point)?.snap : undefined;
+  }
+
   move(point: [number, number]) {
     this.lastPoint = point;
+    if (this.state === 'cut' && this.side) {
+      const end = this.side.end = this.sideAt(point, this.side.start);
+      this.snap = end?.snap;
+      this.guide(end?.p ?? this.planePoint(point));
+      return;
+    }
     if (this.state === 'cut' && this.loop) {
       const q = this.pointAt(point);
       this.guide(this.closesLoop(point, q) ? this.loop.pts[0] : q);
@@ -431,6 +474,71 @@ export class SplitTool {
     return true;
   }
 
+  /**
+   * Точка бокового ребра под курсором: вертикаль над вершиной контура в пределах стен, на экране — до EDGE_PX,
+   * не у её концов (там — рёбра верха и низа). Высота — ближайшая к лучу курсора, с привязкой к отметкам.
+   * from — начало разреза по высоте: тогда ищется другое ребро того же объекта, высота — его.
+   */
+  private sideAt(point: [number, number], from?: SidePoint): SidePoint | undefined {
+    const ray = this.layer.focusRay(point);
+    if (!ray) return;
+    const preferred = this.selected();
+    const keys = from ? [from.key] : [...new Set([...(preferred ? [preferred] : []), ...this.members()])];
+    const hits = from ? [] : this.layer.focusRayHits(point);
+    const px = (x: number, y: number, z: number) => this.layer.focusProject(new THREE.Vector3(x, y, z));
+    let best: (SidePoint & { d: number }) | undefined;
+    for (const key of keys) {
+      const range = this.rangeOf(key);
+      const polygons = typeof range === 'string' ? undefined : this.layer.focusPolygons(key);
+      if (typeof range === 'string' || !polygons) continue;
+      polygons.forEach((polygon, poly) => ringsOf(polygon).forEach((ring, ri) => ring.forEach((v, i) => {
+        if (from && from.poly === poly && from.ring === ri && from.vertex === i) return;
+        const a = px(v[0], v[1], range.lo), b = px(v[0], v[1], range.hi);
+        if (!a || !b) return;
+        const sx = b[0] - a[0], sy = b[1] - a[1], l = Math.hypot(sx, sy);
+        if (l < 2 * SIDE_END_PX) return; // вертикаль сверху почти точка — по ней не попасть
+        const s = ((point[0] - a[0]) * sx + (point[1] - a[1]) * sy) / l;
+        if (!from && (s < SIDE_END_PX || s > l - SIDE_END_PX)) return;
+        const d = Math.abs((point[0] - a[0]) * sy - (point[1] - a[1]) * sx) / l - (key === preferred ? 2 : 0);
+        if (d > EDGE_PX || (best && best.d <= d)) return;
+        // Высота: точка вертикали, ближайшая к лучу курсора
+        const o = ray.origin, dir = ray.direction, h2 = dir.x * dir.x + dir.y * dir.y;
+        if (h2 < 1e-9) return;
+        const t = ((v[0] - o.x) * dir.x + (v[1] - o.y) * dir.y) / h2;
+        if (t <= 0) return;
+        // Ребро за ближней поверхностью не видно
+        if (hits.length && hits[0].t < t * Math.sqrt(dir.lengthSq()) - 0.3) return;
+        let z = from ? from.z : Math.max(range.lo, Math.min(range.hi, o.z + t * dir.z));
+        let label = `${z.toFixed(2)} ${tr('м')}`, kind: SnapHit['kind'] = 'edge';
+        if (!from) {
+          let near = SIDE_MARK_PX;
+          for (const m of range.marks) {
+            const q = px(v[0], v[1], m.z);
+            const dm = q ? Math.hypot(q[0] - point[0], q[1] - point[1]) : Infinity;
+            if (dm < near) { near = dm; z = m.z; label = `${m.label} · ${m.z.toFixed(2)} ${tr('м')}`; kind = 'tracked'; }
+          }
+        } else { label = tr('Боковое ребро'); kind = 'vertex'; }
+        const at = new THREE.Vector3(v[0], v[1], z);
+        const screen = this.layer.focusProject(at), ll = this.layer.focusToLngLat(v[0], v[1]);
+        if (!screen || !ll) return;
+        best = { key, poly, ring: ri, vertex: i, p: v, z, d,
+          snap: { kind, key, local: at, lngLat: new LngLat(ll[0], ll[1]), altitude: z, point: screen, label } };
+      })));
+    }
+    if (!best) return;
+    const { d: _d, ...side } = best;
+    void _d;
+    return side;
+  }
+
+  private rangeOf(key: string): SideRange | string {
+    const now = performance.now(), cached = this.ranges.get(key);
+    if (cached && now - cached.at < RANGE_TTL_MS) return cached.range;
+    const range = this.level.range(key);
+    this.ranges.set(key, { at: now, range });
+    return range;
+  }
+
   /** Точка под курсором на плоскости верхней грани. */
   private planePoint(point: [number, number]): Pt | undefined {
     const ray = this.layer.focusRay(point);
@@ -493,6 +601,16 @@ export class SplitTool {
       this.layer.setMoveGuide({ from: first, to: to ? new THREE.Vector3(to[0], to[1], this.z) : undefined, path: rest, axis: this.axis, locked: this.locked, axes: this.axes, dashSize: 0.2, gapSize: 0.12, widthPx: 2.5 });
       return;
     }
+    if (this.side) {
+      const { start, end } = this.side;
+      const at = (p: Pt) => new THREE.Vector3(p[0], p[1], start.z);
+      // Конец на ребре — весь разрез: обход кольца на этой высоте
+      const polygon = end && this.layer.focusPolygons(start.key)?.[start.poly];
+      const ring = polygon && ringsOf(polygon)[start.ring];
+      const path = ring ? ring.map((_, k) => ring[(start.vertex + 1 + k) % ring.length]).slice(0, -1).map(at) : [];
+      this.layer.setMoveGuide({ from: at(start.p), to: to && at(ring ? start.p : to), path, dashSize: 0.2, gapSize: 0.12, widthPx: 2.5 });
+      return;
+    }
     if (!this.start) return;
     const from = new THREE.Vector3(this.start.p[0], this.start.p[1], this.z);
     this.layer.setMoveGuide({ from, to: to ? new THREE.Vector3(to[0], to[1], this.z) : undefined, path: this.bends.map((p) => new THREE.Vector3(p[0], p[1], this.z)), axis: this.axis, locked: this.locked, axes: this.axes, dashSize: 0.2, gapSize: 0.12, widthPx: 2.5 });
@@ -503,6 +621,8 @@ export class SplitTool {
     this.target = undefined;
     this.start = undefined;
     this.loop = undefined;
+    this.side = undefined;
+    this.ranges.clear();
     this.candidates = [];
     this.bends = [];
     this.axes = this.axis = this.locked = undefined;
@@ -521,6 +641,13 @@ const INFER_RADIUS_PX = 8;
 
 /** Как близко к ребру верхней грани на экране клик считается кликом по ребру, px. */
 const EDGE_PX = 8;
+
+/** Начало и конец бокового ребра на экране (px) — уже рёбра верха и низа, не разрез по высоте. */
+const SIDE_END_PX = 6;
+/** Сколько держится диапазон стен объекта в кеше, мс: правка (и отмена) меняют высоты. */
+const RANGE_TTL_MS = 500;
+/** Как близко на экране высота ловится на отметку (этаж, высота соседа), px. */
+const SIDE_MARK_PX = 8;
 
 /** Радиус «попал в первую точку кольца», px. */
 const CLOSE_RADIUS_PX = 12;

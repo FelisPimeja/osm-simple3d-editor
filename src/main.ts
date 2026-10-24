@@ -39,8 +39,8 @@ import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuil
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
-import { pushHeightTags, lockedPushUnits, isFreshFlat, roofHeightTags, levelsNote } from './edit/push-height';
-import { SplitTool, type CutPoint } from './edit/split-tool';
+import { pushHeightTags, lockedPushUnits, isFreshFlat, roofHeightTags, levelsNote, heightSplitTags } from './edit/push-height';
+import { SplitTool, type CutPoint, type SideRange } from './edit/split-tool';
 import { insertInLine, insertInRing, restructureRing, type Insert, type RingWay } from './edit/topology';
 import { MAX_DEVIATION_DEG, orthogonalize } from './edit/orthogonalize';
 import type { Pt } from './render/building-geometry';
@@ -2143,6 +2143,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
       : measureTool.active ? (point ? measureTool.snap : undefined)
       : rotateTool.active ? (point ? rotateTool.snap : undefined)
       : splitTool.state === 'cut' ? (point ? splitTool.snap : undefined)
+      : splitTool.active ? (point ? splitTool.hover(point) ?? overpassLayer.snapAt(point) : undefined)
       : point ? overpassLayer.snapAt(point) : undefined;
     if (currentSnap?.kind === 'center') currentSnap = undefined;
     snapEl.hidden = !currentSnap;
@@ -2575,7 +2576,7 @@ function startShape() {
 
 // Инструмент «Рассечь»: прямой разрез верхней грани делит путь на два (больший сохраняет историю)
 const splitBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="split"]')!;
-const splitTool = new SplitTool(overpassLayer, () => selectedKey, () => focus?.members ?? [], splitReason, splitFeature, cutHole, (hint, error) => {
+const splitTool = new SplitTool(overpassLayer, () => selectedKey, () => focus?.members ?? [], splitReason, splitFeature, cutHole, { range: sideCutRange, split: splitAtHeight }, (hint, error) => {
   splitBtn.classList.toggle('active', splitTool.active);
   syncCursor();
   toolHint(hint, error);
@@ -3387,6 +3388,111 @@ function splitFeature(key: string, a: CutPoint, b: CutPoint, bends: [number, num
   const result = splitFeatureIn(key, a, b, bends, pending);
   if (pending && !session.get(pending.key)) editGroups.delete(pending.key);
   return result;
+}
+
+/** Горизонтальный разрез с бокового ребра: высоты стен объекта в сцене и отметки привязки; строка — почему нельзя. */
+function sideCutRange(key: string): SideRange | string {
+  if (isSolo(focus) && key !== focus!.members[0] && focus!.roles[focus!.members.indexOf(key)] !== 'part') return tr('Копию режьте отдельно: выйдите и откройте её двойным кликом.');
+  if (!focus?.members.includes(key) || hiddenInFocus(key)) return tr('Резать можно только части этого здания.');
+  const f = entity(key) as Feature3D | undefined;
+  const box = overpassLayer.focusItemBox(key);
+  if (!f?.polygons || !box) return tr('Объект не найден.');
+  if (overpassLayer.focusFlat(key) || (isOutlineIn(focus, key) && !isSolo(focus)) || (isSolo(focus) && key === focus.members[0] && focus.roles.includes('part')))
+    return tr('Контур здания (outline) по высоте не делится — режьте его части.');
+  if (f.type === 'relation' && (f.tags.type !== 'multipolygon' || !relWays(f))) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+  if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+  const h = computeHeights(f.tags);
+  const base = box.min.z - h.min;
+  const lo = box.min.z, hi = base + h.wallTop;
+  if (hi - lo < 0.1) return tr('У объекта нет стен — делить по высоте нечего.');
+  const marks: SideRange['marks'] = [];
+  const levels = Number(f.tags['building:levels']), minLevel = Number(f.tags['building:min_level'] ?? 0);
+  if (Number.isFinite(levels) && Number.isFinite(minLevel) && levels - minLevel > 1 && levels - minLevel <= 200) {
+    const step = (h.wallTop - h.min) / (levels - minLevel);
+    for (let k = 1; k < levels - minLevel; k++) marks.push({ z: lo + k * step, label: tr('Этаж {n}', { n: minLevel + k + 1 }) });
+  }
+  // Вровень с соседними частями: их низ, верх стен и верх
+  for (const other of focus.members) {
+    const ob = other !== key && !hiddenInFocus(other) ? overpassLayer.focusItemBox(other) : undefined;
+    const of = ob && (entity(other) as Feature3D | undefined);
+    if (!ob || !of?.tags) continue;
+    const oh = computeHeights(of.tags);
+    for (const z of [ob.min.z, ob.min.z - oh.min + oh.wallTop, ob.max.z]) marks.push({ z, label: tr('Вровень с {key}', { key: other }) });
+  }
+  return { lo, hi, marks: marks.filter((m) => m.z > lo + 0.05 && m.z < hi - 0.05) };
+}
+
+/**
+ * Рассечь объём по высоте z (метры сцены): нижняя часть — исходный объект (без крыши), верхняя — новая часть
+ * на тех же узлах (путь или мультиполигон с теми же путями-членами), с крышей. Отдельное здание — как у разреза:
+ * контур остаётся, обе части — в новом отношении здания. Одним шагом истории.
+ */
+function splitAtHeight(key: string, z: number): string | undefined {
+  const pending = isSolo(focus) && focus!.roles.includes('part') ? implicitRelation(focus!.members[0], implicitParts(focus!)) : undefined;
+  const result = splitAtHeightIn(key, z, pending);
+  if (pending && !session.get(pending.key)) editGroups.delete(pending.key);
+  return result;
+}
+
+function splitAtHeightIn(key: string, z: number, pending: EditGroup | undefined): string | undefined {
+  const f = entity(key) as Feature3D | undefined;
+  const solo = isSolo(focus) && !pending;
+  const g = pending ?? (focus && !solo ? (entity(focus.key) as EditGroup | undefined) : undefined);
+  if (!f || (!g && !solo)) return tr('Объект не найден.');
+  const range = sideCutRange(key);
+  if (typeof range === 'string') return range;
+  if (z <= range.lo + 0.05 || z >= range.hi - 0.05) return tr('Разрез по высоте — между низом и верхом стен.');
+  const h = computeHeights(f.tags);
+  const at = h.min + (z - range.lo);
+  const source: Record<string, string> = solo ? { 'building:part': 'yes' } : { ...f.tags };
+  if (solo) for (const [k, v] of Object.entries(f.tags)) if (PART_TAGS.test(k)) source[k] = v;
+  const { lower, upper } = heightSplitTags(source, at, computeHeights(source));
+  // Мультиполигон: та же разметка путей-членов у второго отношения
+  const members = f.type === 'relation' ? (session.get(f.key)?.relMembers ?? f.ways?.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })))?.filter((m) => m.type === 'way') : undefined;
+  if (f.type === 'relation' && !members?.length) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+  const lineNodes = new Map((f.ways ?? []).map((w) => [w.id, w.nodes] as const));
+  for (const line of session.lineEntities()) lineNodes.set(Number(line.key.split('/')[1]), line.line!.ids);
+  if (members?.some((m) => !lineNodes.has(m.ref))) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+  const kind = solo ? 'part' : f.kind;
+  const copyOf = (tags: Record<string, string>): Feature3D => {
+    const id = nextNewId--;
+    const polygons = structuredClone(f.polygons);
+    if (f.type === 'way') return { key: `way/${id}`, type: 'way', id, version: 0, kind, tags, polygons, hasParts: false };
+    const relMembers = members!.map((m) => ({ ...m }));
+    const created: Feature3D & { relMembers: OsmMember[] } = { key: `relation/${id}`, type: 'relation', id, version: 0, kind,
+      tags: { ...tags, type: 'multipolygon' }, polygons, hasParts: false,
+      ways: relMembers.map((m) => ({ id: m.ref, role: m.role, nodes: lineNodes.get(m.ref)! })), relMembers };
+    return created;
+  };
+  const fmt = (n: number) => `${Math.round(n * 100) / 100} ${tr('м')}`;
+
+  if (solo) {
+    const parts = [copyOf(lower), copyOf(upper)];
+    const relId = nextNewId--;
+    const [type, ref] = f.key.split('/');
+    const relMembers: OsmMember[] = [
+      { type: type as 'way' | 'relation', ref: Number(ref), role: 'outline' },
+      ...parts.map((p) => ({ type: p.type as 'way' | 'relation', ref: p.id, role: 'part' })),
+    ];
+    const group: EditGroup = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, tags: { type: 'building' },
+      members: relMembers.map((m) => `${m.type}/${m.ref}`), roles: relMembers.map((m) => m.role), relMembers };
+    editGroups.set(group.key, group);
+    session.editMany([...parts.map((p) => ({ key: p.key, create: p })), { key: group.key, create: group }]);
+    enterFocus(group);
+    select(parts[1].key);
+    setStatus(tr('Рассечено на высоте {h}: здание {key}, контур {outline} и части {parts}.', { h: fmt(at), key: group.key, outline: f.key, parts: parts.map((p) => p.key).join(', ') }));
+    return;
+  }
+
+  const created = copyOf(f.kind === 'part' ? upper : Object.fromEntries(Object.entries(upper).filter(([k]) => !IDENTITY_TAGS.test(k))));
+  session.editMany([
+    { key, tags: lower },
+    { key: created.key, create: created },
+    groupMembersEdit(g!, [...g!.relMembers, { type: created.type as 'way' | 'relation', ref: created.id, role: 'part' }]),
+  ]);
+  select(created.key);
+  setStatus(tr('Рассечено на высоте {h}: {key} снизу и новая часть {part} сверху.', { h: fmt(at), key, part: created.key }));
+  return;
 }
 
 /** Состав отношения здания в шаге разреза: у ещё не созданного (здание без отношения) — создание с этим составом. */

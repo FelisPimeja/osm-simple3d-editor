@@ -72,3 +72,30 @@ export function levelsNote(levelsTag: string, metresTag: string): string {
   return tr('Высота задана этажами ({levels}) — меняется только целыми этажами. Чтобы менять в метрах, задайте высоту в метрах ({metres}).',
     { levels: levelsTag, metres: metresTag });
 }
+
+/**
+ * Горизонтальный разрез объёма на высоте at (м от земли, между низом и верхом стен): теги нижней и верхней части.
+ * Крыша уходит наверх, низ — плоский. Разрез по границе этажа делит этажи (building:levels / building:min_level);
+ * высота в метрах пишется, если объект размечен метрами или разрез не по этажу.
+ */
+export function heightSplitTags(tags: Record<string, string>, at: number, h: Heights = computeHeights(tags)): { lower: Record<string, string>; upper: Record<string, string> } {
+  const fmt = (n: number) => String(Math.round(n * 100) / 100);
+  const lower = { ...tags }, upper = { ...tags };
+  for (const k of Object.keys(lower)) if (k.startsWith('roof:')) delete lower[k];
+  const levels = Number(tags['building:levels']), minLevel = Number(tags['building:min_level'] ?? 0);
+  let onLevel = false;
+  if (Number.isFinite(levels) && Number.isFinite(minLevel) && levels > minLevel && h.wallTop > h.min) {
+    const step = (h.wallTop - h.min) / (levels - minLevel), n = (at - h.min) / step;
+    onLevel = Math.abs(n - Math.round(n)) * step < 0.05;
+    const k = fmt(minLevel + Math.max(0, Math.min(levels - minLevel, Math.round(n))));
+    lower['building:levels'] = k;
+    upper['building:min_level'] = k;
+  }
+  if (tags.height !== undefined || tags.min_height !== undefined || !onLevel) {
+    lower.height = fmt(at);
+    upper.min_height = fmt(at);
+  }
+  // Высота по умолчанию у верхней части иначе сместилась бы (считается от низа)
+  if (h.source === 'default') upper.height = fmt(h.top);
+  return { lower, upper };
+}

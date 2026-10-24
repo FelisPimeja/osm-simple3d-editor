@@ -54,7 +54,8 @@ import { openColourPopover } from './edit/colour-popover';
 import { loadRecentColours, recordColour } from './edit/recent-colours';
 import { CIRCLE_LABELS, CIRCLE_MODES, CIRCLE_TITLES, DrawTool, RECT_LABELS, RECT_MODES, RECT_TITLES, type CircleMode, type DrawShape, type RectMode } from './edit/draw-tool';
 import { suggestComment, isIndoorChange } from './edit/changeset-comment';
-import { EditSession, type ObjectEdit, type Tagged, type TagChange } from './edit/session';
+import { EditSession, type ObjectEdit, type SessionSnapshot, type Tagged, type TagChange } from './edit/session';
+import { Autosave, type SavedEdits } from './edit/autosave';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmStatus, josmUndo, minElementId, refreshJosmStatus, sendJosmSelection, watchJosmSelection, type JosmChange, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
@@ -9182,6 +9183,7 @@ function groupDateForm(g: BuildingGroup): string {
 /** После правки тегов: пересобрать меши, обновить панель и список изменений. */
 function onSessionChange(keys: string[]) {
   if (josmApi() && !uploading) scheduleJosmSync();
+  scheduleAutosave();
   mapIssuesDirty = true;
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
@@ -9769,6 +9771,7 @@ session.beforeStep = autoRelation;
   indoorCreated.clear();
   editGroups = new Map();
   editMemberGroup = new Map();
+  scheduleAutosave();
   clearSelection();
   if (map.getLayer(overpassLayer.id)) overpass.setSource(tileSource()); // до загрузки стиля — в обработчике load
   applyDate();
@@ -10291,3 +10294,51 @@ if (josmMode) watchJosmSelection((keys) => {
   map.jumpTo({ center: [v.lon, v.lat], zoom: v.zoom });
   window.focus();
 });
+
+/** Автосохранение правок (IndexedDB): что нужно, чтобы после перезагрузки продолжить с того же места. */
+interface AutosaveData {
+  session: SessionSnapshot; nextNewId: number;
+  editGroups: [string, EditGroup][]; indoorEdited: string[]; indoorCreated: [string, IndoorFeature][];
+}
+/** В JOSM правки живут в его слое — сохранять нечего. */
+const autosave = josmMode ? undefined : new Autosave<AutosaveData>(() => server().id);
+function scheduleAutosave() {
+  autosave?.schedule(() => {
+    const count = session.changes().length;
+    if (!count && !session.hasDataHistory()) return undefined;
+    return { count, data: { session: session.snapshot(), nextNewId, editGroups: [...editGroups],
+      indoorEdited: [...indoorEdited], indoorCreated: [...indoorCreated] } };
+  });
+}
+
+/** Вернуть сохранённые правки в пустую сессию. */
+function restoreEdits(rec: SavedEdits<AutosaveData>) {
+  const d = rec.data;
+  const keys = session.restore(d.session);
+  nextNewId = Math.min(nextNewId, d.nextNewId);
+  for (const [k, g] of d.editGroups) editGroups.set(k, g);
+  for (const k of d.indoorEdited) indoorEdited.add(k);
+  for (const [k, f] of d.indoorCreated) indoorCreated.set(k, f);
+  rebuildGroupIndex();
+  onSessionChange(keys);
+  renderChanges();
+  setStatus(trn(rec.count, 'Восстановлены несохранённые правки: {n} объект. Отменить их — Ctrl+Z, как обычно.|Восстановлены несохранённые правки: {n} объекта. Отменить их — Ctrl+Z, как обычно.|Восстановлены несохранённые правки: {n} объектов. Отменить их — Ctrl+Z, как обычно.'));
+}
+
+if (autosave) void (async () => {
+  try {
+    // Своя запись — вкладку перезагрузили: молча продолжаем. Иначе — правки закрытой вкладки: спросить
+    const own = await autosave.own();
+    if (session.changes().length || session.hasDataHistory()) return; // уже начали править — не мешаем
+    if (own) return restoreEdits(own);
+    const [orphan] = await autosave.orphans();
+    if (!orphan || session.changes().length || session.hasDataHistory()) return;
+    const when = new Date(orphan.savedAt).toLocaleString();
+    if (confirm(trn(orphan.count, 'Остались несохранённые правки из закрытой вкладки ({n} объект, {when}). Восстановить?|Остались несохранённые правки из закрытой вкладки ({n} объекта, {when}). Восстановить?|Остались несохранённые правки из закрытой вкладки ({n} объектов, {when}). Восстановить?', { when }))) {
+      await autosave.adopt(orphan);
+      restoreEdits(orphan);
+    } else await autosave.discard(orphan.id);
+  } catch (err) {
+    console.warn('Не удалось восстановить правки:', err);
+  }
+})();

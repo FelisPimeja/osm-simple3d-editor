@@ -47,7 +47,7 @@ export interface TagChange {
 }
 
 /** Правка одного объекта в шаге истории. before/after = null — объекта нет (создание и его отмена). */
-interface Entry {
+export interface Entry {
   key: string;
   before: Tags | null; after: Tags | null;
   mBefore?: OsmMember[]; mAfter?: OsmMember[];
@@ -76,6 +76,17 @@ export interface ObjectEdit {
   delete?: boolean;
 }
 
+/** Состояние сессии для автосохранения (IndexedDB): простые данные, без действий интерфейса в истории. */
+export interface SessionSnapshot {
+  features: Tagged[];
+  original: [string, Tags][];
+  originalMembers: [string, OsmMember[]][];
+  originalGeometry: [string, Polygon[]][];
+  originalLine: [string, Line][];
+  created: string[]; alive: string[]; deleted: string[];
+  undo: Entry[][]; redo: Entry[][];
+}
+
 /**
  * Правки поверх данных: исходные теги, состав и геометрия, текущие и история шагов для undo/redo.
  * Теги меняются на месте — рендер и панель всегда видят текущее состояние.
@@ -96,6 +107,33 @@ export class EditSession {
 
   constructor(features: Tagged[], private readonly onChange: (keys: string[]) => void) {
     for (const f of features) this.track(f);
+  }
+
+  /** Снимок для автосохранения. Действия интерфейса из истории выпадают — после перезагрузки их не к чему применить. */
+  snapshot(): SessionSnapshot {
+    const data = (steps: Step[]) => steps.filter((st): st is Entry[] => !isView(st));
+    return {
+      features: [...this.features.values()],
+      original: [...this.original], originalMembers: [...this.originalMembers],
+      originalGeometry: [...this.originalGeometry], originalLine: [...this.originalLine],
+      created: [...this.created], alive: [...this.alive], deleted: [...this.deleted],
+      undo: data(this.undoStack), redo: data(this.redoStack),
+    };
+  }
+
+  /** Вернуть сохранённое состояние (сессия должна быть пустой). Ключи восстановленных объектов. */
+  restore(s: SessionSnapshot): string[] {
+    for (const f of s.features) this.features.set(f.key, f);
+    for (const [k, v] of s.original) this.original.set(k, v);
+    for (const [k, v] of s.originalMembers) this.originalMembers.set(k, v);
+    for (const [k, v] of s.originalGeometry) this.originalGeometry.set(k, v);
+    for (const [k, v] of s.originalLine) this.originalLine.set(k, v);
+    for (const k of s.created) this.created.add(k);
+    for (const k of s.alive) this.alive.add(k);
+    for (const k of s.deleted) this.deleted.add(k);
+    this.undoStack = s.undo;
+    this.redoStack = s.redo;
+    return [...this.features.keys()];
   }
 
   /** Начать отслеживать объект (если ещё не отслеживается): его текущее состояние становится исходным. */

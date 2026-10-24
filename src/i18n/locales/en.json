@@ -1156,5 +1156,7 @@
   "Копировать теги": "Copy tags",
   "Скопирован {n} тег {key}.|Скопировано {n} тега {key}.|Скопировано {n} тегов {key}.": "Copied {n} tag from {key}.|Copied {n} tags from {key}.",
   "Теги уже такие же.": "The tags are already the same.",
-  "Теги {from} вставлены в {n} объект. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объекта. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объектов. Отменить — Ctrl+Z.": "Tags from {from} pasted into {n} object. Undo — Ctrl+Z.|Tags from {from} pasted into {n} objects. Undo — Ctrl+Z."
+  "Теги {from} вставлены в {n} объект. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объекта. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объектов. Отменить — Ctrl+Z.": "Tags from {from} pasted into {n} object. Undo — Ctrl+Z.|Tags from {from} pasted into {n} objects. Undo — Ctrl+Z.",
+  "Восстановлены несохранённые правки: {n} объект. Отменить их — Ctrl+Z, как обычно.|Восстановлены несохранённые правки: {n} объекта. Отменить их — Ctrl+Z, как обычно.|Восстановлены несохранённые правки: {n} объектов. Отменить их — Ctrl+Z, как обычно.": "Unsaved edits restored: {n} object. Undo them with Ctrl+Z as usual.|Unsaved edits restored: {n} objects. Undo them with Ctrl+Z as usual.",
+  "Остались несохранённые правки из закрытой вкладки ({n} объект, {when}). Восстановить?|Остались несохранённые правки из закрытой вкладки ({n} объекта, {when}). Восстановить?|Остались несохранённые правки из закрытой вкладки ({n} объектов, {when}). Восстановить?": "A closed tab left unsaved edits ({n} object, {when}). Restore them?|A closed tab left unsaved edits ({n} objects, {when}). Restore them?"
 }

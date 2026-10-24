@@ -1178,5 +1178,7 @@
   "Копировать правки (JSON — для разбора ошибок)": "Copy edits (JSON, for debugging)",
   "Вставить правки (заменят текущие)": "Paste edits (replaces current ones)",
   "Вставить правки": "Paste edits",
-  "Браузер не дал прочитать буфер обмена — вставьте скопированные правки сюда (Cmd+V / Ctrl+V).": "The browser did not allow reading the clipboard. Paste the copied edits here (Cmd+V / Ctrl+V)."
+  "Браузер не дал прочитать буфер обмена — вставьте скопированные правки сюда (Cmd+V / Ctrl+V).": "The browser did not allow reading the clipboard. Paste the copied edits here (Cmd+V / Ctrl+V).",
+  "Части с одним контуром объединяются, только если стоят одна на другой: {a} — до {top} м, {b} — от {min} м.": "Parts with the same outline merge only when stacked one on top of the other: {a} goes up to {top} m, {b} starts at {min} m.",
+  "Объединено частей одна над другой: {n} → {key}, высоты {from}–{to} м. Отменить — Ctrl+Z.": "Merged stacked parts: {n} → {key}, heights {from}–{to} m. Undo with Ctrl+Z."
 }

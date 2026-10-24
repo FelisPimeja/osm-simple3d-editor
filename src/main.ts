@@ -2343,6 +2343,8 @@ function mergeIn(pending: EditGroup | undefined): string | undefined {
   if (parts.some((f) => f.type === 'relation' && (f.tags.type !== 'multipolygon' || !relWays(f)))) {
     return tr('Для объединения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
   }
+  const stacked = mergeStacked(parts, g);
+  if (stacked !== false) return stacked;
   // Теги объёма должны совпадать: иначе неясно, чьи высоты и крышу оставить. Цвет и материал, заданные
   // только у части частей, не мешают — объединённая часть возьмёт их оттуда (различаться могут лишь заданные)
   const volume = (f: Feature3D) => Object.fromEntries(Object.entries(f.tags).filter(([k]) => PART_TAGS.test(k)));
@@ -2464,6 +2466,70 @@ function mergeIn(pending: EditGroup | undefined): string | undefined {
   session.editMany(edits);
   select(result);
   setStatus(tr('Объединено частей: {n} → {key}. Отменить — Ctrl+Z.', { n: parts.length, key: result }));
+  return;
+}
+
+/** Теги высоты: при объединении частей одна над другой низ берётся у нижней, верх и крыша — у верхней. */
+const STACK_TAGS = /^(height|min_height|building:levels|building:min_level|roof:)/;
+const STACK_TOP_TAGS = /^(height|building:levels|roof:)/;
+/** Расхождение контуров частей одна над другой, м² (и доля площади): больше — контуры разные. */
+const STACK_PLAN_EPS_M2 = 0.05;
+const STACK_PLAN_EPS = 0.002;
+/** Зазор или нахлёст по высоте между частями одна над другой, м. */
+const STACK_GAP_M = 0.05;
+
+/**
+ * Объединить части с одним контуром, стоящие одна на другой: остаётся одна (существующая, иначе нижняя) с низом
+ * нижней и верхом и крышей верхней, остальные удаляются. false — контуры разные (обычное объединение в плане).
+ */
+function mergeStacked(parts: Feature3D[], g: EditGroup | undefined): string | undefined | false {
+  const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
+  const shape = (f: Feature3D) => f.polygons.map((p) => [p.outer, ...p.inners].map((r) => {
+    const q = r.map(local);
+    return [...q, q[0]] as [number, number][];
+  }));
+  const area = (mp: ReturnType<typeof polygonClipping.union>) => mp.reduce((s, poly) => s + poly.reduce((t, r, i) => t + (i ? -1 : 1) * ringArea(r.slice(0, -1)), 0), 0);
+  const base = shape(parts[0]);
+  const baseArea = area(base);
+  try {
+    for (const f of parts.slice(1)) {
+      const diff = area(polygonClipping.xor(base, shape(f)));
+      if (diff > Math.max(STACK_PLAN_EPS_M2, baseArea * STACK_PLAN_EPS)) return false;
+    }
+  } catch { return false; }
+  const order = parts.map((f) => ({ f, h: computeHeights(f.tags) })).sort((a, b) => a.h.min - b.h.min);
+  for (let i = 1; i < order.length; i++) {
+    if (Math.abs(order[i].h.min - order[i - 1].h.top) > STACK_GAP_M) {
+      return tr('Части с одним контуром объединяются, только если стоят одна на другой: {a} — до {top} м, {b} — от {min} м.',
+        { a: order[i - 1].f.key, top: Math.round(order[i - 1].h.top * 100) / 100, b: order[i].f.key, min: Math.round(order[i].h.min * 100) / 100 });
+    }
+  }
+  // Остальные теги объёма должны совпадать; цвет и материал, заданные только у части частей, — берутся оттуда
+  const vols = parts.map((f) => Object.fromEntries(Object.entries(f.tags).filter(([k]) => PART_TAGS.test(k) && !STACK_TAGS.test(k))));
+  const differ = [...new Set(vols.flatMap(Object.keys))].filter((k) => (LOOK_TAGS.test(k)
+    ? new Set(vols.map((v) => v[k]).filter((x) => x !== undefined)).size > 1
+    : vols.some((v) => v[k] !== vols[0][k]))).sort();
+  if (differ.length) {
+    return tr('Объединять можно части с одинаковыми тегами объёма, различаются: {tags}.',
+      { tags: differ.map((k) => `${k} (${vols.map((v) => v[k] ?? '—').join(' / ')})`).join(', ') });
+  }
+  const lower = order[0].f, upper = order[order.length - 1].f;
+  const keeper = order.find((o) => o.f.id > 0)?.f ?? lower;
+  const tags: Record<string, string> = Object.fromEntries(Object.entries(keeper.tags).filter(([k]) => !STACK_TAGS.test(k)));
+  for (const v of vols) for (const [k, x] of Object.entries(v)) if (LOOK_TAGS.test(k) && tags[k] === undefined) tags[k] = x;
+  for (const [k, x] of Object.entries(lower.tags)) if (STACK_TAGS.test(k) && !STACK_TOP_TAGS.test(k)) tags[k] = x;
+  for (const [k, x] of Object.entries(upper.tags)) if (STACK_TOP_TAGS.test(k)) tags[k] = x;
+  // Верх задан этажами, а низ — метрами (или наоборот): верх в метрах тоже, иначе этажи считались бы от земли не так
+  if (tags.height === undefined && tags['building:levels'] === undefined) tags.height = String(Math.round(order[order.length - 1].h.top * 100) / 100);
+  const others = parts.filter((f) => f !== keeper);
+  const edits: ObjectEdit[] = [{ key: keeper.key, tags }, ...others.map((f) => ({ key: f.key, delete: true }))];
+  if (g) edits.push(groupMembersEdit(g, g.relMembers.filter((m) => !others.some((f) => f.key === `${m.type}/${m.ref}`))));
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  session.editMany(edits);
+  select(keeper.key);
+  const h = computeHeights(tags);
+  setStatus(tr('Объединено частей одна над другой: {n} → {key}, высоты {from}–{to} м. Отменить — Ctrl+Z.',
+    { n: parts.length, key: keeper.key, from: Math.round(h.min * 100) / 100, to: Math.round(h.top * 100) / 100 }));
   return;
 }
 

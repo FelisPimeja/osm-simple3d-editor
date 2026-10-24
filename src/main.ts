@@ -4201,8 +4201,8 @@ function splitSolo(f: Feature3D, whole: Polygon, a: Polygon, b: Polygon, fresh: 
   return;
 }
 
-/** Минимальная толщина объекта при вытягивании, м. */
-const MIN_THICKNESS = 0.5;
+/** Минимальная толщина объекта при вытягивании, м: вдавливается хоть в ноль (стены нулевой высоты). */
+const MIN_THICKNESS = 0;
 
 /** Узлы стены (два узла стороны контура); undefined — в кеше нет id узлов. */
 function sideNodes(f: Feature3D, edge: NonNullable<PushTarget['edge']>): [number, number] | undefined {
@@ -5067,7 +5067,7 @@ function clampPush(t: PushTarget, dz: number): number {
   if (!f) return 0;
   if (t.face === 'side') return dz;
   const h = drawnHeights(f);
-  // Верх не ниже низа + крыша + запас; низ — не ниже земли и не выше верха стен минус запас
+  // Верх не ниже низа + крыша; низ — не ниже земли и не выше верха стен
   let lower = t.face === 'top' ? h.min + h.roofHeight + MIN_THICKNESS - h.top : -h.min;
   let upper = t.face === 'top' ? Infinity : h.wallTop - MIN_THICKNESS - h.min;
   if (pushTool.units === 'levels') {

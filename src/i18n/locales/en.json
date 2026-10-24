@@ -784,7 +784,6 @@
   "JOSM запретил экспорт: включите «Export data from JOSM» в Настройках → Remote Control.": "JOSM refused the export: enable “Export data from JOSM” in Preferences → Remote Control.",
   "JOSM ответил {status} на {path}": "JOSM responded {status} to {path}",
   "JOSM отдал не .osm (ошибка разбора XML)": "JOSM did not return .osm data (XML parse error)",
-  "Настройки из профиля применятся полностью при следующей загрузке страницы.": "Settings from your profile will fully apply the next time the page loads.",
   "Хранить графические настройки": "Keep graphics settings",
   "Галки «Убрать цвета» и «Настройки графики» сохраняются вместе с остальными настройками и применяются на других устройствах": "The “Hide colors” and “Graphics settings” checkboxes are saved along with your other settings and applied on other devices",
   "Деревья": "Trees",

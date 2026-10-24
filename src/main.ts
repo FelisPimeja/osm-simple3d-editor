@@ -9907,18 +9907,14 @@ langSelect.addEventListener('change', async () => {
   location.reload();
 });
 
-/** Сверить настройки с профилем; пришло то, что требует перезагрузки (язык, сглаживание), — перезагрузить, если не жалко правок. */
+/** Сверить настройки с профилем; пришло то, что требует перезагрузки (язык, сглаживание), — перезагрузить. */
 async function syncSettings() {
   if (!osmUser) return;
   try {
     const reload = await syncPrefs();
     if (settingsDialog.open) keepGfxToggle.checked = keepGraphics();
-    if (!reload) return;
-    if (session.changes().length) {
-      setStatus(tr('Настройки из профиля применятся полностью при следующей загрузке страницы.'));
-      return;
-    }
-    location.reload();
+    // Правки переживут перезагрузку: их сохраняет и восстанавливает автосохранение
+    if (reload) location.reload();
   } catch (err) {
     console.warn('OSM preferences:', err);
   }

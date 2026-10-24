@@ -17,6 +17,7 @@ import { clipAbove, prepareSolid, trimCoplanarWalls, trimTriangles, type Prepare
 import { areaLedgeTriangles } from './area-ledge';
 import { floatingParts } from '../osm/floating';
 import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
+import { dropPartSeams } from './part-seams';
 import { edgePass } from './edge-pass';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { timed } from '../perf';
@@ -180,6 +181,8 @@ const AO_MIN = 0.55;
 const EDGE_ANGLE = 25;
 /** Сдвиг вертикали в конце стены внутрь неё, м: за примыкающей стеной вертикаль не просвечивает. */
 const EDGE_INSET = 0.03;
+/** Эксперимент: стыки частей скрыты; выключить — localStorage['osm3d.partSeams'] = '0' и перезагрузка. */
+const PART_SEAMS = (() => { try { return localStorage.getItem('osm3d.partSeams') !== '0'; } catch { return true; } })();
 /** Пунктир подземной части здания: виден только не закрытый зданием участок (земля карты глубину не пишет). */
 const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, dashSize: 0.8, gapSize: 0.5, depthWrite: false, transparent: true, opacity: 0.85 });
 /** Выбранный контур подземной части — целиком, сквозь здание. */
@@ -4290,7 +4293,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Пересборка тайла: рёбра выделенного — по новым треугольникам (в режиме здания ими ведают его правки)
     if (g !== this.groups.get(FOCUS_GROUP)) this.updateSelEdges(g);
     if (!this.graphics.edges || !g.mesh) return;
-    g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it)), EDGE_MATERIAL);
+    g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it)), EDGE_MATERIAL, true);
     if (this.level && g === this.groups.get(FOCUS_GROUP)) {
       const positions = g.edges.geometry.getAttribute('position').array as Float32Array;
       g.edges.geometry.setAttribute('position', new THREE.BufferAttribute(trimIndoorBuildingEdges(positions, this.indoorEdgeOccluders), 3));
@@ -4522,11 +4525,12 @@ export class BuildingsLayer implements CustomLayerInterface {
 }
 
 /** Рёбра нескольких объектов одним LineSegments. */
-function edgeLines(items: Item[], material: THREE.LineBasicMaterial): THREE.LineSegments {
+function edgeLines(items: Item[], material: THREE.LineBasicMaterial, seams = false): THREE.LineSegments {
   for (const it of items) it.edges ??= itemEdges(it);
-  const lines = new Float32Array(items.reduce((n, it) => n + it.edges!.length, 0));
+  const parts = seams && PART_SEAMS ? timed('рёбра: стыки частей', () => dropPartSeams(items as (Item & { edges: Float32Array })[], EDGE_ANGLE, PLANAR_ROOF_EDGE_ANGLE), () => `${items.length} объектов`) : items.map((it) => it.edges!);
+  const lines = new Float32Array(parts.reduce((n, e) => n + e.length, 0));
   let o = 0;
-  for (const it of items) { lines.set(it.edges!, o); o += it.edges!.length; }
+  for (const e of parts) { lines.set(e, o); o += e.length; }
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(lines, 3));
   const out = new THREE.LineSegments(geom, material);
@@ -4762,6 +4766,7 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
   return new Float32Array(keep);
 }
 const FLAT_COS = Math.cos(THREE.MathUtils.degToRad(1));
+
 
 /**
  * Сетка треугольников по xy для поиска тех, на сторонах которых может лежать середина отрезка: у больших

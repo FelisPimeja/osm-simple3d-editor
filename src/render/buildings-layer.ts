@@ -341,7 +341,7 @@ class MeshGroup {
   /** Обводки контуров под частями (в просмотре вместо заливки). */
   strokes?: THREE.LineSegments;
   /** Выделенный плоский след в режиме здания: толстая обводка и полупрозрачная заливка. */
-  strokeSelected: (LineSegments2 | THREE.Mesh)[] = [];
+  strokeSelected: (LineSegments2 | THREE.Mesh | THREE.LineSegments)[] = [];
   /** Из чего посчитана оболочка (исходные треугольники, скрытые и плоские объекты, стекло) — не пересчитывать зря. */
   shellOf?: { bases: Float32Array[]; hidden: string };
   /** Оболочка для планов этажей (buildShell) и по каким данным посчитана — между переключениями этажей не пересчитывается. */
@@ -4254,8 +4254,15 @@ export class BuildingsLayer implements CustomLayerInterface {
       const mesh = new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ color: STROKE_SELECTED, transparent: true, opacity: SELECTED_FILL_OPACITY,
         side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
       mesh.frustumCulled = false;
-      g.strokeSelected = [line, mesh];
-      g.scene.add(line, mesh);
+      // Закрытая объёмами часть — пунктиром сквозь них, как скрытые рёбра выделенной части
+      const hg = new THREE.BufferGeometry();
+      hg.setAttribute('position', new THREE.Float32BufferAttribute(fat, 3));
+      const hidden = new THREE.LineSegments(hg, HIDDEN_EDGE_MATERIAL.clone());
+      hidden.computeLineDistances();
+      hidden.frustumCulled = false;
+      hidden.renderOrder = 999; // после зданий: глубина уже записана
+      g.strokeSelected = [line, mesh, hidden];
+      g.scene.add(line, mesh, hidden);
     }
     if (!lines.length) return;
     const geom = new THREE.BufferGeometry();

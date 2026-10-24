@@ -113,7 +113,7 @@ const userHidden = new Set<string>();
 /** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
 interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -9902,14 +9902,8 @@ settingsSyncEl.addEventListener('click', async (e) => {
 
 // Язык применяется перезагрузкой страницы
 langSelect.addEventListener('change', async () => {
-  const n = session.changes().length;
-  if (n && !confirm(trn(n, 'Есть несохранённые изменения ({n} объект) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объекта) — при смене языка страница перезагрузится и они пропадут. Продолжить?|Есть несохранённые изменения ({n} объектов) — при смене языка страница перезагрузится и они пропадут. Продолжить?'))) {
-    langSelect.value = lang;
-    return;
-  }
   langSelect.disabled = true;
   await saveLang(langSelect.value as Lang);
-  reloadConfirmed = true;
   location.reload();
 });
 
@@ -9924,7 +9918,6 @@ async function syncSettings() {
       setStatus(tr('Настройки из профиля применятся полностью при следующей загрузке страницы.'));
       return;
     }
-    reloadConfirmed = true;
     location.reload();
   } catch (err) {
     console.warn('OSM preferences:', err);
@@ -10256,12 +10249,6 @@ function selectAfterHistory(key: string | undefined) {
   if (focus && (!key || !focus.members.includes(key))) { select(undefined); return; }
   select(key);
 }
-
-/** Перезагрузка уже подтверждена своим диалогом (смена языка) — браузерный не нужен. */
-let reloadConfirmed = false;
-window.addEventListener('beforeunload', (e) => {
-  if (session.changes().length && !reloadConfirmed) e.preventDefault();
-});
 
 /** Предупреждение об этажности части выше контура (для части) или частей выше него (для контура). */
 function levelsAboveOutline(f: Feature3D): string | false {

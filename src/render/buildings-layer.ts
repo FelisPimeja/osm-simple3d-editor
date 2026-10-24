@@ -161,6 +161,8 @@ export interface GraphicsOptions {
   groundAO: boolean;
   /** Контуры рёбер. */
   edges: boolean;
+  /** Не рисовать стыки соседних частей, чьи грани у стыка лежат в одной плоскости (заметно дороже сборка рёбер). */
+  partSeams?: boolean;
   /** Не выделять стекло: стеклянные стены и крыши — как обычные. */
   noGlass?: boolean;
   /** Здания без высоты и этажей поднимать на высоту по умолчанию (иначе — плоский след). */
@@ -181,8 +183,6 @@ const AO_MIN = 0.55;
 const EDGE_ANGLE = 25;
 /** Сдвиг вертикали в конце стены внутрь неё, м: за примыкающей стеной вертикаль не просвечивает. */
 const EDGE_INSET = 0.03;
-/** Эксперимент: стыки частей скрыты; выключить — localStorage['osm3d.partSeams'] = '0' и перезагрузка. */
-const PART_SEAMS = (() => { try { return localStorage.getItem('osm3d.partSeams') !== '0'; } catch { return true; } })();
 /** Пунктир подземной части здания: виден только не закрытый зданием участок (земля карты глубину не пишет). */
 const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, dashSize: 0.8, gapSize: 0.5, depthWrite: false, transparent: true, opacity: 0.85 });
 /** Выбранный контур подземной части — целиком, сквозь здание. */
@@ -4293,7 +4293,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Пересборка тайла: рёбра выделенного — по новым треугольникам (в режиме здания ими ведают его правки)
     if (g !== this.groups.get(FOCUS_GROUP)) this.updateSelEdges(g);
     if (!this.graphics.edges || !g.mesh) return;
-    g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it)), EDGE_MATERIAL, true);
+    g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it)), EDGE_MATERIAL, !!this.graphics.partSeams);
     if (this.level && g === this.groups.get(FOCUS_GROUP)) {
       const positions = g.edges.geometry.getAttribute('position').array as Float32Array;
       g.edges.geometry.setAttribute('position', new THREE.BufferAttribute(trimIndoorBuildingEdges(positions, this.indoorEdgeOccluders), 3));
@@ -4527,7 +4527,7 @@ export class BuildingsLayer implements CustomLayerInterface {
 /** Рёбра нескольких объектов одним LineSegments. */
 function edgeLines(items: Item[], material: THREE.LineBasicMaterial, seams = false): THREE.LineSegments {
   for (const it of items) it.edges ??= itemEdges(it);
-  const parts = seams && PART_SEAMS ? timed('рёбра: стыки частей', () => dropPartSeams(items as (Item & { edges: Float32Array })[], EDGE_ANGLE, PLANAR_ROOF_EDGE_ANGLE), () => `${items.length} объектов`) : items.map((it) => it.edges!);
+  const parts = seams ? timed('рёбра: стыки частей', () => dropPartSeams(items as (Item & { edges: Float32Array })[], EDGE_ANGLE, PLANAR_ROOF_EDGE_ANGLE), () => `${items.length} объектов`) : items.map((it) => it.edges!);
   const lines = new Float32Array(parts.reduce((n, e) => n + e.length, 0));
   let o = 0;
   for (const e of parts) { lines.set(e, o); o += e.length; }

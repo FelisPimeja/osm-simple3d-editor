@@ -5245,20 +5245,63 @@ function shapeMoves(rings: ShapeRings, offset: THREE.Vector3): Map<number, LonLa
 const shapeOwnMoves = (rings: ShapeRings, offset: THREE.Vector3) =>
   new Map(rings.flatMap((r) => r.ks.map((k) => [r.ids[k], shapeShift(r.coords[k], offset)] as const)));
 
-/** Сдвиг вершин «отдельно»: общие с соседями узлы остаются им, у части на новых местах — новые узлы. */
+/** Ближе этого к чужому узлу вершина встаёт в сам узел (привязка к углу соседа), а не рядом с ним новым. */
+const LAND_ON_NODE_M = 0.05;
+
+/**
+ * Узлы, на которые встают сдвинутые вершины: «ri,k» → узел другого объекта (или своего другого кольца) в пределах
+ * LAND_ON_NODE_M. Узел, который уже есть в том же кольце, не берём — кольцо коснулось бы себя.
+ */
+function shapeLandings(moved: ShapeRings): Map<string, { id: number; at: LonLat }> {
+  const out = new Map<string, { id: number; at: LonLat }>();
+  const movedIds = new Set(moved.flatMap((r) => r.ks.map((k) => r.ids[k])));
+  const nodes = new Map<number, LonLat>();
+  for (const g of liveFeatures()) for (const p of g.polygons) {
+    p.outerIds?.forEach((id, i) => nodes.set(id, p.outer[i]));
+    p.inners.forEach((r, j) => p.innerIds?.[j]?.forEach((id, i) => nodes.set(id, r[i])));
+  }
+  const local = new Map<number, Pt>();
+  for (const [id, c] of nodes) if (!movedIds.has(id)) { const l = overpassLayer.focusToLocal(c); if (l) local.set(id, l); }
+  moved.forEach((r, ri) => {
+    for (const k of r.ks) {
+      const q = overpassLayer.focusToLocal(r.coords[k]);
+      if (!q) continue;
+      let best: number | undefined, bd = LAND_ON_NODE_M;
+      for (const [id, l] of local) {
+        const d = Math.hypot(l[0] - q[0], l[1] - q[1]);
+        if (d < bd && !r.ids.includes(id)) { bd = d; best = id; }
+      }
+      if (best !== undefined) out.set(`${ri},${k}`, { id: best, at: nodes.get(best)! });
+    }
+  });
+  return out;
+}
+
+/**
+ * Сдвиг вершин «отдельно»: общие с соседями узлы остаются им, у части на новых местах — новые узлы. Вершина,
+ * отпущенная на чужой узел (угол соседа), становится этим узлом — иначе рядом с ним вырос бы двойник.
+ */
 function shapeSeparateEdits(f: Feature3D, rings: ShapeRings, offset: THREE.Vector3): ObjectEdit[] | string {
   const outside = nodesOutside(new Set([f.key]));
-  if (!rings.some((r) => r.ks.some((k) => outside.has(r.ids[k])))) return nodeMoveEdits(shapeOwnMoves(rings, offset));
+  const moved = shapeMoved(rings, offset);
+  const land = shapeLandings(moved);
+  if (!land.size && !rings.some((r) => r.ks.some((k) => outside.has(r.ids[k])))) return nodeMoveEdits(shapeOwnMoves(rings, offset));
   const fresh = new Map<number, LonLat>();
-  const rewrites = shapeMoved(rings, offset).map((r) => ({
-    poly: r.poly, ring: r.ring, coords: r.coords,
-    ids: r.ids.map((n, k) => {
-      if (!r.ks.includes(k) || !outside.has(n)) return n;
-      const id = nextNewId--;
-      fresh.set(id, r.coords[k]);
-      return id;
-    }),
-  }));
+  const rewrites = moved.map((r, ri) => {
+    const coords = r.coords.map((c, k) => land.get(`${ri},${k}`)?.at ?? c);
+    return { poly: r.poly, ring: r.ring, coords,
+      ids: r.ids.map((n, k) => {
+        if (!r.ks.includes(k)) return n;
+        const to = land.get(`${ri},${k}`);
+        if (to) return to.id;
+        if (!outside.has(n)) return n;
+        const id = nextNewId--;
+        fresh.set(id, r.coords[k]);
+        return id;
+      }) };
+  });
+  // Свои узлы, сдвинутые без слияния, — на новые места (в кольце уже стоят новые координаты)
+  for (const r of rewrites) r.ids.forEach((n, k) => { if (n > 0 && !fresh.has(n)) fresh.set(n, r.coords[k]); });
   return topologyEdits([{ f, rewrites }], [], fresh);
 }
 
@@ -5686,7 +5729,10 @@ function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
     if (!rings) return fail(noIds);
     const problem = shapeProblem(shapeMoved(rings, offset), rings);
     if (problem) return fail(problem);
-    edits = shapeGlued(rings) ? nodeMoveEdits(shapeMoves(rings, offset)) : shapeSeparateEdits(f, rings, offset);
+    // «С соседями», но двигаем только свои узлы и отпускаем на чужой — сливаем так же, как «отдельно»
+    const glued = shapeGlued(rings) && !(shapeLandings(shapeMoved(rings, offset)).size
+      && !rings.some((r) => r.ks.some((k) => nodesOutside(new Set([f.key])).has(r.ids[k]))));
+    edits = glued ? nodeMoveEdits(shapeMoves(rings, offset)) : shapeSeparateEdits(f, rings, offset);
   }
   if (typeof edits === 'string') return fail(edits);
   dropCollapsedHoles(edits);

@@ -3960,11 +3960,13 @@ function splitMultipolygon(f: Feature3D, group: EditGroup | undefined, polyIndex
   for (const result of [keepWays, partWays]) for (const [id, ids] of result.pieces) split.set(id, [...(split.get(id) ?? []), ...ids]);
   const allPieces = (id: number): number[] => (split.get(id) ?? []).flatMap((x) => [x, ...allPieces(x)]);
   const pieces = new Map(sourceWays.filter((w) => split.has(w.id)).map((w) => [w.id, allPieces(w.id)] as const));
+  const createdFrom = new Map(createdWays.map((w) => [w.id, w.splitFrom] as const));
   for (const w of createdWays) {
+    const root = w.splitFrom === undefined ? undefined : splitRoot(w.splitFrom, createdFrom);
     const nodes = finalLines.get(w.id) ?? w.nodes;
     lineNodes.set(w.id, nodes);
     put({ key: `way/${w.id}`, create: { key: `way/${w.id}`, version: 0, tags: { ...(w.tags ?? {}) },
-      line: { ids: nodes, coords: nodes.map(at) }, ...(w.splitFrom !== undefined && w.splitFrom > 0 ? { splitFrom: w.splitFrom } : {}) } });
+      line: { ids: nodes, coords: nodes.map(at) }, ...(root !== undefined ? { splitFrom: root } : {}) } });
   }
   for (const w of sourceWays) {
     const nodes = finalLines.get(w.id);
@@ -4264,6 +4266,19 @@ function nodesOutside(skip: Set<string>): Set<number> {
 }
 
 /**
+ * Серверный путь, от которого (через цепочку разрезов) отрезан путь id: кусок куска ведём сразу к нему —
+ * промежуточный кусок может исчезнуть из сессии, а при отправке куски встают во все отношения серверного пути.
+ */
+function splitRoot(id: number, local?: Map<number, number | undefined>): number | undefined {
+  for (let i = 0; id < 0 && i < 100; i++) {
+    const up = local?.has(id) ? local.get(id) : session.splitFromOf(`way/${id}`);
+    if (up === undefined) return undefined;
+    id = up;
+  }
+  return id > 0 ? id : undefined;
+}
+
+/**
  * Правки (одним шагом истории) для новых колец объектов items и вставки новых узлов в общие стороны.
  * Строка — почему нельзя.
  */
@@ -4290,6 +4305,8 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
   const lines = new Map<number, number[]>();
   const created = new Map<number, { tags?: Record<string, string>; splitFrom?: number }>();
   const lineOf = (id: number) => lines.get(id) ?? ways.get(id)?.nodes;
+  /** Серверный путь куска — и созданного этим же шагом (у него splitFrom уже серверный). */
+  const rootOf = (id: number) => { const r = created.has(id) ? created.get(id)!.splitFrom : splitRoot(id); return r !== undefined && r > 0 ? r : undefined; };
   const ringIns = (ids: number[] | undefined, ring: LonLat[]) => (ids ? insertInRing(ids, ring, inserts, at) : undefined);
   const withInserts = (p: Polygon): Polygon => {
     if (!inserts.length) return p;
@@ -4363,9 +4380,12 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
       const inRing = new Set(res.members.map((m) => m.id));
       const shared = (orig: number) => live.some((g) => g.type === 'relation' && g.key !== f.key && relWays(g)?.some((w) => w.id === orig));
       // Путь целиком ушёл с кольца и без тегов — лишний (удаление if-unused: занятый чужим отношением сервер оставит)
-      for (const w of ringWays) if (!inRing.has(w.id) && !res.lines.has(w.id) && !shared(w.id) && !Object.keys(w.tags ?? {}).length) dropped.add(w.id);
+      // Новый кусок серверного пути не выкидываем: он может быть нужен незагруженному отношению (площади) — при
+      // отправке встанет туда или отбросится сам
+      for (const w of ringWays) if (!inRing.has(w.id) && !res.lines.has(w.id) && !shared(w.id) && !Object.keys(w.tags ?? {}).length
+        && !(w.id < 0 && rootOf(w.id) !== undefined)) dropped.add(w.id);
       for (const [id, nodes] of res.lines) lines.set(id, nodes);
-      for (const c of res.created) { lines.set(c.id, c.nodes); created.set(c.id, { tags: c.tags, splitFrom: c.splitFrom }); }
+      for (const c of res.created) { lines.set(c.id, c.nodes); created.set(c.id, { tags: c.tags, splitFrom: c.splitFrom === undefined ? undefined : rootOf(c.splitFrom) ?? c.splitFrom }); }
       for (const [orig, ids] of res.pieces) if (ids.length) pieces.set(orig, [...(pieces.get(orig) ?? []), ...ids]);
       const ringIds = new Set(ringWays.map((w) => w.id));
       const keep = new Set(res.members.map((m) => m.id));

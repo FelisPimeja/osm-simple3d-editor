@@ -210,6 +210,11 @@ export class EditSession {
     return { before, after };
   }
 
+  /** Откуда отрезан путь — и у исчезнувшего из сессии куска (цепочка разрезов до серверного пути не рвётся). */
+  splitFromOf(key: string): number | undefined {
+    return this.features.get(key)?.splitFrom;
+  }
+
   get(key: string): Tagged | undefined {
     return this.exists(key) ? this.features.get(key) : undefined;
   }

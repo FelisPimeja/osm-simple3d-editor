@@ -1158,5 +1158,13 @@
   "Теги уже такие же.": "The tags are already the same.",
   "Теги {from} вставлены в {n} объект. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объекта. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объектов. Отменить — Ctrl+Z.": "Tags from {from} pasted into {n} object. Undo — Ctrl+Z.|Tags from {from} pasted into {n} objects. Undo — Ctrl+Z.",
   "Восстановлены несохранённые правки: {n} объект. Отменить их — Ctrl+Z, как обычно.|Восстановлены несохранённые правки: {n} объекта. Отменить их — Ctrl+Z, как обычно.|Восстановлены несохранённые правки: {n} объектов. Отменить их — Ctrl+Z, как обычно.": "Unsaved edits restored: {n} object. Undo them with Ctrl+Z as usual.|Unsaved edits restored: {n} objects. Undo them with Ctrl+Z as usual.",
-  "Остались несохранённые правки из закрытой вкладки ({n} объект, {when}). Восстановить?|Остались несохранённые правки из закрытой вкладки ({n} объекта, {when}). Восстановить?|Остались несохранённые правки из закрытой вкладки ({n} объектов, {when}). Восстановить?": "A closed tab left unsaved edits ({n} object, {when}). Restore them?|A closed tab left unsaved edits ({n} objects, {when}). Restore them?"
+  "Остались несохранённые правки из закрытой вкладки ({n} объект, {when}). Восстановить?|Остались несохранённые правки из закрытой вкладки ({n} объекта, {when}). Восстановить?|Остались несохранённые правки из закрытой вкладки ({n} объектов, {when}). Восстановить?": "A closed tab left unsaved edits ({n} object, {when}). Restore them?|A closed tab left unsaved edits ({n} objects, {when}). Restore them?",
+  "Правки скопированы: {n} объект, {kb} КБ JSON.|Правки скопированы: {n} объекта, {kb} КБ JSON.|Правки скопированы: {n} объектов, {kb} КБ JSON.": "Edits copied: {n} object, {kb} KB of JSON.|Edits copied: {n} objects, {kb} KB of JSON.",
+  "Не удалось скопировать: {err}": "Could not copy: {err}",
+  "В буфере обмена нет правок: {err}": "No edits in the clipboard: {err}",
+  "В буфере обмена нет правок редактора.": "The clipboard has no editor edits.",
+  "Правки скопированы для сервера «{from}», а открыт «{to}». Вставить всё равно?": "These edits were copied for the “{from}” server, but “{to}” is open. Paste anyway?",
+  "Текущие правки ({n} объект) будут заменены вставленными. Продолжить?|Текущие правки ({n} объекта) будут заменены вставленными. Продолжить?|Текущие правки ({n} объектов) будут заменены вставленными. Продолжить?": "Your current edits ({n} object) will be replaced with the pasted ones. Continue?|Your current edits ({n} objects) will be replaced with the pasted ones. Continue?",
+  "Копировать правки (JSON — для разбора ошибок)": "Copy edits (JSON, for debugging)",
+  "Вставить правки (заменят текущие)": "Paste edits (replaces current ones)"
 }

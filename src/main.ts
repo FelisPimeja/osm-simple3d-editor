@@ -9288,6 +9288,10 @@ function onSessionChange(keys: string[]) {
 }
 
 const editsHistory = document.getElementById('edits-history')!;
+const EDITS_FORMAT = 'osm-simple3d-edits';
+const editsClip = document.getElementById('edits-clip')!;
+const copyEditsBtn = editsClip.querySelector<HTMLButtonElement>('[data-copy-edits]')!;
+editsClip.hidden = !!josmMode;
 const undoBtn = editsHistory.querySelector<HTMLButtonElement>('[data-undo]')!;
 const redoBtn = editsHistory.querySelector<HTMLButtonElement>('[data-redo]')!;
 /** Отношение type=building — несколько кубиков. */
@@ -9304,6 +9308,7 @@ function renderChanges() {
   const show = changes.length > 0 || session.hasDataHistory();
   changesEl.hidden = !show;
   editsHistory.hidden = !session.canUndo() && !session.canRedo();
+  updateEditsClip();
   undoBtn.disabled = !session.canUndo();
   redoBtn.disabled = !session.canRedo();
   editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : tr('· не выполнен вход');
@@ -9765,13 +9770,7 @@ serverSelect.addEventListener('change', () => {
   // Другая подложка (и наличие тайловых зданий) — проще начать заново: стиль задаётся при создании карты
   if (server().style !== style) return void location.reload();
   // Данные — с выбранного сервера: правки прежнего к нему не относятся
-  session = new EditSession([], onSessionChange);
-session.beforeStep = autoRelation;
-  indoorEdited.clear();
-  indoorCreated.clear();
-  editGroups = new Map();
-  editMemberGroup = new Map();
-  scheduleAutosave();
+  resetSession();
   clearSelection();
   if (map.getLayer(overpassLayer.id)) overpass.setSource(tileSource()); // до загрузки стиля — в обработчике load
   applyDate();
@@ -10302,21 +10301,72 @@ interface AutosaveData {
 }
 /** В JOSM правки живут в его слое — сохранять нечего. */
 const autosave = josmMode ? undefined : new Autosave<AutosaveData>(() => server().id);
+/** Всё о правках для записи; undefined — правок и истории нет. */
+function editsSnapshot(): { count: number; data: AutosaveData } | undefined {
+  const count = session.changes().length;
+  if (!count && !session.hasDataHistory()) return undefined;
+  return { count, data: { session: session.snapshot(), nextNewId, editGroups: [...editGroups],
+    indoorEdited: [...indoorEdited], indoorCreated: [...indoorCreated] } };
+}
 function scheduleAutosave() {
-  autosave?.schedule(() => {
-    const count = session.changes().length;
-    if (!count && !session.hasDataHistory()) return undefined;
-    return { count, data: { session: session.snapshot(), nextNewId, editGroups: [...editGroups],
-      indoorEdited: [...indoorEdited], indoorCreated: [...indoorCreated] } };
-  });
+  autosave?.schedule(editsSnapshot);
+}
+
+// Копировать / вставить правки целиком (JSON) — разбирать правки, которые не уходят на сервер
+function updateEditsClip() {
+  copyEditsBtn.disabled = !session.changes().length && !session.hasDataHistory();
+}
+editsClip.addEventListener('click', (e) => {
+  e.stopPropagation(); // не сворачивать панель
+  const t = e.target as HTMLElement;
+  if (t.closest('[data-copy-edits]')) {
+    const s = editsSnapshot();
+    if (!s) return;
+    const json = JSON.stringify({ format: EDITS_FORMAT, version: 1, server: server().id, savedAt: new Date().toISOString(), count: s.count, data: s.data });
+    navigator.clipboard.writeText(json).then(
+      () => setStatus(trn(s.count, 'Правки скопированы: {n} объект, {kb} КБ JSON.|Правки скопированы: {n} объекта, {kb} КБ JSON.|Правки скопированы: {n} объектов, {kb} КБ JSON.', { kb: Math.ceil(json.length / 1024) })),
+      (err) => setStatus(tr('Не удалось скопировать: {err}', { err: (err as Error).message }), true));
+  } else if (t.closest('[data-paste-edits]')) {
+    void pasteEdits();
+  }
+});
+
+async function pasteEdits() {
+  let rec: { format?: string; server?: string; count?: number; data?: AutosaveData };
+  try {
+    rec = JSON.parse(await navigator.clipboard.readText());
+  } catch (err) {
+    return setStatus(tr('В буфере обмена нет правок: {err}', { err: (err as Error).message }), true);
+  }
+  if (rec?.format !== EDITS_FORMAT || !rec.data?.session) return setStatus(tr('В буфере обмена нет правок редактора.'), true);
+  if (rec.server !== server().id && !confirm(tr('Правки скопированы для сервера «{from}», а открыт «{to}». Вставить всё равно?', { from: rec.server ?? '?', to: server().id }))) return;
+  const n = session.changes().length;
+  if (n && !confirm(trn(n, 'Текущие правки ({n} объект) будут заменены вставленными. Продолжить?|Текущие правки ({n} объекта) будут заменены вставленными. Продолжить?|Текущие правки ({n} объектов) будут заменены вставленными. Продолжить?'))) return;
+  const old = session.snapshot().features.map((f) => f.key);
+  clearSelection();
+  resetSession();
+  onSessionChange(old); // прежние правки — с карты долой
+  restoreEdits({ count: rec.count ?? 0, data: rec.data });
+}
+
+/** Пустая сессия: правки, созданные здания и помещения — забыты. */
+function resetSession() {
+  session = new EditSession([], onSessionChange);
+  session.beforeStep = autoRelation;
+  indoorEdited.clear();
+  indoorCreated.clear();
+  editGroups = new Map();
+  editMemberGroup = new Map();
+  scheduleAutosave();
 }
 
 /** Вернуть сохранённые правки в пустую сессию. */
-function restoreEdits(rec: SavedEdits<AutosaveData>) {
+function restoreEdits(rec: Pick<SavedEdits<AutosaveData>, 'count' | 'data'>) {
   const d = rec.data;
   const keys = session.restore(d.session);
   nextNewId = Math.min(nextNewId, d.nextNewId);
-  for (const [k, g] of d.editGroups) editGroups.set(k, g);
+  // Группа — тот же объект, что в сессии (из IndexedDB связь приходит сама, из JSON — нет)
+  for (const [k, g] of d.editGroups) editGroups.set(k, (session.tracked(k) as EditGroup | undefined) ?? g);
   for (const k of d.indoorEdited) indoorEdited.add(k);
   for (const [k, f] of d.indoorCreated) indoorCreated.set(k, f);
   rebuildGroupIndex();

@@ -248,6 +248,11 @@ export class EditSession {
     return { before, after };
   }
 
+  /** Отслеживаемый объект как есть — и созданный, но отменённый (для восстановления связей после вставки). */
+  tracked(key: string): Tagged | undefined {
+    return this.features.get(key);
+  }
+
   /** Откуда отрезан путь — и у исчезнувшего из сессии куска (цепочка разрезов до серверного пути не рвётся). */
   splitFromOf(key: string): number | undefined {
     return this.features.get(key)?.splitFrom;

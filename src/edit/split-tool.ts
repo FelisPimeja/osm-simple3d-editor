@@ -486,6 +486,9 @@ export class SplitTool {
     const keys = from ? [from.key] : [...new Set([...(preferred ? [preferred] : []), ...this.members()])];
     const hits = from ? [] : this.layer.focusRayHits(point);
     const px = (x: number, y: number, z: number) => this.layer.focusProject(new THREE.Vector3(x, y, z));
+    // Откладывание от вершины (ось вдоль бокового ребра, отложенная точка) — высота разреза оттуда
+    const built = from ? undefined : this.layer.snapAt(point);
+    const track = built && (built.kind === 'tracking' || built.kind === 'tracked') ? built : undefined;
     let best: (SidePoint & { d: number }) | undefined;
     for (const key of keys) {
       const range = this.rangeOf(key);
@@ -499,8 +502,11 @@ export class SplitTool {
         if (l < 2 * SIDE_END_PX) return; // вертикаль сверху почти точка — по ней не попасть
         const s = ((point[0] - a[0]) * sx + (point[1] - a[1]) * sy) / l;
         if (!from && (s < SIDE_END_PX || s > l - SIDE_END_PX)) return;
-        const d = Math.abs((point[0] - a[0]) * sy - (point[1] - a[1]) * sx) / l - (key === preferred ? 2 : 0);
-        if (d > EDGE_PX || (best && best.d <= d)) return;
+        // Ребро под осью откладывания (или отложенной точкой) — первым: рядом бывают рёбра соседей, ближе на пиксель
+        const onTrack = !!track && Math.hypot(track.local.x - v[0], track.local.y - v[1]) < 0.05;
+        const raw = Math.abs((point[0] - a[0]) * sy - (point[1] - a[1]) * sx) / l;
+        const d = raw - (key === preferred ? 2 : 0) - (onTrack ? EDGE_PX : 0);
+        if (raw > EDGE_PX || (best && best.d <= d)) return;
         // Высота: точка вертикали, ближайшая к лучу курсора
         const o = ray.origin, dir = ray.direction, h2 = dir.x * dir.x + dir.y * dir.y;
         if (h2 < 1e-9) return;
@@ -510,7 +516,12 @@ export class SplitTool {
         if (hits.length && hits[0].t < t * Math.sqrt(dir.lengthSq()) - 0.3) return;
         let z = from ? from.z : Math.max(range.lo, Math.min(range.hi, o.z + t * dir.z));
         let label = `${z.toFixed(2)} ${tr('м')}`, kind: SnapHit['kind'] = 'edge';
-        if (!from) {
+        if (onTrack) {
+          if (track.local.z <= range.lo || track.local.z >= range.hi) return;
+          z = track.local.z;
+          label = track.kind === 'tracked' ? `${tr('Отложенная точка')} · ${z.toFixed(2)} ${tr('м')}` : `${Math.abs(track.dist ?? 0).toFixed(2)} ${tr('м')}`;
+          kind = track.kind;
+        } else if (!from) {
           let near = SIDE_MARK_PX;
           for (const m of range.marks) {
             const q = px(v[0], v[1], m.z);
@@ -522,7 +533,8 @@ export class SplitTool {
         const screen = this.layer.focusProject(at), ll = this.layer.focusToLngLat(v[0], v[1]);
         if (!screen || !ll) return;
         best = { key, poly, ring: ri, vertex: i, p: v, z, d,
-          snap: { kind, key, local: at, lngLat: new LngLat(ll[0], ll[1]), altitude: z, point: screen, label } };
+          snap: { kind, key, local: at, lngLat: new LngLat(ll[0], ll[1]), altitude: z, point: screen, label,
+            ...(kind === track?.kind ? { dist: track.dist, along: track.along } : {}) } };
       })));
     }
     if (!best) return;

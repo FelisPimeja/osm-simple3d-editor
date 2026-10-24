@@ -2040,6 +2040,7 @@ function updateSnap(point: [number, number] | undefined) {
   const tracking = !!focus && toolActive() && shapeTool.state !== 'drag';
   if (!tracking && (overpassLayer.tracking || trackTyped)) { overpassLayer.clearTracking(); trackTyped = ''; trackAxis = undefined; }
   overpassLayer.trackingEnabled = tracking;
+  overpassLayer.trackVertical = splitTool.state === 'pick';
   updateSnapMarker(point);
   overpassLayer.setSnapLine(currentSnap?.along && [currentSnap.along, currentSnap.local]);
   updateTracking();

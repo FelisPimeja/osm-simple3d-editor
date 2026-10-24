@@ -2138,6 +2138,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   tracking?: { anchor: THREE.Vector3; key: string; dirs: THREE.Vector3[]; px?: [number, number]; axis?: number; dist?: number; point?: THREE.Vector3; pointPx?: [number, number] };
   /** Включать откладывание (только в инструментах). */
   trackingEnabled = false;
+  /** Ось откладывания и по вертикали (вдоль бокового ребра) — инструменту, которому нужны высоты («Рассечь»). */
+  trackVertical = false;
   /** Якорь только что взведён задержкой курсора — перерисовать маркеры. */
   onTrackArmed?: () => void;
   private vertexHover?: { id: string; since: number; timer: ReturnType<typeof setTimeout> };
@@ -2293,7 +2295,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (Math.abs(dist) < 0.02) return;
         const px = toPx(onSeg);
         const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
-        if (px && d <= Math.min(radius, TRACK_RADIUS_PX)) near.push({ s: { kind: 'tracking', key: track.key, p: onSeg.clone(), axis: i, dist }, d: d + SNAP_PRIORITY.tracking * 6, px, along: track.anchor.clone() });
+        // Ось — построение пользователя: на ребре выделенного объекта она совпадает с ним и не должна ему уступать
+        // (у ребра бонус выделенного — без него ось проигрывала, и число на ней не набиралось)
+        if (px && d <= Math.min(radius, TRACK_RADIUS_PX)) near.push({ s: { kind: 'tracking', key: track.key, p: onSeg.clone(), axis: i, dist }, d: d + SNAP_PRIORITY.tracking * 6 - SNAP_SELECTED_BONUS_PX, px, along: track.anchor.clone() });
       });
     }
     // Перпендикуляр из якоря на линию от from (по оси Shift или к курсору): основание — угол 90° у линии
@@ -2351,11 +2355,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     const timer = setTimeout(() => {
       this.vertexHover = undefined;
       const dirs: THREE.Vector3[] = [];
-      const add = (u: THREE.Vector3) => { if (!dirs.some((v) => Math.abs(v.x * u.y - v.y * u.x) < 0.02)) dirs.push(u); };
+      const add = (u: THREE.Vector3) => { if (!dirs.some((v) => v.clone().cross(u).length() < 0.02)) dirs.push(u); };
       for (const e of [...this.snaps?.edges ?? [], ...this.indoorSnaps?.edges ?? []]) {
-        if (Math.abs(e.a.z - e.b.z) > 1e-3) continue;
         const other = e.a.distanceTo(s.p) < 1e-3 ? e.b : e.b.distanceTo(s.p) < 1e-3 ? e.a : undefined;
         if (!other) continue;
+        if (Math.abs(e.a.z - e.b.z) > 1e-3) {
+          if (this.trackVertical && Math.hypot(e.a.x - e.b.x, e.a.y - e.b.y) < 1e-3) add(new THREE.Vector3(0, 0, 1));
+          continue;
+        }
         const u = other.clone().sub(s.p).setZ(0).normalize();
         add(u);
         add(new THREE.Vector3(-u.y, u.x, 0));

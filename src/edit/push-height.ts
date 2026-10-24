@@ -97,5 +97,10 @@ export function heightSplitTags(tags: Record<string, string>, at: number, h: Hei
   }
   // Высота по умолчанию у верхней части иначе сместилась бы (считается от низа)
   if (h.source === 'default') upper.height = fmt(h.top);
+  // Крыша без стен (разрез по её основанию): building:part=roof, высота крыши — явно, а не по умолчанию для формы
+  if (Math.abs(at - h.wallTop) < 0.05 && h.roofHeight > 0) {
+    if (tags['roof:height'] === undefined && tags['roof:levels'] === undefined) upper['roof:height'] = fmt(h.roofHeight);
+    if (tags['building:part'] !== undefined) upper['building:part'] = 'roof';
+  }
   return { lower, upper };
 }

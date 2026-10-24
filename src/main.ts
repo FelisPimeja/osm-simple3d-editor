@@ -2520,6 +2520,8 @@ function mergeStacked(parts: Feature3D[], g: EditGroup | undefined): string | un
   for (const v of vols) for (const [k, x] of Object.entries(v)) if (LOOK_TAGS.test(k) && tags[k] === undefined) tags[k] = x;
   for (const [k, x] of Object.entries(lower.tags)) if (STACK_TAGS.test(k) && !STACK_TOP_TAGS.test(k)) tags[k] = x;
   for (const [k, x] of Object.entries(upper.tags)) if (STACK_TOP_TAGS.test(k)) tags[k] = x;
+  // Крыша (building:part=roof) со стенами под ней — уже не просто крыша: вид части — от нижней
+  if (tags['building:part'] === 'roof' && lower.tags['building:part'] !== 'roof') tags['building:part'] = lower.tags['building:part'] ?? 'yes';
   // Верх задан этажами, а низ — метрами (или наоборот): верх в метрах тоже, иначе этажи считались бы от земли не так
   if (tags.height === undefined && tags['building:levels'] === undefined) tags.height = String(Math.round(order[order.length - 1].h.top * 100) / 100);
   const others = parts.filter((f) => f !== keeper);
@@ -3486,7 +3488,8 @@ function sideCutRange(key: string): SideRange | string {
     const oh = computeHeights(of.tags);
     for (const z of [ob.min.z, ob.min.z - oh.min + oh.wallTop, ob.max.z]) marks.push({ z, label: tr('Вровень с {key}', { key: other }) });
   }
-  return { lo, hi, marks: marks.filter((m) => m.z > lo + 0.05 && m.z < hi - 0.05) };
+  const roofBase = h.roofHeight > 0.05 && h.top - h.wallTop > 0.05 ? tr('Основание крыши') : undefined;
+  return { lo, hi, marks: marks.filter((m) => m.z > lo + 0.05 && m.z < hi - 0.05), roofBase };
 }
 
 /**
@@ -3508,9 +3511,11 @@ function splitAtHeightIn(key: string, z: number, pending: EditGroup | undefined)
   if (!f || (!g && !solo)) return tr('Объект не найден.');
   const range = sideCutRange(key);
   if (typeof range === 'string') return range;
-  if (z <= range.lo + 0.05 || z >= range.hi - 0.05) return tr('Разрез по высоте — между низом и верхом стен.');
+  // По основанию скатной крыши — тоже: объём без крыши и крыша без стен
+  const roofCut = !!range.roofBase && Math.abs(z - range.hi) < 0.05;
+  if (z <= range.lo + 0.05 || (z >= range.hi - 0.05 && !roofCut)) return tr('Разрез по высоте — между низом и верхом стен.');
   const h = computeHeights(f.tags);
-  const at = h.min + (z - range.lo);
+  const at = roofCut ? h.wallTop : h.min + (z - range.lo);
   const source: Record<string, string> = solo ? { 'building:part': 'yes' } : { ...f.tags };
   if (solo) for (const [k, v] of Object.entries(f.tags)) if (PART_TAGS.test(k)) source[k] = v;
   const { lower, upper } = heightSplitTags(source, at, computeHeights(source));

@@ -16,7 +16,11 @@ const ringsOf = (p: { outer: Pt[]; inners: Pt[][] }) => [p.outer, ...p.inners];
 type Candidate = { key: string; z: number; start: CutPoint };
 
 /** Горизонтальный разрез: высоты стен объекта в сцене (низ, верх) и отметки привязки по высоте (этажи, соседи). */
-export interface SideRange { lo: number; hi: number; marks: { z: number; label: string }[] }
+export interface SideRange {
+  lo: number; hi: number; marks: { z: number; label: string }[];
+  /** Скатная крыша: резать можно и по её основанию (верх стен, hi) — подпись этой отметки. */
+  roofBase?: string;
+}
 /** Точка на боковом (вертикальном) ребре: вершина контура и высота. */
 type SidePoint = { key: string; poly: number; ring: number; vertex: number; p: Pt; z: number; snap: SnapHit };
 
@@ -501,7 +505,9 @@ export class SplitTool {
         const sx = b[0] - a[0], sy = b[1] - a[1], l = Math.hypot(sx, sy);
         if (l < 2 * SIDE_END_PX) return; // вертикаль сверху почти точка — по ней не попасть
         const s = ((point[0] - a[0]) * sx + (point[1] - a[1]) * sy) / l;
-        if (!from && (s < SIDE_END_PX || s > l - SIDE_END_PX)) return;
+        // У верхнего конца — основание скатной крыши (там же вершина: разрез по ней отделяет крышу от объёма)
+        const atRoof = !from && !!range.roofBase && s > l - SIDE_END_PX && s < l + SIDE_END_PX;
+        if (!from && !atRoof && (s < SIDE_END_PX || s > l - SIDE_END_PX)) return;
         // Ребро под осью откладывания (или отложенной точкой) — первым: рядом бывают рёбра соседей, ближе на пиксель
         const onTrack = !!track && Math.hypot(track.local.x - v[0], track.local.y - v[1]) < 0.05;
         const raw = Math.abs((point[0] - a[0]) * sy - (point[1] - a[1]) * sx) / l;
@@ -516,7 +522,11 @@ export class SplitTool {
         if (hits.length && hits[0].t < t * Math.sqrt(dir.lengthSq()) - 0.3) return;
         let z = from ? from.z : Math.max(range.lo, Math.min(range.hi, o.z + t * dir.z));
         let label = `${z.toFixed(2)} ${tr('м')}`, kind: SnapHit['kind'] = 'edge';
-        if (onTrack) {
+        if (atRoof) {
+          z = range.hi;
+          label = `${range.roofBase} · ${z.toFixed(2)} ${tr('м')}`;
+          kind = 'vertex';
+        } else if (onTrack) {
           if (track.local.z <= range.lo || track.local.z >= range.hi) return;
           z = track.local.z;
           label = track.kind === 'tracked' ? `${tr('Отложенная точка')} · ${z.toFixed(2)} ${tr('м')}` : `${Math.abs(track.dist ?? 0).toFixed(2)} ${tr('м')}`;

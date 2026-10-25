@@ -101,6 +101,7 @@ export class RotateTool {
       // По картинке подложки — ось по её нормали (если ось не зафиксирована)
       if (!this.keys.size && this.locked === undefined) this.setAxis(this.underlayNormal(point) ?? Z);
       this.state = 'ref';
+      this.updateVcb();
       this.preview(point);
       this.onState(tr('Кликните опорное направление — от оси на точку (например, на угол здания). Esc — отмена.'));
       return;
@@ -163,12 +164,14 @@ export class RotateTool {
   }
 
   /**
-   * Точка под курсором: привязка (здания, а при выборе оси — и подложек), поверхность объекта или подложки,
+   * Точка под курсором: привязка (здания, а при выборе центра и опорной точки — и подложек), поверхность объекта или подложки,
    * плоскость поворота (до выбора оси — земля). После выбора оси — проекция на плоскость поворота.
    */
   private pointAt(point: [number, number], filter?: (k: string) => boolean): THREE.Vector3 | undefined {
     const pivoting = this.state === 'pivot';
-    this.snap = this.layer.snapAt(point, filter) ?? (pivoting && this.underlayIds.size ? this.underlays?.snap(point, this.underlayIds) : undefined);
+    // Свои подложки притягивают центр и опорную точку (угол растра), но не цель поворота: они сами едут
+    const own = (pivoting || this.state === 'ref') && this.underlayIds.size;
+    this.snap = this.layer.snapAt(point, filter) ?? (own ? this.underlays?.snap(point, this.underlayIds) : undefined);
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(this.axis, this.pivot);
     if (this.snap) return pivoting ? this.snap.local.clone() : plane.projectPoint(this.snap.local, new THREE.Vector3());
     if (pivoting) {

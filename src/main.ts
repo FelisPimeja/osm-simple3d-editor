@@ -1383,6 +1383,9 @@ map.on('click', (e) => {
     if (e.originalEvent.shiftKey) toggleUnderlay(underlayId); else selectUnderlay(underlayId);
     return;
   }
+  // Подложка под курсором — если нет геометрии (у неё приоритет)
+  const underlayHit = key && (!focus || focus.members.includes(key)) ? undefined : topUnderlay(e.point);
+  if (e.originalEvent.shiftKey && underlayHit) { toggleUnderlay(underlayHit); return; }
   if (e.originalEvent.shiftKey && key) {
     // Shift+клик: добавить/убрать объект; внутри группы — только её члены
     const k = drill ? (drill.members.includes(key) ? key : undefined) : buildingKey(key);
@@ -1401,7 +1404,9 @@ map.on('click', (e) => {
     const hit = key ? overpassLayer.pickHit(e.point) : undefined;
     if (!hit || road.depth < roadsLayer.depthOf(hit.lngLat, hit.altitude)) { selectRoad(road.way, e.originalEvent.shiftKey); return; }
   }
-  if (select(resolveClick(key))) return;
+  const resolved = resolveClick(key);
+  if (!resolved && underlayHit) { selectUnderlay(underlayHit); return; }
+  if (select(resolved)) return;
   const f = queryTileLayers(e.point)[0];
   infoEl.innerHTML = f ? describeTile(f) : '';
   highlightedTile = f?.layer.id === MERGED_LAYER ? undefined : f?.id as number | undefined;
@@ -1409,6 +1414,13 @@ map.on('click', (e) => {
   map.setFilter(MERGED_HIGHLIGHT_LAYER, ['==', ['get', 'key'], f?.layer.id === MERGED_LAYER ? f.properties.key : '']);
   if (f) resolveTileFeature(f);
 });
+
+/** Свои подложки под точкой экрана, от ближней к дальней. */
+function underlaysAt(p: { x: number; y: number }): string[] {
+  const canvas = map.getCanvas();
+  return overpassLayer.underlays.pickAll([p.x, p.y], [canvas.clientWidth, canvas.clientHeight]);
+}
+const topUnderlay = (p: { x: number; y: number }) => underlaysAt(p)[0];
 
 /** Alt+клик: повторные клики в ту же точку по очереди выбирают объекты под курсором, от ближнего к дальнему. */
 let altCycle: { x: number; y: number; keys: string[]; i: number } | undefined;
@@ -1418,8 +1430,7 @@ function cyclePick(p: { x: number; y: number }): string | undefined {
   // (resolveClick не годится — он выходит из группы)
   const keys = overpassLayer.pickAll([p.x, p.y]).filter((k) => !focus || focus.members.includes(k));
   // Свои подложки — в конце перебора: у частей здания приоритет
-  const canvas = map.getCanvas();
-  const underlays = overpassLayer.underlays.pickAll([p.x, p.y], [canvas.clientWidth, canvas.clientHeight]).map(underlayKey);
+  const underlays = underlaysAt(p).map(underlayKey);
   if (!keys.length && !underlays.length) { altCycle = undefined; return; }
   const resolved = (k: string) => focus || drill?.members.includes(k) ? k : groupOf(k)?.key ?? k;
   const uniq: string[] = [];

@@ -28,6 +28,11 @@ const OUTLINE = 1;
 /** Углы картинки в её плоскости (сетка 1×1). */
 const CORNERS = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] as const;
 const v = new THREE.Vector4();
+/** Цвета выделения — как у частей здания (SELECTED_EDGE_COLOUR, SELECTED_FILL_MATERIAL в buildings-layer). */
+const SELECTED_EDGE = new THREE.LineBasicMaterial({ color: 0x2563eb, depthTest: false, depthWrite: false, transparent: true });
+const SELECTED_FILL = new THREE.MeshBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false,
+  polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }); // как у стоящей картинки — не прячется в стене
+const OUTLINE_GEOMETRY = new THREE.BufferGeometry().setFromPoints(CORNERS.map(([x, y]) => new THREE.Vector3(x, y, 0)));
 
 interface Entry {
   u: Underlay;
@@ -35,8 +40,8 @@ interface Entry {
   camera: THREE.Camera;
   model: THREE.Matrix4;
   mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-  /** Рамка выделения (дочерняя к картинке, слой OUTLINE). */
-  outline: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  /** Выделение, как у частей здания: заливка — вместе с картинкой (здания её закрывают), рамка — слоем OUTLINE поверх всего. */
+  outline: THREE.Group;
   /** Картинка подложки (blob) — текстура пересобирается, только если она сменилась. */
   blob?: Blob;
 }
@@ -60,9 +65,11 @@ export class UnderlayMeshes {
       if (!e) {
         const material = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, visible: false });
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
-        const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(CORNERS.map(([x, y]) => new THREE.Vector3(x, y, 0))),
-          new THREE.LineBasicMaterial({ color: 0xff8c00, depthTest: false, depthWrite: false, transparent: true }));
-        outline.layers.set(OUTLINE);
+        const outline = new THREE.Group();
+        const fill = new THREE.Mesh(mesh.geometry, SELECTED_FILL), edge = new THREE.LineLoop(OUTLINE_GEOMETRY, SELECTED_EDGE);
+        fill.renderOrder = 1; // поверх картинки
+        edge.layers.set(OUTLINE);
+        outline.add(fill, edge);
         mesh.add(outline);
         const scene = new THREE.Scene();
         scene.add(mesh);
@@ -162,8 +169,7 @@ export class UnderlayMeshes {
     m.map?.dispose();
     m.dispose();
     e.mesh.geometry.dispose();
-    e.outline.geometry.dispose();
-    e.outline.material.dispose();
+
   }
 
   get size() { return this.entries.size; }

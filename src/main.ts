@@ -9846,7 +9846,7 @@ function renderUnderlaySelection() {
     `<label class="field" title="${esc(title)}"><span>${label}</span><input type="number" data-uprop="${prop}" step="${step}" value="${fmtNum(value)}"> ${unit}</label>`;
   const n = u && underlayNumbers(u);
   infoEl.innerHTML = `
-    <h2>${u ? tr('Подложка') : tr('Подложки: {n}', { n: list.length })}</h2>
+    <h2>${u ? tr('Своя подложка') : tr('Подложки: {n}', { n: list.length })}</h2>
     <ul class="change-list">${list.map((x) => `<li>${esc(x.name)}${x.building === undefined ? ` <span class="hint">${tr('(общая)')}</span>` : ''}</li>`).join('')}</ul>
     ${u && n ? `<div class="underlay-props" data-underlay="${esc(u.id)}">
       ${num('azimuth', tr('Азимут'), n.azimuth, '°', '0.1', tr('Лежащей — куда смотрит верх картинки, стоящей — куда обращена лицевая сторона; по часовой от севера'))}

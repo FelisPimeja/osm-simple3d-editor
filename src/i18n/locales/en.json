@@ -1226,5 +1226,6 @@
   "Выбрать": "Select",
   "Выделить подложку: двигать, поворачивать и масштабировать — инструментами (M, Q, E), точные значения — в свойствах": "Select the underlay: move, rotate and scale with the tools (M, Q, E), exact values in Properties",
   "Везде": "Everywhere",
-  "«Везде» — на карте и в режиме любого здания, «в этом здании» — только в его режиме": "“Everywhere” — on the map and in any building mode, “in this building” — only in its mode"
+  "«Везде» — на карте и в режиме любого здания, «в этом здании» — только в его режиме": "“Everywhere” — on the map and in any building mode, “in this building” — only in its mode",
+  "Своя подложка": "Underlay"
 }

@@ -1,17 +1,22 @@
 // ==UserScript==
 // @name         OSMCha: Open with Simple3D Editor
 // @namespace    https://github.com/felispimeja/osm-simple3d-editor
-// @version      1.0.0
-// @description  Open the location of an OSMCha changeset in Simple3D Editor.
+// @version      1.1.0
+// @description  Open the location of an OSMCha changeset in Simple3D Editor (OpenStreetMap and OpenHistoricalMap).
 // @match        https://osmcha.org/*
+// @match        https://osmcha.openhistoricalmap.org/*
 // @grant        GM_xmlhttpRequest
 // @connect      api.openstreetmap.org
+// @connect      www.openhistoricalmap.org
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  const editor = 'https://felispimeja.github.io/osm-simple3d-editor/';
+  // OSMCha of OpenHistoricalMap — changesets from the OHM API, the editor opens with OHM as the server
+  const ohm = location.hostname === 'osmcha.openhistoricalmap.org';
+  const api = ohm ? 'https://www.openhistoricalmap.org/api/0.6' : 'https://api.openstreetmap.org/api/0.6';
+  const editor = `https://felispimeja.github.io/osm-simple3d-editor/${ohm ? '?server=ohm' : ''}`;
   const cache = new Map();
 
   function changesetId() {
@@ -50,7 +55,7 @@
     const request = new Promise((resolve) => {
       GM_xmlhttpRequest({
         method: 'GET',
-        url: `https://api.openstreetmap.org/api/0.6/changeset/${id}`,
+        url: `${api}/changeset/${id}`,
         onload: (response) => resolve(response.status === 200 ? editorUrl(response.responseText) : null),
         onerror: () => resolve(null),
         ontimeout: () => resolve(null),

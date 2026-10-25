@@ -26,6 +26,10 @@ Usage statistics (changesets, users, edited keys; updated daily): https://felisp
 
 The [osm-open-simple3d.user.js](userscripts/osm-open-simple3d.user.js) userscript adds **Simple3D Editor** to the top menu on openstreetmap.org, immediately after **About**. Install it in Tampermonkey or another userscript manager. It opens a new tab with the current map position and zoom, or links directly to the object on way and relation pages (`?edit=w123` / `?edit=r456`). Node pages use the current map view. The menu also works when navigating without a full page reload.
 
+## Open from OSMCha
+
+The [osmcha-open-simple3d.user.js](userscripts/osmcha-open-simple3d.user.js) userscript adds **Simple3D Editor** to the **Open with** menu on an OSMCha changeset page. Install it in Tampermonkey or another userscript manager and allow requests to `api.openstreetmap.org`. The script reads the changeset bounds from the OSM API and opens the editor with a `#zoom/lat/lon` link. If the changeset has no bounds, the item says the location is unavailable. On [OpenHistoricalMap's OSMCha](https://osmcha.openhistoricalmap.org) it reads the bounds from the OHM API (allow requests to `www.openhistoricalmap.org`) and opens the editor with OHM as the server (`?server=ohm`) at the date when most of the changed features exist (by `start_date`/`end_date`, buildings first; `&date=`), so the edits are visible.
+
 ## Interface languages
 
 Russian and English. The language is chosen in the settings panel; on first launch it follows the browser and system language

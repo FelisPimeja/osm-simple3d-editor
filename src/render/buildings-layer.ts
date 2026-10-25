@@ -11,7 +11,7 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
-import { MercatorCoordinate, type LngLat, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
+import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, type Heights } from '../osm/heights';
 import { clipAbove, prepareSolid, trimCoplanarWalls, trimTriangles, type PreparedSolid } from './shell-trim';
 import { areaLedgeTriangles } from './area-ledge';
@@ -669,6 +669,7 @@ export class BuildingsLayer implements CustomLayerInterface {
    * по сторонам света — в ней работают инструменты рисования (луч на землю, проекция), а карта видна вся.
    */
   setSketch(center: LonLat | undefined) {
+    this.mapSnaps = new WeakMap(); // здания карты могли смениться
     this.setFocus(undefined);
     this.focusLock = undefined;
     if (!center) { this.map?.triggerRepaint(); return; }
@@ -2184,11 +2185,60 @@ export class BuildingsLayer implements CustomLayerInterface {
     opts: SnapOpts = {}): SnapHit | undefined {
     const own = timed('привязки: поиск', () => this.findSnap(point, filter, radius, opts));
     // В наброске на карте — и привязки к геометрии карты (сцена наброска своей почти не имеет): ближайшая на экране
-    const found = this.sketching && this.snapsEnabled && !this.snapsSuspended ? this.sketchSnap?.(point) : undefined;
-    const ext = found && filter(found.key) ? found : undefined; // фильтр инструмента — и для них (захват — только за свои)
-    if (!ext || !own) return own ?? ext;
+    const on = this.sketching && this.snapsEnabled && !this.snapsSuspended;
     const d = (h: SnapHit) => Math.hypot(h.point[0] - point[0], h.point[1] - point[1]);
-    return d(ext) < d(own) ? ext : own;
+    // Фильтр инструмента — и для них (захват — только за свои); из нескольких — ближайшая на экране
+    // Здания карты в 3D — их привязки (с высотой); плоские привязки контуров — только если 3D-зданий нет (низкий зум)
+    const map3d = [...this.groups.keys()].some((k) => k !== FOCUS_GROUP);
+    const cands = on ? [map3d ? this.mapGroupSnap(point, filter, radius) : this.sketchSnap?.(point)].filter((h): h is SnapHit => !!h && filter(h.key)) : [];
+    return [own, ...cands].filter((h): h is SnapHit => !!h).sort((a, b) => d(a) - d(b))[0];
+  }
+
+  /** Привязки зданий карты (по группе — один раз): вершины низа и верха стен, середины сторон. */
+  private mapSnaps = new WeakMap<MeshGroup, SnapPoint[]>();
+
+  /**
+   * Привязка к зданиям карты в наброске (в 3D — с высотой: углы по верху стен, а не только контур на земле), в метрах
+   * сцены наброска. Вершины важнее середин.
+   */
+  private mapGroupSnap(point: [number, number], filter: (key: string) => boolean, radius: number): SnapHit | undefined {
+    const f = this.groups.get(FOCUS_GROUP);
+    if (!f || !this.map || !this.lastMain || !this.visible) return;
+    const canvas = this.map.getCanvas();
+    const toFocus = f.model.clone().invert();
+    const v = new THREE.Vector4();
+    const near: { s: SnapPoint; g: MeshGroup; d: number; px: [number, number] }[] = [];
+    const off = this.snapKindsOff;
+    for (const [key, g] of this.groups) {
+      if (key === FOCUS_GROUP) continue;
+      let pts = this.mapSnaps.get(g);
+      if (!pts) { pts = collectSnaps(g).points.filter((s) => s.kind === 'vertex' || s.kind === 'midpoint'); this.mapSnaps.set(g, pts); }
+      const m = this.lastMain.clone().multiply(g.model);
+      for (const s of pts) {
+        if (off.has(s.kind) || !filter(s.key) || g.hidden.has(s.key)) continue;
+        v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
+        if (v.w <= 0) continue;
+        const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
+        const d = Math.hypot(px[0] - point[0], px[1] - point[1]);
+        if (d <= radius) near.push({ s, g, d: d + SNAP_PRIORITY[s.kind] * 6, px });
+      }
+    }
+    // Заслонённые (вершина контура за стеной и т. п.) — «дальше»: выигрывают, только если видимых рядом нет
+    const world = (n: (typeof near)[number]) => n.s.p.clone().applyMatrix4(n.g.model);
+    near.sort((a, b) => a.d - b.d);
+    for (const n of near.slice(0, 6)) {
+      const hit = this.pickHit(n.px);
+      if (!hit) continue;
+      const w = world(n), h = MercatorCoordinate.fromLngLat(hit.lngLat, hit.altitude);
+      const s = MercatorCoordinate.fromLngLat(hit.lngLat).meterInMercatorCoordinateUnits();
+      if (Math.hypot(w.x - h.x, w.y - h.y, w.z - h.z) / s > 0.6) n.d += SNAP_HIDDEN_PENALTY_PX;
+    }
+    const best = near.sort((a, b) => a.d - b.d)[0];
+    if (!best) return;
+    const local = world(best).applyMatrix4(toFocus);
+    const ll = this.focusToLngLat(local.x, local.y);
+    if (!ll) return;
+    return { kind: best.s.kind, key: best.s.key, local, lngLat: new LngLat(ll[0], ll[1]), altitude: local.z, point: best.px };
   }
 
   /** Привязки к геометрии карты в наброске (подключает main.ts); undefined — без них. */

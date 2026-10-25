@@ -1086,7 +1086,7 @@ function scheduleRoads() {
     const obstacles = overpass.allFeatures()
       // building=bridge / man_made=bridge / bridge:support — сам мост или его опора, не препятствие
       // Подземные (location=underground, layer<0 — ТЦ под площадью) — тоже нет: мост над ними на земле
-      .filter((f) => !f.hasParts && f.tags.building !== 'bridge' && f.tags.man_made !== 'bridge' && !f.tags['bridge:support']
+      .filter((f) => overpass.isVisible(f) && !f.hasParts && f.tags.building !== 'bridge' && f.tags.man_made !== 'bridge' && !f.tags['bridge:support']
         && f.tags.location !== 'underground' && !(Number(f.tags.layer) < 0)).map((f) => {
       const h = computeHeights(f.tags);
       return { rings: f.polygons.map((p) => p.outer), min: h.min, top: h.top };
@@ -1497,6 +1497,8 @@ map.on('click', (e) => {
     const hit = key ? overpassLayer.pickHit(e.point) : undefined;
     if (!hit || road.depth < roadsLayer.depthOf(hit.lngLat, hit.altitude)) { selectRoad(road.way, e.originalEvent.shiftKey); return; }
   }
+  // Shift-клик мимо объектов сохраняет выделение и текущую группу.
+  if (e.originalEvent.shiftKey) return;
   const resolved = resolveClick(key);
   if (!resolved && underlayHit) { selectUnderlay(underlayHit); return; }
   if (select(resolved)) return;
@@ -7323,7 +7325,7 @@ let buildingIndoorCache: { sig: string; list: IndoorFeature[] } | undefined;
 
 function buildingIndoor(g: BuildingGroup): IndoorFeature[] {
   // Отбор по всем тайлам — дорогой, а панель этажей перерисовывается при каждом выделении: кешируем
-  const sig = `${g.key}|${overpass.revision}|${focusIndoor.get(g.key)?.length ?? -1}|${g.members.join(',')}|${indoorEditRev}`;
+  const sig = `${g.key}|${overpass.revision}|${overpass.visibilityRevision}|${focusIndoor.get(g.key)?.length ?? -1}|${g.members.join(',')}|${indoorEditRev}`;
   if (buildingIndoorCache?.sig === sig) return buildingIndoorCache.list;
   const list = timed('этажи: indoor здания', () => buildingIndoorImpl(g), (r) => `${r.length} объектов`);
   buildingIndoorCache = { sig, list };
@@ -7351,7 +7353,7 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
     const at = f.point && !f.key.endsWith('#poi') ? e.polygons?.[0]?.outer[0] : undefined;
     return at ? { ...g, point: at } : g;
   });
-  const visible = list.filter((f) => f.kind === 'poi' || !indoorEdited.has(indoorKey(f.key)) || !!f.tags.indoor || (f.escalator && f.tags.highway === 'steps' && !!f.tags.conveying && f.tags.conveying !== 'no'));
+  const visible = list.filter((f) => overpass.isVisible(f)).filter((f) => f.kind === 'poi' || !indoorEdited.has(indoorKey(f.key)) || !!f.tags.indoor || (f.escalator && f.tags.highway === 'steps' && !!f.tags.conveying && f.tags.conveying !== 'no'));
   const axes = visible.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
   return visible.map((f) => {
     if (f.line || !f.polygons.length || !(f.tags.room === 'stairs' || f.tags.stairs === 'yes' || f.tags.conveying)) return f;
@@ -10741,6 +10743,14 @@ function applyDate() {
     if (selection.some((k) => focusDated.has(k))) select(undefined);
     renderOutliner();
   }
+  // Indoor может смениться даже при неизменном наборе частей здания.
+  if (focus) { renderLevels(); renderIssues(); }
+  if (roadSelection.some((r) => !overpass.isVisible(r))) {
+    roadSelection = [];
+    roadsLayer.select([]);
+    infoEl.innerHTML = '';
+  }
+  scheduleRoads();
 }
 
 /** Новая дата (год, ГГГГ-ММ или ГГГГ-ММ-ДД). Год 0 допустим: даты OSM — ISO 8601, там 0 = 1 г. до н. э. */

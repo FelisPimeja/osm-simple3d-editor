@@ -206,7 +206,7 @@ export class OverpassTiles {
   roads(): RoadWay[] {
     const out: RoadWay[] = [];
     for (const k of this.wanted) { const e = this.cache.get(k); if (e?.state === 'ready' && e.roads) out.push(...e.roads); }
-    return out;
+    return out.filter((f) => this.visible(f));
   }
 
   /** Отдельные деревья видимых тайлов; старые записи кеша без id ещё нельзя выбрать. */
@@ -256,9 +256,11 @@ export class OverpassTiles {
   setExtras(fn: () => Feature3D[]) { this.extras = fn; }
 
   /** Какие объекты рисовать (фильтр по дате OHM); смена — перерисовка показанных тайлов. */
-  private visible: (f: Feature3D) => boolean = () => true;
-  setFeatureFilter(fn: (f: Feature3D) => boolean) {
+  private visible: (f: { tags: Record<string, string> }) => boolean = () => true;
+  visibilityRevision = 0;
+  setFeatureFilter(fn: (f: { tags: Record<string, string> }) => boolean) {
     this.visible = fn;
+    this.visibilityRevision++;
     for (const key of this.layer.groupKeys()) this.show(key);
   }
   /** Какие деревья и леса показывать (фильтр по дате OHM, по start_date/end_date); key — подпись фильтра. */
@@ -269,7 +271,7 @@ export class OverpassTiles {
     for (const k of this.wanted) this.showTrees(k);
   }
   /** Проходит ли объект фильтр по дате. */
-  isVisible(f: Feature3D): boolean { return this.visible(f); }
+  isVisible(f: { tags: Record<string, string> }): boolean { return this.visible(f); }
 
   /** Перерисовать нарисованные тайлы (появился или исчез созданный объект). */
   rerender() {

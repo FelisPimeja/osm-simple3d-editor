@@ -2402,7 +2402,7 @@ function startRotate() {
   if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
     return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
   }
-  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   rotateTool.start(keys, underlaySelection);
 }
 

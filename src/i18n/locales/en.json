@@ -1218,5 +1218,9 @@
   "Подложки: {n}": "Underlays: {n}",
   "(общая)": "(shared)",
   "Подогнать…": "Fit…",
-  "Перемещено подложек: {n} на {d} м.": "Underlays moved: {n} by {d} m."
+  "Перемещено подложек: {n} на {d} м.": "Underlays moved: {n} by {d} m.",
+  "Части здания поворачиваются только вокруг вертикали (у подложек без частей — любая ось).": "Building parts rotate only around the vertical (underlays without parts — any axis).",
+  "ось z или по картинке (стрелки — x, y, z)": "z axis or along the image (arrows — x, y, z)",
+  "по картинке": "along the image",
+  "Повёрнуто подложек: {n} на {deg}°. Отменить — Ctrl+Z.": "Underlays rotated: {n} by {deg}°. Undo — Ctrl+Z."
 }

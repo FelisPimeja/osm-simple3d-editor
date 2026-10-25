@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import { tr } from '../i18n';
+import type { UnderlayTarget } from './underlay-target';
 import { linkedNote, type LinkPreview, glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
 
 /** Угол между движением курсора и осью на экране, при котором движение «прилипает» к оси. */
@@ -11,16 +12,6 @@ const AXIS_NAMES = ['x', 'y', 'z'] as const;
 
 type Axis = 0 | 1 | 2;
 type Pt = [number, number];
-
-/** Свои подложки как цель перемещения (подключает main.ts). */
-export interface MoveUnderlays {
-  /** Привязка на подложках ids под точкой экрана: угол, середина стороны, центр. */
-  snap(point: Pt, ids: Set<string>): SnapHit | undefined;
-  /** Точка на картинке одной из подложек ids под точкой экрана (метры сцены). */
-  hit(point: Pt, ids: Set<string>): THREE.Vector3 | undefined;
-  /** Показать подложки сдвинутыми на offset (undefined — как есть). */
-  preview(ids: Set<string>, offset: THREE.Vector3 | undefined): void;
-}
 
 /**
  * Инструмент «Переместить» (как Move в SketchUp), работает в режиме одного здания:
@@ -37,7 +28,7 @@ export class MoveTool {
   keys = new Set<string>();
   /** Выделенные подложки (id) — едут вместе с объектами. */
   underlayIds = new Set<string>();
-  underlays?: MoveUnderlays;
+  underlays?: UnderlayTarget;
   /** Привязка, к которой сейчас тянем (для маркера). */
   snap?: SnapHit;
   /** Общие с соседями узлы: тянуть соседей следом или отделиться (D). */
@@ -149,7 +140,7 @@ export class MoveTool {
       // Привязки (свои и подложек) — раньше поверхностей; у объектов здания приоритет
       const us = s ? undefined : this.underlaySnap(point);
       const p = s?.local ?? us?.local ?? (doorKey && this.keys.has(doorKey) ? this.layer.doorAnchor(doorKey) : undefined) ?? (hit && this.keys.has(hit.key) ? hit.local : undefined)
-        ?? (this.underlayIds.size ? this.underlays?.hit(point, this.underlayIds) : undefined);
+        ?? (this.underlayIds.size ? this.underlays?.hit(point, this.underlayIds)?.p : undefined);
       if (!p) return this.onState(tr('Кликните по точке на выбранном объекте (подсвеченные привязки — вершины, середины, центр).'));
       this.from.copy(p);
       this.offset.set(0, 0, 0);
@@ -195,7 +186,7 @@ export class MoveTool {
     this.offset.copy(offset);
     this.linked = this.linkPreview?.([...this.keys], new THREE.Matrix4().makeTranslation(offset.x, offset.y, 0), this.glue) ?? 0;
     this.layer.setMovePreview([...this.keys], offset);
-    if (this.underlayIds.size) this.underlays?.preview(this.underlayIds, offset);
+    if (this.underlayIds.size) this.underlays?.preview(this.underlayIds, new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z));
     this.layer.setMoveGuide({ from: this.from, to: this.from.clone().add(offset), axis, locked: this.locked, gizmoScale: this.horizontalOnly ? 0.375 : 1 });
     this.updateVcb();
   }

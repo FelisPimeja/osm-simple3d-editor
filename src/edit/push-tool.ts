@@ -2,11 +2,11 @@ import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit, SnapOpts } from '../render/buildings-layer';
 import { LEVEL_HEIGHT } from '../osm/heights';
 import { levelsNote } from './push-height';
+import { glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
 import { tr, trn } from '../i18n';
 
 export type PushUnits = 'm' | 'levels';
 const UNITS_STORAGE = 'push-units';
-const GLUE_STORAGE = 'push-glue';
 
 export type PushFace = 'top' | 'bottom' | 'side';
 
@@ -86,8 +86,8 @@ export class PushTool {
     this.vcb.addEventListener('click', (e) => {
       const u = (e.target as HTMLElement).closest<HTMLElement>('[data-units]')?.dataset.units as PushUnits | undefined;
       if (u) this.setUnits(u);
-      const g = (e.target as HTMLElement).closest<HTMLElement>('[data-glue]')?.dataset.glue;
-      if (g) this.setGlue(g === 'on');
+      const g = glueClick(e);
+      if (g !== undefined) this.setGlue(g);
     });
   }
 
@@ -104,7 +104,7 @@ export class PushTool {
 
   setGlue(on: boolean) {
     this.glue = on;
-    try { localStorage.setItem(GLUE_STORAGE, on ? 'on' : 'off'); } catch { /* без хранилища — до перезагрузки */ }
+    saveGlue(on);
     if (this.state === 'push' && this.target?.face === 'side') {
       // Превью прежнего режима могло задеть соседей — сбросить его целиком
       this.preview(this.target, undefined);
@@ -266,7 +266,7 @@ export class PushTool {
   key(e: KeyboardEvent): boolean {
     if (!this.active || e.type !== 'keydown') return false;
     if (e.key === 'Tab') { this.setUnits(this.units === 'm' ? 'levels' : 'm'); return true; }
-    if (e.code === 'KeyD' && !e.ctrlKey && !e.metaKey && !e.altKey) { this.setGlue(!this.glue); return true; }
+    if (isGlueKey(e)) { this.setGlue(!this.glue); return true; }
     if (e.key === 'Escape') {
       if (this.state === 'push') { this.cancel(); this.start(); } else this.stop();
       return true;
@@ -323,8 +323,7 @@ export class PushTool {
     const locked = t && this.unitConstraint?.(t);
     const units = `<span class="vcb-units" title="${tr('Единицы сдвига верха и низа (Tab)')}">${(['m', 'levels'] as const)
       .map((u) => `<button type="button" data-units="${u}"${locked && u !== locked ? ' aria-disabled="true"' : ''}${u === this.units ? ' class="active"' : ''}>${u === 'm' ? tr('м') : tr('этажи')}</button>`).join('')}</span>`;
-    const glue = `<span class="vcb-units" title="${tr('Общие с соседями углы стены: «с соседями» — соседи тянутся следом, «отдельно» — стена отделяется от них (D)')}">${[true, false]
-      .map((on) => `<button type="button" data-glue="${on ? 'on' : 'off'}"${on === this.glue ? ' class="active"' : ''}>${on ? tr('с соседями') : tr('отдельно')}</button>`).join('')}</span>`;
+    const glue = glueSwitch(this.glue, tr('Общие с соседями углы стены: «с соседями» — соседи тянутся следом, «отдельно» — стена отделяется от них (D)'));
     this.vcb.innerHTML = t
       ? `<span class="vcb-label">${{ top: tr('Верх'), bottom: tr('Низ'), side: tr('Стена') }[t.face]}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${levels ? tr('эт.') : tr('м')}
       <span class="vcb-axis">${this.snap ? tr('до точки') : t.face === 'side' ? tr('по нормали') : tr('по вертикали')}</span>${t.face === 'side' && this.glue && this.linked ? `<span class="vcb-axis vcb-linked">${trn(this.linked, 'тянет {n} соседа|тянет {n} соседей|тянет {n} соседей')}</span>` : ''}${t.face === 'side' ? glue : units}`
@@ -356,9 +355,6 @@ function inRing([x, y]: [number, number], ring: [number, number][]): boolean {
   return inside;
 }
 
-function loadGlue(): boolean {
-  try { return localStorage.getItem(GLUE_STORAGE) !== 'off'; } catch { return true; }
-}
 
 function loadUnits(): PushUnits {
   try { return localStorage.getItem(UNITS_STORAGE) === 'levels' ? 'levels' : 'm'; } catch { return 'm'; }

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import { tr } from '../i18n';
+import { linkedNote, type LinkPreview, glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
 
 /** Шаг «прилипания» угла, градусы. */
 const STEP_DEG = 15;
@@ -19,6 +20,8 @@ export class RotateTool {
   state: 'off' | 'pivot' | 'ref' | 'rotate' = 'off';
   keys = new Set<string>();
   snap?: SnapHit;
+  /** Общие с соседями узлы: тянуть соседей следом или отделиться (D). */
+  glue = loadGlue();
   private pivot = new THREE.Vector3();
   private refAngle = 0;
   private refPoint = new THREE.Vector3();
@@ -27,25 +30,39 @@ export class RotateTool {
   private typed = '';
   private lastPoint?: [number, number];
   private readonly vcb: HTMLDivElement;
+  /** Превью соседей «с соседями» (подключает main.ts) и сколько их тянется. */
+  linkPreview?: LinkPreview;
+  private linked = 0;
 
   constructor(
     private readonly layer: BuildingsLayer,
     container: HTMLElement,
     /** Повернуть keys на angle (радианы, против часовой) вокруг точки pivot (метры сцены). */
-    private readonly commit: (keys: string[], pivot: THREE.Vector3, angle: number) => void,
+    private readonly commit: (keys: string[], pivot: THREE.Vector3, angle: number, glue: boolean) => void,
     private readonly onState: (hint: string) => void,
   ) {
     this.vcb = document.createElement('div');
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
     container.appendChild(this.vcb);
+    for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
+    this.vcb.addEventListener('click', (e) => { const g = glueClick(e); if (g !== undefined) this.setGlue(g); });
+  }
+
+  setGlue(on: boolean) {
+    this.glue = on;
+    saveGlue(on);
+    if (this.state === 'rotate' && this.lastPoint) this.preview(this.lastPoint);
+    this.updateVcb();
   }
 
   get active() { return this.state !== 'off'; }
 
   start(keys: string[]) {
     this.keys = new Set(keys);
+    this.glue = loadGlue();
     this.state = 'pivot';
+    this.updateVcb();
     this.onState(tr('Поворот: кликните ось поворота (вершина, центр, точка на объекте или на земле). Esc — выйти.'));
   }
 
@@ -53,6 +70,7 @@ export class RotateTool {
     this.cancel();
     this.state = 'off';
     this.keys = new Set();
+    this.vcb.hidden = true;
     this.onState('');
   }
 
@@ -99,6 +117,7 @@ export class RotateTool {
       else { this.cancel(); this.start([...this.keys]); }
       return true;
     }
+    if (isGlueKey(e)) { this.setGlue(!this.glue); return true; }
     if (this.state !== 'rotate') return false;
     if (/^[\d.,-]$/.test(e.key)) { this.typed += e.key === ',' ? '.' : e.key; this.updateVcb(); return true; }
     if (e.key === 'Backspace') { this.typed = this.typed.slice(0, -1); this.updateVcb(); return true; }
@@ -147,6 +166,9 @@ export class RotateTool {
       v(this.pivot.x, this.pivot.y),
       v(this.pivot.x + Math.cos(end) * r, this.pivot.y + Math.sin(end) * r),
     ], false, true);
+    const m = new THREE.Matrix4().makeTranslation(this.pivot.x, this.pivot.y, 0).multiply(new THREE.Matrix4().makeRotationZ(a))
+      .multiply(new THREE.Matrix4().makeTranslation(-this.pivot.x, -this.pivot.y, 0));
+    this.linked = this.linkPreview?.([...this.keys], m, this.glue) ?? 0;
     this.layer.setRotatePreview([...this.keys], this.pivot, a);
     this.updateVcb();
   }
@@ -155,24 +177,24 @@ export class RotateTool {
     const keys = [...this.keys];
     const pivot = this.pivot.clone();
     this.cancel();
-    if (Math.abs(angle) > 1e-6) this.commit(keys, pivot, angle);
+    if (Math.abs(angle) > 1e-6) this.commit(keys, pivot, angle, this.glue);
     this.start(keys);
   }
 
   private cancel() {
-    if (this.state === 'rotate') this.layer.setRotatePreview([...this.keys], undefined, 0);
+    if (this.state === 'rotate') { this.linked = this.linkPreview?.([...this.keys], undefined, false) ?? 0; this.layer.setRotatePreview([...this.keys], undefined, 0); }
     this.layer.setDrawPreview(undefined);
     this.snap = undefined;
     this.typed = '';
     this.angle = 0;
-    this.vcb.hidden = true;
   }
 
   private updateVcb() {
-    if (this.state !== 'rotate') { this.vcb.hidden = true; return; }
+    if (!this.active) { this.vcb.hidden = true; return; }
     this.vcb.hidden = false;
+    if (this.state !== 'rotate') { this.vcb.innerHTML = `<span class="vcb-label">${tr('Поворот')}</span>${glueSwitch(this.glue)}`; return; }
     const deg = (this.angle * 180) / Math.PI;
     this.vcb.innerHTML = `<span class="vcb-label">${tr('Угол')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || deg.toFixed(1)}</span>°
-      <span class="vcb-axis">${this.snap ? tr('привязка') : this.shift ? tr('шаг {step}° (Shift)', { step: STEP_DEG }) : tr('против часовой')}</span>`;
+      <span class="vcb-axis">${this.snap ? tr('привязка') : this.shift ? tr('шаг {step}° (Shift)', { step: STEP_DEG }) : tr('против часовой')}</span>${this.glue ? linkedNote(this.linked) : ''}${glueSwitch(this.glue)}`;
   }
 }

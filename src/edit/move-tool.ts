@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import { tr } from '../i18n';
+import { linkedNote, type LinkPreview, glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
 
 /** Угол между движением курсора и осью на экране, при котором движение «прилипает» к оси. */
 const AXIS_SNAP_DEG = 15;
@@ -25,6 +26,8 @@ export class MoveTool {
   keys = new Set<string>();
   /** Привязка, к которой сейчас тянем (для маркера). */
   snap?: SnapHit;
+  /** Общие с соседями узлы: тянуть соседей следом или отделиться (D). */
+  glue = loadGlue();
   private from = new THREE.Vector3();
   private offset = new THREE.Vector3();
   private axis?: Axis;
@@ -36,19 +39,31 @@ export class MoveTool {
   private typed = '';
   private lastPoint?: [number, number];
   private readonly vcb: HTMLDivElement;
+  /** Превью соседей «с соседями» (подключает main.ts) и сколько их тянется. */
+  linkPreview?: LinkPreview;
+  private linked = 0;
   /** Разовое перемещение (вставка): сразу тянем от заданной точки, после клика — выход; Esc — отмена всего. */
   private oneShot?: { done: () => void; cancel: () => void };
 
   constructor(
     private readonly layer: BuildingsLayer,
     container: HTMLElement,
-    private readonly commit: (keys: string[], offset: THREE.Vector3) => void,
+    private readonly commit: (keys: string[], offset: THREE.Vector3, glue: boolean) => void,
     private readonly onState: (hint: string) => void,
   ) {
     this.vcb = document.createElement('div');
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
     container.appendChild(this.vcb);
+    for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
+    this.vcb.addEventListener('click', (e) => { const g = glueClick(e); if (g !== undefined) this.setGlue(g); });
+  }
+
+  setGlue(on: boolean) {
+    this.glue = on;
+    saveGlue(on);
+    this.refresh();
+    this.updateVcb();
   }
 
   get active() { return this.state !== 'off'; }
@@ -77,6 +92,7 @@ export class MoveTool {
     this.axis = this.locked = undefined;
     this.typed = '';
     this.state = 'move';
+    this.glue = loadGlue();
     this.oneShot = { done, cancel };
     this.layer.setMoveGuide({ from: this.from, gizmoScale: this.horizontalOnly ? 0.375 : 1 });
     this.updateVcb();
@@ -110,6 +126,7 @@ export class MoveTool {
       this.axis = this.locked = undefined;
       this.typed = '';
       this.state = 'move';
+      this.glue = loadGlue();
       this.layer.setMoveGuide({ from: this.from, gizmoScale: this.horizontalOnly ? 0.375 : 1 });
       this.updateVcb();
       this.onState(tr('Ведите курсор: вдоль оси здания движение прилипает к ней. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.'));
@@ -146,6 +163,7 @@ export class MoveTool {
     this.axis = axis;
     if (this.shiftLock && this.locked === undefined && axis !== undefined) this.locked = axis;
     this.offset.copy(offset);
+    this.linked = this.linkPreview?.([...this.keys], new THREE.Matrix4().makeTranslation(offset.x, offset.y, 0), this.glue) ?? 0;
     this.layer.setMovePreview([...this.keys], offset);
     this.layer.setMoveGuide({ from: this.from, to: this.from.clone().add(offset), axis, locked: this.locked, gizmoScale: this.horizontalOnly ? 0.375 : 1 });
     this.updateVcb();
@@ -161,6 +179,7 @@ export class MoveTool {
       return true;
     }
     if (this.state !== 'move') return false;
+    if (e.type === 'keydown' && isGlueKey(e)) { this.setGlue(!this.glue); return true; }
     if (e.type === 'keyup') {
       if (e.key === 'Shift') { this.shiftLock = false; if (!this.arrowLock) this.locked = undefined; this.refresh(); return true; }
       return false;
@@ -210,18 +229,18 @@ export class MoveTool {
       this.oneShot = undefined;
       this.state = 'off';
       this.keys = new Set();
-      if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone());
+      if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone(), this.glue);
       this.onState('');
       once.done();
       return;
     }
     this.state = 'pick';
-    if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone());
+    if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone(), this.glue);
     this.start(keys, this.horizontalOnly);
   }
 
   private cancelMove() {
-    if (this.state === 'move') this.layer.setMovePreview([...this.keys], undefined);
+    if (this.state === 'move') { this.linked = this.linkPreview?.([...this.keys], undefined, false) ?? 0; this.layer.setMovePreview([...this.keys], undefined); }
     this.layer.setMoveGuide(undefined);
     this.snap = undefined;
     this.typed = '';
@@ -264,7 +283,7 @@ export class MoveTool {
       : this.axis !== undefined ? tr('ось {axis}', { axis: AXIS_NAMES[this.axis] }) : tr('свободно');
     const value = this.typed || this.offset.length().toFixed(2);
     this.vcb.innerHTML = `<span class="vcb-label">${tr('Расстояние')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
-      <span class="vcb-axis">${this.snap ? tr('к точке · {along}', { along }) : along}</span>`;
+      <span class="vcb-axis">${this.snap ? tr('к точке · {along}', { along }) : along}</span>${this.glue ? linkedNote(this.linked) : ''}${glueSwitch(this.glue)}`;
   }
 }
 

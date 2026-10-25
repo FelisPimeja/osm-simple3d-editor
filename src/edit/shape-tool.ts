@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit, SnapOpts } from '../render/buildings-layer';
+import { linkedNote, glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
 import { tr, trn } from '../i18n';
 import { MIN_ROOF_HEIGHT } from './push-height';
 import { LEVEL_HEIGHT } from '../osm/heights';
@@ -16,8 +17,6 @@ const GRAB_PX = 12;
 const EDGE_PX = 8;
 /** Точка на стороне ближе этого к её концу (доля длины) — не новая вершина: там уже есть. */
 const EDGE_END = 0.02;
-/** Общие узлы — тот же переключатель, что у «Вытянуть»: выбор один на оба инструмента. */
-const GLUE_STORAGE = 'push-glue';
 
 /**
  * Захваченная вершина: объект, полигон, кольцо (0 — внешнее, 1… — дыры), номер вершины и точка захвата (метры сцены).
@@ -119,8 +118,8 @@ export class ShapeTool {
     container.appendChild(this.vcb);
     for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
     this.vcb.addEventListener('click', (e) => {
-      const g = (e.target as HTMLElement).closest<HTMLElement>('[data-glue]')?.dataset.glue;
-      if (g) this.setGlue(g === 'on');
+      const g = glueClick(e);
+      if (g !== undefined) this.setGlue(g);
     });
   }
 
@@ -151,7 +150,7 @@ export class ShapeTool {
 
   setGlue(on: boolean) {
     this.glue = on;
-    try { localStorage.setItem(GLUE_STORAGE, on ? 'on' : 'off'); } catch { /* без хранилища — до перезагрузки */ }
+    saveGlue(on);
     if (this.state === 'drag' && this.target) {
       // Превью прежнего режима могло задеть соседей — сбросить его целиком
       this.preview(this.target, undefined);
@@ -338,7 +337,7 @@ export class ShapeTool {
       else this.stop();
       return true;
     }
-    if (e.code === 'KeyD' && !e.ctrlKey && !e.metaKey && !e.altKey) { this.setGlue(!this.glue); return true; }
+    if (isGlueKey(e)) { this.setGlue(!this.glue); return true; }
     // Del (на Mac — Backspace) — удалить вершину под курсором или выбранные; посреди сдвига — захваченную
     // (Backspace там сначала стирает набранное число, а когда его нет — удаляет вершину)
     if (e.key === 'Delete' || (e.key === 'Backspace' && (this.state === 'pick' || !this.typed))) {
@@ -692,8 +691,7 @@ export class ShapeTool {
   private updateVcb() {
     if (!this.active) { this.vcb.hidden = true; return; }
     this.vcb.hidden = false;
-    const glue = `<span class="vcb-units" title="${tr('Общие с соседями узлы: «с соседями» — соседи тянутся следом, «отдельно» — часть отделяется от них (D)')}">${[true, false]
-      .map((on) => `<button type="button" data-glue="${on ? 'on' : 'off'}"${on === this.glue ? ' class="active"' : ''}>${on ? tr('с соседями') : tr('отдельно')}</button>`).join('')}</span>`;
+    const glue = glueSwitch(this.glue, tr('Общие с соседями узлы: «с соседями» — соседи тянутся следом, «отдельно» — часть отделяется от них (D)'));
     if (this.state !== 'drag') { this.vcb.innerHTML = `<span class="vcb-label">${tr('Вершина')}</span>${glue}`; return; }
     if (this.target?.roof || this.target?.eave) {
       const w = this.walls(this.target.key);
@@ -711,7 +709,7 @@ export class ShapeTool {
     const along = !d ? tr('свободно') : this.locked ? tr('{dir} (зафиксировано)', { dir: d.axis === undefined ? d.name : tr('ось {axis}', { axis: d.name }) })
       : d.axis === undefined ? d.name : tr('ось {axis}', { axis: d.name });
     const value = this.typed || this.offset.length().toFixed(2);
-    const linked = this.glue && this.linked ? `<span class="vcb-axis vcb-linked">${trn(this.linked, 'тянет {n} соседа|тянет {n} соседей|тянет {n} соседей')}</span>` : '';
+    const linked = this.glue ? linkedNote(this.linked) : '';
     const problem = this.merge ? `<span class="vcb-axis vcb-linked">${tr('слить с соседней')}</span>`
       : this.problem ? `<span class="vcb-axis vcb-error">${this.problem}</span>` : '';
     this.vcb.innerHTML = `<span class="vcb-label">${tr('Вершина')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
@@ -746,6 +744,3 @@ function closestOnLine(ray: THREE.Ray, from: THREE.Vector3, dir: THREE.Vector3):
   return (e - b * d) / denom;
 }
 
-function loadGlue(): boolean {
-  try { return localStorage.getItem(GLUE_STORAGE) !== 'off'; } catch { return true; }
-}

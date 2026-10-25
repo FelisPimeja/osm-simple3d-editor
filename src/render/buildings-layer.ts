@@ -2792,6 +2792,11 @@ export class BuildingsLayer implements CustomLayerInterface {
       .multiply(new THREE.Matrix4().makeRotationZ(angle)).multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, 0)));
   }
 
+  /** Предпросмотр произвольного преобразования m (масштаб); undefined — сбросить. */
+  setMatrixPreview(keys: string[], m: THREE.Matrix4 | undefined) {
+    this.setTransformPreview(keys, m);
+  }
+
   /** Предпросмотр преобразования m у объектов keys (перемещение, поворот); undefined — вернуть как было. */
   private setTransformPreview(keys: string[], m: THREE.Matrix4 | undefined) {
     const g = this.groups.get(FOCUS_GROUP);

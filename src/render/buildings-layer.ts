@@ -2182,8 +2182,17 @@ export class BuildingsLayer implements CustomLayerInterface {
    */
   snapAt(point: [number, number], filter: (key: string) => boolean = () => true, radius = SNAP_RADIUS_PX,
     opts: SnapOpts = {}): SnapHit | undefined {
-    return timed('привязки: поиск', () => this.findSnap(point, filter, radius, opts));
+    const own = timed('привязки: поиск', () => this.findSnap(point, filter, radius, opts));
+    // В наброске на карте — и привязки к геометрии карты (сцена наброска своей почти не имеет): ближайшая на экране
+    const found = this.sketching && this.snapsEnabled && !this.snapsSuspended ? this.sketchSnap?.(point) : undefined;
+    const ext = found && filter(found.key) ? found : undefined; // фильтр инструмента — и для них (захват — только за свои)
+    if (!ext || !own) return own ?? ext;
+    const d = (h: SnapHit) => Math.hypot(h.point[0] - point[0], h.point[1] - point[1]);
+    return d(ext) < d(own) ? ext : own;
   }
+
+  /** Привязки к геометрии карты в наброске (подключает main.ts); undefined — без них. */
+  sketchSnap?: (point: [number, number]) => SnapHit | undefined;
 
   private findSnap(point: [number, number], filter: (key: string) => boolean, radius: number, opts: SnapOpts): SnapHit | undefined {
     if (!this.snapsEnabled || this.snapsSuspended) return;

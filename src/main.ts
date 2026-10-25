@@ -3369,6 +3369,14 @@ function startMapUnderlayTool(tool: 'move' | 'rotate' | 'scale') {
   syncMapTools();
 }
 
+// Инструменты подложек на карте прилипают к контурам зданий карты (вершины и середины сторон на земле)
+overpassLayer.sketchSnap = (pt) => {
+  if (!underlaySketch) return;
+  const s = snapGround(pt), local = s && overpassLayer.focusToLocal([s.lngLat.lng, s.lngLat.lat]);
+  if (!s || !local) return;
+  return { kind: s.kind as SnapKind, key: '', local: new THREE.Vector3(local[0], local[1], 0), lngLat: s.lngLat, altitude: 0, point: s.point, label: s.label };
+};
+
 /** Инструменты подложек на карте выключены — закрыть их сцену наброска. */
 function endUnderlaySketch() {
   if (!underlaySketch || moveTool.active || rotateTool.active || scaleTool.active) return;

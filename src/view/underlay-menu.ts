@@ -1,6 +1,6 @@
 /**
  * Свои подложки в меню слоёв: на карте — общие, в режиме здания — его и общие. Галка видимости у каждой,
- * настройки под стрелкой — прозрачность, где видна (в режиме здания), этаж (у подложки здания), подгонка и удаление;
+ * настройки под стрелкой — прозрачность, где видна (в режиме здания), этаж (у подложки здания), выбор и удаление;
  * «Добавить картинку…» — выбор файлов (на карте — общая, в режиме здания — этого здания).
  */
 import { tr } from '../i18n';
@@ -12,8 +12,8 @@ export interface UnderlayMenuHooks {
   /** Подложку изменили (видимость, прозрачность, этаж, здание). */
   change(u: Underlay): void;
   remove(u: Underlay): void;
-  /** Открыть панель подгонки (положение, поворот, масштаб). */
-  adjust(u: Underlay): void;
+  /** Выделить подложку (инструменты и свойства). */
+  select(u: Underlay): void;
 }
 
 export class UnderlayMenu {
@@ -185,9 +185,9 @@ export class UnderlayMenu {
     const adjust = document.createElement('button');
     adjust.type = 'button';
     adjust.className = 'basemap-shift-tool';
-    adjust.innerHTML = `${MOVE_SVG}<span>${tr('Подогнать')}</span>`;
-    adjust.title = tr('Сдвинуть, повернуть и растянуть мышью, числами или по двум точкам');
-    adjust.addEventListener('click', () => this.hooks.adjust(u));
+    adjust.innerHTML = `${MOVE_SVG}<span>${tr('Выбрать')}</span>`;
+    adjust.title = tr('Выделить подложку: двигать, поворачивать и масштабировать — инструментами (M, Q, E), точные значения — в свойствах');
+    adjust.addEventListener('click', () => this.hooks.select(u));
     buttons.append(adjust, remove);
     sec.append(alphaRow);
     if (this.building !== undefined) sec.append(scopeRow);

@@ -70,7 +70,6 @@ import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from '.
 import { LOADER_TIMING, CUBE_SHAPES, MorphLoader } from './view/morph-loader';
 import { createUnderlay, deleteUnderlay, fitToBuilding, fitToView, isUnderlayFile, loadUnderlays, saveUnderlay, type Underlay } from './view/underlays';
 import { UnderlayMenu } from './view/underlay-menu';
-import { UnderlayPanel } from './view/underlay-panel';
 
 // Статичная разметка index.html — до того, как код ниже начнёт менять тексты
 localizeDom(document.body);
@@ -646,16 +645,16 @@ const underlayOf = (key: string | undefined) => (key?.startsWith(UNDERLAY_KEY) ?
 const underlayMenu = new UnderlayMenu({
   add: (files) => void addUnderlays(files),
   change: (changed) => {
-    // Из меню — видимость, прозрачность, этаж и где видна: положение могла сдвинуть панель подгонки
+    // Из меню — видимость, прозрачность, этаж и где видна: положение могли изменить инструменты
     const cur = currentUnderlays().find((x) => x.id === changed.id);
     const u = cur ? { ...cur, visible: changed.visible, opacity: changed.opacity, level: changed.level, building: changed.building } : changed;
-    underlayPanel.update(u);
     replaceUnderlay(u, u.level !== cur?.level || u.building !== cur?.building);
+    if (underlaySelection.includes(u.id)) renderSelected();
     scheduleUnderlaySave(u);
   },
-  adjust: (u) => adjustUnderlay(u),
+  // «Выбрать»: выделить подложку — инструменты и свойства
+  select: (u) => { basemapCtrl?.closeMenu(); selectUnderlay(u.id); },
   remove: (u) => {
-    if (underlayPanel.id === u.id) underlayPanel.hide();
     sharedUnderlays = sharedUnderlays.filter((x) => x.id !== u.id);
     focusUnderlays = focusUnderlays?.filter((x) => x.id !== u.id);
     clearTimeout(underlaySaves.get(u.id));
@@ -665,41 +664,6 @@ const underlayMenu = new UnderlayMenu({
   },
 });
 basemapCtrl?.addSection(underlayMenu.el);
-/** Открыть панель подгонки подложки. */
-function adjustUnderlay(u: Underlay) {
-  basemapCtrl?.closeMenu();
-  // На карте сцены режима здания нет — своя система координат вокруг подложки
-  mapUnderlayFrame = focus ? undefined : overpassLayer.geoFrame(u.center);
-  underlayPanel.show(u);
-}
-
-/** Система координат подгонки подложки на карте (вне режима здания). */
-let mapUnderlayFrame: ReturnType<typeof overpassLayer.geoFrame> | undefined;
-// Панель подгонки: правки сразу видны, в базу — по «Подтвердить» (отмена возвращает как было)
-const underlayPanel = new UnderlayPanel(map, {
-  focusRay: (p) => (focus ? overpassLayer.focusRay(p) : mapUnderlayFrame?.ray(p)),
-  focusProjector: () => (focus ? overpassLayer.focusProjector() : mapUnderlayFrame?.projector()),
-  focusToLocal: (p) => (focus ? overpassLayer.focusToLocal(p) : mapUnderlayFrame?.toLocal(p)),
-  focusToLngLat: (x, y) => (focus ? overpassLayer.focusToLngLat(x, y) : mapUnderlayFrame?.toLngLat(x, y)),
-  snapAt: (p) => (focus ? overpassLayer.snapAt(p) : mapUnderlaySnap(p)),
-  elevation: (u) => underlayElevation(u) ?? 0,
-}, {
-  change: (u) => replaceUnderlay(u),
-  close: (u, done) => {
-    replaceUnderlay(u);
-    if (done) scheduleUnderlaySave(u);
-    showUnderlays();
-  },
-});
-
-/** Привязка подгонки на карте: вершины и середины рёбер контуров зданий на земле (как у сдвига снимка). */
-function mapUnderlaySnap(pt: [number, number]): SnapHit | undefined {
-  const s = snapGround(pt), frame = mapUnderlayFrame;
-  if (!s || !frame) return;
-  const [x, y] = frame.toLocal([s.lngLat.lng, s.lngLat.lat]);
-  return { kind: s.kind as SnapKind, key: '', local: new THREE.Vector3(x, y, 0), lngLat: s.lngLat, altitude: 0, point: s.point, label: s.label };
-}
-
 /** Подложка изменилась: в своём списке и на сцене (меню — только если menu: ползунок может быть под мышью). */
 function replaceUnderlay(u: Underlay, menu = false) {
   sharedUnderlays = sharedUnderlays.filter((x) => x.id !== u.id);
@@ -744,8 +708,6 @@ function showUnderlays(menu = true) {
   if (kept.length !== underlaySelection.length) { underlaySelection = kept; paintSelection(); renderSelected(); }
   if (shown.some((u) => u.visible)) usedUnderlay = true;
   // Подгоняемую подложку больше не видно (сменили этаж, режим) — подгонку закончить
-  const fitting = underlayPanel.id;
-  if (fitting && !shown.some((u) => u.id === fitting)) underlayPanel.hide();
 }
 
 /** Подложки, показанные преобразованными (превью инструмента), и преобразование, м сцены. */
@@ -856,7 +818,10 @@ if (josmMode) watchJosmUnderlays((id, redo) => { const s = josmUnderlaySteps.get
 
 /** Правка подложек одним шагом истории вместе с правками объектов edit (отменяются вместе); name — название шага. */
 function editUnderlays(before: Underlay[], after: Underlay[], edit: () => void = () => {}, name = tr('подложка')) {
-  const apply = (list: Underlay[]) => { for (const u of list) { replaceUnderlay(u); scheduleUnderlaySave(u); } };
+  const apply = (list: Underlay[]) => {
+    for (const u of list) { replaceUnderlay(u); scheduleUnderlaySave(u); }
+    if (list.some((u) => underlaySelection.includes(u.id))) renderSelected(); // свойства — по новому положению
+  };
   apply(after);
   if (!josmUnderlayHistory()) {
     session.editWithView({ keep: true, undo: () => apply(before), redo: () => apply(after) }, edit);
@@ -873,7 +838,6 @@ function editUnderlays(before: Underlay[], after: Underlay[], edit: () => void =
 /** Загрузить подложки здания режима (при входе в здание). */
 async function loadFocusUnderlays() {
   const key = focus?.key;
-  underlayPanel.hide(); // подгонка подложки прежнего здания или карты
   focusUnderlays = undefined;
   showUnderlays();
   if (!key) return;
@@ -2162,7 +2126,6 @@ function exitFocus() {
   restore(focusHiddenLayers.filter((l) => !TILE_LAYERS.includes(l.id)));
   focusHiddenLayers = [];
   offsetPanel.hide();
-  underlayPanel.hide();
   syncBasemapLayers();
   focusUnderlays = undefined;
   showUnderlays();
@@ -9855,19 +9818,67 @@ infoEl.addEventListener('mouseout', (e) => {
   if ((e.target as HTMLElement).closest('[data-outline-cand], [data-hover-key]')) overpassLayer.setOverlay(outlineOverlay);
 });
 
-/** Свойства выделенных подложек (без объектов OSM). */
-function renderUnderlaySelection() {
-  const list = underlaySelection.map((id) => currentUnderlays().find((u) => u.id === id)).filter((u): u is Underlay => !!u);
-  infoEl.innerHTML = `
-    <h2>${list.length === 1 ? tr('Подложка') : tr('Подложки: {n}', { n: list.length })}</h2>
-    <ul class="change-list">${list.map((u) => `<li>${esc(u.name)}${u.building === undefined ? ` <span class="hint">${tr('(общая)')}</span>` : ''}</li>`).join('')}</ul>
-    ${list.length === 1 ? `<p><button type="button" data-underlay-adjust="${esc(list[0].id)}">${tr('Подогнать…')}</button></p>` : ''}`;
+/** Оси картинки подложки (единичные): вдоль ширины, вдоль высоты, нормаль — по её ориентации. */
+function underlayAxes(u: Underlay): [THREE.Vector3, THREE.Vector3, THREE.Vector3] {
+  const q = underlayQuaternion(u);
+  return [new THREE.Vector3(1, 0, 0).applyQuaternion(q), new THREE.Vector3(0, 1, 0).applyQuaternion(q), new THREE.Vector3(0, 0, 1).applyQuaternion(q)];
 }
 
-infoEl.addEventListener('click', (e) => {
-  const id = (e.target as HTMLElement).closest<HTMLElement>('[data-underlay-adjust]')?.dataset.underlayAdjust;
+/**
+ * Числа подложки для свойств: азимут (лежащей — куда смотрит верх картинки, стоящей — куда обращена лицевая сторона;
+ * по часовой от севера, °), наклон (0 — лежит, 90 — стоит, °), ширина на местности (м), низ — высота нижней точки
+ * над основанием (землёй или полом этажа), м.
+ */
+function underlayNumbers(u: Underlay) {
+  const [a, b, n] = underlayAxes(u);
+  const flat = Math.abs(n.z) > Math.SQRT1_2;
+  const d = flat ? b : n;
+  const azimuth = ((Math.atan2(d.x, d.y) * 180) / Math.PI + 360) % 360;
+  const w = u.width * u.scale, h = u.height * u.scale;
+  return { azimuth, tilt: (u.tilt * 180) / Math.PI, width: w, bottom: u.elevation - (Math.abs(a.z) * w + Math.abs(b.z) * h) / 2 };
+}
+
+/** Свойства выделенных подложек (без объектов OSM); у одной — точные значения положения. */
+function renderUnderlaySelection() {
+  const list = underlaySelection.map((id) => currentUnderlays().find((u) => u.id === id)).filter((u): u is Underlay => !!u);
+  const u = list.length === 1 ? list[0] : undefined;
+  const num = (prop: string, label: string, value: number, unit: string, step: string, title = '') =>
+    `<label class="field" title="${esc(title)}"><span>${label}</span><input type="number" data-uprop="${prop}" step="${step}" value="${fmtNum(value)}"> ${unit}</label>`;
+  const n = u && underlayNumbers(u);
+  infoEl.innerHTML = `
+    <h2>${u ? tr('Подложка') : tr('Подложки: {n}', { n: list.length })}</h2>
+    <ul class="change-list">${list.map((x) => `<li>${esc(x.name)}${x.building === undefined ? ` <span class="hint">${tr('(общая)')}</span>` : ''}</li>`).join('')}</ul>
+    ${u && n ? `<div class="underlay-props" data-underlay="${esc(u.id)}">
+      ${num('azimuth', tr('Азимут'), n.azimuth, '°', '0.1', tr('Лежащей — куда смотрит верх картинки, стоящей — куда обращена лицевая сторона; по часовой от севера'))}
+      ${num('tilt', tr('Наклон'), n.tilt, '°', '0.1', tr('0 — лежит (план), 90 — стоит (фасад, разрез)'))}
+      ${num('width', tr('Ширина'), n.width, tr('м'), '0.01', tr('Ширина картинки на местности'))}
+      ${num('bottom', tr('Низ'), n.bottom, tr('м'), '0.01', tr('Высота нижней точки картинки над землёй (у подложки этажа — над его полом)'))}
+      <label class="field"><span>${tr('Прозрачность')}</span><input type="range" data-uprop="opacity" min="0" max="95" value="${Math.round((1 - u.opacity) * 100)}"></label>
+      <label class="field-check"><input type="checkbox" data-uprop="mirror"${u.mirror ? ' checked' : ''}> ${tr('Зеркально')}</label>
+      <p class="hint">${tr('Двигать, поворачивать и масштабировать — инструментами «Переместить», «Повернуть», «Масштаб» (M, Q, E).')}</p>
+    </div>` : ''}`;
+}
+
+const fmtNum = (v: number) => String(Math.round(v * 1000) / 1000);
+
+// Поле свойства подложки изменено — шаг истории (прозрачность — сразу, без истории: её крутят ползунком)
+infoEl.addEventListener('change', (e) => {
+  const input = (e.target as HTMLElement).closest<HTMLInputElement>('[data-uprop]');
+  const id = input?.closest<HTMLElement>('[data-underlay]')?.dataset.underlay;
   const u = id && currentUnderlays().find((x) => x.id === id);
-  if (u) adjustUnderlay(u);
+  if (!input || !u) return;
+  const prop = input.dataset.uprop!, v = Number(input.value), n = underlayNumbers(u);
+  let next: Underlay | undefined;
+  if (prop === 'mirror') next = { ...u, mirror: input.checked };
+  else if (prop === 'opacity') { const o = { ...u, opacity: Math.max(0.05, Math.min(1, 1 - v / 100)) }; replaceUnderlay(o, true); scheduleUnderlaySave(o); return; }
+  else if (!Number.isFinite(v)) return renderSelected();
+  // Азимут — поворот вокруг вертикали через центр: у любой ориентации это добавка к rotation (против часовой)
+  else if (prop === 'azimuth') { const r = u.rotation - ((v - n.azimuth) * Math.PI) / 180; next = { ...u, rotation: Math.atan2(Math.sin(r), Math.cos(r)) }; }
+  else if (prop === 'tilt') next = { ...u, tilt: (Math.max(0, Math.min(180, v)) * Math.PI) / 180 };
+  else if (prop === 'width' && v > 0) next = { ...u, scale: v / u.width };
+  else if (prop === 'bottom') next = { ...u, elevation: u.elevation + v - n.bottom };
+  if (!next) return renderSelected();
+  editUnderlays([u], [next], undefined, tr('подложка'));
 });
 
 function renderMulti() {

@@ -689,18 +689,12 @@ body.mobile #issues-panel { display: none !important; }
 .basemap-menu label.underlay-row { min-width: 0; }
 .underlay-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .underlay-add { margin-bottom: 2px; }
-/* Панель подгонки подложки: рамка и ручки поверх карты */
-.underlay-handles { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; overflow: visible; }
-.underlay-handles .frame { fill: none; stroke: #ff7a00; stroke-width: 1.5; stroke-dasharray: 6 4; }
-.underlay-handles .handle { fill: #fff; stroke: #ff7a00; stroke-width: 1.5; }
-.underlay-handles .pick { fill: #ff7a00; stroke: #fff; stroke-width: 2; }
-.underlay-handles .pin { fill: #16a34a; stroke: #fff; stroke-width: 2; }
-.underlay-handles .lead { stroke: #ff7a00; stroke-width: 2; stroke-dasharray: 4 3; }
-.underlay-handles text { font: 600 12px system-ui, sans-serif; fill: #222; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
-.offset-panel label.underlay-mirror input { width: auto; margin: 0; }
-.underlay-fit { width: 100%; margin: 4px 0 0; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
-.underlay-fit:hover { background: #f3f4f6; }
-.underlay-fit.active { background: #e8f0ff; border-color: #2f7cff; color: #1d4ed8; }
+/* Свойства подложки (панель «Свойства») */
+.underlay-props .field { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.underlay-props .field > span { min-width: 92px; }
+.underlay-props .field input[type=number] { width: 90px; }
+.underlay-props .field input[type=range] { flex: 1; }
+.underlay-props .field-check { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
 .underlay-row.away .underlay-name { color: #9ca3af; }
 .underlay-level { flex: none; padding: 0 4px; border-radius: 3px; background: #f3f4f6; color: #4b5563; font-size: 11px; }
 .basemap-menu .underlay-level-row select { flex: 1; min-width: 0; font: inherit; }

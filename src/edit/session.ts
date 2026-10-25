@@ -341,14 +341,16 @@ export class EditSession {
   }
 
   /**
-   * Правки edit и уже выполненное действие интерфейса — одним шагом истории; правок не вышло — только действие.
+   * Правки edit и уже выполненное действие интерфейса — одним шагом истории; правок не вышло — только действие
+   * (alone = false — тогда в историю ничего). true — действие прикреплено к шагу правок.
    */
-  editWithView(action: ViewAction, edit: () => void) {
+  editWithView(action: ViewAction, edit: () => void, alone = true): boolean {
     const n = this.undoStack.length;
     edit();
     const last = this.undoStack.at(-1);
-    if (this.undoStack.length > n && last && !isView(last)) this.attached.set(last, action);
-    else this.pushView(action);
+    if (this.undoStack.length > n && last && !isView(last)) { this.attached.set(last, action); return true; }
+    if (alone) this.pushView(action);
+    return false;
   }
 
   /** Убрать из истории действия интерфейса (например, при выходе из режима здания — они о его сцене). */

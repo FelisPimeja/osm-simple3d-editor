@@ -22,6 +22,33 @@ const MIN_PROTOCOL = 2;
 export const PLUGIN_DOWNLOAD = 'https://github.com/FelisPimeja/osm-simple3d-editor/releases/latest/download/simple3d.jar';
 /** Плагин отвечает: правки уходят в JOSM, слой читается через него. */
 let plugin = false;
+/** Версия протокола плагина. */
+let pluginProtocol = 0;
+/** Протокол, с которого шаги подложек живут в истории JOSM (UnderlayCommand в плагине). */
+const UNDERLAY_PROTOCOL = 3;
+/** Шаги правки подложек — в истории JOSM (общий Ctrl+Z с правками данных). */
+export const josmUnderlayHistory = () => plugin && pluginProtocol >= UNDERLAY_PROTOCOL;
+/** Шаг подложки (уже сделан в редакторе) — в историю JOSM; name — название команды. */
+export async function josmUnderlayStep(id: string, name: string) {
+  if (josmUnderlayHistory()) await fetch(`${PLUGIN_URL}/simple3d/underlay`, { method: 'POST', body: `${id}\n${name}` });
+}
+/** Отмены и повторы шагов подложек в JOSM (долгий опрос плагина): f(id, redo). */
+export function watchJosmUnderlays(f: (id: string, redo: boolean) => void) {
+  let seq: number | undefined;
+  const loop = async () => {
+    if (!josmUnderlayHistory()) { setTimeout(loop, 5000); return; }
+    try {
+      const res = await fetch(`${PLUGIN_URL}/simple3d/underlays${seq !== undefined ? `?since=${seq}` : ''}`);
+      if (res.status === 200) {
+        const r = (await res.json()) as { seq: number; events: { id: string; op: 'undo' | 'redo' }[] };
+        seq = r.seq;
+        for (const e of r.events) f(e.id, e.op === 'redo');
+      }
+      setTimeout(loop, 0);
+    } catch { setTimeout(loop, 2000); }
+  };
+  void loop();
+}
 /** Ревизия слоя у плагина (растёт при каждом изменении данных в JOSM). */
 let pluginRev: string | undefined;
 export const josmPlugin = () => plugin;
@@ -113,6 +140,7 @@ export function josmLayer(): Promise<JosmLayer> {
 async function loadLayer(): Promise<JosmLayer> {
   const st = await fetch(`${PLUGIN_URL}/simple3d/status`).then((r) => (r.ok ? r.json() as Promise<{ protocol?: number }> : undefined)).catch(() => undefined);
   plugin = !!st;
+  pluginProtocol = st?.protocol ?? 0;
   if (st && (st.protocol ?? 0) < MIN_PROTOCOL) {
     plugin = false;
     throw new Error(tr('Плагин simple3d в JOSM устарел (протокол {v}, нужен {min}). Обновите его: {url} — и перезапустите JOSM.',

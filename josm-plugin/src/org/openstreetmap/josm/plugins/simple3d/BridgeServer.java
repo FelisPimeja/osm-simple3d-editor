@@ -59,6 +59,8 @@ import org.openstreetmap.josm.plugins.simple3d.MiniHttp.Exchange;
  * <li>GET /simple3d/status — версия протокола и номер ревизии слоя (rev растёт при любом изменении данных);</li>
  * <li>GET /simple3d/export[?since=rev] — активный слой в .osm; с since ждёт изменения до 25 с (иначе 204);</li>
  * <li>POST /simple3d/undo, /simple3d/redo — отмена/повтор в JOSM;</li>
+ * <li>POST /simple3d/underlay — шаг правки подложки редактора в историю JOSM (тело: id, с новой строки — название);
+ * GET /simple3d/underlays?since=N — отмены и повторы этих шагов после события N (ждёт до 25 с, иначе 204);</li>
  * <li>/api/0.6/… — подмножество OSM API, которым пользуется отправка редактора: nodes/ways/relations.json,
  * way/{id}/relations.json, changeset create/upload/close. Загрузка osmChange — одна команда JOSM.</li>
  * </ul>
@@ -66,9 +68,10 @@ import org.openstreetmap.josm.plugins.simple3d.MiniHttp.Exchange;
 class BridgeServer {
     /**
      * Версия протокола: растёт при несовместимых изменениях и при новых возможностях, без которых редактор не обойдётся
-     * (редактор знает минимальную, MIN_PROTOCOL в src/osm/josm.ts). 2 — выделение, история, пользователь в status.
+     * (редактор знает минимальную, MIN_PROTOCOL в src/osm/josm.ts). 2 — выделение, история, пользователь в status;
+     * 3 — шаги подложек в истории JOSM (UnderlayCommand).
      */
-    static final int PROTOCOL = 2;
+    static final int PROTOCOL = 3;
 
     private final int port;
     private MiniHttp http;
@@ -198,6 +201,18 @@ class BridgeServer {
             send(ex, 200, "text/plain", "");
             return;
         }
+        if (path.equals("/simple3d/underlay") && method.equals("POST")) {
+            String[] t = new String(readAll(ex.getRequestBody()), StandardCharsets.UTF_8).split("\n", 2);
+            DataSet ds = editDataSet();
+            String name = "3D: " + (t.length > 1 && !t[1].isBlank() ? t[1].trim() : "подложка");
+            onEdt(() -> UndoRedoHandler.getInstance().add(new UnderlayCommand(ds, t[0].trim(), name, this::underlayEvent)));
+            send(ex, 200, "text/plain", "");
+            return;
+        }
+        if (path.equals("/simple3d/underlays") && method.equals("GET")) {
+            underlays(ex, q.get("since"));
+            return;
+        }
         String api = "/api/0.6/";
         if (!path.startsWith(api)) throw new HttpError(404, "not found");
         String p = path.substring(api.length());
@@ -224,7 +239,11 @@ class BridgeServer {
             send(ex, 200, "application/json", elementsJson(ds, found));
         } else if (p.equals("changeset/create") && method.equals("PUT")) {
             // Комментарий пакета (редактор предлагает его по правкам) — имя команды в истории JOSM
-            Matcher c = Pattern.compile("k=\"comment\"\\s+v=\"([^\"]*)\"").matcher(new String(readAll(ex.getRequestBody()), StandardCharsets.UTF_8));
+            String cs = new String(readAll(ex.getRequestBody()), StandardCharsets.UTF_8);
+            // Шаги подложек, сделанные вместе с этими правками, — в ту же команду JOSM (одна отмена)
+            Matcher u = Pattern.compile("k=\"simple3d:underlays\"\\s+v=\"([^\"]*)\"").matcher(cs);
+            pendingUnderlays = u.find() ? unescapeXml(u.group(1)) : "";
+            Matcher c = Pattern.compile("k=\"comment\"\\s+v=\"([^\"]*)\"").matcher(cs);
             label = c.find() ? String.join("; ", java.util.Arrays.stream(unescapeXml(c.group(1)).split("\n"))
                 .map(l -> l.replaceFirst("^\\s*[*•-]\\s*", "").replaceFirst(":$", "").trim()).filter(l -> !l.isEmpty()).toArray(String[]::new)) : "";
             send(ex, 200, "text/plain", "1");
@@ -412,6 +431,50 @@ class BridgeServer {
         send(ex, 200, "application/xml; charset=utf-8", sw.toString());
     }
 
+    // ---------------------------------------------------------------- подложки
+
+    /** Отмены и повторы шагов подложек: номер события, id шага, повтор (иначе отмена). Последние — для опроса редактора. */
+    private final List<String[]> underlayEvents = new ArrayList<>();
+    private long underlaySeq;
+    private static final int UNDERLAY_EVENTS_KEPT = 200;
+
+    private void underlayEvent(String id, boolean redo) {
+        synchronized (revLock) {
+            underlaySeq++;
+            underlayEvents.add(new String[] {String.valueOf(underlaySeq), id, redo ? "redo" : "undo"});
+            if (underlayEvents.size() > UNDERLAY_EVENTS_KEPT) underlayEvents.remove(0);
+            revLock.notifyAll();
+        }
+    }
+
+    /** События после since; без since — только текущий номер (с него редактор начинает). */
+    private void underlays(Exchange ex, String since) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        synchronized (revLock) {
+            if (since != null) {
+                long s = Long.parseLong(since);
+                long deadline = System.currentTimeMillis() + 25_000;
+                while (underlaySeq <= s) {
+                    long left = deadline - System.currentTimeMillis();
+                    if (left <= 0) break;
+                    revLock.wait(left);
+                }
+                if (underlaySeq <= s) {
+                    send(ex, 204, null, null);
+                    return;
+                }
+            }
+            sb.append("{\"seq\":").append(underlaySeq).append(",\"events\":[");
+            boolean first = true;
+            if (since != null) for (String[] e : underlayEvents) {
+                if (Long.parseLong(e[0]) <= Long.parseLong(since)) continue;
+                sb.append(first ? "" : ",").append("{\"id\":").append(str(e[1])).append(",\"op\":").append(str(e[2])).append('}');
+                first = false;
+            }
+        }
+        send(ex, 200, "application/json", sb.append("]}").toString());
+    }
+
     // ---------------------------------------------------------------- osmChange → команды JOSM
 
     /** Ключ элемента osmChange: тип/id (id — как прислал редактор, у новых отрицательный). */
@@ -451,6 +514,8 @@ class BridgeServer {
 
     /** Имя следующей команды (комментарий из changeset/create). */
     private volatile String label = "";
+    /** Шаги подложек для следующей загрузки (id через запятую; из тега simple3d:underlays пакета). */
+    private volatile String pendingUnderlays = "";
 
     private static String unescapeXml(String s) {
         return s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&");
@@ -578,6 +643,10 @@ class BridgeServer {
             diff.append('<').append(p.getType().getAPIName()).append(" old_id=\"").append(p.getUniqueId()).append("\"/>");
         }
 
+        for (String id : pendingUnderlays.split(",")) {
+            if (!id.isBlank()) cmds.add(new UnderlayCommand(ds, id.trim(), "подложка", this::underlayEvent));
+        }
+        pendingUnderlays = "";
         if (!cmds.isEmpty()) {
             String name = "3D: " + (label.isEmpty() ? "Simple3D" : label);
             SequenceCommand seq = new SequenceCommand(ds, name, cmds, false) {

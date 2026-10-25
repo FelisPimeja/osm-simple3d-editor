@@ -25,13 +25,15 @@
 
 | Запрос | Что делает |
 |---|---|
-| `GET /simple3d/status` | `{"plugin":"simple3d","protocol":1,"rev":N,"layer":true}` |
+| `GET /simple3d/status` | `{"plugin":"simple3d","protocol":3,"rev":N,"layer":true,…}` |
 | `GET /simple3d/export[?since=N]` | слой в .osm, заголовок `X-Simple3D-Rev`; с `since` ждёт изменения до 25 с, иначе 204 |
 | `GET /editor/…` | страница редактора с `simple3d.url` (прокси) |
 | `GET /simple3d/selection[?since=N]`, `POST /simple3d/selection` | выделение в JOSM (ключи `way/1,relation/2`); GET с `since` ждёт изменения |
 | `POST /simple3d/undo`, `/simple3d/redo` | отмена и повтор в JOSM |
+| `POST /simple3d/underlay` | шаг правки подложки редактора в историю JOSM (тело: id, с новой строки — название); данные не меняет (протокол 3) |
+| `GET /simple3d/underlays[?since=N]` | отмены и повторы шагов подложек: `{"seq":N,"events":[{"id":…,"op":"undo"\|"redo"}]}`; с `since` ждёт до 25 с, иначе 204 |
 | `GET /api/0.6/{nodes,ways,relations}.json`, `/way/{id}/relations.json` | текущие объекты слоя (с правками) |
-| `PUT /api/0.6/changeset/create`, `…/close`; `POST …/upload` | osmChange → команды JOSM, ответ diffResult (`new_id` — id в JOSM) |
+| `PUT /api/0.6/changeset/create`, `…/close`; `POST …/upload` | osmChange → команды JOSM, ответ diffResult (`new_id` — id в JOSM); тег пакета `simple3d:underlays` (id через запятую) — шаги подложек в ту же команду |
 
 Редактор отправляет в JOSM тем же кодом, что и в OSM (`src/osm/upload.ts`, параметр `to`).
 Удаление — как `if-unused`: то, на что ещё ссылаются, не удаляется. Адрес редактора — настройка `simple3d.url`.

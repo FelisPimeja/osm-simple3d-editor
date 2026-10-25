@@ -61,7 +61,7 @@ import { EditSession, type ObjectEdit, type SessionSnapshot, type Tagged, type T
 import { Autosave, type SavedEdits } from './edit/autosave';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
-import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmStatus, josmUndo, minElementId, refreshJosmStatus, sendJosmSelection, watchJosmSelection, type JosmChange, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
+import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmStatus, josmUndo, josmUnderlayHistory, josmUnderlayStep, watchJosmUnderlays, minElementId, refreshJosmStatus, sendJosmSelection, watchJosmSelection, type JosmChange, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
 import { deprecations, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
 import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, setDateFields, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
@@ -839,11 +839,29 @@ const underlayTarget: UnderlayTarget = {
   },
 };
 
-/** Правка подложек одним шагом истории вместе с правками объектов edit (отменяются вместе). */
-function editUnderlays(before: Underlay[], after: Underlay[], edit: () => void = () => {}) {
+/**
+ * Шаги подложек в истории JOSM (плагин, протокол 3): id → отменить/повторить. JOSM сообщает об отмене и повторе —
+ * подложки и правки данных отменяются одним Ctrl+Z в общем порядке. После перезагрузки страницы шаги забываются.
+ */
+const josmUnderlaySteps = new Map<string, { undo(): void; redo(): void }>();
+/** Шаги подложек, сделанные вместе с правками данных: уйдут в JOSM той же командой (с их отправкой). */
+let pendingJosmUnderlays: { id: string; applied: boolean }[] = [];
+if (josmMode) watchJosmUnderlays((id, redo) => { const s = josmUnderlaySteps.get(id); if (s) { if (redo) s.redo(); else s.undo(); } });
+
+/** Правка подложек одним шагом истории вместе с правками объектов edit (отменяются вместе); name — название шага. */
+function editUnderlays(before: Underlay[], after: Underlay[], edit: () => void = () => {}, name = tr('подложка')) {
   const apply = (list: Underlay[]) => { for (const u of list) { replaceUnderlay(u); scheduleUnderlaySave(u); } };
   apply(after);
-  session.editWithView({ keep: true, undo: () => apply(before), redo: () => apply(after) }, edit);
+  if (!josmUnderlayHistory()) {
+    session.editWithView({ keep: true, undo: () => apply(before), redo: () => apply(after) }, edit);
+    return;
+  }
+  // С плагином JOSM история — его: правки данных уходят туда, шаг подложки — следом за ними или сразу (один)
+  const id = crypto.randomUUID(), pending = { id, applied: true };
+  josmUnderlaySteps.set(id, { undo: () => apply(before), redo: () => apply(after) });
+  const attached = session.editWithView({ keep: true, undo: () => { pending.applied = false; apply(before); }, redo: () => { pending.applied = true; apply(after); } }, edit, false);
+  if (attached) pendingJosmUnderlays.push(pending);
+  else void josmUnderlayStep(id, name).catch((err) => setStatus((err as Error).message, true));
 }
 
 /** Загрузить подложки здания режима (при входе в здание). */
@@ -2340,7 +2358,8 @@ let moveSelectedByClick = false;
 const moveTool = new MoveTool(overpassLayer, map.getContainer(), (keys, offset, glue, underlays) => {
   if (!underlays.length) return commitMove(keys, offset, glue);
   const before = currentUnderlays().filter((u) => underlays.includes(u.id));
-  editUnderlays(before, before.map((u) => transformUnderlay(u, new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z))), () => { if (keys.length) commitMove(keys, offset, glue); });
+  editUnderlays(before, before.map((u) => transformUnderlay(u, new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z))), () => { if (keys.length) commitMove(keys, offset, glue); },
+    tr('перемещение подложки'));
   if (!keys.length) setStatus(tr('Перемещено подложек: {n} на {d} м.', { n: before.length, d: offset.length().toFixed(2) }));
 }, (hint) => {
   moveBtn.classList.toggle('active', moveTool.active);
@@ -2361,7 +2380,8 @@ const rotateTool = new RotateTool(overpassLayer, map.getContainer(), (keys, pivo
   const m = new THREE.Matrix4().makeTranslation(pivot.x, pivot.y, pivot.z).multiply(new THREE.Matrix4().makeRotationAxis(axis, angle))
     .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
   const before = currentUnderlays().filter((u) => underlays.includes(u.id));
-  editUnderlays(before, before.map((u) => transformUnderlay(u, m)), () => { if (keys.length) commitRotate(keys, pivot, angle, glue); });
+  editUnderlays(before, before.map((u) => transformUnderlay(u, m)), () => { if (keys.length) commitRotate(keys, pivot, angle, glue); },
+    tr('поворот подложки'));
   if (!keys.length) setStatus(tr('Повёрнуто подложек: {n} на {deg}°. Отменить — Ctrl+Z.', { n: before.length, deg: (angle * 180 / Math.PI).toFixed(1) }));
 }, (hint) => {
   rotateBtn.classList.toggle('active', rotateTool.active);
@@ -2389,7 +2409,8 @@ const scaleBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="scal
 const scaleTool = new ScaleTool(overpassLayer, map.getContainer(), (keys, m, glue, underlays) => {
   if (!underlays.length) return commitScale(keys, m, glue);
   const before = currentUnderlays().filter((u) => underlays.includes(u.id));
-  editUnderlays(before, before.map((u) => transformUnderlay(u, m)), () => { if (keys.length) commitScale(keys, m, glue); });
+  editUnderlays(before, before.map((u) => transformUnderlay(u, m)), () => { if (keys.length) commitScale(keys, m, glue); },
+    tr('масштаб подложки'));
   if (!keys.length) setStatus(tr('Масштабировано подложек: {n}. Отменить — Ctrl+Z.', { n: before.length }));
 }, (hint) => {
   scaleBtn.classList.toggle('active', scaleTool.active);
@@ -10284,7 +10305,11 @@ async function doUpload() {
     });
     const toJosm = josmApi();
     // В JOSM комментарий — имя команды в его истории: предложенный по правкам
-    const res = await uploadEdits(edits, toJosm ? commentSuggestion() : uploadComment.trim(), (t) => panelStatus(t), toJosm, sourceTags());
+    // Шаги подложек, сделанные вместе с этими правками (и не отменённые), — в ту же команду JOSM
+    const underlaySteps = toJosm ? pendingJosmUnderlays.filter((p) => p.applied).map((p) => p.id) : [];
+    const res = await uploadEdits(edits, toJosm ? commentSuggestion() : uploadComment.trim(), (t) => panelStatus(t), toJosm,
+      { ...sourceTags(), ...(underlaySteps.length ? { 'simple3d:underlays': underlaySteps.join(',') } : {}) });
+    if (toJosm) pendingJosmUnderlays = [];
     // Отправлено — источники считаем заново, с того, что включено сейчас
     usedImagery.clear();
     usedStreet.clear();

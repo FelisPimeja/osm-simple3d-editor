@@ -1389,10 +1389,13 @@ map.on('click', (e) => {
   }
   if (shapeTool.active) {
     const p: [number, number] = [e.point.x, e.point.y];
-    // Не по вершине выделенной части — выбрать объект под курсором (мимо — снять выделение), инструмент остаётся
+    // Не по вершине выделенной части — выбрать объект под курсором (Shift — добавить к выделению или убрать;
+    // мимо — снять выделение), инструмент остаётся
     if (!shapeTool.click(p, e.originalEvent.shiftKey)) {
       const key = resolveClick(e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point));
-      select(key && focus?.members.includes(key) ? key : undefined);
+      const member = key && focus?.members.includes(key) ? key : undefined;
+      if (e.originalEvent.shiftKey) { if (member) toggleSelection(member); }
+      else select(member);
     }
     updateSnap(p);
     return;
@@ -2782,7 +2785,7 @@ function startPush() {
 // Инструмент «Форма» (V): вершины контура выделенной части — только в плане
 const shapeBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="shape"]')!;
 const shapeTool = new ShapeTool(overpassLayer, map.getContainer(),
-  () => (selection.length === 1 && focus?.members.includes(selection[0]) && !hiddenInFocus(selection[0]) ? selection[0] : undefined),
+  () => selection.filter((k) => focus?.members.includes(k) && !hiddenInFocus(k)),
   (key) => {
     const f = entity(key) as Feature3D | undefined;
     if (!f?.polygons) return;
@@ -6938,6 +6941,7 @@ function toggleSelection(key: string) {
   selectedKey = selection.at(-1);
   paintSelection();
   renderSelected();
+  if (shapeTool.active) shapeTool.refresh();
 }
 
 /** Добавить к выделению несколько объектов (рамкой). */
@@ -6949,6 +6953,7 @@ function addToSelection(keys: string[]) {
   selectedKey = selection.at(-1);
   paintSelection();
   renderSelected();
+  if (shapeTool.active) shapeTool.refresh();
 }
 
 // Выделение рамкой: Shift + перетаскивание. Объект попадает в рамку, если в неё попал центр его основания.

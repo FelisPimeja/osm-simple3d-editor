@@ -41,7 +41,8 @@ type Hover = { index?: number; point?: THREE.Vector3; roof?: number; eave?: numb
 type Dir = { v: THREE.Vector3; name: string; axis?: 0 | 1 };
 
 /**
- * Инструмент «Форма»: правка контура выделенной части по вершинам (только в плане — в Simple 3D у вершины нет высоты).
+ * Инструмент «Форма»: правка контура выделенных частей по вершинам (ручки — у всех выделенных, выбор нескольких
+ * вершин — в пределах одной части) (только в плане — в Simple 3D у вершины нет высоты).
  * 1. клик по вершине выделенной части — захват; вершину можно взять на любой высоте вертикального ребра стены,
  *    маркеры вершин — у основания, видны поверх геометрии (заслонённые — полые). Клик по стороне у основания — новая
  *    вершина ровно на стороне (сразу применяется), дальше её можно отвести, как обычную. Клик мимо — выбрать другой объект
@@ -98,8 +99,8 @@ export class ShapeTool {
   constructor(
     private readonly layer: BuildingsLayer,
     container: HTMLElement,
-    /** Выделенная часть, вершины которой правим (одна, член здания). */
-    private readonly selected: () => string | undefined,
+    /** Выделенные части, вершины которых правим (члены здания). */
+    private readonly selected: () => string[],
     /** Низ и верх стен объекта и высота крыши, м сцены. */
     private readonly walls: (key: string) => { min: number; top: number; roof: number } | undefined,
     /** Объекты, к которым не привязываемся во время сдвига (сам объект и соседи в превью). */
@@ -163,30 +164,44 @@ export class ShapeTool {
   refresh() {
     if (this.state === 'drag') { if (this.lastPoint) this.move(this.lastPoint); return; }
     if (this.state !== 'pick') return;
-    if (this.selected() !== this.pickedKey) { this.picked.clear(); this.pickedKey = this.selected(); }
+    if (!this.pickedKey || !this.selected().includes(this.pickedKey)) { this.picked.clear(); this.pickedKey = undefined; }
     if (this.lastPoint) this.hover = this.hoverAt(this.lastPoint);
     this.showHandles();
     this.updateVcb();
-    this.say(this.selected()
+    this.say(this.selected().length
       ? tr('Форма: кликните по вершине выделенной части (на любой высоте ребра стены), по стороне — новая вершина, по ручке крыши — её высота. Клик по другому объекту — выбрать его. Esc — выйти.')
       : tr('Форма: выберите часть здания кликом, затем кликните по её вершине. Esc — выйти.'));
   }
 
   /** Рамку можно тянуть: инструмент ждёт захвата, часть выделена. */
-  get canBox() { return this.state === 'pick' && !!this.selected(); }
+  get canBox() { return this.state === 'pick' && this.selected().length > 0; }
 
-  /** Shift+рамка (px экрана): вершины основания внутри — к выбранным. */
+  /**
+   * Shift+рамка (px экрана): вершины основания внутри — к выбранным. Выбор — в пределах одной части: уже выбранной,
+   * иначе той, у которой в рамке больше вершин.
+   */
   boxSelect(x0: number, y0: number, x1: number, y1: number) {
-    const key = this.selected();
-    const polys = key ? this.layer.focusPolygons(key) : undefined;
-    const w = key ? this.walls(key) : undefined;
-    if (!key || !polys || !w) return;
-    polys.forEach((p, poly) => [p.outer, ...p.inners].forEach((r, ring) => r.forEach(([x, y], i) => {
-      const q = this.layer.focusProject(new THREE.Vector3(x, y, w.min));
-      if (q && q[0] >= x0 && q[0] <= x1 && q[1] >= y0 && q[1] <= y1) this.picked.set(vertKey({ poly, ring, i }), { poly, ring, i });
-    })));
+    const inside = this.verts().filter((v) => {
+      const q = this.layer.focusProject(new THREE.Vector3(v.x, v.y, v.z));
+      return q && q[0] >= x0 && q[0] <= x1 && q[1] >= y0 && q[1] <= y1;
+    });
+    const count = new Map<string, number>();
+    for (const v of inside) count.set(v.key, (count.get(v.key) ?? 0) + 1);
+    const key = this.pickedKey && count.has(this.pickedKey) ? this.pickedKey : [...count].sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!key) return;
+    if (key !== this.pickedKey) this.picked.clear();
+    for (const v of inside) if (v.key === key) this.picked.set(vertKey(v), { poly: v.poly, ring: v.ring, i: v.i });
     this.pickedKey = key;
     this.showHandles();
+  }
+
+  /** Вершины основания всех выделенных частей — по порядку (номер в списке — номер маркера). */
+  private verts(): (ShapeVert & { key: string; x: number; y: number; z: number; top: number })[] {
+    return this.selected().flatMap((key) => {
+      const polys = this.layer.focusPolygons(key), w = this.walls(key);
+      if (!polys || !w) return [];
+      return polys.flatMap((p, poly) => [p.outer, ...p.inners].flatMap((r, ring) => r.map(([x, y], i) => ({ key, poly, ring, i, x, y, z: w.min, top: w.top }))));
+    });
   }
 
   /** true — клик ушёл в инструмент; false — не по вершине (main выбирает объект под курсором). */
@@ -212,6 +227,8 @@ export class ShapeTool {
     const v = eave || roof?.onPoint ? undefined : this.vertexAt(point);
     if (v && shift) {
       const k = vertKey(v.target);
+      // Выбор — в пределах одной части: вершина другой начинает выбор заново
+      if (v.target.key !== this.pickedKey) this.picked.clear();
       if (this.picked.has(k)) this.picked.delete(k); else this.picked.set(k, { poly: v.target.poly, ring: v.target.ring, i: v.target.i });
       this.pickedKey = v.target.key;
       this.showHandles();
@@ -221,7 +238,7 @@ export class ShapeTool {
     if (!hit) { this.picked.clear(); return false; }
     const t = hit.target;
     // Захват одной из выбранных — едут все выбранные; иначе выбор сбрасывается
-    if (v && this.picked.size > 1 && this.picked.has(vertKey(t))) t.also = [...this.picked.values()].filter((p) => vertKey(p) !== vertKey(t));
+    if (v && this.picked.size > 1 && t.key === this.pickedKey && this.picked.has(vertKey(t))) t.also = [...this.picked.values()].filter((p) => vertKey(p) !== vertKey(t));
     else this.picked.clear();
     if (t.insert !== undefined) {
       // Новая вершина — сразу ровно на стороне; дальше её можно отвести, как обычную (Esc оставит на стороне)
@@ -342,7 +359,7 @@ export class ShapeTool {
     // (Backspace там сначала стирает набранное число, а когда его нет — удаляет вершину)
     if (e.key === 'Delete' || (e.key === 'Backspace' && (this.state === 'pick' || !this.typed))) {
       const [first, ...rest] = this.state === 'pick' ? [...this.picked.values()] : [];
-      const key = this.selected();
+      const key = this.pickedKey;
       const t = this.state === 'drag' ? this.target
         : first && key ? { key, ...first, from: new THREE.Vector3(), also: rest }
         : this.lastPoint && !this.eaveAt(this.lastPoint) ? this.vertexAt(this.lastPoint)?.target : undefined;
@@ -456,37 +473,47 @@ export class ShapeTool {
     return polys.flatMap((p) => [p.outer, ...p.inners].flatMap((r) => r.map(([x, y]) => new THREE.Vector3(x, y, z))));
   }
 
+  /** Ручки верха стен всех выделенных частей — по порядку. */
+  private allEaves() { return this.selected().flatMap((key) => this.eavePoints(key).map((p) => ({ key, p }))); }
+
   private eaveAt(point: [number, number]): { target: ShapeTarget; index: number } | undefined {
-    const key = this.selected();
-    const pts = key ? this.eavePoints(key) : [];
+    const pts = this.allEaves();
     let best: { index: number; d: number } | undefined;
-    pts.forEach((p, i) => {
+    pts.forEach(({ p }, i) => {
       const q = this.layer.focusProject(p);
       const d = q ? Math.hypot(q[0] - point[0], q[1] - point[1]) : Infinity;
       if (d <= GRAB_PX && (!best || d < best.d)) best = { index: i, d };
     });
-    return best && key ? { target: { key, poly: 0, ring: 0, i: 0, eave: true, from: pts[best.index].clone() }, index: best.index } : undefined;
+    const e = best && pts[best.index];
+    return best && e ? { target: { key: e.key, poly: 0, ring: 0, i: 0, eave: true, from: e.p.clone() }, index: best.index } : undefined;
   }
 
   /** Ручка крыши под курсором: верхняя точка крыши выделенной части или конёк между двумя такими точками. */
   private roofAt(point: [number, number]): { target: ShapeTarget; index: number; onPoint: boolean } | undefined {
-    const key = this.selected();
-    const pts = key ? this.layer.focusRoofTop(key) : [];
-    if (!key || !pts.length) return;
-    const px = pts.map((p) => this.layer.focusProject(p));
-    let best: { index: number; d: number; from: THREE.Vector3 } | undefined;
-    px.forEach((q, i) => {
-      if (!q) return;
-      const d = Math.hypot(q[0] - point[0], q[1] - point[1]);
-      if (d <= GRAB_PX && (!best || d < best.d)) best = { index: i, d, from: pts[i].clone() };
-    });
-    const onPoint = !!best;
-    // Конёк — отрезок между двумя верхними точками: взять можно за любую его точку
-    if (!best && pts.length === 2 && px[0] && px[1]) {
-      const { d, s } = segDist(point, px[0], px[1]);
-      if (d <= GRAB_PX) best = { index: s < 0.5 ? 0 : 1, d, from: pts[0].clone().lerp(pts[1], s) };
+    let found: { target: ShapeTarget; index: number; onPoint: boolean; d: number } | undefined;
+    let base = 0; // номер первой ручки части в общем списке
+    for (const key of this.selected()) {
+      const pts = this.layer.focusRoofTop(key);
+      const px = pts.map((p) => this.layer.focusProject(p));
+      let best: { index: number; d: number; from: THREE.Vector3 } | undefined;
+      px.forEach((q, i) => {
+        if (!q) return;
+        const d = Math.hypot(q[0] - point[0], q[1] - point[1]);
+        if (d <= GRAB_PX && (!best || d < best.d)) best = { index: i, d, from: pts[i].clone() };
+      });
+      const onPoint = !!best;
+      // Конёк — отрезок между двумя верхними точками: взять можно за любую его точку
+      if (!best && pts.length === 2 && px[0] && px[1]) {
+        const { d, s } = segDist(point, px[0], px[1]);
+        if (d <= GRAB_PX) best = { index: s < 0.5 ? 0 : 1, d, from: pts[0].clone().lerp(pts[1], s) };
+      }
+      // Точная ручка важнее конька рядом, ближняя — дальней
+      if (best && (!found || (onPoint && !found.onPoint) || (onPoint === found.onPoint && best.d < found.d))) {
+        found = { target: { key, poly: 0, ring: 0, i: 0, roof: true, from: best.from }, index: base + best.index, onPoint, d: best.d };
+      }
+      base += pts.length;
     }
-    return best && { target: { key, poly: 0, ring: 0, i: 0, roof: true, from: best.from }, index: best.index, onPoint };
+    return found && { target: found.target, index: found.index, onPoint: found.onPoint };
   }
 
   /** Курсор у точки захвата (на экране) — сдвига ещё нет. */
@@ -512,34 +539,37 @@ export class ShapeTool {
 
   /** Вершины выделенной части — у основания (верх стен у здания с крышей проходит посреди граней), захваченная — на новом месте. */
   private showHandles() {
-    const key = this.selected();
-    const polys = key ? this.layer.focusPolygons(key) : undefined;
-    const w = key ? this.walls(key) : undefined;
-    if (!key || !polys || !w) { this.layer.setHandles(undefined); return; }
+    const keys = this.selected();
+    if (!keys.length) { this.layer.setHandles(undefined); return; }
     const pts: THREE.Vector3[] = [];
     const active: number[] = [];
     const t = this.state === 'drag' ? this.target : undefined;
     // Едущие вершины: захваченная и выбранные вместе с ней — на новых местах
     const moving = new Set(t && t.insert === undefined && !t.roof ? [t, ...(t.also ?? [])].map(vertKey) : []);
-    polys.forEach((p, pi) => [p.outer, ...p.inners].forEach((ring, ri) => ring.forEach(([x, y], i) => {
-      const k = vertKey({ poly: pi, ring: ri, i });
-      const o = moving.has(k) ? this.origin.get(k) : undefined;
+    for (const v of this.verts()) {
+      const k = vertKey(v);
+      const o = v.key === t?.key && moving.has(k) ? this.origin.get(k) : undefined;
       if (o) {
         active.push(pts.length);
-        pts.push(new THREE.Vector3(o[0] + this.offset.x, o[1] + this.offset.y, w.min));
-        return;
+        pts.push(new THREE.Vector3(o[0] + this.offset.x, o[1] + this.offset.y, v.z));
+        continue;
       }
-      if (this.picked.has(k) || (!t && this.hover?.index === pts.length)) active.push(pts.length);
-      pts.push(new THREE.Vector3(x, y, w.min));
-    })));
+      if ((v.key === this.pickedKey && this.picked.has(k)) || (!t && this.hover?.index === pts.length)) active.push(pts.length);
+      pts.push(new THREE.Vector3(v.x, v.y, v.z));
+    }
     // Будущая новая вершина под курсором
-    if (!t && this.hover?.point) { active.push(pts.length); pts.push(this.hover.point.clone().setZ(w.min)); }
+    if (!t && this.hover?.point) { active.push(pts.length); pts.push(this.hover.point.clone()); }
     // Ручки крыши — по текущей (в том числе предварительной) геометрии; захваченная или под курсором — выделена
-    const roof = this.layer.focusRoofTop(key);
-    const roofActive = t?.roof ? nearest(roof, t.from.clone().add(this.offset)) : !t ? this.hover?.roof : undefined;
-    const eave = this.eavePoints(key);
-    const eaveActive = t?.eave ? nearest(eave, t.from) : !t ? this.hover?.eave : undefined;
-    this.layer.setHandles(pts, active, { points: roof, active: roofActive }, { points: eave, active: eaveActive });
+    const roofs = keys.flatMap((key) => this.layer.focusRoofTop(key).map((p) => ({ key, p })));
+    const roof = roofs.map((r) => r.p);
+    const own = <T extends { key: string; p: THREE.Vector3 }>(list: T[], key: string, p: THREE.Vector3) => {
+      const i = nearest(list.filter((r) => r.key === key).map((r) => r.p), p);
+      return i === undefined ? undefined : list.findIndex((r) => r.key === key) + i;
+    };
+    const roofActive = t?.roof ? own(roofs, t.key, t.from.clone().add(this.offset)) : !t ? this.hover?.roof : undefined;
+    const eaves = this.allEaves();
+    const eaveActive = t?.eave ? own(eaves, t.key, t.from) : !t ? this.hover?.eave : undefined;
+    this.layer.setHandles(pts, active, { points: roof, active: roofActive }, { points: eaves.map((e) => e.p), active: eaveActive });
   }
 
   private hoverAt(point: [number, number]): Hover | undefined {
@@ -561,12 +591,12 @@ export class ShapeTool {
    * луча курсора с горизонталью основания, спроецированное на сторону. Концы сторон — вершины, не тут.
    */
   private edgeAt(point: [number, number]): { target: ShapeTarget; snap?: SnapHit } | undefined {
-    const key = this.selected();
-    const polys = key ? this.layer.focusPolygons(key) : undefined;
-    const w = key ? this.walls(key) : undefined;
     const ray = this.layer.focusRay(point);
-    if (!key || !polys || !w || !ray) return;
+    if (!ray) return;
     let best: { target: ShapeTarget; d: number } | undefined;
+    for (const key of this.selected()) {
+    const polys = this.layer.focusPolygons(key), w = this.walls(key);
+    if (!polys || !w) continue;
     polys.forEach((p, poly) => [p.outer, ...p.inners].forEach((r, ring) => r.forEach(([ax, ay], i) => {
       const [bx, by] = r[(i + 1) % r.length];
       for (const z of [w.min]) {
@@ -583,7 +613,9 @@ export class ShapeTool {
         best = { target: { key, poly, ring, i, insert: s, from: new THREE.Vector3(ax + s * ex, ay + s * ey, z) }, d };
       }
     })));
+    }
     if (!best) return;
+    const polys = this.layer.focusPolygons(best.target.key)!, w = this.walls(best.target.key)!;
     // Привязка, лежащая на этой стороне (её середина, чужая вершина на ней): новая вершина встанет точно в неё
     const b: { target: ShapeTarget; snap?: SnapHit } = best;
     const snap = this.layer.snapAt(point, undefined, undefined, { noEdge: true });
@@ -604,21 +636,15 @@ export class ShapeTool {
 
   /** Вершина выделенной части под курсором: ближайшее на экране вертикальное ребро стены (низ — верх). */
   private vertexAt(point: [number, number]): { target: ShapeTarget; index: number } | undefined {
-    const key = this.selected();
-    const polys = key ? this.layer.focusPolygons(key) : undefined;
-    const w = key ? this.walls(key) : undefined;
-    if (!key || !polys || !w) return;
     let best: { target: ShapeTarget; index: number; d: number } | undefined;
-    let index = 0;
-    polys.forEach((p, poly) => [p.outer, ...p.inners].forEach((r, ring) => r.forEach(([x, y], i) => {
-      const n = index++;
-      const a = this.layer.focusProject(new THREE.Vector3(x, y, w.min));
-      const b = this.layer.focusProject(new THREE.Vector3(x, y, w.top));
+    this.verts().forEach(({ key, poly, ring, i, x, y, z, top }, n) => {
+      const a = this.layer.focusProject(new THREE.Vector3(x, y, z));
+      const b = this.layer.focusProject(new THREE.Vector3(x, y, top));
       if (!a || !b) return;
       const { d, s } = segDist(point, a, b);
       if (d > GRAB_PX || (best && d >= best.d)) return;
-      best = { target: { key, poly, ring, i, from: new THREE.Vector3(x, y, w.min + s * (w.top - w.min)) }, index: n, d };
-    })));
+      best = { target: { key, poly, ring, i, from: new THREE.Vector3(x, y, z + s * (top - z)) }, index: n, d };
+    });
     return best;
   }
 

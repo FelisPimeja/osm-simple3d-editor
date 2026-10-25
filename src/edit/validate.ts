@@ -23,6 +23,8 @@ export interface Issue {
   other?: string;
   /** Область проблемы для подсветки заливкой (участок контура, не покрытый частями). */
   area?: Polygon[];
+  /** Точки проблемы для подсветки кружком (где стороны контура пересекаются), [lon, lat]. */
+  points?: [number, number][];
   /** Однозначное исправление: новые значения тегов объекта key (undefined — удалить тег). */
   fix?: Fix;
 }
@@ -418,6 +420,24 @@ export function selfIntersects(r: [number, number][]): boolean {
   return false;
 }
 
+/** Точки, где несмежные стороны кольца пересекаются (до 2000 вершин). */
+function crossingPoints(r: [number, number][]): [number, number][] {
+  const n = r.length, out: [number, number][] = [];
+  if (n < 4 || n > 2000) return out;
+  for (let i = 0; i < n; i++) {
+    const a = r[i], b = r[(i + 1) % n];
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      const c = r[j], d = r[(j + 1) % n];
+      if (!crosses(a, b, c, d)) continue;
+      const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
+      const t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / den;
+      out.push([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]);
+    }
+  }
+  return out;
+}
+
 /** Проблемы геометрии одного объекта. */
 export function validateGeometry(f: Feature3D): Issue[] {
   if (!f.polygons.length) return [];
@@ -429,7 +449,7 @@ export function validateGeometry(f: Feature3D): Issue[] {
       const distinct = new Set(r.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`)).size;
       if (distinct >= 3 && selfIntersects(r)) {
         const text = i ? tr('Внутреннее кольцо самопересекается — объём строится неверно.') : tr('Контур самопересекается — объём строится неверно.');
-        out.push({ key: f.key, level: 'error', code: 'self', text });
+        out.push({ key: f.key, level: 'error', code: 'self', text, points: crossingPoints(r).map(p.back) });
       } else if (distinct < 3 || ringArea(r) < MIN_AREA || 2 * ringArea(r) < MIN_WIDTH * perimeter(r)) {
         const params = { points: distinct, area: fmt(ringArea(r)) };
         const text = i ? tr('Внутреннее кольцо вырождено (разных точек: {points}, площадь {area} м²).', params)

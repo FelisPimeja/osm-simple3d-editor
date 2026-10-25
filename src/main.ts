@@ -5910,6 +5910,7 @@ function selectEntrance(id: number) {
   selectedEntrance = id;
   overpassLayer.setEntranceSelection(id);
   renderSelected();
+  renderOutliner();
 }
 
 function renderEntrance(id: number) {
@@ -8691,6 +8692,32 @@ function syncIssueFilter() {
   renderIssues();
 }
 
+/**
+ * Точки проблем (где контур пересекает сам себя) — кружками поверх сцены: на рёбрах их не разглядеть.
+ * В режиме здания — на высоте низа объекта.
+ */
+const issuePointsEl = document.createElement('div');
+issuePointsEl.className = 'issue-points';
+map.getContainer().appendChild(issuePointsEl);
+let issuePoints: { p: [number, number]; key: string; level: 'error' | 'warning' }[] = [];
+function setIssuePoints(active: Issue[]) {
+  issuePoints = active.flatMap((i) => (i.points ?? []).map((p) => ({ p, key: i.key, level: i.level })));
+  issuePointsEl.innerHTML = issuePoints.map((x) => `<div class="issue-point ${x.level}"></div>`).join('');
+  placeIssuePoints();
+}
+function placeIssuePoints() {
+  issuePoints.forEach((x, i) => {
+    const el = issuePointsEl.children[i] as HTMLElement | undefined;
+    if (!el) return;
+    const local = focus ? overpassLayer.focusToLocal(x.p) : undefined;
+    const at = local ? overpassLayer.focusProject(new THREE.Vector3(local[0], local[1], shapeWalls(x.key)?.min ?? 0))
+      : (({ x: px, y: py }) => [px, py] as [number, number])(map.project(x.p));
+    el.hidden = !at;
+    if (at) { el.style.left = `${at[0]}px`; el.style.top = `${at[1]}px`; }
+  });
+}
+map.on('render', () => { if (issuePoints.length) placeIssuePoints(); });
+
 /** «Подсветить все»: рёбра объёмов с проблемами (ошибка важнее предупреждения). */
 let highlightedIssueLevels = new Map<string, 'error' | 'warning'>();
 let highlightedIssueAreas = new Set<Issue>();
@@ -8705,9 +8732,10 @@ function highlightIssues() {
   overpassLayer.setIndoorIssueHighlight(indoorKeys);
   indoorPois.setIssueHighlight(indoorKeys);
   if (levels.size === highlightedIssueLevels.size && [...levels].every(([key, level]) => highlightedIssueLevels.get(key) === level)
-    && active.filter((i) => i.area).every((i) => highlightedIssueAreas.has(i)) && highlightedIssueAreas.size === active.filter((i) => i.area).length) return;
+    && active.filter((i) => i.area).every((i) => highlightedIssueAreas.has(i)) && highlightedIssueAreas.size === active.filter((i) => i.area).length) { setIssuePoints(active); return; }
   highlightedIssueAreas = new Set(active.filter((i) => i.area));
   highlightedIssueLevels = levels;
+  setIssuePoints(active);
   overpassLayer.setIssueHighlight(levels, active.filter((i) => i.area).map((i) => ({ key: i.key, level: i.level, polygons: i.area! })));
 }
 
@@ -8934,6 +8962,10 @@ function changeIssues(keys: string[]): Issue[] {
   return out;
 }
 
+/** Ключ свёрнутой группы «Двери» (рядом с подписями видов частей). */
+const DOORS_GROUP = '\u0000doors';
+const ICON_DOOR = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3.5 14.5V2.5h9v12M1.5 14.5h13"/><circle cx="10" cy="8.5" r="0.6" fill="currentColor"/></svg>';
+
 function renderOutliner() {
   renderLevels();
   queueMicrotask(() => renderMobileCard()); // вход в режим здания и выход — карточка мобильного режима
@@ -8988,8 +9020,39 @@ function renderOutliner() {
       <button type="button" class="ol-eye" data-eye title="${allOff ? tr('Показать все') : tr('Скрыть все')}">${allOff ? ICON_EYE_OFF : ICON_EYE}</button></li>`);
     if (!collapsed) for (const x of list) html.push(row(x, true));
   }
+  // Двери — входы на фасаде (узлы контура с entrance=*): клик выбирает вход
+  const doors = new Map<number, Record<string, string>>();
+  for (const f of liveFeatures()) if (g.members.includes(f.key)) for (const e of f.entrances ?? []) doors.set(e.id, e.tags);
+  if (doors.size) {
+    const label = tr('Двери'), collapsed = collapsedKinds.has(DOORS_GROUP);
+    html.push(`<li class="ol-group${collapsed ? ' collapsed' : ''}" data-doors title="${esc(label)}">
+      <button type="button" class="ol-toggle" data-toggle title="${collapsed ? tr('Развернуть') : tr('Свернуть')}">${ICON_CHEVRON}</button>
+      <span class="ol-icon">${ICON_DOOR}</span>
+      <span class="ol-label">${esc(label)}<span class="ol-key">${doors.size}</span></span></li>`);
+    if (!collapsed) for (const [id, t] of doors) {
+      const name = t.ref ?? t.name ?? (t.entrance === 'yes' ? tr('Вход') : t.entrance);
+      html.push(`<li class="ol-child${selectedEntrance === id ? ' selected' : ''}" data-entrance="${id}" title="node/${id}">
+        <span class="ol-icon">${ICON_DOOR}</span><span class="ol-label">${esc(name)}<span class="ol-key">node/${id}</span></span></li>`);
+    }
+  }
   outlinerEl.innerHTML = html.join('');
 }
+
+// Двери: стрелка — свернуть, клик по двери — выбрать вход
+outlinerEl.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest('li[data-doors]')) {
+    e.stopImmediatePropagation();
+    if (collapsedKinds.has(DOORS_GROUP)) collapsedKinds.delete(DOORS_GROUP); else collapsedKinds.add(DOORS_GROUP);
+    try { localStorage.setItem('outliner-collapsed', JSON.stringify([...collapsedKinds])); } catch { /* только до перезагрузки */ }
+    renderOutliner();
+    return;
+  }
+  const li = t.closest<HTMLElement>('li[data-entrance]');
+  if (!li) return;
+  e.stopImmediatePropagation();
+  selectEntrance(Number(li.dataset.entrance));
+}, { capture: true });
 
 // Группа видов: стрелка — свернуть, глазик — скрыть/показать все, клик — выделить все (Shift — добавить или снять)
 outlinerEl.addEventListener('click', (e) => {

@@ -1224,5 +1224,6 @@
   "по картинке": "along the image",
   "Повёрнуто подложек: {n} на {deg}°. Отменить — Ctrl+Z.": "Underlays rotated: {n} by {deg}°. Undo — Ctrl+Z.",
   "Ведите курсор вдоль отрезка — множитель. Клик — применить, число или 150% + Enter — множитель, Esc — отмена.": "Move the cursor along the segment — factor. Click — apply, number or 150% + Enter — factor, Esc — cancel.",
-  "Масштабировано подложек: {n}. Отменить — Ctrl+Z.": "Underlays scaled: {n}. Undo — Ctrl+Z."
+  "Масштабировано подложек: {n}. Отменить — Ctrl+Z.": "Underlays scaled: {n}. Undo — Ctrl+Z.",
+  "Двери": "Doors"
 }

@@ -705,3 +705,13 @@ body.mobile #issues-panel { display: none !important; }
 .underlay-level { flex: none; padding: 0 4px; border-radius: 3px; background: #f3f4f6; color: #4b5563; font-size: 11px; }
 .basemap-menu .underlay-level-row select { flex: 1; min-width: 0; font: inherit; }
 .offset-panel label[hidden] { display: none; }
+
+/* Точка проблемы проверки (самопересечение контура): кружок поверх сцены */
+.issue-points { position: absolute; inset: 0; pointer-events: none; }
+.issue-point {
+  position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%;
+  border: 3px solid #ff1a1a; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9), inset 0 0 0 2px rgba(255, 255, 255, 0.9);
+  animation: issue-point-pulse 1.4s ease-in-out infinite;
+}
+.issue-point.warning { border-color: #ff8a00; }
+@keyframes issue-point-pulse { 50% { transform: scale(1.35); } }

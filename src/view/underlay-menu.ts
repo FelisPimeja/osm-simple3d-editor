@@ -119,16 +119,28 @@ export class UnderlayMenu {
     }
     row.append(fold);
     if (this.open !== u.id) return [row];
+    // Настройки: сетка «подпись — элемент», под строкой подложки (с отступом до имени файла)
     const sec = document.createElement('div');
-    sec.className = 'basemap-imagery';
-    const alphaRow = document.createElement('label');
-    alphaRow.className = 'basemap-alpha';
+    sec.className = 'underlay-settings';
+    const field = (label: string, control: HTMLElement, title = '') => {
+      const l = document.createElement('label');
+      l.className = 'underlay-set-label';
+      l.textContent = label;
+      if (title) l.title = title;
+      const c = document.createElement('div');
+      c.className = 'underlay-set-control';
+      c.append(control);
+      if (title) c.title = title;
+      sec.append(l, c);
+      return c;
+    };
     const alpha = document.createElement('input');
     alpha.type = 'range';
     alpha.min = '0';
     alpha.max = '100';
     alpha.step = '5';
     const value = document.createElement('span');
+    value.className = 'underlay-set-value';
     const sync = (opacity: number) => {
       const t = Math.round((1 - opacity) * 100);
       alpha.value = String(t);
@@ -143,56 +155,51 @@ export class UnderlayMenu {
       if (i >= 0) this.items[i] = u = { ...u, opacity };
       this.hooks.change(u);
     });
-    alphaRow.append(tr('Прозрачность'), alpha, value);
-    // Этаж: на земле (видна всегда) или на отметке пола этажа (видна только на нём)
-    const levelRow = document.createElement('label');
-    levelRow.className = 'basemap-alpha underlay-level-row';
-    levelRow.title = tr('Подложка этажа лежит на отметке его пола и видна, только когда этот этаж выбран в панели этажей');
-    const select = document.createElement('select');
+    field(tr('Прозрачность'), alpha).append(value);
     const opt = (value: string, text: string) => {
       const o = document.createElement('option');
       o.value = value;
       o.textContent = text;
       return o;
     };
-    select.append(opt('', tr('На земле')), ...this.levels.map((l) => opt(String(l.n), l.label)));
-    // Этажа подложки больше нет в здании — всё равно показать его
-    if (u.level !== undefined && !this.levels.some((l) => l.n === u.level)) select.append(opt(String(u.level), `level=${u.level}`));
-    select.value = u.level === undefined ? '' : String(u.level);
-    select.addEventListener('change', () => this.hooks.change({ ...u, level: select.value === '' ? undefined : Number(select.value) }));
-    levelRow.append(tr('Этаж'), select);
     // Где видна (только в режиме здания): в этом здании или везде — на карте и во всех зданиях
-    const scopeRow = document.createElement('label');
-    scopeRow.className = 'basemap-alpha underlay-level-row';
-    const scope = document.createElement('select');
-    scope.append(opt('building', tr('В этом здании')), opt('shared', tr('На карте и во всех зданиях')));
-    scope.value = shared ? 'shared' : 'building';
-    scope.addEventListener('change', () => this.hooks.change(scope.value === 'shared'
-      ? { ...u, building: undefined, level: undefined }
-      : { ...u, building: this.building }));
-    scopeRow.append(tr('Видна'), scope);
+    if (this.building !== undefined) {
+      const scope = document.createElement('select');
+      scope.append(opt('building', tr('В этом здании')), opt('shared', tr('Везде')));
+      scope.value = shared ? 'shared' : 'building';
+      scope.addEventListener('change', () => this.hooks.change(scope.value === 'shared'
+        ? { ...u, building: undefined, level: undefined }
+        : { ...u, building: this.building }));
+      field(tr('Видна'), scope, tr('«Везде» — на карте и в режиме любого здания, «в этом здании» — только в его режиме'));
+    }
+    // Этаж (только у подложки здания): на земле (видна всегда) или на отметке пола этажа (видна только на нём)
+    if (this.building !== undefined && !shared) {
+      const select = document.createElement('select');
+      select.append(opt('', tr('На земле')), ...this.levels.map((l) => opt(String(l.n), l.label)));
+      // Этажа подложки больше нет в здании — всё равно показать его
+      if (u.level !== undefined && !this.levels.some((l) => l.n === u.level)) select.append(opt(String(u.level), `level=${u.level}`));
+      select.value = u.level === undefined ? '' : String(u.level);
+      select.addEventListener('change', () => this.hooks.change({ ...u, level: select.value === '' ? undefined : Number(select.value) }));
+      field(tr('Этаж'), select, tr('Подложка этажа лежит на отметке его пола и видна, только когда этот этаж выбран в панели этажей'));
+    }
     const buttons = document.createElement('div');
-    buttons.className = 'basemap-shift-buttons';
+    buttons.className = 'underlay-set-actions';
+    const adjust = document.createElement('button');
+    adjust.type = 'button';
+    adjust.className = 'underlay-select';
+    adjust.innerHTML = `${MOVE_SVG}<span>${tr('Выбрать')}</span>`;
+    adjust.title = tr('Выделить подложку: двигать, поворачивать и масштабировать — инструментами (M, Q, E), точные значения — в свойствах');
+    adjust.addEventListener('click', () => this.hooks.select(u));
     const remove = document.createElement('button');
     remove.type = 'button';
-    remove.className = 'basemap-shift-reset';
+    remove.className = 'underlay-remove';
     remove.textContent = tr('Удалить');
     remove.title = tr('Удалить подложку из этого браузера');
     remove.addEventListener('click', () => {
       if (this.open === u.id) this.open = undefined;
       this.hooks.remove(u);
     });
-    const adjust = document.createElement('button');
-    adjust.type = 'button';
-    adjust.className = 'basemap-shift-tool';
-    adjust.innerHTML = `${MOVE_SVG}<span>${tr('Выбрать')}</span>`;
-    adjust.title = tr('Выделить подложку: двигать, поворачивать и масштабировать — инструментами (M, Q, E), точные значения — в свойствах');
-    adjust.addEventListener('click', () => this.hooks.select(u));
     buttons.append(adjust, remove);
-    sec.append(alphaRow);
-    if (this.building !== undefined) sec.append(scopeRow);
-    // Этаж — только у подложки здания
-    if (this.building !== undefined && !shared) sec.append(levelRow);
     sec.append(buttons);
     return [row, sec];
   }

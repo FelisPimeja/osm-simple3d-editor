@@ -1126,7 +1126,6 @@
   "на карте": "on map",
   "Общая подложка: видна на карте и в режиме любого здания": "Shared underlay: shown on the map and in any building",
   "В этом здании": "In this building",
-  "На карте и во всех зданиях": "On the map and in all buildings",
   "Видна": "Shown",
   "Не часть": "Not a part",
   "Без ключа — удалить тег": "No key — remove the tag",
@@ -1225,5 +1224,7 @@
   "Высота нижней точки картинки над землёй (у подложки этажа — над его полом)": "Height of the lowest point of the image above the ground (for a floor underlay — above its floor)",
   "Двигать, поворачивать и масштабировать — инструментами «Переместить», «Повернуть», «Масштаб» (M, Q, E).": "Move, rotate and scale with the Move, Rotate and Scale tools (M, Q, E).",
   "Выбрать": "Select",
-  "Выделить подложку: двигать, поворачивать и масштабировать — инструментами (M, Q, E), точные значения — в свойствах": "Select the underlay: move, rotate and scale with the tools (M, Q, E), exact values in Properties"
+  "Выделить подложку: двигать, поворачивать и масштабировать — инструментами (M, Q, E), точные значения — в свойствах": "Select the underlay: move, rotate and scale with the tools (M, Q, E), exact values in Properties",
+  "Везде": "Everywhere",
+  "«Везде» — на карте и в режиме любого здания, «в этом здании» — только в его режиме": "“Everywhere” — on the map and in any building mode, “in this building” — only in its mode"
 }

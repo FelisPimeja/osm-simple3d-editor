@@ -697,7 +697,22 @@ body.mobile #issues-panel { display: none !important; }
 .underlay-props .field-check { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
 .underlay-row.away .underlay-name { color: #9ca3af; }
 .underlay-level { flex: none; padding: 0 4px; border-radius: 3px; background: #f3f4f6; color: #4b5563; font-size: 11px; }
-.basemap-menu .underlay-level-row select { flex: 1; min-width: 0; font: inherit; }
+/* Настройки подложки в меню слоёв: подписи слева, элементы справа; отступ — до имени файла */
+.underlay-settings { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 5px 10px;
+  padding: 2px 4px 10px 26px; font-size: 12px; color: #4b5563; }
+.underlay-set-label { white-space: nowrap; cursor: default; }
+.underlay-set-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.underlay-set-control input[type=range] { flex: 1; min-width: 0; margin: 0; }
+.underlay-set-control select { width: 100%; min-width: 0; padding: 2px 4px; font: inherit; }
+.underlay-set-value { width: 36px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+.underlay-set-actions { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 3px; }
+.basemap-menu .underlay-set-actions button { width: auto; height: 26px; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 0 10px; border: 1px solid #d1d5db !important; border-radius: 5px; background: #fff; font: inherit; color: #374151; cursor: pointer; }
+.basemap-menu .underlay-set-actions button:hover { background: #f3f4f6; }
+.basemap-menu .underlay-set-actions .underlay-select { flex: 1; }
+.underlay-select svg { width: 13px; height: 13px; flex: none; }
+.basemap-menu .underlay-set-actions .underlay-remove { color: #b91c1c; border-color: transparent !important; background: none; }
+.basemap-menu .underlay-set-actions .underlay-remove:hover { background: #fef2f2; }
 .offset-panel label[hidden] { display: none; }
 
 /* Точка проблемы проверки (самопересечение контура): кружок поверх сцены */

@@ -275,7 +275,8 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
     if (!sameTags(r.tags, edit.after)) rebased.add(edit.key);
   }
   for (const w of memberWays) payload.push({ element: w, tags: {}, deleted: true });
-  for (const n of dropNodes.values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
+  // Узел уже в пакете (сдвинут) — второй копии не будет: удаление с той же версией сервер отверг бы (409)
+  for (const n of dropNodes.values()) if (!Object.keys(n.tags ?? {}).length && !movedIds.has(n.id)) payload.push({ element: n, tags: {}, deleted: true });
   if (conflicts.length) throw new ConflictError(conflicts);
   const dropped = await settleTopology(edits, payload, fresh, onStatus);
   keepForeignMembers(payload, editKeys);
@@ -468,7 +469,8 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
     const p = payload[i];
     if (p.created && p.element.type === 'node' && !used.has(p.element.id)) payload.splice(i, 1);
   }
-  const already = new Set(payload.filter((p) => p.deleted && p.element.type === 'node').map((p) => p.element.id));
+  // И удалённые, и изменённые (сдвинутые) узлы: вторая копия узла в пакете — 409 «Version mismatch»
+  const already = new Set(payload.filter((p) => !p.created && p.element.type === 'node').map((p) => p.element.id));
   const ids = [...dropNodes].filter((n) => !used.has(n) && !already.has(n));
   if (ids.length) for (const n of (await fetchNodes(ids, api())).values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
   return dropped;

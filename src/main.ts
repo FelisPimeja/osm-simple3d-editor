@@ -3362,6 +3362,8 @@ function startMapUnderlayTool(tool: 'move' | 'rotate' | 'scale') {
   if (!underlaySketch) {
     overpassLayer.setSketch(u.center);
     underlaySketch = true;
+    // Кнопка привязок (панель режима здания скрыта) — на время инструментов на панель карты, как при смещении снимка
+    mapToolbar.querySelector('[data-help]')!.before(snapsBtn);
   }
   if (tool === 'move') moveTool.start([], false, ids);
   else if (tool === 'rotate') rotateTool.start([], ids);
@@ -3382,6 +3384,7 @@ function endUnderlaySketch() {
   if (!underlaySketch || moveTool.active || rotateTool.active || scaleTool.active) return;
   underlaySketch = false;
   overpassLayer.setSketch(undefined);
+  if (snapsBtn.parentElement === mapToolbar) focusToolbar.querySelector('[data-help]')!.before(snapsBtn);
   updateSnap(undefined);
   syncMapTools();
 }
@@ -6754,7 +6757,7 @@ document.addEventListener('keydown', (e) => {
   if (trackKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   if (moveTool.key(e) || pushTool.key(e) || shapeTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e) || scaleTool.key(e) || paintTool.key(e) || offsetTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   // S — привязки вкл/выкл, в том числе посреди перемещения или вытягивания
-  if (focus && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  if ((focus || underlaySketch) && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     closeCtxMenu();
     toggleSnaps();

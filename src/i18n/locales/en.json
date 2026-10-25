@@ -1228,9 +1228,9 @@
   "перемещение подложки": "move underlay",
   "поворот подложки": "rotate underlay",
   "масштаб подложки": "scale underlay",
-  "Ось поворота: ведите курсор от центра вдоль стрелки оси растра и держите Shift — поворот вокруг неё (без Shift — в плоскости растра). Клик — опорное направление. Esc — отмена.": "Rotation axis: move the cursor from the centre along an image axis arrow and hold Shift to rotate around it (without Shift — in the image plane). Click — reference direction. Esc — cancel.",
   "ось {axis} растра (зафиксирована)": "image {axis} axis (locked)",
-  "ось {axis} растра — Shift, чтобы взять": "image {axis} axis — Shift to take it",
   "в плоскости растра": "in the image plane",
-  "вокруг оси {axis} растра": "around the image {axis} axis"
+  "вокруг оси {axis} растра": "around the image {axis} axis",
+  "Отведите курсор от оси поворота — опорное направление должно быть в стороне от неё.": "Move the cursor away from the rotation axis — the reference direction must be off the axis.",
+  "Ось поворота: проведите курсор от центра вдоль стрелки оси растра — она выбрана (z — в плоскости растра). Клик — опорное направление. Esc — отмена.": "Rotation axis: move the cursor from the centre along an image axis arrow to choose it (z — in the image plane). Click — reference direction. Esc — cancel."
 }

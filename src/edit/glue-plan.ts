@@ -3,62 +3,65 @@ import type { Pt } from '../render/building-geometry';
 import { computeHeights } from '../osm/heights';
 
 /**
- * План преобразования объектов в плане (перемещение, поворот, масштаб) в режиме «с соседями»:
- * - соседи, чей объём по высоте пересекается с нашими, тянутся следом: общие узлы едут вместе с нами, их узлы на
- *   наших сторонах (Т-образные стыки) — туда же, куда точки сторон;
- * - соседи выше или ниже (касание по высоте — не пересечение) не трогаются: общие с ними узлы у нас заменяются
- *   новыми (split), как в режиме «отдельно».
- * Чистая геометрия: правки из плана собирает вызывающий.
+ * Режим «с соседями» (attached) — общие правила для всех инструментов, меняющих контур:
+ * - соседи тянутся следом: общие узлы едут вместе с нами, их узлы на наших сторонах и у наших углов (в пределах
+ *   ON_SIDE_M) — так же, как ближайшая точка стороны;
+ * - уровни: тянутся только соседи, чей объём по высоте пересекается с нашим; соседи выше или ниже (касание по
+ *   высоте — не пересечение) не меняются никогда — общие с ними узлы у нас и у соседей того же уровня заменяются
+ *   новым узлом, который и едет (сборка правок — levelSafeEdits в main.ts);
+ * - контур здания (outline) — след всех частей: он всегда «того же уровня», какой бы ни была его высота.
  */
-export interface GluePlan {
-  /** Узел → новые координаты (наши узлы, кроме split, и чужие узлы на наших сторонах). */
-  moves: Map<number, LonLat>;
-  /** Наши узлы, общие с соседями выше/ниже: у нас — новые узлы, соседям — старые. */
-  split: Set<number>;
-  /** Соседи выше/ниже: их не трогаем. */
-  apart: Set<string>;
-}
+
+/**
+ * Чужой узел ближе этого к нашей стороне — на ней (Т-стык): едет вместе с ней. Шаг координат OSM (1e-7°) — около
+ * 1 см, поэтому миллиметровый допуск не ловил узлы, лежащие на стороне с точностью до округления.
+ */
+export const ON_SIDE_M = 0.05;
 
 type Ring = readonly [LonLat[], number[] | undefined];
-const rings = (f: Feature3D): Ring[] =>
+export const featureRings = (f: Feature3D): Ring[] =>
   f.polygons.flatMap((p) => [[p.outer, p.outerIds] as const, ...p.inners.map((c, k) => [c, p.innerIds?.[k]] as const)]);
 
-export function gluePlan(features: Feature3D[], live: Feature3D[], fn: (c: LonLat) => LonLat, toLocal: (c: LonLat) => Pt): GluePlan {
+/** Соседи выше или ниже features (не пересекаются с ними по высоте; контуры здания — никогда). */
+export function levelApart(features: Feature3D[], live: Feature3D[]): Set<string> {
   const mine = new Set(features.map((f) => f.key));
   const spans = features.map((f) => computeHeights(f.tags));
   const apart = new Set<string>();
   for (const g of live) {
-    if (mine.has(g.key)) continue;
+    if (mine.has(g.key) || g.kind === 'building') continue;
     const h = computeHeights(g.tags);
     if (!spans.some((s) => h.min < s.top - 1e-3 && s.min < h.top - 1e-3)) apart.add(g.key);
   }
-  const own = new Set<number>();
+  return apart;
+}
+
+/**
+ * Узлы, которые едут при плановом преобразовании fn объектов features «с соседями»: все наши и чужие на наших
+ * сторонах или у углов. Узел → новые координаты (уровни — потом, в levelSafeEdits).
+ */
+export function glueMoves(features: Feature3D[], live: Feature3D[], fn: (c: LonLat) => LonLat, toLocal: (c: LonLat) => Pt): Map<number, LonLat> {
+  const mine = new Set(features.map((f) => f.key));
+  const moves = new Map<number, LonLat>();
   const sides: [Pt, Pt][] = [];
-  for (const f of features) for (const [ring, ids] of rings(f)) ids?.forEach((id, k) => {
-    own.add(id);
+  for (const f of features) for (const [ring, ids] of featureRings(f)) ids?.forEach((id, k) => {
+    moves.set(id, fn(ring[k]));
     sides.push([toLocal(ring[k]), toLocal(ring[(k + 1) % ring.length])]);
   });
-  // Узлы соседей выше/ниже не двигаем никогда: ни наши общие с ними (split), ни их узлы на наших сторонах, даже
-  // если узел заодно и у соседа того же уровня (иначе стык потянул бы часть сверху)
-  const fixed = new Set<number>();
-  for (const g of live) if (apart.has(g.key)) for (const [, ids] of rings(g)) ids?.forEach((id) => fixed.add(id));
-  const split = new Set([...own].filter((id) => fixed.has(id)));
-  const moves = new Map<number, LonLat>();
-  for (const f of features) for (const [ring, ids] of rings(f)) ids?.forEach((id, k) => { if (!split.has(id)) moves.set(id, fn(ring[k])); });
   for (const g of live) {
-    if (mine.has(g.key) || apart.has(g.key)) continue;
-    for (const [ring, ids] of rings(g)) ids?.forEach((id, k) => {
-      if (own.has(id) || moves.has(id) || fixed.has(id)) return;
+    if (mine.has(g.key)) continue;
+    for (const [ring, ids] of featureRings(g)) ids?.forEach((id, k) => {
+      if (moves.has(id)) return;
       const [px, py] = toLocal(ring[k]);
       for (const [a, b] of sides) {
         const ex = b[0] - a[0], ey = b[1] - a[1], len = Math.hypot(ex, ey);
         if (len < 1e-6) continue;
-        const t = ((px - a[0]) * ex + (py - a[1]) * ey) / (len * len);
-        if (Math.abs((px - a[0]) * ey - (py - a[1]) * ex) / len >= 1e-3 || t <= 1e-6 || t >= 1 - 1e-6) continue;
+        // На стороне или у её конца (почти совпадающий угол соседа): преобразование одно на всех — fn своей точки
+        const t = Math.min(1, Math.max(0, ((px - a[0]) * ex + (py - a[1]) * ey) / (len * len)));
+        if (Math.hypot(px - a[0] - t * ex, py - a[1] - t * ey) >= ON_SIDE_M) continue;
         moves.set(id, fn(ring[k]));
         break;
       }
     });
   }
-  return { moves, split, apart };
+  return moves;
 }

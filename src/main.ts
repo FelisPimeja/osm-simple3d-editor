@@ -28,7 +28,7 @@ import { mapillary } from './view/mapillary';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { ScaleTool } from './edit/scale-tool';
-import { gluePlan } from './edit/glue-plan';
+import { featureRings, glueMoves, levelApart, ON_SIDE_M } from './edit/glue-plan';
 import { MoveTool } from './edit/move-tool';
 import * as THREE from 'three';
 import { inheritedTags, inheritedValue } from './osm/inherit';
@@ -2321,7 +2321,7 @@ function squareSelected() {
         const ex = sd.b[0] - sd.a[0], ey = sd.b[1] - sd.a[1], len = Math.hypot(ex, ey);
         if (len < 1e-6) continue;
         const t = ((px - sd.a[0]) * ex + (py - sd.a[1]) * ey) / (len * len);
-        if (Math.abs((px - sd.a[0]) * ey - (py - sd.a[1]) * ex) / len >= 1e-3 || t <= 1e-6 || t >= 1 - 1e-6) continue;
+        if (Math.abs((px - sd.a[0]) * ey - (py - sd.a[1]) * ex) / len >= ON_SIDE_M || t <= 1e-6 || t >= 1 - 1e-6) continue;
         const a = target.get(sd.u)!, b = target.get(sd.v)!;
         moves.set(id, overpassLayer.focusToLngLat(a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))!);
         break;
@@ -3264,7 +3264,14 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
     for (const r of rings) {
       for (let k = 0; k < r.pts.length; k++) {
         const a = r.pts[k], b = r.pts[(k + 1) % r.pts.length];
-        if (segDist2(q, a, b) < SHARE_EPS) { fresh.push({ id, p: q, u: r.ids[k], v: r.ids[(k + 1) % r.ids.length] }); return id; }
+        if (segDist2(q, a, b) >= SHARE_EPS) continue;
+        // У самого угла стороны — сам угол, а не новый узел рядом с ним (вычисленный угол прямоугольника ложится
+        // в сантиметрах от угла соседа; двойник рядом потом рвал контур соседа при вытягивании)
+        const near = Math.sqrt(SHARE_EPS);
+        if (Math.hypot(q[0] - a[0], q[1] - a[1]) < near) { coord.delete(id); coord.set(r.ids[k], r.coords[k]); return r.ids[k]; }
+        if (Math.hypot(q[0] - b[0], q[1] - b[1]) < near) { const j = (k + 1) % r.pts.length; coord.delete(id); coord.set(r.ids[j], r.coords[j]); return r.ids[j]; }
+        fresh.push({ id, p: q, u: r.ids[k], v: r.ids[(k + 1) % r.ids.length] });
+        return id;
       }
     }
     return id;
@@ -4706,7 +4713,7 @@ function pushSideEdits(f: Feature3D, edge: NonNullable<PushTarget['edge']>, dz: 
     if (pi !== edge.poly || ri !== edge.ring) for (const id of r ?? []) shared.add(id);
   }));
   // «С соседями» — только если есть кого тянуть; иначе это то же, что «отдельно» (там кольца ещё и приводятся в порядок)
-  if (pushTool.glue && [...gluedSideMoves(e).keys()].some((id) => shared.has(id))) return gluedSideEdits(f, edge, e);
+  if (pushTool.glue && [...gluedSideMoves(e).keys()].some((id) => shared.has(id))) return levelSafeEdits([f.key], gluedSideEdits(f, edge, e), gluedSideMoves(e));
   const outIds: number[] = [], outC: LonLat[] = [], inserts: Insert[] = [], fresh = new Map<number, LonLat>();
   /** Сдвинутые прежние узлы — их новые места нужны и путям-членам. */
   const moved = new Map<number, LonLat>();
@@ -5227,9 +5234,12 @@ function gluedSideMoves(e: SideEnds): Map<number, LonLat> {
         rids?.forEach((id, k) => {
           if (moves.has(id) || id === ids[i] || id === ids[j]) return;
           const [px, py] = local(ring[k]);
-          const t = ((px - ax) * ex + (py - ay) * ey) / (len * len);
-          const off = Math.abs((px - ax) * ey - (py - ay) * ex) / len;
-          if (off < 1e-3 && t > 1e-6 && t < 1 - 1e-6) moves.set(id, overpassLayer.focusToLngLat(cx + t * (dx - cx), cy + t * (dy - cy))!);
+          // На стене или у её конца (почти совпадающий угол соседа) — едет как ближайшая точка стены
+          const t = Math.min(1, Math.max(0, ((px - ax) * ex + (py - ay) * ey) / (len * len)));
+          if (Math.hypot(px - ax - t * ex, py - ay - t * ey) >= ON_SIDE_M) return;
+          if ((t === 0 && e.keepA) || (t === 1 && e.keepB)) return;
+          const mx = (cx - ax) * (1 - t) + (dx - bx) * t, my = (cy - ay) * (1 - t) + (dy - by) * t;
+          moves.set(id, overpassLayer.focusToLngLat(px + mx, py + my)!);
         });
       }
     }
@@ -5303,9 +5313,10 @@ function previewPush(t: PushTarget, dz: number | undefined) {
       // Сам объект — со своими новыми углами (у углов на прямой с соседней стороной — старый и новый)
       const keys = new Set<string>([f.key]);
       previewFocus({ ...f, polygons: pushSidePolygons(f, t.edge!, dz) });
+      const apart = levelApartKeys([f.key]);
       for (const x of edits) {
         const g = live.get(x.key);
-        if (x.key === f.key || !x.polygons || !g) continue;
+        if (x.key === f.key || apart.has(x.key) || !x.polygons || !g) continue;
         keys.add(x.key);
         previewFocus({ ...g, polygons: x.polygons });
       }
@@ -5438,9 +5449,11 @@ function shapeMoves(rings: ShapeRings, offset: THREE.Vector3): Map<number, LonLa
       for (const { a, b, a2, b2 } of sides) {
         const ex = b[0] - a[0], ey = b[1] - a[1], len = Math.hypot(ex, ey);
         if (len < 1e-6) continue;
-        const s = ((px - a[0]) * ex + (py - a[1]) * ey) / (len * len);
-        if (Math.abs((px - a[0]) * ey - (py - a[1]) * ex) / len >= 1e-3 || s <= 1e-6 || s >= 1 - 1e-6) continue;
-        moves.set(nid, overpassLayer.focusToLngLat(a2[0] + s * (b2[0] - a2[0]), a2[1] + s * (b2[1] - a2[1]))!);
+        // На стороне или у её конца (почти совпадающий угол соседа) — едет как ближайшая точка стороны
+        const s = Math.min(1, Math.max(0, ((px - a[0]) * ex + (py - a[1]) * ey) / (len * len)));
+        if (Math.hypot(px - a[0] - s * ex, py - a[1] - s * ey) >= ON_SIDE_M) continue;
+        const mx = (a2[0] - a[0]) * (1 - s) + (b2[0] - b[0]) * s, my = (a2[1] - a[1]) * (1 - s) + (b2[1] - b[1]) * s;
+        moves.set(nid, overpassLayer.focusToLngLat(px + mx, py + my)!);
         break;
       }
     });
@@ -5886,12 +5899,13 @@ function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string
   if (!rings) { restore(new Set()); return; }
   const glue = shapeGlued(rings);
   const edits = nodeMoveEdits(glue ? shapeMoves(rings, offset) : shapeOwnMoves(rings, offset), true);
+  const apart = glue ? levelApartKeys([t.key]) : new Set<string>();
   if (typeof edits === 'string') { restore(new Set()); return edits; }
   const keys = new Set<string>();
   for (const x of edits) {
     const g = live.get(x.key);
-    // «Отдельно» соседи остаются на месте — в превью только сама часть
-    if (!x.polygons || !g || (!glue && x.key !== t.key)) continue;
+    // «Отдельно» соседи остаются на месте — в превью только сама часть; соседи выше/ниже — всегда на месте
+    if (!x.polygons || !g || (!glue && x.key !== t.key) || apart.has(x.key)) continue;
     keys.add(x.key);
     previewFocus({ ...g, polygons: x.polygons });
   }
@@ -5939,7 +5953,8 @@ function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
     // «С соседями», но двигаем только свои узлы и отпускаем на чужой — сливаем так же, как «отдельно»
     const glued = shapeGlued(rings) && !(shapeLandings(shapeMoved(rings, offset)).size
       && !rings.some((r) => r.ks.some((k) => nodesOutside(new Set([f.key])).has(r.ids[k]))));
-    edits = glued ? nodeMoveEdits(shapeMoves(rings, offset)) : shapeSeparateEdits(f, rings, offset);
+    const moves = glued ? shapeMoves(rings, offset) : undefined;
+    edits = moves ? levelSafeEdits([f.key], nodeMoveEdits(moves), moves) : shapeSeparateEdits(f, rings, offset);
   }
   if (typeof edits === 'string') return fail(edits);
   dropCollapsedHoles(edits);
@@ -6222,12 +6237,11 @@ function previewGlued(keys: string[], m: THREE.Matrix4 | undefined, glue: boolea
       return overpassLayer.focusToLngLat(e[0] * x + e[4] * y + e[12], e[1] * x + e[5] * y + e[13])!;
     };
     const features = keys.map((k) => live.get(k)).filter((f): f is Feature3D => !!f?.polygons);
-    const mine = new Set(keys);
-    const { moves, apart } = gluePlan(features, [...live.values()], fn, (c) => overpassLayer.focusToLocal(c)!);
-    const edits = nodeMoveEdits(moves, true);
+    const edits = nodeMoveEdits(glueMoves(features, [...live.values()], fn, (c) => overpassLayer.focusToLocal(c)!), true);
+    const skip = new Set([...keys, ...levelApart(features, [...live.values()])]);
     if (typeof edits !== 'string') for (const x of edits) {
       const g = live.get(x.key);
-      if (mine.has(x.key) || apart.has(x.key) || !x.polygons || !g) continue;
+      if (skip.has(x.key) || !x.polygons || !g) continue;
       keep.add(x.key);
       previewFocus({ ...g, polygons: x.polygons });
     }
@@ -6240,25 +6254,70 @@ function previewGlued(keys: string[], m: THREE.Matrix4 | undefined, glue: boolea
 
 /**
  * Правки «сдвинуть все узлы объектов через fn» (перемещение, поворот, масштаб) в выбранном режиме:
- * glue — «с соседями» по плану gluePlan, иначе «отдельно» (transformEdits).
+ * glue — «с соседями» (glueMoves + правило уровней), иначе «отдельно» (transformEdits).
  */
 function placeEdits(keys: string[], features: Feature3D[], fn: (c: LonLat) => LonLat, glue: boolean): ObjectEdit[] | string {
   if (!glue) return transformEdits(keys, features, fn);
-  const { moves, split, apart } = gluePlan(features, liveFeatures(), fn, (c) => overpassLayer.focusToLocal(c)!);
-  if (!split.size) return nodeMoveEdits(moves);
-  // Свои кольца — с новыми узлами вместо общих с соседями выше/ниже; соседям по высоте — сдвиг общих узлов
-  const edits = transformEdits(keys, features, fn, split);
-  if (typeof edits === 'string') return edits;
+  const moves = glueMoves(features, liveFeatures(), fn, (c) => overpassLayer.focusToLocal(c)!);
+  return levelSafeEdits(keys, nodeMoveEdits(moves), moves);
+}
+
+/** Соседи выше или ниже объектов keys (правило уровней «с соседями»). */
+function levelApartKeys(keys: string[]): Set<string> {
+  const live = liveFeatures();
   const mine = new Set(keys);
-  const remap = (cs: LonLat[], ids: number[] | undefined) => (ids ? cs.map((c, k) => moves.get(ids[k]) ?? c) : cs);
-  for (const e of edits) {
-    if (mine.has(e.key) || !e.polygons) continue;
-    e.polygons = e.polygons.map((r) => ({ ...r, outer: remap(r.outer, r.outerIds), inners: r.inners.map((c, k) => remap(c, r.innerIds?.[k])) }));
+  return levelApart(live.filter((g) => mine.has(g.key)), live);
+}
+
+/**
+ * Правило уровней для правок «с соседями» (edits — сдвиг узлов moves у всех, кто их держит): соседи выше или ниже
+ * объектов keys не меняются. Их узлы, которые едут у нас или у соседей того же уровня, заменяются там новыми
+ * узлами (общими для всех, кто едет), старые остаются соседям выше/ниже.
+ */
+function levelSafeEdits(keys: string[], edits: ObjectEdit[] | string, moves: Map<number, LonLat>): ObjectEdit[] | string {
+  if (typeof edits === 'string') return edits;
+  const live = liveFeatures();
+  const mine = new Set(keys);
+  const apart = levelApart(live.filter((g) => mine.has(g.key)), live);
+  if (!edits.some((e) => apart.has(e.key))) return edits;
+  const fixed = new Set<number>();
+  for (const g of live) if (apart.has(g.key)) for (const [, ids] of featureRings(g)) ids?.forEach((id) => fixed.add(id));
+  // Узлы, которые едут, но держат и соседи выше/ниже: у тех, кто едет, — новые
+  const edited = edits.filter((e) => e.polygons && !apart.has(e.key));
+  const split = new Set<number>();
+  for (const e of edited) for (const p of e.polygons!) for (const ids of [p.outerIds, ...(p.innerIds ?? [])]) {
+    ids?.forEach((id) => { if (fixed.has(id) && moves.has(id)) split.add(id); });
   }
-  const rest = nodeMoveEdits(moves);
-  if (typeof rest === 'string') return rest;
-  for (const e of rest) if (!mine.has(e.key) && !apart.has(e.key) && !edits.some((x) => x.key === e.key)) edits.push(e);
-  return edits;
+  const kept = edits.filter((e) => !apart.has(e.key));
+  if (!split.size) return kept.filter((e) => !e.line?.ids.some((id) => fixed.has(id) && moves.has(id)));
+  const fresh = new Map<number, LonLat>(), swap = new Map<number, number>();
+  const id = (n: number) => {
+    if (!split.has(n)) return n;
+    const k = swap.get(n) ?? swap.set(n, nextNewId--).get(n)!;
+    fresh.set(k, moves.get(n)!);
+    return k;
+  };
+  const byKey = new Map(live.map((g) => [g.key, g] as const));
+  const coords = new Map<number, LonLat>();
+  const touched = edited.filter((e) => e.polygons!.some((p) => [p.outerIds, ...(p.innerIds ?? [])].some((ids) => ids?.some((n) => split.has(n)))));
+  const items = touched.flatMap((e) => {
+    const f = byKey.get(e.key);
+    if (!f) return [];
+    return [{ f, rewrites: e.polygons!.flatMap((p, poly) => [[p.outer, p.outerIds] as const, ...p.inners.map((c, k) => [c, p.innerIds?.[k]] as const)]
+      .map(([ring, ids], r) => {
+        ids?.forEach((n, k) => coords.set(n, ring[k]));
+        return { poly, ring: r, ids: (ids ?? []).map(id), coords: ring };
+      })) }];
+  });
+  const te = topologyEdits(items, [], new Map([...coords, ...fresh]));
+  if (typeof te === 'string') return te;
+  const done = new Set(te.map((e) => e.key));
+  for (const e of te) { const was = kept.find((x) => x.key === e.key); if (was?.tags && !e.tags) e.tags = was.tags; }
+  // Пути-члены переписанных отношений собраны заново (и новые куски тоже); пути с узлами соседей выше/ниже,
+  // которые не переписаны разводкой, — не трогаем
+  const rebuilt = items.some((i) => i.f.type === 'relation');
+  return [...te, ...kept.filter((e) => !done.has(e.key) && !(rebuilt && e.create?.line)
+    && !e.line?.ids.some((n) => fixed.has(n) && moves.has(n)))];
 }
 
 /** Поднять или опустить объект на dz метров, сохранив способ разметки (этажи — если сдвиг кратен этажу). */

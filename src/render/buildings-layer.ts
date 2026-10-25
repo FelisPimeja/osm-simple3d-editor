@@ -510,6 +510,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (underlays && overFirst) this.underlays.render(depthMain(options), 'over');
     if (this.visible) timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
     if (underlays && !overFirst) this.underlays.render(depthMain(options), 'over');
+    if (underlays) this.underlays.render(depthMain(options), 'outline');
   }
 
   /** Куда рисуются группы: буфер прозрачного слоя или сама карта. */

@@ -634,6 +634,12 @@ let focusUnderlays: Underlay[] | undefined;
 let usedUnderlay = false;
 /** Подложки, которые сейчас в работе: общие и (в режиме здания) этого здания. */
 const currentUnderlays = () => [...sharedUnderlays, ...(focus ? focusUnderlays ?? [] : [])];
+/** Выделенные подложки (id) — отдельно от объектов OSM; выделение может быть смешанным. */
+let underlaySelection: string[] = [];
+/** Ключ подложки в списке Alt+клика (рядом с ключами объектов OSM). */
+const UNDERLAY_KEY = 'underlay:';
+const underlayKey = (id: string) => UNDERLAY_KEY + id;
+const underlayOf = (key: string | undefined) => (key?.startsWith(UNDERLAY_KEY) ? key.slice(UNDERLAY_KEY.length) : undefined);
 const underlayMenu = new UnderlayMenu({
   add: (files) => void addUnderlays(files),
   change: (changed) => {
@@ -644,12 +650,7 @@ const underlayMenu = new UnderlayMenu({
     replaceUnderlay(u, u.level !== cur?.level || u.building !== cur?.building);
     scheduleUnderlaySave(u);
   },
-  adjust: (u) => {
-    basemapCtrl?.closeMenu();
-    // На карте сцены режима здания нет — своя система координат вокруг подложки
-    mapUnderlayFrame = focus ? undefined : overpassLayer.geoFrame(u.center);
-    underlayPanel.show(u);
-  },
+  adjust: (u) => adjustUnderlay(u),
   remove: (u) => {
     if (underlayPanel.id === u.id) underlayPanel.hide();
     sharedUnderlays = sharedUnderlays.filter((x) => x.id !== u.id);
@@ -661,6 +662,14 @@ const underlayMenu = new UnderlayMenu({
   },
 });
 basemapCtrl?.addSection(underlayMenu.el);
+/** Открыть панель подгонки подложки. */
+function adjustUnderlay(u: Underlay) {
+  basemapCtrl?.closeMenu();
+  // На карте сцены режима здания нет — своя система координат вокруг подложки
+  mapUnderlayFrame = focus ? undefined : overpassLayer.geoFrame(u.center);
+  underlayPanel.show(u);
+}
+
 /** Система координат подгонки подложки на карте (вне режима здания). */
 let mapUnderlayFrame: ReturnType<typeof overpassLayer.geoFrame> | undefined;
 // Панель подгонки: правки сразу видны, в базу — по «Подтвердить» (отмена возвращает как было)
@@ -726,6 +735,9 @@ function showUnderlays(menu = true) {
     return elevation === undefined ? [] : [{ ...u, elevation }];
   });
   overpassLayer.underlays.set(shown);
+  // Выделенную подложку больше не видно (скрыли, сменили этаж или режим, удалили) — снять с выделения
+  const kept = underlaySelection.filter((id) => shown.some((u) => u.id === id && u.visible));
+  if (kept.length !== underlaySelection.length) { underlaySelection = kept; paintSelection(); renderSelected(); }
   if (shown.some((u) => u.visible)) usedUnderlay = true;
   // Подгоняемую подложку больше не видно (сменили этаж, режим) — подгонку закончить
   const fitting = underlayPanel.id;
@@ -1365,6 +1377,12 @@ map.on('click', (e) => {
     if (e.originalEvent.shiftKey) { if (key) toggleAddPending(key); return; }
     stopAdding(); // обычный клик — выходим из режима добавления
   }
+  // Подложка (только Alt+кликом): Shift — добавить к выделению или убрать, вместе с частями здания
+  const underlayId = underlayOf(key);
+  if (underlayId) {
+    if (e.originalEvent.shiftKey) toggleUnderlay(underlayId); else selectUnderlay(underlayId);
+    return;
+  }
   if (e.originalEvent.shiftKey && key) {
     // Shift+клик: добавить/убрать объект; внутри группы — только её члены
     const k = drill ? (drill.members.includes(key) ? key : undefined) : buildingKey(key);
@@ -1399,10 +1417,14 @@ function cyclePick(p: { x: number; y: number }): string | undefined {
   // Вне группы клик выделяет всё здание — перебираем разные результаты, а не части одного здания
   // (resolveClick не годится — он выходит из группы)
   const keys = overpassLayer.pickAll([p.x, p.y]).filter((k) => !focus || focus.members.includes(k));
-  if (!keys.length) { altCycle = undefined; return; }
+  // Свои подложки — в конце перебора: у частей здания приоритет
+  const canvas = map.getCanvas();
+  const underlays = overpassLayer.underlays.pickAll([p.x, p.y], [canvas.clientWidth, canvas.clientHeight]).map(underlayKey);
+  if (!keys.length && !underlays.length) { altCycle = undefined; return; }
   const resolved = (k: string) => focus || drill?.members.includes(k) ? k : groupOf(k)?.key ?? k;
   const uniq: string[] = [];
   for (const k of keys) if (!uniq.some((u) => resolved(u) === resolved(k))) uniq.push(k);
+  uniq.push(...underlays);
   // Первый Alt+клик после обычного: верхний уже выделен — сразу следующий
   const start = uniq.length > 1 && selection.length === 1 && resolved(uniq[0]) === selection[0] ? 1 : 0;
   const i = same && altCycle!.keys.join() === uniq.join() ? (altCycle!.i + 1) % uniq.length : start;
@@ -6756,11 +6778,27 @@ function select(key: string | undefined): boolean {
   if (key && !entity(key)) key = undefined; // нет в данных или отменили создание группы
   selection = key ? [key] : [];
   selectedKey = key;
+  underlaySelection = [];
   if (key) clearTileHighlight();
   paintSelection();
   renderSelected();
   if (shapeTool.active) shapeTool.refresh();
   return !!key;
+}
+
+/** Выделить одну подложку (вместо всего прочего). */
+function selectUnderlay(id: string) {
+  select(undefined);
+  underlaySelection = [id];
+  paintSelection();
+  renderSelected();
+}
+
+/** Добавить подложку к выделению или убрать (части здания остаются выделенными). */
+function toggleUnderlay(id: string) {
+  underlaySelection = underlaySelection.includes(id) ? underlaySelection.filter((x) => x !== id) : [...underlaySelection, id];
+  paintSelection();
+  renderSelected();
 }
 
 function toggleSelection(key: string) {
@@ -6884,6 +6922,7 @@ let suppressClick = false;
 function paintSelection() {
   syncJosmSelection();
   overpassLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
+  overpassLayer.underlays.select(underlaySelection);
   syncIssueFilter();
   renderOutliner();
   for (const li of changesEl.querySelectorAll<HTMLElement>('li[data-key]')) li.classList.toggle('selected', selection.includes(li.dataset.key!));
@@ -9471,6 +9510,21 @@ infoEl.addEventListener('mouseout', (e) => {
   if ((e.target as HTMLElement).closest('[data-outline-cand], [data-hover-key]')) overpassLayer.setOverlay(outlineOverlay);
 });
 
+/** Свойства выделенных подложек (без объектов OSM). */
+function renderUnderlaySelection() {
+  const list = underlaySelection.map((id) => currentUnderlays().find((u) => u.id === id)).filter((u): u is Underlay => !!u);
+  infoEl.innerHTML = `
+    <h2>${list.length === 1 ? tr('Подложка') : tr('Подложки: {n}', { n: list.length })}</h2>
+    <ul class="change-list">${list.map((u) => `<li>${esc(u.name)}${u.building === undefined ? ` <span class="hint">${tr('(общая)')}</span>` : ''}</li>`).join('')}</ul>
+    ${list.length === 1 ? `<p><button type="button" data-underlay-adjust="${esc(list[0].id)}">${tr('Подогнать…')}</button></p>` : ''}`;
+}
+
+infoEl.addEventListener('click', (e) => {
+  const id = (e.target as HTMLElement).closest<HTMLElement>('[data-underlay-adjust]')?.dataset.underlayAdjust;
+  const u = id && currentUnderlays().find((x) => x.id === id);
+  if (u) adjustUnderlay(u);
+});
+
 function renderMulti() {
   const plan = mergePlan(selection);
   const addPlan = selectedPartsForGroup();
@@ -9491,6 +9545,8 @@ function renderSelected() {
   outlineOverlay = undefined;
   try {
     renderSelectedImpl();
+    // Смешанное выделение: подложки едут вместе с частями
+    if (selection.length && underlaySelection.length) infoEl.insertAdjacentHTML('afterbegin', `<p class="hint">${tr('И подложек: {n}', { n: underlaySelection.length })}</p>`);
   } finally { overpassLayer.setOverlay(outlineOverlay); updateTagsClip(); }
 }
 
@@ -9532,6 +9588,7 @@ tagsClip.addEventListener('click', (e) => {
 function renderSelectedImpl() {
   if (selectedEntrance !== undefined) return renderEntrance(selectedEntrance);
   if (addingTo) return renderAdding();
+  if (!selection.length && underlaySelection.length) return renderUnderlaySelection();
   if (selection.length > 1) return renderMulti();
   const og = selectedKey ? groupOf(selectedKey) : undefined;
   const outline = !!og && og.members.some((k, i) => k === selectedKey && og.roles[i] === 'outline');
@@ -10514,7 +10571,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !focus || toolActive() || popupEl.childElementCount || (e.target as HTMLElement).closest('input, select, textarea')) return;
   // Esc: сначала снять выделение части, затем выйти из режима здания
   if (selectedRoomWalls.length || indoorSelection.length) { selectIndoor(undefined); infoEl.innerHTML = ''; }
-  else if (selection.length) select(undefined);
+  else if (selection.length || underlaySelection.length) select(undefined);
   else closeFocus();
 });
 

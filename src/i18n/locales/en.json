@@ -1213,5 +1213,9 @@
   "Подземная часть выходит за контур здания на {area} м² — свяжите её со зданием отношением type=building (контур — след на земле).": "An underground part extends {area} m² beyond the building outline — link it to the building with a type=building relation (the outline is the footprint on the ground).",
   "Нависающая часть за контуром здания — по вики ей ставят layer=1 (над тем, что на земле).": "Overhanging part outside the building outline — the wiki recommends layer=1 (above what is on the ground).",
   "Подземная часть за контуром здания — по вики ей ставят layer=-1.": "Underground part outside the building outline — the wiki recommends layer=-1.",
-  "Контур {key} обновлён: охватывает все части на земле ({n}). Отменить — Ctrl+Z.": "Outline {key} updated: it now covers all parts on the ground ({n}). Undo: Ctrl+Z."
+  "Контур {key} обновлён: охватывает все части на земле ({n}). Отменить — Ctrl+Z.": "Outline {key} updated: it now covers all parts on the ground ({n}). Undo: Ctrl+Z.",
+  "И подложек: {n}": "And underlays: {n}",
+  "Подложки: {n}": "Underlays: {n}",
+  "(общая)": "(shared)",
+  "Подогнать…": "Fit…"
 }

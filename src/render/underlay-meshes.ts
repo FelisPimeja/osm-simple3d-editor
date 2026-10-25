@@ -23,6 +23,11 @@ const X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
 const q = new THREE.Quaternion(), q2 = new THREE.Quaternion();
 /** Рисуется после зданий (с проверкой глубины): подложка этажа и стоящая. */
 const over = (u: Underlay) => u.level !== undefined || isVertical(u);
+/** Слой three рамки выделения: рисуется отдельным проходом поверх всего. */
+const OUTLINE = 1;
+/** Углы картинки в её плоскости (сетка 1×1). */
+const CORNERS = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] as const;
+const v = new THREE.Vector4();
 
 interface Entry {
   u: Underlay;
@@ -30,6 +35,8 @@ interface Entry {
   camera: THREE.Camera;
   model: THREE.Matrix4;
   mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  /** Рамка выделения (дочерняя к картинке, слой OUTLINE). */
+  outline: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   /** Картинка подложки (blob) — текстура пересобирается, только если она сменилась. */
   blob?: Blob;
 }
@@ -37,6 +44,8 @@ interface Entry {
 export class UnderlayMeshes {
   private readonly entries = new Map<string, Entry>();
   private renderer?: THREE.WebGLRenderer;
+  /** Выделенные подложки (id). */
+  private selected = new Set<string>();
 
   constructor(private readonly repaint: () => void) {}
 
@@ -51,9 +60,13 @@ export class UnderlayMeshes {
       if (!e) {
         const material = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, visible: false });
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+        const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(CORNERS.map(([x, y]) => new THREE.Vector3(x, y, 0))),
+          new THREE.LineBasicMaterial({ color: 0xff8c00, depthTest: false, depthWrite: false, transparent: true }));
+        outline.layers.set(OUTLINE);
+        mesh.add(outline);
         const scene = new THREE.Scene();
         scene.add(mesh);
-        e = { u, scene, camera: new THREE.Camera(), model: new THREE.Matrix4(), mesh };
+        e = { u, scene, camera: new THREE.Camera(), model: new THREE.Matrix4(), mesh, outline };
         this.entries.set(u.id, e);
       }
       e.u = u;
@@ -84,6 +97,37 @@ export class UnderlayMeshes {
     mesh.scale.set(u.width * u.scale * (u.mirror ? -1 : 1), u.height * u.scale, 1);
     mesh.material.opacity = u.opacity;
     mesh.visible = u.visible;
+    e.outline.visible = this.selected.has(u.id);
+  }
+
+  /** Выделить подложки (рамка поверх всего). */
+  select(ids: Iterable<string>) {
+    this.selected = new Set(ids);
+    for (const e of this.entries.values()) e.outline.visible = this.selected.has(e.u.id);
+    this.repaint();
+  }
+
+  /**
+   * Подложки под точкой экрана (px; size — размер вида, px), от ближней к дальней — по проекции последнего кадра.
+   * Только видимые и уже загруженные; прозрачные пиксели картинки тоже считаются попаданием.
+   */
+  pickAll(point: [number, number], size: [number, number]): string[] {
+    const hits: { id: string; depth: number }[] = [];
+    for (const e of this.entries.values()) {
+      if (!e.mesh.visible || !e.mesh.material.visible) continue;
+      e.mesh.updateMatrixWorld();
+      const m = e.camera.projectionMatrix.clone().multiply(e.mesh.matrixWorld);
+      const px: [number, number][] = [];
+      let depth = 0;
+      for (const [x, y] of CORNERS) {
+        v.set(x, y, 0, 1).applyMatrix4(m);
+        if (v.w <= 0) break; // угол за камерой — не выбираем
+        px.push([(v.x / v.w + 1) / 2 * size[0], (1 - v.y / v.w) / 2 * size[1]]);
+        depth += v.z / v.w;
+      }
+      if (px.length === 4 && insideQuad(point, px)) hits.push({ id: e.u.id, depth });
+    }
+    return hits.sort((a, b) => a.depth - b.depth).map((h) => h.id);
   }
 
   private async load(e: Entry, blob: Blob) {
@@ -118,22 +162,38 @@ export class UnderlayMeshes {
     m.map?.dispose();
     m.dispose();
     e.mesh.geometry.dispose();
+    e.outline.geometry.dispose();
+    e.outline.material.dispose();
   }
 
   get size() { return this.entries.size; }
 
   /**
    * Нарисовать подложки (main — матрица проекции MapLibre, как у групп зданий): pass 'under' — лежащие на земле
-   * (до зданий), 'over' — этажей и стоящие (после зданий).
+   * (до зданий), 'over' — этажей и стоящие (после зданий), 'outline' — рамки выделенных (поверх всего).
    */
-  render(main: THREE.Matrix4, pass: 'under' | 'over') {
+  render(main: THREE.Matrix4, pass: 'under' | 'over' | 'outline') {
     const renderer = this.renderer;
     if (!renderer) return;
     for (const e of this.entries.values()) {
-      if (!e.mesh.visible || !e.mesh.material.visible || over(e.u) !== (pass === 'over')) continue;
+      if (!e.mesh.visible || !e.mesh.material.visible) continue;
+      if (pass === 'outline' ? !e.outline.visible : over(e.u) !== (pass === 'over')) continue;
+      e.camera.layers.set(pass === 'outline' ? OUTLINE : 0);
       e.camera.projectionMatrix.copy(main).multiply(e.model);
       renderer.resetState();
       renderer.render(e.scene, e.camera);
     }
   }
+}
+
+/** Точка внутри выпуклого четырёхугольника (обход в любую сторону). */
+function insideQuad([x, y]: [number, number], q: [number, number][]): boolean {
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const [ax, ay] = q[i], [bx, by] = q[(i + 1) % 4];
+    const c = Math.sign((bx - ax) * (y - ay) - (by - ay) * (x - ax));
+    if (c && sign && c !== sign) return false;
+    if (c) sign = c;
+  }
+  return true;
 }

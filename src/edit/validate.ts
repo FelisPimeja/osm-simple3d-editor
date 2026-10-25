@@ -41,6 +41,8 @@ export interface Fix {
   splitLevels?: string[];
   /** Копии пути — на новых узлах в тех же точках (ось эскалатора не должна связывать этажи общими узлами). */
   splitNewNodes?: boolean;
+  /** Расширить контур здания до объединения с частями («Обновить контур» режима здания). */
+  growOutline?: boolean;
 }
 
 /** Высота этажа, ниже и выше которой этажность и высота противоречат друг другу, м. */
@@ -56,6 +58,26 @@ const MIN_WIDTH = 0.05;
 /** Части за контуром: допуск по площади, м² и доля части (погрешности обрисовки). */
 const OUTSIDE_AREA = 1;
 const OUTSIDE_SHARE = 0.03;
+/**
+ * Автоисправление «части за контуром» — расширить контур — предлагаем, только если он вырастет не больше чем на эту
+ * долю площади: при большем расхождении вероятнее ошибка в части, а не в контуре.
+ */
+export const OUTLINE_GROW_SHARE = 0.1;
+/**
+ * Как часть стоит относительно земли: raised — приподнята (нависает: консоль, козырёк, верхний ярус), underground —
+ * под землёй, ground — стоит на земле. По вики (Simple 3D Buildings, «Underground parts»; обсуждение
+ * community.openstreetmap.org/t/137537) контур — след здания на земле, а приподнятые и подземные части в отношении
+ * type=building могут выходить за него (им ставят layer=1 / layer=-1).
+ */
+export function partGround(tags: Record<string, string>): 'raised' | 'underground' | 'ground' {
+  const layer = Number(tags.layer);
+  if (layer < 0 || tags.location === 'underground') return 'underground';
+  const h = computeHeights(tags);
+  if (h.top <= 0.01 && tags.height !== undefined && Number(tags.height) !== 0) return 'underground';
+  if (h.min < -0.01) return 'underground';
+  return h.min > 0.01 ? 'raised' : 'ground';
+}
+
 /** Разрыв между отдельными корпусами, после которого предлагаем проверить принадлежность, м. */
 const REMOTE_PART_GAP = 20;
 /**
@@ -494,6 +516,7 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
     const o = multi(outline);
     const outlineArea = multiArea(o);
     const inOutline = (c: LonLat) => outline.polygons.some((q) => pointInRing(c, q.outer) && !q.inners.some((h) => pointInRing(c, h)));
+    const outside: { f: Feature3D; rest: number }[] = [];
     for (const f of parts) {
       if (broken.has(f.key)) continue;
       // Все вершины внутри — вычитание не нужно (вогнутый контур мог бы обмануть, но такие части видно и глазом)
@@ -501,7 +524,38 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
       const a = multiArea(multi(f));
       const rest = safe(() => multiArea(polygonClipping.difference(multi(f), o)));
       if (rest !== undefined && rest > OUTSIDE_AREA && rest > a * OUTSIDE_SHARE) {
-        out.push({ key: f.key, level: 'warning', code: 'outside', text: tr('Часть выходит за контур здания на {area} м² — контур должен охватывать все части.', { area: fmt(rest) }) });
+        outside.push({ f, rest });
+      }
+    }
+    if (outside.length) {
+      const hasRelation = g.type === 'relation' && g.id !== 0;
+      // Контур — след на земле: расширяем его только по частям, стоящим на земле
+      const ok = parts.filter((f) => !broken.has(f.key) && partGround(f.tags) === 'ground');
+      const union = safe(() => polygonClipping.union(o, ...ok.map(multi)));
+      const share = union && outlineArea > 0 ? (multiArea(union) - outlineArea) / outlineArea : Infinity;
+      // Объединение из нескольких кусков (мультиполигон) расширением не построить
+      const growable = hasRelation && share <= OUTLINE_GROW_SHARE && union?.length === 1;
+      for (const { f, rest } of outside) {
+        const ground = partGround(f.tags);
+        if (ground === 'ground') {
+          out.push({ key: f.key, level: 'warning', code: 'outside', text: tr('Часть выходит за контур здания на {area} м² — контур должен охватывать все части.', { area: fmt(rest) }),
+            ...(growable ? { fix: { label: tr('расширить контур до частей (+{pct}% площади)', { pct: fmt(share * 100) }), tags: {}, growOutline: true } } : {}) });
+          continue;
+        }
+        const layer = ground === 'raised' ? '1' : '-1';
+        if (!hasRelation) {
+          // Без отношения часть относят к зданию по попаданию в контур — выступающую нужно связать отношением
+          out.push({ key: f.key, level: 'warning', code: 'outside', text: ground === 'raised'
+            ? tr('Нависающая часть выходит за контур здания на {area} м² — свяжите её со зданием отношением type=building (контур — след на земле).', { area: fmt(rest) })
+            : tr('Подземная часть выходит за контур здания на {area} м² — свяжите её со зданием отношением type=building (контур — след на земле).', { area: fmt(rest) }),
+            ...(outline ? { fix: { label: tr('собрать отношение type=building'), tags: {}, createRelation: { outline: outline.key, parts: parts.map((x) => x.key) } } } : {}) });
+        } else if (Math.sign(Number(f.tags.layer) || 0) !== Math.sign(Number(layer))) {
+          // В отношении выступать можно; вики советует слой, чтобы валидаторы не путали её с тем, что на земле
+          out.push({ key: f.key, level: 'warning', code: 'outside-layer', text: ground === 'raised'
+            ? tr('Нависающая часть за контуром здания — по вики ей ставят layer=1 (над тем, что на земле).')
+            : tr('Подземная часть за контуром здания — по вики ей ставят layer=-1.'),
+            fix: { label: `layer=${layer}`, tags: { layer } } });
+        }
       }
     }
     // Пробел — место контура, над которым нет ни одной части. Приподнятые части тоже покрывают контур:

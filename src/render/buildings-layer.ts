@@ -3247,8 +3247,11 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
-  /** Набросок контура; open — просто ломаная (без замыкания и заливки: стороны угла поворота). */
-  setDrawPreview(points: THREE.Vector3[] | undefined, closed = false, open = false) {
+  /**
+   * Набросок контура; open — просто ломаная (без замыкания и заливки: стороны угла поворота). gain — участки, которые
+   * добавятся (метры сцены, кольца: внешнее и дыры), — ярче заливки.
+   */
+  setDrawPreview(points: THREE.Vector3[] | undefined, closed = false, open = false, gain: [number, number][][][] = []) {
     const g = this.groups.get(FOCUS_GROUP);
     if (this.drawPreview) {
       this.drawPreview.parent?.remove(this.drawPreview);
@@ -3272,6 +3275,17 @@ export class BuildingsLayer implements CustomLayerInterface {
         fill.position.z = points[0].z;
         fill.renderOrder = 1002;
         root.add(close, fill);
+      }
+      for (const [outer, ...holes] of gain) {
+        const shape = new THREE.Shape(outer.map(([x, y]) => new THREE.Vector2(x, y)));
+        shape.holes = holes.map((h) => new THREE.Path(h.map(([x, y]) => new THREE.Vector2(x, y))));
+        const fill = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color: 0xf97316, opacity: 0.75, side: THREE.DoubleSide, ...overlay }));
+        fill.position.z = points[0].z;
+        fill.renderOrder = 1003;
+        const edge = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(outer.map(([x, y]) => new THREE.Vector3(x, y, points[0].z))),
+          new THREE.LineBasicMaterial({ color: 0xc2410c, ...overlay }));
+        edge.renderOrder = 1004;
+        root.add(fill, edge);
       }
       g.scene.add(root);
       this.drawPreview = root;

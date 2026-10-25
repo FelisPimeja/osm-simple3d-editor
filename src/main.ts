@@ -6,7 +6,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
-import { setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, selfIntersects, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, type Issue } from './edit/validate';
+import { setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, selfIntersects, validateIndoor, validateRepeatedRooms, validateStackedEscalators, validateTags, OUTLINE_GROW_SHARE, partGround, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -4261,22 +4261,28 @@ function freshInserts(fresh: FreshNode[], coord: Map<number, LonLat>): Insert[] 
 /** Допуск «часть внутри контура», м: общие стороны и узлы, погрешность координат. */
 const OUTLINE_EPS = 0.05;
 
-/** Контур отношения (путь) и части, выходящие за него хоть одной вершиной. */
+/**
+ * Контур отношения и части, стоящие на земле (приподнятые и подземные выходить за след на земле могут — partGround),
+ * и те из них, что выходят за контур хоть одной вершиной.
+ */
 function partsOutsideOutline(g: BuildingGroup): { outline: Feature3D; parts: Feature3D[]; out: Feature3D[] } | undefined {
   const oi = g.roles.indexOf('outline');
   const outline = oi >= 0 ? entity(g.members[oi]) as Feature3D | undefined : undefined;
-  if (!outline?.polygons?.length || !outline.key.startsWith('way/') || !overpassLayer.focusToLocal([0, 0])) return;
-  const ring = outline.polygons[0].outer.map((c) => overpassLayer.focusToLocal(c)!);
+  if (!outline?.polygons?.length || !overpassLayer.focusToLocal([0, 0])) return;
+  const rings = outline.polygons.map((p) => p.outer.map((c) => overpassLayer.focusToLocal(c)!));
   const parts = g.members.filter((k, i) => g.roles[i] === 'part' && !session.isDeleted(k))
-    .map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons?.length);
-  const inside = (q: [number, number]) => pointInRing(q, ring)
-    || ring.some((a, i) => segDist2(q, a, ring[(i + 1) % ring.length]) < OUTLINE_EPS);
+    .map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons?.length && partGround(f.tags) === 'ground');
+  const inside = (q: [number, number]) => rings.some((ring) => pointInRing(q, ring)
+    || ring.some((a, i) => segDist2(q, a, ring[(i + 1) % ring.length]) < OUTLINE_EPS));
   const out = parts.filter((f) => f.polygons.some((p) => p.outer.some((c) => !inside(overpassLayer.focusToLocal(c)!))));
   return { outline, parts, out };
 }
 
-/** Новый контур: объединение контура и всех частей (метры сцены); строка — почему нельзя. */
-function unitedOutline(outline: Feature3D, parts: Feature3D[]): [number, number][] | string {
+/**
+ * Новый контур: объединение контура и всех частей (метры сцены) — внешнее кольцо и дворы (их сохраняет только
+ * контур-мультиполигон, у пути они под контуром); строка — почему нельзя.
+ */
+function unitedOutline(outline: Feature3D, parts: Feature3D[]): { outer: [number, number][]; holes: [number, number][][] } | string {
   const toRing = (outer: LonLat[]) => {
     const r = outer.map((c) => overpassLayer.focusToLocal(c)!);
     return [[...r, r[0]]] as [number, number][][];
@@ -4284,16 +4290,21 @@ function unitedOutline(outline: Feature3D, parts: Feature3D[]): [number, number]
   const polys = [outline, ...parts].flatMap((f) => f.polygons.map((p) => toRing(p.outer)));
   const u = polygonClipping.union(polys[0], ...polys.slice(1));
   if (u.length !== 1) return tr('Части не соприкасаются с контуром: контур из нескольких кусков (мультиполигон) пока не поддерживается — соедините части.');
-  // Дворы внутри объединения — тоже под контуром (путь без дыр); лишние точки на прямых — убираем
-  const ring = u[0][0].slice(0, -1) as [number, number][];
-  const out: [number, number][] = [];
-  for (let i = 0; i < ring.length; i++) {
-    const a = out.length ? out[out.length - 1] : ring[ring.length - 1], b = ring[i], c = ring[(i + 1) % ring.length];
-    if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.01) continue;
-    if (segDist2(b, a, c) < 0.01) continue; // на прямой a–c
-    out.push(b);
-  }
-  return out.length >= 3 ? out : tr('Не удалось построить контур.');
+  // Лишние точки на прямых — убираем
+  const clean = (closed: number[][]) => {
+    const ring = closed.slice(0, -1) as [number, number][];
+    const out: [number, number][] = [];
+    for (let i = 0; i < ring.length; i++) {
+      const a = out.length ? out[out.length - 1] : ring[ring.length - 1], b = ring[i], c = ring[(i + 1) % ring.length];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.01) continue;
+      if (segDist2(b, a, c) < 0.01) continue; // на прямой a–c
+      out.push(b);
+    }
+    return out;
+  };
+  const outer = clean(u[0][0]);
+  if (outer.length < 3) return tr('Не удалось построить контур.');
+  return { outer, holes: outline.type === 'relation' ? u[0].slice(1).map(clean).filter((h) => h.length >= 3) : [] };
 }
 
 /**
@@ -4305,25 +4316,37 @@ function fixOutline() {
   if (!focus || isSolo(focus)) return;
   const r = partsOutsideOutline(focus);
   if (!r) return setStatus(tr('Контур здания — не простой путь: обновить его пока нельзя.'), true);
-  const ring = unitedOutline(r.outline, r.parts);
-  if (typeof ring === 'string') return setStatus(ring, true);
+  const united = unitedOutline(r.outline, r.parts);
+  if (typeof united === 'string') return setStatus(united, true);
   // Узлы: существующие узлы контура и частей в тех же точках, иначе новые
   const known: { id: number; c: LonLat; p: [number, number] }[] = [];
   for (const f of [r.outline, ...r.parts]) {
-    for (const p of f.polygons) (p.outerIds ?? []).forEach((id, i) => known.push({ id, c: p.outer[i], p: overpassLayer.focusToLocal(p.outer[i])! }));
+    for (const p of f.polygons) {
+      (p.outerIds ?? []).forEach((id, i) => known.push({ id, c: p.outer[i], p: overpassLayer.focusToLocal(p.outer[i])! }));
+      p.inners.forEach((h, j) => p.innerIds?.[j]?.forEach((id, i) => known.push({ id, c: h[i], p: overpassLayer.focusToLocal(h[i])! })));
+    }
   }
-  const ids: number[] = [], coords: LonLat[] = [];
-  for (const q of ring) {
-    const k = known.find((n) => Math.hypot(n.p[0] - q[0], n.p[1] - q[1]) < SHARE_EPS);
-    if (k && !ids.includes(k.id)) { ids.push(k.id); coords.push(k.c); continue; }
-    ids.push(nextNewId--);
-    coords.push(overpassLayer.focusToLngLat(q[0], q[1])!);
-  }
+  const toNodes = (ring: [number, number][]) => {
+    const ids: number[] = [], coords: LonLat[] = [];
+    for (const q of ring) {
+      const k = known.find((n) => Math.hypot(n.p[0] - q[0], n.p[1] - q[1]) < SHARE_EPS);
+      if (k && !ids.includes(k.id)) { ids.push(k.id); coords.push(k.c); continue; }
+      ids.push(nextNewId--);
+      coords.push(overpassLayer.focusToLngLat(q[0], q[1])!);
+    }
+    return { ids, coords };
+  };
+  const { ids, coords } = toNodes(united.outer);
+  const holes = united.holes.map(toNodes);
   const edits: Parameters<typeof session.editMany>[0] = [];
   const g = entity(focus.key) as EditGroup | undefined;
   if (!g) return setStatus(tr('Отношение здания не найдено.'), true);
   const outlineTags = { ...r.outline.tags };
-  if (!isBareOutlineTags(outlineTags)) {
+  if (r.outline.type === 'relation') {
+    const res = relationOutlineEdits(r.outline, outlineTags, { ids, coords }, holes, g);
+    if (typeof res === 'string') return setStatus(res, true);
+    edits.push(...res);
+  } else if (outlineHasVolume(outlineTags)) {
     // Объём контура — новой частью прежней формы (на тех же узлах)
     const id = nextNewId--;
     const tags: Record<string, string> = { 'building:part': 'yes' };
@@ -4333,11 +4356,87 @@ function fixOutline() {
     edits.push({ key: part.key, create: part });
     edits.push({ key: g.key, members: [...g.relMembers, { type: 'way', ref: id, role: 'part' }] });
   }
-  edits.push({ key: r.outline.key, polygons: [{ outer: coords, inners: [], outerIds: ids, innerIds: [] }], tags: outlineTags });
+  if (r.outline.type !== 'relation') edits.push({ key: r.outline.key, polygons: [{ outer: coords, inners: [], outerIds: ids, innerIds: [] }], tags: outlineTags });
   overpassLayer.setDrawPreview(undefined);
   session.editMany(edits);
   renderSelected();
-  setStatus(tr('Контур {key} обновлён: охватывает все части ({n}). Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length }));
+  setStatus(tr('Контур {key} обновлён: охватывает все части на земле ({n}). Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length }));
+}
+
+/** У контура свой объём (переносится в часть при «Обновить контур»); height=0 — явно без объёма, так и остаётся. */
+const outlineHasVolume = (t: Record<string, string>) => !isBareOutlineTags(t) && !(Number(t.height) === 0 && !isOutlinePart(t));
+
+/**
+ * Контур-мультиполигон для «Обновить контур» — локально, без правки соседей: внешнее кольцо — один новый путь,
+ * дворы — прежние пути-члены, если кольцо то же, иначе новые. Прежние пути, больше никому не нужные (без тегов, не
+ * в других загруженных отношениях), удаляются (if-unused: занятый незагруженным отношением сервер оставит). Объём
+ * контура (не голые теги здания) — новой частью-мультиполигоном на прежних путях.
+ */
+function relationOutlineEdits(outline: Feature3D, outlineTags: Record<string, string>, outer: { ids: number[]; coords: LonLat[] },
+  holes: { ids: number[]; coords: LonLat[] }[], g: EditGroup): ObjectEdit[] | string {
+  const members = session.get(outline.key)?.relMembers ?? (outline as Tagged).relMembers;
+  const lineNodes = new Map((outline.ways ?? []).map((w) => [w.id, { nodes: w.nodes, tags: w.tags ?? {} }] as const));
+  for (const line of session.lineEntities()) lineNodes.set(Number(line.key.split('/')[1]), { nodes: line.line!.ids, tags: line.tags });
+  const at = new Map<number, LonLat>();
+  for (const p of outline.polygons) {
+    p.outerIds?.forEach((id, i) => at.set(id, p.outer[i]));
+    p.inners.forEach((h, j) => p.innerIds?.[j]?.forEach((id, i) => at.set(id, h[i])));
+  }
+  for (const line of session.lineEntities()) line.line!.ids.forEach((id, i) => at.set(id, line.line!.coords[i]));
+  const wayMembers = members?.filter((m) => m.type === 'way') ?? [];
+  if (!members || wayMembers.some((m) => !lineNodes.has(m.ref))) return tr('Для обновления контура нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+  const edits: ObjectEdit[] = [];
+  const newWay = (ring: { ids: number[]; coords: LonLat[] }) => {
+    const id = nextNewId--, key = `way/${id}`;
+    edits.push({ key, create: { key, version: 0, tags: {}, line: { ids: [...ring.ids, ring.ids[0]], coords: [...ring.coords, ring.coords[0]] } } });
+    return id;
+  };
+  const next: OsmMember[] = [{ type: 'way', ref: newWay(outer), role: 'outer' }];
+  // Двор — тот же, если его узлы — узлы прежнего внутреннего кольца и площадь та же
+  const oldInners = outline.polygons.flatMap((p) => p.inners.map((h, j) => ({ h, ids: p.innerIds?.[j] })));
+  const area = (c: LonLat[]) => ringArea(c.map((x) => overpassLayer.focusToLocal(x)!));
+  for (const hole of holes) {
+    const same = oldInners.find((o) => o.ids && hole.ids.every((id) => o.ids!.includes(id)) && Math.abs(area(o.h) - area(hole.coords)) < 0.01 * area(o.h));
+    const ways = same && wayMembers.filter((m) => m.role === 'inner' && lineNodes.get(m.ref)!.nodes.every((id) => same.ids!.includes(id)));
+    if (ways?.length) next.push(...ways);
+    else next.push({ type: 'way', ref: newWay(hole), role: 'inner' });
+  }
+  const kept = new Set(next.map((m) => m.ref));
+  const gone = wayMembers.filter((m) => !kept.has(m.ref));
+  const others = members.filter((m) => m.type !== 'way');
+  if (outlineHasVolume(outlineTags)) {
+    // Объём контура — новой частью прежней формы на прежних путях
+    const relId = nextNewId--, key = `relation/${relId}`;
+    const tags: Record<string, string> = { type: 'multipolygon', 'building:part': 'yes' };
+    for (const [k, v] of Object.entries(outlineTags)) if (PART_TAGS.test(k)) { tags[k] = v; delete outlineTags[k]; }
+    const relMembers = wayMembers.map((m) => ({ ...m }));
+    edits.push({ key, create: { key, type: 'relation', id: relId, version: 0, kind: 'part', tags, hasParts: false,
+      polygons: outline.polygons.map((p) => ({ ...p })), ways: outline.ways, relMembers } as Feature3D });
+    edits.push({ key: g.key, members: [...g.relMembers, { type: 'relation', ref: relId, role: 'part' }] });
+  } else {
+    const live = liveFeatures();
+    const shared = (id: number) => live.some((f) => f.type === 'relation' && f.key !== outline.key && relWays(f)?.some((w) => w.id === id));
+    for (const m of gone) {
+      const w = lineNodes.get(m.ref)!, key = `way/${m.ref}`;
+      if (Object.keys(w.tags).length || shared(m.ref) || session.get(key)?.polygons?.length) continue;
+      if (!session.has(key)) session.track({ key, version: 0, tags: {}, line: { ids: w.nodes, coords: w.nodes.map((id) => at.get(id)!) } });
+      edits.push({ key, delete: true });
+    }
+  }
+  edits.push({ key: outline.key, tags: outlineTags, members: [...next, ...others],
+    polygons: [{ outer: outer.coords, outerIds: outer.ids, inners: holes.map((h) => h.coords), innerIds: holes.map((h) => h.ids) }] });
+  return edits;
+
+}
+
+/** На какую долю площади вырастет контур после «Обновить контур»; undefined — построить нельзя. */
+function outlineGrowth(r: { outline: Feature3D; parts: Feature3D[] }): number | undefined {
+  const u = unitedOutline(r.outline, r.parts);
+  if (typeof u === 'string') return;
+  const area = (c: LonLat[]) => ringArea(c.map((x) => overpassLayer.focusToLocal(x)!));
+  const was = r.outline.polygons.reduce((s, p) => s + area(p.outer) - p.inners.reduce((t, h) => t + area(h), 0), 0);
+  const now = ringArea(u.outer) - u.holes.reduce((t, h) => t + ringArea(h), 0);
+  return was > 0 ? now / was - 1 : undefined;
 }
 
 /** Предупреждение в панели режима здания: части за контуром и кнопка «Обновить контур». */
@@ -4345,8 +4444,11 @@ function outlineWarning(g: BuildingGroup): string {
   if (isSolo(g)) return '';
   const r = partsOutsideOutline(g);
   const above = partsAboveOutline(g);
+  const share = r?.out.length ? outlineGrowth(r) : undefined;
   return (r?.out.length ? `<p class="warn">⚠ ${tr('Частей за контуром здания: {n}. Контур должен охватывать все части.', { n: r.out.length })}
-    <button type="button" data-outline-fix title="${tr('Наведите — предпросмотр нового контура')}">${tr('Обновить контур')}</button></p>` : '')
+    ${share !== undefined && share <= OUTLINE_GROW_SHARE
+      ? `<button type="button" data-outline-fix title="${tr('Контур вырастет на {pct}% площади. Наведите — предпросмотр нового контура', { pct: (Math.round(share * 1000) / 10).toString() })}">${tr('Обновить контур')}</button>`
+      : share !== undefined ? tr('Контур пришлось бы увеличить на {pct}% площади — проверьте сами части.', { pct: Math.round(share * 100).toString() }) : ''}</p>` : '')
     + (above ? `<p class="warn">⚠ ${aboveOutlineText(above)}</p>` : '');
 }
 
@@ -6459,11 +6561,24 @@ function queryTileLayers(point: maplibregl.PointLike): MapGeoJSONFeature[] {
 
 // Наведение на «Обновить контур» — предпросмотр нового контура
 infoEl.addEventListener('mouseover', (e) => {
-  if (!(e.target as HTMLElement).closest('[data-outline-fix]') || !focus) return;
-  const r = partsOutsideOutline(focus);
-  const ring = r && unitedOutline(r.outline, r.parts);
-  if (Array.isArray(ring)) overpassLayer.setDrawPreview(ring.map(([x, y]) => new THREE.Vector3(x, y, 0)), true);
+  if ((e.target as HTMLElement).closest('[data-outline-fix]')) previewGrownOutline(true);
 });
+
+/** Предпросмотр «Обновить контур» (новый контур поверх всего — виден и у скрытого контура); false — убрать. */
+function previewGrownOutline(on: boolean) {
+  const r = on && focus ? partsOutsideOutline(focus) : undefined;
+  const u = r && unitedOutline(r.outline, r.parts);
+  if (!r || !u || typeof u === 'string') return overpassLayer.setDrawPreview(undefined);
+  // Прирост — новый контур минус прежний: его и выделяем (на фоне всего контура он бывает в пару м²)
+  const loc = (ring: LonLat[]) => { const q = ring.map((c) => overpassLayer.focusToLocal(c)!); return [...q, q[0]]; };
+  let gain: [number, number][][][] = [];
+  try {
+    gain = polygonClipping.difference([[...u.outer, u.outer[0]], ...u.holes.map((h) => [...h, h[0]])],
+      ...r.outline.polygons.map((p) => [loc(p.outer), ...p.inners.map(loc)])) as [number, number][][][];
+  } catch { /* без выделения прироста */ }
+  overpassLayer.setDrawPreview(u.outer.map(([x, y]) => new THREE.Vector3(x, y, 0)), true, false,
+    gain.map((poly) => poly.map((ring) => ring.slice(0, -1))));
+}
 infoEl.addEventListener('mouseout', (e) => {
   if ((e.target as HTMLElement).closest('[data-outline-fix]')) overpassLayer.setDrawPreview(undefined);
 });
@@ -8394,6 +8509,13 @@ function applyFixes(list: Issue[]) {
   const splits = list.filter((i) => i.fix?.splitLevels);
   if (splits.length) void splitRoomsByLevel(splits);
   list = list.filter((i) => !i.fix?.splitLevels);
+  if (list.some((i) => i.fix?.growOutline)) {
+    // Одно расширение на здание, сколько бы частей ни выходило; только в режиме этого здания
+    const grow = list.find((i) => i.fix?.growOutline)!;
+    if (focus && groupOf(grow.key)?.key === focus.key) fixOutline();
+    else setStatus(tr('Откройте здание, чтобы расширить его контур.'), true);
+    list = list.filter((i) => !i.fix?.growOutline);
+  }
   const tags = new Map<string, Record<string, string>>();
   const removals = new Map<string, Set<string>>();
   const additions = new Map<string, Set<string>>();
@@ -8543,7 +8665,9 @@ issuesEl.addEventListener('mouseover', (e) => {
   const issue = li ? shownIssues[Number(li.dataset.i)] : undefined;
   if (hoveredIssue !== issue) { hoveredIssue = issue; highlightIssues(); }
   if (issue === fixPreviewed) return;
+  if (fixPreviewed?.fix?.growOutline || issue?.fix?.growOutline) previewGrownOutline(!!issue?.fix?.growOutline);
   fixPreviewed = issue;
+  if (issue?.fix?.growOutline) return overpassLayer.setFixPreview(undefined);
   const f = issue?.fix ? liveFeatures().find((x) => x.key === issue.key) : undefined;
   if (!f || !issue?.fix) return overpassLayer.setFixPreview(undefined);
   const tags = { ...f.tags };
@@ -8561,6 +8685,7 @@ issuesEl.addEventListener('mouseleave', () => {
   overpassLayer.setHover(undefined);
   hoveredIssue = undefined;
   highlightIssues();
+  if (fixPreviewed?.fix?.growOutline) previewGrownOutline(false);
   fixPreviewed = undefined;
   overpassLayer.setFixPreview(undefined);
 });

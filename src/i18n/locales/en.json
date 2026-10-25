@@ -175,9 +175,7 @@
   "Части не соприкасаются с контуром: контур из нескольких кусков (мультиполигон) пока не поддерживается — соедините части.": "The parts do not touch the outline: an outline of several pieces (multipolygon) is not supported yet. Connect the parts.",
   "Не удалось построить контур.": "Could not build the outline.",
   "Контур здания — не простой путь: обновить его пока нельзя.": "The building outline is not a simple way, so it cannot be updated yet.",
-  "Контур {key} обновлён: охватывает все части ({n}). Отменить — Ctrl+Z.": "Outline {key} updated: it now covers all parts ({n}). Undo: Ctrl+Z.",
   "Частей за контуром здания: {n}. Контур должен охватывать все части.": "Parts outside the building outline: {n}. The outline must cover all parts.",
-  "Наведите — предпросмотр нового контура": "Hover to preview the new outline",
   "Обновить контур": "Update outline",
   "и ещё {n}": "and {n} more",
   "У контура building:levels={outline}, а у частей больше (до {max}): {list}.": "The outline has building:levels={outline}, but some parts have more (up to {max}): {list}.",
@@ -1205,5 +1203,15 @@
   "Клик — применить; число или процент (1.5, 150%) + Enter — множитель.": "Click to apply; a number or percentage (1.5, 150%) + Enter sets the factor.",
   "По двум точкам: точка на объекте и куда её поставить, затем так же вторая — перенос, поворот и масштаб сразу; Shift — без поворота.": "Two points: a point on the object and where to put it, then the same for a second one — moves, rotates and scales at once; Shift: no rotation.",
   "Tab — способ; D — общие узлы с соседями или отдельно. Esc — отмена.": "Tab: method; D: shared nodes attached or detached. Esc: cancel.",
-  "Масштаб в плане (E)": "Scale in plan (E)"
+  "Масштаб в плане (E)": "Scale in plan (E)",
+  "расширить контур до частей (+{pct}% площади)": "grow the outline to cover the parts (+{pct}% area)",
+  "Контур вырастет на {pct}% площади. Наведите — предпросмотр нового контура": "The outline will grow by {pct}% of its area. Hover to preview the new outline",
+  "Контур пришлось бы увеличить на {pct}% площади — проверьте сами части.": "The outline would have to grow by {pct}% of its area — check the parts themselves.",
+  "Откройте здание, чтобы расширить его контур.": "Open the building to grow its outline.",
+  "Для обновления контура нужны пути-члены мультиполигона — перезагрузите видимые тайлы.": "Updating the outline needs the multipolygon's member ways — reload the visible tiles.",
+  "Нависающая часть выходит за контур здания на {area} м² — свяжите её со зданием отношением type=building (контур — след на земле).": "An overhanging part extends {area} m² beyond the building outline — link it to the building with a type=building relation (the outline is the footprint on the ground).",
+  "Подземная часть выходит за контур здания на {area} м² — свяжите её со зданием отношением type=building (контур — след на земле).": "An underground part extends {area} m² beyond the building outline — link it to the building with a type=building relation (the outline is the footprint on the ground).",
+  "Нависающая часть за контуром здания — по вики ей ставят layer=1 (над тем, что на земле).": "Overhanging part outside the building outline — the wiki recommends layer=1 (above what is on the ground).",
+  "Подземная часть за контуром здания — по вики ей ставят layer=-1.": "Underground part outside the building outline — the wiki recommends layer=-1.",
+  "Контур {key} обновлён: охватывает все части на земле ({n}). Отменить — Ctrl+Z.": "Outline {key} updated: it now covers all parts on the ground ({n}). Undo: Ctrl+Z."
 }

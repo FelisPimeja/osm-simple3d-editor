@@ -15,6 +15,10 @@ export interface Pivot {
 const BEARING_PER_PX = 0.8;
 const PITCH_PER_PX = -0.5;
 const MIN_PITCH = 0;
+/** Зум колесом — с той же скоростью, что у scrollZoom MapLibre: уровней зума на пиксель прокрутки (колесо и трекпад). */
+const WHEEL_ZOOM_RATE = 1 / 450, TRACKPAD_ZOOM_RATE = 1 / 100;
+/** Ближе этого к точке под курсором колесом не подходим, м. */
+const MIN_ZOOM_DISTANCE = 0.5;
 
 /**
  * Вращение камеры как в SketchUp: вокруг точки под курсором, а не вокруг центра карты.
@@ -30,7 +34,9 @@ export class CursorOrbit {
   private rotated = false;
   private readonly marker: HTMLDivElement;
 
-  constructor(private readonly map: MlMap, private readonly pickPivot: (x: number, y: number) => Pivot) {
+  constructor(private readonly map: MlMap, private readonly pickPivot: (x: number, y: number) => Pivot,
+    /** Точка объекта под курсором для зума колесом; undefined — обычный зум MapLibre (к земле). */
+    private readonly pickZoom?: (x: number, y: number) => Pivot | undefined) {
     this.marker = document.createElement('div');
     this.marker.className = 'orbit-pivot';
     this.marker.hidden = true;
@@ -42,6 +48,7 @@ export class CursorOrbit {
     canvas.addEventListener('pointerup', this.onUp);
     canvas.addEventListener('pointercancel', this.onUp);
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('wheel', this.onWheel, { capture: true, passive: false });
     // Ctrl+ЛКМ: после вращения браузер всё равно шлёт click, а MapLibre (без mousedown — его гасит preventDefault)
     // сверяет его со старой точкой нажатия и может принять за клик — выделение сбрасывалось
     canvas.addEventListener('click', (e) => { if (this.rotated) { this.rotated = false; e.stopPropagation(); } }, { capture: true });
@@ -101,6 +108,59 @@ export class CursorOrbit {
     this.drag = undefined;
     this.marker.hidden = true;
   };
+
+  /**
+   * Зум колесом к точке объекта под курсором (как в SketchUp): камера едет по прямой к этой точке (или от неё),
+   * точка остаётся под курсором. MapLibre зумит к земле под курсором — к крыше на высоте так не подойти: камера
+   * опускается ниже неё раньше, чем приближается.
+   */
+  private onWheel = (e: WheelEvent) => {
+    if (!this.pickZoom || this.drag) return;
+    const rect = this.map.getCanvas().getBoundingClientRect();
+    const target = this.pickZoom(e.clientX - rect.left, e.clientY - rect.top);
+    if (!target) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const px = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1);
+    // Как у MapLibre: щелчок колеса — крупный шаг (кратен 4.000244140625), трекпад и пинч — мелкие частые
+    const rate = px % 4.000244140625 === 0 || Math.abs(px) >= 50 ? WHEEL_ZOOM_RATE : TRACKPAD_ZOOM_RATE;
+    const k = Math.pow(2, px * rate);
+    const cam = this.cameraOffset(target);
+    if (!cam) return;
+    const { ox, oy, oz, p, s } = cam;
+    const dist = Math.hypot(ox, oy, oz);
+    const minAlt = this.underground ? 0.3 : 1;
+    const at = (f: number) => {
+      const altitude = target.altitude + oz * f;
+      if (altitude < minAlt) return;
+      const camLngLat = new MercatorCoordinate(p.x + ox * f * s, p.y - oy * f * s, 0).toLngLat();
+      const opts = this.map.calculateCameraOptionsFromCameraLngLatAltRotation(camLngLat, altitude, this.map.getBearing(), this.map.getPitch());
+      // Дальше предела зума MapLibre камера встала бы не туда (зум обрезается)
+      return opts.zoom !== undefined && opts.zoom > this.map.getMaxZoom() ? undefined : opts;
+    };
+    let f = Math.max(k, MIN_ZOOM_DISTANCE / Math.max(dist, 1e-6));
+    let opts = at(f);
+    // Слишком близко (предел зума, земля) — подходим, сколько можно: подбор шага делением пополам
+    if (!opts && f < 1) {
+      let lo = f, hi = 1;
+      for (let i = 0; i < 20; i++) { const mid = (lo + hi) / 2; if (at(mid)) hi = mid; else lo = mid; }
+      f = hi;
+      opts = f < 0.999 ? at(f) : undefined;
+    }
+    if (opts) this.map.jumpTo(opts);
+  };
+
+  /** Камера относительно точки t (метры: x — восток, y — север, z — вверх) и масштаб меркатора у t. */
+  private cameraOffset(t: Pivot) {
+    const p = MercatorCoordinate.fromLngLat(t.lngLat, 0);
+    const s = p.meterInMercatorCoordinateUnits();
+    type CameraTransform = { getCameraLngLat(): LngLat; getCameraAltitude(): number };
+    const m = this.map as unknown as { _camera?: { transform?: CameraTransform }; transform?: CameraTransform };
+    const tr = m._camera?.transform ?? m.transform;
+    if (!tr) return;
+    const cam = MercatorCoordinate.fromLngLat(tr.getCameraLngLat(), 0);
+    return { ox: (cam.x - p.x) / s, oy: -(cam.y - p.y) / s, oz: tr.getCameraAltitude() - t.altitude, p, s };
+  }
 
   /** Повернуть камеру вокруг pivot: dBearing — по часовой, dPitch — к горизонту. */
   private rotate(pivot: Pivot, dBearing: number, dPitch: number) {

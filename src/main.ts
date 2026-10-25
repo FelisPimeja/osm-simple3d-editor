@@ -186,6 +186,8 @@ const map = new maplibregl.Map({
   center: savedCamera?.center ?? [0, 0],
   zoom: savedCamera?.zoom ?? Math.max(-2, worldZoom),
   minZoom: -2,
+  // Предел MapLibre (по умолчанию 22): к отдельным вершинам и стыкам нужно подходить ближе
+  maxZoom: 24,
   pitch: savedCamera?.pitch ?? 0,
   bearing: savedCamera?.bearing ?? 0,
   hash: true,
@@ -1049,7 +1051,7 @@ const orbit = new CursorOrbit(map, (x, y) => {
   if (!hit && focus) { const c = overpassLayer.focusCenter(); if (c) return c; }
   // Не попали в 3D-слой (тайловое здание или пусто) — точка на земле
   return hit ?? { lngLat: map.unproject([x, y]), altitude: 0 };
-});
+}, (x, y) => overpassLayer.pickHit([x, y]) ?? undefined);
 
 function applyMonochrome() {
   overpassLayer.setMonochrome(gfx.monochrome);

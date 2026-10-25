@@ -4,7 +4,8 @@ import type { UnderlayTarget } from './underlay-target';
 import { linkedNote, type LinkPreview, glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
 import { tr } from '../i18n';
 
-export type ScaleMode = 'factor' | 'points';
+export type ScaleMode = 'factor' | 'distance' | 'points';
+const MODES: ScaleMode[] = ['factor', 'distance', 'points'];
 const MODE_STORAGE = 'scale-mode';
 /** Меньше этого множитель не бывает (иначе объект схлопнется в точку). */
 const MIN_FACTOR = 0.01;
@@ -19,6 +20,8 @@ const X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0), Z = new TH
  * 2. клик — опорная точка: отрезок от базы до неё — длина «×1»;
  * 3. движение курсора — множитель: проекция курсора на направление отрезка, делённая на его длину; Shift — только
  *    вдоль оси здания, ближайшей к отрезку; клик — применить; число (или 150%) + Enter — множитель.
+ * Режим «расстояние» — как «множитель», но число + Enter — реальная длина отрезка от базы до опорной точки, м:
+ * масштаб — она, делённая на текущую (подогнать скан по известному размеру).
  * Режим «по двум точкам» (как у подложек): клик — точка на объекте, клик — куда её поставить, затем так же вторая
  * точка; объект переносится, поворачивается и масштабируется так, чтобы обе точки встали на места (Shift — без поворота).
  * Tab — режим, D — общие с соседями узлы: тянуть соседей следом или отделить часть. Esc — отмена.
@@ -43,6 +46,8 @@ export class ScaleTool {
   private dst1 = new THREE.Vector2();
   private src2 = new THREE.Vector2();
   private factor = 1;
+  /** Длина отрезка база — опорная точка (вдоль направления масштаба), м. */
+  private refLen = 1;
   private angle = 0;
   /** Ось здания, вдоль которой масштаб при Shift (единичный вектор в плане). */
   private axis?: THREE.Vector2;
@@ -87,10 +92,10 @@ export class ScaleTool {
     this.keys = new Set(keys);
     this.underlayIds = new Set(underlays);
     this.glue = loadGlue();
-    this.state = this.mode === 'factor' ? 'base' : 'src1';
-    this.onState(this.mode === 'factor'
-      ? tr('Масштаб: кликните базовую точку — она останется на месте. Tab — по двум точкам, Esc — выйти.')
-      : tr('Масштаб по двум точкам: кликните первую точку на объекте. Tab — множителем, Esc — выйти.'));
+    this.state = this.mode === 'points' ? 'src1' : 'base';
+    this.onState(this.mode === 'factor' ? tr('Масштаб: кликните базовую точку — она останется на месте. Tab — способ, Esc — выйти.')
+      : this.mode === 'distance' ? tr('Масштаб по расстоянию: кликните первую точку известного отрезка — она останется на месте. Tab — способ, Esc — выйти.')
+      : tr('Масштаб по двум точкам: кликните первую точку на объекте. Tab — способ, Esc — выйти.'));
     this.updateVcb();
   }
 
@@ -129,7 +134,8 @@ export class ScaleTool {
       case 'base':
         this.base.copy(q);
         this.state = 'ref';
-        this.onState(tr('Кликните опорную точку: отрезок от базы до неё — исходная длина (×1). Esc — отмена.'));
+        this.onState(this.mode === 'distance' ? tr('Кликните вторую точку отрезка, длина которого известна. Esc — отмена.')
+          : tr('Кликните опорную точку: отрезок от базы до неё — исходная длина (×1). Esc — отмена.'));
         break;
       case 'ref':
         if (q.distanceTo(this.base) < 1e-3) return;
@@ -137,7 +143,9 @@ export class ScaleTool {
         this.factor = 1;
         this.axis = undefined;
         this.state = 'scale';
-        this.onState(this.underlayIds.size
+        this.refLen = q.distanceTo(this.base);
+        if (this.mode === 'distance') this.onState(tr('Введите реальную длину отрезка в метрах и Enter (или ведите курсор вдоль отрезка, клик — применить). Esc — отмена.'));
+        else this.onState(this.underlayIds.size
           ? tr('Ведите курсор вдоль отрезка — множитель. Клик — применить, число или 150% + Enter — множитель, Esc — отмена.')
           : tr('Ведите курсор вдоль отрезка — множитель (Shift — только вдоль оси здания). Клик — применить, число или 150% + Enter — множитель, Esc — отмена.'));
         break;
@@ -189,14 +197,15 @@ export class ScaleTool {
       else { this.cancel(); this.start([...this.keys], [...this.underlayIds]); }
       return true;
     }
-    if (e.key === 'Tab') { this.setMode(this.mode === 'factor' ? 'points' : 'factor'); return true; }
+    if (e.key === 'Tab') { this.setMode(MODES[(MODES.indexOf(this.mode) + 1) % MODES.length]); return true; }
     if (isGlueKey(e) && this.keys.size) { this.setGlue(!this.glue); return true; }
     if (this.state !== 'scale') return false;
-    if (/^[\d.,%]$/.test(e.key)) { this.typed += e.key === ',' ? '.' : e.key; this.updateVcb(); return true; }
+    if (this.mode === 'distance' ? /^[\d.,]$/.test(e.key) : /^[\d.,%]$/.test(e.key)) { this.typed += e.key === ',' ? '.' : e.key; this.updateVcb(); return true; }
     if (e.key === 'Backspace') { this.typed = this.typed.slice(0, -1); this.updateVcb(); return true; }
     if (e.key === 'Enter') {
       const pct = this.typed.endsWith('%');
-      const k = Number(pct ? this.typed.slice(0, -1) : this.typed) / (pct ? 100 : 1);
+      // По расстоянию — число в метрах: масштаб — оно, делённое на текущую длину отрезка
+      const k = this.mode === 'distance' ? Number(this.typed) / this.refLen : Number(pct ? this.typed.slice(0, -1) : this.typed) / (pct ? 100 : 1);
       if (this.typed && Number.isFinite(k) && k >= MIN_FACTOR) {
         this.factor = k;
         this.matrix = this.lift(this.factorMatrix(k));
@@ -281,6 +290,7 @@ export class ScaleTool {
       const dir = (this.axis ?? r).clone().normalize();
       if (r.dot(dir) < 0) dir.negate();
       const len = r.dot(dir);
+      this.refLen = len;
       const k = d.dot(dir) / len;
       this.factor = Math.max(MIN_FACTOR, Number.isFinite(k) ? k : 1);
       this.matrix = this.lift(this.factorMatrix(this.factor));
@@ -367,12 +377,18 @@ export class ScaleTool {
   private updateVcb() {
     if (!this.active) { this.vcb.hidden = true; return; }
     this.vcb.hidden = false;
-    const modes = `<span class="vcb-units" title="${tr('Способ масштабирования (Tab)')}">${(['factor', 'points'] as const)
-      .map((m) => `<button type="button" data-scale-mode="${m}"${m === this.mode ? ' class="active"' : ''}>${m === 'factor' ? tr('множитель') : tr('по двум точкам')}</button>`).join('')}</span>`;
+    const label = { factor: tr('множитель'), distance: tr('расстояние'), points: tr('по двум точкам') };
+    const modes = `<span class="vcb-units" title="${tr('Способ масштабирования (Tab)')}">${MODES
+      .map((m) => `<button type="button" data-scale-mode="${m}"${m === this.mode ? ' class="active"' : ''}>${label[m]}</button>`).join('')}</span>`;
     // Только подложки — соседей нет
     const glue = this.keys.size ? glueSwitch(this.glue, tr('Общие с соседями узлы: «с соседями» — соседи тянутся следом, «отдельно» — часть отделяется от них (D)')) : '';
     let value = '';
-    if (this.state === 'scale') {
+    if (this.state === 'scale' && this.mode === 'distance') {
+      // Длина отрезка сейчас (введённая — какой станет), м, и множитель
+      const k = this.typed ? Number(this.typed) / this.refLen : this.factor;
+      value = `<span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || fmt(this.refLen * this.factor)}</span> ${tr('м')}<span class="vcb-axis">${
+        tr('длина отрезка · ×{k}', { k: Number.isFinite(k) ? fmt(k) : '—' })}</span>`;
+    } else if (this.state === 'scale') {
       const along = this.axis ? tr('вдоль оси здания (Shift)') : this.snap ? tr('привязка') : tr('равномерно');
       value = `<span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || '×' + fmt(this.factor)}</span><span class="vcb-axis">${along}</span>`;
     } else if (this.state === 'dst2') {
@@ -385,6 +401,6 @@ export class ScaleTool {
 const fmt = (k: number) => String(Math.round(k * 1000) / 1000);
 
 function loadMode(): ScaleMode {
-  try { return localStorage.getItem(MODE_STORAGE) === 'points' ? 'points' : 'factor'; } catch { return 'factor'; }
+  try { const m = localStorage.getItem(MODE_STORAGE) as ScaleMode | null; return m && MODES.includes(m) ? m : 'factor'; } catch { return 'factor'; }
 }
 

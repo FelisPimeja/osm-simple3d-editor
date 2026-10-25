@@ -1180,8 +1180,6 @@
   "Части с одним контуром объединяются, только если стоят одна на другой: {a} — до {top} м, {b} — от {min} м.": "Parts with the same outline merge only when stacked one on top of the other: {a} goes up to {top} m, {b} starts at {min} m.",
   "Объединено частей одна над другой: {n} → {key}, высоты {from}–{to} м. Отменить — Ctrl+Z.": "Merged stacked parts: {n} → {key}, heights {from}–{to} m. Undo with Ctrl+Z.",
   "Основание крыши": "Roof base",
-  "Масштаб: кликните базовую точку — она останется на месте. Tab — по двум точкам, Esc — выйти.": "Scale: click the base point — it stays in place. Tab: by two points, Esc: exit.",
-  "Масштаб по двум точкам: кликните первую точку на объекте. Tab — множителем, Esc — выйти.": "Scale by two points: click the first point on the object. Tab: by factor, Esc: exit.",
   "Кликните опорную точку: отрезок от базы до неё — исходная длина (×1). Esc — отмена.": "Click the reference point: the segment from the base to it is the original length (×1). Esc: cancel.",
   "Ведите курсор вдоль отрезка — множитель (Shift — только вдоль оси здания). Клик — применить, число или 150% + Enter — множитель, Esc — отмена.": "Move the cursor along the segment to set the factor (Shift: along a building axis only). Click to apply, number or 150% + Enter for the factor, Esc: cancel.",
   "Кликните, куда поставить первую точку. Esc — отмена.": "Click where to put the first point. Esc: cancel.",
@@ -1235,5 +1233,12 @@
   "Ось поворота: проведите курсор от центра вдоль стрелки оси растра — она выбрана (z — в плоскости растра). Клик — опорное направление. Esc — отмена.": "Rotation axis: move the cursor from the centre along an image axis arrow to choose it (z — in the image plane). Click — reference direction. Esc — cancel.",
   "Переместить подложку (M)": "Move underlay (M)",
   "Повернуть подложку (Q)": "Rotate underlay (Q)",
-  "Масштаб подложки (E)": "Scale underlay (E)"
+  "Масштаб подложки (E)": "Scale underlay (E)",
+  "Масштаб: кликните базовую точку — она останется на месте. Tab — способ, Esc — выйти.": "Scale: click the base point — it stays in place. Tab — method, Esc — exit.",
+  "Масштаб по расстоянию: кликните первую точку известного отрезка — она останется на месте. Tab — способ, Esc — выйти.": "Scale by distance: click the first point of a segment of known length — it stays in place. Tab — method, Esc — exit.",
+  "Масштаб по двум точкам: кликните первую точку на объекте. Tab — способ, Esc — выйти.": "Scale by two points: click the first point on the object. Tab — method, Esc — exit.",
+  "Кликните вторую точку отрезка, длина которого известна. Esc — отмена.": "Click the second point of the segment whose length is known. Esc — cancel.",
+  "Введите реальную длину отрезка в метрах и Enter (или ведите курсор вдоль отрезка, клик — применить). Esc — отмена.": "Type the real segment length in metres and press Enter (or move the cursor along the segment, click — apply). Esc — cancel.",
+  "расстояние": "distance",
+  "длина отрезка · ×{k}": "segment length · ×{k}"
 }

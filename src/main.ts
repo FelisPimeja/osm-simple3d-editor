@@ -763,15 +763,19 @@ function transformUnderlay(u: Underlay, m: THREE.Matrix4): Underlay {
   const f = underlayFrame(u);
   if (!f) return u;
   const c = f.center.clone().applyMatrix4(m);
-  const pos = new THREE.Vector3(), rq = new THREE.Quaternion(), sc = new THREE.Vector3();
-  m.decompose(pos, rq, sc);
-  const e = new THREE.Matrix4().makeRotationFromQuaternion(underlayQuaternion(u).premultiply(rq)).elements; // по столбцам
+  // Оси картинки после преобразования (линейная часть m): масштаб — по ширине, ориентация — по осям (в плоскости
+  // картинки m — подобие; масштаб по нормали, как у «Масштаба» в плоскости, на ориентацию не влияет)
+  const lin = new THREE.Matrix3().setFromMatrix4(m);
+  const a = f.a.clone().applyMatrix3(lin), b = f.b.clone().applyMatrix3(lin);
+  const k = a.length() / f.a.length();
+  const x = a.clone().normalize(), y = b.clone().sub(x.clone().multiplyScalar(b.dot(x))).normalize(), z = x.clone().cross(y);
+  const e = new THREE.Matrix4().makeBasis(x, y, z).elements; // по столбцам
   const m00 = e[0], m10 = e[1], m20 = e[2], m21 = e[6], m02 = e[8], m12 = e[9], m22 = e[10];
   let tilt = Math.acos(Math.max(-1, Math.min(1, m22))), rotation: number, spin: number;
   if (Math.sin(tilt) > 1e-9) { rotation = Math.atan2(m02, -m12); spin = Math.atan2(m20, m21); }
   else { rotation = Math.atan2(m10, m00); spin = 0; if (tilt < 1e-9) tilt = 0; } // лежит лицом вверх или вниз: весь поворот — в rotation
   const center = overpassLayer.focusToLngLat(c.x, c.y);
-  return center ? { ...u, center, elevation: u.elevation + c.z - f.center.z, rotation, tilt, spin, scale: u.scale * Math.abs(sc.x) } : u;
+  return center ? { ...u, center, elevation: u.elevation + c.z - f.center.z, rotation, tilt, spin, scale: u.scale * k } : u;
 }
 
 /** Подложка в метрах сцены режима здания: центр, полуоси вдоль ширины и высоты картинки, нормаль. */
@@ -2377,24 +2381,30 @@ function startRotate() {
 
 // Инструмент «Масштаб» (E): в плане, от базовой точки множителем или по двум парам точек
 const scaleBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="scale"]')!;
-const scaleTool = new ScaleTool(overpassLayer, map.getContainer(), commitScale, (hint) => {
+const scaleTool = new ScaleTool(overpassLayer, map.getContainer(), (keys, m, glue, underlays) => {
+  if (!underlays.length) return commitScale(keys, m, glue);
+  const before = currentUnderlays().filter((u) => underlays.includes(u.id));
+  editUnderlays(before, before.map((u) => transformUnderlay(u, m)), () => { if (keys.length) commitScale(keys, m, glue); });
+  if (!keys.length) setStatus(tr('Масштабировано подложек: {n}. Отменить — Ctrl+Z.', { n: before.length }));
+}, (hint) => {
   scaleBtn.classList.toggle('active', scaleTool.active);
   syncCursor();
   toolHint(hint);
 });
 scaleTool.linkPreview = previewGlued;
+scaleTool.underlays = underlayTarget;
 scaleBtn.addEventListener('click', () => (scaleTool.active ? scaleTool.stop() : startScale()));
 
 function startScale() {
   if (!focus) return;
   const keys = selection.filter((k) => focus!.members.includes(k));
-  if (!keys.length) return setStatus(tr('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Масштаб».'), true);
+  if (!keys.length && !underlaySelection.length) return setStatus(tr('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Масштаб».'), true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
     return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
   }
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
-  scaleTool.start(keys);
+  scaleTool.start(keys, underlaySelection);
 }
 
 // «Выровнять углы» (A): все углы выделенных частей — 90°, одним шагом истории

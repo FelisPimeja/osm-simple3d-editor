@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import type { UnderlayTarget } from './underlay-target';
 import { linkedNote, type LinkPreview, glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
 import { tr } from '../i18n';
 
@@ -7,9 +8,12 @@ export type ScaleMode = 'factor' | 'points';
 const MODE_STORAGE = 'scale-mode';
 /** Меньше этого множитель не бывает (иначе объект схлопнется в точку). */
 const MIN_FACTOR = 0.01;
+const X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0), Z = new THREE.Vector3(0, 0, 1);
 
 /**
- * Инструмент «Масштаб» (как Scale в SketchUp), только в плане — высоты не меняются; в режиме одного здания.
+ * Инструмент «Масштаб» (как Scale в SketchUp), в режиме одного здания: в рабочей плоскости. С частями здания —
+ * в плане (высоты не меняются); одни подложки — в плоскости картинки под первым кликом (у стоящей — в её плоскости),
+ * только равномерно.
  * Режим «множитель»:
  * 1. клик — базовая точка (неподвижная);
  * 2. клик — опорная точка: отрезок от базы до неё — длина «×1»;
@@ -22,14 +26,22 @@ const MIN_FACTOR = 0.01;
 export class ScaleTool {
   state: 'off' | 'base' | 'ref' | 'scale' | 'src1' | 'dst1' | 'src2' | 'dst2' = 'off';
   keys = new Set<string>();
+  /** Выделенные подложки (id) — масштабируются вместе с объектами. */
+  underlayIds = new Set<string>();
+  underlays?: UnderlayTarget;
   snap?: SnapHit;
   mode: ScaleMode = loadMode();
   glue = loadGlue();
-  private base = new THREE.Vector3();
-  private ref = new THREE.Vector3();
-  private src1 = new THREE.Vector3();
-  private dst1 = new THREE.Vector3();
-  private src2 = new THREE.Vector3();
+  /** Рабочая плоскость: начало, оси e1, e2 и нормаль; точки ниже — в её координатах. */
+  private o = new THREE.Vector3();
+  private e1 = X.clone();
+  private e2 = Y.clone();
+  private n = Z.clone();
+  private base = new THREE.Vector2();
+  private ref = new THREE.Vector2();
+  private src1 = new THREE.Vector2();
+  private dst1 = new THREE.Vector2();
+  private src2 = new THREE.Vector2();
   private factor = 1;
   private angle = 0;
   /** Ось здания, вдоль которой масштаб при Shift (единичный вектор в плане). */
@@ -46,8 +58,11 @@ export class ScaleTool {
   constructor(
     private readonly layer: BuildingsLayer,
     container: HTMLElement,
-    /** Применить к keys плановое преобразование m (метры сцены, z не трогает); glue — тянуть соседей следом. */
-    private readonly commit: (keys: string[], m: THREE.Matrix4, glue: boolean) => void,
+    /**
+     * Применить преобразование m (метры сцены) к keys — в плане (z не трогает) — и к подложкам underlays;
+     * glue — тянуть соседей следом.
+     */
+    private readonly commit: (keys: string[], m: THREE.Matrix4, glue: boolean, underlays: string[]) => void,
     private readonly onState: (hint: string) => void,
   ) {
     this.vcb = document.createElement('div');
@@ -68,8 +83,9 @@ export class ScaleTool {
   /** Посреди действия (точка уже выбрана). */
   get busy() { return this.state !== 'off' && this.state !== 'base' && this.state !== 'src1'; }
 
-  start(keys: string[]) {
+  start(keys: string[], underlays: string[] = []) {
     this.keys = new Set(keys);
+    this.underlayIds = new Set(underlays);
     this.glue = loadGlue();
     this.state = this.mode === 'factor' ? 'base' : 'src1';
     this.onState(this.mode === 'factor'
@@ -82,6 +98,7 @@ export class ScaleTool {
     this.cancel();
     this.state = 'off';
     this.keys = new Set();
+    this.underlayIds = new Set();
     this.vcb.hidden = true;
     this.onState('');
   }
@@ -92,7 +109,7 @@ export class ScaleTool {
     try { localStorage.setItem(MODE_STORAGE, m); } catch { /* без хранилища — до перезагрузки */ }
     if (!this.active) return;
     this.cancel();
-    this.start([...this.keys]);
+    this.start([...this.keys], [...this.underlayIds]);
   }
 
   setGlue(on: boolean) {
@@ -103,41 +120,44 @@ export class ScaleTool {
   }
 
   click(point: [number, number]) {
-    const p = this.pointAt(point, this.state === 'scale' || this.state === 'dst1' || this.state === 'dst2' ? (k) => !this.keys.has(k) : undefined);
+    const first = this.state === 'base' || this.state === 'src1';
+    const p = this.pointAt(point, this.moving() ? (k) => !this.keys.has(k) : undefined);
+    if (!p) return;
+    if (first) this.choosePlane(point, p);
+    const q = this.to2(p);
     switch (this.state) {
       case 'base':
-        if (!p) return;
-        this.base.copy(p);
+        this.base.copy(q);
         this.state = 'ref';
         this.onState(tr('Кликните опорную точку: отрезок от базы до неё — исходная длина (×1). Esc — отмена.'));
         break;
       case 'ref':
-        if (!p || Math.hypot(p.x - this.base.x, p.y - this.base.y) < 1e-3) return;
-        this.ref.set(p.x, p.y, this.base.z);
+        if (q.distanceTo(this.base) < 1e-3) return;
+        this.ref.copy(q);
         this.factor = 1;
         this.axis = undefined;
         this.state = 'scale';
-        this.onState(tr('Ведите курсор вдоль отрезка — множитель (Shift — только вдоль оси здания). Клик — применить, число или 150% + Enter — множитель, Esc — отмена.'));
+        this.onState(this.underlayIds.size
+          ? tr('Ведите курсор вдоль отрезка — множитель. Клик — применить, число или 150% + Enter — множитель, Esc — отмена.')
+          : tr('Ведите курсор вдоль отрезка — множитель (Shift — только вдоль оси здания). Клик — применить, число или 150% + Enter — множитель, Esc — отмена.'));
         break;
       case 'scale':
         if (this.matrix) this.apply();
         return;
       case 'src1':
-        if (!p) return;
-        this.src1.copy(p);
+        this.src1.copy(q);
         this.state = 'dst1';
         this.onState(tr('Кликните, куда поставить первую точку. Esc — отмена.'));
         break;
       case 'dst1':
-        if (!p) return;
-        this.dst1.set(p.x, p.y, this.src1.z);
+        this.dst1.copy(q);
         this.state = 'src2';
         this.show(undefined);
         this.onState(tr('Кликните вторую точку на объекте. Esc — отмена.'));
         break;
       case 'src2':
-        if (!p || Math.hypot(p.x - this.src1.x, p.y - this.src1.y) < 1e-3) return;
-        this.src2.copy(p);
+        if (q.distanceTo(this.src1) < 1e-3) return;
+        this.src2.copy(q);
         this.state = 'dst2';
         this.onState(tr('Кликните, куда поставить вторую точку (Shift — без поворота). Esc — отмена.'));
         break;
@@ -166,11 +186,11 @@ export class ScaleTool {
     if (e.type !== 'keydown') return false;
     if (e.key === 'Escape') {
       if (this.state === 'base' || this.state === 'src1') this.stop();
-      else { this.cancel(); this.start([...this.keys]); }
+      else { this.cancel(); this.start([...this.keys], [...this.underlayIds]); }
       return true;
     }
     if (e.key === 'Tab') { this.setMode(this.mode === 'factor' ? 'points' : 'factor'); return true; }
-    if (isGlueKey(e)) { this.setGlue(!this.glue); return true; }
+    if (isGlueKey(e) && this.keys.size) { this.setGlue(!this.glue); return true; }
     if (this.state !== 'scale') return false;
     if (/^[\d.,%]$/.test(e.key)) { this.typed += e.key === ',' ? '.' : e.key; this.updateVcb(); return true; }
     if (e.key === 'Backspace') { this.typed = this.typed.slice(0, -1); this.updateVcb(); return true; }
@@ -179,7 +199,7 @@ export class ScaleTool {
       const k = Number(pct ? this.typed.slice(0, -1) : this.typed) / (pct ? 100 : 1);
       if (this.typed && Number.isFinite(k) && k >= MIN_FACTOR) {
         this.factor = k;
-        this.matrix = this.factorMatrix(k);
+        this.matrix = this.lift(this.factorMatrix(k));
         this.apply();
       }
       return true;
@@ -187,54 +207,97 @@ export class ScaleTool {
     return false;
   }
 
-  /** Точка под курсором: привязка, поверхность объекта или горизонтальная плоскость через первую точку. */
+  /** Ведём точку к цели (свои объекты не притягивают). */
+  private moving() { return this.state === 'scale' || this.state === 'dst1' || this.state === 'dst2'; }
+
+  /**
+   * Рабочая плоскость по первому клику: одни подложки и клик по наклонной (стоящей) картинке — её плоскость
+   * (e1 — по горизонтали, e2 — вверх по ней); иначе — горизонтальная через точку.
+   */
+  private choosePlane(point: [number, number], p: THREE.Vector3) {
+    const h = !this.keys.size && this.underlayIds.size ? this.underlays?.hit(this.snap?.point ?? point, this.underlayIds) : undefined;
+    if (h && Math.abs(h.n.z) < 0.999) {
+      this.n.copy(h.n).normalize();
+      this.e1.crossVectors(Z, this.n).normalize();
+      this.e2.crossVectors(this.n, this.e1);
+      this.o.copy(p);
+    } else {
+      this.n.copy(Z); this.e1.copy(X); this.e2.copy(Y);
+      this.o.set(0, 0, p.z);
+    }
+  }
+
+  private to2(p: THREE.Vector3) {
+    const d = p.clone().sub(this.o);
+    return new THREE.Vector2(d.dot(this.e1), d.dot(this.e2));
+  }
+
+  private from2(v: THREE.Vector2) {
+    return this.o.clone().addScaledVector(this.e1, v.x).addScaledVector(this.e2, v.y);
+  }
+
+  /** Плоское (2D, в координатах плоскости) преобразование — в метры сцены; по нормали плоскости ничего не меняет. */
+  private lift(m: THREE.Matrix3): THREE.Matrix4 {
+    const e = m.elements; // по столбцам
+    const m4 = new THREE.Matrix4().set(e[0], e[3], 0, e[6], e[1], e[4], 0, e[7], 0, 0, 1, 0, 0, 0, 0, 1);
+    const b = new THREE.Matrix4().makeBasis(this.e1, this.e2, this.n).setPosition(this.o);
+    return b.clone().multiply(m4).multiply(b.invert());
+  }
+
+  /**
+   * Точка под курсором: привязка (при выборе точек на объекте — и подложек), поверхность объекта или подложки,
+   * рабочая плоскость (до первого клика — земля). После первого клика — проекция на рабочую плоскость.
+   */
   private pointAt(point: [number, number], filter?: (k: string) => boolean): THREE.Vector3 | undefined {
-    this.snap = this.layer.snapAt(point, filter);
-    if (this.snap) return this.snap.local.clone();
-    const first = this.state === 'base' || this.state === 'src1' || this.state === 'src2';
+    const first = this.state === 'base' || this.state === 'src1';
+    const onObject = first || this.state === 'ref' || this.state === 'src2';
+    const ids = onObject && this.underlayIds.size ? this.underlayIds : undefined;
+    this.snap = this.layer.snapAt(point, filter) ?? (ids ? this.underlays?.snap(point, ids) : undefined);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(this.n, this.o);
+    if (this.snap) return first ? this.snap.local.clone() : plane.projectPoint(this.snap.local, new THREE.Vector3());
     if (first) {
-      const hit = this.layer.focusRayHits(point)[0];
-      if (hit) return hit.local.clone();
+      const hit = this.layer.focusRayHits(point)[0]?.local ?? (ids ? this.underlays?.hit(point, ids)?.p : undefined);
+      if (hit) return hit.clone();
     }
     const ray = this.layer.focusRay(point);
-    const z = this.state === 'base' || this.state === 'src1' ? 0 : this.mode === 'factor' ? this.base.z : this.src1.z;
-    return ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3()) ?? undefined;
+    if (first) return ray?.intersectPlane(new THREE.Plane(Z, 0), new THREE.Vector3()) ?? undefined;
+    return ray?.intersectPlane(plane, new THREE.Vector3()) ?? undefined;
   }
 
   private preview(point: [number, number]) {
-    const moving = this.state === 'scale' || this.state === 'dst1' || this.state === 'dst2';
-    const p = this.pointAt(point, moving ? (k) => !this.keys.has(k) : undefined);
-    if (this.state === 'base' || this.state === 'src1' || !p) return;
-    const at = (v: THREE.Vector3, z: number) => new THREE.Vector3(v.x, v.y, z);
+    const p3 = this.pointAt(point, this.moving() ? (k) => !this.keys.has(k) : undefined);
+    if (this.state === 'base' || this.state === 'src1' || !p3) return;
+    const p = this.to2(p3);
+    const at = (v: THREE.Vector2) => this.from2(v);
     if (this.state === 'ref') {
-      this.layer.setDrawPreview([this.base.clone(), at(p, this.base.z)]);
+      this.layer.setDrawPreview([at(this.base), at(p)]);
       return;
     }
     if (this.state === 'scale') {
-      const d = new THREE.Vector2(p.x - this.base.x, p.y - this.base.y);
-      const r = new THREE.Vector2(this.ref.x - this.base.x, this.ref.y - this.base.y);
-      this.axis = this.shift ? this.nearestAxis(r) : undefined;
+      const d = p.clone().sub(this.base);
+      const r = this.ref.clone().sub(this.base);
+      // Вдоль оси — только у частей здания (подложка масштабируется равномерно)
+      this.axis = this.shift && !this.underlayIds.size ? this.nearestAxis(r) : undefined;
       const dir = (this.axis ?? r).clone().normalize();
       if (r.dot(dir) < 0) dir.negate();
       const len = r.dot(dir);
       const k = d.dot(dir) / len;
       this.factor = Math.max(MIN_FACTOR, Number.isFinite(k) ? k : 1);
-      this.matrix = this.factorMatrix(this.factor);
-      const z = this.base.z;
-      const end = new THREE.Vector3(this.base.x + dir.x * len * this.factor, this.base.y + dir.y * len * this.factor, z);
-      this.layer.setDrawPreview([at(this.ref, z), this.base.clone(), end], false, true);
+      this.matrix = this.lift(this.factorMatrix(this.factor));
+      const end = this.base.clone().addScaledVector(dir, len * this.factor);
+      this.layer.setDrawPreview([at(this.ref), at(this.base), at(end)], false, true);
       this.show(this.matrix);
       this.updateVcb();
       return;
     }
     if (this.state === 'dst1') {
-      this.matrix = new THREE.Matrix4().makeTranslation(p.x - this.src1.x, p.y - this.src1.y, 0);
-      this.layer.setDrawPreview([this.src1.clone(), at(p, this.src1.z)]);
+      this.matrix = this.lift(new THREE.Matrix3().makeTranslation(p.x - this.src1.x, p.y - this.src1.y));
+      this.layer.setDrawPreview([at(this.src1), at(p)]);
       this.show(this.matrix);
       return;
     }
     if (this.state === 'src2') {
-      this.layer.setDrawPreview([this.src1.clone(), this.dst1.clone(), at(p, this.dst1.z)], false, true);
+      this.layer.setDrawPreview([at(this.src1), at(this.dst1), at(p)], false, true);
       return;
     }
     // dst2: подобие, переводящее src1 → dst1 и src2 → курсор
@@ -247,26 +310,30 @@ export class ScaleTool {
     this.angle = Math.atan2(b, a);
     if (this.factor < MIN_FACTOR) { this.matrix = undefined; return; }
     const tx = this.dst1.x - (a * this.src1.x - b * this.src1.y), ty = this.dst1.y - (b * this.src1.x + a * this.src1.y);
-    this.matrix = new THREE.Matrix4().set(a, -b, 0, tx, b, a, 0, ty, 0, 0, 1, 0, 0, 0, 0, 1);
-    const end = this.src2.clone().applyMatrix4(this.matrix);
-    this.layer.setDrawPreview([this.src1.clone(), this.src2.clone(), this.dst1.clone(), end], false, true);
+    const m2 = new THREE.Matrix3().set(a, -b, tx, b, a, ty, 0, 0, 1);
+    this.matrix = this.lift(m2);
+    const end = this.src2.clone().applyMatrix3(m2);
+    this.layer.setDrawPreview([at(this.src1), at(this.src2), at(this.dst1), at(end)], false, true);
     this.show(this.matrix);
     this.updateVcb();
   }
 
-  /** Превью: соседи (если тянутся), затем сами объекты; undefined — вернуть как было. */
+  /** Превью: соседи (если тянутся), затем сами объекты и подложки; undefined — вернуть как было. */
   private show(m: THREE.Matrix4 | undefined) {
-    this.linked = this.linkPreview?.([...this.keys], m, this.glue) ?? 0;
-    this.layer.setMatrixPreview([...this.keys], m);
+    if (this.keys.size) {
+      this.linked = this.linkPreview?.([...this.keys], m, this.glue) ?? 0;
+      this.layer.setMatrixPreview([...this.keys], m);
+    }
+    if (this.underlayIds.size) this.underlays?.preview(this.underlayIds, m);
   }
 
-  /** Масштаб k от базы: равномерно или (Shift) только вдоль оси this.axis. */
-  private factorMatrix(k: number): THREE.Matrix4 {
+  /** Масштаб k от базы (в координатах плоскости): равномерно или (Shift) только вдоль оси this.axis. */
+  private factorMatrix(k: number): THREE.Matrix3 {
     const u = this.axis;
     const s = u
-      ? new THREE.Matrix4().set(1 + (k - 1) * u.x * u.x, (k - 1) * u.x * u.y, 0, 0, (k - 1) * u.x * u.y, 1 + (k - 1) * u.y * u.y, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
-      : new THREE.Matrix4().makeScale(k, k, 1);
-    return new THREE.Matrix4().makeTranslation(this.base.x, this.base.y, 0).multiply(s).multiply(new THREE.Matrix4().makeTranslation(-this.base.x, -this.base.y, 0));
+      ? new THREE.Matrix3().set(1 + (k - 1) * u.x * u.x, (k - 1) * u.x * u.y, 0, (k - 1) * u.x * u.y, 1 + (k - 1) * u.y * u.y, 0, 0, 0, 1)
+      : new THREE.Matrix3().makeScale(k, k);
+    return new THREE.Matrix3().makeTranslation(this.base.x, this.base.y).multiply(s).multiply(new THREE.Matrix3().makeTranslation(-this.base.x, -this.base.y));
   }
 
   /** Ось здания (x или y), ближайшая по направлению к r; без осей — само r. */
@@ -278,12 +345,12 @@ export class ScaleTool {
   }
 
   private apply() {
-    const keys = [...this.keys];
+    const keys = [...this.keys], underlays = [...this.underlayIds];
     const m = this.matrix!.clone();
     const glue = this.glue;
     this.cancel();
-    this.commit(keys, m, glue);
-    this.start(keys);
+    this.commit(keys, m, glue, underlays);
+    this.start(keys, underlays);
   }
 
   private cancel() {
@@ -302,7 +369,8 @@ export class ScaleTool {
     this.vcb.hidden = false;
     const modes = `<span class="vcb-units" title="${tr('Способ масштабирования (Tab)')}">${(['factor', 'points'] as const)
       .map((m) => `<button type="button" data-scale-mode="${m}"${m === this.mode ? ' class="active"' : ''}>${m === 'factor' ? tr('множитель') : tr('по двум точкам')}</button>`).join('')}</span>`;
-    const glue = glueSwitch(this.glue, tr('Общие с соседями узлы: «с соседями» — соседи тянутся следом, «отдельно» — часть отделяется от них (D)'));
+    // Только подложки — соседей нет
+    const glue = this.keys.size ? glueSwitch(this.glue, tr('Общие с соседями узлы: «с соседями» — соседи тянутся следом, «отдельно» — часть отделяется от них (D)')) : '';
     let value = '';
     if (this.state === 'scale') {
       const along = this.axis ? tr('вдоль оси здания (Shift)') : this.snap ? tr('привязка') : tr('равномерно');
@@ -310,7 +378,7 @@ export class ScaleTool {
     } else if (this.state === 'dst2') {
       value = `<span class="vcb-value">×${fmt(this.factor)}</span><span class="vcb-axis">${this.shift ? tr('без поворота (Shift)') : tr('поворот {deg}°', { deg: ((this.angle * 180) / Math.PI).toFixed(1) })}</span>`;
     }
-    this.vcb.innerHTML = `<span class="vcb-label">${tr('Масштаб')}</span>${value}${this.glue ? linkedNote(this.linked) : ''}${modes}${glue}`;
+    this.vcb.innerHTML = `<span class="vcb-label">${tr('Масштаб')}</span>${value}${this.keys.size && this.glue ? linkedNote(this.linked) : ''}${modes}${glue}`;
   }
 }
 

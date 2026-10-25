@@ -6,6 +6,14 @@ import { linkedNote, type LinkPreview, glueClick, glueSwitch, isGlueKey, loadGlu
 
 /** Шаг «прилипания» угла, градусы. */
 const STEP_DEG = 15;
+/** Радиус транспортира на экране, px. */
+const PROTRACTOR_PX = 48;
+/** Длина стрелок осей растра у центра поворота, px. */
+const AXES_PX = 70;
+/** Курсор идёт от центра вдоль стрелки оси (на экране) с таким допуском — ось подсвечивается, градусы. */
+const AXIS_SNAP_DEG = 12;
+/** Ближе к центру направление курсора ещё не определено, px. */
+const MIN_DRAG_PX = 8;
 /** Ближе этого к кратному шагу — угол прилипает к нему, градусы. */
 const STICK_DEG = 1.5;
 const AXIS_NAMES = ['x', 'y', 'z'] as const;
@@ -14,9 +22,11 @@ const Z = new THREE.Vector3(0, 0, 1);
 
 /**
  * Инструмент «Повернуть» (как Rotate в SketchUp), в режиме одного здания:
- * 1. клик — ось поворота (с привязкой: вершина, середина, центр, сетка). Ось вертикальна; у подложек (без частей
- *    здания в выделении) — любая: стрелки → x, ← y, ↑ z (оси здания), ↓ — по картинке под курсором (её нормаль);
- * 2. клик — опорное направление (от оси на эту точку);
+ * 1. клик — центр поворота (с привязкой: вершина, середина, центр, сетка). Ось вертикальна. У подложек (без частей
+ *    здания в выделении) в центре — стрелки осей растра (x — вдоль ширины картинки, y — вдоль высоты, z — нормаль):
+ *    курсор, ведомый от центра вдоль стрелки, подсвечивает ось, Shift (держать) — поворот вокруг неё; без Shift — вокруг
+ *    нормали растра (в его плоскости). Стрелки клавиатуры → x, ← y, ↑ z фиксируют оси растра, ↓ — снять;
+ * 2. клик — опорное направление (от оси на эту точку, в плоскости поворота);
  * 3. движение курсора — поворот: угол от опорного направления до направления на курсор; рядом с кратным
  *    15° прилипает к нему, Shift — только шагом 15°, привязка к точке выравнивает направление на неё;
  *    клик — применить; число + Enter — угол в градусах (против часовой стрелки, минус — по часовой). Esc — отмена.
@@ -35,8 +45,12 @@ export class RotateTool {
   private axis = Z.clone();
   private u = new THREE.Vector3(1, 0, 0);
   private v = new THREE.Vector3(0, 1, 0);
-  /** Ось зафиксирована стрелкой; undefined — z, а у подложки под курсором — её нормаль. */
+  /** Ось зафиксирована (стрелкой клавиатуры или Shift); undefined — по умолчанию (z, у растра — его нормаль). */
   private locked?: Axis;
+  /** Ось зафиксирована Shift (снимается при отпускании). */
+  private shiftLocked = false;
+  /** Ось растра, вдоль стрелки которой идёт курсор (выбор опорной точки). */
+  private hovered?: Axis;
   private refAngle = 0;
   private refPoint = new THREE.Vector3();
   private angle = 0;
@@ -75,8 +89,10 @@ export class RotateTool {
   start(keys: string[], underlays: string[] = []) {
     this.keys = new Set(keys);
     this.underlayIds = new Set(underlays);
-    if (keys.length) this.locked = undefined; // части здания — только вокруг вертикали
-    this.setAxis(this.lockedAxis() ?? Z);
+    if (keys.length || this.shiftLocked) this.locked = undefined; // части здания — только вокруг вертикали
+    this.shiftLocked = false;
+    this.hovered = undefined;
+    this.setAxis(this.lockedAxis() ?? this.defaultAxis());
     this.glue = loadGlue();
     this.state = 'pivot';
     this.updateVcb();
@@ -98,12 +114,13 @@ export class RotateTool {
       const p = this.pointAt(point);
       if (!p) return;
       this.pivot.copy(p);
-      // По картинке подложки — ось по её нормали (если ось не зафиксирована)
-      if (!this.keys.size && this.locked === undefined) this.setAxis(this.underlayNormal(point) ?? Z);
+      this.setAxis(this.lockedAxis() ?? this.defaultAxis());
       this.state = 'ref';
       this.updateVcb();
       this.preview(point);
-      this.onState(tr('Кликните опорное направление — от оси на точку (например, на угол здания). Esc — отмена.'));
+      this.onState(this.rasterAxes()
+        ? tr('Ось поворота: ведите курсор от центра вдоль стрелки оси растра и держите Shift — поворот вокруг неё (без Shift — в плоскости растра). Клик — опорное направление. Esc — отмена.')
+        : tr('Кликните опорное направление — от оси на точку (например, на угол здания). Esc — отмена.'));
       return;
     }
     if (this.state === 'ref') {
@@ -113,6 +130,10 @@ export class RotateTool {
       this.refAngle = this.angleOf(p);
       this.angle = 0;
       this.state = 'rotate';
+      // Ось выбрана: Shift дальше — шаг угла, его отпускание ось не меняет
+      if (this.shiftLocked) { this.shiftLocked = false; this.locked = undefined; }
+      this.hovered = undefined;
+      this.layer.setRotateAxes(undefined);
       this.onState(tr('Ведите курсор — поворот (у кратных {step}° прилипает, Shift — только шагом {step}°). Клик — применить, число + Enter — угол в градусах, Esc — отмена.', { step: STEP_DEG }));
       this.preview(point);
       return;
@@ -130,7 +151,13 @@ export class RotateTool {
     if (!this.active) return false;
     if (e.key === 'Shift') {
       this.shift = e.type === 'keydown';
+      // Выбор оси растра: Shift держит ось, вдоль которой шёл курсор
+      if (this.state === 'ref' && this.rasterAxes()) {
+        if (this.shift && !e.repeat && this.locked === undefined && this.hovered !== undefined) { this.locked = this.hovered; this.shiftLocked = true; }
+        if (!this.shift && this.shiftLocked) { this.locked = undefined; this.shiftLocked = false; }
+      }
       if (this.lastPoint) this.preview(this.lastPoint);
+      this.updateVcb();
       return true;
     }
     if (e.type !== 'keydown') return false;
@@ -145,9 +172,10 @@ export class RotateTool {
       if (this.keys.size) { this.onState(tr('Части здания поворачиваются только вокруг вертикали (у подложек без частей — любая ось).')); return true; }
       const a = arrows[e.key];
       this.locked = a === null || this.locked === a ? undefined : a;
-      // Ось меняется — опорное направление выбираем заново
-      if (this.state !== 'pivot') { this.cancel(); this.state = 'ref'; }
-      this.setAxis(this.lockedAxis() ?? Z);
+      this.shiftLocked = false;
+      // Посреди поворота ось сменилась — опорное направление выбираем заново
+      if (this.state === 'rotate') { this.cancel(); this.state = 'ref'; }
+      this.setAxis(this.lockedAxis() ?? this.defaultAxis());
       if (this.lastPoint) this.preview(this.lastPoint);
       this.updateVcb();
       return true;
@@ -183,15 +211,66 @@ export class RotateTool {
     return ray?.intersectPlane(plane, new THREE.Vector3()) ?? undefined;
   }
 
-  /** Нормаль подложки под курсором — к камере. */
-  private underlayNormal(point: [number, number]): THREE.Vector3 | undefined {
-    const h = this.underlayIds.size ? this.underlays?.hit(point, this.underlayIds) : undefined;
-    const ray = this.layer.focusRay(point);
-    if (!h) return;
-    return ray && h.n.dot(ray.direction) > 0 ? h.n.clone().negate() : h.n.clone();
+  /** Транспортир в центре поворота, в плоскости поворота (после выбора центра). */
+  private showProtractor() {
+    const c = this.pivot;
+    if (this.state !== 'ref' && this.state !== 'rotate') { this.layer.setProtractor(undefined); return; }
+    const s0 = this.layer.focusProject(c), s1 = this.layer.focusProject(c.clone().add(this.u)), s2 = this.layer.focusProject(c.clone().add(this.v));
+    const px = s0 && Math.max(s1 ? Math.hypot(s1[0] - s0[0], s1[1] - s0[1]) : 0, s2 ? Math.hypot(s2[0] - s0[0], s2[1] - s0[1]) : 0);
+    if (!px) { this.layer.setProtractor(undefined); return; }
+    this.layer.setProtractor({ center: c, u: this.u, v: this.v, r: PROTRACTOR_PX / px, axis: this.axisIndex() });
   }
 
+  /** Px на метр у центра поворота (вдоль d). */
+  private pxPerM(d: THREE.Vector3): number {
+    const s0 = this.layer.focusProject(this.pivot), s1 = this.layer.focusProject(this.pivot.clone().add(d));
+    return s0 && s1 ? Math.hypot(s1[0] - s0[0], s1[1] - s0[1]) : 0;
+  }
+
+  /** Стрелки осей растра у центра (выбор опорной точки у одних подложек). */
+  private showRasterAxes() {
+    const dirs = this.state === 'ref' ? this.rasterAxes() : undefined;
+    if (!dirs) { this.layer.setRotateAxes(undefined); return; }
+    const px = Math.max(this.pxPerM(dirs[0]), this.pxPerM(dirs[1]), this.pxPerM(dirs[2]));
+    if (!px) { this.layer.setRotateAxes(undefined); return; }
+    this.layer.setRotateAxes({ from: this.pivot, dirs, len: AXES_PX / px, active: this.hovered, locked: this.locked });
+  }
+
+  /** Ось растра, вдоль стрелки которой (на экране) идёт курсор от центра. */
+  private inferAxis(point: [number, number], dirs: THREE.Vector3[]): Axis | undefined {
+    const s0 = this.layer.focusProject(this.pivot);
+    if (!s0) return;
+    const cx = point[0] - s0[0], cy = point[1] - s0[1], len = Math.hypot(cx, cy);
+    if (len < MIN_DRAG_PX) return;
+    let best: { i: Axis; angle: number } | undefined;
+    dirs.forEach((d, i) => {
+      const s1 = this.layer.focusProject(this.pivot.clone().add(d));
+      if (!s1) return;
+      const dx = s1[0] - s0[0], dy = s1[1] - s0[1], l = Math.hypot(dx, dy);
+      if (l < 1e-6) return;
+      // Ось почти в камеру — на экране короткая: её не выбрать направлением
+      const angle = Math.acos(Math.min(1, Math.abs((cx * dx + cy * dy) / (len * l)))) * 180 / Math.PI;
+      if (!best || angle < best.angle) best = { i: i as Axis, angle };
+    });
+    return best && best.angle < AXIS_SNAP_DEG ? best.i : undefined;
+  }
+
+  /** Номер оси (растра или здания), по которой идёт ось поворота (undefined — произвольная). */
+  private axisIndex(): Axis | undefined {
+    const i = this.axes().findIndex((a) => Math.abs(a.dot(this.axis)) > 0.999);
+    return i < 0 ? undefined : (i as Axis);
+  }
+
+  /** Оси растра — у одних подложек (без частей здания в выделении). */
+  private rasterAxes() { return this.keys.size || !this.underlayIds.size ? undefined : this.underlays?.axes(this.underlayIds); }
+
+  /** Ось по умолчанию: у растра — его нормаль, иначе вертикаль. */
+  private defaultAxis() { return this.rasterAxes()?.[2] ?? Z; }
+
+  /** Оси для фиксации: у растра — его оси, иначе оси здания. */
   private axes(): [THREE.Vector3, THREE.Vector3, THREE.Vector3] {
+    const r = this.rasterAxes();
+    if (r) return r;
     const f = this.layer.focusAxes;
     return f ? [new THREE.Vector3(f.x[0], f.x[1], 0), new THREE.Vector3(f.y[0], f.y[1], 0), Z.clone()] : [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), Z.clone()];
   }
@@ -230,6 +309,14 @@ export class RotateTool {
 
   private preview(point: [number, number]) {
     if (this.state === 'pivot') { this.pointAt(point); return; }
+    if (this.state === 'ref') {
+      const dirs = this.rasterAxes();
+      const hovered = dirs ? this.inferAxis(point, dirs) : undefined;
+      if (hovered !== this.hovered) { this.hovered = hovered; this.updateVcb(); }
+      this.setAxis(this.lockedAxis() ?? this.defaultAxis());
+      this.showRasterAxes();
+    }
+    this.showProtractor();
     // Поворачиваемые объекты не притягивают направление (иначе оно цепляется за них самих)
     const p = this.pointAt(point, this.state === 'rotate' ? (k) => !this.keys.has(k) : undefined);
     if (!p) return;
@@ -269,6 +356,8 @@ export class RotateTool {
       if (this.underlayIds.size) this.underlays?.preview(this.underlayIds, undefined);
     }
     this.layer.setDrawPreview(undefined);
+    this.layer.setProtractor(undefined);
+    this.layer.setRotateAxes(undefined);
     this.snap = undefined;
     this.typed = '';
     this.angle = 0;
@@ -279,8 +368,13 @@ export class RotateTool {
     this.vcb.hidden = false;
     // Только подложки — соседей нет, зато ось любая
     const glue = this.keys.size ? glueSwitch(this.glue) : '';
-    const axis = this.keys.size ? '' : `<span class="vcb-axis">${this.locked !== undefined ? tr('ось {axis} (зафиксирована)', { axis: AXIS_NAMES[this.locked] })
-      : this.state === 'pivot' ? tr('ось z или по картинке (стрелки — x, y, z)') : Math.abs(this.axis.z) > 0.999 ? tr('ось {axis}', { axis: 'z' }) : tr('по картинке')}</span>`;
+    // Ось растра: зафиксированная, подсвеченная (Shift — взять) или нормаль по умолчанию
+    const raster = !!this.rasterAxes();
+    const axis = this.keys.size ? '' : `<span class="vcb-axis">${this.locked !== undefined
+      ? tr('ось {axis} растра (зафиксирована)', { axis: AXIS_NAMES[this.locked] })
+      : this.state === 'ref' && this.hovered !== undefined ? tr('ось {axis} растра — Shift, чтобы взять', { axis: AXIS_NAMES[this.hovered] })
+      : raster && this.state === 'rotate' && this.axisIndex() !== 2 && this.axisIndex() !== undefined ? tr('вокруг оси {axis} растра', { axis: AXIS_NAMES[this.axisIndex()!] })
+      : raster ? tr('в плоскости растра') : tr('ось {axis}', { axis: 'z' })}</span>`;
     if (this.state !== 'rotate') { this.vcb.innerHTML = `<span class="vcb-label">${tr('Поворот')}</span>${axis}${glue}`; return; }
     const deg = (this.angle * 180) / Math.PI;
     this.vcb.innerHTML = `<span class="vcb-label">${tr('Угол')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || deg.toFixed(1)}</span>°

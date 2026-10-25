@@ -511,6 +511,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (this.visible) timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
     if (underlays && !overFirst) this.underlays.render(depthMain(options), 'over');
     if (underlays) this.underlays.render(depthMain(options), 'outline');
+    // Накладки инструментов (транспортир, оси, превью линий) — последними: поверх и подложек, поднятых над землёй
+    const fg = this.groups.get(FOCUS_GROUP);
+    if (this.toolOverlay.children.length && fg && this.focused) {
+      this.toolCamera.projectionMatrix = depthMain(options).clone().multiply(fg.model);
+      this.renderer.resetState();
+      this.renderer.render(this.toolOverlay, this.toolCamera);
+    }
   }
 
   /** Куда рисуются группы: буфер прозрачного слоя или сама карта. */
@@ -3140,6 +3147,85 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   private drawPreview?: THREE.Group;
+  /** Сцена накладок инструментов (метры сцены режима здания): рисуется после всего, в том числе подложек. */
+  private readonly toolOverlay = new THREE.Scene();
+  private readonly toolCamera = new THREE.Camera();
+  private protractor?: THREE.LineSegments;
+  private rotateAxes?: THREE.Group;
+
+  /**
+   * Стрелки осей у центра поворота (оси растра у «Повернуть»): dirs — x, y, z (единичные), len — длина, м;
+   * active — подсвеченная ось (курсор идёт вдоль неё), locked — зафиксированная. undefined — убрать.
+   */
+  setRotateAxes(p: { from: THREE.Vector3; dirs: THREE.Vector3[]; len: number; active?: number; locked?: number } | undefined) {
+    if (this.rotateAxes) {
+      this.rotateAxes.parent?.remove(this.rotateAxes);
+      this.rotateAxes.traverse((o) => { if (o instanceof THREE.Line || o instanceof THREE.Mesh) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
+      this.rotateAxes = undefined;
+    }
+    const g = this.groups.get(FOCUS_GROUP);
+    if (p && g) {
+      const root = new THREE.Group();
+      p.dirs.forEach((d, i) => {
+        const on = p.locked === i || (p.locked === undefined && p.active === i);
+        const dim = !on && (p.locked !== undefined || p.active !== undefined);
+        const end = p.from.clone().addScaledVector(d, p.len * (on ? 1.25 : 1));
+        // Наконечник — две короткие черты к концу стрелки
+        const side = new THREE.Vector3().crossVectors(d, Math.abs(d.z) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1)).normalize();
+        const back = end.clone().addScaledVector(d, -p.len * 0.18);
+        const pts = [p.from, end, end, back.clone().addScaledVector(side, p.len * 0.08), end, back.clone().addScaledVector(side, -p.len * 0.08)];
+        // Толстые линии (как оси у «Переместить»): тонкие теряются на картинке подложки
+        const geo = new LineSegmentsGeometry();
+        geo.setPositions(pts.flatMap((q) => [q.x, q.y, q.z]));
+        const canvas = this.map?.getCanvas();
+        const dpr = canvas ? canvas.width / Math.max(1, canvas.clientWidth) : 1;
+        const mat = new LineMaterial({ color: AXIS_COLOURS[i], linewidth: (on ? 4 : 2.5) * dpr, depthTest: false, depthWrite: false, transparent: true, opacity: dim ? 0.45 : 1 });
+        if (canvas) mat.resolution.set(canvas.width, canvas.height);
+        const line = new LineSegments2(geo, mat);
+        line.frustumCulled = false;
+        line.renderOrder = 1004;
+        root.add(line);
+        // Подсвеченная или зафиксированная ось — продолжение в обе стороны пунктиром
+        if (on) {
+          const guide = new THREE.Line(new THREE.BufferGeometry().setFromPoints([p.from.clone().addScaledVector(d, -p.len * 20), p.from.clone().addScaledVector(d, p.len * 20)]),
+            new THREE.LineDashedMaterial({ color: AXIS_COLOURS[i], dashSize: p.len * 0.15, gapSize: p.len * 0.1, depthTest: false, depthWrite: false, transparent: true, opacity: 0.8 }));
+          guide.computeLineDistances();
+          guide.renderOrder = 1003;
+          root.add(guide);
+        }
+      });
+      this.toolOverlay.add(root);
+      this.rotateAxes = root;
+    }
+    this.map?.triggerRepaint();
+  }
+
+  /**
+   * Транспортир «Повернуть» (как в SketchUp): круг с делениями через 15° в плоскости поворота (u, v — её оси, r — радиус,
+   * м). Цвет — ось здания (x, y, z), axis undefined — произвольная ось (по грани). undefined — убрать.
+   */
+  setProtractor(p: { center: THREE.Vector3; u: THREE.Vector3; v: THREE.Vector3; r: number; axis?: 0 | 1 | 2 } | undefined) {
+    if (this.protractor) {
+      this.protractor.parent?.remove(this.protractor);
+      this.protractor.geometry.dispose();
+      (this.protractor.material as THREE.Material).dispose();
+      this.protractor = undefined;
+    }
+    const g = this.groups.get(FOCUS_GROUP);
+    if (p && g) {
+      const at = (a: number, r: number) => p.center.clone().addScaledVector(p.u, Math.cos(a) * r).addScaledVector(p.v, Math.sin(a) * r);
+      const pts: THREE.Vector3[] = [];
+      const N = 72;
+      for (let i = 0; i < N; i++) pts.push(at((i / N) * 2 * Math.PI, p.r), at(((i + 1) / N) * 2 * Math.PI, p.r));
+      for (let i = 0; i < 24; i++) { const a = (i / 24) * 2 * Math.PI; pts.push(at(a, p.r * (i % 6 ? 0.88 : 0.75)), at(a, p.r)); }
+      const line = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: p.axis === undefined ? 0x333333 : AXIS_COLOURS[p.axis], depthTest: false, depthWrite: false, transparent: true }));
+      line.renderOrder = 1003;
+      this.toolOverlay.add(line);
+      this.protractor = line;
+    }
+    this.map?.triggerRepaint();
+  }
   /** Начало сцены, размер земли и оси режима здания — с момента входа до выхода. */
   private focusLock?: { center: [number, number]; size: number; axes?: LocalFrame };
 
@@ -3288,7 +3374,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         edge.renderOrder = 1004;
         root.add(fill, edge);
       }
-      g.scene.add(root);
+      this.toolOverlay.add(root);
       this.drawPreview = root;
     }
     this.map?.triggerRepaint();

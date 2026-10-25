@@ -1220,8 +1220,6 @@
   "Подогнать…": "Fit…",
   "Перемещено подложек: {n} на {d} м.": "Underlays moved: {n} by {d} m.",
   "Части здания поворачиваются только вокруг вертикали (у подложек без частей — любая ось).": "Building parts rotate only around the vertical (underlays without parts — any axis).",
-  "ось z или по картинке (стрелки — x, y, z)": "z axis or along the image (arrows — x, y, z)",
-  "по картинке": "along the image",
   "Повёрнуто подложек: {n} на {deg}°. Отменить — Ctrl+Z.": "Underlays rotated: {n} by {deg}°. Undo — Ctrl+Z.",
   "Ведите курсор вдоль отрезка — множитель. Клик — применить, число или 150% + Enter — множитель, Esc — отмена.": "Move the cursor along the segment — factor. Click — apply, number or 150% + Enter — factor, Esc — cancel.",
   "Масштабировано подложек: {n}. Отменить — Ctrl+Z.": "Underlays scaled: {n}. Undo — Ctrl+Z.",
@@ -1229,5 +1227,10 @@
   "подложка": "underlay",
   "перемещение подложки": "move underlay",
   "поворот подложки": "rotate underlay",
-  "масштаб подложки": "scale underlay"
+  "масштаб подложки": "scale underlay",
+  "Ось поворота: ведите курсор от центра вдоль стрелки оси растра и держите Shift — поворот вокруг неё (без Shift — в плоскости растра). Клик — опорное направление. Esc — отмена.": "Rotation axis: move the cursor from the centre along an image axis arrow and hold Shift to rotate around it (without Shift — in the image plane). Click — reference direction. Esc — cancel.",
+  "ось {axis} растра (зафиксирована)": "image {axis} axis (locked)",
+  "ось {axis} растра — Shift, чтобы взять": "image {axis} axis — Shift to take it",
+  "в плоскости растра": "in the image plane",
+  "вокруг оси {axis} растра": "around the image {axis} axis"
 }

@@ -835,6 +835,10 @@ const underlayTarget: UnderlayTarget = {
     }
     return best;
   },
+  axes(ids) {
+    const u = shownUnderlays(ids)[0], f = u && underlayFrame(u);
+    return f ? [f.a.clone().normalize(), f.b.clone().normalize(), f.n.clone().normalize()] : undefined;
+  },
   preview(ids, m) {
     underlayPreview = m && { ids, m: m.clone() };
     showUnderlays(false);

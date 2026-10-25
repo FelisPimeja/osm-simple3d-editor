@@ -9,6 +9,8 @@ export interface UnderlayTarget {
   snap(point: Pt, ids: Set<string>): SnapHit | undefined;
   /** Точка на картинке одной из подложек ids под точкой экрана и нормаль картинки (метры сцены). */
   hit(point: Pt, ids: Set<string>): { p: THREE.Vector3; n: THREE.Vector3 } | undefined;
+  /** Оси первой из подложек ids (единичные): вдоль ширины картинки, вдоль высоты, нормаль. */
+  axes(ids: Set<string>): [THREE.Vector3, THREE.Vector3, THREE.Vector3] | undefined;
   /** Показать подложки преобразованными матрицей m (метры сцены; undefined — как есть). */
   preview(ids: Set<string>, m: THREE.Matrix4 | undefined): void;
 }

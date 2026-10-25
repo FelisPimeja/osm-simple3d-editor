@@ -29,7 +29,7 @@ import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, is
 import { RotateTool } from './edit/rotate-tool';
 import { ScaleTool } from './edit/scale-tool';
 import { featureRings, glueMoves, levelApart, ON_SIDE_M } from './edit/glue-plan';
-import { MoveTool } from './edit/move-tool';
+import { MoveTool, type MoveUnderlays } from './edit/move-tool';
 import * as THREE from 'three';
 import { inheritedTags, inheritedValue } from './osm/inherit';
 import { TileBorders } from './view/tile-borders';
@@ -731,8 +731,9 @@ function showUnderlays(menu = true) {
   if (menu) underlayMenu.set(list, focus?.key, focus ? underlayLevels.map((l) => ({ n: l.n, label: LEVEL_NAME(l.n) })) : [], currentLevel);
   // Подложка этажа — только на выбранном этаже, на отметке его пола
   const shown = list.flatMap((u) => {
-    const elevation = u.level === undefined || u.level === currentLevel ? underlayElevation(u) : undefined;
-    return elevation === undefined ? [] : [{ ...u, elevation }];
+    const v = underlayPreview?.ids.has(u.id) ? shiftUnderlay(u, underlayPreview.offset) : u;
+    const elevation = v.level === undefined || v.level === currentLevel ? underlayElevation(v) : undefined;
+    return elevation === undefined ? [] : [{ ...v, elevation }];
   });
   overpassLayer.underlays.set(shown);
   // Выделенную подложку больше не видно (скрыли, сменили этаж или режим, удалили) — снять с выделения
@@ -742,6 +743,86 @@ function showUnderlays(menu = true) {
   // Подгоняемую подложку больше не видно (сменили этаж, режим) — подгонку закончить
   const fitting = underlayPanel.id;
   if (fitting && !shown.some((u) => u.id === fitting)) underlayPanel.hide();
+}
+
+/** Подложки, показанные сдвинутыми (превью инструмента), и сдвиг, м сцены. */
+let underlayPreview: { ids: Set<string>; offset: THREE.Vector3 } | undefined;
+
+/** Подложка, сдвинутая на offset (метры сцены режима здания; z — по высоте). */
+function shiftUnderlay(u: Underlay, offset: THREE.Vector3): Underlay {
+  const c = overpassLayer.focusToLocal(u.center);
+  const center = c && overpassLayer.focusToLngLat(c[0] + offset.x, c[1] + offset.y);
+  return center ? { ...u, center, elevation: u.elevation + offset.z } : u;
+}
+
+const UNDERLAY_X = new THREE.Vector3(1, 0, 0), UNDERLAY_Z = new THREE.Vector3(0, 0, 1);
+/** Подложка в метрах сцены режима здания: центр, полуоси вдоль ширины и высоты картинки, нормаль. */
+function underlayFrame(u: Underlay) {
+  const c = overpassLayer.focusToLocal(u.center), z = underlayElevation(u);
+  if (!c || z === undefined) return;
+  // Как у картинки на сцене (underlay-meshes): R_z(rotation)·R_x(tilt)·R_z(spin)
+  const q = new THREE.Quaternion().setFromAxisAngle(UNDERLAY_Z, u.rotation)
+    .multiply(new THREE.Quaternion().setFromAxisAngle(UNDERLAY_X, u.tilt))
+    .multiply(new THREE.Quaternion().setFromAxisAngle(UNDERLAY_Z, u.spin ?? 0));
+  return {
+    center: new THREE.Vector3(c[0], c[1], z),
+    a: new THREE.Vector3(1, 0, 0).applyQuaternion(q).multiplyScalar(u.width * u.scale / 2),
+    b: new THREE.Vector3(0, 1, 0).applyQuaternion(q).multiplyScalar(u.height * u.scale / 2),
+    n: new THREE.Vector3(0, 0, 1).applyQuaternion(q),
+  };
+}
+
+/** Показанные подложки из ids. */
+const shownUnderlays = (ids: Set<string>) => currentUnderlays().filter((u) => ids.has(u.id) && u.visible && (u.level === undefined || u.level === currentLevel));
+
+// Подложки — цель «Переместить»: привязки — углы, середины сторон, центр; захват — и за любую точку картинки
+const moveUnderlays: MoveUnderlays = {
+  snap(point, ids) {
+    let best: SnapHit | undefined, bestD = 12;
+    for (const u of shownUnderlays(ids)) {
+      const f = underlayFrame(u);
+      if (!f) continue;
+      const { center: c, a, b } = f;
+      const pts: [SnapKind, THREE.Vector3][] = [
+        ...[[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([i, j]): [SnapKind, THREE.Vector3] => ['vertex', c.clone().addScaledVector(a, i).addScaledVector(b, j)]),
+        ...[[1, 0], [-1, 0], [0, 1], [0, -1]].map(([i, j]): [SnapKind, THREE.Vector3] => ['midpoint', c.clone().addScaledVector(a, i).addScaledVector(b, j)]),
+        ['center', c.clone()],
+      ];
+      for (const [kind, p] of pts) {
+        const px = overpassLayer.focusProject(p);
+        const d = px && Math.hypot(px[0] - point[0], px[1] - point[1]);
+        if (!px || d === undefined || d >= bestD) continue;
+        const ll = overpassLayer.focusToLngLat(p.x, p.y)!;
+        bestD = d;
+        best = { kind, key: '', local: p, lngLat: new maplibregl.LngLat(ll[0], ll[1]), altitude: p.z, point: px };
+      }
+    }
+    return best;
+  },
+  hit(point, ids) {
+    const ray = overpassLayer.focusRay(point);
+    if (!ray) return;
+    let best: THREE.Vector3 | undefined, bestT = Infinity;
+    for (const u of shownUnderlays(ids)) {
+      const f = underlayFrame(u);
+      const p = f && ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(f.n, f.center), new THREE.Vector3());
+      if (!f || !p) continue;
+      const d = p.clone().sub(f.center), t = p.distanceTo(ray.origin);
+      if (Math.abs(d.dot(f.a)) <= f.a.lengthSq() && Math.abs(d.dot(f.b)) <= f.b.lengthSq() && t < bestT) { best = p; bestT = t; }
+    }
+    return best;
+  },
+  preview(ids, offset) {
+    underlayPreview = offset && { ids, offset: offset.clone() };
+    showUnderlays(false);
+  },
+};
+
+/** Правка подложек одним шагом истории вместе с правками объектов edit (отменяются вместе). */
+function editUnderlays(before: Underlay[], after: Underlay[], edit: () => void = () => {}) {
+  const apply = (list: Underlay[]) => { for (const u of list) { replaceUnderlay(u); scheduleUnderlaySave(u); } };
+  apply(after);
+  session.editWithView({ keep: true, undo: () => apply(before), redo: () => apply(after) }, edit);
 }
 
 /** Загрузить подложки здания режима (при входе в здание). */
@@ -1341,7 +1422,7 @@ map.on('click', (e) => {
   }
   if (moveTool.active) {
     // Перемещение не начато, клик мимо всех объектов — выключаем инструмент и снимаем выделение
-    if (moveTool.state === 'pick' && !overpassLayer.snapAt([e.point.x, e.point.y], moveTool.pickFilter) && !overpassLayer.pickHit(e.point) && !overpassLayer.pickDoor([e.point.x, e.point.y])) {
+    if (moveTool.state === 'pick' && !overpassLayer.snapAt([e.point.x, e.point.y], moveTool.pickFilter) && !overpassLayer.pickHit(e.point) && !overpassLayer.pickDoor([e.point.x, e.point.y]) && !moveTool.grabsUnderlay([e.point.x, e.point.y])) {
       moveTool.stop();
       select(undefined);
       updateSnap(undefined);
@@ -2197,7 +2278,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
   // Привязки — только при активном инструменте
   currentSnap = !focus || !point || !moveTool.active ? undefined
     : moveTool.state === 'move' ? moveTool.snap
-    : overpassLayer.snapAt(point, moveTool.pickFilter);
+    : overpassLayer.snapAt(point, moveTool.pickFilter) ?? moveTool.underlaySnap(point);
   snapEl.hidden = !currentSnap;
   if (!currentSnap) return;
   snapEl.className = `snap-marker ${currentSnap.kind}`;
@@ -2232,7 +2313,12 @@ const moveBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="move"
 const popupEl = document.getElementById('popup')!;
 /** Объект для перемещения выбран первым кликом инструмента (а не заранее). */
 let moveSelectedByClick = false;
-const moveTool = new MoveTool(overpassLayer, map.getContainer(), commitMove, (hint) => {
+const moveTool = new MoveTool(overpassLayer, map.getContainer(), (keys, offset, glue, underlays) => {
+  if (!underlays.length) return commitMove(keys, offset, glue);
+  const before = currentUnderlays().filter((u) => underlays.includes(u.id));
+  editUnderlays(before, before.map((u) => shiftUnderlay(u, offset)), () => { if (keys.length) commitMove(keys, offset, glue); });
+  if (!keys.length) setStatus(tr('Перемещено подложек: {n} на {d} м.', { n: before.length, d: offset.length().toFixed(2) }));
+}, (hint) => {
   moveBtn.classList.toggle('active', moveTool.active);
   syncCursor();
   toolHint(hint);
@@ -2252,6 +2338,7 @@ const rotateTool = new RotateTool(overpassLayer, map.getContainer(), commitRotat
   toolHint(hint);
 });
 moveTool.linkPreview = rotateTool.linkPreview = previewGlued;
+moveTool.underlays = moveUnderlays;
 rotateBtn.addEventListener('click', () => (rotateTool.active ? rotateTool.stop() : startRotate()));
 
 function startRotate() {
@@ -6233,7 +6320,7 @@ function startMove() {
   splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   // Без выделения инструмент сначала ждёт клика по объекту (см. обработчик клика)
-  moveTool.start(keys, doors.length > 0);
+  moveTool.start(keys, doors.length > 0, doors.length ? [] : underlaySelection);
 }
 
 /** Применить сдвиг: x/y — координаты узлов, z — высоты (теги). */

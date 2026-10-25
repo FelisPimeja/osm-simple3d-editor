@@ -10,6 +10,17 @@ const MIN_DRAG_PX = 6;
 const AXIS_NAMES = ['x', 'y', 'z'] as const;
 
 type Axis = 0 | 1 | 2;
+type Pt = [number, number];
+
+/** Свои подложки как цель перемещения (подключает main.ts). */
+export interface MoveUnderlays {
+  /** Привязка на подложках ids под точкой экрана: угол, середина стороны, центр. */
+  snap(point: Pt, ids: Set<string>): SnapHit | undefined;
+  /** Точка на картинке одной из подложек ids под точкой экрана (метры сцены). */
+  hit(point: Pt, ids: Set<string>): THREE.Vector3 | undefined;
+  /** Показать подложки сдвинутыми на offset (undefined — как есть). */
+  preview(ids: Set<string>, offset: THREE.Vector3 | undefined): void;
+}
 
 /**
  * Инструмент «Переместить» (как Move в SketchUp), работает в режиме одного здания:
@@ -24,6 +35,9 @@ type Axis = 0 | 1 | 2;
 export class MoveTool {
   state: 'off' | 'select' | 'pick' | 'move' = 'off';
   keys = new Set<string>();
+  /** Выделенные подложки (id) — едут вместе с объектами. */
+  underlayIds = new Set<string>();
+  underlays?: MoveUnderlays;
   /** Привязка, к которой сейчас тянем (для маркера). */
   snap?: SnapHit;
   /** Общие с соседями узлы: тянуть соседей следом или отделиться (D). */
@@ -48,7 +62,7 @@ export class MoveTool {
   constructor(
     private readonly layer: BuildingsLayer,
     container: HTMLElement,
-    private readonly commit: (keys: string[], offset: THREE.Vector3, glue: boolean) => void,
+    private readonly commit: (keys: string[], offset: THREE.Vector3, glue: boolean, underlays: string[]) => void,
     private readonly onState: (hint: string) => void,
   ) {
     this.vcb = document.createElement('div');
@@ -70,10 +84,11 @@ export class MoveTool {
 
   private horizontalOnly = false;
 
-  start(keys: string[], horizontalOnly = false) {
+  start(keys: string[], horizontalOnly = false, underlays: string[] = []) {
     this.horizontalOnly = horizontalOnly;
     this.keys = new Set(keys);
-    if (!keys.length) {
+    this.underlayIds = new Set(underlays);
+    if (!keys.length && !underlays.length) {
       this.state = 'select';
       this.onState(tr('Кликните по объекту здания, который нужно переместить. Esc — выйти из инструмента.'));
       return;
@@ -86,6 +101,7 @@ export class MoveTool {
   drag(keys: string[], from: THREE.Vector3, hint: string, done: () => void, cancel: () => void) {
     this.stop();
     this.keys = new Set(keys);
+    this.underlayIds = new Set();
     this.horizontalOnly = false;
     this.from.copy(from);
     this.offset.set(0, 0, 0);
@@ -108,18 +124,32 @@ export class MoveTool {
     if (once) { this.state = 'off'; this.keys = new Set(); this.onState(''); once.cancel(); return; }
     this.state = 'off';
     this.keys = new Set();
+    this.underlayIds = new Set();
     this.onState('');
   }
 
   /** Привязки в режиме выбора точки захвата — только на перемещаемых объектах. */
   pickFilter = (key: string) => this.keys.has(key);
 
+  /** Привязка на перемещаемых подложках (маркер в режиме выбора точки захвата). */
+  underlaySnap(point: Pt): SnapHit | undefined {
+    return this.underlayIds.size ? this.underlays?.snap(point, this.underlayIds) : undefined;
+  }
+
+  /** Под курсором есть за что взяться: привязка или поверхность перемещаемой подложки. */
+  grabsUnderlay(point: Pt): boolean {
+    return !!this.underlayIds.size && !!(this.underlays?.snap(point, this.underlayIds) ?? this.underlays?.hit(point, this.underlayIds));
+  }
+
   click(point: [number, number]) {
     if (this.state === 'pick') {
       const s = this.layer.snapAt(point, this.pickFilter);
       const hit = s ? undefined : this.layer.pickHit(point);
       const doorKey = this.layer.pickDoor(point);
-      const p = s?.local ?? (doorKey && this.keys.has(doorKey) ? this.layer.doorAnchor(doorKey) : undefined) ?? (hit && this.keys.has(hit.key) ? hit.local : undefined);
+      // Привязки (свои и подложек) — раньше поверхностей; у объектов здания приоритет
+      const us = s ? undefined : this.underlaySnap(point);
+      const p = s?.local ?? us?.local ?? (doorKey && this.keys.has(doorKey) ? this.layer.doorAnchor(doorKey) : undefined) ?? (hit && this.keys.has(hit.key) ? hit.local : undefined)
+        ?? (this.underlayIds.size ? this.underlays?.hit(point, this.underlayIds) : undefined);
       if (!p) return this.onState(tr('Кликните по точке на выбранном объекте (подсвеченные привязки — вершины, середины, центр).'));
       this.from.copy(p);
       this.offset.set(0, 0, 0);
@@ -165,6 +195,7 @@ export class MoveTool {
     this.offset.copy(offset);
     this.linked = this.linkPreview?.([...this.keys], new THREE.Matrix4().makeTranslation(offset.x, offset.y, 0), this.glue) ?? 0;
     this.layer.setMovePreview([...this.keys], offset);
+    if (this.underlayIds.size) this.underlays?.preview(this.underlayIds, offset);
     this.layer.setMoveGuide({ from: this.from, to: this.from.clone().add(offset), axis, locked: this.locked, gizmoScale: this.horizontalOnly ? 0.375 : 1 });
     this.updateVcb();
   }
@@ -174,7 +205,7 @@ export class MoveTool {
     if (!this.active) return false;
     if (e.key === 'Escape') {
       if (this.oneShot) { this.stop(); return true; }
-      if (this.state === 'move') { this.cancelMove(); this.state = 'pick'; this.start([...this.keys], this.horizontalOnly); }
+      if (this.state === 'move') { this.cancelMove(); this.state = 'pick'; this.start([...this.keys], this.horizontalOnly, [...this.underlayIds]); }
       else this.stop();
       return true;
     }
@@ -222,25 +253,29 @@ export class MoveTool {
   }
 
   private apply(offset: THREE.Vector3) {
-    const keys = [...this.keys];
+    const keys = [...this.keys], underlays = [...this.underlayIds];
     this.cancelMove();
     if (this.oneShot) {
       const once = this.oneShot;
       this.oneShot = undefined;
       this.state = 'off';
       this.keys = new Set();
-      if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone(), this.glue);
+      if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone(), this.glue, []);
       this.onState('');
       once.done();
       return;
     }
     this.state = 'pick';
-    if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone(), this.glue);
-    this.start(keys, this.horizontalOnly);
+    if (offset.lengthSq() > 1e-8) this.commit(keys, offset.clone(), this.glue, underlays);
+    this.start(keys, this.horizontalOnly, underlays);
   }
 
   private cancelMove() {
-    if (this.state === 'move') { this.linked = this.linkPreview?.([...this.keys], undefined, false) ?? 0; this.layer.setMovePreview([...this.keys], undefined); }
+    if (this.state === 'move') {
+      this.linked = this.linkPreview?.([...this.keys], undefined, false) ?? 0;
+      this.layer.setMovePreview([...this.keys], undefined);
+      if (this.underlayIds.size) this.underlays?.preview(this.underlayIds, undefined);
+    }
     this.layer.setMoveGuide(undefined);
     this.snap = undefined;
     this.typed = '';
@@ -283,7 +318,9 @@ export class MoveTool {
       : this.axis !== undefined ? tr('ось {axis}', { axis: AXIS_NAMES[this.axis] }) : tr('свободно');
     const value = this.typed || this.offset.length().toFixed(2);
     this.vcb.innerHTML = `<span class="vcb-label">${tr('Расстояние')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
-      <span class="vcb-axis">${this.snap ? tr('к точке · {along}', { along }) : along}</span>${this.glue ? linkedNote(this.linked) : ''}${glueSwitch(this.glue)}`;
+      <span class="vcb-axis">${this.snap ? tr('к точке · {along}', { along }) : along}</span>${
+      // Только подложки — соседей нет
+      this.keys.size ? `${this.glue ? linkedNote(this.linked) : ''}${glueSwitch(this.glue)}` : ''}`;
   }
 }
 

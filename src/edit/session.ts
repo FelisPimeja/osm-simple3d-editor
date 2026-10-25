@@ -56,7 +56,11 @@ export interface Entry {
   lBefore?: Line | null; lAfter?: Line;
 }
 /** Действие интерфейса в общей истории (скрытие частей и т. п.): данные не меняет, но отменяется так же. */
-export interface ViewAction { undo(): void; redo(): void }
+export interface ViewAction {
+  undo(): void; redo(): void;
+  /** Не про сцену здания (например, правка своей подложки) — при выходе из режима здания остаётся в истории. */
+  keep?: boolean;
+}
 /** Шаг истории — одна или несколько правок, отменяемых вместе, или действие интерфейса. */
 type Step = Entry[] | ViewAction;
 const isView = (s: Step): s is ViewAction => !Array.isArray(s);
@@ -99,6 +103,8 @@ export class EditSession {
   private readonly originalLine = new Map<string, Line>();
   private undoStack: Step[] = [];
   private redoStack: Step[] = [];
+  /** Действие интерфейса, отменяемое вместе с шагом правок (подложка, сдвинутая вместе с частями). */
+  private readonly attached = new WeakMap<Entry[], ViewAction>();
   /** Созданные в сессии объекты и те из них, что сейчас существуют (создание можно отменить). */
   private readonly created = new Set<string>();
   private readonly alive = new Set<string>();
@@ -334,11 +340,22 @@ export class EditSession {
     this.onChange([]);
   }
 
+  /**
+   * Правки edit и уже выполненное действие интерфейса — одним шагом истории; правок не вышло — только действие.
+   */
+  editWithView(action: ViewAction, edit: () => void) {
+    const n = this.undoStack.length;
+    edit();
+    const last = this.undoStack.at(-1);
+    if (this.undoStack.length > n && last && !isView(last)) this.attached.set(last, action);
+    else this.pushView(action);
+  }
+
   /** Убрать из истории действия интерфейса (например, при выходе из режима здания — они о его сцене). */
   dropViewActions() {
     const before = this.undoStack.length + this.redoStack.length;
-    this.undoStack = this.undoStack.filter((s) => !isView(s));
-    this.redoStack = this.redoStack.filter((s) => !isView(s));
+    this.undoStack = this.undoStack.filter((s) => !isView(s) || s.keep);
+    this.redoStack = this.redoStack.filter((s) => !isView(s) || s.keep);
     if (this.undoStack.length + this.redoStack.length !== before) this.onChange([]);
   }
 
@@ -353,6 +370,7 @@ export class EditSession {
     this.redoStack.push(step);
     if (isView(step)) { step.undo(); this.onChange([]); return; }
     for (const e of [...step].reverse()) this.apply(e.key, e.before, e.mBefore, e.gBefore, e.lBefore);
+    this.attached.get(step)?.undo();
     this.notify(step);
     return step[0].key;
   }
@@ -363,6 +381,7 @@ export class EditSession {
     this.undoStack.push(step);
     if (isView(step)) { step.redo(); this.onChange([]); return; }
     for (const e of step) this.apply(e.key, e.after, e.mAfter, e.gAfter, e.lAfter);
+    this.attached.get(step)?.redo();
     this.notify(step);
     return step[0].key;
   }

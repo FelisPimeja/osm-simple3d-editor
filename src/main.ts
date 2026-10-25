@@ -2324,7 +2324,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
     return;
   }
   // Привязки — только при активном инструменте
-  currentSnap = !focus || !point || !moveTool.active ? undefined
+  currentSnap = !(focus || underlaySketch) || !point || !moveTool.active ? undefined
     : moveTool.state === 'move' ? moveTool.snap
     : overpassLayer.snapAt(point, moveTool.pickFilter) ?? moveTool.underlaySnap(point);
   snapEl.hidden = !currentSnap;
@@ -2371,6 +2371,8 @@ const moveTool = new MoveTool(overpassLayer, map.getContainer(), (keys, offset, 
   moveBtn.classList.toggle('active', moveTool.active);
   syncCursor();
   toolHint(hint);
+  endUnderlaySketch();
+  syncMapTools();
 });
 
 moveBtn.addEventListener('click', () => {
@@ -2393,6 +2395,8 @@ const rotateTool = new RotateTool(overpassLayer, map.getContainer(), (keys, pivo
   rotateBtn.classList.toggle('active', rotateTool.active);
   syncCursor();
   toolHint(hint);
+  endUnderlaySketch();
+  syncMapTools();
 });
 moveTool.linkPreview = rotateTool.linkPreview = previewGlued;
 moveTool.underlays = rotateTool.underlays = underlayTarget;
@@ -2422,6 +2426,8 @@ const scaleTool = new ScaleTool(overpassLayer, map.getContainer(), (keys, m, glu
   scaleBtn.classList.toggle('active', scaleTool.active);
   syncCursor();
   toolHint(hint);
+  endUnderlaySketch();
+  syncMapTools();
 });
 scaleTool.linkPreview = previewGlued;
 scaleTool.underlays = underlayTarget;
@@ -3336,6 +3342,42 @@ for (const [btn, start] of [[circleBtn, () => startDraw('circle')], [mapCircleBt
 }
 syncCircleIcons();
 
+// Подложки на карте: «Переместить», «Повернуть», «Масштаб» — в сцене наброска вокруг подложки (как рисование здания)
+const mapUMoveBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="umove"]')!;
+const mapURotateBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="urotate"]')!;
+const mapUScaleBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="uscale"]')!;
+/** Сцена наброска открыта для инструментов подложек на карте. */
+let underlaySketch = false;
+mapUMoveBtn.addEventListener('click', () => (moveTool.active ? moveTool.stop() : startMapUnderlayTool('move')));
+mapURotateBtn.addEventListener('click', () => (rotateTool.active ? rotateTool.stop() : startMapUnderlayTool('rotate')));
+mapUScaleBtn.addEventListener('click', () => (scaleTool.active ? scaleTool.stop() : startMapUnderlayTool('scale')));
+
+/** Инструмент для выделенных подложек на карте: сцена наброска с началом в первой из них. */
+function startMapUnderlayTool(tool: 'move' | 'rotate' | 'scale') {
+  const ids = [...underlaySelection];
+  const u = currentUnderlays().find((x) => ids.includes(x.id));
+  if (focus || !u) return;
+  cancelCopyPick();
+  drawTool.stop(); moveTool.stop(); rotateTool.stop(); scaleTool.stop(); measureTool.stop();
+  if (!underlaySketch) {
+    overpassLayer.setSketch(u.center);
+    underlaySketch = true;
+  }
+  if (tool === 'move') moveTool.start([], false, ids);
+  else if (tool === 'rotate') rotateTool.start([], ids);
+  else scaleTool.start([], ids);
+  syncMapTools();
+}
+
+/** Инструменты подложек на карте выключены — закрыть их сцену наброска. */
+function endUnderlaySketch() {
+  if (!underlaySketch || moveTool.active || rotateTool.active || scaleTool.active) return;
+  underlaySketch = false;
+  overpassLayer.setSketch(undefined);
+  updateSnap(undefined);
+  syncMapTools();
+}
+
 function toggleSketch(shape: DrawShape) {
   if (sketching && drawTool.shape === shape) return drawTool.stop();
   startSketch(shape);
@@ -3363,6 +3405,12 @@ function endSketch() {
 
 function syncMapTools() {
   mapToolbar.hidden = !!focus;
+  // Инструменты подложек на карте — только когда выделена подложка
+  const u = !focus && underlaySelection.length > 0;
+  for (const [btn, on] of [[mapUMoveBtn, moveTool.active], [mapURotateBtn, rotateTool.active], [mapUScaleBtn, scaleTool.active]] as const) {
+    btn.hidden = !u;
+    btn.classList.toggle('active', underlaySketch && on);
+  }
   renderHelp();
   mapRectBtn.classList.toggle('active', sketching && drawTool.shape === 'rect');
   mapPolyBtn.classList.toggle('active', sketching && drawTool.shape === 'polygon');
@@ -6757,6 +6805,14 @@ document.addEventListener('keydown', (e) => {
     startSketch(sketchKeys[e.code]);
     return;
   }
+  // На карте с выделенной подложкой M / Q / E — её «Переместить», «Повернуть», «Масштаб»
+  const underlayKeys: Record<string, 'move' | 'rotate' | 'scale'> = { KeyM: 'move', KeyQ: 'rotate', KeyE: 'scale' };
+  if (!focus && underlaySelection.length && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && underlayKeys[e.code]) {
+    e.preventDefault();
+    closeCtxMenu();
+    startMapUnderlayTool(underlayKeys[e.code]);
+    return;
+  }
   // Шорткаты режима здания — по физической клавише (e.code), чтобы работали и в русской раскладке
   // Работают и посреди другого инструмента: запуск нового выключает текущий
   if (!focus || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -7138,6 +7194,7 @@ function paintSelection() {
   syncJosmSelection();
   overpassLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
   overpassLayer.underlays.select(underlaySelection);
+  syncMapTools();
   syncIssueFilter();
   renderOutliner();
   for (const li of changesEl.querySelectorAll<HTMLElement>('li[data-key]')) li.classList.toggle('selected', selection.includes(li.dataset.key!));

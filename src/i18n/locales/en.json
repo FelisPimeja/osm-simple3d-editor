@@ -1232,5 +1232,8 @@
   "в плоскости растра": "in the image plane",
   "вокруг оси {axis} растра": "around the image {axis} axis",
   "Отведите курсор от оси поворота — опорное направление должно быть в стороне от неё.": "Move the cursor away from the rotation axis — the reference direction must be off the axis.",
-  "Ось поворота: проведите курсор от центра вдоль стрелки оси растра — она выбрана (z — в плоскости растра). Клик — опорное направление. Esc — отмена.": "Rotation axis: move the cursor from the centre along an image axis arrow to choose it (z — in the image plane). Click — reference direction. Esc — cancel."
+  "Ось поворота: проведите курсор от центра вдоль стрелки оси растра — она выбрана (z — в плоскости растра). Клик — опорное направление. Esc — отмена.": "Rotation axis: move the cursor from the centre along an image axis arrow to choose it (z — in the image plane). Click — reference direction. Esc — cancel.",
+  "Переместить подложку (M)": "Move underlay (M)",
+  "Повернуть подложку (Q)": "Rotate underlay (Q)",
+  "Масштаб подложки (E)": "Scale underlay (E)"
 }

@@ -211,14 +211,19 @@ export class RotateTool {
     return ray?.intersectPlane(plane, new THREE.Vector3()) ?? undefined;
   }
 
-  /** Транспортир в центре поворота, в плоскости поворота (после выбора центра). */
+  /**
+   * Транспортир в центре поворота, в плоскости поворота (после выбора центра). При выборе оси растра — уже в плоскости
+   * подсвеченной оси: видно, какая плоскость будет, если взять её Shift.
+   */
   private showProtractor() {
     const c = this.pivot;
     if (this.state !== 'ref' && this.state !== 'rotate') { this.layer.setProtractor(undefined); return; }
-    const s0 = this.layer.focusProject(c), s1 = this.layer.focusProject(c.clone().add(this.u)), s2 = this.layer.focusProject(c.clone().add(this.v));
+    const shown = this.state === 'ref' && this.locked === undefined && this.hovered !== undefined ? this.hovered : undefined;
+    const { u, v } = shown !== undefined ? basis(this.axes()[shown]) : { u: this.u, v: this.v };
+    const s0 = this.layer.focusProject(c), s1 = this.layer.focusProject(c.clone().add(u)), s2 = this.layer.focusProject(c.clone().add(v));
     const px = s0 && Math.max(s1 ? Math.hypot(s1[0] - s0[0], s1[1] - s0[1]) : 0, s2 ? Math.hypot(s2[0] - s0[0], s2[1] - s0[1]) : 0);
     if (!px) { this.layer.setProtractor(undefined); return; }
-    this.layer.setProtractor({ center: c, u: this.u, v: this.v, r: PROTRACTOR_PX / px, axis: this.axisIndex() });
+    this.layer.setProtractor({ center: c, u, v, r: PROTRACTOR_PX / px, axis: shown ?? this.axisIndex() });
   }
 
   /** Px на метр у центра поворота (вдоль d). */
@@ -277,16 +282,10 @@ export class RotateTool {
 
   private lockedAxis() { return this.locked === undefined ? undefined : this.axes()[this.locked]; }
 
-  /** Ось поворота и базис плоскости: u — горизонтально (у горизонтальной плоскости — восток), v = axis × u. */
+  /** Ось поворота и базис её плоскости (basis). */
   private setAxis(axis: THREE.Vector3) {
-    this.axis.copy(axis).normalize();
-    this.u.crossVectors(Z, this.axis);
-    if (this.u.lengthSq() < 1e-8) this.u.set(1, 0, 0);
-    this.u.normalize();
-    this.v.crossVectors(this.axis, this.u);
-    // Вокруг вертикали — как было: угол от востока против часовой, если смотреть сверху
-    if (this.axis.z > 0.999) { this.u.set(1, 0, 0); this.v.set(0, 1, 0); }
-    else if (this.axis.z < -0.999) { this.axis.set(0, 0, 1); this.u.set(1, 0, 0); this.v.set(0, 1, 0); }
+    const b = basis(axis);
+    this.axis.copy(b.axis); this.u.copy(b.u); this.v.copy(b.v);
   }
 
   /** Угол точки (в плоскости поворота) от u к v. */
@@ -380,4 +379,13 @@ export class RotateTool {
     this.vcb.innerHTML = `<span class="vcb-label">${tr('Угол')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || deg.toFixed(1)}</span>°
       <span class="vcb-axis">${this.snap ? tr('привязка') : this.shift ? tr('шаг {step}° (Shift)', { step: STEP_DEG }) : tr('против часовой')}</span>${axis}${this.keys.size && this.glue ? linkedNote(this.linked) : ''}${glue}`;
   }
+}
+
+/** Ось поворота и базис её плоскости: u — горизонтально (у горизонтальной плоскости — восток), v = axis × u. */
+function basis(a: THREE.Vector3): { axis: THREE.Vector3; u: THREE.Vector3; v: THREE.Vector3 } {
+  const axis = a.clone().normalize();
+  // Вокруг вертикали — как было: угол от востока против часовой, если смотреть сверху
+  if (Math.abs(axis.z) > 0.999) return { axis: Z.clone(), u: new THREE.Vector3(1, 0, 0), v: new THREE.Vector3(0, 1, 0) };
+  const u = new THREE.Vector3().crossVectors(Z, axis).normalize();
+  return { axis, u, v: new THREE.Vector3().crossVectors(axis, u) };
 }

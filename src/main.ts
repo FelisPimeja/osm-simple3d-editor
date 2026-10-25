@@ -774,8 +774,10 @@ function transformUnderlay(u: Underlay, m: THREE.Matrix4): Underlay {
   const e = new THREE.Matrix4().makeBasis(x, y, z).elements; // по столбцам
   const m00 = e[0], m10 = e[1], m20 = e[2], m21 = e[6], m02 = e[8], m12 = e[9], m22 = e[10];
   let tilt = Math.acos(Math.max(-1, Math.min(1, m22))), rotation: number, spin: number;
-  if (Math.sin(tilt) > 1e-9) { rotation = Math.atan2(m02, -m12); spin = Math.atan2(m20, m21); }
-  else { rotation = Math.atan2(m10, m00); spin = 0; if (tilt < 1e-9) tilt = 0; } // лежит лицом вверх или вниз: весь поворот — в rotation
+  // Почти лежит (наклон — погрешность счёта): rotation и spin из шума по отдельности случайны и картинка дрожит —
+  // весь поворот в rotation, наклон ровно 0 или π
+  if (Math.sin(tilt) > 1e-6) { rotation = Math.atan2(m02, -m12); spin = Math.atan2(m20, m21); }
+  else { rotation = Math.atan2(m10, m00); spin = 0; tilt = tilt < Math.PI / 2 ? 0 : Math.PI; }
   const center = overpassLayer.focusToLngLat(c.x, c.y);
   return center ? { ...u, center, elevation: u.elevation + c.z - f.center.z, rotation, tilt, spin, scale: u.scale * k } : u;
 }

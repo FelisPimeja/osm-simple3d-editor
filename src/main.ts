@@ -2784,16 +2784,18 @@ function startPush() {
 
 // Инструмент «Форма» (V): вершины контура выделенной части — только в плане
 const shapeBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="shape"]')!;
-const shapeTool = new ShapeTool(overpassLayer, map.getContainer(),
-  () => selection.filter((k) => focus?.members.includes(k) && !hiddenInFocus(k)),
-  (key) => {
-    const f = entity(key) as Feature3D | undefined;
-    if (!f?.polygons) return;
-    // Плоский след (контур без building:part под частями) — высоту не рисуем, ручек высоты нет
-    if (overpassLayer.focusFlat(key)) return { min: 0, top: 0, roof: 0 };
-    const h = drawnHeights(f);
-    return { min: h.min, top: Math.max(h.min, h.wallTop), roof: h.roofHeight };
-  },
+/** Части, которые правит «Форма»: выделенные видимые члены здания. */
+const shapeSelected = () => selection.filter((k) => focus?.members.includes(k) && !hiddenInFocus(k));
+/** Низ и верх стен части и высота крыши, м сцены (для «Формы»). */
+function shapeWalls(key: string) {
+  const f = entity(key) as Feature3D | undefined;
+  if (!f?.polygons) return;
+  // Плоский след (контур без building:part под частями) — высоту не рисуем, ручек высоты нет
+  if (overpassLayer.focusFlat(key)) return { min: 0, top: 0, roof: 0 };
+  const h = drawnHeights(f);
+  return { min: h.min, top: Math.max(h.min, h.wallTop), roof: h.roofHeight };
+}
+const shapeTool = new ShapeTool(overpassLayer, map.getContainer(), shapeSelected, shapeWalls,
   () => new Set([...shapePreviewed, ...selection]),
   previewShape, commitShape, removeShapeVertex,
   (hint, error) => {
@@ -5757,9 +5759,10 @@ function shapeLandings(moved: ShapeRings): Map<string, { id: number; at: LonLat 
 /**
  * Сдвиг вершин «отдельно»: общие с соседями узлы остаются им, у части на новых местах — новые узлы. Вершина,
  * отпущенная на чужой узел (угол соседа), становится этим узлом — иначе рядом с ним вырос бы двойник.
+ * together — части, выделенные вместе с f: общие с ними узлы едут у них тоже (новый узел — общий для них).
  */
-function shapeSeparateEdits(f: Feature3D, rings: ShapeRings, offset: THREE.Vector3): ObjectEdit[] | string {
-  const outside = nodesOutside(new Set([f.key]));
+function shapeSeparateEdits(f: Feature3D, rings: ShapeRings, offset: THREE.Vector3, together = new Set([f.key])): ObjectEdit[] | string {
+  const outside = nodesOutside(new Set([...together, f.key]));
   const moved = shapeMoved(rings, offset);
   const land = shapeLandings(moved);
   if (!land.size && !rings.some((r) => r.ks.some((k) => outside.has(r.ids[k])))) return nodeMoveEdits(shapeOwnMoves(rings, offset));
@@ -5779,7 +5782,43 @@ function shapeSeparateEdits(f: Feature3D, rings: ShapeRings, offset: THREE.Vecto
   });
   // Свои узлы, сдвинутые без слияния, — на новые места (в кольце уже стоят новые координаты)
   for (const r of rewrites) r.ids.forEach((n, k) => { if (n > 0 && !fresh.has(n)) fresh.set(n, r.coords[k]); });
-  return topologyEdits([{ f, rewrites }], [], fresh);
+  // Выделенные вместе с f части с теми же узлами: в их кольцах — те же замены и новые места
+  const swap = new Map<number, { id: number; at: LonLat }>();
+  rings.forEach((r, ri) => r.ks.forEach((k) => swap.set(r.ids[k], { id: rewrites[ri].ids[k], at: rewrites[ri].coords[k] })));
+  const items: { f: Feature3D; rewrites: RingRewrite[] }[] = [{ f, rewrites }];
+  for (const g of liveFeatures()) {
+    if (g.key === f.key || !together.has(g.key)) continue;
+    const rw: RingRewrite[] = [];
+    g.polygons.forEach((p, poly) => [[p.outer, p.outerIds] as const, ...p.inners.map((c, j) => [c, p.innerIds?.[j]] as const)].forEach(([coords, ids], ring) => {
+      if (!ids?.some((n) => swap.has(n))) return;
+      rw.push({ poly, ring, ids: ids.map((n) => swap.get(n)?.id ?? n), coords: coords.map((c, k) => swap.get(ids[k])?.at ?? c) });
+    }));
+    if (rw.length) items.push({ f: g, rewrites: rw });
+  }
+  return topologyEdits(items, [], fresh);
+}
+
+/** Точность совпадения ручек крыши и верха стен у разных частей, м. */
+const SAME_HANDLE_M = 0.01;
+/** Ручка, взятая в начале сдвига → части с ней же (неизменно, пока тянем: превью двигает и их ручки). */
+const shapeHeightCache = new WeakMap<ShapeTarget, string[]>();
+
+/**
+ * Части, которые меняет ручка крыши или верха стен t: сама часть и выделенные вместе с ней, у которых в том же месте
+ * та же ручка (общий узел на той же высоте верха стен, общая верхняя точка крыши).
+ */
+function shapeHeightKeys(t: ShapeTarget): string[] {
+  const cached = shapeHeightCache.get(t);
+  if (cached) return cached;
+  const near = (p: THREE.Vector3) => p.distanceTo(t.from) < SAME_HANDLE_M;
+  const keys = [t.key, ...shapeSelected().filter((k) => {
+    if (k === t.key) return false;
+    if (t.roof) return overpassLayer.focusRoofTop(k).some(near);
+    const w = shapeWalls(k), polys = overpassLayer.focusPolygons(k);
+    return !!w && !!polys && w.top - w.min >= 0.2 && polys.some((p) => [p.outer, ...p.inners].some((r) => r.some(([x, y]) => near(new THREE.Vector3(x, y, w.top)))));
+  })];
+  shapeHeightCache.set(t, keys);
+  return keys;
 }
 
 /** Сторона u–v есть у других объектов (общая с соседями). */
@@ -6147,22 +6186,24 @@ function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string
   const f = live.get(t.key);
   if (!f || !offset) { restore(new Set()); return; }
   if (t.roof || t.eave) {
-    previewFocus({ ...f, tags: shapeHeightTags(f, t, offset.z) });
-    restore(new Set([t.key]));
-    shapePreviewed = [t.key];
+    const keys = shapeHeightKeys(t);
+    for (const k of keys) { const g = live.get(k); if (g) previewFocus({ ...g, tags: shapeHeightTags(g, t, offset.z) }); }
+    restore(new Set(keys));
+    shapePreviewed = keys;
     return;
   }
   const rings = shapeRings(f, t);
   if (!rings) { restore(new Set()); return; }
   const glue = shapeGlued(rings);
+  const together = new Set(shapeSelected());
   const edits = nodeMoveEdits(glue ? shapeMoves(rings, offset) : shapeOwnMoves(rings, offset), true);
-  const apart = glue ? levelApartKeys([t.key]) : new Set<string>();
+  const apart = glue ? levelApartKeys([...together, t.key]) : new Set<string>();
   if (typeof edits === 'string') { restore(new Set()); return edits; }
   const keys = new Set<string>();
   for (const x of edits) {
     const g = live.get(x.key);
-    // «Отдельно» соседи остаются на месте — в превью только сама часть; соседи выше/ниже — всегда на месте
-    if (!x.polygons || !g || (!glue && x.key !== t.key) || apart.has(x.key)) continue;
+    // «Отдельно» соседи остаются на месте — в превью сама часть и выделенные вместе с ней; соседи выше/ниже — всегда на месте
+    if (!x.polygons || !g || (!glue && x.key !== t.key && !together.has(x.key)) || apart.has(x.key)) continue;
     keys.add(x.key);
     previewFocus({ ...g, polygons: x.polygons });
   }
@@ -6190,9 +6231,15 @@ function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
   if (!f?.polygons) return false;
   if (t.roof || t.eave) {
     const tags = shapeHeightTags(f, t, offset.z), h = computeHeights(tags);
-    session.setTags(t.key, diffTags(f.tags, tags));
-    setStatus(t.roof ? tr('Высота крыши {key}: {h} м. Отменить — Ctrl+Z.', { key: t.key, h: h.roofHeight.toFixed(2) })
-      : tr('Высота стен {key}: {h} м. Отменить — Ctrl+Z.', { key: t.key, h: (h.wallTop - h.min).toFixed(2) }));
+    // Выделенные части с той же ручкой (общий верх стен, общая точка крыши) — вместе, одним шагом
+    const edits = shapeHeightKeys(t).flatMap((k) => {
+      const g = entity(k) as Feature3D | undefined;
+      return g ? [{ key: k, tags: shapeHeightTags(g, t, offset.z) }] : [];
+    });
+    session.editMany(edits);
+    const key = edits.length > 1 ? edits.map((e) => e.key).join(', ') : t.key;
+    setStatus(t.roof ? tr('Высота крыши {key}: {h} м. Отменить — Ctrl+Z.', { key, h: h.roofHeight.toFixed(2) })
+      : tr('Высота стен {key}: {h} м. Отменить — Ctrl+Z.', { key, h: (h.wallTop - h.min).toFixed(2) }));
     return true;
   }
   const noIds = tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
@@ -6211,12 +6258,15 @@ function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
     const glued = shapeGlued(rings) && !(shapeLandings(shapeMoved(rings, offset)).size
       && !rings.some((r) => r.ks.some((k) => nodesOutside(new Set([f.key])).has(r.ids[k]))));
     const moves = glued ? shapeMoves(rings, offset) : undefined;
-    edits = moves ? levelSafeEdits([f.key], nodeMoveEdits(moves), moves) : shapeSeparateEdits(f, rings, offset);
+    const together = new Set([...shapeSelected(), f.key]);
+    edits = moves ? levelSafeEdits([...together], nodeMoveEdits(moves), moves) : shapeSeparateEdits(f, rings, offset, together);
   }
   if (typeof edits === 'string') return fail(edits);
   dropCollapsedHoles(edits);
   session.editMany(edits);
-  const neighbours = edits.filter((e) => e.polygons && e.key !== t.key).length;
+  // Выделенные вместе с частью — не «соседи»: они и должны были ехать
+  const selected = new Set(shapeSelected());
+  const neighbours = edits.filter((e) => e.polygons && e.key !== t.key && !selected.has(e.key)).length;
   const n = 1 + (t.also?.length ?? 0), d = offset.length().toFixed(2);
   setStatus((t.insert !== undefined ? tr('Новая вершина на стороне {key}', { key: t.key })
     : n > 1 ? tr('Вершины {key} ({n}) сдвинуты на {d} м', { key: t.key, n, d }) : tr('Вершина {key} сдвинута на {d} м', { key: t.key, d }))

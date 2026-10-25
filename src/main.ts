@@ -9949,7 +9949,10 @@ function renderSelectedImpl() {
   if (!selection.length && underlaySelection.length) return renderUnderlaySelection();
   if (selection.length > 1) return renderMulti();
   const og = selectedKey ? groupOf(selectedKey) : undefined;
-  const outline = !!og && og.members.some((k, i) => k === selectedKey && og.roles[i] === 'outline');
+  const sf = selectedKey ? session.get(selectedKey) : undefined;
+  // Контур — и в отношении type=building (роль outline), и без отношения (здание с частями внутри)
+  const outline = og ? og.members.some((k, i) => k === selectedKey && og.roles[i] === 'outline')
+    : !!(sf as Feature3D | undefined)?.polygons?.length && implicitBuilding(sf as Feature3D)?.outline === sf!.key;
   const form = selectedKey ? renderTagForm(selectedKey, session, inheritSources(selectedKey), { suggest: dateSources(selectedKey), outline }) : undefined;
   const g = selectedKey ? editGroups.get(selectedKey) : undefined;
   // Отношение type=building — только контейнер: высоты, крыша и прочее живут на контуре и частях

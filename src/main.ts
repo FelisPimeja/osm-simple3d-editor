@@ -9849,7 +9849,7 @@ function renderUnderlaySelection() {
   const n = u && underlayNumbers(u);
   infoEl.innerHTML = `
     <h2>${u ? tr('Своя подложка') : tr('Подложки: {n}', { n: list.length })}</h2>
-    <ul class="change-list">${list.map((x) => `<li>${esc(x.name)}${x.building === undefined ? ` <span class="hint">${tr('(общая)')}</span>` : ''}</li>`).join('')}</ul>
+    <ul class="change-list">${list.map((x) => `<li><span class="ch-icon"></span><span class="ch-title" title="${esc(x.name)}">${esc(x.name)}</span>${x.building === undefined ? `<span class="ch-key">${tr('(общая)')}</span>` : ''}</li>`).join('')}</ul>
     ${u && n ? `<div class="underlay-props" data-underlay="${esc(u.id)}">
       ${num('azimuth', tr('Азимут'), n.azimuth, '°', '0.1', tr('Лежащей — куда смотрит верх картинки, стоящей — куда обращена лицевая сторона; по часовой от севера'))}
       ${num('tilt', tr('Наклон'), n.tilt, '°', '0.1', tr('0 — лежит (план), 90 — стоит (фасад, разрез)'))}

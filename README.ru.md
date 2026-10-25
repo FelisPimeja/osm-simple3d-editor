@@ -30,7 +30,7 @@ Userscript [osm-open-simple3d.user.js](userscripts/osm-open-simple3d.user.js) д
 
 ## Открытие из OSMCha
 
-Userscript [osmcha-open-simple3d.user.js](userscripts/osmcha-open-simple3d.user.js) добавляет пункт **Simple3D Editor** в меню **Open with** на странице чейнджсета OSMCha. Установите файл в Tampermonkey или другой менеджер userscript-скриптов и разрешите запросы к `api.openstreetmap.org`. Скрипт берёт границы чейнджсета из OSM API и открывает редактор по ссылке вида `#масштаб/широта/долгота`. Если у чейнджсета нет границ, пункт сообщает, что местоположение недоступно. На [OSMCha OpenHistoricalMap](https://osmcha.openhistoricalmap.org) скрипт берёт границы из API OHM (разрешите запросы к `www.openhistoricalmap.org`) и открывает редактор с сервером OHM (`?server=ohm`).
+Userscript [osmcha-open-simple3d.user.js](userscripts/osmcha-open-simple3d.user.js) добавляет пункт **Simple3D Editor** в меню **Open with** на странице чейнджсета OSMCha. Установите файл в Tampermonkey или другой менеджер userscript-скриптов и разрешите запросы к `api.openstreetmap.org`. Скрипт берёт границы чейнджсета из OSM API и открывает редактор по ссылке вида `#масштаб/широта/долгота`. Если у чейнджсета нет границ, пункт сообщает, что местоположение недоступно. На [OSMCha OpenHistoricalMap](https://osmcha.openhistoricalmap.org) скрипт берёт границы из API OHM (разрешите запросы к `www.openhistoricalmap.org`) и открывает редактор с сервером OHM (`?server=ohm`) на дату, когда существует больше всего изменённых объектов (по `start_date`/`end_date`, в первую очередь зданий; `&date=`), — чтобы правки были видны.
 
 ## Использование ИИ
 

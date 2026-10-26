@@ -2184,6 +2184,7 @@ function exitFocus() {
   orbit.setUnderground(false);
   overpassLayer.setFocus(undefined);
   scheduleMapIssues();
+  scheduleIndoorBadges(); // значки скрыты в режиме здания; за это время могли появиться помещения
   const restore = (ls: typeof focusHiddenLayers) => {
     for (const { id, visibility } of ls) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility as 'visible' | 'none');
   };
@@ -7511,24 +7512,10 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   // Свои данные здания (без стыков тайлов) — поверх данных тайлов
   const all = new Map(overpass.indoorIn([w, s, e, n]).map((f) => [f.key, f]));
   for (const f of focusIndoor.get(g.key) ?? []) all.set(f.key, f);
-  for (const [key, f] of indoorCreated) {
-    const e = session.get(key);
-    if (!e) continue;
-    // Точка (дверь, вход, POI) — узел: место в сессии — единственная вершина
-    all.set(key, f.point ? { ...f, tags: e.tags, point: e.polygons?.[0]?.outer[0] ?? f.point } : { ...f, tags: e.tags, polygons: e.polygons ?? f.polygons });
-  }
-  const list = [...all.values()].filter((f) => {
+  const list = withSessionIndoor(all).filter((f) => {
     const p = f.point ?? (f.line ? f.polygons[0].outer[0] : pointOnSurface(f.polygons[0]));
     // Дверь на наружной стене лежит ровно на контуре — для такой точки pointInRing случаен
     return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || (!!f.point && nearRing(p, q.outer, 0.3))));
-  }).filter((f) => !session.isDeleted(indoorKey(f.key)) && (!indoorCreated.has(f.key) || !!session.get(f.key))).map((f) => {
-    // Правки тегов в сессии (indoor, level, room) — поверх данных: вид и этажи по новым тегам; у двери — и место
-    const e = indoorEdited.has(indoorKey(f.key)) ? session.get(indoorKey(f.key)) : undefined;
-    if (!e) return f;
-    const g = withIndoorTags(f, e.tags);
-    const at = f.point && !f.key.endsWith('#poi') ? e.polygons?.[0]?.outer[0] : undefined;
-    if (!f.point && !f.line && e.polygons?.length && f.key.startsWith('way/')) return { ...g, polygons: e.polygons };
-    return at ? { ...g, point: at } : g;
   });
   const visible = list.filter((f) => overpass.isVisible(f)).filter((f) => f.kind === 'poi' || !indoorEdited.has(indoorKey(f.key)) || !!f.tags.indoor || (f.escalator && f.tags.highway === 'steps' && !!f.tags.conveying && f.tags.conveying !== 'no'));
   const axes = visible.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
@@ -7536,6 +7523,30 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
     if (f.line || !f.polygons.length || !(f.tags.room === 'stairs' || f.tags.stairs === 'yes' || f.tags.conveying)) return f;
     const matched = axes.some((axis) => escalatorAreaMatches(axis, f));
     return matched ? { ...f, escalatorArea: true } : f;
+  });
+}
+
+/**
+ * Indoor-объекты данных (all, по ключам) с правками сессии: плюс созданные (в рамке bbox, если задана), минус
+ * удалённые; у правленых — теги (вид и этажи по новым тегам), у путей — геометрия, у двери — и место.
+ */
+function withSessionIndoor(all: Map<string, IndoorFeature>, bbox?: Bbox): IndoorFeature[] {
+  for (const [key, f] of indoorCreated) {
+    const e = session.get(key);
+    if (!e) continue;
+    // Точка (дверь, вход, POI) — узел: место в сессии — единственная вершина
+    const made = f.point ? { ...f, tags: e.tags, point: e.polygons?.[0]?.outer[0] ?? f.point } : { ...f, tags: e.tags, polygons: e.polygons ?? f.polygons };
+    const at = made.point ?? made.polygons[0]?.outer[0];
+    if (bbox && (!at || at[0] < bbox[0] || at[0] > bbox[2] || at[1] < bbox[1] || at[1] > bbox[3])) continue;
+    all.set(key, made);
+  }
+  return [...all.values()].filter((f) => !session.isDeleted(indoorKey(f.key)) && (!indoorCreated.has(f.key) || !!session.get(f.key))).map((f) => {
+    const e = indoorEdited.has(indoorKey(f.key)) ? session.get(indoorKey(f.key)) : undefined;
+    if (!e) return f;
+    const g = withIndoorTags(f, e.tags);
+    const at = f.point && !f.key.endsWith('#poi') ? e.polygons?.[0]?.outer[0] : undefined;
+    if (!f.point && !f.line && e.polygons?.length && f.key.startsWith('way/')) return { ...g, polygons: e.polygons };
+    return at ? { ...g, point: at } : g;
   });
 }
 
@@ -7656,7 +7667,9 @@ function updateIndoorBadges() {
   if (focus || !buildingsView.shown || map.getZoom() < BADGE_MIN_ZOOM) return indoorBadges.set([]);
   const b = map.getBounds();
   const bbox: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
-  const indoor = overpass.indoorIn(bbox).filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length);
+  // С правками: нарисованные и рассечённые помещения — тоже, удалённые — нет
+  const indoor = withSessionIndoor(new Map(overpass.indoorIn(bbox).map((f) => [f.key, f])), bbox)
+    .filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length);
   if (!indoor.length) return indoorBadges.set([]);
   // Сетка рамок зданий (~50 м) — чтобы не перебирать все здания для каждого помещения
   const CELL = 0.0005;
@@ -11210,6 +11223,8 @@ function onSessionChange(keys: string[]) {
   if (josmApi() && !uploading) scheduleJosmSync();
   scheduleAutosave();
   mapIssuesDirty = true;
+  // Значки планов над зданиями — по правкам тоже (в режиме здания они скрыты, пересчёт — дёшев)
+  if (!focus && keys.some((k) => indoorEdited.has(k) || indoorCreated.has(k))) scheduleIndoorBadges();
   syncEntranceEdits(keys);
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {

@@ -697,7 +697,7 @@ function underlayElevation(u: Underlay): number | undefined {
 /** Показать подложки (слой и меню); menu = false — меню не пересобирать (ползунок под мышью). */
 function showUnderlays(menu = true) {
   const list = currentUnderlays();
-  if (menu) underlayMenu.set(list, focus?.key, focus ? underlayLevels.map((l) => ({ n: l.n, label: LEVEL_NAME(l.n) })) : [], currentLevel);
+  if (menu) underlayMenu.set(list, focus?.key, focus ? underlayLevels.map((l) => ({ n: l.n, label: levelLabel(l.n) })) : [], currentLevel);
   // Подложка этажа — только на выбранном этаже, на отметке его пола
   const shown = list.flatMap((u) => {
     const v = underlayPreview?.ids.has(u.id) ? transformUnderlay(u, underlayPreview.m) : u;
@@ -7569,6 +7569,8 @@ function plannedLevels(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
 let shownLevel: Level | undefined;
 /** Номера этажей здания режима (для выбора level у indoor-объекта). */
 let panelLevels: number[] = [];
+/** Обозначения этажей здания режима (level:ref с indoor=level) — для подписей этажей вне панели. */
+let panelLevelRefs = new Map<number, string>();
 let shownIndoor: IndoorFeature[] = [];
 let selectedIndoor: IndoorFeature | undefined;
 
@@ -7681,7 +7683,7 @@ function renderIndoorSelection(add = false) {
   const [type, id] = key.split('/');
   const t = f.tags;
   const kind = indoorTitle(f);
-  const levels = f.levels.map((n) => LEVEL_NAME(n)).join(', ');
+  const levels = f.levels.map((n) => levelLabel(n)).join(', ');
   infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''} — `
     + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
     + `<p class="hint">${esc(levels)}</p>`
@@ -7904,7 +7906,7 @@ function bindLevelPicker(input: HTMLInputElement, fs: IndoorFeature[]) {
     box.innerHTML = shown.map((n) => {
       const count = sets.filter((x) => x.has(n)).length;
       return `<label class="level-picker-row${n === cur ? ' current' : ''}"><input type="checkbox" value="${n}"${count === sets.length ? ' checked' : ''}${count && count < sets.length ? ' data-mixed' : ''}>`
-        + `<span>${esc(LEVEL_NAME(n))}</span><span class="level-picker-n">level=${n}</span></label>`;
+        + `<span>${esc(levelLabel(n))}</span><span class="level-picker-n">level=${n}</span></label>`;
     }).join('');
     // У части выбранных этот этаж есть — промежуточное состояние
     for (const cb of box.querySelectorAll<HTMLInputElement>('input[data-mixed]')) cb.indeterminate = true;
@@ -8224,6 +8226,8 @@ function selectRoad(w: RoadWay, add = false) {
 const humanFloor = (n: number) => (lang === 'ru' ? n + 1 : n);
 /** Название этажа: у подземных сохраняем номер level, надземные нумеруем по локали. */
 const LEVEL_NAME = (n: number) => tr('{n} этаж', { n: n < 0 ? n : humanFloor(n) });
+/** Подпись этажа: по level:ref, если он есть у indoor=level этажа здания режима («Этаж E0»), иначе по номеру. */
+const levelLabel = (n: number) => (panelLevelRefs.has(n) ? tr('Этаж {ref}', { ref: panelLevelRefs.get(n)! }) : LEVEL_NAME(n));
 
 /**
  * Свойства выбранного этажа (панель свойств, когда ничего не выделено): высота этажа — height на его indoor=level
@@ -8307,6 +8311,7 @@ function renderLevelsImpl() {
   const indoor = buildingIndoor(focus);
   const levels = buildingLevels(focus, indoor);
   panelLevels = levels.map((l) => l.n);
+  panelLevelRefs = new Map(levels.filter((l) => l.ref).map((l) => [l.n, l.ref!]));
   if (linkLevel !== undefined && levels.some((l) => l.n === linkLevel)) { currentLevel = linkLevel; linkLevel = undefined; }
   if (currentLevel !== undefined && !levels.some((l) => l.n === currentLevel)) currentLevel = undefined;
   // Сменился этаж (щелчок, ссылка, этаж пропал) или его данные (догрузились indoor, правка) — свойства этажа в панели, если ничего не выделено

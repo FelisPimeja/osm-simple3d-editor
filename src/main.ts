@@ -8407,7 +8407,7 @@ function renderLevelsImpl() {
 /** Пустоты (второй свет) этажа n здания: lon/lat; кеш — по зданию, данным и этажу. */
 /** Чем последний раз пересобраны перекрытия стеклянных частей здания режима. */
 let glassVoidsSig = '';
-type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[] }[]> & { mapped?: Map<number, LonLat[][][]> };
+type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[] }[]>;
 /** Пустоты (второй свет) всех этажей здания, lon/lat; кеш — по зданию и данным. */
 const voidsCache = new Map<string, { sig: string; map: LevelVoids }>();
 function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
@@ -8439,8 +8439,6 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
     const parts = partFeats
       .map((f) => { const h = computeHeights(f.tags); return { polygons: f.polygons.map(poly), min: h.min, wallTop: h.wallTop }; });
     const plans = buildPlans(levels, parts, indoor.filter((f) => f.kind !== 'poi').map((f) => ({ kind: f.kind, levels: f.levels, floors: floorLevels(f), line: f.line, polygons: f.polygons.map(poly) })));
-    // Размеченное по этажам (lon/lat) — перекрытия стеклянных частей кладём только там
-    out.mapped = new Map([...plans].map(([n, p]) => [n, p.mapped.map((poly) => poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number]))))]));
     for (const l of levels) {
       const list = findVoids(l.n, plans).map((v) => ({ polygon: v.polygon.map((p) => p.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))), through: v.through }));
       // Лифтовая шахта — сквозной проём до нижней остановки (через этажи без остановок тоже)
@@ -9987,10 +9985,10 @@ setLevelGrid((f) => {
   const voids = buildingVoids(g, levels, indoor);
   const zs = [...new Set([...levels.map((l) => l.floor), ...levels.map((l) => l.ceil)])];
   return zs.map((z) => {
+    // Плита — весь след части на отметке пола (часть на этой высоте существует — это и есть сечение оболочки),
+    // минус пустоты второго света; где этаж не размечен — плита тоже есть
     const at = levels.filter((l) => Math.abs(l.floor - z) < 0.01);
-    // Есть разметка этажа — плита только под ней (над атриумом, галереями вокруг пустоты плиты нет)
-    const mask = at.flatMap((l) => voids.mapped?.get(l.n) ?? []);
-    return { z, holes: at.flatMap((l) => voids.get(l.n) ?? []).flatMap((v) => v.polygon), mask: mask.length ? mask : undefined };
+    return { z, holes: at.flatMap((l) => voids.get(l.n) ?? []).flatMap((v) => v.polygon) };
   });
 });
 

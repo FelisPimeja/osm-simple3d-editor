@@ -5519,21 +5519,20 @@ const SLAB_MARGIN = 0.3;
  * раскладки (одиночное), тогда плиты считаются по тегам самой части.
  */
 /** Высота пола и пустоты второго света в перекрытии на ней (lon/lat). */
-export interface SlabLevel { z: number; holes: LonLat[][][]; mask?: LonLat[][][] }
+export interface SlabLevel { z: number; holes: LonLat[][][] }
 let levelGridFor: (f: Feature3D) => SlabLevel[] | undefined = () => undefined;
 export function setLevelGrid(fn: (f: Feature3D) => SlabLevel[] | undefined) { levelGridFor = fn; }
 
 /** Плиты перекрытий между этажами: по раскладке этажей здания, иначе по building:levels (с min_level) или через 3 м. */
-function floorSlabs(polys: LocalPolygon[], h: Heights, tags: Record<string, string>, grid?: { z: number; holes: Pt[][][]; mask?: Pt[][][] }[]): number[] {
+function floorSlabs(polys: LocalPolygon[], h: Heights, tags: Record<string, string>, grid?: { z: number; holes: Pt[][][] }[]): number[] {
   if (grid?.length) {
     const out: number[] = [];
-    for (const { z, holes, mask } of grid) {
+    for (const { z, holes } of grid) {
       if (z <= h.min + SLAB_MARGIN || z >= h.wallTop - SLAB_MARGIN) continue;
       // Второй свет: пустоты этажа в плите вырезаем — объём над атриумом не режется перекрытиями
       let slab = polys;
       const ring = (p: Pt[][]) => p.map((r) => [...r, r[0]] as [number, number][]);
       try {
-        if (mask) slab = fromClip(polygonClipping.intersection(toClip(slab), mask.map(ring)));
         if (holes.length) slab = fromClip(polygonClipping.difference(toClip(slab), ...holes.map(ring)));
       } catch { /* вырожденная геометрия — плита целиком */ }
       out.push(...bottomTriangles(slab, z));
@@ -5831,7 +5830,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   }
   // Стеклянный фасад: внутри видны перекрытия — плиты на границах этажей (непрозрачные, после крыши)
   const glassWalls = isGlass(roofPartWallMaterial(tags));
-  const floors = [...joint, ...(glassWalls && !flat && !roofOnly ? timed('здание: перекрытия за стеклом', () => floorSlabs(polys, heights, tags, levelGridFor(f)?.map((l) => ({ z: l.z, holes: l.holes.map((p) => p.map((r) => r.map(g.toLocal))), mask: l.mask?.map((p) => p.map((r) => r.map(g.toLocal))) })))) : [])];
+  const floors = [...joint, ...(glassWalls && !flat && !roofOnly ? timed('здание: перекрытия за стеклом', () => floorSlabs(polys, heights, tags, levelGridFor(f)?.map((l) => ({ z: l.z, holes: l.holes.map((p) => p.map((r) => r.map(g.toLocal))) })))) : [])];
   const positions = new Float32Array(tri.walls.length + tri.roof.length + floors.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);

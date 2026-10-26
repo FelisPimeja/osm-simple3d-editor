@@ -738,3 +738,12 @@ body.mobile #issues-panel { display: none !important; }
 .repeat-levels { list-style: none; padding: 0 !important; margin: 6px 0 10px !important; }
 .repeat-mode { display: block; margin: 4px 0; }
 .repeat-mode .hint { display: block; margin-left: 22px; font-size: 12px; color: #666; }
+
+.other-tags { margin-top: 12px; }
+.other-tags h3 { margin: 0 0 6px; font-size: 12px; font-weight: 500; color: #555; }
+.other-tag-row, .other-tag-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 26px; gap: 4px; align-items: center; margin: 4px 0; }
+.other-tag-row label { overflow-wrap: anywhere; font-size: 12px; }
+.other-tags input { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; padding: 3px 5px; border: 1px solid #ccc; border-radius: 4px; }
+.other-tags button { padding: 2px; height: 26px; font-size: 18px; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; }
+.other-tags button:hover { background: #f3f4f6; }
+.other-tag-add { margin-top: 8px; }

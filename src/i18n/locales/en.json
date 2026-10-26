@@ -1294,5 +1294,12 @@
   "Скопировать нельзя: стены-линии и мультиполигоны из нескольких частей пока не копируются.": "Can't copy: wall lines and multi-part multipolygons aren't copied yet.",
   "Этажи: копий создано {made}, убрано {removed}.": "Levels: {made} copies created, {removed} removed.",
   "Пропущено: {n}.": "Skipped: {n}.",
-  "Повторять на этажах…": "Repeat on levels…"
+  "Повторять на этажах…": "Repeat on levels…",
+  "Другие теги": "Other tags",
+  "Удалить тег": "Delete tag",
+  "Добавить тег": "Add tag",
+  "Ключ": "Key",
+  "Значение": "Value",
+  "Ключ не должен содержать пробелы или знак равенства.": "The key must not contain spaces or an equals sign.",
+  "Такой тег уже существует. Измените его значение в панели свойств.": "This tag already exists. Edit its value in Properties."
 }

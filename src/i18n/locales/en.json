@@ -884,6 +884,7 @@
   "Проверка отношений…": "Checking relations…",
   "Выбор или данные изменились. Повторите удаление.": "Selection or data changed. Try deleting again.",
   "Удалено помещений: {n}; у путей в составе отношений сняты только теги: {m}. Отменить — Ctrl+Z.": "Rooms deleted: {n}; ways that belong to relations only lost their tags: {m}. Undo with Ctrl+Z.",
+  "Удалено контуров этажа: {n} ({keys}). Отменить — Ctrl+Z.": "Level outlines deleted: {n} ({keys}). Undo with Ctrl+Z.",
   "Удалено помещений: {n}. Отменить — Ctrl+Z.": "Rooms deleted: {n}. Undo with Ctrl+Z.",
   "Не удалось удалить помещения: {error}": "Could not delete rooms: {error}",
   "Зона без стен": "Area without walls",

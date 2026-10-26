@@ -7887,7 +7887,10 @@ function renderIndoorSelection(add = false) {
 /** Несколько indoor-объектов: число и виды, общая форма. */
 function renderIndoorMulti(fs: IndoorFeature[]) {
   const kinds = [...new Set(fs.map(indoorTitle))].join(', ');
-  infoEl.innerHTML = `<h2>${trn(fs.length, 'Выбран {n} объект|Выбрано {n} объекта|Выбрано {n} объектов')}</h2><p class="hint">${esc(kinds)}</p>`
+  // Ключи объектов — ссылками: щелчок выделяет один из них
+  const keys = fs.slice(0, 12).map((f) => `<a href="#" data-select-indoor="${esc(indoorKey(f.key))}">${esc(indoorKey(f.key))}</a>`).join(', ')
+    + (fs.length > 12 ? ' …' : '');
+  infoEl.innerHTML = `<h2>${trn(fs.length, 'Выбран {n} объект|Выбрано {n} объекта|Выбрано {n} объектов')}</h2><p class="hint">${esc(kinds)}: ${keys}</p>`
     + indoorForm(fs);
   bindIndoorForm(fs);
 }
@@ -8200,9 +8203,12 @@ function canDeleteIndoorSelection(): boolean {
     && (indoorSelection.every(isDoor) || indoorSelection.every(isDeletableSpace) || indoorSelection.some((f) => f.kind === 'wall')));
 }
 
-/** Помещение, коридор или зона — удаляется целиком. */
+/** Помещение, коридор, зона или контур этажа (indoor=level) — удаляется целиком. */
 const isDeletableSpace = (f: IndoorFeature) => !f.line && !f.escalator && !f.key.endsWith('#poi')
-  && (f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor');
+  && (f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor' || f.kind === 'level');
+
+/** Теги этажа у пути, который заодно часть или контур здания: при удалении этажа снимаются только они. */
+const LEVEL_OWN_KEYS = ['indoor', 'level', 'level:ref', 'repeat_on'];
 
 function deleteIndoorSelection() {
   if (uploading || deletingIndoorWalls || !canDeleteIndoorSelection()) return;
@@ -8236,6 +8242,12 @@ async function deleteIndoorSpaces(fs: IndoorFeature[]) {
       const key = indoorKey(f.key);
       trackIndoor(key, f);
       if (key.startsWith('relation/')) { edits.push({ key, delete: true }); continue; }
+      // Этаж на части здания (building:part + indoor=level) — часть остаётся, уходят только теги этажа
+      if (f.kind === 'level' && (f.tags.building || f.tags['building:part'])) {
+        edits.push({ key, tags: Object.fromEntries(Object.entries(f.tags).filter(([k]) => !LEVEL_OWN_KEYS.includes(k))) });
+        stripped++;
+        continue;
+      }
       const id = Number(key.split('/')[1]);
       // Членство — по текущему составу в сессии (отношения могли уже правиться или быть созданы в ней)
       const referenced = parents.find((p) => p.key === key)!.relations.some((r) => {
@@ -8249,9 +8261,11 @@ async function deleteIndoorSpaces(fs: IndoorFeature[]) {
     selectIndoor(undefined);
     clearInfo();
     session.editMany(edits);
-    setStatus(stripped
-      ? tr('Удалено помещений: {n}; у путей в составе отношений сняты только теги: {m}. Отменить — Ctrl+Z.', { n: fs.length, m: stripped })
-      : tr('Удалено помещений: {n}. Отменить — Ctrl+Z.', { n: fs.length }));
+    setStatus(fs.every((f) => f.kind === 'level')
+      ? tr('Удалено контуров этажа: {n} ({keys}). Отменить — Ctrl+Z.', { n: fs.length, keys: fs.map((f) => indoorKey(f.key)).join(', ') })
+      : stripped
+        ? tr('Удалено помещений: {n}; у путей в составе отношений сняты только теги: {m}. Отменить — Ctrl+Z.', { n: fs.length, m: stripped })
+        : tr('Удалено помещений: {n}. Отменить — Ctrl+Z.', { n: fs.length }));
   } catch (err) {
     setStatus(tr('Не удалось удалить помещения: {error}', { error: (err as Error).message }), true);
   } finally {

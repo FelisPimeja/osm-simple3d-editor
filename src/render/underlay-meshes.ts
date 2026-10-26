@@ -179,6 +179,12 @@ export class UnderlayMeshes {
 
   get size() { return this.entries.size; }
 
+  /** Есть видимые подложки прохода 'over' (этажей и поднятые над землёй). */
+  hasOver(): boolean {
+    for (const e of this.entries.values()) if (e.mesh.visible && e.mesh.material.visible && over(e.u)) return true;
+    return false;
+  }
+
   /**
    * Нарисовать подложки (main — матрица проекции MapLibre, как у групп зданий): pass 'under' — лежащие на земле
    * (до зданий), 'over' — этажей и стоящие (после зданий), 'outline' — рамки выделенных (поверх всего).

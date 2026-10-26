@@ -223,7 +223,12 @@ function cornersOnly(ring: Pt[]): Pt[] {
 const EDGE_OPACITY = 0.55;
 const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: EDGE_OPACITY });
 /** Проход отрисовки: обычный или режим контуров (грани зданий только пишут глубину). */
-type RenderPass = 'all' | 'wire';
+/**
+ * Проход отрисовки групп: 'all' — как есть; 'wire' — режим контуров (грани зданий только в глубину);
+ * 'wire-fills' и 'wire-lines' — тот же режим двумя частями, между которыми рисуются поднятые подложки:
+ * сначала видимые заливки (полы помещений и прочее), затем грани в глубину и все линии.
+ */
+type RenderPass = 'all' | 'wire' | 'wire-fills' | 'wire-lines';
 /** Рёбра объёмов с проблемами проверки («Подсветить все»): ошибки — красные, предупреждения — оранжевые; толщина, px. */
 const ISSUE_COLOUR = { error: 0xff1a1a, warning: 0xff8a00 };
 const ISSUE_WIDTH_PX = 3;
@@ -514,10 +519,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     const underlays = this.underlays.size > 0;
     // В режиме контуров грани невидимы, но пишут глубину (прячут задние рёбра) — стоящие подложки рисуем до зданий,
     // иначе грани вырезали бы в них дыры; подложки глубину не пишут, рёбра остаются поверх
+    // Но заливки (полы помещений) — до подложек: поднятая над полом подложка иначе оказывалась под ним
     const overFirst = this.visible && this.wireframe;
+    const split = overFirst && underlays && this.underlays.hasOver();
     if (underlays) this.underlays.render(depthMain(options), 'under');
-    if (underlays && overFirst) this.underlays.render(depthMain(options), 'over');
-    if (this.visible) timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
+    if (split) {
+      timed(`${this.id}: кадр (CPU)`, () => this.renderWire(options, 'wire-fills'), () => `${this.groups.size} групп`);
+      this.underlays.render(depthMain(options), 'over');
+      this.renderWire(options, 'wire-lines');
+    } else {
+      if (underlays && overFirst) this.underlays.render(depthMain(options), 'over');
+      if (this.visible) timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
+    }
     if (underlays && !overFirst) this.underlays.render(depthMain(options), 'over');
     if (underlays) this.underlays.render(depthMain(options), 'outline');
     // Накладки инструментов (транспортир, оси, превью линий) — последними: поверх и подложек, поднятых над землёй
@@ -549,8 +562,12 @@ export class BuildingsLayer implements CustomLayerInterface {
    */
   private renderTranslucent(options: CustomRenderMethodInput) {
     if (!this.wireframe) { this.renderFill(options, 'all'); return; }
+    this.renderWire(options, 'wire');
+  }
+
+  private renderWire(options: CustomRenderMethodInput, pass: RenderPass) {
     EDGE_MATERIAL.opacity = WIRE_EDGE_OPACITY;
-    try { this.renderGroups(options, 'wire'); } finally { EDGE_MATERIAL.opacity = EDGE_OPACITY; }
+    try { this.renderGroups(options, pass); } finally { EDGE_MATERIAL.opacity = EDGE_OPACITY; }
   }
 
   /** Здания с прозрачностью слоя: непрозрачно — прямо на карту, иначе — через свой буфер. */
@@ -586,7 +603,23 @@ export class BuildingsLayer implements CustomLayerInterface {
     const fills = g.entranceObj?.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh && !o.userData.entrancePoint) ?? [];
     const swapped = [g.mesh, g.glass, ...fills].filter((o): o is THREE.Mesh => !!o).map((o) => [o, o.material] as const);
     for (const [o] of swapped) o.material = DEPTH_ONLY_MATERIAL;
-    return () => { for (const [o, m] of swapped) o.material = m; };
+    // Половина прохода: прячем то, что рисует другая половина
+    const hidden: THREE.Object3D[] = [];
+    if (pass !== 'wire') {
+      const depthOnly = new Set<THREE.Object3D>(swapped.map(([o]) => o));
+      const isLine = (o: THREE.Object3D) => o instanceof THREE.Line || o instanceof THREE.Points
+        || (o as THREE.Mesh).material instanceof LineMaterial;
+      g.scene.traverseVisible((o) => {
+        if (!(o instanceof THREE.Mesh || o instanceof THREE.Line || o instanceof THREE.Points || o instanceof THREE.Sprite)) return;
+        const line = isLine(o) || depthOnly.has(o);
+        if (line === (pass === 'wire-fills')) hidden.push(o);
+      });
+      for (const o of hidden) o.visible = false;
+    }
+    return () => {
+      for (const [o, m] of swapped) o.material = m;
+      for (const o of hidden) o.visible = true;
+    };
   }
 
   /** Режим контуров вкл/выкл. */
@@ -644,7 +677,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       g.camera.projectionMatrix = pick;
       triangles += renderer.info.render.triangles;
     }
-    if (!this.focused && this.graphics.trees !== false) {
+    // Деревья — один раз: во второй половине режима контуров они уже нарисованы
+    if (!this.focused && this.graphics.trees !== false && pass !== 'wire-lines') {
       const height = renderer.getContext().drawingBufferHeight;
       for (const t of this.trees.values()) {
         t.camera.projectionMatrix = main.clone().multiply(t.model);
@@ -654,7 +688,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         triangles += renderer.info.render.triangles;
       }
     }
-    this.lastTriangles = triangles;
+    if (pass === 'wire-lines') this.lastTriangles += triangles; else this.lastTriangles = triangles;
   }
 
   /** Группы, которые сейчас рисуются и выбираются. */

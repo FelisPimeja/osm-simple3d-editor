@@ -8415,6 +8415,8 @@ function indoorCreateEdits(poly: Polygon, tags: Record<string, string>, nodeFor:
 
 /** Кусок меньше этого, м², — не кусок (касание разрезом угла, погрешность). */
 const CUT_MIN_AREA = 0.05;
+/** Насколько глубоко нарисованная линия должна зайти в объект, чтобы его резать, м. */
+const CUT_REACH = 0.5;
 
 /**
  * «Рассечь» на плане этажа: ломаная pts (метры сцены, концы — за стенами) делит помещения, коридоры, площадки
@@ -8439,8 +8441,19 @@ function cutPlan(pts: [number, number][]): string | undefined {
     inners: p.slice(1).map((r) => r.slice(0, -1).map((q) => overpassLayer.focusToLngLat(q[0], q[1])! as LonLat)), });
   const localArea = (p: [number, number][][]) => ringArea(p[0].slice(0, -1)) - p.slice(1).reduce((a, r) => a + ringArea(r.slice(0, -1)), 0);
   /** Куски полигона по разрезу; меньше двух — разрез его не делит. */
+  // Точки нарисованной линии через 0,1 м: продление за концами нужно лишь чтобы выйти за стену
+  const samples: [number, number][] = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [a, b] = [pts[i], pts[i + 1]];
+    const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.1));
+    for (let k = 0; k <= n; k++) samples.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
+  }
+  /** Нарисованная линия заходит в полигон глубже CUT_REACH от его сторон (соседа на продолжении или заступ за стену не режем). */
+  const entered = (local: [number, number][][]) => samples.some((q) => pointInRing(q, local[0]) && !local.slice(1).some((r) => pointInRing(q, r))
+    && local.every((r) => r.every((a, i) => i === r.length - 1 || segDist2(q, a, r[i + 1]) > CUT_REACH * CUT_REACH)));
   const cut = (p: Polygon): [number, number][][][] => {
     const local = [toLocal(p.outer), ...p.inners.map(toLocal)];
+    if (!entered(local)) return [];
     try {
       return [...polygonClipping.intersection(local, side), ...polygonClipping.difference(local, side)].filter((q) => localArea(q) >= CUT_MIN_AREA);
     } catch (err) { console.warn('[cut-plan]', err); return []; }

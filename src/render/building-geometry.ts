@@ -97,7 +97,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   } else if (axis && shape === 'half-hipped') {
     addHalfHippedRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across');
   } else if (axis) {
-    addAxisRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across', PROFILES[shape]);
+    addAxisRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, shape === 'gabled' ? gabledAcross(axis, tags) : tags['roof:orientation'] === 'across', PROFILES[shape]);
   } else if (quadRoof) {
     addQuadRoof(roof, walls, single!.outer, h.wallTop, h.top, shape === 'hipped', tags['roof:orientation'] === 'across');
   } else {
@@ -436,6 +436,17 @@ function addHalfHippedRoof(roof: number[], walls: number[], ring: Pt[], ax: Rect
     rising([-along[0], -along[1]], halfL, zc),
   ];
   addPlanesRoof(roof, walls, ring, planes, z0, top);
+}
+
+/** Explicit slope direction selects the nearest footprint axis; the ridge is perpendicular to it. */
+function gabledAcross(ax: RectAxis, tags: Record<string, string>): boolean {
+  const direction = tags['roof:direction']?.trim();
+  const deg = direction ? CARDINAL[direction.toUpperCase()] ?? Number(direction) : NaN;
+  if (!Number.isFinite(deg)) return tags['roof:orientation'] === 'across';
+  const rad = deg * Math.PI / 180;
+  const along = Math.sin(rad) * ax.dir[0] + Math.cos(rad) * ax.dir[1];
+  const across = -Math.sin(rad) * ax.dir[1] + Math.cos(rad) * ax.dir[0];
+  return Math.abs(along) > Math.abs(across);
 }
 
 /**

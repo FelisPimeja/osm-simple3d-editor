@@ -431,11 +431,6 @@ function applyVectorStyle(hidden: boolean) {
 
 const offsetPanel = new ImageryOffsetPanel(map, {
   onChange: () => basemapCtrl?.sync(),
-  // Кнопка привязок — на время смещения снимка и вне режима здания (там её панель скрыта): переносим её на панель карты
-  onOpen: (open) => {
-    if (open && !focus) mapToolbar.querySelector('[data-help]')!.before(snapsBtn);
-    else if (!open && snapsBtn.parentElement === mapToolbar) focusToolbar.querySelector('[data-help]')!.before(snapsBtn);
-  },
   snap: (pt) => snapGround(pt),
   // После клика: иначе этот же клик закрыл бы меню как «мимо него»
   onConfirm: () => setTimeout(() => basemapCtrl?.openImagery()),
@@ -3362,8 +3357,6 @@ function startMapUnderlayTool(tool: 'move' | 'rotate' | 'scale') {
   if (!underlaySketch) {
     overpassLayer.setSketch(u.center);
     underlaySketch = true;
-    // Кнопка привязок (панель режима здания скрыта) — на время инструментов на панель карты, как при смещении снимка
-    mapToolbar.querySelector('[data-help]')!.before(snapsBtn);
   }
   if (tool === 'move') moveTool.start([], false, ids);
   else if (tool === 'rotate') rotateTool.start([], ids);
@@ -3371,9 +3364,9 @@ function startMapUnderlayTool(tool: 'move' | 'rotate' | 'scale') {
   syncMapTools();
 }
 
-// Инструменты подложек на карте прилипают к контурам зданий карты (вершины и середины сторон на земле)
+// Инструменты геометрии и подложек на карте прилипают к контурам зданий (запасной вариант без 3D).
 overpassLayer.sketchSnap = (pt) => {
-  if (!underlaySketch) return;
+  if (!underlaySketch && !sketching) return;
   const s = snapGround(pt), local = s && overpassLayer.focusToLocal([s.lngLat.lng, s.lngLat.lat]);
   if (!s || !local) return;
   return { kind: s.kind as SnapKind, key: '', local: new THREE.Vector3(local[0], local[1], 0), lngLat: s.lngLat, altitude: 0, point: s.point, label: s.label };
@@ -3384,7 +3377,6 @@ function endUnderlaySketch() {
   if (!underlaySketch || moveTool.active || rotateTool.active || scaleTool.active) return;
   underlaySketch = false;
   overpassLayer.setSketch(undefined);
-  if (snapsBtn.parentElement === mapToolbar) focusToolbar.querySelector('[data-help]')!.before(snapsBtn);
   updateSnap(undefined);
   syncMapTools();
 }
@@ -3416,6 +3408,9 @@ function endSketch() {
 
 function syncMapTools() {
   mapToolbar.hidden = !!focus;
+  // Общий переключатель и типы привязок доступны в обоих режимах, независимо от инструмента.
+  const snaps = document.querySelector<HTMLButtonElement>('[data-snaps]');
+  if (snaps) (focus ? focusToolbar : mapToolbar).querySelector('[data-help]')!.before(snaps);
   // Инструменты подложек на карте — только когда выделена подложка
   const u = !focus && underlaySelection.length > 0;
   for (const [btn, on] of [[mapUMoveBtn, moveTool.active], [mapURotateBtn, rotateTool.active], [mapUScaleBtn, scaleTool.active]] as const) {
@@ -6751,7 +6746,7 @@ document.addEventListener('keydown', (e) => {
   if (trackKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   if (moveTool.key(e) || pushTool.key(e) || shapeTool.key(e) || splitTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e) || scaleTool.key(e) || paintTool.key(e) || offsetTool.key(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   // S — привязки вкл/выкл, в том числе посреди перемещения или вытягивания
-  if ((focus || underlaySketch) && e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  if (e.code === 'KeyS' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     closeCtxMenu();
     toggleSnaps();
@@ -10292,6 +10287,7 @@ for (const b of helpBtns) b.addEventListener('click', () => {
 });
 
 const snapsBtn = document.querySelector<HTMLButtonElement>('[data-snaps]')!;
+syncMapTools();
 snapsBtn.addEventListener('click', () => toggleSnaps());
 
 // Типы привязок — галками во всплывашке у кнопки привязок (стрелка в углу); выбор запоминается

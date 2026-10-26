@@ -1249,5 +1249,14 @@
   "Высота этажа {h} м — расчётная (по этажности). Правка любого поля создаст indoor=level этажа по контуру здания (вершины на контуре — общие с ним).": "Level height {h} m is estimated (from building:levels). Editing any field creates the level's indoor=level from the building outline (vertices on the outline are shared with it).",
   "Неразмеченная площадь": "Unmapped space",
   "{s} м² · {level}": "{s} m² · {level}",
-  "В OSM пустота ничем не размечена: правка любого поля создаст объект (по умолчанию indoor=area) с этими тегами.": "Empty space is not mapped in OSM: editing any field creates an object (indoor=area by default) with these tags."
+  "В OSM пустота ничем не размечена: правка любого поля создаст объект (по умолчанию indoor=area) с этими тегами.": "Empty space is not mapped in OSM: editing any field creates an object (indoor=area by default) with these tags.",
+  "Разрез: следующая точка; Enter или клик в последнюю точку — рассечь, Backspace — убрать точку, Esc — отмена.": "Cut: next point; Enter or click the last point to cut, Backspace removes a point, Esc cancels.",
+  "Рассечь план: проведите линию через помещение или пустую площадь — от стены до стены. Esc — выйти.": "Split plan: draw a line through a room or empty floor, wall to wall. Esc to exit.",
+  "Рассекать план можно на этаже здания.": "Plans can be split on a building level.",
+  "Мультиполигон {keys} пока рассекать нельзя.": "Multipolygon {keys} can't be split yet.",
+  "Разрез ничего не делит: проведите его через помещение или пустую площадь от стены до стены.": "The cut divides nothing: draw it through a room or empty floor, wall to wall.",
+  "Рассечено: кусков {n}, новых объектов {created}, узлы добавлены в соседей: {touched}.": "Split: {n} pieces, {created} new objects, nodes added to neighbours: {touched}.",
+  "Нет этажа.": "No level.",
+  "Контур вне этажа здания.": "The outline is outside the building level.",
+  "Создано: {keys} (indoor=area, этаж {n}).": "Created: {keys} (indoor=area, {n})."
 }

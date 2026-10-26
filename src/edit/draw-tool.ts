@@ -4,7 +4,8 @@ import { tr } from '../i18n';
 
 type Pt = [number, number];
 
-export type DrawShape = 'polygon' | 'rect' | 'circle' | 'ngon';
+/** line — открытая ломаная (разрез плана этажа): Enter или клик в последнюю точку завершает. */
+export type DrawShape = 'polygon' | 'rect' | 'circle' | 'ngon' | 'line';
 /** Фигуры «центр + точка на окружности». */
 const ROUND: DrawShape[] = ['circle', 'ngon'];
 /** Способ построения прямоугольника: по двум углам вдоль осей здания, по трём точкам (повёрнутый), от центра. */
@@ -78,6 +79,8 @@ export class DrawTool {
 
   /** Способ построения сменили с клавиатуры (Tab) — обновить кнопку. */
   onModeChange?: () => void;
+  /** Плоскость рисования задана снаружи (пол этажа на плане): высота z; undefined — по первой точке. */
+  plane?: () => number | undefined;
 
   constructor(
     private readonly layer: BuildingsLayer,
@@ -157,6 +160,11 @@ export class DrawTool {
     if (this.state !== 'draw') return false;
     const q = this.pointAt(point);
     if (!q) return true;
+    if (this.shape === 'line' && this.pts.length >= 2) {
+      const last = this.pts[this.pts.length - 1];
+      const px = this.layer.focusProject(new THREE.Vector3(last[0], last[1], this.z));
+      if (px && Math.hypot(px[0] - point[0], px[1] - point[1]) < CLOSE_PX) { this.finishLine(); return true; }
+    }
     if (this.shape === 'polygon' && this.pts.length >= 3) {
       const first = this.layer.focusProject(new THREE.Vector3(this.pts[0][0], this.pts[0][1], this.z));
       if (first && Math.hypot(first[0] - point[0], first[1] - point[1]) < CLOSE_PX) { this.finish(this.pts); return true; }
@@ -214,6 +222,7 @@ export class DrawTool {
     if (e.key === 'Enter') {
       if (this.typed) this.applyTyped();
       else if (this.shape === 'polygon' && this.pts.length >= 3) this.finish(this.pts);
+      else if (this.shape === 'line' && this.pts.length >= 2) this.finishLine();
       return true;
     }
     return false;
@@ -226,6 +235,11 @@ export class DrawTool {
     this.snap = this.layer.snapAt(point, undefined, undefined, { from: last && new THREE.Vector3(last[0], last[1], this.z) });
     if (this.snap?.kind === 'center') this.snap = undefined;
     this.axis = undefined;
+    const fixed = this.plane?.();
+    if (!this.pts.length && fixed !== undefined) {
+      this.z = fixed;
+      return this.snap ? [this.snap.local.x, this.snap.local.y] : this.planePoint(point);
+    }
     if (!this.pts.length) {
       // Плоскость — по первой точке: привязка, плоская крыша под курсором или земля
       if (this.snap) { this.z = this.snap.local.z; return [this.snap.local.x, this.snap.local.y]; }
@@ -439,6 +453,13 @@ export class DrawTool {
     this.hint();
   }
 
+  private finishLine() {
+    const fail = this.commit(this.pts, this.z);
+    if (fail) { this.onState(fail, true); return; }
+    this.reset();
+    this.hint();
+  }
+
   /** Подписи длин сторон у их середин на экране (и после движения камеры). */
   relabel() {
     const r = this.dimRing;
@@ -529,6 +550,12 @@ export class DrawTool {
       this.onState(this.pts.length
         ? tr('{what}: {target} (число + Enter — радиус). Esc — отмена.', { what, target: this.shape === 'circle' ? tr('точка на окружности') : tr('вершина') })
         : tr('{what}: кликните центр на земле или на плоской крыше. Esc — выйти.', { what }));
+      return;
+    }
+    if (this.shape === 'line') {
+      this.onState(this.pts.length
+        ? tr('Разрез: следующая точка; Enter или клик в последнюю точку — рассечь, Backspace — убрать точку, Esc — отмена.')
+        : tr('Рассечь план: проведите линию через помещение или пустую площадь — от стены до стены. Esc — выйти.'));
       return;
     }
     if (this.shape === 'polygon') {

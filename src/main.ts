@@ -600,7 +600,7 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
   scheduleIndoorBadges();
   tileBorders.setTiles(overpass.tiles());
   scheduleRoads();
-}, (f) => (session.isDeleted(f.key) ? { ...f, polygons: [] } : (session.get(f.key) as Feature3D | undefined) ?? f));
+}, (f) => (session.isDeleted(f.key) ? { ...f, polygons: [] } : withEntranceEdits((session.get(f.key) as Feature3D | undefined) ?? f)));
 roadsLayer.onBuilt = () => overpass.setTreeCuts(roadsLayer.treeCuts);
 // В режиме здания карта вокруг убрана — мосты и тоннели тоже
 roadsLayer.hidden = () => focusScene();
@@ -610,7 +610,36 @@ roadsLayer.hidden = () => focusScene();
  */
 function createdShapes(): Feature3D[] {
   return session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length
-    && !t.key.startsWith('node/') && !(t.tags.indoor && !t.tags.building && !t.tags['building:part']));
+    && !t.key.startsWith('node/') && !(t.tags.indoor && !t.tags.building && !t.tags['building:part'])).map(withEntranceEdits);
+}
+
+/** Теги узлов в сессии (id → теги): входы контуров — по ним, а не по загруженным (см. withEntranceEdits). */
+const sessionNodeTags = new Map<number, Record<string, string>>();
+
+/** Узлы с правками: теги из сессии (нет в сессии — убрать). */
+function syncSessionNodes(keys: string[]) {
+  for (const k of keys) {
+    if (!k.startsWith('node/')) continue;
+    const t = session.get(k)?.tags;
+    if (t) sessionNodeTags.set(Number(k.slice(5)), t); else sessionNodeTags.delete(Number(k.slice(5)));
+  }
+}
+
+/**
+ * Входы объекта с правками тегов узлов в сессии: тип или номер поменяли, entrance сняли или поставили (дверь на
+ * фасаде с плана этажа). Входы в данных — по тегам узлов при загрузке, правки сессии их не трогают.
+ */
+function withEntranceEdits(f: Feature3D): Feature3D {
+  if (!sessionNodeTags.size) return f;
+  const out = new Map((f.entrances ?? []).map((e) => [e.id, e.tags]));
+  let touched = false;
+  for (const p of f.polygons) for (const id of [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]) {
+    const t = sessionNodeTags.get(id);
+    if (!t) continue;
+    touched = true;
+    if (t.entrance) out.set(id, t); else out.delete(id);
+  }
+  return touched ? { ...f, entrances: [...out].map(([id, tags]) => ({ id, tags })) } : f;
 }
 overpass.setExtras(createdShapes);
 let selectedKey: string | undefined;
@@ -1826,7 +1855,7 @@ function groupFeatures(g: BuildingGroup): Feature3D[] {
     // Удалённый в сессии — нет (иначе подставился бы загруженный исходник: виден, но не выделяется)
     if (session.isDeleted(k)) return undefined;
     const f = (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature ?? overpass.findFeature(k);
-    return f && focusFeature(g, f, g.roles[i]);
+    return f && focusFeature(g, withEntranceEdits(f), g.roles[i]);
   }).filter((f): f is Feature3D => !!f);
 }
 
@@ -5998,13 +6027,61 @@ function selectEntrance(id: number) {
   renderOutliner();
 }
 
+/** Поля карточки входа: тип входа (варианты схемы iD) и номер. */
+const ENTRANCE_FORM_TAGS = ['entrance', 'ref'] as const;
+
 function renderEntrance(id: number) {
-  const t = entranceTags(id) ?? {};
+  const key = `node/${id}`;
+  const t = session.get(key)?.tags ?? entranceTags(id) ?? {};
   const name = t.ref ? ` ${esc(t.ref)}` : t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : '';
-  infoEl.innerHTML = `<h2>${tr('Вход')}${name} — <a href="${server().web}/node/${id}" target="_blank" rel="noopener">node/${id}</a></h2>`
+  loadPresets(() => { if (selectedEntrance === id) renderSelected(); });
+  const title = matchPreset(t, 'vertex')?.name ?? tr('Вход');
+  const rows = ENTRANCE_FORM_TAGS.map((k) => {
+    const changed = session.isChanged(key, k);
+    const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : tr('Номер'))}</span>`;
+    const input = k === 'entrance' ? renderValueCombo(idOptions('entrance') ?? [], `data-entrance-tag="${k}"`, t[k] ?? '', tr('не вход'), undefined, k)
+      : `<input type="text" data-entrance-tag="${k}" value="${esc(t[k] ?? '')}" placeholder="—" spellcheck="false" autocomplete="off">`;
+    return `<label class="tag-row${changed ? ' changed' : ''}">${label}${input}</label>`;
+  }).join('');
+  infoEl.innerHTML = `<h2>${esc(title)}${name} — <a href="${server().web}/node/${id}" target="_blank" rel="noopener">node/${id}</a></h2>`
+    + `<div class="tag-form">${rows}</div>`
     + `<p class="hint">${tr('Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.')}</p>`
     + `<details class="all-tags" open><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
+  for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-entrance-tag]')) {
+    input.addEventListener('change', () => setEntranceTags(id, { ...t, [input.dataset.entranceTag!]: input.value }));
+  }
+}
+
+/** Теги входа на фасаде (узел контура): узел — в сессию со всеми тегами из данных; пустые значения — прочь. */
+function setEntranceTags(id: number, next: Record<string, string>) {
+  const key = `node/${id}`;
+  if (!session.has(key)) session.track({ key, version: 0, tags: { ...(entranceTags(id) ?? {}) } });
+  const tags: Record<string, string> = {};
+  for (const [k, v] of Object.entries(next)) if (v?.trim()) tags[k] = v.trim();
+  const cur = session.get(key)?.tags ?? {};
+  if (JSON.stringify(Object.entries(cur).sort()) === JSON.stringify(Object.entries(tags).sort())) return;
+  // Узел — и дверь плана этажа (с level): план берёт теги из сессии
+  if (focus && buildingIndoorFor(key)) indoorEdited.add(key);
+  session.editMany([{ key, tags }]);
+}
+
+/**
+ * Правка тегов узлов (вход на фасаде, дверь плана этажа): входы контуров по новым тегам — сцена режима здания
+ * (вход появился или исчез), список «Двери», карточка выбранного входа.
+ */
+function syncEntranceEdits(keys: string[]) {
+  const nodes = keys.filter((k) => k.startsWith('node/'));
+  if (!nodes.length) return;
+  syncSessionNodes(nodes);
+  if (!focus) return;
+  // Объекты с этими узлами — заново (вход мог появиться или исчезнуть)
+  const ids = new Set(nodes.map((k) => Number(k.slice(5))));
+  for (const f of groupFeatures(focus)) {
+    if (f.polygons.some((p) => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()].some((id) => ids.has(id)))) previewFocus(f);
+  }
+  renderOutliner();
+  if (selectedEntrance !== undefined && nodes.includes(`node/${selectedEntrance}`)) renderSelected();
 }
 
 /** phase pick — M: сначала клик по точке входа; move — клик по точке уже был, вход сразу едет за курсором. */
@@ -7753,10 +7830,10 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
 
 /**
  * Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений
- * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance.
+ * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance и номер ref (как у пресета iD «Вход / выход»).
  */
 const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
-  : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
+  : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
   : [...INDOOR_EDIT_TAGS].filter((k) => (k !== 'ref' && k !== 'name') || fs.every((f) => f.kind === 'room' || f.kind === 'area')));
@@ -11008,6 +11085,7 @@ function onSessionChange(keys: string[]) {
   if (josmApi() && !uploading) scheduleJosmSync();
   scheduleAutosave();
   mapIssuesDirty = true;
+  syncEntranceEdits(keys);
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
     if (selectedRoomWalls.length) { selectIndoor(undefined); clearInfo(); }
@@ -12199,6 +12277,7 @@ function applyEditsText(text: string) {
 function resetSession() {
   session = new EditSession([], onSessionChange);
   session.beforeStep = autoRelation;
+  sessionNodeTags.clear();
   indoorEdited.clear();
   indoorCreated.clear();
   editGroups = new Map();
@@ -12210,6 +12289,7 @@ function resetSession() {
 function restoreEdits(rec: Pick<SavedEdits<AutosaveData>, 'count' | 'data'>) {
   const d = rec.data;
   const keys = session.restore(d.session);
+  syncSessionNodes(keys);
   nextNewId = Math.min(nextNewId, d.nextNewId);
   // Группа — тот же объект, что в сессии (из IndexedDB связь приходит сама, из JSON — нет)
   for (const [k, g] of d.editGroups) editGroups.set(k, (session.tracked(k) as EditGroup | undefined) ?? g);

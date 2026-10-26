@@ -5508,8 +5508,6 @@ const GLASS_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, trans
 
 /** Цвет перекрытий (срезов этажей) внутри здания. */
 const FLOOR_SLAB = new THREE.Color(0xffffff);
-/** Высота этажа, если число этажей не указано, м. */
-const SLAB_LEVEL_HEIGHT = 3;
 
 /** Отступ плиты от низа и верха стен, м: у самого края плита совпала бы с дном или крышей. */
 const SLAB_MARGIN = 0.3;
@@ -5523,7 +5521,7 @@ export interface SlabLevel { z: number; holes: LonLat[][][] }
 let levelGridFor: (f: Feature3D) => SlabLevel[] | undefined = () => undefined;
 export function setLevelGrid(fn: (f: Feature3D) => SlabLevel[] | undefined) { levelGridFor = fn; }
 
-/** Плиты перекрытий между этажами: по раскладке этажей здания, иначе по building:levels (с min_level) или через 3 м. */
+/** Плиты перекрытий между этажами: по раскладке этажей здания, иначе по building:levels (с min_level); без этажности — нет. */
 function floorSlabs(polys: LocalPolygon[], h: Heights, tags: Record<string, string>, grid?: { z: number; holes: Pt[][][] }[]): number[] {
   if (grid?.length) {
     const out: number[] = [];
@@ -5541,10 +5539,10 @@ function floorSlabs(polys: LocalPolygon[], h: Heights, tags: Record<string, stri
   }
   const span = h.wallTop - h.min;
   const levels = Number(tags['building:levels']), minLevel = Number(tags['building:min_level'] ?? 0) || 0;
-  // Этажи указаны, но с ошибкой (building:levels не больше building:min_level) — не угадываем, плит нет
-  if (Number.isFinite(levels) && tags['building:levels'] !== undefined && levels - minLevel < 1) return [];
-  const count = Number.isFinite(levels) && tags['building:levels'] !== undefined
-    ? Math.round(levels - minLevel) : Math.round(span / SLAB_LEVEL_HEIGHT);
+  // Этажность не указана — перекрытий не выдумываем; указана с ошибкой (building:levels не больше
+  // building:min_level) — тоже не угадываем
+  if (tags['building:levels'] === undefined || !Number.isFinite(levels) || levels - minLevel < 1) return [];
+  const count = Math.round(levels - minLevel);
   if (count < 2 || span / count < 1.5) return [];
   const out: number[] = [];
   for (let i = 1; i < count; i++) out.push(...bottomTriangles(polys, h.min + span * i / count));

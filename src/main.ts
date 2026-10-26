@@ -37,6 +37,7 @@ import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
 import type { TreePoint } from './osm/trees';
 import { isBridge, isTunnel, roadLevel, type RoadWay } from './osm/roads';
+import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
 import { BuildingsLayer, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, type EntrancePlace, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
@@ -1461,7 +1462,7 @@ map.on('click', (e) => {
   overpassLayer.selectUnderground(under);
   if (under) {
     select(undefined);
-    const depth = Math.min(0, ...withIndoorLevels(focusLevels(focus!), buildingIndoor(focus!)).filter((l) => l.n < 0).map((l) => l.floor));
+    const depth = Math.min(0, ...buildingLevels(focus!, buildingIndoor(focus!)).filter((l) => l.n < 0).map((l) => l.floor));
     setStatus(tr('Подземная часть здания: до {d} м под землёй.', { d: (-depth).toFixed(1) }));
     return;
   }
@@ -7243,9 +7244,14 @@ function partKind(t: Record<string, string>, outline: boolean): { label: string;
   return { label, icon: kind ? PART_ICONS[kind[1]] : ICON_PART, title: `${label} (building:part=${value ?? '—'})`, order };
 }
 
-/** Этаж здания режима: номер level (0 — первый этаж) и высоты пола и потолка, м. */
-/** Этаж панели; src — объект, по тегам которого он посчитан (нет — из indoor-данных). */
-interface Level { n: number; floor: number; ceil: number; src?: string }
+/** Этажи здания режима: по этажности частей с явными высотами из indoor=level, плюс этажи из indoor-данных. */
+function buildingLevels(g: BuildingGroup, indoor: IndoorFeature[]): Level[] {
+  const info = indoorLevelInfo(indoor);
+  return withIndoorLevels(focusLevels(g, info), indoor, info).map((l) => {
+    const i = info.get(l.n);
+    return i ? { ...l, ref: i.ref, name: i.name } : l;
+  });
+}
 
 const levelsPanel = document.getElementById('levels-panel')!;
 const levelsEl = document.getElementById('levels')!;
@@ -7256,15 +7262,13 @@ let currentLevel: number | undefined;
 let levelsFocusKey: string | undefined;
 let levelSignature = '';
 
-/** Правдоподобный шаг этажа, м: часть с шагом вне этих границ в сетку этажей не попадает. */
-const MIN_LEVEL_STEP = 2, MAX_LEVEL_STEP = 10;
 
 /**
  * Этажи здания по этажности частей и контура: у каждого объекта с building:levels — этажи от building:min_level
  * до верхнего (высота этажа — стены поровну на этажи) и подземные из building:levels:underground. Номер этажа
  * общий для здания; высоты берутся у объекта с наибольшей этажностью, где этот этаж есть.
  */
-function focusLevels(g: BuildingGroup): Level[] {
+function focusLevels(g: BuildingGroup, info: Map<number, LevelInfo> = new Map()): Level[] {
   const byN = new Map<number, Level & { rank: number }>();
   for (const f of groupFeatures(g)) {
     const t = f.tags;
@@ -7282,14 +7286,13 @@ function focusLevels(g: BuildingGroup): Level[] {
     // под частями — обычно общая этажность с высотой по умолчанию), явная высота точнее этажей × 3 м;
     // при равенстве — у объекта с большим числом этажей. Шаг у каждой части свой: первые этажи бывают выше
     const rank = (f.kind === 'part' ? 2000 : 0) + (h.source === 'height' ? 1000 : 0) + levels;
-    const add = (n: number, floor: number) => {
+    const add = (n: number, floor: number, ceil: number, explicit: boolean) => {
       const cur = byN.get(n);
-      if (!cur || rank > cur.rank) byN.set(n, { n, floor, ceil: floor + step, rank, src: f.key });
+      if (!cur || rank > cur.rank) byN.set(n, { n, floor, ceil, rank, src: f.key, explicit });
     };
-    for (let n = Math.floor(minLevel); n < Math.ceil(levels); n++) add(n, h.min + (n - minLevel) * step);
-    for (let n = -under; n < 0; n++) add(n, n * step);
+    for (const l of partLevels({ min: h.min, wallTop: h.wallTop, levels, minLevel, under, step }, info)) add(l.n, l.floor, l.ceil, l.explicit);
   }
-  return [...byN.values()].map(({ n, floor, ceil, src }) => ({ n, floor, ceil, src })).sort((a, b) => b.n - a.n);
+  return [...byN.values()].map(({ n, floor, ceil, src, explicit }) => ({ n, floor, ceil, src, explicit })).sort((a, b) => b.n - a.n);
 }
 
 /**
@@ -7390,20 +7393,6 @@ function isInteriorDoor(f: IndoorFeature, g: BuildingGroup): boolean {
  * Дополнить этажи по этажности целыми этажами из indoor-данных (подвал без building:levels:underground и т. п.):
  * высота этажа — как у ближайшего известного, без этажности — LEVEL_HEIGHT от земли.
  */
-function withIndoorLevels(levels: Level[], indoor: IndoorFeature[]): Level[] {
-  const have = new Set(levels.map((l) => l.n));
-  const extra = new Set<number>();
-  for (const f of indoor) for (const n of f.levels) if (Number.isInteger(n) && !have.has(n) && Math.abs(n) < 100) extra.add(n);
-  if (!extra.size) return levels;
-  const out = [...levels];
-  for (const n of extra) {
-    const near = levels.reduce<Level | undefined>((best, l) => (!best || Math.abs(l.n - n) < Math.abs(best.n - n) ? l : best), undefined);
-    const step = near ? near.ceil - near.floor : LEVEL_HEIGHT;
-    const floor = near ? near.floor + (n - near.n) * step : n * step;
-    out.push({ n, floor, ceil: floor + step });
-  }
-  return out.sort((x, y) => y.n - x.n);
-}
 
 /** Пояснение внизу панели: какие этажи посчитаны по тегам какого объекта (ссылка выделяет его), какие — из indoor. */
 function levelSources(levels: Level[]): string {
@@ -8267,7 +8256,7 @@ function renderLevelsImpl() {
   }
   loadFocusIndoor(focus);
   const indoor = buildingIndoor(focus);
-  const levels = withIndoorLevels(focusLevels(focus), indoor);
+  const levels = buildingLevels(focus, indoor);
   panelLevels = levels.map((l) => l.n);
   if (linkLevel !== undefined && levels.some((l) => l.n === linkLevel)) { currentLevel = linkLevel; linkLevel = undefined; }
   if (currentLevel !== undefined && !levels.some((l) => l.n === currentLevel)) currentLevel = undefined;
@@ -8280,9 +8269,9 @@ function renderLevelsImpl() {
     ? `<li class="${currentLevel === undefined ? 'selected' : ''}" data-level=""><span class="lv-name"><span class="lv-plan"></span>${tr('Всё здание')}</span></li>` + levels.map((l, i) =>
       // Заголовки групп: перед первым надземным и первым подземным этажом (список — сверху вниз)
       (i === 0 || (levels[i - 1].n >= 0) !== (l.n >= 0) ? `<li class="lv-group">${l.n >= 0 ? tr('Надземные этажи') : tr('Подземные этажи')}</li>` : '')
-      + `<li class="${l.n === currentLevel ? 'selected' : ''}" data-level="${l.n}" title="level=${l.n} · ${l.src ? tr('по тегам {link}', { link: l.src }) : tr('из indoor-данных')}${planned.has(l.n) ? ' · ' + tr('есть поэтажный план') : ''}">`
-      + `<span class="lv-name"><span class="lv-plan">${planned.has(l.n) ? ICON_PLAN : ''}</span>${LEVEL_NAME(l.n)}</span>`
-      + `<span class="lv-meta">${levelIssue(l) ? `<span class="lv-warn" title="${esc(levelIssue(l)!)}">!</span>` : ''}${tr('{floor}–{ceil} м', { floor: l.floor.toFixed(1), ceil: l.ceil.toFixed(1) })}</span></li>`).join('') + levelSources(levels)
+      + `<li class="${l.n === currentLevel ? 'selected' : ''}" data-level="${l.n}" title="level=${l.n}${l.ref ? ` · level:ref=${esc(l.ref)}` : ''}${l.name ? ` · ${esc(l.name)}` : ''} · ${l.src ? tr('по тегам {link}', { link: l.src }) : tr('из indoor-данных')}${planned.has(l.n) ? ' · ' + tr('есть поэтажный план') : ''}">`
+      + `<span class="lv-name"><span class="lv-plan">${planned.has(l.n) ? ICON_PLAN : ''}</span>${l.ref ? esc(tr('Этаж {ref}', { ref: l.ref })) : LEVEL_NAME(l.n)}${l.name ? ` <span class="lv-sub">${esc(l.name)}</span>` : ''}</span>`
+      + `<span class="lv-meta">${levelIssue(l) ? `<span class="lv-warn" title="${esc(levelIssue(l)!)}">!</span>` : ''}<span${l.explicit ? ` class="lv-explicit" title="${esc(tr('Высота этажа задана: height={h} на indoor=level', { h: +(l.ceil - l.floor).toFixed(2) }))}"` : ''}>${tr('{floor}–{ceil} м', { floor: l.floor.toFixed(1), ceil: l.ceil.toFixed(1) })}</span></span></li>`).join('') + levelSources(levels)
     : `<li class="lv-empty">${tr('Нет этажности (building:levels) и indoor-данных')}</li>`;
   overpassLayer.setUnderground(currentLevel === undefined ? undergroundOutline(focus, levels) : undefined);
   const level = levels.find((l) => l.n === currentLevel);
@@ -9980,7 +9969,7 @@ setLevelGrid((f) => {
   const g = groupOf(f.key);
   if (!g || g.key === f.key) return;
   const indoor = buildingIndoor(g);
-  const levels = withIndoorLevels(focusLevels(g), indoor);
+  const levels = buildingLevels(g, indoor);
   if (!levels.length) return;
   const voids = buildingVoids(g, levels, indoor);
   const zs = [...new Set([...levels.map((l) => l.floor), ...levels.map((l) => l.ceil)])];

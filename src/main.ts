@@ -8238,13 +8238,63 @@ function describeLevel(l: Level): string {
   const title = `<h2>${l.ref ? esc(tr('Этаж {ref}', { ref: l.ref })) : LEVEL_NAME(l.n)}${l.name ? ' ' + tr('«{name}»', { name: esc(l.name) }) : ''}</h2>`
     + `<p class="hint">level=${l.n} · ${tr('пол {floor} м, потолок {ceil} м', { floor: +l.floor.toFixed(2), ceil: +l.ceil.toFixed(2) })}</p>`;
   const fs = levelFeatures(l);
-  if (!fs.length) return title + `<p class="hint">${tr('Высота этажа {h} м — расчётная (по этажности). Задать её, обозначение и название можно на indoor=level этажа, а его здесь нет.', { h })}</p>`;
+  if (!fs.length) return title + `<p class="hint">${tr('Высота этажа {h} м — расчётная (по этажности). Задать её, обозначение и название можно на indoor=level этажа, а его здесь нет.', { h })}</p>`
+    + `<p><button type="button" data-level-outline="${l.n}">${tr('Этаж из контура')}</button></p>`
+    + `<p class="hint">${tr('Создаст indoor=level с level={n} по контуру здания на отметке пола этажа (если там пусто — в середине этажа). Вершины на контуре здания и частей — общие с ним.', { n: l.n })}</p>`;
   const ignored = l.heightTag !== undefined && !l.explicit
     ? `<p class="warn">${esc(tr('height={v} не учтена: вне {min}–{max} м', { v: l.heightTag, min: MIN_LEVEL_STEP, max: MAX_LEVEL_STEP }))}</p>`
     : l.overflow ? `<p class="warn">${esc(tr('Высоты этажей не умещаются в высоту части по этажности ({src}): этажи выходят выше её стен.', { src: l.src ?? '—' }))}</p>` : '';
   const objs = fs.map((f) => `<a href="#" data-select-indoor="${esc(indoorKey(f.key))}">${esc(indoorKey(f.key))}</a>`).join(', ');
   return title + indoorForm(fs, { height: String(h) }) + ignored
     + `<p class="hint">${tr('Теги {objs}: height — высота этажа (пусто — по этажности; пол этажей выше сдвинется).', { objs })}</p>`;
+}
+
+/** Узел контура здания ближе этого (градусы, ~1 см) к вершине сечения — общий: вершина встаёт на него. */
+const OUTLINE_NODE_SNAP = 1e-7;
+
+/**
+ * «Этаж из контура»: indoor=level этажа n по сечению оболочки здания на отметке пола (под скатом — уже следа).
+ * Вершины, совпадающие с узлами контура или частей, — эти же узлы (attached: двигаются вместе с фасадом),
+ * остальные — новые. Сечение с дырами (двор-колодец) — мультиполигон пока не создаём: только внешние кольца.
+ */
+function levelFromOutline(n: number) {
+  if (!focus) return;
+  const l = buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === n);
+  // На полу пусто (низ части выше расчётного пола: подвал по этажности глубже самой части) — середина этажа
+  const section = l && [l.floor + 0.1, (l.floor + l.ceil) / 2].map((h) => overpassLayer.focusSection(h)).find((x) => !x || x.length);
+  if (!l || !section?.length) { setStatus(tr('Контур этажа ещё не посчитан — повторите через пару секунд.'), true); return; }
+  const nodes: { p: LonLat; id: number }[] = [];
+  for (const f of groupFeatures(focus)) for (const poly of f.polygons) {
+    [poly.outer, ...poly.inners].forEach((ring, r) => {
+      const ids = r === 0 ? poly.outerIds : poly.innerIds?.[r - 1];
+      ring.forEach((p, i) => { if (ids?.[i] !== undefined) nodes.push({ p, id: ids[i] }); });
+    });
+  }
+  const used = new Map<number, number>();
+  const nodeFor = (p: LonLat): { p: LonLat; id: number } => {
+    let best: { p: LonLat; id: number } | undefined, bd = OUTLINE_NODE_SNAP;
+    for (const q of nodes) { const d = Math.max(Math.abs(q.p[0] - p[0]), Math.abs(q.p[1] - p[1])); if (d <= bd) { best = q; bd = d; } }
+    if (best) used.set(best.id, (used.get(best.id) ?? 0) + 1);
+    return best ?? { p, id: nextNewId-- };
+  };
+  const edits: ObjectEdit[] = [];
+  let holes = 0;
+  for (const poly of section) {
+    holes += poly.length - 1;
+    const ring = poly[0].map(nodeFor).filter((q, i, a) => i === 0 || q.id !== a[i - 1].id);
+    if (ring.length > 1 && ring[0].id === ring.at(-1)!.id) ring.pop();
+    if (ring.length < 3) continue;
+    const key = `way/${nextNewId--}`;
+    const tags = { indoor: 'level', level: String(n) };
+    const polygons = [{ outer: ring.map((q) => q.p), outerIds: ring.map((q) => q.id), inners: [] }];
+    edits.push({ key, create: { key, version: 0, tags, polygons } });
+    indoorCreated.set(key, { key, kind: 'level', polygons, tags, levels: [n] });
+    indoorEdited.add(key);
+  }
+  if (!edits.length) return;
+  session.editMany(edits);
+  setStatus(tr('Создан indoor=level этажа {n}: общих узлов с контуром — {shared}.', { n, shared: used.size })
+    + (holes ? ' ' + tr('Дворы внутри контура ({k}) не вырезаны.', { k: holes }) : ''));
 }
 
 /** Объекты indoor=level этажа (их теги правятся в свойствах этажа). */
@@ -8544,6 +8594,8 @@ levelsEl.addEventListener('click', (e) => {
   renderLevels();
 });
 infoEl.addEventListener('click', (e) => {
+  const outline = (e.target as HTMLElement).closest<HTMLElement>('[data-level-outline]');
+  if (outline) { levelFromOutline(Number(outline.dataset.levelOutline)); return; }
   const ilink = (e.target as HTMLElement).closest<HTMLElement>('[data-select-indoor]');
   if (!ilink) return;
   e.preventDefault();

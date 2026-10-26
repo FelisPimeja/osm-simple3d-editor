@@ -390,6 +390,11 @@ class MeshGroup {
     return [(c.x - this.origin.x) / this.metersToMerc, -(c.y - this.origin.y) / this.metersToMerc];
   };
 
+  fromLocal = ([x, y]: Pt): LonLat => {
+    const ll = new MercatorCoordinate(this.origin.x + x * this.metersToMerc, this.origin.y - y * this.metersToMerc, 0).toLngLat();
+    return [ll.lng, ll.lat];
+  };
+
   /** Стекло группы — прозрачное, поэтому отдельно от непрозрачной слитой геометрии. */
   glass?: THREE.Mesh;
   /** Входы на фасадах (entrance=*) и где они стоят — для выбора кликом. */
@@ -1104,6 +1109,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     let out = at.get(key);
     if (!out) at.set(key, out = timed('этажи: сечение оболочки', () => sectionOf(solids, key)));
     return out;
+  }
+
+  /** Контур здания режима на высоте h (lon/lat, кольца без замыкающей точки); undefined — оболочки ещё нет. */
+  focusSection(h: number): LonLat[][][] | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    const sec = g && this.sectionAt(g, h);
+    return sec?.map((poly) => poly.map((r) => r.slice(0, -1).map(([x, y]) => g!.fromLocal([x, y]))));
   }
 
   private applyLevel() {

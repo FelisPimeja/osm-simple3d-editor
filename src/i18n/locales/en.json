@@ -1243,5 +1243,10 @@
   "Вид": "Kind",
   "Назначение": "Purpose",
   "Ширина, м": "Width, m",
-  "Диаметр": "Diameter"
+  "Диаметр": "Diameter",
+  "Этаж из контура": "Level from outline",
+  "Контур этажа ещё не посчитан — повторите через пару секунд.": "The level outline is not computed yet — try again in a couple of seconds.",
+  "Создан indoor=level этажа {n}: общих узлов с контуром — {shared}.": "Created indoor=level for level {n}: nodes shared with the outline — {shared}.",
+  "Дворы внутри контура ({k}) не вырезаны.": "Courtyards inside the outline ({k}) are not cut out.",
+  "Создаст indoor=level с level={n} по контуру здания на отметке пола этажа (если там пусто — в середине этажа). Вершины на контуре здания и частей — общие с ним.": "Creates indoor=level with level={n} from the building outline at the level's floor elevation (if empty there — at mid-level). Vertices on the building and part outlines are shared with them."
 }

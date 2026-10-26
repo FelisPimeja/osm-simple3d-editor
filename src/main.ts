@@ -15,7 +15,7 @@ import { materializeRoomWalls, roomTouchesWall, roomWallSpan, type RoomWall, typ
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, dateSpan, decimalDate, existsIn, isoDay, parseDate, shiftDate } from './osm/dates';
-import { buildingRefreshMembers } from './osm/building-refresh';
+import { buildingRefreshMembers, refreshBuildingFeatures } from './osm/building-refresh';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT, parseLength } from './osm/heights';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type IndoorCategory } from './osm/indoor-categories';
@@ -1989,23 +1989,21 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     });
     const oldGroup = overpass.groupOf(g.key);
     const groupChanged = !isSolo(g) && JSON.stringify(oldGroup) !== JSON.stringify(freshGroup);
-    if (!changed.length && !groupChanged) {
-      if (requestId === focusRefreshId && focus?.key === g.key && (manual || warning)) setStatus(warning ?? tr('Данные здания актуальны.'), !!warning);
-      return;
-    }
+    const cacheChanged = changed.length > 0 || groupChanged;
     // Кеш тайлов (память и IndexedDB) хранит данные сервера, а не правки сессии — обновляем его всегда,
     // иначе после выхода в режим карты снова покажется старое здание
     const saved = new Map(changed.map((f) => [f.key, { version: f.version, tags: f.tags, polygons: f.polygons, ways: f.ways }]));
-    await overpass.applySaved(saved, isSolo(g) ? [] : [freshGroup], changed);
+    if (cacheChanged) await overpass.applySaved(saved, isSolo(g) ? [] : [freshGroup], changed);
     // Свежие версии запоминаем как отправленные: отстающий Overpass или старая запись IndexedDB не вернут прежнее здание
     overpass.noteUploaded(new Map([...changed, ...(groupChanged ? [freshGroup] : [])].map((f) => [f.key, f.version])));
     if (requestId !== focusRefreshId || focus?.key !== g.key) return;
     if (session.hasDataHistory() || [...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.has(key) && session.isChanged(key))) {
-      setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
+      if (cacheChanged) setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
       return;
     }
-    for (const f of features) if (session.has(f.key)) session.refresh({ ...f, tags: { ...f.tags },
-      ...(f.ways ? { relMembers: f.ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } : {}) });
+    // A tile reload may already have updated the cache while the session still holds older copies.
+    // Refresh the clean session even when the API response matches the tile cache.
+    refreshBuildingFeatures(session, features);
     if (!isSolo(g)) {
       const copy = { ...freshGroup, tags: { ...freshGroup.tags }, members: [...freshGroup.members], roles: [...freshGroup.roles],
         relMembers: freshGroup.members.map((key, i) => { const [type, ref] = key.split('/'); return { type: type as 'way' | 'relation', ref: Number(ref), role: freshGroup.roles[i] ?? '' }; }) };
@@ -2017,7 +2015,10 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     syncFocusHidden();
     paintSelection();
     renderSelected();
-    setStatus(warning ? `${tr('Данные здания обновлены до актуальной версии OSM.')} ${warning}` : tr('Данные здания обновлены до актуальной версии OSM.'), !!warning);
+    if (cacheChanged || manual || warning) {
+      const message = cacheChanged ? tr('Данные здания обновлены до актуальной версии OSM.') : tr('Данные здания актуальны.');
+      setStatus(warning ? `${message} ${warning}` : message, !!warning);
+    }
   } catch (err) {
     if (requestId === focusRefreshId && focus?.key === g.key) setStatus(tr('Не удалось проверить актуальность здания: {error}', { error: (err as Error).message }), true);
   }

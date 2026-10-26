@@ -1,5 +1,6 @@
+import type { EditSession } from '../edit/session';
 import type { OsmElement } from './api';
-import type { BuildingGroup, ParseResult } from './model';
+import type { BuildingGroup, Feature3D, ParseResult } from './model';
 
 /** A loaded relation member need not be a renderable building volume (e.g. roof lines or a courtyard). */
 export function buildingRefreshMembers(group: BuildingGroup, parsed: ParseResult, elements: OsmElement[]) {
@@ -14,4 +15,10 @@ export function buildingRefreshMembers(group: BuildingGroup, parsed: ParseResult
       type: element.tags?.type, reason: parsed.skipped.find((f) => f.key === key)?.reason };
   });
   return { features, unrendered };
+}
+
+/** Update tracked copies independently of whether the tile cache already contains this API response. */
+export function refreshBuildingFeatures(session: EditSession, features: Feature3D[]) {
+  for (const f of features) if (session.has(f.key)) session.refresh({ ...f, tags: { ...f.tags },
+    ...(f.ways ? { relMembers: f.ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } : {}) });
 }

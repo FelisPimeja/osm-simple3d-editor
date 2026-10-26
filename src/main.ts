@@ -1,3 +1,4 @@
+import { renderOtherTags, bindOtherTags } from './edit/other-tags';
 import { escalatorAreaMatches, syncEscalatorLevels } from './edit/escalator-levels';
 import polygonClipping from 'polygon-clipping';
 import * as maplibregl from 'maplibre-gl';
@@ -7816,7 +7817,7 @@ function renderIndoorSelection(add = false) {
     + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
     + `<p class="hint">${esc(levels)}</p>`
     + indoorForm([f])
-    + `<details class="all-tags"><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
+    + renderOtherTags(key, t, indoorForm([f]), true);
   bindIndoorForm([f]);
 }
 
@@ -11064,14 +11065,15 @@ function buildingHeader(name: string | undefined, t: Record<string, string> | un
 
 function describeGroup(g: BuildingGroup): string {
   const t = outlineTags(g);
+  const form = groupDateForm(g);
   return `
     ${buildingHeader(g.tags.name ?? t?.name, t)}
     <h2>type=building — <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>${g.version ? ` v${g.version}` : ''}</h2>
     <p class="hint">${tr('Членов: {n}. Двойной клик по зданию — режим одного здания.', { n: g.members.length })}
       ${tr('Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.')}</p>
     <p><button type="button" data-add-parts>${tr('Добавить части')}</button></p>
-    ${groupDateForm(g)}
-    ${tagTable(g.tags)}`;
+    ${form}
+    ${renderOtherTags(g.key, g.tags, form)}`;
 }
 
 /** Даты отношения (OHM): только поля дат, с подсказкой от контура. */
@@ -11936,6 +11938,17 @@ function tileSource(): TileSource {
 void refreshUser();
 
 bindTagForms(infoEl, () => session);
+bindOtherTags(infoEl,
+  (key, indoor) => session.get(key)?.tags ?? (indoor ? (focus ? buildingIndoor(focus) : shownIndoor).find(f => indoorKey(f.key) === key)?.tags : entity(key)?.tags),
+  (key, tag, value, indoor) => {
+    if (!indoor) { session.setTags(key, { [tag]: value }); return; }
+    const f = (focus ? buildingIndoor(focus) : shownIndoor).find(f => indoorKey(f.key) === key)
+      ?? indoorSelection.find(f => indoorKey(f.key) === key);
+    if (!f) return;
+    const tags = { ...(session.get(key)?.tags ?? f.tags) };
+    if (value === undefined) delete tags[tag]; else tags[tag] = value;
+    setIndoorTags([{ key, tags }], tag);
+  });
 
 // Скелеты для сложных крыш считаются в воркере; досчитанные — пересобираем ждавшие здания
 onSkeletons(() => {
@@ -12011,7 +12024,7 @@ function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: s
     <pre>${tr('высота: {min} → {wall} → {top} м ({source})', { min: fmt(h.min), wall: fmt(roofApproximated ? h.top : h.wallTop), top: fmt(h.top), source: h.source })}\n${tr('крыша: {shape}, {height} м', { shape: h.roofShape, height: fmt(h.roofHeight) })}</pre>
     ${warn.map((w) => `<p class="warn">⚠ ${w}</p>`).join('')}
     ${issues.map((i) => `<p class="warn ${i.level}">${i.level === 'error' ? '✖' : '⚠'} ${esc(i.text)}</p>`).join('')}
-    ${form ? `${form}<details class="all-tags"><summary>${tr('Все теги')}</summary>${tagTable(f.tags)}</details>` : tagTable(f.tags)}`;
+    ${form ? `${form}${renderOtherTags(f.key, f.tags, form)}` : tagTable(f.tags)}`;
 }
 
 /** Planetiler: id = osmId * 10 + (1 — node, 2 — way, 3 — relation); 0 — фича, склеенная из нескольких зданий. */

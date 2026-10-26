@@ -1297,5 +1297,12 @@
   "Повторять на этажах…": "Repeat on levels…",
   "Дверь на наружной стене: вход в здание обозначают entrance=* (тип входа можно уточнить в свойствах двери).": "Door on an exterior wall: building entrances are tagged entrance=* (the entrance type can be set in the door properties).",
   "Тип входа": "Entrance type",
-  "не вход": "not an entrance"
+  "не вход": "not an entrance",
+  "Другие теги": "Other tags",
+  "Удалить тег": "Delete tag",
+  "Добавить тег": "Add tag",
+  "Ключ": "Key",
+  "Значение": "Value",
+  "Ключ не должен содержать пробелы или знак равенства.": "The key must not contain spaces or an equals sign.",
+  "Такой тег уже существует. Измените его значение в панели свойств.": "This tag already exists. Edit its value in Properties."
 }

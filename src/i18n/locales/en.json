@@ -1258,5 +1258,18 @@
   "Рассечено: кусков {n}, новых объектов {created}, узлы добавлены в соседей: {touched}.": "Split: {n} pieces, {created} new objects, nodes added to neighbours: {touched}.",
   "Нет этажа.": "No level.",
   "Контур вне этажа здания.": "The outline is outside the building level.",
-  "Создано: {keys} (indoor=area, этаж {n}).": "Created: {keys} (indoor=area, {n})."
+  "Создано: {keys} (indoor=area, этаж {n}).": "Created: {keys} (indoor=area, {n}).",
+  "Объединять помещения можно на этаже здания.": "Rooms can be merged on a building level.",
+  "Выделите два или больше помещения, коридора или площадки.": "Select two or more rooms, corridors or areas.",
+  "Мультиполигоны пока не объединяются — только помещения-пути.": "Multipolygons can't be merged yet — only way rooms.",
+  "У объектов разные indoor, room или level — объединяются только одинаковые.": "The objects differ in indoor, room or level — only matching ones are merged.",
+  "Объекты не соприкасаются — объединяются только помещения с общей стороной.": "The objects don't touch — only rooms sharing a side are merged.",
+  "Внутри объединения получилась дыра — такое пока не поддерживается.": "The merge would leave a hole inside — not supported yet.",
+  "Не удалось проверить отношения: {error}": "Couldn't check relations: {error}",
+  "Выбор или данные изменились. Повторите.": "The selection or data changed. Try again.",
+  "{keys} входит в отношение — объединение его бы удалило.": "{keys} is a relation member — merging would delete it.",
+  "Объединено в {key}: объектов {n}.": "Merged into {key}: {n} objects.",
+  "Разные значения тегов ({k}) — оставлены у {key}.": "Conflicting tag values ({k}) — kept from {key}.",
+  "Объединить": "Merge",
+  "Очистить (сделать пустым)": "Clear (make empty)"
 }

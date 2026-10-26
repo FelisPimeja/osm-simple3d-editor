@@ -2522,6 +2522,8 @@ mergeBtn.addEventListener('click', () => mergeSelected());
 
 function mergeSelected() {
   if (!focus) return;
+  // План этажа: выделены помещения — объединяем их
+  if (shownLevel && !selection.length && indoorSelection.length) { void mergeIndoor().then((err) => { if (err) setStatus(err, true); }); return; }
   const pending = isSolo(focus) && focus.roles.includes('part') ? implicitRelation(focus.members[0], implicitParts(focus)) : undefined;
   const err = mergeIn(pending);
   if (pending && !session.get(pending.key)) editGroups.delete(pending.key);
@@ -8082,6 +8084,80 @@ async function deleteIndoorSpaces(fs: IndoorFeature[]) {
   }
 }
 
+/** Теги, по которым помещения должны совпадать, чтобы их объединить. */
+const INDOOR_MERGE_KEYS = ['indoor', 'room', 'level', 'repeat_on'];
+
+/**
+ * «Объединить» (J) на плане этажа: выделенные помещения, коридоры или площадки одного вида (indoor, room, level)
+ * с общей стороной — в одно. Историю сохраняет большее, остальные удаляются; узлы на бывшей общей стороне
+ * уходят из контура (у соседей остаются), лишние вершины на прямой — тоже, если больше никому не нужны.
+ * Прочие теги — у большего, недостающие добавляются от остальных. Строка — почему нельзя.
+ */
+async function mergeIndoor(): Promise<string | undefined> {
+  if (!focus || !shownLevel) return tr('Объединять помещения можно на этаже здания.');
+  const fs = indoorSelection.filter(isDeletableSpace);
+  if (fs.length < 2 || fs.length !== indoorSelection.length) return tr('Выделите два или больше помещения, коридора или площадки.');
+  if (fs.some((f) => !f.key.startsWith('way/') || f.polygons.length !== 1 || !f.polygons[0].outerIds)) return tr('Мультиполигоны пока не объединяются — только помещения-пути.');
+  const sig = (f: IndoorFeature) => INDOOR_MERGE_KEYS.map((k) => f.tags[k] ?? '').join('|');
+  if (new Set(fs.map(sig)).size > 1) return tr('У объектов разные indoor, room или level — объединяются только одинаковые.');
+  const toLocal = (r: LonLat[]) => { const q = r.map((x) => overpassLayer.focusToLocal(x)!); return [...q, q[0]] as [number, number][]; };
+  let union: [number, number][][][];
+  try { union = polygonClipping.union(...fs.map((f) => [toLocal(f.polygons[0].outer)]) as [[[number, number][]]]); } catch (err) { console.warn('[merge-indoor]', err); return tr('Не удалось объединить контуры.'); }
+  if (union.length !== 1) return tr('Объекты не соприкасаются — объединяются только помещения с общей стороной.');
+  if (union[0].length > 1) return tr('Внутри объединения получилась дыра — такое пока не поддерживается.');
+  const sorted = [...fs].sort((a, b) => polyArea(b.polygons[0]) - polyArea(a.polygons[0]));
+  const [keep, ...rest] = sorted;
+  const keepKey = indoorKey(keep.key);
+  // Пути в составе отношений не удаляем молча
+  const api = server().api, stamp = JSON.stringify(session.changes());
+  const existing = rest.filter((f) => Number(f.key.split('/')[1]) > 0);
+  let parents: { id: number }[][];
+  try { parents = await Promise.all(existing.map((f) => fetchWayRelations(Number(f.key.split('/')[1]), api))); } catch (err) { return tr('Не удалось проверить отношения: {error}', { error: (err as Error).message }); }
+  if (JSON.stringify(session.changes()) !== stamp || !shownLevel) return tr('Выбор или данные изменились. Повторите.');
+  const inRel = existing.filter((_, i) => parents[i].some((r) => !session.isDeleted(`relation/${r.id}`)));
+  if (inRel.length) return tr('{keys} входит в отношение — объединение его бы удалило.', { keys: inRel.map((f) => indoorKey(f.key)).join(', ') });
+  // Узлы: вершины объединения — прежние узлы (свои и соседей)
+  const merged = new Set(fs.map((f) => indoorKey(f.key)));
+  const others = [...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point && !f.line && !merged.has(indoorKey(f.key)))];
+  const { nodeFor } = sharedNodes([...others, ...fs]);
+  const ring = nodeRing(union[0][0].slice(0, -1).map((q) => overpassLayer.focusToLngLat(q[0], q[1])! as LonLat), nodeFor);
+  if (!ring) return tr('Не удалось объединить контуры.');
+  // Вершина на прямой, которая не нужна соседям, — лишняя (конец бывшей общей стороны)
+  const used = new Set(others.flatMap((f) => f.polygons.flatMap((p) => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()])));
+  let pts = ring;
+  for (let changed = true; changed && pts.length > 3;) {
+    changed = false;
+    for (let i = 0; i < pts.length; i++) {
+      const a = overpassLayer.focusToLocal(pts[(i + pts.length - 1) % pts.length].p)!, b = overpassLayer.focusToLocal(pts[i].p)!, c = overpassLayer.focusToLocal(pts[(i + 1) % pts.length].p)!;
+      const cross = Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
+      if (cross / (Math.hypot(c[0] - a[0], c[1] - a[1]) || 1) < 0.01 && !used.has(pts[i].id)) { pts = pts.filter((_, j) => j !== i); changed = true; break; }
+    }
+  }
+  const tags = { ...keep.tags };
+  let conflicts = 0;
+  for (const f of rest) for (const [k, v] of Object.entries(f.tags)) {
+    if (tags[k] === undefined) tags[k] = v;
+    else if (tags[k] !== v) conflicts++;
+  }
+  for (const f of fs) trackIndoor(indoorKey(f.key), f);
+  const edits: ObjectEdit[] = [
+    { key: keepKey, tags, polygons: [{ outer: pts.map((q) => q.p), outerIds: pts.map((q) => q.id), inners: [], innerIds: [] }] },
+    ...rest.map((f) => ({ key: indoorKey(f.key), delete: true })),
+  ];
+  selectIndoor(undefined);
+  session.editMany(edits);
+  for (const f of rest) indoorCreated.delete(indoorKey(f.key));
+  const made = indoorCreated.get(keepKey);
+  if (made) indoorCreated.set(keepKey, { ...made, tags, polygons: edits[0].polygons! });
+  indoorEditRev++;
+  renderLevels();
+  const f = buildingIndoorFor(keepKey);
+  if (f) selectIndoor(f);
+  setStatus(tr('Объединено в {key}: объектов {n}.', { key: keepKey, n: fs.length })
+    + (conflicts ? ' ' + tr('Разные значения тегов ({k}) — оставлены у {key}.', { k: conflicts, key: keepKey }) : ''));
+  return;
+}
+
 /** Удаление стены и материализация остальных сторон помещений — один шаг истории. */
 async function deleteIndoorWalls() {
   if (deletingIndoorWalls || uploading || !focus || !shownLevel) return;
@@ -8197,6 +8273,14 @@ function setIndoorTags(edits: { key: string; tags: Record<string, string> }[], c
   const all = focus ? buildingIndoor(focus) : shownIndoor;
   edits = syncEscalatorLevels(edits, all, changedTag === 'level');
   const out: { key: string; tags: Record<string, string> }[] = [];
+  // Снят indoor у помещения и, кроме этажа, тегов нет — «Очистить»: полигон удаляется, общие узлы остаются
+  const empty = edits.map((e) => all.find((x) => indoorKey(x.key) === e.key) ?? indoorSelection.find((x) => indoorKey(x.key) === e.key))
+    .filter((f, i): f is IndoorFeature => !!f && isDeletableSpace(f) && changedTag === 'indoor'
+      && Object.entries(edits[i].tags).every(([k, v]) => !v?.trim() || k === 'level' || k === 'repeat_on'));
+  if (empty.length) {
+    void deleteIndoorSpaces(empty);
+    edits = edits.filter((e) => !empty.some((f) => indoorKey(f.key) === e.key));
+  }
   for (const e of edits) {
     const f = all.find((x) => indoorKey(x.key) === e.key) ?? indoorSelection.find((x) => indoorKey(x.key) === e.key);
     trackIndoor(e.key, f);
@@ -9684,7 +9768,10 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
     const n = count > 1 ? ` (${count})` : '';
     ctxMenu.innerHTML = `<li><button type="button" data-ctx="indoor-hide"${indoorSelection.length ? '' : ' disabled'}>${tr('Скрыть объекты')}${n}<kbd>H</kbd></button></li>`
       + showAll
-      + `<li><button type="button" data-ctx="indoor-delete"${canDeleteIndoorSelection() && !uploading && !deletingIndoorWalls ? '' : ' disabled'}>${tr('Удалить')}${n}<kbd>Del</kbd></button></li>`;
+      + (indoorSelection.length > 1 && indoorSelection.every(isDeletableSpace)
+        ? `<li><button type="button" data-ctx="indoor-merge">${tr('Объединить')}${n}<kbd>J</kbd></button></li>` : '')
+      + `<li><button type="button" data-ctx="indoor-delete"${canDeleteIndoorSelection() && !uploading && !deletingIndoorWalls ? '' : ' disabled'}>${
+        indoorSelection.length && !selectedRoomWalls.length && indoorSelection.every(isDeletableSpace) ? tr('Очистить (сделать пустым)') : tr('Удалить')}${n}<kbd>Del</kbd></button></li>`;
     return placeCtxMenu(x, y);
   }
   const inScene = where !== 'list';
@@ -9741,6 +9828,7 @@ ctxMenu.addEventListener('click', (e) => {
   closeCtxMenu();
   if (action === 'indoor-hide') return hideSelectedIndoor();
   if (action === 'indoor-delete') return deleteIndoorSelection();
+  if (action === 'indoor-merge') return mergeSelected();
   focusAction(action);
 });
 

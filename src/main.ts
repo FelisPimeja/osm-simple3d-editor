@@ -6837,20 +6837,42 @@ function shiftHeights(tags: Record<string, string>, dz: number): Record<string, 
   return out;
 }
 
+/**
+ * Пробел: любой инструмент на любой стадии — выключить (незавершённое действие отменяется, как Esc), обратно
+ * к выделению. Включая «Точку», вставку (Ctrl+V), перенос входа, пипетку цветового поля, набранное расстояние.
+ */
+function stopAllTools() {
+  moveTool.stop(); shapeTool.stop();
+  pushTool.stop();
+  splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
+  drawTool.stop();
+  stopPoint();
+  cancelCopyPick();
+  cancelEntranceDrag();
+  eyedropper.cancel();
+  overpassLayer.clearTracking();
+  trackTyped = '';
+  trackAxis = undefined;
+  updateTracking();
+  updateSnap(undefined);
+  toolHint('');
+  syncCursor();
+}
+
 document.addEventListener('keydown', (e) => {
-  if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+  const field = (e.target as HTMLElement).closest('input, select, textarea');
+  // Поле самого инструмента (число углов многоугольника) — пробел и там выключает инструмент
+  if (field && !(e.code === 'Space' && field.closest('.draw-opts'))) return;
   if (e.key === 'Escape' && popupEl.childElementCount) { showPopup(''); e.stopImmediatePropagation(); return; }
-  // Пробел — выключить инструмент (незавершённое действие отменяется), обратно к выделению
-  if (e.code === 'Space' && toolActive() && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    moveTool.stop(); shapeTool.stop();
-    pushTool.stop();
-    splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
-    drawTool.stop();
-    cancelCopyPick();
-    cancelEntranceDrag();
-    updateSnap(undefined);
+  if (e.code === 'Space' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    // Кнопка инструмента в фокусе (её только что нажали): пробел «нажал» бы её снова на отпускании — снимаем фокус
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('#toolbars button, .draw-opts input');
+    if (btn) { e.preventDefault(); btn.blur(); }
+    if (toolActive() || fieldPick || trackTyped) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      stopAllTools();
+    }
     return;
   }
   if (e.key === 'Escape' && entranceDrag) { e.preventDefault(); e.stopImmediatePropagation(); cancelEntranceDrag(); setStatus(tr('Перенос входа отменён.')); return; }

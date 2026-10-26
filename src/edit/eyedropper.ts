@@ -107,6 +107,13 @@ export class Eyedropper {
 
   get active() { return !!this.mode; }
 
+  /** Отменить режим со своей отменой (пипетка цветового поля); false — такого нет. */
+  cancel(): boolean {
+    if (!this.mode?.cancel) return false;
+    this.mode.cancel();
+    return true;
+  }
+
   /** Курсор-пипетка сейчас (без модификатора у заливки — нет). */
   get picking() { return !!this.mode && (!this.mode.modifier || this.modifierDown); }
 

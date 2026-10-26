@@ -14,6 +14,7 @@ import { materializeRoomWalls, roomTouchesWall, roomWallSpan, type RoomWall, typ
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, dateSpan, decimalDate, existsIn, isoDay, parseDate, shiftDate } from './osm/dates';
+import { buildingRefreshMembers } from './osm/building-refresh';
 import { ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT, parseLength } from './osm/heights';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type IndoorCategory } from './osm/indoor-categories';
@@ -1915,13 +1916,21 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     const root = isSolo(g) ? g.members[0] : g.key;
     // Здание создано в сессии (например, разрезом отдельного здания) — на сервере его ещё нет
     if (Number(root.split('/')[1]) < 0) return;
-    const parsed = parseBuildings(await fetchBuildingElements(root, api));
+    const elements = await fetchBuildingElements(root, api);
+    const parsed = parseBuildings(elements);
     if (api !== server().api) return;
     const freshGroup = isSolo(g) ? { ...g } : parsed.groups.find((item) => item.key === g.key);
     if (!freshGroup) throw new Error(`OSM: ${g.key} отсутствует в ответе API`);
-    const features = parsed.features.filter((f) => freshGroup.members.includes(f.key));
-    // У здания без отношения API отдаёт только контур — части проверяются по своим тайлам
-    if (!isSolo(g) && features.length !== freshGroup.members.length) throw new Error(`OSM: не удалось загрузить все части ${g.key}`);
+    // fetchBuildingElements checks the download, including nested relations and way nodes.
+    // Parsing may legitimately omit members that are not building volumes.
+    // A standalone outline only fetches its own data; inferred parts are refreshed via tiles.
+    const { features, unrendered } = isSolo(g)
+      ? { features: parsed.features.filter((f) => freshGroup.members.includes(f.key)), unrendered: [] }
+      : buildingRefreshMembers(freshGroup, parsed, elements);
+    const warning = unrendered.length ? tr('Загружены, но не отображаются члены {building}: {members}', {
+      building: g.key, members: unrendered.map((m) => `${m.key} (role=${m.role || '—'}${m.type ? `, type=${m.type}` : ''}${m.reason ? `, ${m.reason}` : ''})`).join('; '),
+    }) : undefined;
+    if (warning) console.warn('[building refresh]', warning, unrendered);
     const changed = features.filter((f) => {
       const old = overpass.cachedFeature(f.key);
       return !old || old.version !== f.version || JSON.stringify(old.polygons) !== JSON.stringify(f.polygons) ||
@@ -1930,7 +1939,7 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     const oldGroup = overpass.groupOf(g.key);
     const groupChanged = !isSolo(g) && JSON.stringify(oldGroup) !== JSON.stringify(freshGroup);
     if (!changed.length && !groupChanged) {
-      if (manual && requestId === focusRefreshId) setStatus(tr('Данные здания актуальны.'));
+      if (requestId === focusRefreshId && focus?.key === g.key && (manual || warning)) setStatus(warning ?? tr('Данные здания актуальны.'), !!warning);
       return;
     }
     // Кеш тайлов (память и IndexedDB) хранит данные сервера, а не правки сессии — обновляем его всегда,
@@ -1957,7 +1966,7 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     syncFocusHidden();
     paintSelection();
     renderSelected();
-    setStatus(tr('Данные здания обновлены до актуальной версии OSM.'));
+    setStatus(warning ? `${tr('Данные здания обновлены до актуальной версии OSM.')} ${warning}` : tr('Данные здания обновлены до актуальной версии OSM.'), !!warning);
   } catch (err) {
     if (requestId === focusRefreshId && focus?.key === g.key) setStatus(tr('Не удалось проверить актуальность здания: {error}', { error: (err as Error).message }), true);
   }

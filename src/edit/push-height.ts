@@ -20,7 +20,7 @@ export function pushHeightTags(tags: Record<string, string>, face: PushFace, dz:
   const fmt = (n: number) => String(Math.round(n * 100) / 100);
   const levels = units === 'levels';
   if (face === 'top') {
-    if (levels || tags['building:levels']) {
+    if (levels) {
       out['building:levels'] = fmt(Number(tags['building:levels'] ?? h.wallTop / LEVEL_HEIGHT) + dz / LEVEL_HEIGHT);
     }
     if (!levels || (tags.height && !fresh)) out.height = fmt(h.top + dz);
@@ -33,7 +33,7 @@ export function pushHeightTags(tags: Record<string, string>, face: PushFace, dz:
     }
   } else if (face === 'bottom') {
     const min = h.min + dz;
-    if (levels || tags['building:min_level']) {
+    if (levels) {
       if (min > 1e-4) out['building:min_level'] = fmt(min / LEVEL_HEIGHT);
       else delete out['building:min_level'];
     }
@@ -50,19 +50,13 @@ export const MIN_ROOF_HEIGHT = 0;
 
 /**
  * Высота крыши на dz (ручка крыши «Формы»): верх стен стоит, height (если задан) растёт вместе с крышей.
- * roof:height — в метрах; крыша, размеченная только roof:levels, — целыми этажами (до нуля).
+ * Изменение формы задаёт roof:height в метрах, сохраняя roof:levels.
  */
 export function roofHeightTags(tags: Record<string, string>, dz: number): Record<string, string> {
   const h = computeHeights(tags), out = { ...tags };
   const fmt = (n: number) => String(Math.round(n * 100) / 100);
-  let roof = Math.max(MIN_ROOF_HEIGHT, h.roofHeight + dz);
-  if (tags['roof:levels'] !== undefined && tags['roof:height'] === undefined) {
-    const n = Math.max(0, Math.round(roof / LEVEL_HEIGHT));
-    out['roof:levels'] = String(n);
-    // roof:levels=0 высоту не задаёт (рисуется высота по умолчанию) — ноль ставим явно
-    if (!n) out['roof:height'] = '0';
-    roof = n * LEVEL_HEIGHT;
-  } else out['roof:height'] = fmt(roof);
+  const roof = Math.max(MIN_ROOF_HEIGHT, h.roofHeight + dz);
+  out['roof:height'] = fmt(roof);
   if (tags.height !== undefined) out.height = fmt(h.wallTop + roof);
   return out;
 }

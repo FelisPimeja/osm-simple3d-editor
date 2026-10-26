@@ -312,7 +312,7 @@ export class BasemapButton {
     const menu = this.menu = document.createElement('div');
     menu.className = 'basemap-menu';
     menu.hidden = true;
-    const items: [string, string][] = list.length ? [[MAP_BASEMAP, tr('Карта')], ...list.map((i): [string, string] => [i.id, i.name])] : [];
+    const items: [string, string][] = [[MAP_BASEMAP, tr('Карта')], ...list.map((i): [string, string] => [i.id, i.name])];
     for (const [id, label] of items) {
       const row = document.createElement('label');
       const input = document.createElement('input');
@@ -620,7 +620,7 @@ export class BasemapButton {
 
   /** Подсветить кнопки смещения сдвинутых снимков и кнопку слоёв. */
   sync() {
-    this.btn.classList.toggle('active', this.current !== MAP_BASEMAP || this.gps || [...this.overlays.values()].some((o) => o.on) || !this.buildings.shown || this.buildings.opacity < 1);
+    this.btn.classList.toggle('active', (!!this.current && this.current !== MAP_BASEMAP) || this.gps || [...this.overlays.values()].some((o) => o.on) || !this.buildings.shown || this.buildings.opacity < 1);
     this.buildingsInput.checked = this.buildings.shown;
     // В режиме контуров заливки нет — прозрачность не к чему применять
     this.alphaInput.disabled = this.buildings.wireframe;

@@ -234,11 +234,10 @@ const imageryList = server().imagery ? IMAGERY : server().id === 'ohm' ? [WAYBAC
 const basemapScope = server().imagery ? '' : `.${server().id}`;
 let basemap = imageryList.length ? storedBasemap(basemapScope) : MAP_BASEMAP;
 let gpsTraces = server().imagery ? storedGps() : false;
-/** В режиме здания — свой выбор подложки и треков: при входе выключены, обрезаны тайлами вокруг здания. */
-let focusBasemap = MAP_BASEMAP;
-let focusGps = false;
+/** Векторная карта в здании скрыта по умолчанию; снимки и треки общие для обоих режимов. */
+let focusVectorMap = false;
 let mapLoaded = false;
-/** Сцена режима здания (окружение скрыто) — подложка своя. */
+/** Сцена режима здания (окружение скрыто). */
 const focusScene = () => focusHiddenLayers.length > 0;
 // Кнопка — в блоке кнопок масштаба и компаса, последней
 const navGroup = document.querySelector<HTMLElement>('.maplibregl-ctrl-compass')?.parentElement;
@@ -247,12 +246,11 @@ const buildingsView = storedBuildings();
 const basemapCtrl = navGroup ? new BasemapButton(navGroup, basemap, (id) => {
   pickBasemap(id);
 }, gpsTraces, (on) => {
-  if (focusScene()) { focusGps = on; syncBasemapLayers(); return; }
   setGpsTraces(on);
   void saveSetting('gps-traces');
 }, (id) => {
   // Настройки снимка: показать его (если выбран другой) и открыть панель
-  if ((focusScene() ? focusBasemap : basemap) !== id) pickBasemap(id);
+  if (basemap !== id) pickBasemap(id);
   offsetPanel.show(id);
 }, imageryList, !!server().imagery, { ...buildingsView }, (v) => setBuildingsView(v), (id, edit) => {
   // Поля сдвига и прозрачности в меню: инструмент сдвига закрыть (иначе он перезапишет своё), записать и показать
@@ -364,12 +362,11 @@ function toggleWireframe() {
   basemapCtrl?.setBuildings({ ...buildingsView });
 }
 
-/** Подложку выбрали в списке: в режиме здания — только для него, иначе — запомнить. */
+/** Выбор снимков общий; векторную карту в здании включают явно. */
 function pickBasemap(id: string) {
-  if (!focusScene()) { setBasemap(id); void saveSetting('basemap'); return; }
-  if (id !== focusBasemap) offsetPanel.hide();
-  focusBasemap = id;
-  syncBasemapLayers();
+  if (focusScene()) focusVectorMap = id === MAP_BASEMAP;
+  setBasemap(id);
+  void saveSetting('basemap');
 }
 
 /** Область снимков в режиме здания: здание с запасом FOCUS_IMAGERY_PAD_M; дальше — по границе тайлов. */
@@ -392,7 +389,7 @@ function focusImageryBounds(): [number, number, number, number] | undefined {
 const usedImagery = new Set<string>();
 const usedStreet = new Set<string>();
 function noteSources() {
-  const id = focusScene() ? focusBasemap : basemap;
+  const id = basemap;
   if (id !== MAP_BASEMAP) usedImagery.add(findImagery(id)?.name ?? id);
   const shown = photoViewer.service;
   if (shown) usedStreet.add(shown.name);
@@ -408,16 +405,17 @@ function sourceTags(): Record<string, string> {
 /** Слои снимков и треков — по режиму (карта или здание). */
 function syncBasemapLayers() {
   const f = focusScene();
-  const id = f ? focusBasemap : basemap, gps = f ? focusGps : gpsTraces;
-  basemapCtrl?.set(id);
-  basemapCtrl?.setGps(gps);
+  const id = basemap;
+  // Ни один radio не выбран, пока векторная карта в здании скрыта.
+  basemapCtrl?.set(f && id === MAP_BASEMAP && !focusVectorMap ? '' : id);
+  basemapCtrl?.setGps(gpsTraces);
   if (!mapLoaded) return; // слои добавит обработчик load
   const bounds = f ? focusImageryBounds() : undefined;
-  applyGpsTraces(map, gps && (!f || !!bounds), bounds);
+  applyGpsTraces(map, gpsTraces && (!f || !!bounds), bounds);
   applyBasemap(map, f && !bounds ? MAP_BASEMAP : id, bounds);
   syncPhotos();
   noteSources();
-  if (!f) applyVectorStyle(id !== MAP_BASEMAP);
+  applyVectorStyle(id !== MAP_BASEMAP || (f && !focusVectorMap));
 }
 
 /** Слои стиля карты (без фона и экструзий) и их видимость в стиле — запоминаются при загрузке. */
@@ -425,7 +423,7 @@ let styleLayers: { id: string; visibility: 'visible' | 'none' }[] = [];
 
 /**
  * Под снимками стиль карты не нужен (сквозь прозрачный снимок проглядывал бы): скрыть его заливки, линии и подписи,
- * оставив здания (наши слои). В режиме здания видимостью слоёв ведает он сам.
+ * оставив здания (наши слои). В режиме здания векторную карту можно включить явно.
  */
 function applyVectorStyle(hidden: boolean) {
   for (const l of styleLayers) if (map.getLayer(l.id)) map.setLayoutProperty(l.id, 'visibility', hidden ? 'none' : l.visibility);
@@ -1898,10 +1896,9 @@ function hideMapLayers() {
     focusHiddenLayers.push(pending ?? { id: l.id, visibility: (map.getLayoutProperty(l.id, 'visibility') as string | undefined) ?? 'visible' });
     map.setLayoutProperty(l.id, 'visibility', 'none');
   }
-  // Подложка в режиме здания по умолчанию выключена
+  // Только векторную карту скрываем при входе; снимки и треки сохраняем.
   offsetPanel.hide();
-  focusBasemap = MAP_BASEMAP;
-  focusGps = false;
+  focusVectorMap = false;
   syncBasemapLayers();
 }
 
@@ -2012,11 +2009,15 @@ function enterFocus(g: BuildingGroup, flyIn = true) {
 /** Доля экрана, которую занимает здание после подлёта. */
 const FOCUS_FILL = 0.8;
 
-/** Плавный подлёт к зданию режима: оно занимает 80% ширины или высоты экрана; наклон и поворот те же. */
+/** Подлёт только к небольшому зданию: довести до 80% экрана, сохранив наклон и поворот. */
 function flyToFocus() {
-  const center = overpassLayer.focusFrame()?.center;
-  if (!center) return;
+  const frame = overpassLayer.focusFrame();
+  if (!frame) return;
+  const { center, rect: currentRect } = frame;
   const canvas = map.getCanvas();
+  // Уже крупное хотя бы по одной оси — сохраняем всю камеру, включая центр.
+  if (currentRect[2] - currentRect[0] >= canvas.clientWidth * FOCUS_FILL
+      || currentRect[3] - currentRect[1] >= canvas.clientHeight * FOCUS_FILL) return;
   // Центр и размер — по всему экрану, панели не вычитаем (так нагляднее)
   const availW = canvas.clientWidth, availH = canvas.clientHeight;
   // Размер на экране зависит от удалённости от камеры (перспектива) — меряем на пробной камере,
@@ -2814,13 +2815,6 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(), shapeSelected
     toolHint(hint, error);
   });
 shapeBtn.addEventListener('click', () => (shapeTool.active ? shapeTool.stop() : startShape()));
-// Высота только в этажах — ручки ходят целыми этажами, и об этом говорим прямо
-shapeTool.levelLock = (t) => {
-  const f = entity(t.key) as Feature3D | undefined;
-  if (!f) return;
-  if (t.roof) return f.tags['roof:levels'] !== undefined && f.tags['roof:height'] === undefined ? levelsNote('roof:levels', 'roof:height') : undefined;
-  return lockedPushUnits(f.tags, f.version) === 'levels' ? levelsNote('building:levels', 'height') : undefined;
-};
 // Что меняет сдвиг ручки: «тег: было → станет» для панели инструмента
 shapeTool.tagChanges = (t, dz) => {
   const f = entity(t.key) as Feature3D | undefined;
@@ -6236,7 +6230,7 @@ let shapePreviewed: string[] = [];
 
 /** Теги для ручки крыши (высота крыши) или верха стен (высота стен — как «Вытянуть» за верх, крыша не меняется). */
 function shapeHeightTags(f: Feature3D, t: ShapeTarget, dz: number): Record<string, string> {
-  return t.roof ? roofHeightTags(f.tags, dz) : pushHeightTags(f.tags, 'top', dz, lockedPushUnits(f.tags, f.version) ?? 'm', isFreshFlat(f.tags, f.version));
+  return t.roof ? roofHeightTags(f.tags, dz) : pushHeightTags(f.tags, 'top', dz, 'm', false, drawnHeights(f));
 }
 
 function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string | undefined {
@@ -6691,23 +6685,14 @@ function levelSafeEdits(keys: string[], edits: ObjectEdit[] | string, moves: Map
     && !e.line?.ids.some((n) => fixed.has(n) && moves.has(n)))];
 }
 
-/** Поднять или опустить объект на dz метров, сохранив способ разметки (этажи — если сдвиг кратен этажу). */
+/** Поднять или опустить объект на dz метров, сохраняя теги этажности. */
 function shiftHeights(tags: Record<string, string>, dz: number): Record<string, string> {
   const h = computeHeights(tags);
   const out = { ...tags };
   const fmt = (v: number) => String(Math.round(v * 100) / 100);
-  const levels = dz / 3;
-  if (!tags.height && !tags.min_height && tags['building:levels'] && Math.abs(levels - Math.round(levels)) < 1e-6) {
-    const k = Math.round(levels);
-    const minLevel = Number(tags['building:min_level'] ?? 0) + k;
-    if (minLevel) out['building:min_level'] = String(minLevel); else delete out['building:min_level'];
-    out['building:levels'] = String(Number(tags['building:levels']) + k);
-    return out;
-  }
   const min = h.min + dz;
   if (min > 1e-4 || tags.min_height) out.min_height = fmt(min); else delete out.min_height;
   out.height = fmt(h.top + dz);
-  delete out['building:min_level']; // высоты теперь заданы метрами
   return out;
 }
 
@@ -10758,7 +10743,7 @@ async function syncWayback(to: number) {
   const r = pickRelease(await waybackReleases(), to);
   if (!r || !setWaybackRelease(r)) return;
   basemapCtrl?.setLabel(WAYBACK.id, `Esri Wayback · ${r.date}`);
-  const shown = (focusScene() ? focusBasemap : basemap) === WAYBACK.id;
+  const shown = basemap === WAYBACK.id;
   // Слой ещё не добавлен (выпусков не было) — добавить; есть — сменить тайлы и подпись атрибуции
   if (shown && mapLoaded) syncBasemapLayers();
 }

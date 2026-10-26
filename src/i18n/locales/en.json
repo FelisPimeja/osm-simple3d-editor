@@ -1229,5 +1229,6 @@
   "«Везде» — на карте и в режиме любого здания, «в этом здании» — только в его режиме": "“Everywhere” — on the map and in any building mode, “in this building” — only in its mode",
   "Своя подложка": "Underlay",
   "Этаж {ref}": "Level {ref}",
-  "Высота этажа задана: height={h} на indoor=level": "Level height is set: height={h} on indoor=level"
+  "Высота этажа задана: height={h} на indoor=level": "Level height is set: height={h} on indoor=level",
+  "Загружены, но не отображаются члены {building}: {members}": "Loaded but not displayed: members of {building}: {members}"
 }

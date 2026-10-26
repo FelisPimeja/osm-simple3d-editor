@@ -12,8 +12,8 @@ export interface TagEdit {
   before: Tags;
   /** Теги, которые надо записать. */
   after: Tags;
-  /** Новое отношение или путь (отрицательный id) — уходит в <create>. */
-  created?: OsmRelation | OsmWay;
+  /** Новое отношение, путь или узел с тегами (отрицательный id) — уходит в <create>. */
+  created?: OsmRelation | OsmWay | (OsmNode & { version: number });
   /** Новый состав членов отношения и исходный (если менялся). */
   members?: OsmMember[];
   membersBefore?: OsmMember[];
@@ -243,6 +243,15 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
       if ('conflict' in r || !sameTags(f.tags ?? {}, edit.before)) { conflicts.push({ key: edit.key, tags: [tr('объект изменён на сервере после загрузки')] }); continue; }
       payload.push({ element: f, tags: {}, deleted: true });
       deleted.add(edit.key);
+      continue;
+    }
+    if (edit.created?.type === 'node') {
+      // Узел с тегами (дверь, вход, POI): если он уже создан как вершина нового узла пути — теги туда же
+      const n = edit.created;
+      const same = payload.find((p) => p.created && p.element.type === 'node' && p.element.id === n.id);
+      if (same) same.tags = edit.after; else payload.push({ element: n, tags: edit.after, created: true });
+      created.add(n.id);
+      written.set(edit.key, edit.after);
       continue;
     }
     if (edit.created) {

@@ -726,3 +726,5 @@ body.mobile #issues-panel { display: none !important; }
 }
 .issue-point.warning { border-color: #ff8a00; }
 @keyframes issue-point-pulse { 50% { transform: scale(1.35); } }
+/* «Точка» на плане: значки и подписи не забирают щелчок — он ставит точку под ними */
+.indoor-pois.passthrough, .indoor-pois.passthrough * { pointer-events: none !important; }

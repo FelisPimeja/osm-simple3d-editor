@@ -1271,5 +1271,15 @@
   "Объединено в {key}: объектов {n}.": "Merged into {key}: {n} objects.",
   "Разные значения тегов ({k}) — оставлены у {key}.": "Conflicting tag values ({k}) — kept from {key}.",
   "Объединить": "Merge",
-  "Очистить (сделать пустым)": "Clear (make empty)"
+  "Очистить (сделать пустым)": "Clear (make empty)",
+  "Точки ставятся на плане этажа — выберите этаж в панели «Этажи».": "Points are placed on a floor plan — pick a level in the Levels panel.",
+  "Точка: щелчок на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа. Esc — выйти.": "Point: click a room wall for a door, an outer wall for an entrance, inside for a level object. Esc to exit.",
+  "Вход в здание (entrance=yes): щелчок — поставить.": "Building entrance (entrance=yes): click to place.",
+  "Дверь (door=yes) — узел войдёт в стороны: {n}. Щелчок — поставить.": "Door (door=yes) — the node joins {n} sides. Click to place.",
+  "Объект этажа: щелчок — поставить, вид задаётся в свойствах.": "Level object: click to place, set its kind in Properties.",
+  "Здесь уже есть точка {key}.": "There is already a point here: {key}.",
+  "Поставлен вход {key}.": "Entrance {key} placed.",
+  "Поставлена дверь {key}.": "Door {key} placed.",
+  "Поставлена точка {key}: вид задайте в свойствах.": "Point {key} placed: set its kind in Properties.",
+  "Точка на плане этажа: на стене помещения — дверь, на наружной стене — вход, внутри — объект (X)": "Point on a floor plan: on a room wall — door, on an outer wall — entrance, inside — object (X)"
 }

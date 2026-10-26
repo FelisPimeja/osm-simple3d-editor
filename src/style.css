@@ -7,6 +7,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; font: 14px system-ui, sa
 }
 .col > * { pointer-events: auto; }
 #left-col { left: 12px; }
+/* Настройки и инструменты занимают независимые колонки на всю высоту экрана. */
+body:not(.mobile) #left-col {
+  width: 372px; display: grid; grid-template-columns: 44px 320px;
+  grid-template-rows: minmax(0, 1fr); align-items: start;
+}
+body:not(.mobile) #left-col > #panel { grid-column: 2; grid-row: 1; max-height: 100%; }
+body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 #right-col { right: 12px; }
 #toolbars { display: flex; flex-direction: column; gap: 8px; align-self: flex-start; }
 #toolbars:not(:has(.toolbar:not([hidden]))) { display: none; }

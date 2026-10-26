@@ -9,6 +9,8 @@ export interface Level {
   n: number; floor: number; ceil: number; src?: string;
   /** Из indoor=level этажа: обозначение (level:ref), название, высота задана явно (height). */
   ref?: string; name?: string; explicit?: boolean;
+  /** Явные высоты этажей части не уместились в её высоту: этажи выходят выше верха стен. */
+  overflow?: boolean;
   /** Объекты indoor=level этажа и высота из их height (даже если в расчёт не пошла — не сходится с частью). */
   levelKeys?: string[]; heightTag?: string;
 }
@@ -39,26 +41,27 @@ export function indoorLevelInfo(indoor: IndoorFeature[]): Map<number, LevelInfo>
 
 /**
  * Этажи одной части: надземные от building:min_level, подземные из building:levels:underground. Явные высоты
- * (indoor=level + height): отметка пола — сумма высот ниже, остальные этажи делят остаток высоты стен поровну.
- * Остаток неправдоподобен (явные высоты не сходятся с высотой части) или этажность дробная — поровну все.
+ * (indoor=level + height) применяются всегда: отметка пола — сумма высот ниже, остальные этажи делят остаток
+ * высоты стен поровну, но не ниже MIN_LEVEL_STEP. Не уместились в высоту части — overflow (этажи выше верха
+ * стен; предупреждение в свойствах этажа). Дробная этажность — поровну все, явные не в счёт.
  * Подвалы — вниз от нуля, каждый своей высоты (явной или шагом части).
  */
 export function partLevels(p: { min: number; wallTop: number; levels: number; minLevel: number; under: number; step: number },
-  info: Map<number, LevelInfo>): { n: number; floor: number; ceil: number; explicit: boolean }[] {
-  const out: { n: number; floor: number; ceil: number; explicit: boolean }[] = [];
+  info: Map<number, LevelInfo>): { n: number; floor: number; ceil: number; explicit: boolean; overflow?: boolean }[] {
+  const out: { n: number; floor: number; ceil: number; explicit: boolean; overflow?: boolean }[] = [];
   const from = Math.floor(p.minLevel), to = Math.ceil(p.levels);
   const known = [...Array(Math.max(0, to - from)).keys()].map((i) => info.get(from + i)?.height);
   const rest = known.filter((x) => x === undefined).length;
   const sum = known.reduce<number>((a, x) => a + (x ?? 0), 0);
-  const restStep = rest ? (p.wallTop - p.min - sum) / rest : 0;
-  const useKnown = Number.isInteger(p.levels) && Number.isInteger(p.minLevel) && known.some((x) => x !== undefined)
-    && (!rest || (restStep >= MIN_LEVEL_STEP && restStep <= MAX_LEVEL_STEP));
+  const restStep = rest ? Math.max(MIN_LEVEL_STEP, (p.wallTop - p.min - sum) / rest) : 0;
+  const useKnown = Number.isInteger(p.levels) && Number.isInteger(p.minLevel) && known.some((x) => x !== undefined);
+  const overflow = useKnown && sum + rest * restStep > p.wallTop - p.min + 0.01;
   let z = p.min;
   for (let n = from; n < to; n++) {
     const k = useKnown ? known[n - from] : undefined;
     const floor = useKnown ? z : p.min + (n - p.minLevel) * p.step;
     const hn = useKnown ? k ?? restStep : p.step;
-    out.push({ n, floor, ceil: floor + hn, explicit: k !== undefined });
+    out.push({ n, floor, ceil: floor + hn, explicit: k !== undefined, ...(overflow ? { overflow } : {}) });
     z += hn;
   }
   let zu = 0;

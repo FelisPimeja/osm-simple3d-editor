@@ -7295,13 +7295,13 @@ function focusLevels(g: BuildingGroup, info: Map<number, LevelInfo> = new Map())
     // под частями — обычно общая этажность с высотой по умолчанию), явная высота точнее этажей × 3 м;
     // при равенстве — у объекта с большим числом этажей. Шаг у каждой части свой: первые этажи бывают выше
     const rank = (f.kind === 'part' ? 2000 : 0) + (h.source === 'height' ? 1000 : 0) + levels;
-    const add = (n: number, floor: number, ceil: number, explicit: boolean) => {
+    const add = (n: number, floor: number, ceil: number, explicit: boolean, overflow?: boolean) => {
       const cur = byN.get(n);
-      if (!cur || rank > cur.rank) byN.set(n, { n, floor, ceil, rank, src: f.key, explicit });
+      if (!cur || rank > cur.rank) byN.set(n, { n, floor, ceil, rank, src: f.key, explicit, overflow });
     };
-    for (const l of partLevels({ min: h.min, wallTop: h.wallTop, levels, minLevel, under, step }, info)) add(l.n, l.floor, l.ceil, l.explicit);
+    for (const l of partLevels({ min: h.min, wallTop: h.wallTop, levels, minLevel, under, step }, info)) add(l.n, l.floor, l.ceil, l.explicit, l.overflow);
   }
-  return [...byN.values()].map(({ n, floor, ceil, src, explicit }) => ({ n, floor, ceil, src, explicit })).sort((a, b) => b.n - a.n);
+  return [...byN.values()].map(({ n, floor, ceil, src, explicit, overflow }) => ({ n, floor, ceil, src, explicit, ...(overflow ? { overflow } : {}) })).sort((a, b) => b.n - a.n);
 }
 
 /**
@@ -7697,7 +7697,7 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
 }
 
 /** Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений и зон. */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width'] : fs.every(isDoor) ? ['door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width'] : fs.every(isDoor) ? ['door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
   : [...INDOOR_EDIT_TAGS].filter((k) => (k !== 'ref' && k !== 'name') || fs.every((f) => f.kind === 'room' || f.kind === 'area')));
@@ -7831,7 +7831,7 @@ const ROOM_LABELS: Record<string, string> = {
 };
 
 /** Поля правки indoor, level и room у выбранного indoor-объекта. */
-function indoorForm(fs: IndoorFeature[]): string {
+function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
   const rows = indoorFormTags(fs).map((k) => {
     const values = new Set(fs.map((f) => f.tags[k] ?? ''));
     const mixed = values.size > 1;
@@ -7842,7 +7842,7 @@ function indoorForm(fs: IndoorFeature[]): string {
     if (options) return `<label class="tag-row${changed ? ' changed' : ''}"><span>${k}</span>`
       + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : '—', k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : ROOM_LABELS, k) + '</label>';
     return `<label class="tag-row${changed ? ' changed' : ''}"><span>${k}</span>`
-      + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : k === 'diameter' ? '2.4 m' : '—'}" spellcheck="false" autocomplete="off"></label>`;
+      + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : placeholders[k] ?? (k === 'diameter' ? '2.4 m' : '—')}" spellcheck="false" autocomplete="off"></label>`;
   }).join('');
   const hint = fs.every(isDoor) ? `<p class="hint">${tr('Для перемещения дверей используйте инструмент «Переместить» (M).')}</p>` : '';
   return `<div class="tag-form">${rows}</div>${hint}`;
@@ -8214,28 +8214,21 @@ const LEVEL_NAME = (n: number) => tr('{n} этаж', { n: n < 0 ? n : humanFloor
  */
 function describeLevel(l: Level): string {
   const h = +(l.ceil - l.floor).toFixed(2);
-  const title = `<h2>${l.ref ? esc(tr('Этаж {ref}', { ref: l.ref })) : LEVEL_NAME(l.n)}${l.name ? ` <span class="hint">${esc(l.name)}</span>` : ''}</h2>`
+  const title = `<h2>${l.ref ? esc(tr('Этаж {ref}', { ref: l.ref })) : LEVEL_NAME(l.n)}${l.name ? ' ' + tr('«{name}»', { name: esc(l.name) }) : ''}</h2>`
     + `<p class="hint">level=${l.n} · ${tr('пол {floor} м, потолок {ceil} м', { floor: +l.floor.toFixed(2), ceil: +l.ceil.toFixed(2) })}</p>`;
-  if (!l.levelKeys?.length) return title + `<p class="hint">${tr('Высота этажа {h} м — расчётная (по этажности). Задать её можно тегом height на indoor=level этажа, а его здесь нет.', { h })}</p>`;
-  const tagged = l.heightTag !== undefined ? parseFloat(l.heightTag) : undefined;
+  const fs = levelFeatures(l);
+  if (!fs.length) return title + `<p class="hint">${tr('Высота этажа {h} м — расчётная (по этажности). Задать её, обозначение и название можно на indoor=level этажа, а его здесь нет.', { h })}</p>`;
   const ignored = l.heightTag !== undefined && !l.explicit
-    ? ` <span class="lv-warn" title="${esc(tr('height={v} не учтена: вне {min}–{max} м или не сходится с высотой части', { v: l.heightTag, min: MIN_LEVEL_STEP, max: MAX_LEVEL_STEP }))}">!</span>` : '';
-  const objs = l.levelKeys.map((k) => `<a href="#" data-select-indoor="${esc(k)}">${esc(k)}</a>`).join(', ');
-  return title + `<p><label>${tr('Высота этажа')} <input type="number" min="0" step="0.1" data-level-height="${l.n}"
-    value="${tagged !== undefined && Number.isFinite(tagged) ? tagged : ''}" placeholder="${h}"> ${tr('м')}</label>${ignored}</p>
-    <p class="hint">${tr('height на {objs}; пусто — по этажности. Пол этажей выше сдвинется.', { objs })}</p>`;
+    ? `<p class="warn">${esc(tr('height={v} не учтена: вне {min}–{max} м', { v: l.heightTag, min: MIN_LEVEL_STEP, max: MAX_LEVEL_STEP }))}</p>`
+    : l.overflow ? `<p class="warn">${esc(tr('Высоты этажей не умещаются в высоту части по этажности ({src}): этажи выходят выше её стен.', { src: l.src ?? '—' }))}</p>` : '';
+  const objs = fs.map((f) => `<a href="#" data-select-indoor="${esc(indoorKey(f.key))}">${esc(indoorKey(f.key))}</a>`).join(', ');
+  return title + indoorForm(fs, { height: String(h) }) + ignored
+    + `<p class="hint">${tr('Теги {objs}: height — высота этажа (пусто — по этажности; пол этажей выше сдвинется).', { objs })}</p>`;
 }
 
-/** Высота этажа n: height на всех его indoor=level (пусто — тег убрать). */
-function setLevelHeight(l: Level, value: string) {
-  const v = value.trim() === '' ? '' : String(+(+value).toFixed(2));
-  if (v !== '' && !(+v > 0)) return;
-  const edits = (l.levelKeys ?? []).map((key) => {
-    const tags = { ...(session.get(key)?.tags ?? buildingIndoorFor(key)?.tags ?? {}) };
-    if (v) tags.height = v; else delete tags.height;
-    return { key, tags };
-  });
-  setIndoorTags(edits, 'height');
+/** Объекты indoor=level этажа (их теги правятся в свойствах этажа). */
+function levelFeatures(l: Level): IndoorFeature[] {
+  return focus ? (l.levelKeys ?? []).map((k) => buildingIndoorFor(k)).filter((f): f is IndoorFeature => !!f) : [];
 }
 
 /** Панель этажей режима здания: список по этажности и indoor-данным, клик — срез здания выше этажа. */
@@ -8511,14 +8504,6 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
 function levelVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[], n: number) {
   return buildingVoids(g, levels, indoor).get(n) ?? [];
 }
-
-infoEl.addEventListener('change', (e) => {
-  const input = (e.target as HTMLElement).closest<HTMLInputElement>('input[data-level-height]');
-  if (!input || !focus) return;
-  const l = buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === Number(input.dataset.levelHeight));
-  if (l) setLevelHeight(l, input.value);
-});
-infoEl.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (e.target as HTMLElement).matches('input[data-level-height]')) (e.target as HTMLInputElement).blur(); });
 
 levelsEl.addEventListener('click', (e) => {
   const link = (e.target as HTMLElement).closest<HTMLElement>('[data-select]');
@@ -10002,7 +9987,12 @@ function renderSelectedImpl() {
   // Новые объекты (нарисованные, отрезанные) в режиме здания ещё не нарисованы в тайлах карты — берём из сессии
   const own = selectedKey && !overpass.get(selectedKey) ? session.get(selectedKey) as Feature3D | undefined : undefined;
   const r = selectedKey ? overpass.get(selectedKey) ?? (own?.polygons ? { feature: own, roofApproximated: false } : undefined) : undefined;
-  if (!r && focus && !selection.length) { infoEl.innerHTML = describeFocus(focus); return; }
+  if (!r && focus && !selection.length) {
+    infoEl.innerHTML = describeFocus(focus);
+    const l = currentLevel !== undefined ? buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === currentLevel) : undefined;
+    if (l) bindIndoorForm(levelFeatures(l));
+    return;
+  }
   // В режиме здания подсказка о группе не нужна (выход — Esc и панель частей); «Исключить» — под свойствами
   // Здание без отношения (контур с частями внутри) — та же шапка, что у отношения
   const header = r && !focus && highlightKeys(r.feature.key).length > 1 ? buildingHeader((session.get(r.feature.key)?.tags ?? r.feature.tags).name, session.get(r.feature.key)?.tags ?? r.feature.tags) : '';

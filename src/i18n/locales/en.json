@@ -1232,7 +1232,6 @@
   "Высота этажа задана: height={h} на indoor=level": "Level height is set: height={h} on indoor=level",
   "Загружены, но не отображаются члены {building}: {members}": "Loaded but not displayed: members of {building}: {members}",
   "пол {floor} м, потолок {ceil} м": "floor {floor} m, ceiling {ceil} m",
-  "Высота этажа {h} м — расчётная (по этажности). Задать её, обозначение и название можно на indoor=level этажа, а его здесь нет.": "Level height {h} m is estimated (from building:levels). Height, reference and name can be set on the level's indoor=level, but there is none here.",
   "Теги {objs}: height — высота этажа (пусто — по этажности; пол этажей выше сдвинется).": "Tags of {objs}: height is the level's own height (empty — from building:levels; floors above will shift).",
   "height={v} не учтена: вне {min}–{max} м": "height={v} is ignored: outside {min}–{max} m",
   "Высоты этажей не умещаются в высоту части по этажности ({src}): этажи выходят выше её стен.": "Level heights don't fit into the height of the part the levels come from ({src}): levels rise above its walls.",
@@ -1244,9 +1243,8 @@
   "Назначение": "Purpose",
   "Ширина, м": "Width, m",
   "Диаметр": "Diameter",
-  "Этаж из контура": "Level from outline",
   "Контур этажа ещё не посчитан — повторите через пару секунд.": "The level outline is not computed yet — try again in a couple of seconds.",
   "Создан indoor=level этажа {n}: общих узлов с контуром — {shared}.": "Created indoor=level for level {n}: nodes shared with the outline — {shared}.",
   "Дворы внутри контура ({k}) не вырезаны.": "Courtyards inside the outline ({k}) are not cut out.",
-  "Создаст indoor=level с level={n} по контуру здания на отметке пола этажа (если там пусто — в середине этажа). Вершины на контуре здания и частей — общие с ним.": "Creates indoor=level with level={n} from the building outline at the level's floor elevation (if empty there — at mid-level). Vertices on the building and part outlines are shared with them."
+  "Высота этажа {h} м — расчётная (по этажности). Правка любого поля создаст indoor=level этажа по контуру здания (вершины на контуре — общие с ним).": "Level height {h} m is estimated (from building:levels). Editing any field creates the level's indoor=level from the building outline (vertices on the outline are shared with it)."
 }

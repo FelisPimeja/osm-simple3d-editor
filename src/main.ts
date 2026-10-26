@@ -8238,9 +8238,9 @@ function describeLevel(l: Level): string {
   const title = `<h2>${l.ref ? esc(tr('Этаж {ref}', { ref: l.ref })) : LEVEL_NAME(l.n)}${l.name ? ' ' + tr('«{name}»', { name: esc(l.name) }) : ''}</h2>`
     + `<p class="hint">level=${l.n} · ${tr('пол {floor} м, потолок {ceil} м', { floor: +l.floor.toFixed(2), ceil: +l.ceil.toFixed(2) })}</p>`;
   const fs = levelFeatures(l);
-  if (!fs.length) return title + `<p class="hint">${tr('Высота этажа {h} м — расчётная (по этажности). Задать её, обозначение и название можно на indoor=level этажа, а его здесь нет.', { h })}</p>`
-    + `<p><button type="button" data-level-outline="${l.n}">${tr('Этаж из контура')}</button></p>`
-    + `<p class="hint">${tr('Создаст indoor=level с level={n} по контуру здания на отметке пола этажа (если там пусто — в середине этажа). Вершины на контуре здания и частей — общие с ним.', { n: l.n })}</p>`;
+  // Этажа отдельным объектом нет — те же поля; первая правка создаёт indoor=level по контуру (levelFromOutline)
+  if (!fs.length) return title + indoorForm([newLevelStub(l.n)], { height: String(h) })
+    + `<p class="hint">${tr('Высота этажа {h} м — расчётная (по этажности). Правка любого поля создаст indoor=level этажа по контуру здания (вершины на контуре — общие с ним).', { h })}</p>`;
   const ignored = l.heightTag !== undefined && !l.explicit
     ? `<p class="warn">${esc(tr('height={v} не учтена: вне {min}–{max} м', { v: l.heightTag, min: MIN_LEVEL_STEP, max: MAX_LEVEL_STEP }))}</p>`
     : l.overflow ? `<p class="warn">${esc(tr('Высоты этажей не умещаются в высоту части по этажности ({src}): этажи выходят выше её стен.', { src: l.src ?? '—' }))}</p>` : '';
@@ -8253,11 +8253,11 @@ function describeLevel(l: Level): string {
 const OUTLINE_NODE_SNAP = 1e-7;
 
 /**
- * «Этаж из контура»: indoor=level этажа n по сечению оболочки здания на отметке пола (под скатом — уже следа).
+ * Этаж из контура: indoor=level этажа n по сечению оболочки здания на отметке пола (под скатом — уже следа).
  * Вершины, совпадающие с узлами контура или частей, — эти же узлы (attached: двигаются вместе с фасадом),
  * остальные — новые. Сечение с дырами (двор-колодец) — мультиполигон пока не создаём: только внешние кольца.
  */
-function levelFromOutline(n: number) {
+function levelFromOutline(n: number, extra: Record<string, string> = {}) {
   if (!focus) return;
   const l = buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === n);
   // На полу пусто (низ части выше расчётного пола: подвал по этажности глубже самой части) — середина этажа
@@ -8285,7 +8285,7 @@ function levelFromOutline(n: number) {
     if (ring.length > 1 && ring[0].id === ring.at(-1)!.id) ring.pop();
     if (ring.length < 3) continue;
     const key = `way/${nextNewId--}`;
-    const tags = { indoor: 'level', level: String(n) };
+    const tags = { indoor: 'level', level: String(n), ...extra };
     const polygons = [{ outer: ring.map((q) => q.p), outerIds: ring.map((q) => q.id), inners: [] }];
     edits.push({ key, create: { key, version: 0, tags, polygons } });
     indoorCreated.set(key, { key, kind: 'level', polygons, tags, levels: [n] });
@@ -8293,9 +8293,15 @@ function levelFromOutline(n: number) {
   }
   if (!edits.length) return;
   session.editMany(edits);
+  // Новый этаж — выделен: контур подсвечен, дальше правится как любой indoor-объект
+  const made = edits.map((e) => buildingIndoorFor(e.key)).filter((f): f is IndoorFeature => !!f);
+  made.forEach((f, i) => selectIndoor(f, i > 0));
   setStatus(tr('Создан indoor=level этажа {n}: общих узлов с контуром — {shared}.', { n, shared: used.size })
     + (holes ? ' ' + tr('Дворы внутри контура ({k}) не вырезаны.', { k: holes }) : ''));
 }
+
+/** Заготовка indoor=level для формы этажа, у которого его ещё нет. */
+const newLevelStub = (n: number): IndoorFeature => ({ key: `level-new/${n}`, kind: 'level', tags: {}, polygons: [], levels: [n] });
 
 /** Объекты indoor=level этажа (их теги правятся в свойствах этажа). */
 function levelFeatures(l: Level): IndoorFeature[] {
@@ -8594,8 +8600,6 @@ levelsEl.addEventListener('click', (e) => {
   renderLevels();
 });
 infoEl.addEventListener('click', (e) => {
-  const outline = (e.target as HTMLElement).closest<HTMLElement>('[data-level-outline]');
-  if (outline) { levelFromOutline(Number(outline.dataset.levelOutline)); return; }
   const ilink = (e.target as HTMLElement).closest<HTMLElement>('[data-select-indoor]');
   if (!ilink) return;
   e.preventDefault();
@@ -10075,7 +10079,11 @@ function renderSelectedImpl() {
   if (!r && focus && !selection.length) {
     infoEl.innerHTML = describeFocus(focus);
     const l = currentLevel !== undefined ? buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === currentLevel) : undefined;
-    if (l) bindIndoorForm(levelFeatures(l));
+    const fs = l ? levelFeatures(l) : [];
+    if (fs.length) bindIndoorForm(fs);
+    else if (l) for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
+      input.addEventListener('change', () => { if (input.value.trim()) levelFromOutline(l.n, { [input.dataset.indoorTag!]: input.value.trim() }); });
+    }
     return;
   }
   // В режиме здания подсказка о группе не нужна (выход — Esc и панель частей); «Исключить» — под свойствами

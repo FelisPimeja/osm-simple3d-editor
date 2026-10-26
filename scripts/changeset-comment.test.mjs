@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { before, after, test } from 'node:test';
 import { createServer } from 'vite';
-let vite, suggestComment, isIndoorChange;
+let vite, suggestComment, isIndoorChange, commentBuildingName;
 const ctx={groupOf:()=>undefined,isGroup:()=>false,buildingName:()=>undefined};
 const change=(key,before,after,extra={})=>({key,feature:{key,version:1,tags:after},before,after,created:false,diff:[...new Set([...Object.keys(before),...Object.keys(after)])].filter(k=>before[k]!==after[k]).map(tag=>({tag,from:before[tag],to:after[tag]})),...extra});
 before(async()=>{
  globalThis.localStorage={getItem:()=> 'en'};
  vite=await createServer({configFile:false,server:{middlewareMode:true,ws:false,watch:null},appType:'custom'});
- ({suggestComment,isIndoorChange}=await vite.ssrLoadModule('/src/edit/changeset-comment.ts'));
+ ({suggestComment,isIndoorChange,commentBuildingName}=await vite.ssrLoadModule('/src/edit/changeset-comment.ts'));
 });
 after(async()=>{await vite.close();delete globalThis.localStorage;});
 test('door attributes and deleted indoor wall lines are described as indoor components',()=>{
@@ -41,4 +41,20 @@ test('indoor tag fixes retain their concise existing description',()=>{
 test('ordinary building edits keep their previous description',()=>{
  const text=suggestComment([change('way/1',{building:'yes',height:'3'},{building:'yes',height:'4'})],ctx);
  assert.match(text,/individual buildings/);assert.doesNotMatch(text,/Indoor/);
+});
+
+test('building names prefer the interface language and fall back to name',()=>{
+ const tags={name:'Default','name:ru':'Русское','name:en':'English'};
+ assert.equal(commentBuildingName(tags,undefined,'ru'),'Русское');
+ assert.equal(commentBuildingName(tags,undefined,'en'),'English');
+ assert.equal(commentBuildingName({name:'Default'},undefined,'ru'),'Default');
+ assert.equal(commentBuildingName({name:'Default'},{'name:ru':'Контур'},'ru'),'Контур');
+ assert.equal(commentBuildingName({'name:ru':'  '},{name:'Outline'},'ru'),'Outline');
+ assert.equal(commentBuildingName({},undefined,'en'),undefined);
+ assert.equal(commentBuildingName(tags),'English');
+ const text=suggestComment([change('way/1',{height:'3'},{height:'4'})],{
+  ...ctx,groupOf:()=> 'relation/1',buildingName:()=>commentBuildingName(tags),
+ });
+ assert.match(text,/English/);
+ assert.doesNotMatch(text,/Default|Русское/);
 });

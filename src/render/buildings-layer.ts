@@ -2238,18 +2238,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Фильтр инструмента — и для них (захват — только за свои); из нескольких — ближайшая на экране
     // Здания карты в 3D — их привязки (с высотой); плоские привязки контуров — только если 3D-зданий нет (низкий зум)
     const map3d = [...this.groups.keys()].some((k) => k !== FOCUS_GROUP);
-    const cands = on ? [map3d ? this.mapGroupSnap(point, filter, radius) : this.sketchSnap?.(point)].filter((h): h is SnapHit => !!h && filter(h.key)) : [];
+    const cands = on ? [map3d ? this.mapGroupSnap(point, filter, radius, opts) : this.sketchSnap?.(point)].filter((h): h is SnapHit => !!h && filter(h.key)) : [];
     return [own, ...cands].filter((h): h is SnapHit => !!h).sort((a, b) => d(a) - d(b))[0];
   }
 
-  /** Привязки зданий карты (по группе — один раз): вершины низа и верха стен, середины сторон. */
-  private mapSnaps = new WeakMap<MeshGroup, SnapPoint[]>();
+  /** Привязки зданий карты (по группе — один раз): точки и рёбра низа и верха стен. */
+  private mapSnaps = new WeakMap<MeshGroup, ReturnType<typeof collectSnaps>>();
 
   /**
    * Привязка к зданиям карты в наброске (в 3D — с высотой: углы по верху стен, а не только контур на земле), в метрах
    * сцены наброска. Вершины важнее середин.
    */
-  private mapGroupSnap(point: [number, number], filter: (key: string) => boolean, radius: number): SnapHit | undefined {
+  private mapGroupSnap(point: [number, number], filter: (key: string) => boolean, radius: number, opts: SnapOpts = {}): SnapHit | undefined {
     const f = this.groups.get(FOCUS_GROUP);
     if (!f || !this.map || !this.lastMain || !this.visible) return;
     const canvas = this.map.getCanvas();
@@ -2259,16 +2259,43 @@ export class BuildingsLayer implements CustomLayerInterface {
     const off = this.snapKindsOff;
     for (const [key, g] of this.groups) {
       if (key === FOCUS_GROUP) continue;
-      let pts = this.mapSnaps.get(g);
-      if (!pts) { pts = collectSnaps(g).points.filter((s) => s.kind === 'vertex' || s.kind === 'midpoint'); this.mapSnaps.set(g, pts); }
+      let snaps = this.mapSnaps.get(g);
+      if (!snaps) { snaps = collectSnaps(g); this.mapSnaps.set(g, snaps); }
       const m = this.lastMain.clone().multiply(g.model);
-      for (const s of pts) {
+      for (const s of snaps.points) {
+        if (s.kind !== 'vertex' && s.kind !== 'midpoint') continue;
         if (off.has(s.kind) || !filter(s.key) || g.hidden.has(s.key)) continue;
         v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
         if (v.w <= 0) continue;
         const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
         const d = Math.hypot(px[0] - point[0], px[1] - point[1]);
         if (d <= radius) near.push({ s, g, d: d + SNAP_PRIORITY[s.kind] * 6, px });
+      }
+      if (!opts.noEdge && !off.has('edge')) {
+        // Луч сцены наброска переводим в локальные метры здания карты.
+        const ray = this.focusRay(point)?.clone().applyMatrix4(f.model).applyMatrix4(g.model.clone().invert());
+        const a = new THREE.Vector4(), b = new THREE.Vector4(), p = new THREE.Vector3();
+        if (ray) for (const e of snaps.edges) {
+          if (!filter(e.key) || g.hidden.has(e.key)) continue;
+          // Дешёвый экранный отсев до поиска точки на 3D-отрезке.
+          a.set(e.a.x, e.a.y, e.a.z, 1).applyMatrix4(m);
+          b.set(e.b.x, e.b.y, e.b.z, 1).applyMatrix4(m);
+          if (a.w <= 0 && b.w <= 0) continue;
+          if (a.w > 0 && b.w > 0) {
+            const ax = (a.x / a.w + 1) * canvas.clientWidth / 2;
+            const ay = (1 - a.y / a.w) * canvas.clientHeight / 2;
+            const bx = (b.x / b.w + 1) * canvas.clientWidth / 2;
+            const by = (1 - b.y / b.w) * canvas.clientHeight / 2;
+            if (point[0] < Math.min(ax, bx) - radius || point[0] > Math.max(ax, bx) + radius
+                || point[1] < Math.min(ay, by) - radius || point[1] > Math.max(ay, by) + radius) continue;
+          }
+          ray.distanceSqToSegment(e.a, e.b, undefined, p);
+          v.set(p.x, p.y, p.z, 1).applyMatrix4(m);
+          if (v.w <= 0) continue;
+          const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
+          const d = Math.hypot(px[0] - point[0], px[1] - point[1]);
+          if (d <= radius) near.push({ s: {kind: 'edge', key: e.key, p: p.clone()}, g, d: d + SNAP_PRIORITY.edge * 6, px });
+        }
       }
     }
     // Заслонённые (вершина контура за стеной и т. п.) — «дальше»: выигрывают, только если видимых рядом нет

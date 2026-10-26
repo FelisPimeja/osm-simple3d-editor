@@ -1,5 +1,11 @@
 import type { TagChange } from './session';
-import { tr } from '../i18n';
+import { tr, lang } from '../i18n';
+
+/** Название для комментария: перевод отношения или контура, затем обычное name. */
+export function commentBuildingName(tags: Record<string, string>, outline?: Record<string, string>, language = lang): string | undefined {
+  return [tags[`name:${language}`], outline?.[`name:${language}`], tags.name, outline?.name]
+    .map((name) => name?.trim()).find((name) => !!name);
+}
 
 /** Что генератору нужно знать о зданиях: к какому отношению относится объект и как оно называется. */
 export interface CommentContext {
@@ -7,7 +13,7 @@ export interface CommentContext {
   groupOf(key: string): string | undefined;
   /** Является ли ключ отношением type=building. */
   isGroup(key: string): boolean;
-  /** Название здания: name отношения или его контура (outline). */
+  /** Название здания на языке интерфейса, иначе name отношения или контура (outline). */
   buildingName(groupKey: string): string | undefined;
   /** Исправлены ли в объекте проблемы, найденные проверкой (были в исходных тегах, а теперь нет). */
   fixedIssues?(key: string): boolean;

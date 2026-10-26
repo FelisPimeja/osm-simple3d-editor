@@ -58,7 +58,7 @@ import { Eyedropper, glPixels, pickFieldHint } from './edit/eyedropper';
 import { openColourPopover } from './edit/colour-popover';
 import { loadRecentColours, recordColour } from './edit/recent-colours';
 import { CIRCLE_LABELS, CIRCLE_MODES, CIRCLE_TITLES, DrawTool, RECT_LABELS, RECT_MODES, RECT_TITLES, type CircleMode, type DrawShape, type RectMode } from './edit/draw-tool';
-import { suggestComment, isIndoorChange } from './edit/changeset-comment';
+import { suggestComment, isIndoorChange, commentBuildingName } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type SessionSnapshot, type Tagged, type TagChange } from './edit/session';
 import { Autosave, type SavedEdits } from './edit/autosave';
 import { onSkeletons } from './render/skeleton';
@@ -11190,7 +11190,7 @@ function commentSuggestion(): string {
     isGroup: (key) => editGroups.has(key),
     buildingName: (key) => {
       const g = editGroups.get(key) ?? groupOf(key);
-      return g ? g.tags.name ?? outlineTags(g)?.name : undefined;
+      return g ? commentBuildingName(g.tags, outlineTags(g)) : undefined;
     },
     fixedIssues: (key) => {
       const before = session.originalTags(key), f = entity(key);

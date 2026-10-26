@@ -1235,5 +1235,13 @@
   "Высота этажа {h} м — расчётная (по этажности). Задать её, обозначение и название можно на indoor=level этажа, а его здесь нет.": "Level height {h} m is estimated (from building:levels). Height, reference and name can be set on the level's indoor=level, but there is none here.",
   "Теги {objs}: height — высота этажа (пусто — по этажности; пол этажей выше сдвинется).": "Tags of {objs}: height is the level's own height (empty — from building:levels; floors above will shift).",
   "height={v} не учтена: вне {min}–{max} м": "height={v} is ignored: outside {min}–{max} m",
-  "Высоты этажей не умещаются в высоту части по этажности ({src}): этажи выходят выше её стен.": "Level heights don't fit into the height of the part the levels come from ({src}): levels rise above its walls."
+  "Высоты этажей не умещаются в высоту части по этажности ({src}): этажи выходят выше её стен.": "Level heights don't fit into the height of the part the levels come from ({src}): levels rise above its walls.",
+  "Высота этажа, м": "Level height, m",
+  "Обозначение этажа": "Level reference",
+  "Название": "Name",
+  "Номер": "Number",
+  "Вид": "Kind",
+  "Назначение": "Purpose",
+  "Ширина, м": "Width, m",
+  "Диаметр": "Diameter"
 }

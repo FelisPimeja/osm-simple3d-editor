@@ -64,7 +64,7 @@ import { Autosave, type SavedEdits } from './edit/autosave';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmStatus, josmUndo, josmUnderlayHistory, josmUnderlayStep, watchJosmUnderlays, minElementId, refreshJosmStatus, sendJosmSelection, watchJosmSelection, type JosmChange, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
-import { deprecations, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
+import { deprecations, idFieldLabel, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
 import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, setDateFields, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
@@ -7267,6 +7267,8 @@ const levelsEl = document.getElementById('levels')!;
 const levelsCount = document.getElementById('levels-count')!;
 /** Выбранный этаж (срез здания выше него); undefined — всё здание. */
 let currentLevel: number | undefined;
+/** Этаж, для которого последний раз перерисованы свойства (см. renderLevels). */
+let infoLevel = '';
 /** Здание, к которому относится currentLevel, и что последним отдано слою — чтобы не пересобирать план зря. */
 let levelsFocusKey: string | undefined;
 let levelSignature = '';
@@ -7671,7 +7673,7 @@ function renderIndoorSelection(add = false) {
   overpassLayer.setIndoorSelection(indoorSelection.map((x) => x.key));
   indoorPois.setSelection(indoorSelection.map((x) => x.key));
   syncIssueFilter();
-  if (!indoorSelection.length) { if (add) infoEl.innerHTML = ''; return; }
+  if (!indoorSelection.length) { clearInfo(); return; }
   if (selection.length) select(undefined);
   if (indoorSelection.length > 1) { renderIndoorMulti(indoorSelection); return; }
   f = indoorSelection[0];
@@ -7758,7 +7760,7 @@ function changeIndoorHidden(next: Set<string>) {
     for (const key of keys) indoorHidden.add(key);
     if (indoorSelection.some((f) => indoorHidden.has(indoorKey(f.key)))) {
       selectIndoor(undefined);
-      infoEl.innerHTML = '';
+      clearInfo();
     }
     renderLevels();
   };
@@ -7831,6 +7833,20 @@ const ROOM_LABELS: Record<string, string> = {
 };
 
 /** Поля правки indoor, level и room у выбранного indoor-объекта. */
+/**
+ * Подпись поля indoor-формы: свои (у этажа — высота этажа, обозначение), иначе из схемы iD (src/osm/presets.ts),
+ * иначе ключ. Ключ — во всплывающей подсказке. У iD нет пресета indoor=level и поля level:ref.
+ */
+function indoorFieldLabel(k: string, fs: IndoorFeature[]): string {
+  const level = fs.every((f) => f.kind === 'level');
+  const own: Record<string, string> = {
+    height: level ? tr('Высота этажа, м') : tr('Высота, м'), 'level:ref': tr('Обозначение этажа'), name: tr('Название'), ref: tr('Номер'),
+    // У iD и indoor, и room — «Тип»: рядом не различить
+    indoor: tr('Вид'), room: tr('Назначение'), width: tr('Ширина, м'), diameter: tr('Диаметр'),
+  };
+  return own[k] ?? idFieldLabel(k) ?? k;
+}
+
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
   const rows = indoorFormTags(fs).map((k) => {
     const values = new Set(fs.map((f) => f.tags[k] ?? ''));
@@ -7839,9 +7855,10 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
     const changed = fs.some((f) => session.isChanged(indoorKey(f.key), k));
     // Свой список, а не datalist: тот показывает только варианты, совпадающие с уже введённым значением
     const options = k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : undefined;
-    if (options) return `<label class="tag-row${changed ? ' changed' : ''}"><span>${k}</span>`
+    const label = `<span title="${esc(k)}">${esc(indoorFieldLabel(k, fs))}</span>`;
+    if (options) return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : '—', k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : ROOM_LABELS, k) + '</label>';
-    return `<label class="tag-row${changed ? ' changed' : ''}"><span>${k}</span>`
+    return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : placeholders[k] ?? (k === 'diameter' ? '2.4 m' : '—')}" spellcheck="false" autocomplete="off"></label>`;
   }).join('');
   const hint = fs.every(isDoor) ? `<p class="hint">${tr('Для перемещения дверей используйте инструмент «Переместить» (M).')}</p>` : '';
@@ -7963,7 +7980,7 @@ function deleteDoors(fs: IndoorFeature[]) {
     edits.push(f.point && isVertex(f.point) ? { key, tags: {} } : { key, delete: true });
   }
   selectIndoor(undefined);
-  infoEl.innerHTML = '';
+  clearInfo();
   session.editMany(edits);
   setStatus(trn(fs.length, 'Удалена {n} дверь.|Удалено {n} двери.|Удалено {n} дверей.'));
 }
@@ -8021,7 +8038,7 @@ async function deleteIndoorSpaces(fs: IndoorFeature[]) {
       if (referenced) { edits.push({ key, tags: {} }); stripped++; } else edits.push({ key, delete: true });
     }
     selectIndoor(undefined);
-    infoEl.innerHTML = '';
+    clearInfo();
     session.editMany(edits);
     setStatus(stripped
       ? tr('Удалено помещений: {n}; у путей в составе отношений сняты только теги: {m}. Отменить — Ctrl+Z.', { n: fs.length, m: stripped })
@@ -8130,7 +8147,7 @@ async function deleteIndoorWalls() {
     }
     for (const f of created) { indoorCreated.set(f.key, f); indoorEdited.add(f.key); }
     selectIndoor(undefined);
-    infoEl.innerHTML = '';
+    clearInfo();
     session.editMany(edits);
     setStatus(tr('Стены удалены. Отменить — Ctrl+Z.'));
   } catch (err) {
@@ -8292,6 +8309,12 @@ function renderLevelsImpl() {
   panelLevels = levels.map((l) => l.n);
   if (linkLevel !== undefined && levels.some((l) => l.n === linkLevel)) { currentLevel = linkLevel; linkLevel = undefined; }
   if (currentLevel !== undefined && !levels.some((l) => l.n === currentLevel)) currentLevel = undefined;
+  // Сменился этаж (щелчок, ссылка, этаж пропал) или его данные (догрузились indoor, правка) — свойства этажа в панели, если ничего не выделено
+  const infoSig = (() => { const l = levels.find((x) => x.n === currentLevel); return l ? JSON.stringify([l.n, l.floor, l.ceil, l.ref, l.name, l.heightTag, l.levelKeys, l.overflow]) : ''; })();
+  if (infoSig !== infoLevel) {
+    infoLevel = infoSig;
+    if (!selection.length && !indoorSelection.length) queueMicrotask(renderSelected);
+  }
   // Пока этаж из ссылки не появился в панели — он остаётся в адресе
   setLevelParam(currentLevel ?? linkLevel);
   syncUnderlayLevels(levels);
@@ -8311,13 +8334,13 @@ function renderLevelsImpl() {
   const visibleIndoor = indoor.filter((f) => !indoorHidden.has(indoorKey(f.key)));
   if (selectedRoomWalls.length && (shownLevel?.n !== level?.n || shownLevel?.floor !== level?.floor)) {
     selectIndoor(undefined);
-    infoEl.innerHTML = '';
+    clearInfo();
   }
   shownLevel = level;
   shownIndoor = onLevel;
   if (selectedRoomWalls.length && (!level || selectedRoomWalls.some((w) => !onLevel.some((f) => f.key === w.key && f.kind === 'room')))) {
     selectIndoor(undefined);
-    infoEl.innerHTML = '';
+    clearInfo();
   }
   // Лифты: пол только на нижней остановке; выше, до верхней (и на этажах без остановки), — шахта: вырез в полу
   const elevators = visibleIndoor.filter((f) => isElevatorRoom(f, visibleIndoor) && f.levels.length);
@@ -8514,7 +8537,6 @@ levelsEl.addEventListener('click', (e) => {
   currentLevel = n;
   linkLevel = undefined;
   renderLevels();
-  if (!selection.length && !indoorSelection.length) renderSelected(); // свойства этажа
 });
 infoEl.addEventListener('click', (e) => {
   const ilink = (e.target as HTMLElement).closest<HTMLElement>('[data-select-indoor]');
@@ -9926,6 +9948,12 @@ function renderMulti() {
     <p class="hint">${tr('Shift+клик — добавить или убрать объект.')}</p>`;
 }
 
+/** Снято выделение: в режиме здания — его свойства (на выбранном этаже — свойства этажа), иначе пусто. */
+function clearInfo() {
+  if (focus) renderSelected();
+  else infoEl.innerHTML = '';
+}
+
 function renderSelected() {
   outlineOverlay = undefined;
   try {
@@ -10120,7 +10148,7 @@ function onSessionChange(keys: string[]) {
   mapIssuesDirty = true;
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
-    if (selectedRoomWalls.length) { selectIndoor(undefined); infoEl.innerHTML = ''; }
+    if (selectedRoomWalls.length) { selectIndoor(undefined); clearInfo(); }
     indoorEditRev++;
     const sel = indoorSelection.map((f) => indoorKey(f.key));
     renderLevels();
@@ -10977,7 +11005,7 @@ onSkeletons(() => {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !focus || toolActive() || popupEl.childElementCount || (e.target as HTMLElement).closest('input, select, textarea')) return;
   // Esc: сначала снять выделение части, затем выйти из режима здания
-  if (selectedRoomWalls.length || indoorSelection.length) { selectIndoor(undefined); infoEl.innerHTML = ''; }
+  if (selectedRoomWalls.length || indoorSelection.length) { selectIndoor(undefined); clearInfo(); }
   else if (selection.length || underlaySelection.length) select(undefined);
   else closeFocus();
 });

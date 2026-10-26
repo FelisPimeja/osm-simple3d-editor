@@ -8711,7 +8711,8 @@ const CUT_ON_SIDE = 0.02;
 /**
  * «Рассечь» на плане этажа: ломаная pts (метры сцены, концы — за стенами) делит помещения, коридоры, площадки
  * и пустую площадь, которые пересекает. Помещение-путь сохраняет историю на большем куске, остальные куски —
- * новые объекты с теми же тегами; пустая площадь — новые indoor=area этажа. Новые узлы на линии разреза общие
+ * новые объекты с теми же тегами; мультиполигон (помещение с дырами) заменяется кусками целиком; пустая площадь —
+ * новые indoor=area этажа. Новые узлы на линии разреза общие
  * у кусков и вставляются в стороны indoor-соседей (помещений, этажа); пути здания не трогаем — правка контура
  * здания без отношения собрала бы отношение и сменила здание режима. Строка — почему нельзя.
  */
@@ -8762,11 +8763,14 @@ function cutPlan(pts: [number, number][]): string | undefined {
   };
   const rooms = shownIndoor.filter((f) => isFloorKind(f) && !f.escalatorArea && f.polygons.length);
   const targets: { f: IndoorFeature; pieces: [number, number][][][] }[] = [];
+  /** Мультиполигоны (помещение с дырами): заменяются кусками — новыми объектами с их тегами. */
+  const replaced: typeof targets = [];
   const skipped: string[] = [];
   for (const f of rooms) {
     if (f.polygons.length !== 1) continue;
     const pieces = cut(f.polygons[0]);
     if (pieces.length < 2) continue;
+    if (indoorKey(f.key).startsWith('relation/')) { replaced.push({ f, pieces }); continue; }
     if (!f.key.startsWith('way/') || !f.polygons[0].outerIds) { skipped.push(indoorKey(f.key)); continue; }
     targets.push({ f, pieces });
   }
@@ -8783,7 +8787,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
       }
     } catch (err) { console.warn('[cut-plan]', err); }
   }
-  if (!targets.length && !free.length) {
+  if (!targets.length && !replaced.length && !free.length) {
     return skipped.length
       ? tr('Мультиполигон {keys} пока рассекать нельзя.', { keys: skipped.join(', ') })
       : tr('Разрез ничего не делит: проведите его через помещение или пустую площадь от стены до стены.');
@@ -8805,6 +8809,18 @@ function cutPlan(pts: [number, number][]): string | undefined {
     rebuilt.set(key, poly);
     edits.push({ key, polygons: [poly] });
     for (const p of rest) { const m = indoorCreateEdits(p, f.tags, nodeFor, edits); if (m) created.push(m); }
+  }
+  // Мультиполигон — прочь (его пути без тегов: созданные в сессии — сразу, с сервера — при отправке), куски — новые
+  for (const { f, pieces } of replaced) {
+    const key = indoorKey(f.key);
+    trackIndoor(key, f);
+    edits.push({ key, delete: true });
+    for (const m of session.get(key)?.relMembers ?? []) {
+      const wk = `way/${m.ref}`;
+      if (m.type === 'way' && session.isCreated(wk) && session.get(wk)) edits.push({ key: wk, delete: true });
+    }
+    const tags = Object.fromEntries(Object.entries(f.tags).filter(([k]) => k !== 'type'));
+    for (const p of pieces) { const m = indoorCreateEdits(toPoly(p), tags, nodeFor, edits); if (m) created.push(m); }
   }
   for (const p of free) { const m = indoorCreateEdits(toPoly(p), { indoor: 'area', level: String(level.n) }, nodeFor, edits); if (m) created.push(m); }
   // Новые узлы на сторонах соседей (и самих разрезанных — в куски без них): вставить в эти стороны
@@ -8862,7 +8878,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
   for (const m of created) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
   indoorEditRev++;
   renderLevels();
-  const pieces = targets.reduce((n, t) => n + t.pieces.length, 0) + free.length;
+  const pieces = [...targets, ...replaced].reduce((n, t) => n + t.pieces.length, 0) + free.length;
   setStatus(tr('Рассечено: кусков {n}, новых объектов {created}, узлы добавлены в соседей: {touched}.', { n: pieces, created: created.length, touched })
     + (skipped.length ? ' ' + tr('Мультиполигон {keys} пока рассекать нельзя.', { keys: skipped.join(', ') }) : ''));
   const sel = [...[...rebuilt.keys()].map((k) => buildingIndoorFor(k)), ...created.map((m) => buildingIndoorFor(m.key))].filter((f): f is IndoorFeature => !!f);

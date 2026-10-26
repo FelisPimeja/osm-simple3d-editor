@@ -1246,5 +1246,8 @@
   "Контур этажа ещё не посчитан — повторите через пару секунд.": "The level outline is not computed yet — try again in a couple of seconds.",
   "Создан indoor=level этажа {n}: общих узлов с контуром — {shared}.": "Created indoor=level for level {n}: nodes shared with the outline — {shared}.",
   "Дворы внутри контура ({k}) не вырезаны.": "Courtyards inside the outline ({k}) are not cut out.",
-  "Высота этажа {h} м — расчётная (по этажности). Правка любого поля создаст indoor=level этажа по контуру здания (вершины на контуре — общие с ним).": "Level height {h} m is estimated (from building:levels). Editing any field creates the level's indoor=level from the building outline (vertices on the outline are shared with it)."
+  "Высота этажа {h} м — расчётная (по этажности). Правка любого поля создаст indoor=level этажа по контуру здания (вершины на контуре — общие с ним).": "Level height {h} m is estimated (from building:levels). Editing any field creates the level's indoor=level from the building outline (vertices on the outline are shared with it).",
+  "Неразмеченная площадь": "Unmapped space",
+  "{s} м² · {level}": "{s} m² · {level}",
+  "В OSM пустота ничем не размечена: правка любого поля создаст объект (по умолчанию indoor=area) с этими тегами.": "Empty space is not mapped in OSM: editing any field creates an object (indoor=area by default) with these tags."
 }

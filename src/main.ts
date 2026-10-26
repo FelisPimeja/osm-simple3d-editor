@@ -26,7 +26,7 @@ import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback'
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
 import { mapillary } from './view/mapillary';
-import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type MemberWay, type Polygon } from './osm/model';
+import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { ScaleTool } from './edit/scale-tool';
 import { featureRings, glueMoves, levelApart, ON_SIDE_M } from './edit/glue-plan';
@@ -1456,6 +1456,8 @@ map.on('click', (e) => {
     const room = indoorAt([e.point.x, e.point.y]);
     if (room) { selectIndoor(room, indoorAdd); return; }
     if (indoorAdd) return; // Shift+клик мимо — выбор не сбрасываем
+    const free = freeAreaAt([e.point.x, e.point.y]);
+    if (free) { selectFreeArea(free); return; }
   }
   if (selectedIndoor || selectedRoomWalls.length) selectIndoor(undefined);
   // Контур подземной части (режим здания, всё здание): только подсветка, объекта OSM за ним нет
@@ -7017,6 +7019,7 @@ function toolHint(hint: string | undefined, error = false) {
 
 /** Выделить объект (или группу); false — выделять нечего. */
 function select(key: string | undefined): boolean {
+  if (freeArea) { freeArea = undefined; overpassLayer.setFreeArea(undefined); }
   if (selectedEntrance !== undefined) { cancelEntranceDrag(); selectedEntrance = undefined; overpassLayer.setEntranceSelection(undefined); }
   clearTreeSelection();
   roadsLayer.select([]);
@@ -7599,7 +7602,8 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
   if (!ll) return;
   const inside = (p: Polygon) => pointInRing(ll, p.outer) && !p.inners.some((r) => pointInRing(ll, r));
   return shownIndoor
-    .filter((f) => !f.line && !f.escalatorArea && f.kind !== 'poi' && f.kind !== 'wall' && f.kind !== 'column' && f.polygons.some(inside))
+    // indoor=level — не помещение: пол этажа вне помещений — пустая площадь (freeAreaAt), сам этаж — из панели «Этажи»
+    .filter((f) => !f.line && !f.escalatorArea && f.kind !== 'poi' && f.kind !== 'wall' && f.kind !== 'column' && f.kind !== 'level' && f.polygons.some(inside))
     .sort((a, b) => a.polygons.reduce((s, p) => s + polyArea(p), 0) - b.polygons.reduce((s, p) => s + polyArea(p), 0))[0];
 }
 
@@ -7639,6 +7643,7 @@ function selectRoomWall(wall: RoomWall, add = false) {
  * к выбранным или убрать из них (несколько — общая форма: одинаковые значения, у разных — «разные значения»).
  */
 function selectIndoor(f: IndoorFeature | undefined, add = false) {
+  if (freeArea) { freeArea = undefined; overpassLayer.setFreeArea(undefined); }
   selectedRoomWalls = [];
   overpassLayer.setRoomWallSelection([]);
   if (f) clearTreeSelection();
@@ -8252,19 +8257,18 @@ function describeLevel(l: Level): string {
 /** Узел контура здания ближе этого (градусы, ~1 см) к вершине сечения — общий: вершина встаёт на него. */
 const OUTLINE_NODE_SNAP = 1e-7;
 
+/** Контур здания на этаже: сечение оболочки на отметке пола; пусто (низ части выше расчётного пола) — в середине этажа. */
+function levelSection(l: Level): LonLat[][][] | undefined {
+  return [l.floor + 0.1, (l.floor + l.ceil) / 2].map((h) => overpassLayer.focusSection(h)).find((x) => !x || x.length);
+}
+
 /**
- * Этаж из контура: indoor=level этажа n по сечению оболочки здания на отметке пола (под скатом — уже следа).
- * Вершины, совпадающие с узлами контура или частей, — эти же узлы (attached: двигаются вместе с фасадом),
- * остальные — новые. Сечение с дырами (двор-колодец) — мультиполигон пока не создаём: только внешние кольца.
+ * Узлы объектов (контура, частей, помещений) для новых контуров: вершина ближе OUTLINE_NODE_SNAP к узлу — этот
+ * узел (общий: двигается вместе с соседом), иначе новый. used — сколько раз взят каждый общий узел.
  */
-function levelFromOutline(n: number, extra: Record<string, string> = {}) {
-  if (!focus) return;
-  const l = buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === n);
-  // На полу пусто (низ части выше расчётного пола: подвал по этажности глубже самой части) — середина этажа
-  const section = l && [l.floor + 0.1, (l.floor + l.ceil) / 2].map((h) => overpassLayer.focusSection(h)).find((x) => !x || x.length);
-  if (!l || !section?.length) { setStatus(tr('Контур этажа ещё не посчитан — повторите через пару секунд.'), true); return; }
+function sharedNodes(features: { polygons: Polygon[] }[]) {
   const nodes: { p: LonLat; id: number }[] = [];
-  for (const f of groupFeatures(focus)) for (const poly of f.polygons) {
+  for (const f of features) for (const poly of f.polygons) {
     [poly.outer, ...poly.inners].forEach((ring, r) => {
       const ids = r === 0 ? poly.outerIds : poly.innerIds?.[r - 1];
       ring.forEach((p, i) => { if (ids?.[i] !== undefined) nodes.push({ p, id: ids[i] }); });
@@ -8277,13 +8281,118 @@ function levelFromOutline(n: number, extra: Record<string, string> = {}) {
     if (best) used.set(best.id, (used.get(best.id) ?? 0) + 1);
     return best ?? { p, id: nextNewId-- };
   };
+  return { nodeFor, used };
+}
+
+/** Кольцо из узлов: подряд одинаковые и замыкающий — прочь; меньше трёх — нет кольца. */
+function nodeRing(ring: LonLat[], nodeFor: (p: LonLat) => { p: LonLat; id: number }): { p: LonLat; id: number }[] | undefined {
+  const out = ring.map(nodeFor).filter((q, i, a) => i === 0 || q.id !== a[i - 1].id);
+  if (out.length > 1 && out[0].id === out.at(-1)!.id) out.pop();
+  return out.length >= 3 ? out : undefined;
+}
+
+/** Выбранный кусок неразмеченной площади этажа: n — этаж, polygon — lon/lat (кольца без замыкающей точки). */
+let freeArea: { n: number; polygon: Polygon } | undefined;
+
+/**
+ * Неразмеченная площадь этажа под курсором: контур здания на этаже минус помещения, коридоры и площадки этажа;
+ * связный кусок, где курсор. В OSM пустота ничем не размечена — объект появится при первой правке.
+ */
+function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | undefined {
+  if (!shownLevel) return;
+  const ray = overpassLayer.focusRay(point);
+  const hit = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -shownLevel.floor), new THREE.Vector3());
+  const ll = hit && overpassLayer.focusToLngLat(hit.x, hit.y);
+  const section = ll && levelSection(shownLevel);
+  if (!ll || !section?.length) return;
+  const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
+  const rooms = shownIndoor.filter((f) => isFloorKind(f) && !f.escalatorArea)
+    .map((f) => f.polygons.map((p) => [close(p.outer), ...p.inners.map(close)]));
+  let pieces: [number, number][][][];
+  try { pieces = polygonClipping.difference(section.map((p) => p.map(close)), ...rooms); } catch (err) { console.warn('[free-area]', err); return; }
+  const piece = pieces.map((p) => ({ outer: p[0].slice(0, -1) as LonLat[], inners: p.slice(1).map((r) => r.slice(0, -1) as LonLat[]) }))
+    .find((p) => pointInRing(ll, p.outer) && !p.inners.some((r) => pointInRing(ll, r)));
+  return piece && { n: shownLevel.n, polygon: piece };
+}
+
+function selectFreeArea(a: { n: number; polygon: Polygon }) {
+  select(undefined);
+  selectIndoor(undefined);
+  freeArea = a;
+  overpassLayer.setFreeArea({ key: 'free-area', kind: 'area', polygons: [a.polygon], z: shownLevel?.floor ?? 0 });
+  renderFreeArea(a);
+}
+
+function renderFreeArea(a: { n: number; polygon: Polygon }) {
+  const stub: IndoorFeature = { key: 'free-area/0', kind: 'area', tags: { level: String(a.n) }, polygons: [a.polygon], levels: [a.n] };
+  infoEl.innerHTML = `<h2>${tr('Неразмеченная площадь')}</h2>`
+    + `<p class="hint">${tr('{s} м² · {level}', { s: Math.round(polyArea(a.polygon)), level: levelLabel(a.n) })}</p>`
+    + indoorForm([stub], { indoor: 'area' })
+    + `<p class="hint">${tr('В OSM пустота ничем не размечена: правка любого поля создаст объект (по умолчанию indoor=area) с этими тегами.')}</p>`;
+  for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
+    input.addEventListener('change', () => { if (input.value.trim()) createFromFreeArea({ [input.dataset.indoorTag!]: input.value.trim() }); });
+  }
+}
+
+/** Пустая площадь → indoor-объект (по умолчанию indoor=area) этажа; вершины на соседях — их узлы. Выделяется. */
+function createFromFreeArea(extra: Record<string, string>) {
+  const a = freeArea;
+  if (!a || !focus) return;
+  const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)]);
+  const outer = nodeRing(a.polygon.outer, nodeFor);
+  if (!outer) return;
+  const inners = a.polygon.inners.map((r) => nodeRing(r, nodeFor)).filter((r): r is NonNullable<typeof r> => !!r);
+  const tags: Record<string, string> = { indoor: 'area', level: String(a.n), ...extra };
+  const kind = (['room', 'corridor', 'area', 'level', 'wall', 'column'].includes(tags.indoor) ? tags.indoor : 'area') as IndoorKind;
+  const polygons = [{ outer: outer.map((q) => q.p), outerIds: outer.map((q) => q.id), inners: inners.map((r) => r.map((q) => q.p)), innerIds: inners.map((r) => r.map((q) => q.id)) }];
+  let key: string;
+  if (!inners.length) {
+    key = `way/${nextNewId--}`;
+    session.editMany([{ key, create: { key, version: 0, tags, polygons } }]);
+  } else {
+    // Дыры (лестница, лифт, помещения внутри) — мультиполигон: внешний путь и пути дыр без тегов
+    const relId = nextNewId--;
+    key = `relation/${relId}`;
+    const edits: ObjectEdit[] = [];
+    const ways: MemberWay[] = [];
+    for (const [r, role] of [[outer, 'outer'] as const, ...inners.map((x) => [x, 'inner'] as const)]) {
+      const id = nextNewId--;
+      const line = { ids: [...r.map((q) => q.id), r[0].id], coords: [...r.map((q) => q.p), r[0].p] };
+      edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line } });
+      ways.push({ id, role, nodes: line.ids });
+    }
+    tags.type = 'multipolygon';
+    edits.push({ key, create: { key, type: 'relation', id: relId, version: 0, tags, polygons, ways,
+      relMembers: ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } as unknown as Feature3D });
+    session.editMany(edits);
+  }
+  indoorCreated.set(key, { key, kind, polygons, tags, levels: parseLevels(tags.level) });
+  indoorEdited.add(key);
+  // indoorCreated заполняется после editMany: перерисовать план с новым объектом
+  indoorEditRev++;
+  renderLevels();
+  const f = buildingIndoorFor(key);
+  if (f) selectIndoor(f);
+}
+
+/**
+ * Этаж из контура: indoor=level этажа n по сечению оболочки здания на отметке пола (под скатом — уже следа).
+ * Вершины, совпадающие с узлами контура или частей, — эти же узлы (attached: двигаются вместе с фасадом),
+ * остальные — новые. Сечение с дырами (двор-колодец) — мультиполигон пока не создаём: только внешние кольца.
+ */
+function levelFromOutline(n: number, extra: Record<string, string> = {}) {
+  if (!focus) return;
+  const l = buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === n);
+  // На полу пусто (низ части выше расчётного пола: подвал по этажности глубже самой части) — середина этажа
+  const section = l && levelSection(l);
+  if (!l || !section?.length) { setStatus(tr('Контур этажа ещё не посчитан — повторите через пару секунд.'), true); return; }
+  const { nodeFor, used } = sharedNodes(groupFeatures(focus));
   const edits: ObjectEdit[] = [];
   let holes = 0;
   for (const poly of section) {
     holes += poly.length - 1;
-    const ring = poly[0].map(nodeFor).filter((q, i, a) => i === 0 || q.id !== a[i - 1].id);
-    if (ring.length > 1 && ring[0].id === ring.at(-1)!.id) ring.pop();
-    if (ring.length < 3) continue;
+    const ring = nodeRing(poly[0], nodeFor);
+    if (!ring) continue;
     const key = `way/${nextNewId--}`;
     const tags = { indoor: 'level', level: String(n), ...extra };
     const polygons = [{ outer: ring.map((q) => q.p), outerIds: ring.map((q) => q.id), inners: [] }];
@@ -8374,6 +8483,7 @@ function renderLevelsImpl() {
   const infoSig = (() => { const l = levels.find((x) => x.n === currentLevel); return l ? JSON.stringify([l.n, l.floor, l.ceil, l.ref, l.name, l.heightTag, l.levelKeys, l.overflow]) : ''; })();
   if (infoSig !== infoLevel) {
     infoLevel = infoSig;
+    if (freeArea && freeArea.n !== currentLevel) { freeArea = undefined; overpassLayer.setFreeArea(undefined); }
     if (!selection.length && !indoorSelection.length) queueMicrotask(() => { if (!selection.length && !indoorSelection.length) renderSelected(); });
   }
   // Пока этаж из ссылки не появился в панели — он остаётся в адресе
@@ -10064,6 +10174,7 @@ tagsClip.addEventListener('click', (e) => {
 });
 
 function renderSelectedImpl() {
+  if (freeArea && !selection.length && !indoorSelection.length) return renderFreeArea(freeArea);
   if (selectedEntrance !== undefined) return renderEntrance(selectedEntrance);
   if (addingTo) return renderAdding();
   if (!selection.length && underlaySelection.length) return renderUnderlaySelection();

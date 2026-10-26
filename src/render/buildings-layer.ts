@@ -910,6 +910,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  /** Выбранный кусок неразмеченной площади этажа (ещё не объект OSM) — подсвечивается как выделенное помещение. */
+  private freeArea?: IndoorItem;
+  setFreeArea(item: IndoorItem | undefined) {
+    this.freeArea = item;
+    this.applyIndoorSelection();
+    this.map?.triggerRepaint();
+  }
+
   setRoomWallSelection(items: IndoorItem[]) {
     this.roomWallSelection = items;
     this.applyIndoorSelection();
@@ -941,7 +949,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       else if (o instanceof Line2) o.material = keys.has(key) ? ESCALATOR_SELECTED_HANDRAIL : o.userData.escalatorMaterial;
     });
     const items = [...this.level?.items ?? [], ...this.level?.highlights ?? []].filter((i) => keys.has(i.key));
-    if (this.level) items.push(...this.roomWallSelection);
+    if (this.level) items.push(...this.roomWallSelection, ...(this.freeArea ? [this.freeArea] : []));
     if (!g || (!items.length && ![...keys].some((key) => this.doorOpeningEdges.has(key)))) return;
     const root = new THREE.Group();
     this.indoorSelObj = root;

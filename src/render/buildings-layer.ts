@@ -1115,7 +1115,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Чуть ниже потолка: днища частей, начинающихся на потолке, и крыши частей на этой высоте не накрывают план
     const cut = this.levelCut = this.cutZ();
     const planes = cut !== undefined ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), cut)] : null;
-    for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL]) m.clippingPlanes = planes;
+    // Входы на контуре — тоже: у частей выше среза они висели бы в воздухе
+    for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL, ENTRANCE_MATERIAL, ENTRANCE_SELECTED_MATERIAL, ENTRANCE_LINE_MATERIAL]) m.clippingPlanes = planes;
     for (const m of [ESCALATOR_BELT, ESCALATOR_SIDE, ESCALATOR_STEP, ESCALATOR_BALUSTRADE, ESCALATOR_HANDRAIL,
       ESCALATOR_PALE_BELT, ESCALATOR_PALE_SIDE, ESCALATOR_PALE_STEP, ESCALATOR_PALE_BALUSTRADE, ESCALATOR_PALE_HANDRAIL, ESCALATOR_SELECTED, ESCALATOR_SELECTED_HANDRAIL]) m.clippingPlanes = planes;
     if (this.indoorObj) {

@@ -12011,6 +12011,16 @@ function tileSource(): TileSource {
 void refreshUser();
 
 bindTagForms(infoEl, () => session);
+// Выбор из списка (тип крыши и т. п.) или Enter в поле завершает ввод: фокус уходит из поля, горячие клавиши
+// инструментов — снова карте. Снимаем до применения: перерисовка формы вернула бы фокус в поле, где он был
+document.addEventListener('change', (e) => { if (e.target instanceof HTMLSelectElement) e.target.blur(); }, true);
+document.addEventListener('keydown', (e) => {
+  const el = e.target;
+  // Свой Enter (подстановка из списка, «Прочие теги», поле инструмента) уже отработал — preventDefault
+  if (e.key !== 'Enter' || e.defaultPrevented || e.isComposing || !(el instanceof HTMLInputElement)) return;
+  if (el.type === 'checkbox' || el.type === 'radio' || el.type === 'button') return;
+  el.blur();
+});
 bindOtherTags(infoEl,
   (key, indoor) => session.get(key)?.tags ?? (indoor ? (focus ? buildingIndoor(focus) : shownIndoor).find(f => indoorKey(f.key) === key)?.tags : entity(key)?.tags),
   (key, tag, value, indoor) => {

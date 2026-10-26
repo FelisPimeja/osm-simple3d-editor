@@ -7867,8 +7867,9 @@ function renderIndoorSelection(add = false) {
   overpassLayer.setIndoorSelection(indoorSelection.map((x) => x.key));
   indoorPois.setSelection(indoorSelection.map((x) => x.key));
   syncIssueFilter();
-  if (!indoorSelection.length) { clearInfo(); return; }
+  if (!indoorSelection.length) { clearInfo(); updateTagsClip(); return; }
   if (selection.length) select(undefined);
+  updateTagsClip();
   if (indoorSelection.length > 1) { renderIndoorMulti(indoorSelection); return; }
   f = indoorSelection[0];
   const key = indoorKey(f.key);
@@ -11003,11 +11004,32 @@ function renderSelected() {
 /** Не переносятся: type задаёт устройство отношения (мультиполигон, здание), а не свойства объекта. */
 const UNCOPIED_TAGS = new Set(['type']);
 
-/** Выбранные объекты, теги которых можно копировать и менять (в сессии). */
-const tagClipKeys = () => selection.filter((k) => session.get(k));
+/**
+ * Выбранные объекты, теги которых можно копировать и менять: части и контуры (в сессии), indoor-объекты плана
+ * этажа, вход на фасаде. У каждого — свои теги и своя запись (indoor и вход начинают отслеживаться при правке).
+ */
+interface TagClipTarget { key: string; tags: Record<string, string> }
+function tagClipTargets(): TagClipTarget[] {
+  if (selectedEntrance !== undefined) {
+    const key = `node/${selectedEntrance}`;
+    return [{ key, tags: session.get(key)?.tags ?? entranceTags(selectedEntrance) ?? {} }];
+  }
+  if (indoorSelection.length) return indoorSelection.filter((f) => !f.key.startsWith('level-new/')).map((f) => {
+    const key = indoorKey(f.key);
+    return { key, tags: session.get(key)?.tags ?? f.tags };
+  });
+  return selection.flatMap((key) => { const f = session.get(key); return f ? [{ key, tags: f.tags }] : []; });
+}
+
+/** Записать теги выбранным объектам одним шагом истории — тем же путём, что их формы свойств. */
+function setClipTags(edits: TagClipTarget[]) {
+  if (selectedEntrance !== undefined) { for (const e of edits) setEntranceTags(selectedEntrance, e.tags); return; }
+  if (indoorSelection.length) { setIndoorTags(edits); renderIndoorSelection(); return; }
+  session.editMany(edits);
+}
 
 function updateTagsClip() {
-  const keys = tagClipKeys();
+  const keys = tagClipTargets().map((t) => t.key);
   tagsClip.hidden = !keys.length && !copiedTags;
   copyTagsBtn.disabled = keys.length !== 1;
   pasteTagsBtn.disabled = !copiedTags || !keys.length || (keys.length === 1 && keys[0] === copiedTags.from);
@@ -11017,19 +11039,19 @@ function updateTagsClip() {
 tagsClip.addEventListener('click', (e) => {
   e.stopPropagation(); // не сворачивать панель
   const t = e.target as HTMLElement;
-  const keys = tagClipKeys();
-  if (t.closest('[data-copy-tags]') && keys.length === 1) {
-    const tags = Object.fromEntries(Object.entries(session.get(keys[0])!.tags).filter(([k]) => !UNCOPIED_TAGS.has(k)));
-    copiedTags = { from: keys[0], tags };
-    setStatus(trn(Object.keys(tags).length, 'Скопирован {n} тег {key}.|Скопировано {n} тега {key}.|Скопировано {n} тегов {key}.', { key: keys[0] }));
+  const targets = tagClipTargets();
+  if (t.closest('[data-copy-tags]') && targets.length === 1) {
+    const tags = Object.fromEntries(Object.entries(targets[0].tags).filter(([k]) => !UNCOPIED_TAGS.has(k)));
+    copiedTags = { from: targets[0].key, tags };
+    setStatus(trn(Object.keys(tags).length, 'Скопирован {n} тег {key}.|Скопировано {n} тега {key}.|Скопировано {n} тегов {key}.', { key: targets[0].key }));
   } else if (t.closest('[data-paste-tags]') && copiedTags) {
     const from = copiedTags;
-    const edits = keys.filter((k) => k !== from.from).flatMap((key) => {
-      const cur = session.get(key)!.tags, tags = { ...cur, ...from.tags };
+    const edits = targets.filter((x) => x.key !== from.from).flatMap(({ key, tags: cur }) => {
+      const tags = { ...cur, ...from.tags };
       return Object.keys(from.tags).some((k) => cur[k] !== tags[k]) ? [{ key, tags }] : [];
     });
     if (!edits.length) setStatus(tr('Теги уже такие же.'));
-    else { session.editMany(edits); setStatus(trn(edits.length, 'Теги {from} вставлены в {n} объект. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объекта. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объектов. Отменить — Ctrl+Z.', { from: from.from })); }
+    else { setClipTags(edits); setStatus(trn(edits.length, 'Теги {from} вставлены в {n} объект. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объекта. Отменить — Ctrl+Z.|Теги {from} вставлены в {n} объектов. Отменить — Ctrl+Z.', { from: from.from })); }
   }
   updateTagsClip();
 });

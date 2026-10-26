@@ -594,6 +594,7 @@ const tileBorders = new TileBorders(map);
 const roadsLayer = new RoadsLayer('osm-roads-3d');
 const indoorPois = new IndoorPois(map, overpassLayer, (f, add) => selectIndoor(f, add));
 const overpass = new OverpassTiles(map, overpassLayer, () => {
+  syncDataEntrances();
   updateTileFilter();
   showOverpassStatus();
   if (focus) { renderLevels(); renderIssues(); }
@@ -616,6 +617,20 @@ function createdShapes(): Feature3D[] {
 
 /** Теги узлов в сессии (id → теги): входы контуров — по ним, а не по загруженным (см. withEntranceEdits). */
 const sessionNodeTags = new Map<number, Record<string, string>>();
+/** Входы загруженных данных (id узла → теги): у правленого пути в сессии своих входов нет. */
+let dataEntrances = new Map<number, Record<string, string>>();
+
+/**
+ * Пришли тайлы — входы данных заново. Режим здания открыт раньше, чем пришли входы (вход в здание по ссылке
+ * с правками в сессии): правленые объекты здания — заново, с входами, и список «Двери».
+ */
+function syncDataEntrances() {
+  const before = dataEntrances.size;
+  dataEntrances = overpass.dataEntrances();
+  if (!focus || dataEntrances.size === before) return;
+  for (const f of groupFeatures(focus)) if (session.has(f.key)) previewFocus(f);
+  renderOutliner();
+}
 
 /** Узлы с правками: теги из сессии (нет в сессии — убрать). */
 function syncSessionNodes(keys: string[]) {
@@ -631,16 +646,17 @@ function syncSessionNodes(keys: string[]) {
  * фасаде с плана этажа). Входы в данных — по тегам узлов при загрузке, правки сессии их не трогают.
  */
 function withEntranceEdits(f: Feature3D): Feature3D {
-  if (!sessionNodeTags.size) return f;
-  const out = new Map((f.entrances ?? []).map((e) => [e.id, e.tags]));
-  let touched = false;
+  // Объект из данных без правок узлов — входы уже по данным
+  if (!sessionNodeTags.size && !session.has(f.key)) return f;
+  const out = new Map<number, Record<string, string>>();
   for (const p of f.polygons) for (const id of [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]) {
-    const t = sessionNodeTags.get(id);
-    if (!t) continue;
-    touched = true;
-    if (t.entrance) out.set(id, t); else out.delete(id);
+    // Узел в сессии — по её тегам; иначе — по данным (правленый путь в сессии хранится без входов)
+    const t = sessionNodeTags.get(id) ?? dataEntrances.get(id);
+    if (t?.entrance) out.set(id, t);
   }
-  return touched ? { ...f, entrances: [...out].map(([id, tags]) => ({ id, tags })) } : f;
+  const was = f.entrances ?? [];
+  if (was.length === out.size && was.every((e) => out.get(e.id) === e.tags)) return f;
+  return { ...f, entrances: out.size ? [...out].map(([id, tags]) => ({ id, tags })) : undefined };
 }
 overpass.setExtras(createdShapes);
 let selectedKey: string | undefined;
@@ -6046,7 +6062,7 @@ function renderEntrance(id: number) {
   }).join('');
   infoEl.innerHTML = `<h2>${esc(title)}${name} — <a href="${server().web}/node/${id}" target="_blank" rel="noopener">node/${id}</a></h2>`
     + `<div class="tag-form">${rows}</div>`
-    + `<p class="hint">${tr('Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.')}</p>`
+    + `<p class="hint">${tr('Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.')} ${tr('Del — удалить вход (узел останется вершиной контура).')}</p>`
     + `<details class="all-tags" open><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-entrance-tag]')) {
@@ -6065,6 +6081,23 @@ function setEntranceTags(id: number, next: Record<string, string>) {
   // Узел — и дверь плана этажа (с level): план берёт теги из сессии
   if (focus && buildingIndoorFor(key)) indoorEdited.add(key);
   session.editMany([{ key, tags }]);
+}
+
+/** Теги двери: при удалении входа снимаются только они, остальные (адрес и т. п.) остаются у вершины. */
+const DOOR_TAG_KEYS = ['entrance', 'door', 'level', 'repeat_on', 'ref'];
+
+/** Удалить вход на фасаде (Del): узел остаётся вершиной контура и помещений, теряет теги двери. */
+function deleteEntrance(id: number) {
+  const key = `node/${id}`;
+  const t = session.get(key)?.tags ?? entranceTags(id) ?? {};
+  const rest = Object.fromEntries(Object.entries(t).filter(([k, v]) => !DOOR_TAG_KEYS.includes(k) && !(k === 'indoor' && v === 'door')));
+  cancelEntranceDrag();
+  selectedEntrance = undefined;
+  overpassLayer.setEntranceSelection(undefined);
+  setEntranceTags(id, rest);
+  renderSelected();
+  renderOutliner();
+  setStatus(tr('Вход {key} удалён: узел остался вершиной контура. Отменить — Ctrl+Z.', { key }));
 }
 
 /**
@@ -6867,6 +6900,12 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     closeCtxMenu();
     deleteIndoorSelection();
+    return;
+  }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && selectedEntrance !== undefined) {
+    e.preventDefault();
+    closeCtxMenu();
+    deleteEntrance(selectedEntrance);
     return;
   }
   if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && selection.length) {
@@ -8818,7 +8857,13 @@ function pointTarget(screen: [number, number]): PointTarget | undefined {
     });
   });
   for (const f of shownIndoor) if (!f.point && !f.line && indoorKey(f.key).startsWith('way/') && f.polygons.length === 1) add(f, true);
-  for (const f of groupFeatures(focus)) if (f.key.startsWith('way/')) add(f, false);
+  // Пути здания — только объёмы, стены которых проходят через пол этажа: навес (building:part=roof) и части выше
+  // или ниже этажа вдоль фасада — не стена, вход по ним строился бы на их высоте
+  const spans = (f: Feature3D) => {
+    const h = computeHeights(f.tags);
+    return f.tags['building:part'] !== 'roof' && h.min <= z + 0.1 && h.wallTop > z + 0.1;
+  };
+  for (const f of groupFeatures(focus)) if (f.key.startsWith('way/') && spans(f)) add(f, false);
   // Ближайшая сторона на экране
   const px = (q: [number, number]) => overpassLayer.focusProject(new THREE.Vector3(q[0], q[1], z));
   // Стороны частей здания — только по фасаду (граница двух частей внутри — не стена этажа)

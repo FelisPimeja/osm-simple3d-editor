@@ -312,6 +312,15 @@ export class OverpassTiles {
 
   private readonly featureIndex = new WeakMap<Feature3D[], Map<string, Feature3D>>();
 
+  /** Входы (entrance=*) на узлах контуров загруженных данных: id узла → теги. */
+  dataEntrances(): Map<number, Record<string, string>> {
+    const out = new Map<number, Record<string, string>>();
+    for (const e of this.cache.values()) {
+      if (e.state === 'ready') for (const f of e.features) for (const x of f.entrances ?? []) out.set(x.id, x.tags);
+    }
+    return out;
+  }
+
   /** Исходные данные тайла без несохранённых правок сессии и без нарисованного overlay. */
   cachedFeature(key: string): Feature3D | undefined {
     for (const e of this.cache.values()) {

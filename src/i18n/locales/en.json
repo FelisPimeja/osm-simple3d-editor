@@ -1304,5 +1304,7 @@
   "Ключ": "Key",
   "Значение": "Value",
   "Ключ не должен содержать пробелы или знак равенства.": "The key must not contain spaces or an equals sign.",
-  "Такой тег уже существует. Измените его значение в панели свойств.": "This tag already exists. Edit its value in Properties."
+  "Такой тег уже существует. Измените его значение в панели свойств.": "This tag already exists. Edit its value in Properties.",
+  "Вход {key} удалён: узел остался вершиной контура. Отменить — Ctrl+Z.": "Entrance {key} deleted: the node stays a vertex of the outline. Undo with Ctrl+Z.",
+  "Del — удалить вход (узел останется вершиной контура).": "Del deletes the entrance (the node stays a vertex of the outline)."
 }

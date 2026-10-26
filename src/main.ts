@@ -8690,6 +8690,8 @@ function indoorCreateEdits(poly: Polygon, tags: Record<string, string>, nodeFor:
 const CUT_MIN_AREA = 0.05;
 /** Насколько глубоко нарисованная линия должна зайти в объект, чтобы его резать, м. */
 const CUT_REACH = 0.5;
+/** Точка линии ближе этого к стороне, м, — на стороне (конец линии, привязанный к стене). */
+const CUT_ON_SIDE = 0.02;
 
 /**
  * «Рассечь» на плане этажа: ломаная pts (метры сцены, концы — за стенами) делит помещения, коридоры, площадки
@@ -8714,16 +8716,28 @@ function cutPlan(pts: [number, number][]): string | undefined {
     inners: p.slice(1).map((r) => r.slice(0, -1).map((q) => overpassLayer.focusToLngLat(q[0], q[1])! as LonLat)), });
   const localArea = (p: [number, number][][]) => ringArea(p[0].slice(0, -1)) - p.slice(1).reduce((a, r) => a + ringArea(r.slice(0, -1)), 0);
   /** Куски полигона по разрезу; меньше двух — разрез его не делит. */
-  // Точки нарисованной линии через 0,1 м: продление за концами нужно лишь чтобы выйти за стену
+  // Точки нарисованной линии через 5 см: продление за концами нужно лишь чтобы выйти за стену
   const samples: [number, number][] = [];
   for (let i = 0; i < pts.length - 1; i++) {
     const [a, b] = [pts[i], pts[i + 1]];
-    const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.1));
+    const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.05));
     for (let k = 0; k <= n; k++) samples.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
   }
-  /** Нарисованная линия заходит в полигон глубже CUT_REACH от его сторон (соседа на продолжении или заступ за стену не режем). */
-  const entered = (local: [number, number][][]) => samples.some((q) => pointInRing(q, local[0]) && !local.slice(1).some((r) => pointInRing(q, r))
-    && local.every((r) => r.every((a, i) => i === r.length - 1 || segDist2(q, a, r[i + 1]) > CUT_REACH)));
+  /**
+   * Нарисованная линия режет полигон: заходит в него глубже CUT_REACH от его сторон или проходит его насквозь —
+   * от стороны до стороны (маленький кусок у стены или угла). Соседа на продолжении линии и заступ концом
+   * за стену не режем: там линия в полигоне обрывается, не выйдя из него.
+   */
+  const entered = (local: [number, number][][]) => {
+    const inside = (q: [number, number]) => pointInRing(q, local[0]) && !local.slice(1).some((r) => pointInRing(q, r));
+    const wall = (q: [number, number]) => Math.min(...local.map((r) => Math.min(...r.slice(0, -1).map((a, i) => segDist2(q, a, r[i + 1])))));
+    // По точке: 1 — в глубине, 0 — внутри у стороны (или на ней), -1 — снаружи
+    const at = samples.map((q) => { if (!inside(q)) return -1; const d = wall(q); return d > CUT_REACH ? 1 : d > CUT_ON_SIDE ? 0 : -1; });
+    if (at.includes(1)) return true;
+    // Насквозь: отрезок точек внутри, с обеих сторон которого линия снаружи или на стороне
+    const first = at.indexOf(0), last = at.lastIndexOf(0);
+    return first > 0 && last < at.length - 1 && at.slice(0, first).includes(-1) && at.slice(last + 1).includes(-1);
+  };
   const cut = (p: Polygon): [number, number][][][] => {
     const local = [toLocal(p.outer), ...p.inners.map(toLocal)];
     if (!entered(local)) return [];

@@ -8912,7 +8912,10 @@ function placePoint(screen: [number, number]) {
     if (t.building.length) {
       const coord = new Map<number, LonLat>([[id, t.at]]);
       for (const b of t.building) { coord.set(b.u, b.cu); coord.set(b.v, b.cv); }
-      const out = insertIntoNeighbours(`node/${id}`, t.building.map((b) => ({ id, p: t.local, u: b.u, v: b.v })), coord);
+      // Сторона, общая для контура и части, — одна вставка: вставка встаёт во все пути с этой стороной,
+      // повтор дал бы узел дважды подряд (сторона нулевой длины — вход на фасаде не строился)
+      const sides = new Map(t.building.map((b) => [b.u < b.v ? `${b.u},${b.v}` : `${b.v},${b.u}`, b]));
+      const out = insertIntoNeighbours(`node/${id}`, [...sides.values()].map((b) => ({ id, p: t.local, u: b.u, v: b.v })), coord);
       if (typeof out === 'string') { setStatus(out, true); return; }
       edits.push(...out);
     }

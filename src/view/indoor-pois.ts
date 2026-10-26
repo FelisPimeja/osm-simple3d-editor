@@ -116,7 +116,8 @@ export class IndoorPois {
     const labelled = refs.filter((f) => (f.tags.ref || f.tags.name) && !f.line && f.polygons.length);
     const sig = `${z}|${shown.map((f) => {
       const p = positions.get(f.key);
-      return `${f.key}:${p ? `${p.at.join(',')}:${p.z}` : ''}`;
+      // Точка и значок — тоже: дверь сдвинули («Переместить») или сменили вид — значок за ней
+      return `${f.key}:${f.point!.join(',')}:${poiIcon(f.tags)}:${p ? `${p.at.join(',')}:${p.z}` : ''}`;
     }).join(',')}|${labelled.map((f) => `${f.key}:${f.tags.ref}:${f.tags.name}:${f.polygons[0].outer.length}:${f.polygons[0].outer[0]}`).join(',')}`;
     if (sig === this.signature) return;
     this.signature = sig;

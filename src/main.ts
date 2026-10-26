@@ -64,7 +64,7 @@ import { Autosave, type SavedEdits } from './edit/autosave';
 import { onSkeletons } from './render/skeleton';
 import { timed } from './perf';
 import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmStatus, josmUndo, josmUnderlayHistory, josmUnderlayStep, watchJosmUnderlays, minElementId, refreshJosmStatus, sendJosmSelection, watchJosmSelection, type JosmChange, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
-import { deprecations, idFieldLabel, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
+import { deprecations, idFieldLabel, idOptions, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
 import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, setDateFields, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
@@ -7422,6 +7422,33 @@ function isInteriorDoor(f: IndoorFeature, g: BuildingGroup): boolean {
     && farFromEdge(p.outer) && p.inners.every(farFromEdge)));
 }
 
+/** Допуск «узел на стене», м. */
+const DOOR_ON_WALL = 0.3;
+
+/**
+ * Наружные двери здания g: узел на сечении здания на своём этаже (у частей разной высоты — по этажу) или на
+ * контуре этажа indoor=level. Сечение — только у здания режима; у другого — его контур. Сечения — раз на этаж.
+ */
+function outerDoorTest(g: BuildingGroup, indoor: IndoorFeature[]): (f: IndoorFeature) => boolean {
+  // Этажи и контур — при первой двери: проверка зовёт тест у каждого объекта
+  let levels: Level[] | undefined, outline: LonLat[][] | undefined;
+  const byLevel = new Map<number, LonLat[][]>();
+  const rings = (n: number) => {
+    let r = byLevel.get(n);
+    if (!r) {
+      levels ??= focus === g ? buildingLevels(g, indoor) : [];
+      outline ??= groupFeatures(g).filter((b) => b.kind === 'building').flatMap((b) => b.polygons.flatMap((p) => [p.outer, ...p.inners]));
+      const l = levels.find((x) => x.n === n);
+      const section = l ? levelSection(l)?.flat() : undefined;
+      r = [...(section?.length ? section : outline),
+        ...indoor.filter((x) => x.kind === 'level' && x.levels.includes(n)).flatMap((x) => x.polygons.flatMap((p) => [p.outer, ...p.inners]))];
+      byLevel.set(n, r);
+    }
+    return r;
+  };
+  return (f) => isDoor(f) && f.levels.some((n) => rings(n).some((ring) => nearRing(f.point!, ring, DOOR_ON_WALL)));
+}
+
 /**
  * Дополнить этажи по этажности целыми этажами из indoor-данных (подвал без building:levels:underground и т. п.):
  * высота этажа — как у ближайшего известного, без этажности — LEVEL_HEIGHT от земли.
@@ -7724,8 +7751,12 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
   bindIndoorForm(fs);
 }
 
-/** Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений и зон. */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width'] : fs.every(isDoor) ? ['door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
+/**
+ * Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений
+ * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance.
+ */
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
+  : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
   : [...INDOOR_EDIT_TAGS].filter((k) => (k !== 'ref' && k !== 'name') || fs.every((f) => f.kind === 'room' || f.kind === 'area')));
@@ -7768,6 +7799,11 @@ function isToiletRoom(f: IndoorFeature): boolean {
 }
 const isDoor = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && !f.key.endsWith('#poi')
   && !!(f.tags.door || f.tags.indoor === 'door' || f.tags.entrance);
+/** Все двери — входы: уже с entrance или на наружной стене здания режима. */
+function entranceDoors(fs: IndoorFeature[]): boolean {
+  const outer = focus && fs.some((f) => !f.tags.entrance) ? outerDoorTest(focus, buildingIndoor(focus)) : undefined;
+  return fs.every((f) => !!f.tags.entrance || !!outer?.(f));
+}
 
 /** Обработчики формы: правка поля — у всех выбранных одним шагом истории. */
 function bindIndoorForm(fs: IndoorFeature[]) {
@@ -7869,6 +7905,8 @@ function indoorFieldLabel(k: string, fs: IndoorFeature[]): string {
     height: level ? tr('Высота этажа, м') : tr('Высота, м'), 'level:ref': tr('Обозначение этажа'), name: tr('Название'), ref: tr('Номер'),
     // У iD и indoor, и room — «Тип»: рядом не различить
     indoor: tr('Вид'), room: tr('Назначение'), width: tr('Ширина, м'), diameter: tr('Диаметр'),
+    // У iD — «Тип»: рядом с типом двери не различить
+    entrance: tr('Тип входа'),
   };
   return own[k] ?? idFieldLabel(k) ?? k;
 }
@@ -7880,10 +7918,12 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
     const value = mixed ? '' : [...values][0];
     const changed = fs.some((f) => session.isChanged(indoorKey(f.key), k));
     // Свой список, а не datalist: тот показывает только варианты, совпадающие с уже введённым значением
-    const options = k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : undefined;
+    // Тип входа — варианты и подписи из схемы iD (поле entrance пресета «Вход / выход»)
+    const options = k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : k === 'entrance' ? idOptions('entrance') : undefined;
     const label = `<span title="${esc(k)}">${esc(indoorFieldLabel(k, fs))}</span>`;
     if (options) return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
-      + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : '—', k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : ROOM_LABELS, k) + '</label>';
+      + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : k === 'entrance' ? tr('не вход') : '—',
+        k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : k === 'room' ? ROOM_LABELS : undefined, k) + '</label>';
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : placeholders[k] ?? (k === 'diameter' ? '2.4 m' : '—')}" spellcheck="false" autocomplete="off"></label>`;
   }).join('');
@@ -9548,7 +9588,8 @@ function renderIssues() {
   const simpleIssues = focus ? [...buildingIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : strayPartsOf(focus))] : [];
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding ? buildingIndoor(focusedBuilding) : [];
-  const indoorIssues = focusedBuilding ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding))), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
+  const outerDoor = focusedBuilding ? outerDoorTest(focusedBuilding, indoorAll) : undefined;
+  const indoorIssues = focusedBuilding ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), outerDoor!(f))), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
   const duplicates = focusedBuilding ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
   focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
   // Слой зданий выключен — проверку карты не считаем (пересчитаем, когда включат)
@@ -9863,12 +9904,14 @@ issuesEl.addEventListener('mouseleave', () => {
 /** Проблемы изменённых объектов (для «Правок» перед отправкой): по зданиям, куда они входят. */
 function changeIssues(keys: string[]): Issue[] {
   const changed = new Set(keys), seen = new Set<string>(), out: Issue[] = [];
+  let outerDoor: ((f: IndoorFeature) => boolean) | undefined;
   for (const k of keys) {
     if (indoorEdited.has(k)) {
       const f = session.get(k);
       if (f) {
         const indoor = buildingIndoorFor(k);
-        out.push(...validateIndoor({ key: k, tags: f.tags }, !!indoor && !!focus && isInteriorDoor(indoor, focus)));
+        if (indoor && focus) outerDoor ??= outerDoorTest(focus, buildingIndoor(focus));
+        out.push(...validateIndoor({ key: k, tags: f.tags }, !!indoor && !!focus && isInteriorDoor(indoor, focus), !!indoor && !!outerDoor?.(indoor)));
       }
       continue;
     }

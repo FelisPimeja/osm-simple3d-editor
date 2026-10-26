@@ -18,7 +18,7 @@ const dist = (f) => JSON.parse(readFileSync(require.resolve(`${dir}/dist/${f}`),
 const FIELDS = {
   'building:part': 'building/part', height: 'height', min_height: 'min_height', 'building:levels': 'building/levels',
   'roof:shape': 'roof/shape', 'roof:height': 'roof/height', 'roof:colour': 'roof/colour', 'building:colour': 'building/colour',
-  level: 'level', indoor: 'indoor_type', room: 'room', door: 'door',
+  level: 'level', indoor: 'indoor_type', room: 'room', door: 'door', entrance: 'entrance',
 };
 const LANGS = ['en', 'ru'];
 

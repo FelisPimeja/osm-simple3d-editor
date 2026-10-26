@@ -184,6 +184,55 @@
     "ru": "Дверь"
    },
    "values": {}
+  },
+  "entrance": {
+   "id": "entrance",
+   "type": "typeCombo",
+   "label": {
+    "en": "Type",
+    "ru": "Тип входа"
+   },
+   "values": {
+    "en": {
+     "emergency": "Emergency Exit",
+     "main": "Main Entrance",
+     "shop": "Shop Entrance",
+     "staircase": "Staircase Entrance",
+     "yes": "Unspecified",
+     "secondary": "Secondary",
+     "service": "Service",
+     "exit": "Exit Only",
+     "entrance": "Entrance Only",
+     "home": "Private House or Apartment",
+     "garage": "Garage Door"
+    },
+    "ru": {
+     "emergency": "Эвакуационный выход",
+     "main": "Главный вход",
+     "shop": "Вход в магазин",
+     "staircase": "Дверь в подъезд",
+     "entrance": "Только вход",
+     "exit": "Только выход",
+     "garage": "Гаражные ворота",
+     "home": "Частный дом или квартира",
+     "secondary": "Запасной",
+     "service": "Служебный",
+     "yes": "Неуточнённый"
+    }
+   },
+   "options": [
+    "yes",
+    "main",
+    "secondary",
+    "service",
+    "shop",
+    "exit",
+    "entrance",
+    "emergency",
+    "staircase",
+    "home",
+    "garage"
+   ]
   }
  }
 }

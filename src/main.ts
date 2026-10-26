@@ -611,7 +611,15 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
 roadsLayer.onBuilt = () => overpass.setTreeCuts(roadsLayer.treeCuts);
 // В режиме здания карта вокруг убрана — мосты и тоннели тоже
 roadsLayer.hidden = () => focusScene();
-overpass.setExtras(() => session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length) as Feature3D[]);
+/**
+ * Созданные в сессии здания и части (с контуром). Новые indoor-объекты (помещения, площадки, этажи) — не объёмы:
+ * они живут в плане этажа (indoorCreated), в 3D-слой зданий не идут.
+ */
+function createdShapes(): Feature3D[] {
+  return session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length
+    && !(t.tags.indoor && !t.tags.building && !t.tags['building:part']));
+}
+overpass.setExtras(createdShapes);
 let selectedKey: string | undefined;
 /** Все выделенные объекты (Shift+клик добавляет); selectedKey — последний из них. */
 let selection: string[] = [];
@@ -1733,7 +1741,7 @@ function looseFeatures(near: { w: number; s: number; e: number; n: number }, poo
 
 /** Все объекты вне отношений (с правками сессии) — один раз на серию поисков looseFeatures. */
 function loosePool(): Feature3D[] {
-  const all = [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)];
+  const all = [...overpass.allFeatures(), ...createdShapes()];
   return all.filter((f) => f.polygons?.length && !session.isDeleted(f.key) && !groupOf(f.key))
     .map((f) => (session.has(f.key) ? (session.get(f.key) as Feature3D | undefined) ?? f : f))
     .filter((f) => f.polygons?.length);
@@ -4799,7 +4807,7 @@ interface RingRewrite {
 function liveFeatures(): Feature3D[] {
   const out = overpass.allFeatures();
   const have = new Set(out.map((f) => f.key));
-  for (const c of session.createdAlive()) if (c.polygons?.length && !have.has(c.key)) out.push(c as Feature3D);
+  for (const c of createdShapes()) if (!have.has(c.key)) out.push(c);
   return out;
 }
 
@@ -9005,7 +9013,7 @@ function strayPartIssues(scope: Feature3D[]): Issue[] {
   if (!parts.length) return [];
   const isOutline = (b: Feature3D) => !!b.tags.building && b.tags.building !== 'no' && !b.tags['building:part'];
   // Рамки контуров считаем один раз: точку части сначала проверяем по рамке, полигон — только у попавших
-  const all = [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)]
+  const all = [...overpass.allFeatures(), ...createdShapes()]
     .filter((f) => f.polygons?.length && !session.isDeleted(f.key) && isOutline(f))
     .map((f) => (session.has(f.key) ? (session.get(f.key) as Feature3D | undefined) ?? f : f))
     .filter((f) => f.polygons?.length)
@@ -9059,7 +9067,7 @@ function implicitIssues(scope: Feature3D[]): Issue[] {
 function orphanPartIssues(scope: Feature3D[]): Issue[] {
   const parts = scope.filter((f) => f.kind === 'part');
   if (!parts.length) return [];
-  const buildings = [...overpass.allFeatures(), ...session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length)]
+  const buildings = [...overpass.allFeatures(), ...createdShapes()]
     .filter((f) => !session.isDeleted(f.key))
     .map((f) => (session.has(f.key) ? (session.get(f.key) as Feature3D | undefined) ?? f : f));
   return timed('проверка частей без здания', () => validateOrphanParts(parts, buildings, (key) => !!groupOf(key)), (r) => `${r.length}`);

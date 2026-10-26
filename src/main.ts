@@ -7258,7 +7258,7 @@ function buildingLevels(g: BuildingGroup, indoor: IndoorFeature[]): Level[] {
   const info = indoorLevelInfo(indoor);
   return withIndoorLevels(focusLevels(g, info), indoor, info).map((l) => {
     const i = info.get(l.n);
-    return i ? { ...l, ref: i.ref, name: i.name } : l;
+    return i ? { ...l, ref: i.ref, name: i.name, levelKeys: i.keys, heightTag: i.heightTag } : l;
   });
 }
 
@@ -8208,6 +8208,36 @@ const humanFloor = (n: number) => (lang === 'ru' ? n + 1 : n);
 /** Название этажа: у подземных сохраняем номер level, надземные нумеруем по локали. */
 const LEVEL_NAME = (n: number) => tr('{n} этаж', { n: n < 0 ? n : humanFloor(n) });
 
+/**
+ * Свойства выбранного этажа (панель свойств, когда ничего не выделено): высота этажа — height на его indoor=level
+ * (по вики — высота самого этажа; отметка пола — сумма высот ниже). Нет indoor=level — высота расчётная.
+ */
+function describeLevel(l: Level): string {
+  const h = +(l.ceil - l.floor).toFixed(2);
+  const title = `<h2>${l.ref ? esc(tr('Этаж {ref}', { ref: l.ref })) : LEVEL_NAME(l.n)}${l.name ? ` <span class="hint">${esc(l.name)}</span>` : ''}</h2>`
+    + `<p class="hint">level=${l.n} · ${tr('пол {floor} м, потолок {ceil} м', { floor: +l.floor.toFixed(2), ceil: +l.ceil.toFixed(2) })}</p>`;
+  if (!l.levelKeys?.length) return title + `<p class="hint">${tr('Высота этажа {h} м — расчётная (по этажности). Задать её можно тегом height на indoor=level этажа, а его здесь нет.', { h })}</p>`;
+  const tagged = l.heightTag !== undefined ? parseFloat(l.heightTag) : undefined;
+  const ignored = l.heightTag !== undefined && !l.explicit
+    ? ` <span class="lv-warn" title="${esc(tr('height={v} не учтена: вне {min}–{max} м или не сходится с высотой части', { v: l.heightTag, min: MIN_LEVEL_STEP, max: MAX_LEVEL_STEP }))}">!</span>` : '';
+  const objs = l.levelKeys.map((k) => `<a href="#" data-select-indoor="${esc(k)}">${esc(k)}</a>`).join(', ');
+  return title + `<p><label>${tr('Высота этажа')} <input type="number" min="0" step="0.1" data-level-height="${l.n}"
+    value="${tagged !== undefined && Number.isFinite(tagged) ? tagged : ''}" placeholder="${h}"> ${tr('м')}</label>${ignored}</p>
+    <p class="hint">${tr('height на {objs}; пусто — по этажности. Пол этажей выше сдвинется.', { objs })}</p>`;
+}
+
+/** Высота этажа n: height на всех его indoor=level (пусто — тег убрать). */
+function setLevelHeight(l: Level, value: string) {
+  const v = value.trim() === '' ? '' : String(+(+value).toFixed(2));
+  if (v !== '' && !(+v > 0)) return;
+  const edits = (l.levelKeys ?? []).map((key) => {
+    const tags = { ...(session.get(key)?.tags ?? buildingIndoorFor(key)?.tags ?? {}) };
+    if (v) tags.height = v; else delete tags.height;
+    return { key, tags };
+  });
+  setIndoorTags(edits, 'height');
+}
+
 /** Панель этажей режима здания: список по этажности и indoor-данным, клик — срез здания выше этажа. */
 /**
  * Почему этаж выбивается из ожидаемых высот (для «!» в панели): высота этажа вне MIN/MAX_LEVEL_STEP
@@ -8482,6 +8512,14 @@ function levelVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[], 
   return buildingVoids(g, levels, indoor).get(n) ?? [];
 }
 
+infoEl.addEventListener('change', (e) => {
+  const input = (e.target as HTMLElement).closest<HTMLInputElement>('input[data-level-height]');
+  if (!input || !focus) return;
+  const l = buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === Number(input.dataset.levelHeight));
+  if (l) setLevelHeight(l, input.value);
+});
+infoEl.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (e.target as HTMLElement).matches('input[data-level-height]')) (e.target as HTMLInputElement).blur(); });
+
 levelsEl.addEventListener('click', (e) => {
   const link = (e.target as HTMLElement).closest<HTMLElement>('[data-select]');
   if (link) { e.preventDefault(); select(link.dataset.select); return; }
@@ -8491,6 +8529,14 @@ levelsEl.addEventListener('click', (e) => {
   currentLevel = n;
   linkLevel = undefined;
   renderLevels();
+  if (!selection.length && !indoorSelection.length) renderSelected(); // свойства этажа
+});
+infoEl.addEventListener('click', (e) => {
+  const ilink = (e.target as HTMLElement).closest<HTMLElement>('[data-select-indoor]');
+  if (!ilink) return;
+  e.preventDefault();
+  const f = buildingIndoorFor(ilink.dataset.selectIndoor!);
+  if (f) selectIndoor(f);
 });
 
 /** Члены группы панели по data-group (для клика по группе). */
@@ -10019,6 +10065,8 @@ function dateSources(key: string): InheritSource[] {
 
 /** Панель режима одного здания, пока ничего не выделено. */
 function describeFocus(g: BuildingGroup): string {
+  const level = currentLevel !== undefined ? buildingLevels(g, buildingIndoor(g)).find((l) => l.n === currentLevel) : undefined;
+  if (level) return describeLevel(level) + focusExitButton('Esc');
   const name = g.tags.name ?? outlineTags(g)?.name;
   return `
     <h2>${tr('Режим здания')}</h2>

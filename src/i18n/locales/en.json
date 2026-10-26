@@ -1230,5 +1230,10 @@
   "Своя подложка": "Underlay",
   "Этаж {ref}": "Level {ref}",
   "Высота этажа задана: height={h} на indoor=level": "Level height is set: height={h} on indoor=level",
-  "Загружены, но не отображаются члены {building}: {members}": "Loaded but not displayed: members of {building}: {members}"
+  "Загружены, но не отображаются члены {building}: {members}": "Loaded but not displayed: members of {building}: {members}",
+  "пол {floor} м, потолок {ceil} м": "floor {floor} m, ceiling {ceil} m",
+  "Высота этажа {h} м — расчётная (по этажности). Задать её можно тегом height на indoor=level этажа, а его здесь нет.": "Level height {h} m is estimated (from building:levels). It can be set with height on the level's indoor=level, but there is none here.",
+  "height={v} не учтена: вне {min}–{max} м или не сходится с высотой части": "height={v} is ignored: outside {min}–{max} m or doesn't fit the part's height",
+  "Высота этажа": "Level height",
+  "height на {objs}; пусто — по этажности. Пол этажей выше сдвинется.": "height on {objs}; empty — from building:levels. Floors above will shift."
 }

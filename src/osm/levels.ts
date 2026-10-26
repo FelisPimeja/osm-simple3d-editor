@@ -9,10 +9,12 @@ export interface Level {
   n: number; floor: number; ceil: number; src?: string;
   /** Из indoor=level этажа: обозначение (level:ref), название, высота задана явно (height). */
   ref?: string; name?: string; explicit?: boolean;
+  /** Объекты indoor=level этажа и высота из их height (даже если в расчёт не пошла — не сходится с частью). */
+  levelKeys?: string[]; heightTag?: string;
 }
 
 /** Этаж, размеченный indoor=level: высота этажа (height — правдоподобная), level:ref, name. */
-export interface LevelInfo { height?: number; ref?: string; name?: string }
+export interface LevelInfo { height?: number; heightTag?: string; ref?: string; name?: string; keys: string[] }
 
 /**
  * indoor=level здания по номерам этажей. По вики height на indoor=level — высота самого этажа, а не отметка пола:
@@ -22,11 +24,14 @@ export function indoorLevelInfo(indoor: IndoorFeature[]): Map<number, LevelInfo>
   const out = new Map<number, LevelInfo>();
   for (const f of indoor) {
     if (f.kind !== 'level') continue;
-    const h = parseFloat(f.tags.height ?? '');
+    // indoor=level, совмещённый с частью или зданием (way/666671146: building:part + height=4.2/8.4/12.6), —
+    // height там по Simple 3D (верх части), а не высота этажа: не читаем и не правим
+    const own = !f.tags['building:part'] && !f.tags.building;
+    const h = own ? parseFloat(f.tags.height ?? '') : NaN;
     const height = Number.isFinite(h) && h >= MIN_LEVEL_STEP && h <= MAX_LEVEL_STEP ? h : undefined;
     for (const n of f.levels) {
-      const cur = out.get(n) ?? {};
-      out.set(n, { height: cur.height ?? height, ref: cur.ref ?? f.tags['level:ref'], name: cur.name ?? f.tags.name });
+      const cur = out.get(n);
+      out.set(n, { height: cur?.height ?? height, heightTag: cur?.heightTag ?? (own ? f.tags.height : undefined), ref: cur?.ref ?? f.tags['level:ref'], name: cur?.name ?? f.tags.name, keys: [...cur?.keys ?? [], ...(own ? [f.key] : [])] });
     }
   }
   return out;

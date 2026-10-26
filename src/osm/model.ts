@@ -127,9 +127,14 @@ export function withIndoorTags(f: IndoorFeature, tags: Record<string, string>): 
   return { ...f, tags, kind, levels: levels.length ? levels.sort((a, b) => a - b) : [0] };
 }
 
+/** Ключи линейных объектов: с ними indoor=yes — признак «внутри», а не площадь (кроме area=yes). */
+const LINEAR_KEYS = ['highway', 'railway', 'waterway', 'barrier', 'conveying', 'power'];
+
 function indoorKind(tags?: Record<string, string>): IndoorKind | undefined {
   const k = tags?.indoor;
-  if (k === 'yes') return 'area'; // общее «внутреннее пространство» — как площадка
+  // indoor=yes — общее «внутреннее пространство», как площадка. Но на линейном объекте (дорожка, рельсы, ограда)
+  // это лишь признак «проходит внутри» (way/1154805379: замкнутый highway=footway + indoor=yes) — не площадь
+  if (k === 'yes') return tags!.area !== 'yes' && LINEAR_KEYS.some((key) => tags![key] !== undefined) ? undefined : 'area';
   return k && INDOOR_KINDS.has(k) ? k as IndoorKind : undefined;
 }
 

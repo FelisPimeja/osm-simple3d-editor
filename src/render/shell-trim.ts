@@ -513,3 +513,30 @@ export function clipAbove(pos: ArrayLike<number>, from: number, to: number, zMin
   }
   return out;
 }
+
+/**
+ * Сечение оболочки на высоте h (в плане): объединение столбов частей, через которые проходит h. Ниже верха стен —
+ * весь след части; выше — та часть каждого ската, что выше h (под скатом сечение уже следа: мансарда, купол).
+ * Стекло не в счёт: прозрачность — свойство отрисовки, а не объёма.
+ */
+export function sectionOf(solids: Iterable<PreparedSolid>, h: number): ClipMulti {
+  const pieces: ClipMulti = [];
+  for (const s of solids) {
+    if (h < s.min - 1e-6 || h > s.top + 1e-6) continue;
+    if (h < s.wallTop) { pieces.push(...s.clip); continue; }
+    for (const { tri, plane: [a, b, c] } of s.roof) {
+      // Треугольник ската, отсечённый полуплоскостью a·x + b·y + c ≥ h
+      const out: Pt[] = [];
+      for (let i = 0; i < 3; i++) {
+        const p = tri[i], q = tri[(i + 1) % 3];
+        const dp = a * p[0] + b * p[1] + c - h, dq = a * q[0] + b * q[1] + c - h;
+        if (dp >= 0) out.push(p);
+        if ((dp >= 0) !== (dq >= 0)) { const t = dp / (dp - dq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); }
+      }
+      if (out.length >= 3 && Math.abs(out.reduce((acc, p, i) => { const q = out[(i + 1) % out.length]; return acc + p[0] * q[1] - q[0] * p[1]; }, 0)) > 2 * MIN_AREA) pieces.push([[...out, out[0]]]);
+    }
+  }
+  if (!pieces.length) return [];
+  const sn = snap(pieces);
+  try { return polygonClipping.union(sn[0], ...sn.slice(1)); } catch (err) { console.warn('[section] сечение не построено', err); return []; }
+}

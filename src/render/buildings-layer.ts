@@ -13,7 +13,7 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, type Heights } from '../osm/heights';
-import { clipAbove, prepareSolid, trimCoplanarWalls, trimTriangles, type PreparedSolid } from './shell-trim';
+import { clipAbove, prepareSolid, sectionOf, trimCoplanarWalls, trimTriangles, type PreparedSolid } from './shell-trim';
 import { areaLedgeTriangles } from './area-ledge';
 import { floatingParts } from '../osm/floating';
 import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
@@ -60,6 +60,8 @@ const tagWidth = (tags?: Record<string, string>) => {
  * шире или глубже — это проход или узкое место коридора, над ним ничего нет. */
 const LINTEL_MAX_GAP = DOOR_WIDTH * 2 + 0.2;
 const LINTEL_MAX_DEPTH = 0.5;
+/** Плита под полом этажа — по сечению оболочки чуть выше пола, м. */
+const SLAB_PROBE = 0.1;
 /** Насколько ниже потолка этажа проходит срез, м. */
 const CUT_BELOW_CEIL = 0.1;
 /** Части, начинающиеся не ниже этого под потолком этажа, считаются потолком (срез — под их днищем), м. */
@@ -358,6 +360,8 @@ class MeshGroup {
     solids: Map<Item, { base: Float32Array; solid: PreparedSolid }>;
     trimmed: Map<Item, { base: Float32Array; deps: PreparedSolid[]; positions: Float32Array; wallVertices: number }>;
   };
+  /** Сечения оболочки по высоте (см. sectionAt): те же, пока не менялись объёмы частей. */
+  sections?: { solids: PreparedSolid[]; at: Map<number, ClipMulti> };
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
   // Цвет «земли» — посередине между белым и 0x8a8478: контраст неба и земли вдвое меньше
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
@@ -1069,6 +1073,8 @@ export class BuildingsLayer implements CustomLayerInterface {
    * при этажах по 3 м, relation/3272772), — тоже потолок: срез под их днищем, иначе днища ложатся на план крышкой.
    */
   private levelCut?: number;
+  /** План этажа нарисован по сечению оболочки (а не по следам частей, пока её нет). */
+  private planBySection = false;
 
   private cutZ(): number | undefined {
     const lv = this.level;
@@ -1081,6 +1087,23 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (min < lv.cut && min >= lv.cut - CEIL_SNAP && min > lv.floor + CEIL_SNAP) cut = Math.min(cut, min - CUT_BELOW_CEIL);
     }
     return cut;
+  }
+
+  /**
+   * Контур здания на высоте h (м сцены): сечение оболочки из объёмов частей (applyShell). undefined — оболочки
+   * ещё нет (крыши считаются в воркере). Кеш — по набору объёмов: пересчёт только при изменении частей.
+   */
+  sectionAt(g: MeshGroup, h: number): ClipMulti | undefined {
+    const cache = g.shellCache;
+    if (!cache || !g.shellOf) return;
+    const solids = g.items.filter((it) => shellSolid(g, it)).map((it) => cache.solids.get(it)?.solid).filter((s): s is PreparedSolid => !!s);
+    const memo = g.sections;
+    if (!memo || memo.solids.length !== solids.length || memo.solids.some((s, i) => s !== solids[i])) g.sections = { solids, at: new Map() };
+    const at = g.sections!.at;
+    const key = Math.round(h * 1000) / 1000;
+    let out = at.get(key);
+    if (!out) at.set(key, out = timed('этажи: сечение оболочки', () => sectionOf(solids, key)));
+    return out;
   }
 
   private applyLevel() {
@@ -1172,9 +1195,12 @@ export class BuildingsLayer implements CustomLayerInterface {
         fill(outer, p.inners.map((h) => h.map(g.toLocal)), top);
       }
     }
-    if (spans.length && this.map) {
-      let union: ClipMulti = [];
-      try { union = polygonClipping.union(spans[0], ...spans.slice(1)); } catch (err) { console.warn('[levels] периметр не построен', err); }
+    // Периметр — сечение оболочки на высоте среза (под скатом — уже следа); пока оболочки нет — объединение следов
+    const section = this.sectionAt(g, top);
+    this.planBySection = !!section;
+    if ((section?.length || spans.length) && this.map) {
+      let union: ClipMulti = section ?? [];
+      if (!section) try { union = polygonClipping.union(spans[0], ...spans.slice(1)); } catch (err) { console.warn('[levels] периметр не построен', err); }
       const canvas = this.map.getCanvas();
       const dpr = canvas.width / Math.max(1, canvas.clientWidth);
       const mat = new LineMaterial({ color: 0x9ca3af, linewidth: PERIMETER_WIDTH_PX * dpr });
@@ -1197,7 +1223,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       const shafts: ClipMulti = this.level.items.filter((it) => it.shaft).flatMap((it) => it.polygons.map((p) =>
         [p.outer, ...p.inners].map((r) => { const rp = r.map(g.toLocal); return [...rp, rp[0]]; })));
       let slab: ClipMulti = [];
-      try { slab = spans.length ? polygonClipping.difference(polygonClipping.union(spans[0], ...spans.slice(1)), ...holes, ...shafts) : []; } catch (err) { console.warn('[levels] плита не построена', err); }
+      const floorSection = this.sectionAt(g, this.level.floor + SLAB_PROBE);
+      try { slab = floorSection ? polygonClipping.difference(floorSection, ...holes, ...shafts) : spans.length ? polygonClipping.difference(polygonClipping.union(spans[0], ...spans.slice(1)), ...holes, ...shafts) : []; } catch (err) { console.warn('[levels] плита не построена', err); }
       const pos: number[] = [];
       for (const poly of slab) {
         const v2 = (r: Pt[]) => r.slice(0, -1).map(([x, y]) => new THREE.Vector2(x, y));
@@ -4020,6 +4047,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.doorCutSources.delete(it);
     }
     this.applyShell(g);
+    // План нарисован до оболочки (крыши ещё считались) — периметр и плита по следам; теперь — по сечению
+    if (this.level && g === this.groups.get(FOCUS_GROUP) && this.indoorObj && !this.planBySection && g.shellOf) { this.applyLevel(); return; }
     if (this.level && g === this.groups.get(FOCUS_GROUP)) {
       const levels = [{ items: this.level.items, doors: this.previewDoors(this.level.doors ?? []), z: this.level.floor },
         ...(this.level.below ?? []).map(b => ({ items: b.items, doors: b.doors ?? [], z: b.items[0]?.z ?? b.doorModels?.[0]?.z }))];

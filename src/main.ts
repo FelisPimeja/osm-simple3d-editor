@@ -8374,7 +8374,7 @@ function renderLevelsImpl() {
   const infoSig = (() => { const l = levels.find((x) => x.n === currentLevel); return l ? JSON.stringify([l.n, l.floor, l.ceil, l.ref, l.name, l.heightTag, l.levelKeys, l.overflow]) : ''; })();
   if (infoSig !== infoLevel) {
     infoLevel = infoSig;
-    if (!selection.length && !indoorSelection.length) queueMicrotask(renderSelected);
+    if (!selection.length && !indoorSelection.length) queueMicrotask(() => { if (!selection.length && !indoorSelection.length) renderSelected(); });
   }
   // Пока этаж из ссылки не появился в панели — он остаётся в адресе
   setLevelParam(currentLevel ?? linkLevel);
@@ -8598,6 +8598,10 @@ levelsEl.addEventListener('click', (e) => {
   currentLevel = n;
   linkLevel = undefined;
   renderLevels();
+  // Этаж размечен indoor=level — щелчок выделяет его (контур подсвечен, свойства — его форма); Esc — свойства этажа
+  const l = n !== undefined && focus ? buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === n) : undefined;
+  const fs = l ? levelFeatures(l) : [];
+  if (fs.length) { select(undefined); fs.forEach((f, i) => selectIndoor(f, i > 0)); }
 });
 infoEl.addEventListener('click', (e) => {
   const ilink = (e.target as HTMLElement).closest<HTMLElement>('[data-select-indoor]');

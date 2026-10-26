@@ -728,3 +728,6 @@ body.mobile #issues-panel { display: none !important; }
 @keyframes issue-point-pulse { 50% { transform: scale(1.35); } }
 /* «Точка» на плане: значки и подписи не забирают щелчок — он ставит точку под ними */
 .indoor-pois.passthrough, .indoor-pois.passthrough * { pointer-events: none !important; }
+.repeat-levels { list-style: none; padding: 0 !important; margin: 6px 0 10px !important; }
+.repeat-mode { display: block; margin: 4px 0; }
+.repeat-mode .hint { display: block; margin-left: 22px; font-size: 12px; color: #666; }

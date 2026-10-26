@@ -1281,5 +1281,18 @@
   "Поставлен вход {key}.": "Entrance {key} placed.",
   "Поставлена дверь {key}.": "Door {key} placed.",
   "Поставлена точка {key}: вид задайте в свойствах.": "Point {key} placed: set its kind in Properties.",
-  "Точка на плане этажа: на стене помещения — дверь, на наружной стене — вход, внутри — объект (X)": "Point on a floor plan: on a room wall — door, on an outer wall — entrance, inside — object (X)"
+  "Точка на плане этажа: на стене помещения — дверь, на наружной стене — вход, внутри — объект (X)": "Point on a floor plan: on a room wall — door, on an outer wall — entrance, inside — object (X)",
+  "Повторять на этажах": "Repeat on levels",
+  "Объектов: {n}. Отмеченные этажи — где объект есть; снятая галка убирает копию.": "Objects: {n}. Checked levels are where the object exists; unchecking removes the copy.",
+  "Отдельные копии": "Separate copies",
+  "по объекту на этаж, правятся по отдельности": "one object per level, edited separately",
+  "repeat_on": "repeat_on",
+  "один объект, повторяется на этажах (вики советует скупо)": "one object repeated on levels (the wiki advises using it sparingly)",
+  "Один объект на нескольких этажах": "One object on several levels",
+  "level=0;1;2 — лестница, лифт, шахта": "level=0;1;2 — stairs, elevator, shaft",
+  "Применить": "Apply",
+  "Скопировать нельзя: стены-линии и мультиполигоны из нескольких частей пока не копируются.": "Can't copy: wall lines and multi-part multipolygons aren't copied yet.",
+  "Этажи: копий создано {made}, убрано {removed}.": "Levels: {made} copies created, {removed} removed.",
+  "Пропущено: {n}.": "Skipped: {n}.",
+  "Повторять на этажах…": "Repeat on levels…"
 }

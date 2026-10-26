@@ -6426,8 +6426,8 @@ function diffTags(before: Record<string, string>, after: Record<string, string>)
 }
 
 /** Попап посреди карты; пустой html — закрыть. */
-function showPopup(html: string) {
-  popupEl.innerHTML = html ? `<div class="popup-card">${html}<p><button type="button" data-popup-close>${tr('Понятно')}</button></p></div>` : '';
+function showPopup(html: string, close = tr('Понятно')) {
+  popupEl.innerHTML = html ? `<div class="popup-card">${html}<p><button type="button" data-popup-close>${close}</button></p></div>` : '';
   if (!html) renderSelected(); // вернуть обычную подсветку
 }
 popupEl.addEventListener('click', (e) => {
@@ -8831,6 +8831,169 @@ function placePoint(screen: [number, number]) {
   setStatus(t.kind === 'entrance' ? tr('Поставлен вход {key}.', { key }) : t.kind === 'door' ? tr('Поставлена дверь {key}.', { key }) : tr('Поставлена точка {key}: вид задайте в свойствах.', { key }));
 }
 
+/** Теги без этажа: копии на других этажах совпадают по ним. */
+const tagsNoLevel = (t: Record<string, string>) => JSON.stringify(Object.entries(t).filter(([k]) => k !== 'level' && k !== 'repeat_on').sort());
+/** Вершины совпадают с точностью ~5 см (в градусах). */
+const NEAR_DEG = 5e-7;
+const nearLL = (a: LonLat, b: LonLat) => Math.abs(a[0] - b[0]) < NEAR_DEG && Math.abs(a[1] - b[1]) < NEAR_DEG;
+
+/** Копии объекта f на других этажах: тот же вид, теги (кроме level) и форма — этаж → копия. */
+function levelCopies(f: IndoorFeature, all: IndoorFeature[]): Map<number, IndoorFeature> {
+  const out = new Map<number, IndoorFeature>();
+  const sig = tagsNoLevel(f.tags);
+  const same = (g: IndoorFeature) => {
+    if (f.point || g.point) return !!f.point && !!g.point && nearLL(f.point, g.point);
+    const a = f.polygons[0], b = g.polygons[0];
+    return !!a && !!b && f.polygons.length === g.polygons.length && a.outer.length === b.outer.length && a.outer.every((p) => b.outer.some((q) => nearLL(p, q)));
+  };
+  for (const g of all) {
+    if (g.key === f.key || g.key.endsWith('#poi') || g.kind !== f.kind || g.levels.length !== 1 || f.levels.includes(g.levels[0])) continue;
+    if (tagsNoLevel(g.tags) === sig && same(g)) out.set(g.levels[0], g);
+  }
+  return out;
+}
+
+type RepeatMode = 'copies' | 'repeat_on' | 'level';
+
+/** «Повторять на этажах…»: галки по этажам здания, способ — отдельные копии, repeat_on или один объект на нескольких этажах. */
+function openRepeatDialog() {
+  if (!focus || !shownLevel) return;
+  const fs = indoorSelection.filter((f) => !f.key.endsWith('#poi'));
+  if (!fs.length) return;
+  const all = buildingIndoor(focus);
+  const copies = fs.map((f) => levelCopies(f, all));
+  const own = new Set(fs.flatMap((f) => parseLevels(f.tags.level)));
+  const repeatOn = fs.map((f) => parseLevels(f.tags.repeat_on));
+  const mode: RepeatMode = repeatOn.some((r) => r.length) ? 'repeat_on' : fs.every((f) => parseLevels(f.tags.level).length > 1) ? 'level' : 'copies';
+  const levels = [...panelLevels].sort((a, b) => b - a);
+  const rows = levels.map((n) => {
+    const isOwn = fs.every((f) => parseLevels(f.tags.level).includes(n));
+    const has = fs.map((f, i) => isOwn || copies[i].has(n) || repeatOn[i].includes(n) || parseLevels(f.tags.level).includes(n));
+    const all = has.every(Boolean), some = has.some(Boolean);
+    return `<li><label><input type="checkbox" data-repeat-level="${n}"${all ? ' checked' : ''}${isOwn && n === shownLevel!.n ? ' disabled' : ''}${!all && some ? ' data-mixed' : ''}> ${esc(levelLabel(n))}</label></li>`;
+  }).join('');
+  const radio = (m: RepeatMode, label: string, hint: string) => `<label class="repeat-mode"><input type="radio" name="repeat-mode" value="${m}"${m === mode ? ' checked' : ''}> ${label}<span class="hint">${hint}</span></label>`;
+  showPopup(`<h3>${tr('Повторять на этажах')}</h3>
+    <p class="hint">${tr('Объектов: {n}. Отмеченные этажи — где объект есть; снятая галка убирает копию.', { n: fs.length })}</p>
+    <ul class="repeat-levels">${rows}</ul>
+    ${radio('copies', tr('Отдельные копии'), tr('по объекту на этаж, правятся по отдельности'))}
+    ${radio('repeat_on', tr('repeat_on'), tr('один объект, повторяется на этажах (вики советует скупо)'))}
+    ${radio('level', tr('Один объект на нескольких этажах'), tr('level=0;1;2 — лестница, лифт, шахта'))}
+    <p><button type="button" data-repeat-apply>${tr('Применить')}</button></p>`, tr('Отмена'));
+  for (const el of popupEl.querySelectorAll<HTMLInputElement>('[data-mixed]')) el.indeterminate = true;
+  const touched = new Set<number>();
+  for (const el of popupEl.querySelectorAll<HTMLInputElement>('[data-repeat-level]')) el.addEventListener('change', () => touched.add(Number(el.dataset.repeatLevel)));
+  popupEl.querySelector('[data-repeat-apply]')!.addEventListener('click', () => {
+    const checked = new Map<number, boolean>();
+    for (const el of popupEl.querySelectorAll<HTMLInputElement>('[data-repeat-level]')) {
+      const n = Number(el.dataset.repeatLevel);
+      // Смешанное и нетронутое — не трогаем
+      if (el.indeterminate && !touched.has(n)) continue;
+      checked.set(n, el.checked);
+    }
+    const m = (popupEl.querySelector<HTMLInputElement>('input[name="repeat-mode"]:checked')?.value ?? 'copies') as RepeatMode;
+    showPopup('');
+    const err = applyRepeat(fs, copies, checked, m);
+    if (err) setStatus(err, true);
+  });
+}
+
+/** Применить «Повторять на этажах»: копии создаются и удаляются, repeat_on или level пишутся одним шагом истории. */
+function applyRepeat(fs: IndoorFeature[], copies: Map<number, IndoorFeature>[], checked: Map<number, boolean>, mode: RepeatMode): string | undefined {
+  if (!focus || !shownLevel) return;
+  const all = buildingIndoor(focus);
+  const edits: ObjectEdit[] = [];
+  const made: IndoorFeature[] = [];
+  const removed = new Set<string>();
+  const used = new Set(all.flatMap((g) => g.polygons.flatMap((p) => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()])));
+  const drop = (g: IndoorFeature) => {
+    const key = indoorKey(g.key);
+    if (removed.has(key)) return;
+    removed.add(key);
+    trackIndoor(key, g);
+    // Узел — вершина контура: снимаем теги, иначе удаляем
+    const id = Number(key.split('/')[1]);
+    edits.push(g.point && key.startsWith('node/') && used.has(id) ? { key, tags: {} } : { key, delete: true });
+  };
+  let skipped = 0;
+  if (mode === 'copies') {
+    // Узлы целевого этажа: вершины его помещений и здания; новые — общие у копий этого шага (дверь встаёт в стену)
+    const byLevel = new Map<number, ReturnType<typeof sharedNodes> & { known: Set<number> }>();
+    const nodesOn = (n: number) => {
+      let r = byLevel.get(n);
+      if (!r) {
+        const feats = [...groupFeatures(focus!), ...all.filter((g) => !g.point && !g.line && g.levels.includes(n))];
+        const known = new Set(feats.flatMap((g) => g.polygons.flatMap((p) => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()])));
+        r = { ...sharedNodes(feats), known };
+        byLevel.set(n, r);
+      }
+      return r;
+    };
+    // Сначала контуры, потом точки: двери встают на вершины скопированных помещений
+    const order = fs.map((f, i) => i).sort((a, b) => Number(!!fs[a].point) - Number(!!fs[b].point));
+    for (const i of order) {
+      const f = fs[i];
+      for (const [n, want] of checked) {
+        if (f.levels.includes(n)) continue;
+        const copy = copies[i].get(n);
+        if (!want) { if (copy) drop(copy); continue; }
+        if (copy) continue;
+        const tags: Record<string, string> = { ...f.tags, level: String(n) };
+        delete tags.repeat_on;
+        delete tags.type;
+        const { nodeFor, known } = nodesOn(n);
+        if (f.point) {
+          const q = nodeFor(f.point);
+          const key = `node/${q.id}`;
+          if (session.get(key) || all.some((g) => g.key === key)) { skipped++; continue; }
+          if (q.id > 0 && known.has(q.id)) {
+            trackIndoor(key, { key, kind: 'poi', tags: {}, polygons: [], point: q.p, levels: [n] });
+            edits.push({ key, tags });
+          } else edits.push({ key, create: { key, version: 0, tags, polygons: [{ outer: [q.p], inners: [], outerIds: [q.id], innerIds: [] }] } });
+          made.push({ key, kind: f.kind, tags, polygons: [], point: q.p, levels: [n] });
+          continue;
+        }
+        if (f.line || f.polygons.length !== 1) { skipped++; continue; }
+        const m = indoorCreateEdits(f.polygons[0], tags, nodeFor, edits);
+        if (m) made.push(m); else skipped++;
+      }
+    }
+    // Копии вместо repeat_on
+    for (const f of fs) if (f.tags.repeat_on !== undefined) { const key = indoorKey(f.key); trackIndoor(key, f); const t = { ...f.tags }; delete t.repeat_on; edits.push({ key, tags: t }); }
+  } else {
+    // Один объект: этажи — в repeat_on или в level; отдельные копии на этих этажах больше не нужны
+    fs.forEach((f, i) => {
+      const own = parseLevels(f.tags.level);
+      const cur = new Set(mode === 'repeat_on' ? parseLevels(f.tags.repeat_on) : own.filter((n) => n !== shownLevel!.n));
+      for (const [n, want] of checked) if (n !== shownLevel!.n) { if (want) cur.add(n); else cur.delete(n); }
+      for (const [n, copy] of copies[i]) if (cur.has(n) || checked.get(n) === false) drop(copy);
+      const list = (xs: number[]) => [...new Set(xs)].sort((a, b) => a - b).join(';');
+      const tags = { ...f.tags };
+      if (mode === 'repeat_on') {
+        if (cur.size) tags.repeat_on = list([...cur].filter((n) => !own.includes(n))); else delete tags.repeat_on;
+        if (tags.repeat_on === '') delete tags.repeat_on;
+      } else {
+        tags.level = list([shownLevel!.n, ...cur]);
+        delete tags.repeat_on;
+      }
+      const key = indoorKey(f.key);
+      trackIndoor(key, f);
+      edits.push({ key, tags });
+    });
+  }
+  if (!edits.length) return skipped ? tr('Скопировать нельзя: стены-линии и мультиполигоны из нескольких частей пока не копируются.') : undefined;
+  session.editMany(edits);
+  for (const m of made) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
+  for (const f of fs) indoorEdited.add(indoorKey(f.key));
+  indoorEditRev++;
+  renderLevels();
+  // Выделение — прежнее
+  fs.map((f) => buildingIndoorFor(indoorKey(f.key))).filter((f): f is IndoorFeature => !!f).forEach((f, i) => selectIndoor(f, i > 0));
+  setStatus(tr('Этажи: копий создано {made}, убрано {removed}.', { made: made.length, removed: removed.size })
+    + (skipped ? ' ' + tr('Пропущено: {n}.', { n: skipped }) : ''));
+  return;
+}
+
 /**
  * «Прямоугольник» и «Полигон» на плане этажа: помещение indoor=area этого этажа по нарисованному контуру
  * (в пределах среза этажа). Вершины на соседях — их узлы.
@@ -9953,6 +10116,7 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
       + showAll
       + (indoorSelection.length > 1 && indoorSelection.every(isDeletableSpace)
         ? `<li><button type="button" data-ctx="indoor-merge">${tr('Объединить')}${n}<kbd>J</kbd></button></li>` : '')
+      + (indoorSelection.length && shownLevel ? `<li><button type="button" data-ctx="indoor-repeat">${tr('Повторять на этажах…')}${n}</button></li>` : '')
       + `<li><button type="button" data-ctx="indoor-delete"${canDeleteIndoorSelection() && !uploading && !deletingIndoorWalls ? '' : ' disabled'}>${
         indoorSelection.length && !selectedRoomWalls.length && indoorSelection.every(isDeletableSpace) ? tr('Очистить (сделать пустым)') : tr('Удалить')}${n}<kbd>Del</kbd></button></li>`;
     return placeCtxMenu(x, y);
@@ -10012,6 +10176,7 @@ ctxMenu.addEventListener('click', (e) => {
   if (action === 'indoor-hide') return hideSelectedIndoor();
   if (action === 'indoor-delete') return deleteIndoorSelection();
   if (action === 'indoor-merge') return mergeSelected();
+  if (action === 'indoor-repeat') return openRepeatDialog();
   focusAction(action);
 });
 

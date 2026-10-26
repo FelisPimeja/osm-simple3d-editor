@@ -86,6 +86,14 @@ export const ENTRANCE_WIDTH = 1;
 export const ENTRANCE_HEIGHT = 2;
 /** Насколько прямоугольник входа вынесен из плоскости стены, м. */
 const ENTRANCE_OFFSET = 0.03;
+/** Вход со скрытого объекта режима здания виден, если стоит не дальше этого от стены видимого, м. */
+const ENTRANCE_ON_WALL = 0.3;
+/** Расстояние от точки до отрезка ab. */
+function distToSegment([px, py]: Pt, [ax, ay]: Pt, [bx, by]: Pt): number {
+  const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+  return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+}
 /** Насколько близко к маркеру двери выбирает клик, px. */
 const DOOR_PICK_PX = 10;
 /** Полы помещений, коридоров и площадок — цвет вершин по виду. */
@@ -3800,9 +3808,16 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const it of g.items) for (const e of it.feature.entrances ?? []) tags.set(e.id, e.tags);
     g.entrances = [];
     if (!tags.size) return;
+    // Режим здания: вход со скрытого объекта (контур скрыт по умолчанию; глазик, изоляция) — только на стене
+    // видимого, иначе при изоляции части висели бы входы чужих стен. На карте скрыт голый контур — его входы нужны
+    const shown = g === this.groups.get(FOCUS_GROUP)
+      ? g.items.filter((it) => !g.hidden.has(it.feature.key)).flatMap((it) => it.feature.polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => r.map(g.toLocal))))
+      : undefined;
+    const onShownWall = (q: Pt) => shown!.some((r) => r.some((a, i) => distToSegment(q, a, r[(i + 1) % r.length]) <= ENTRANCE_ON_WALL));
     // Узел в нескольких объектах (контур и часть, соседние части) — на самой низкой видимой стене
     const best = new Map<number, { place: EntrancePlace; rank: number }>();
     for (const it of g.items) {
+      const offstage = !!shown && g.hidden.has(it.feature.key);
       // Низ — по тегам, не по габаритам: пока часть пересобирается (крыша из воркера), box бывает пустым,
       // и вход перескакивал на соседнюю часть выше (на крышу нижней)
       const min = g.lift?.get(it.feature.key) ?? computeHeights(it.tags).min;
@@ -3815,7 +3830,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
           if (!tags.has(id) || (best.get(id)?.rank ?? Infinity) <= rank) return;
           const place = entrancePlace(rings, r, i, min);
-          if (place) best.set(id, { place: { id, ...place }, rank });
+          if (place && (!offstage || onShownWall(place.p))) best.set(id, { place: { id, ...place }, rank });
         }));
       }
     }

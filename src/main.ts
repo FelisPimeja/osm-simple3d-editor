@@ -1888,6 +1888,8 @@ function focusFeature(g: BuildingGroup, f: Feature3D, role = g.roles[g.members.i
 
 /** Объект на месте в сцене режима здания (превью инструментов, правка тегов) — с видом и следом по роли. */
 function previewFocus(f: Feature3D) {
+  // Входы — с правками узлов и из данных: объект из сессии хранится без них
+  f = withEntranceEdits(f);
   overpassLayer.previewFocusFeature(focus ? focusFeature(focus, f) : f);
 }
 
@@ -8863,7 +8865,8 @@ function pointTarget(screen: [number, number]): PointTarget | undefined {
     const h = computeHeights(f.tags);
     return f.tags['building:part'] !== 'roof' && h.min <= z + 0.1 && h.wallTop > z + 0.1;
   };
-  for (const f of groupFeatures(focus)) if (f.key.startsWith('way/') && spans(f)) add(f, false);
+  // Контур-мультиполигон — тоже: узел встанет в его пути-члены (вставка в общие стороны)
+  for (const f of groupFeatures(focus)) if (spans(f)) add(f, false);
   // Ближайшая сторона на экране
   const px = (q: [number, number]) => overpassLayer.focusProject(new THREE.Vector3(q[0], q[1], z));
   // Стороны частей здания — только по фасаду (граница двух частей внутри — не стена этажа)

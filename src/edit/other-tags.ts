@@ -7,10 +7,10 @@ export function otherTagEntries(tags: Record<string, string>, form: string): [st
   const named = new Set([...form.matchAll(/data-(?:indoor-)?tag="([^"]+)"/g)].map(m=>m[1]));
   return Object.entries(tags).filter(([k])=>!named.has(esc(k))).sort(([a],[b])=>a.localeCompare(b));
 }
-export function renderOtherTags(key: string, tags: Record<string,string>, form = '', indoor = false): string {
+export function renderOtherTags(key: string, tags: Record<string,string>, form = '', indoor = false, mixed = new Set<string>()): string {
   const prefix = `other-tags-${++serial}`;
   const list = (id: string, values: string[]) => `<datalist id="${id}">${values.map(v=>`<option value="${esc(v)}"></option>`).join('')}</datalist>`;
-  const rows = otherTagEntries(tags, form).map(([k,v],i)=>`<div class="other-tag-row"><label for="${prefix}-${i}">${esc(k)}</label><input id="${prefix}-${i}" data-other-value="${esc(k)}" value="${esc(v)}" list="${prefix}-values-${i}" aria-label="${esc(k)}">${list(`${prefix}-values-${i}`,idOptions(k)??[])}<button type="button" data-other-delete="${esc(k)}" title="${tr('Удалить тег')}" aria-label="${tr('Удалить тег')} ${esc(k)}">×</button></div>`).join('');
+  const rows = otherTagEntries(tags, form).map(([k,v],i)=>`<div class="other-tag-row"><label for="${prefix}-${i}">${esc(k)}</label><input id="${prefix}-${i}" data-other-value="${esc(k)}" value="${esc(v)}"${mixed.has(k) ? ` class="mixed" placeholder="${esc(tr('разные значения'))}" title="${esc(tr('разные значения'))}"` : ''} list="${prefix}-values-${i}" aria-label="${esc(k)}">${list(`${prefix}-values-${i}`,idOptions(k)??[])}<button type="button" data-other-delete="${esc(k)}" title="${tr('Удалить тег')}" aria-label="${tr('Удалить тег')} ${esc(k)}">×</button></div>`).join('');
   return `<section class="other-tags" data-other-key="${esc(key)}"${indoor?' data-other-indoor':''}><h3>${tr('Другие теги')}</h3>${rows}<form class="other-tag-add"><input data-other-new-key placeholder="${tr('Ключ')}" aria-label="${tr('Ключ')}" list="${prefix}-keys" required><input data-other-new-value placeholder="${tr('Значение')}" aria-label="${tr('Значение')}" list="${prefix}-new-values" required><button type="submit" title="${tr('Добавить тег')}" aria-label="${tr('Добавить тег')}">+</button>${list(`${prefix}-keys`,idTagKeys())}${list(`${prefix}-new-values`,[])}</form></section>`;
 }
 export function bindOtherTags(container: HTMLElement, read: (key:string, indoor:boolean)=>Record<string,string>|undefined,
@@ -51,4 +51,19 @@ export function bindOtherTags(container: HTMLElement, read: (key:string, indoor:
     if (error) {keyInput.reportValidity();return;}
     if (value) save(box,key,value);
   });
+}
+
+/** Absence on even one object is a different value, not an omitted key. */
+export function multiTagValues(objects: Record<string,string>[]) {
+  const tags: Record<string,string> = {}, mixed = new Set<string>();
+  for (const key of new Set(objects.flatMap(t => Object.keys(t)))) {
+    const values = new Set(objects.map(t => t[key]));
+    if (values.size > 1) mixed.add(key);
+    tags[key] = values.size === 1 ? objects[0][key] : '';
+  }
+  return { tags, mixed };
+}
+export function renderMultiOtherTags(objects: Record<string,string>[], form: string, indoor = false): string {
+  const { tags, mixed } = multiTagValues(objects);
+  return renderOtherTags('@selection', tags, form, indoor, mixed);
 }

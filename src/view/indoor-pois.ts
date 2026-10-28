@@ -44,8 +44,8 @@ const SHOP: Record<string, string> = {
 
 /** Имя значка Maki/Temaki по тегам; undefined — объект без значка. */
 export function poiIcon(t: Record<string, string>): string | undefined {
-  if (t.highway === 'elevator' || t.elevator === 'yes') return 'elevator';
-  if (t.stairs === 'yes' || t.highway === 'steps' || t.indoor === 'stairs') return 'stairs';
+  if (t.room === 'elevator' || t.highway === 'elevator' || t.elevator === 'yes') return 'elevator';
+  if (t.room === 'stairs' || t.stairs === 'yes' || t.highway === 'steps' || t.indoor === 'stairs') return 'stairs';
   if (t.emergency === 'defibrillator') return 'defibrillator';
   if (t.emergency === 'phone') return 'emergency-phone';
   if (t.amenity && AMENITY[t.amenity]) return AMENITY[t.amenity];
@@ -72,13 +72,13 @@ export class IndoorPois {
   private signature = '';
   private byEl = new Map<HTMLElement, IndoorFeature>();
 
-  constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, onPick: (f: IndoorFeature, add: boolean) => void) {
+  constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, onPick: (f: IndoorFeature, add: boolean, point: [number,number]) => void) {
     this.root = document.createElement('div');
     this.root.className = 'indoor-pois';
     this.root.addEventListener('click', (e) => {
       const el = (e.target as HTMLElement).closest<HTMLElement>('.indoor-poi');
       const f = el && this.byEl.get(el);
-      if (f) { e.stopPropagation(); onPick(f, e.shiftKey); }
+      if (f) { e.stopPropagation(); const rect=map.getContainer().getBoundingClientRect(); onPick(f, e.shiftKey, [e.clientX-rect.left,e.clientY-rect.top]); }
     });
     // Колесо над значком — карте: значки лежат вне слоя, где MapLibre слушает колесо, и зум над ними не работал
     this.root.addEventListener('wheel', (e) => {
@@ -113,6 +113,12 @@ export class IndoorPois {
    */
   set(pois: IndoorFeature[], z: number, positions: ReadonlyMap<string, { at: LonLat; z: number }> = new Map(), refs: IndoorFeature[] = []) {
     const shown = pois.filter((f) => f.point && poiIcon(f.tags));
+    const represented = new Set(shown.map(f => f.key.replace(/#poi$/, '')));
+    // Rooms created or retagged in this session may have no parsed #poi companion yet.
+    for (const f of refs) if (!represented.has(f.key) && !f.line && f.polygons[0]?.outer.length && poiIcon(f.tags)) {
+      shown.push({ ...f, key: `${f.key}#poi`, kind: 'poi', point: pointOnSurface(f.polygons[0]) });
+      represented.add(f.key);
+    }
     const labelled = refs.filter((f) => (f.tags.ref || f.tags.name) && !f.line && f.polygons.length);
     const sig = `${z}|${shown.map((f) => {
       const p = positions.get(f.key);

@@ -34,3 +34,29 @@ export function cutDoorOpenings(positions: Float32Array, doors: { x: number; y: 
   }
   return holes.length ? new Float32Array(trimCoplanarWalls(positions, holes)) : positions;
 }
+
+/** Segment interval inside a convex doorway footprint, independent of the door's distance to the room wall. */
+export function wallDoorwaySpan(a: [number,number], b: [number,number], polygon: [number,number][]): [number,number] | undefined {
+  if(polygon.length<3)return;
+  const cross=(x:[number,number],y:[number,number])=>x[0]*y[1]-x[1]*y[0];
+  let area=0;
+  for(let i=0;i<polygon.length;i++){const p=polygon[i],q=polygon[(i+1)%polygon.length];area+=cross(p,q);}
+  if(Math.abs(area)<1e-10)return;
+  const sign=Math.sign(area);let lo=0,hi=1;
+  for(let i=0;i<polygon.length;i++){
+    const p=polygon[i],q=polygon[(i+1)%polygon.length],edge:[number,number]=[q[0]-p[0],q[1]-p[1]];
+    if(Math.hypot(...edge)<1e-9)continue;
+    // Independently rounded OSM boundaries can be almost parallel and a fraction
+    // of a millimetre outside the recovered back edge. Snap both signed distances,
+    // not only exactly parallel segments, before clipping.
+    const tolerance=0.002*Math.hypot(...edge);
+    const snap=(value:number)=>Math.abs(value)<=tolerance?0:value;
+    const value=snap(sign*cross(edge,[a[0]-p[0],a[1]-p[1]]));
+    const end=snap(sign*cross(edge,[b[0]-p[0],b[1]-p[1]])),slope=end-value;
+    if(Math.abs(slope)<1e-10){if(value<0)return;continue;}
+    const t=-value/slope;
+    if(slope>0)lo=Math.max(lo,t);else hi=Math.min(hi,t);
+    if(hi-lo<1e-7)return;
+  }
+  return hi>lo?[Math.max(0,lo),Math.min(1,hi)]:undefined;
+}

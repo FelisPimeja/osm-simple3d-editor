@@ -209,6 +209,13 @@ export async function fetchBuildingElements(root: string, api = server().api): P
   return [...elements.values(), ...nodes.values()];
 }
 
+/** Parent relations of a way or relation (current server versions). */
+export async function fetchElementRelations(key: string, api = server().api): Promise<OsmRelation[]> {
+  if (!/^(way|relation)\/\d+$/.test(key)) throw new Error(`Invalid element key: ${key}`);
+  const res = await getJson(`${api}/${key}/relations.json`);
+  return ((await res.json()) as { elements: OsmRelation[] }).elements;
+}
+
 /** Отношения, в которые входит путь (текущие версии). */
 export async function fetchWayRelations(id: number, api = server().api): Promise<OsmRelation[]> {
   const res = await getJson(`${api}/way/${id}/relations.json`);

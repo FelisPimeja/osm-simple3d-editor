@@ -29,6 +29,8 @@ export class MoveTool {
   /** Выделенные подложки (id) — едут вместе с объектами. */
   underlayIds = new Set<string>();
   underlays?: UnderlayTarget;
+  validate?: (keys: string[], offset: THREE.Vector3, glue: boolean) => string | undefined;
+  objectAnchor?: (point: Pt, keys: ReadonlySet<string>) => THREE.Vector3 | undefined;
   /** Привязка, к которой сейчас тянем (для маркера). */
   snap?: SnapHit;
   /** Общие с соседями узлы: тянуть соседей следом или отделиться (D). */
@@ -132,16 +134,8 @@ export class MoveTool {
     return !!this.underlayIds.size && !!(this.underlays?.snap(point, this.underlayIds) ?? this.underlays?.hit(point, this.underlayIds));
   }
 
-  click(point: [number, number]) {
-    if (this.state === 'pick') {
-      const s = this.layer.snapAt(point, this.pickFilter);
-      const hit = s ? undefined : this.layer.pickHit(point);
-      const doorKey = this.layer.pickDoor(point);
-      // Привязки (свои и подложек) — раньше поверхностей; у объектов здания приоритет
-      const us = s ? undefined : this.underlaySnap(point);
-      const p = s?.local ?? us?.local ?? (doorKey && this.keys.has(doorKey) ? this.layer.doorAnchor(doorKey) : undefined) ?? (hit && this.keys.has(hit.key) ? hit.local : undefined)
-        ?? (this.underlayIds.size ? this.underlays?.hit(point, this.underlayIds)?.p : undefined);
-      if (!p) return this.onState(tr('Кликните по точке на выбранном объекте (подсвеченные привязки — вершины, середины, центр).'));
+  /** Start from a door marker too: its DOM click never reaches the map canvas. */
+  beginAt(p: THREE.Vector3) {
       this.from.copy(p);
       this.offset.set(0, 0, 0);
       this.axis = this.locked = undefined;
@@ -151,6 +145,19 @@ export class MoveTool {
       this.layer.setMoveGuide({ from: this.from, gizmoScale: this.horizontalOnly ? 0.375 : 1 });
       this.updateVcb();
       this.onState(tr('Ведите курсор: вдоль оси здания движение прилипает к ней. Клик — применить, число + Enter — сдвиг в метрах, Esc — отмена.'));
+  }
+
+  click(point: [number, number]) {
+    if (this.state === 'pick') {
+      const s = this.layer.snapAt(point, this.pickFilter);
+      const hit = s ? undefined : this.layer.pickHit(point);
+      const doorKey = this.layer.pickDoor(point);
+      // Привязки (свои и подложек) — раньше поверхностей; у объектов здания приоритет
+      const us = s ? undefined : this.underlaySnap(point);
+      const p = s?.local ?? us?.local ?? this.objectAnchor?.(point, this.keys) ?? (doorKey && this.keys.has(doorKey) ? this.layer.doorAnchor(doorKey) : undefined) ?? (hit && this.keys.has(hit.key) ? hit.local : undefined)
+        ?? (this.underlayIds.size ? this.underlays?.hit(point, this.underlayIds)?.p : undefined);
+      if (!p) return this.onState(tr('Кликните по точке на выбранном объекте (подсвеченные привязки — вершины, середины, центр).'));
+      this.beginAt(p);
       return;
     }
     if (this.state === 'move') this.apply(this.offset);
@@ -245,6 +252,8 @@ export class MoveTool {
 
   private apply(offset: THREE.Vector3) {
     const keys = [...this.keys], underlays = [...this.underlayIds];
+    const problem = this.validate?.(keys, offset, this.glue);
+    if (problem) { this.onState(problem); return; }
     this.cancelMove();
     if (this.oneShot) {
       const once = this.oneShot;

@@ -90,6 +90,7 @@ export class ShapeTool {
   /** Шаг сдвига по вертикали: высота задана только этажами — целыми этажами. */
   private step?: number;
   /** Высота задана только этажами: пояснение (меняется целыми этажами, как перейти на метры); undefined — в метрах. */
+  isOpen?: (key: string) => boolean;
   levelLock?: (t: ShapeTarget) => string | undefined;
   /** Какие теги и как изменит сдвиг ручки крыши или верха стен на dz — для панели во время сдвига. */
   tagChanges?: (t: ShapeTarget, dz: number) => string;
@@ -272,7 +273,8 @@ export class ShapeTool {
       const n = ring.length, prev = ring[(v.i - 1 + n) % n], next = ring[(v.i + 1) % n];
       const mid = (a: [number, number], b: [number, number]) => new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, t.from.z);
       const label = tr('Середина исходной стороны');
-      this.extraSnaps.push({ kind: 'midpoint', key: t.key, p: mid(at, prev), label }, { kind: 'midpoint', key: t.key, p: mid(at, next), label });
+      if (!this.isOpen?.(t.key) || v.i > 0) this.extraSnaps.push({ kind: 'midpoint', key: t.key, p: mid(at, prev), label });
+      if (!this.isOpen?.(t.key) || v.i + 1 < n) this.extraSnaps.push({ kind: 'midpoint', key: t.key, p: mid(at, next), label });
       if (inserted) this.extraSnaps.push({ kind: 'midpoint', key: t.key, p: mid(prev, next), label });
     }
     const note = t.roof || t.eave ? this.levelLock?.(t) : undefined;
@@ -528,9 +530,11 @@ export class ShapeTool {
     const ring = p && (t.ring ? p.inners[t.ring - 1] : p.outer);
     const w = this.walls(t.key);
     // У треугольника внешнего кольца сливать нечего; внутреннее при слиянии удаляется целиком
+    if (this.isOpen?.(t.key)) return;
     if (!ring || (ring.length <= 3 && !t.ring) || !w) return;
-    for (const k of [t.i - 1 + ring.length, t.i + 1]) {
-      const [x, y] = ring[k % ring.length];
+    for (const k of [t.i - 1, t.i + 1]) {
+      if (this.isOpen?.(t.key) && (k < 0 || k >= ring.length)) continue;
+      const [x, y] = ring[(k + ring.length) % ring.length];
       const a = this.layer.focusProject(new THREE.Vector3(x, y, w.min));
       const b = this.layer.focusProject(new THREE.Vector3(x, y, w.top));
       if (a && b && segDist(point, a, b).d <= GRAB_PX) return [x, y];
@@ -598,6 +602,7 @@ export class ShapeTool {
     const polys = this.layer.focusPolygons(key), w = this.walls(key);
     if (!polys || !w) continue;
     polys.forEach((p, poly) => [p.outer, ...p.inners].forEach((r, ring) => r.forEach(([ax, ay], i) => {
+      if (this.isOpen?.(key) && i === r.length - 1) return;
       const [bx, by] = r[(i + 1) % r.length];
       for (const z of [w.min]) {
         const a = this.layer.focusProject(new THREE.Vector3(ax, ay, z));
@@ -657,7 +662,7 @@ export class ShapeTool {
     }
     const p = this.layer.focusPolygons(t.key)?.[t.poly];
     const ring = p && (t.ring ? p.inners[t.ring - 1] : p.outer);
-    if (!ring || ring.length < 3) return out;
+    if (!ring || ring.length < 2) return out;
     const add = (v: THREE.Vector3, name: string) => {
       if (v.lengthSq() < 1e-8) return;
       v.normalize();
@@ -671,13 +676,15 @@ export class ShapeTool {
       return out;
     }
     const [vx, vy] = this.origin.get(vertKey(t)) ?? ring[t.i];
-    for (const k of [t.i - 1 + ring.length, t.i + 1]) {
-      const [x, y] = ring[k % ring.length];
+    for (const k of [t.i - 1, t.i + 1]) {
+      if (this.isOpen?.(t.key) && (k < 0 || k >= ring.length)) continue;
+      const [x, y] = ring[(k + ring.length) % ring.length];
       add(new THREE.Vector3(vx - x, vy - y, 0), tr('вдоль стороны'));
     }
     // Перпендикуляры к сторонам — чтобы отвести вершину (в том числе только что вставленную) поперёк стороны
-    for (const k of [t.i - 1 + ring.length, t.i + 1]) {
-      const [x, y] = ring[k % ring.length];
+    for (const k of [t.i - 1, t.i + 1]) {
+      if (this.isOpen?.(t.key) && (k < 0 || k >= ring.length)) continue;
+      const [x, y] = ring[(k + ring.length) % ring.length];
       add(new THREE.Vector3(y - vy, vx - x, 0), tr('перпендикуляр к стороне'));
     }
     return out;

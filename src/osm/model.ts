@@ -50,23 +50,22 @@ const INDOOR_KINDS = new Set<string>(['room', 'area', 'corridor', 'level', 'wall
 /**
  * Этажи, на которых у объекта пол. Объект на нескольких этажах в level (эскалатор, лестница, зал в два света:
  * level=-1;0 или 1-3) — вертикальное пространство: пол только на нижнем, выше — пустота. repeat_on — то же
- * помещение на каждом этаже: пол на каждом; лифт и лестничная клетка — тоже на каждом этаже из level.
+ * помещение на каждом этаже: пол на каждом; лифтовая шахта обрабатывается отдельно при построении проёмов.
  * Площадь лестницы с осью эскалатора — исключение: её пол только внизу, выше остаётся проём.
  */
 export function floorLevels(f: IndoorFeature): number[] {
   const own = parseLevels(f.tags.level);
   const out = new Set(parseLevels(f.tags.repeat_on));
-  // Лифтовая шахта, лестничная клетка — площадка на каждом этаже из level (как repeat_on), а не пустота
-  if (own.length > 1 && !f.escalatorArea && isShaft(f.tags)) for (const l of own) out.add(l);
+  // Лифтовая шахта отдельно вырезается в плане. Лестницы, как другие многоуровневые комнаты, открыты выше нижнего пола.
+  if (own.length > 1 && !f.escalatorArea && isElevatorShaft(f.tags)) for (const l of own) out.add(l);
   out.add(own.length ? Math.min(...own) : f.levels[0] ?? 0);
   return [...out];
 }
 
-/** Лифт или лестничная клетка (не эскалатор): на каждом этаже своя площадка. */
-function isShaft(t: Record<string, string>): boolean {
+/** Лифтовая шахта: её проёмы добавляются отдельно при построении плана. */
+function isElevatorShaft(t: Record<string, string>): boolean {
   if (t.conveying) return false;
-  return t.highway === 'elevator' || t.elevator === 'yes' || t.stairs === 'yes' || t.highway === 'steps'
-    || t.room === 'elevator' || t.room === 'stairs';
+  return t.highway === 'elevator' || t.elevator === 'yes' || t.room === 'elevator';
 }
 
 export interface IndoorFeature {
@@ -114,7 +113,7 @@ const POI_KEYS = ['door', 'entrance', 'amenity', 'shop', 'office', 'tourism', 'e
 /** Узел или помещение — точечный объект плана этажа. */
 export function isIndoorPoi(tags?: Record<string, string>): boolean {
   if (!tags) return false;
-  if (tags.room === 'toilet' || tags.room === 'toilets') return true;
+  if (tags.room === 'toilet' || tags.room === 'toilets' || tags.room === 'stairs' || tags.room === 'elevator') return true;
   if (tags.indoor === 'door' || tags.highway === 'elevator' || tags.elevator === 'yes' || tags.stairs === 'yes' || tags.highway === 'steps') return true;
   return POI_KEYS.some((k) => tags[k] !== undefined && tags[k] !== 'no');
 }
@@ -397,8 +396,9 @@ export function pointOnSurface(p: Polygon): LonLat {
 const ON_TOP_TOLERANCE = 1;
 
 /**
- * Контур с частями не достраиваем по общей высоте и участок без части не рисуем — о пробеле в модели
- * предупреждает валидатор (coverage). Приподнятые части не вычитаем из основания.
+ * Контур скрываем только при покрытии не менее 90% частями с известной высотой.
+ * Небольшие пристройки и части без высоты не должны скрывать основной объём.
+ * Приподнятые части не вычитаем из основания.
  */
 export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[] = features, groups: BuildingGroup[] = []) {
   const byKey = new Map(features.map((f) => [f.key, f]));
@@ -444,7 +444,8 @@ export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[
         }
       }
     }
-    const parts = [...candidates].map((key) => byKey.get(key)).filter((f): f is Feature3D => !!f && f.kind === 'part');
+    const parts = [...candidates].map((key) => byKey.get(key)).filter((f): f is Feature3D => !!f && f.kind === 'part'
+      && (heights.source === 'default' || computeHeights(f.tags).source !== 'default'));
     const toClip = (polygons: Polygon[]): ClipMulti => polygons.map((p) => [p.outer, ...p.inners].map((ring) => [...ring, ring[0]]));
     try {
       const outline = toClip(b.polygons);
@@ -453,7 +454,8 @@ export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[
       const mergedParts = polygonClipping.union(partShapes[0], ...partShapes.slice(1));
       const covered = polygonClipping.intersection(outline, mergedParts);
       const coveredArea = covered.reduce((sum, [outer, ...holes]) => sum + area({ outer: outer.slice(0, -1), inners: holes.map((r) => r.slice(0, -1)) }), 0);
-      b.hasParts = coveredArea > 0;
+      const outlineArea = b.polygons.reduce((sum, p) => sum + area(p), 0);
+      b.hasParts = outlineArea > 0 && coveredArea / outlineArea >= 0.9;
     } catch {
       // Некорректная геометрия: оставляем исходный контур видимым.
       b.hasParts = false;

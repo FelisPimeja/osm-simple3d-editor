@@ -145,7 +145,19 @@ export class EditSession {
   /** Начать отслеживать объект (если ещё не отслеживается): его текущее состояние становится исходным. */
   track(entity: Tagged): Tagged {
     const known = this.features.get(entity.key);
-    if (known) return known;
+    if (known) {
+      // Indoor objects can initially be tracked for tags only. Attach newly loaded geometry
+      // as the baseline without replacing tags or adding an undo step.
+      if (!known.polygons && !known.line) {
+        if (entity.line) { known.line = entity.line; this.originalLine.set(entity.key, entity.line); }
+        else if (entity.polygons) { known.polygons = entity.polygons; this.originalGeometry.set(entity.key, entity.polygons); }
+      }
+      if (!known.relMembers && entity.relMembers) {
+        known.relMembers = entity.relMembers;
+        this.originalMembers.set(entity.key, entity.relMembers.map(m => ({ ...m })));
+      }
+      return known;
+    }
     this.features.set(entity.key, entity);
     this.original.set(entity.key, { ...entity.tags });
     if (entity.relMembers) this.originalMembers.set(entity.key, entity.relMembers.map((m) => ({ ...m })));
@@ -224,9 +236,11 @@ export class EditSession {
   /** Узлы, сдвинутые относительно исходной геометрии (по id: список узлов мог измениться). */
   private nodeMoves(key: string): NodeMove[] {
     const f = this.features.get(key);
-    const orig = this.originalGeometry.get(key);
-    if (!f?.polygons || !orig || f.polygons === orig) return [];
-    const was = nodeCoords(orig), now = nodeCoords(f.polygons);
+    const orig = this.originalGeometry.get(key), originalLine = this.originalLine.get(key);
+    if (!f) return [];
+    if (f.line ? f.line === originalLine : !f.polygons || !orig || f.polygons === orig) return [];
+    const was = originalLine ? new Map(originalLine.ids.map((id,i) => [id, originalLine.coords[i]] as const)) : nodeCoords(orig ?? []);
+    const now = f.line ? new Map(f.line.ids.map((id,i) => [id, f.line!.coords[i]] as const)) : nodeCoords(f.polygons ?? []);
     const moves: NodeMove[] = [];
     for (const [id, to] of now) {
       const from = was.get(id);
@@ -321,16 +335,34 @@ export class EditSession {
 
   /** Вернуть объект к исходным тегам, составу и геометрии (тоже шаг истории). */
   revert(key: string) {
-    if (this.created.has(key)) return;
-    const f = this.get(key);
+    const f = this.features.get(key);
     const orig = this.original.get(key);
-    if (!f || !orig || !this.isChanged(key)) return;
+    if (!f || !orig || (!this.deleted.has(key) && !this.isChanged(key))) return;
+    if (this.created.has(key)) {
+      const nodeId = Number(key.split('/')[1]);
+      // A new object must not leave references to an absent temporary ID.
+      if ([...this.features.values()].filter((other) => this.exists(other.key)).some((other) => other.key !== key && (
+        other.relMembers?.some((m) => `${m.type}/${m.ref}` === key) ||
+        (key.startsWith('node/') && (other.line?.ids.includes(nodeId) || other.polygons?.some((p) =>
+          p.outerIds?.includes(nodeId) || p.innerIds?.some((ids) => ids.includes(nodeId)))))))) return false;
+      this.editMany([{ key, delete: true }]);
+      return true;
+    }
     const members = this.membersChanged(key) ? this.originalMembers.get(key)!.map((m) => ({ ...m })) : undefined;
     const geometry = this.originalGeometry.get(key);
-    const moved = geometry && f.polygons !== geometry;
-    this.push([{ key, before: { ...f.tags }, after: { ...orig },
+    const line = this.originalLine.get(key);
+    this.push([{ key, before: this.deleted.has(key) ? null : { ...f.tags }, after: { ...orig },
       ...(members ? { mBefore: f.relMembers, mAfter: members } : {}),
-      ...(moved ? { gBefore: f.polygons, gAfter: geometry } : {}) }]);
+      ...(geometry ? { gBefore: f.polygons, gAfter: geometry } : {}),
+      ...(line ? { lBefore: f.line, lAfter: line } : {}) }]);
+    return true;
+  }
+
+  /** Discard one tag edit without changing the other edits on this object. */
+  revertTag(key: string, tag: string) {
+    if (this.created.has(key) || this.deleted.has(key)) return;
+    const original = this.original.get(key);
+    if (original) this.setTags(key, { [tag]: original[tag] });
   }
 
   /** Действие интерфейса в историю (уже выполнено): Cmd+Z его отменит. */

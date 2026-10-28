@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import {before,after,test} from 'node:test';
 import {createServer} from 'vite';
-let vite, otherTagEntries, renderOtherTags, bindOtherTags;
+let vite, otherTagEntries, renderOtherTags, bindOtherTags, multiTagValues, renderMultiOtherTags;
 before(async()=>{
  globalThis.localStorage={getItem:()=> 'en'};
  vite=await createServer({configFile:false,server:{middlewareMode:true,ws:false,watch:null},appType:'custom'});
- ({otherTagEntries,renderOtherTags,bindOtherTags}=await vite.ssrLoadModule('/src/edit/other-tags.ts'));
+ ({otherTagEntries,renderOtherTags,bindOtherTags,multiTagValues,renderMultiOtherTags}=await vite.ssrLoadModule('/src/edit/other-tags.ts'));
 });
 after(async()=>{await vite.close();delete globalThis.localStorage;});
 test('only visible specialized fields are excluded, including indoor fields',()=>{
@@ -57,4 +57,19 @@ test('add prevents duplicate or malformed keys without overwriting a tag',()=>{
  submit();assert.ok(error);assert.equal(writes.length,0);
  key.value='bad key';submit();assert.ok(error);assert.equal(writes.length,0);
  key.value='note';submit();assert.equal(error,'');assert.deepEqual(writes.pop(),['way/1','note','Replacement',false]);
+});
+
+test('multi-selection uses all keys and marks absent or unequal values as mixed',()=>{
+ const result=multiTagValues([{indoor:'area',level:'0',name:'A',source:'survey'},{indoor:'area',level:'0',name:'B',note:'check'}]);
+ assert.deepEqual(result.tags,{indoor:'area',level:'0',name:'',source:'',note:''});
+ assert.deepEqual([...result.mixed].sort(),['name','note','source']);
+});
+test('multi-selection Other tags renders non-shared keys, excluding specialized widgets',()=>{
+ const html=renderMultiOtherTags([{indoor:'wall',level:'0',room:'stairs'},{indoor:'wall',level:'0',material:'brick'}],'<input data-indoor-tag="indoor"><input data-indoor-tag="level">',true);
+ assert.match(html,/data-other-key="@selection"/);
+ assert.match(html,/data-other-indoor/);
+ assert.match(html,/data-other-value="room" value="" class="mixed"/);
+ assert.match(html,/data-other-value="material" value="" class="mixed"/);
+ assert.doesNotMatch(html,/data-other-value="level"/);
+ assert.match(html,/placeholder="[^"]+"/);
 });

@@ -1,32 +1,14 @@
 import polygonClipping, { type MultiPolygon } from 'polygon-clipping';
-import { offsetPolygon } from '../edit/offset-tool';
 
-/**
- * Второй свет (атриумы, пустоты в перекрытиях). В Simple Indoor Tagging отдельного тега нет: пустоту рисуют
- * отсутствием размеченного пространства — дырой в коридоре/зоне или просто неразмеченным местом. Ищем так:
- * контур этажа минус всё размеченное на нём; узкие остатки (толщины стен, полосы вдоль фасада, щели между
- * помещениями) убираем морфологическим открытием (сжать на OPEN_WIDTH и расширить обратно); оставляем
- * крупные куски, под которыми этажом ниже — размеченное пространство (если там тоже пусто — свет на несколько
- * этажей: спускаемся дальше). Координаты — метры в локальной плоской системе.
- */
-
+/** Пустоты задаются многоуровневыми помещениями; отсутствие разметки не означает второй свет. */
 type Pt = [number, number];
-
-/** Полуширина «открытия»: остатки уже 2·OPEN_WIDTH — не пустота, м. */
-const OPEN_WIDTH = 1;
-/** Меньше этой площади — не пустота, м². */
-const MIN_VOID_AREA = 15;
-/** Доля контура этажа, покрытая разметкой, начиная с которой неразмеченное считаем пустотой (а не недорисованным). */
-const MIN_COVERAGE = 0.5;
-/** Этажи ниже (вместе) закрывают пустоту разметкой не меньше чем на эту долю — там пол, видный сквозь неё. */
-const FLOOR_BELOW = 0.6;
 
 export interface LevelPlan {
   /** Контур этажа: следы объектов здания, которые есть на этом этаже (или полигоны indoor=level). */
   floor: MultiPolygon;
   /** Всё размеченное на этаже: помещения, коридоры, зоны, колонны и стены. */
   mapped: MultiPolygon;
-  /** Явные свободные внутренние кольца помещений: не требуют разметки пола снизу. */
+  /** Явные многоуровневые помещения без пола на этом этаже. */
   explicitVoids?: MultiPolygon;
 }
 
@@ -45,111 +27,20 @@ function safe(fn: () => MultiPolygon): MultiPolygon {
 }
 
 const open = (r: Pt[]): Pt[] => (r.length && (r[0][0] !== r[r.length - 1][0] || r[0][1] !== r[r.length - 1][1]) ? [...r, r[0]] : r);
-const unclose = (r: Pt[]): Pt[] => (r.length > 1 && r[0][0] === r[r.length - 1][0] && r[0][1] === r[r.length - 1][1] ? r.slice(0, -1) : r);
-
-type Box = [number, number, number, number];
-const boxOf = (m: MultiPolygon): Box => {
-  const b: Box = [Infinity, Infinity, -Infinity, -Infinity];
-  for (const poly of m) for (const [x, y] of poly[0]) { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); }
-  return b;
-};
-/**
- * Морфологическое открытие: убрать части уже 2·w. Каждый кусок обрезается только своим исходным (одно большое
- * пересечение polygon-clipping иногда не собирает кольца на почти совпадающих рёбрах); не вышло — кусок как есть
- * (сжатие и расширение и так почти не выходят за исходный).
- */
-function opening(m: MultiPolygon, w: number, minArea = 0): MultiPolygon {
-  const out: MultiPolygon = [];
-  for (const poly of m) {
-    // Открытие площадь не прибавляет: мелкий кусок всё равно отсеется, а узкий (уже 2·w по габариту) исчезнет
-    if (multiArea([poly]) < minArea) continue;
-    const [x0, y0, x1, y1] = boxOf([poly]);
-    if (x1 - x0 < 2 * w || y1 - y0 < 2 * w) continue;
-    const shrunk = offsetPolygon({ ring: unclose(poly[0] as Pt[]), inners: poly.slice(1).map((r) => unclose(r as Pt[])) }, -w);
-    if (typeof shrunk === 'string') continue;
-    for (const p of shrunk) {
-      const back = offsetPolygon({ ring: p[0], inners: p.slice(1) }, w);
-      if (typeof back === 'string') continue;
-      for (const q of back) {
-        const grown = q.map(open);
-        try { out.push(...polygonClipping.intersection([poly], [grown] as never)); } catch { out.push(grown); }
-      }
-    }
-  }
-  return out;
-}
-
-/** Размеченная площадь в контуре этажа: для каждого этажа спрашивается при поиске пустот всех этажей выше. */
-const coveredCache = new WeakMap<LevelPlan, number>();
-function coveredArea(p: LevelPlan): number {
-  let a = coveredCache.get(p);
-  if (a === undefined) coveredCache.set(p, a = multiArea(safe(() => polygonClipping.intersection(p.floor, p.mapped))));
-  return a;
-}
-
-/** Габариты кусков разметки этажа: пустоту пересекаем только с кусками рядом с ней. */
-const boxCache = new WeakMap<MultiPolygon, Box[]>();
-
-/** a ∩ m по кускам m, задевающим габарит a (остальные пересечение не меняют, а polygon-clipping платит за каждый). */
-function intersectNear(a: MultiPolygon, m: MultiPolygon): MultiPolygon {
-  const boxes = boxCache.get(m) ?? boxCache.set(m, m.map((poly) => boxOf([poly]))).get(m)!;
-  const b = boxOf(a);
-  const near = m.filter((_, i) => { const q = boxes[i]; return q[0] <= b[2] && q[2] >= b[0] && q[1] <= b[3] && q[3] >= b[1]; });
-  return near.length ? polygonClipping.intersection(a, near) : [];
-}
-
-/** Пустоты этажа n. plans — планы этажей по номерам. */
+/** Only explicitly mapped multilevel spaces create voids. */
 export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[] {
   const plan = plans.get(n);
-  if (!plan || !plan.floor.length || !plan.mapped.length) return [];
-  const lowerLevels = [...plans.keys()].filter((k) => k < n).sort((a, b) => b - a);
-  const floorArea = multiArea(plan.floor);
-  if (!floorArea) return [];
-  const explicit: LevelVoid[] = [];
-  for (const poly of plan.explicitVoids ?? []) {
-    const piece: MultiPolygon = [poly], area = multiArea(piece);
-    if (area < MIN_VOID_AREA || !lowerLevels.length) continue;
-    const through: number[] = [];
-    let seen: MultiPolygon = [];
-    for (const k of lowerLevels) {
+  if (!plan?.floor.length || !plan.explicitVoids?.length) return [];
+  const lower = [...plans.keys()].filter(k => k < n).sort((a,b) => b-a);
+  if (!lower.length) return [];
+  return plan.explicitVoids.filter(poly => multiArea([poly]) > 1e-6).map(poly => {
+    const through: number[] = [], area = multiArea([poly]);
+    for (const k of lower) {
       through.push(k);
-      seen = safe(() => polygonClipping.union(seen, intersectNear(piece, plans.get(k)!.mapped)));
-      if (multiArea(seen) / area >= FLOOR_BELOW) break;
+      if (multiArea(safe(() => polygonClipping.intersection([poly], plans.get(k)!.mapped))) >= area * .999) break;
     }
-    explicit.push({ polygon: piece, through });
-  }
-  const covered = coveredArea(plan);
-  // Этаж размечен мало: пустоты ищем, только если на нём хоть что-то есть, а один из этажей ниже (свет бывает на
-  // несколько этажей) размечен хорошо — галереи вокруг атриума: разметка узкая, остальное — второй свет
-  if (covered / floorArea < MIN_COVERAGE) {
-    const wellMapped = (k: number) => {
-      const p = plans.get(k), a = p ? multiArea(p.floor) : 0;
-      return !!p && a > 0 && coveredArea(p) / a >= MIN_COVERAGE;
-    };
-    const found = lowerLevels.some(wellMapped);
-    if (covered <= 0 || !found) return explicit;
-  }
-  const occupied = plan.explicitVoids?.length ? safe(() => polygonClipping.union(plan.mapped, plan.explicitVoids!)) : plan.mapped;
-  const free = opening(safe(() => polygonClipping.difference(plan.floor, occupied)), OPEN_WIDTH, MIN_VOID_AREA);
-  const out: LevelVoid[] = [...explicit];
-  for (const poly of free) {
-    const piece: MultiPolygon = [poly];
-    const area = multiArea(piece);
-    if (area < MIN_VOID_AREA) continue;
-    // Пол под пустотой копится по этажам вниз: часть видно на ближнем этаже (эскалаторы у края атриума), часть —
-    // глубже; пустота — если суммарно этажи ниже закрывают её не меньше чем на FLOOR_BELOW
-    const through: number[] = [];
-    let seen: MultiPolygon = [];
-    let ok = false;
-    for (const k of lowerLevels) {
-      const below = plans.get(k)!;
-      through.push(k);
-      seen = safe(() => polygonClipping.union(seen, intersectNear(piece, below.mapped)));
-      if (multiArea(seen) / area >= FLOOR_BELOW) { ok = true; break; }
-    }
-    if (ok) out.push({ polygon: piece, through });
-  }
-  return out;
+    return {polygon:[poly], through};
+  });
 }
 
 /** Объект здания для контура этажа: полигоны (в метрах) и высоты низа и верха стен. */
@@ -166,11 +57,8 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
     const onLevel = indoor.filter((f) => !f.line && f.levels.includes(l.n));
     const levelPolys = onLevel.filter((f) => f.kind === 'level').flatMap((f) => f.polygons.map((p) => p.map(open)));
     const partPolys = parts.filter((p) => p.min <= l.floor + 0.5 && p.wallTop >= l.ceil - 0.5).flatMap((p) => p.polygons.map((q) => q.map(open)));
-    // Дыры колонн и стен — тоже возможная пустота (стена-кольцо вокруг атриума, relation/17888772); пустотелые
-    // колонны и шахты отсеивает проверка этажа ниже: под шахтой до самого низа пусто
-    // Объект на нескольких этажах (эскалатор, лестница, зал в два света: level=-1;0) — пол только на нижнем,
-    // выше он — пустота (relation/17919018)
-    const mappedPolys = onLevel.filter((f) => f.kind !== 'level' && (f.floors ?? f.levels).includes(l.n)).flatMap((f) => f.polygons.map((p) => p.map(open)));
+    // Разметка пола нужна лишь для перекрытия явных многоуровневых пустот. Неразмеченные участки остаются полом.
+    const mappedPolys = onLevel.filter((f) => f.kind !== 'level' && (f.floors ?? [Math.min(...f.levels)]).includes(l.n)).flatMap((f) => f.polygons.map((p) => p.map(open)));
     const mapped = unionOf(mappedPolys);
     let floor = unionOf(levelPolys.length ? levelPolys : partPolys);
     // Части не дают контур этажа (подземные этажи — части от земли, неточные высоты этажей): весь след здания
@@ -179,9 +67,11 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
       const outlines = mappedPolys.map((p) => [p[0]]);
       floor = unionOf([...parts.flatMap((p) => p.polygons.map((q) => q.map(open))), ...outlines]);
     }
-    const holes = onLevel.filter((f) => ['room', 'corridor', 'area', 'level'].includes(f.kind)
-      && (f.floors ?? f.levels).includes(l.n)).flatMap((f) => f.polygons.flatMap((p) => p.slice(1).map((r) => [open(r)])));
-    const explicitVoids = holes.length ? safe(() => polygonClipping.difference(unionOf(holes), mapped)) : [];
+    const spaces = indoor.filter(f => !f.line && ['room','area','corridor'].includes(f.kind)
+      && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels)
+      && !(f.floors ?? [Math.min(...f.levels)]).includes(l.n))
+      .flatMap(f => f.polygons.map(p => p.map(open)));
+    const explicitVoids = spaces.length ? safe(() => polygonClipping.intersection(floor, polygonClipping.difference(unionOf(spaces), mapped))) : [];
     plans.set(l.n, { floor, mapped, explicitVoids });
   }
   return plans;

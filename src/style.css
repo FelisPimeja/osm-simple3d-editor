@@ -747,3 +747,8 @@ body.mobile #issues-panel { display: none !important; }
 .other-tags button { padding: 2px; height: 26px; font-size: 18px; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; }
 .other-tags button:hover { background: #f3f4f6; }
 .other-tag-add { margin-top: 8px; }
+
+.change-list .ch-revert { opacity: .65; }
+.change-list > li:focus-within .ch-revert { opacity: 1; }
+.ch-discard-tag { border: 0; background: transparent; color: #777; cursor: pointer; font-size: 16px; padding: 0 4px; }
+.ch-discard-tag:hover, .ch-discard-tag:focus-visible { color: #b91c1c; background: #fee2e2; }

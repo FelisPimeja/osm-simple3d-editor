@@ -124,7 +124,7 @@ test('Move supports door anchors with snaps off, horizontal snaps, numeric dista
  const {Vector3}=await import('three');
  const {MoveTool}=await vite.ssrLoadModule('/src/edit/move-tool.ts');
  const previous=globalThis.document;
- globalThis.document={createElement:()=>({hidden:true})};
+ globalThis.document={createElement:()=>({hidden:true,addEventListener(){}})};
  try {
   let target, committed, preview;
   const layer={focusAxes:{x:[1,0],y:[0,1]},snapAt:()=>target,pickHit:()=>undefined,pickDoor:()=> 'node/1',doorAnchor:()=>new Vector3(0,0,.04),setMoveGuide(){},setMovePreview:(keys,offset)=>{preview=offset?.clone();},focusRay:()=>({}),focusProject:p=>[p.x*10,p.y*10]};
@@ -142,6 +142,14 @@ test('Move supports door anchors with snaps off, horizontal snaps, numeric dista
   tool.click([0,0]);tool.move([30,40]);tool.key({type:'keydown',key:'Escape'});
   assert.equal(preview,undefined);
   assert.equal(tool.state,'pick');
+  // A DOM entrance marker bypasses canvas picking but starts the same Move flow.
+  committed=undefined;target=undefined;
+  tool.beginAt(new Vector3(0,0,.04));
+  assert.equal(tool.state,'move');
+  target={key:'way/2',local:new Vector3(3,4,0)};tool.move([30,40]);
+  tool.key({type:'keydown',key:'1'});tool.key({type:'keydown',key:'Enter'});
+  assert.ok(Math.abs(committed.offset.length()-1)<1e-9);
+  assert.deepEqual(committed.keys,['node/1']);
  } finally {globalThis.document=previous;}
 });
 test('wall door metadata is projected once instead of once per wall/door pair',()=>{

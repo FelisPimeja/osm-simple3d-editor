@@ -39,7 +39,7 @@ export const CATEGORY_ORDER: IndoorCategory[] = ['circulation', 'shop', 'food', 
 const ROOM: Partial<Record<string, IndoorCategory>> = {
   corridor: 'circulation', hall: 'circulation', lobby: 'circulation', foyer: 'circulation', stairs: 'circulation', elevator: 'circulation',
   escalator: 'circulation', entrance: 'circulation', waiting: 'circulation', steps: 'circulation',
-  technical: 'technical', storage: 'technical', utility: 'technical', kitchen: 'technical', server: 'technical', electrical: 'technical',
+  technical: 'technical', warehouse: 'technical', storage: 'technical', utility: 'technical', kitchen: 'technical', server: 'technical', electrical: 'technical',
   shop: 'shop', restaurant: 'food', cafe: 'food', food_court: 'food',
   office: 'office', class: 'office', classroom: 'office', auditorium: 'office', amphitheatre: 'office', conference: 'office',
   laboratory: 'office', library: 'office', reception: 'office', toilets: 'office', toilet: 'office', bathroom: 'office', shower: 'office',

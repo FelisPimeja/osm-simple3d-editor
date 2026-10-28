@@ -122,6 +122,12 @@ export class OverpassTiles {
     try { localStorage.setItem(this.uploadedKey(), JSON.stringify(this.uploaded)); } catch { /* хранилище недоступно */ }
   }
 
+  /** Also protects the separately cached indoor snapshot of the focused building. */
+  wasUploadedDeleted(key: string): boolean {
+    const u=this.uploaded[key.replace(/#poi$/, '')];
+    return !!u && u.v===DELETED && Date.now()-u.at<UPLOADED_TTL_MS;
+  }
+
   /** В ответе есть объект старше отправленной версии или уже удалённый — данные до правки. */
   private behindUploads(elements: Iterable<{ type: string; id: number; version?: number }>): boolean {
     if (!Object.keys(this.uploaded).length) return false;

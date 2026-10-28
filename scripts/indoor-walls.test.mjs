@@ -127,3 +127,27 @@ test('conversion, new wall and removal are one undo/redo step; new wall remaps a
     assert.equal(session.get('way/-1'), undefined);
   } finally { delete globalThis.window; await vite.close(); }
 });
+
+test('removing a relation wall preserves the other boundaries of rooms with holes and multiple polygons', () => {
+  const room = { ...square, inners: [polygon([[2,2],[4,2],[4,4],[2,4]]).outer] };
+  const island = polygon([[20,0],[24,0],[24,4],[20,4]]);
+  const polys = [room,island];
+  const result = materializeRoomWalls(polys, { indoor:'room', level:'0' }, [0], [{span,levels:[0]}], nodesFor(polys));
+  let length = 0;
+  for (const {line} of result) for (let i=1;i<line.coords.length;i++) {
+    const a=line.coords[i-1],b=line.coords[i];
+    length+=Math.hypot(b[0]-a[0],b[1]-a[1])*111320;
+    assert.ok(!(a[1]===0 && b[1]===0 && Math.max(a[0],b[0])<=point(10,0)[0]));
+  }
+  assert.ok(Math.abs(length-54)<1e-6);
+});
+
+test('wall deletion finds doors only on the removed span and matching floor', async () => {
+ const {pointOnRemovedWall}=await import('../src/edit/indoor-walls.ts');
+ const targets=[{span,levels:[0]}];
+ assert.equal(pointOnRemovedWall(point(5,0),[0],targets),true);
+ assert.equal(pointOnRemovedWall(point(5,.01),[0],targets),true);
+ assert.equal(pointOnRemovedWall(point(5,.1),[0],targets),false);
+ assert.equal(pointOnRemovedWall(point(11,0),[0],targets),false);
+ assert.equal(pointOnRemovedWall(point(5,0),[1],targets),false);
+});

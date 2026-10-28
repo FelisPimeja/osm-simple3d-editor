@@ -17,3 +17,7 @@ test('holes and separate floors remain open and unchanged',()=>{
  const p=partitionFloors([room,rect(2,2,3,3),rect(20,0,2,2)]);
  assert.equal(total(p[0]),91);assert.equal(total(p[1]),9);assert.equal(total(p[2]),4);
 });
+test('visual floor offsets do not leave overlapping surfaces on the same storey',()=>{
+ const p=partitionFloors([rect(0,0,10,10,.02),rect(2,2,3,3,.05)],.1);
+ assert.equal(total(p[0]),91);assert.equal(total(p[1]),9);
+});

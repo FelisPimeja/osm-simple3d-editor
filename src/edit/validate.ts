@@ -1,3 +1,4 @@
+import { solidWall, wallLocalPolygons, nearestSolidFace, cutSolidWall, findSolidDoorBinding } from './solid-wall-doors';
 import polygonClipping, { type MultiPolygon } from 'polygon-clipping';
 import { parseLevels, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type Polygon } from '../osm/model';
 import { computeHeights, parseLength, roofShapeOf } from '../osm/heights';
@@ -30,6 +31,7 @@ export interface Issue {
 }
 
 export interface Fix {
+  solidDoorWall?: string;
   /** Что сделает кнопка — для подсказки. */
   label: string;
   tags: Record<string, string | undefined>;
@@ -274,7 +276,9 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
     tr('indoor={value} — тип объекта указывают отдельным тегом; для общего признака используют indoor=yes.', { value: t.indoor }));
   if (space && t.level === undefined) add('error', 'indoor-level', tr('У indoor-объекта нет level=* — этаж обязателен для поэтажного плана.'));
   if (t.room !== undefined && t.indoor !== 'room' && t.indoor !== 'area' && t.indoor !== 'corridor') add('warning', 'indoor-room',
-    tr('room=* описывает назначение помещения; проверьте indoor=room или indoor=area.'));
+    t.indoor === 'wall' || t.indoor === 'column'
+      ? tr('indoor={indoor} несовместим с room={room}: назначение помещения не задаётся стене или колонне. Проверьте тип объекта или удалите room=*.', { indoor: t.indoor, room: t.room })
+      : tr('room=* описывает назначение помещения; проверьте indoor=room или indoor=area.'));
   if (t['building:part'] !== undefined && space) add('warning', 'indoor-key',
     tr('building:part=* описывает объём здания, а не помещение indoor=*.'));
   // Только по геометрии: indoor=door + entrance=yes на наружной стене — обычный вход в здание (Simple Indoor Tagging)
@@ -818,4 +822,24 @@ function findDuplicates(scope: Feature3D[], all: Feature3D[], building: (key: st
     out.push(...found);
   }
   return out;
+}
+
+/** Existing doors on a solid wall need an actual OSM notch, not a render-only hole. */
+export function validateSolidWallDoors(all:IndoorFeature[]):Issue[]{
+ const result:Issue[]=[];
+ for(const door of all){
+  if(!door.point||!(door.tags.door||door.tags.entrance||door.tags.indoor==='door')||door.key.endsWith('#poi'))continue;
+  const origin=door.point,sx=111320*Math.cos(origin[1]*Math.PI/180);
+  const local=(p:LonLat):[number,number]=>[(p[0]-origin[0])*sx,(p[1]-origin[1])*111320];
+  if(findSolidDoorBinding(all,door,local))continue;
+  const candidates=all.filter(f=>solidWall(f)&&f.levels.some(l=>door.levels.includes(l)))
+   .map(wall=>({wall,face:nearestSolidFace(wallLocalPolygons(wall,local),[0,0],0.03)})).filter(c=>c.face).sort((a,b)=>a.face!.distance-b.face!.distance);
+  const candidate=candidates[0];if(!candidate)continue;
+  try{
+   const width=Math.max(0.1,parseLength(door.tags.width)??(door.tags.door==='revolving'?parseLength(door.tags.diameter)??2.4:1));
+   cutSolidWall(wallLocalPolygons(candidate.wall,local),candidate.face!.at,candidate.face!.face,width);
+   result.push({key:door.key,other:candidate.wall.key,level:'warning',code:'indoor-door-notch',text:tr('Дверь на полигональной стене без выемки.'),points:[origin],fix:{label:tr('Создать выемку и обновить соседние контуры'),tags:{},solidDoorWall:candidate.wall.key}});
+  }catch{/* A cut that cannot fit is not an unambiguous automatic fix. */}
+ }
+ return result;
 }

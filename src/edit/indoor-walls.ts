@@ -106,3 +106,15 @@ export function materializeRoomWalls(polygons: Polygon[], tags: Record<string, s
   return [...byGeometry.values()].map((entry) => ({ line: entry.line,
     tags: entry.levels.length === levels.length ? { ...wallTags } : { indoor: 'wall', level: entry.levels.join(';') } }));
 }
+
+/** Door belongs to a removed span only on a shared floor and within 2 cm of it. */
+export function pointOnRemovedWall(point: LonLat, levels: number[], targets: WallTarget[]): boolean {
+  const toLocal = local(point);
+  return targets.some(({span, levels: floors}) => {
+    if (!floors.some(l => levels.includes(l))) return false;
+    const a = toLocal(span[0]), b = toLocal(span[1]);
+    const dx=b[0]-a[0],dy=b[1]-a[1],length2=dx*dx+dy*dy;
+    const t=length2 ? Math.max(0,Math.min(1,-(a[0]*dx+a[1]*dy)/length2)) : 0;
+    return Math.hypot(a[0]+t*dx,a[1]+t*dy)<=EPS;
+  });
+}

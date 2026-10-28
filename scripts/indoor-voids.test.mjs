@@ -13,22 +13,130 @@ const outer=square(0,0,20,20), hole=square(5,5,15,15);
 const levels=[{n:0,floor:0,ceil:3},{n:1,floor:3,ceil:6}];
 const part={polygons:[[outer]],min:0,wallTop:6};
 const corridor={kind:'corridor',polygons:[[outer,hole]],levels:[1],floors:[1]};
-test('explicit inner ring is open even without mapped floors below',()=>{
+test('an unmapped inner ring does not imply a void',()=>{
  const plans=buildPlans(levels,[part],[corridor]);
  const voids=findVoids(1,plans);
- assert.equal(voids.length,1);
- assert.equal(multiArea(voids[0].polygon),100);
- assert.deepEqual(voids[0].through,[0]);
+ assert.deepEqual(voids,[]);
 });
 test('a room inside a corridor ring remains solid',()=>{
  const plans=buildPlans(levels,[part],[corridor,{kind:'room',polygons:[[hole]],levels:[1],floors:[1]}]);
  assert.deepEqual(findVoids(1,plans),[]);
 });
-test('only the unoccupied portion of an inner ring is cut',()=>{
+test('remaining unmapped portion of an inner ring has a floor',()=>{
  const plans=buildPlans(levels,[part],[corridor,{kind:'room',polygons:[[square(5,5,10,15)]],levels:[1],floors:[1]}]);
- assert.equal(findVoids(1,plans).reduce((s,v)=>s+multiArea(v.polygon),0),50);
+ assert.equal(findVoids(1,plans).reduce((s,v)=>s+multiArea(v.polygon),0),0);
 });
 test('unmapped space without an explicit ring still requires lower floor evidence',()=>{
  const plans=buildPlans(levels,[part],[{kind:'room',polygons:[[square(0,0,15,20)]],levels:[1],floors:[1]}]);
  assert.deepEqual(findVoids(1,plans),[]);
+});
+
+test('unmapped upper floor above mapped rooms remains solid',()=>{
+ const plans=buildPlans(levels,[part],[{kind:'room',polygons:[[outer]],levels:[0],floors:[0]}]);
+ assert.deepEqual(findVoids(1,plans),[]);
+});
+test('an explicit multilevel room creates a void even without other upper-floor mapping',()=>{
+ const plans=buildPlans(levels,[part],[{kind:'room',polygons:[[hole]],levels:[0,1],floors:[0]}]);
+ const voids=findVoids(1,plans);assert.equal(voids.length,1);assert.equal(multiArea(voids[0].polygon),100);
+ assert.deepEqual(findVoids(0,plans),[]);
+});
+test('explicitly repeated floors are not multilevel voids',()=>{
+ const plans=buildPlans(levels,[part],[{kind:'room',polygons:[[hole]],levels:[0,1],floors:[0,1]}]);
+ assert.deepEqual(findVoids(1,plans),[]);
+});
+test('small explicitly mapped voids are not dropped by an area heuristic',()=>{
+ const plans=buildPlans(levels,[part],[{kind:'room',polygons:[[square(1,1,2,2)]],levels:[0,1],floors:[0]}]);
+ assert.equal(findVoids(1,plans).reduce((s,v)=>s+multiArea(v.polygon),0),1);
+});
+test('empty floor receives a full base slab and a pool keeps its opening',async()=>{
+ const {BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts');
+ const layer=new BuildingsLayer('test'),ll=([x,y])=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ layer.setFocus([{key:'way/1',id:1,type:'way',version:1,kind:'building',hasParts:false,tags:{building:'yes',height:'9'},polygons:[{outer:outer.map(ll),inners:[]}]}]);
+ layer.setLevel({floor:3,cut:6,items:[],doors:[]});
+ const area=()=>layer.indoorObj.children.filter(o=>o.isMesh).reduce((s,o)=>{
+  const p=o.geometry.getAttribute('position');
+  for(let i=0;i+2<p.count;i+=3)if([i,i+1,i+2].every(j=>Math.abs(p.getZ(j)-2.97)<.001))
+   s+=Math.abs((p.getX(i+1)-p.getX(i))*(p.getY(i+2)-p.getY(i))-(p.getY(i+1)-p.getY(i))*(p.getX(i+2)-p.getX(i)))/2;
+  return s;
+ },0);
+ assert.ok(Math.abs(area()-400)<1);
+ layer.setLevel({floor:3,cut:6,items:[{key:'pool',kind:'area',z:3,pool:2,polygons:[{outer:hole.map(ll),inners:[]}]}],doors:[]});
+ assert.ok(Math.abs(area()-300)<1);
+});
+
+for(const kind of ['room','area'])test(`editing ${kind} level updates the active plan, with undo and redo`,async()=>{
+ const {EditSession}=await vite.ssrLoadModule('/src/edit/session.ts');
+ const {withIndoorTags,floorLevels}=await vite.ssrLoadModule('/src/osm/model.ts');
+ const {BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts');
+ const layer=new BuildingsLayer('test'),ll=([x,y])=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ layer.setFocus([{key:'way/1',id:1,type:'way',version:1,kind:'building',hasParts:false,tags:{building:'yes',height:'9'},polygons:[{outer:outer.map(ll),inners:[]}]}]);
+ const source={key:'way/2',kind,tags:{indoor:kind,level:'0'},levels:[0],polygons:[{outer:hole.map(ll),inners:[]}]};
+ let currentVoids=[],updates=0;
+ const refresh=()=>{
+  updates++;
+  const f=withIndoorTags(source,session.get(source.key).tags),floors=floorLevels(f);
+  const plans=buildPlans(levels,[part],[{kind,polygons:[[hole]],levels:f.levels,floors}]);
+  currentVoids=findVoids(1,plans);
+  const items=f.levels.includes(1)?[{...f,z:3,noFloor:!floors.includes(1)}]:[];
+  layer.setLevel({floor:3,cut:6,items,doors:[],voids:currentVoids.flatMap(v=>v.polygon.map(p=>p.map(r=>r.slice(0,-1).map(ll))))});
+ };
+ const session=new EditSession([{key:source.key,version:1,tags:source.tags,polygons:source.polygons}],refresh);
+ refresh();assert.equal(currentVoids.length,0);
+ session.editMany([{key:source.key,tags:{...source.tags,level:'0;1'}}]);
+ assert.equal(currentVoids.length,1);assert.equal(layer.level.floor,3);assert.equal(layer.level.items[0].noFloor,true);
+ assert.equal(layer.indoorWallPositions.length>0,kind==='room');
+ session.undo();assert.equal(currentVoids.length,0);assert.equal(layer.level.items.length,0);
+ session.redo();assert.equal(currentVoids.length,1);assert.equal(layer.indoorWallPositions.length>0,kind==='room');
+ assert.equal(updates,4);
+});
+
+test('relation/17986282 stairs room has an upper opening and level edits can remove it',async()=>{
+ const {floorLevels,withIndoorTags}=await vite.ssrLoadModule('/src/osm/model.ts');
+ const source={key:'relation/17986282',kind:'room',tags:{indoor:'room',room:'stairs',level:'0;1'},levels:[0,1],polygons:[]};
+ const plansFor=f=>buildPlans(levels,[part],[{kind:f.kind,polygons:[[hole]],levels:f.levels,floors:floorLevels(f)}]);
+ assert.deepEqual(floorLevels(source),[0]);
+ assert.equal(findVoids(1,plansFor(source)).reduce((sum,v)=>sum+multiArea(v.polygon),0),100);
+ assert.deepEqual(findVoids(0,plansFor(source)),[]);
+ const single=withIndoorTags(source,{...source.tags,level:'0'});
+ assert.deepEqual(findVoids(1,plansFor(single)),[]);
+ const repeated=withIndoorTags(source,{...source.tags,level:'0',repeat_on:'1'});
+ assert.deepEqual(new Set(floorLevels(repeated)),new Set([0,1]));
+ assert.deepEqual(findVoids(1,plansFor(repeated)),[]);
+});
+
+test('opening outline skips walls, retains exposed slab edges, and clips partial overlap',async()=>{
+ const {BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts');
+ const layer=new BuildingsLayer('test'),ll=([x,y])=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ layer.setFocus([{key:'way/1',id:1,type:'way',version:1,kind:'building',hasParts:false,tags:{building:'yes',height:'9'},polygons:[{outer:outer.map(ll),inners:[]}]}]);
+ const room={key:'stairs',kind:'room',z:3,noFloor:true,polygons:[{outer:hole.map(ll),inners:[]}]};
+ const length=items=>{
+  layer.setLevel({floor:3,cut:6,items,doors:[],voids:[[hole.map(ll)]]});
+  let length=0;
+  for(const o of layer.indoorObj.children.filter(o=>o.isLineSegments)){
+   const p=o.geometry.getAttribute('position');
+   for(let i=0;i+1<p.count;i+=2)if(Math.abs(p.getZ(i)-3.01)<.0001&&Math.abs(p.getZ(i+1)-3.01)<.0001)
+    length+=Math.hypot(p.getX(i+1)-p.getX(i),p.getY(i+1)-p.getY(i));
+  }
+  return length;
+ };
+ assert.ok(Math.abs(length([])-40)<.1);
+ assert.equal(length([room]),0);
+ assert.ok(Math.abs(length([{key:'wall',kind:'wall',line:true,z:3,polygons:[{outer:[[5,5],[10,5]].map(ll),inners:[]}]}])-35)<.1);
+});
+
+test('white base floor occupies only the area not covered by room floors',async()=>{
+ const {BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts');
+ const layer=new BuildingsLayer('test'),ll=([x,y])=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ layer.setFocus([{key:'way/1',id:1,type:'way',version:1,kind:'building',hasParts:false,tags:{building:'yes',height:'9'},polygons:[{outer:outer.map(ll),inners:[]}]}]);
+ layer.setLevel({floor:3,cut:6,items:[{key:'room',kind:'room',z:3,polygons:[{outer:hole.map(ll),inners:[]}]}],doors:[]});
+ let white=0,colour=0;
+ for(const o of layer.indoorObj.children.filter(o=>o.isMesh)){
+  const p=o.geometry.getAttribute('position');
+  for(let i=0;i+2<p.count;i+=3){
+   const area=Math.abs((p.getX(i+1)-p.getX(i))*(p.getY(i+2)-p.getY(i))-(p.getY(i+1)-p.getY(i))*(p.getX(i+2)-p.getX(i)))/2;
+   if([i,i+1,i+2].every(j=>Math.abs(p.getZ(j)-2.97)<.001))white+=area;
+   if([i,i+1,i+2].every(j=>Math.abs(p.getZ(j)-3.05)<.001))colour+=area;
+  }
+ }
+ assert.ok(Math.abs(white-300)<1);assert.ok(Math.abs(colour-100)<1);
 });

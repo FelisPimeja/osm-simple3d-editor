@@ -1798,7 +1798,39 @@ function soloGroup(key: string): BuildingGroup | undefined {
 
 /** Живые объекты с контуром вне отношений type=building, чья рамка задевает near (данные тайлов с правками сессии). */
 function looseFeatures(near: { w: number; s: number; e: number; n: number }, pool = loosePool()): Feature3D[] {
-  return pool.filter((f) => { const r = bboxOf(f); return r.w <= near.e && r.e >= near.w && r.s <= near.n && r.n >= near.s; });
+  const hit = (f: Feature3D) => { const r = bboxOf(f); return r.w <= near.e && r.e >= near.w && r.s <= near.n && r.n >= near.s; };
+  // Серия поисков по одному пулу (проверка карты — по каждой части в кадре) — через сетку, а не перебором всех объектов
+  const grid = poolGrid(pool);
+  const out = new Set<Feature3D>();
+  for (const f of grid.big) if (hit(f)) out.add(f);
+  for (let i = Math.floor(near.w / POOL_CELL); i <= Math.floor(near.e / POOL_CELL); i++) {
+    for (let j = Math.floor(near.s / POOL_CELL); j <= Math.floor(near.n / POOL_CELL); j++) {
+      for (const f of grid.cells.get(`${i},${j}`) ?? []) if (hit(f)) out.add(f);
+    }
+  }
+  // Порядок — как в пуле (от него зависит выбор среди равных)
+  return out.size < 2 ? [...out] : [...out].sort((a, b) => grid.index.get(a)! - grid.index.get(b)!);
+}
+
+/** Клетка сетки пула, градусы (~100–200 м); объекты больше MAX_POOL_CELLS клеток — в общий список. */
+const POOL_CELL = 0.002;
+const MAX_POOL_CELLS = 64;
+const poolGrids = new WeakMap<Feature3D[], { cells: Map<string, Feature3D[]>; big: Feature3D[]; index: Map<Feature3D, number> }>();
+function poolGrid(pool: Feature3D[]) {
+  let g = poolGrids.get(pool);
+  if (g) return g;
+  g = { cells: new Map(), big: [], index: new Map(pool.map((f, i) => [f, i])) };
+  for (const f of pool) {
+    const r = bboxOf(f);
+    const i0 = Math.floor(r.w / POOL_CELL), i1 = Math.floor(r.e / POOL_CELL), j0 = Math.floor(r.s / POOL_CELL), j1 = Math.floor(r.n / POOL_CELL);
+    if ((i1 - i0 + 1) * (j1 - j0 + 1) > MAX_POOL_CELLS) { g.big.push(f); continue; }
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      const k = `${i},${j}`;
+      (g.cells.get(k) ?? g.cells.set(k, []).get(k)!).push(f);
+    }
+  }
+  poolGrids.set(pool, g);
+  return g;
 }
 
 /** Все объекты вне отношений (с правками сессии) — один раз на серию поисков looseFeatures. */
@@ -10181,6 +10213,8 @@ const selectedIssueIds = new Set<string>();
 const issueId = (i: Issue) => `${i.key}\0${i.other ?? ''}\0${i.code}\0${i.text}`;
 
 /** Последние проверки по зданиям: пересчёт, только когда сменились объекты (правка даёт новый объект). */
+/** Промахи кеша проверки отношений за проход — в подпись замера. */
+let issueCacheMisses = 0;
 const issueCache = new Map<string, { feats: Feature3D[]; roles: string; issues: Issue[] }>();
 // Устаревшие теги iD — отдельным файлом; пришли — перепроверить уже показанное
 loadDeprecated(() => { setDeprecatedTags(deprecations()); issueCache.clear(); featureIssueCache = new WeakMap(); renderIssues(); });
@@ -10193,6 +10227,7 @@ function buildingIssues(g: BuildingGroup): Issue[] {
   const roles = g.roles.join();
   const hit = issueCache.get(g.key);
   if (hit && hit.roles === roles && hit.feats.length === sources.length && hit.feats.every((f, i) => f === sources[i])) return hit.issues;
+  issueCacheMisses++;
   const feats = groupFeatures(g).filter((f) => !session.isDeleted(f.key));
   const issues = timed('проверка здания', () => validateBuilding(g, feats), () => `${g.key}, ${feats.length}`);
   if (issueCache.size > 2000) issueCache.clear();
@@ -10222,12 +10257,13 @@ function visibleMapIssues(): Issue[] {
     else singles.push(f);
   }
   const issues = timed('проверка отдельных объектов', () => singles.flatMap(featureIssues), () => `${singles.length}`);
+  issueCacheMisses = 0;
   timed('проверка отношений', () => {
     for (const group of groups.values()) {
       if (groupSources(group).length === group.members.length) issues.push(...buildingIssues(group));
       else for (const f of groupFeatures(group)) issues.push(...featureIssues(f));
     }
-  }, () => `${groups.size}`);
+  }, () => `${groups.size}, пересчитано ${issueCacheMisses}`);
   const byKey = new Map(rendered.map((f) => [f.key, f]));
   issues.push(...timed('проверка копий (карта)', () => duplicateIssues([...seen].map((k) => byKey.get(k)!), rendered), () => `${rendered.length}`));
   issues.push(...timed('проверка частей без отношения', () => orphanPartIssues(singles)));
@@ -10248,14 +10284,15 @@ function strayPartIssues(scope: Feature3D[]): Issue[] {
   const all = [...overpass.allFeatures(), ...createdShapes()]
     .filter((f) => f.polygons?.length && !session.isDeleted(f.key) && isOutline(f))
     .map((f) => (session.has(f.key) ? (session.get(f.key) as Feature3D | undefined) ?? f : f))
-    .filter((f) => f.polygons?.length)
-    .map((b) => { const r = bboxOf(b); return { b, r, area: (r.e - r.w) * (r.n - r.s) }; });
+    .filter((f) => f.polygons?.length);
   const out: Issue[] = [];
   for (const p of parts) {
     const c = pointOnSurface(p.polygons[0]);
     let host: Feature3D | undefined, best = Infinity;
-    for (const { b, r, area } of all) {
-      if (area >= best || b.key === p.key || c[0] < r.w || c[0] > r.e || c[1] < r.s || c[1] > r.n) continue;
+    // Контуры вокруг точки — по сетке (looseFeatures), а не перебором всех загруженных
+    for (const b of looseFeatures({ w: c[0], e: c[0], s: c[1], n: c[1] }, all)) {
+      const r = bboxOf(b), area = (r.e - r.w) * (r.n - r.s);
+      if (area >= best || b.key === p.key) continue;
       if (insideFeature(c, b)) { host = b; best = area; }
     }
     if (!host) continue;
@@ -11816,7 +11853,10 @@ function groupDateForm(g: BuildingGroup): string {
 }
 
 /** После правки тегов: пересобрать меши, обновить панель и список изменений. */
+/** Растёт с каждой правкой сессии — для кешей проверок поверх данных. */
+let sessionRevision = 0;
 function onSessionChange(keys: string[]) {
+  sessionRevision++;
   if (josmApi() && !uploading) scheduleJosmSync();
   scheduleAutosave();
   mapIssuesDirty = true;
@@ -13077,6 +13117,7 @@ function applyEditsText(text: string) {
 /** Пустая сессия: правки, созданные здания и помещения — забыты. */
 function resetSession() {
   session = new EditSession([], onSessionChange);
+  sessionRevision++;
   session.beforeStep = autoRelation;
   sessionNodeTags.clear();
   indoorEdited.clear();

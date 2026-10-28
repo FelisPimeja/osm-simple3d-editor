@@ -3740,7 +3740,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.pending.set(key, token);
     const g = new MeshGroup(center);
     const todo = features.filter(shouldRender);
-    g.contacts = timed(`${this.id}: стыки тайла`, () => buildContacts(g, todo));
+    // Стыки — тоже порциями: тайл у горизонта то входит в кадр, то уходит, и сборку часто отменяют на середине
+    const contacts = timed(`${this.id}: стыки тайла (начало)`, () => contactsBuilder(g, todo));
+    for (let done = false; !done;) {
+      await new Promise(requestAnimationFrame);
+      if (this.pending.get(key) !== token) return;
+      done = timed(`${this.id}: стыки тайла (порция)`, () => contacts.step(performance.now() + FRAME_BUDGET_MS));
+    }
+    g.contacts = contacts.contacts;
     let i = 0;
     while (i < todo.length) {
       await new Promise(requestAnimationFrame);
@@ -6047,25 +6054,36 @@ function hasFlatTop(prep: ReturnType<typeof prepItem>): boolean {
 
 /** Индекс плоских верхов и дон группы: по нему разбираются соприкасающиеся грани соседних частей. */
 function buildContacts(g: MeshGroup, features: Iterable<Feature3D>): Contacts {
-  features = [...features];
-  g.renderFootprints = outlineRemainders([...features].filter(f => !g.hidden.has(f.key)));
+  const b = contactsBuilder(g, [...features]);
+  b.step(Infinity);
+  return b.contacts;
+}
+
+/** То же порциями: step(deadline) считает до срока (performance.now()), true — всё посчитано. */
+function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Contacts; step: (deadline: number) => boolean } {
+  g.renderFootprints = outlineRemainders(features.filter(f => !g.hidden.has(f.key)));
   const c: Contacts = { tops: new Map(), bottoms: new Map() };
   const add = (m: Map<number, ContactFace[]>, face: ContactFace) => {
     const k = Math.round(face.z / CONTACT_DZ);
     (m.get(k) ?? m.set(k, []).get(k)!).push(face);
   };
-  for (const f of features) {
+  let i = 0;
+  const step = (deadline: number) => {
+    while (i < features.length && performance.now() < deadline) addFeature(features[i++]);
+    return i >= features.length;
+  };
+  const addFeature = (f: Feature3D) => {
     // Скрытые (глазик, изоляция) не стоят на крышах: иначе под ними у соседа вместо крыши — плита перекрытия
-    if (!shouldRender(f) || g.hidden.has(f.key)) continue;
+    if (!shouldRender(f) || g.hidden.has(f.key)) return;
     const prep = prepItem(g, f);
     const top = hasFlatTop(prep), bottom = hasBottom(prep);
-    if (!top && !bottom) continue;
+    if (!top && !bottom) return;
     const box = new THREE.Box2();
     for (const p of prep.polys) for (const [x, y] of p.outer) box.expandByPoint(new THREE.Vector2(x, y));
     if (top) add(c.tops, { key: f.key, z: prep.heights.wallTop, polys: prep.polys, box });
     if (bottom) add(c.bottoms, { key: f.key, z: prep.heights.min, polys: prep.polys, box });
-  }
-  return c;
+  };
+  return { contacts: c, step };
 }
 
 /** Грани другого объекта на высоте z, пересекающие рамку box (кроме самого объекта). */

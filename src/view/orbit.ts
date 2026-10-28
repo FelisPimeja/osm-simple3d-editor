@@ -1,4 +1,10 @@
-import { MercatorCoordinate, type LngLat, type Map as MlMap } from 'maplibre-gl';
+import { Event as MlEvent, MercatorCoordinate, type MapEventType, type LngLat, type Map as MlMap } from 'maplibre-gl';
+
+/**
+ * Поле события moveend, пришедшего посреди вращения мышью: тяжёлые обработчики (догрузка тайлов, проверка карты,
+ * значки) его пропускают — дождутся moveend по отпусканию кнопки, как у жестов самого MapLibre.
+ */
+export const ORBIT_EVENT = 'orbitDrag';
 
 /** Точка, вокруг которой вращаем: координаты и высота над землёй, м. */
 export interface Pivot {
@@ -107,7 +113,23 @@ export class CursorOrbit {
     this.rotated = Math.hypot(e.clientX - this.drag.x0, e.clientY - this.drag.y0) > 4;
     this.drag = undefined;
     this.marker.hidden = true;
+    // Конец жеста — один moveend без пометки: пока тянули, каждый jumpTo слал свой (см. ORBIT_EVENT)
+    if (this.moved) { this.moved = false; this.map.fire(new MlEvent('moveend') as MapEventType['moveend']); }
   };
+
+  /** Камера сдвинулась за текущий жест вращения. */
+  private moved = false;
+
+  /** Идёт вращение мышью: MapLibre считает, что карта стоит (isMoving() — false). */
+  get dragging(): boolean {
+    return !!this.drag;
+  }
+
+  /** jumpTo на каждое движение мыши шлёт movestart/move/moveend; во время жеста moveend помечаем ORBIT_EVENT. */
+  private jump(opts: Parameters<MlMap['jumpTo']>[0]) {
+    if (this.drag) this.moved = true;
+    this.map.jumpTo(opts, this.drag ? { [ORBIT_EVENT]: true } : undefined);
+  }
 
   /**
    * Зум колесом к точке объекта под курсором (как в SketchUp): камера едет по прямой к этой точке (или от неё),
@@ -217,9 +239,9 @@ export class CursorOrbit {
       const tz = altitude - Math.cos(np) * dist;
       // ox2/oy2 — камера относительно pivot, t* — шаг от камеры вдоль взгляда
       const to = new MercatorCoordinate(p.x + (ox2 + tx) * s, p.y - (oy2 + ty) * s, 0).toLngLat();
-      map.jumpTo(map.calculateCameraOptionsFromTo(camLngLat, altitude, to, Math.max(0, tz)));
+      this.jump(map.calculateCameraOptionsFromTo(camLngLat, altitude, to, Math.max(0, tz)));
       return;
     }
-    map.jumpTo(map.calculateCameraOptionsFromCameraLngLatAltRotation(camLngLat, altitude, bearing + dBearing, newPitch));
+    this.jump(map.calculateCameraOptionsFromCameraLngLatAltRotation(camLngLat, altitude, bearing + dBearing, newPitch));
   }
 }

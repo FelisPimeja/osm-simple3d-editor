@@ -52,7 +52,7 @@ import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVE
 import { BuildingsLayer, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, type EntrancePlace, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
-import { CursorOrbit } from './view/orbit';
+import { CursorOrbit, ORBIT_EVENT } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
 import { pushHeightTags, lockedPushUnits, isFreshFlat, roofHeightTags, levelsNote, heightSplitTags } from './edit/push-height';
 import { SplitTool, type CutPoint, type SideRange } from './edit/split-tool';
@@ -1071,7 +1071,8 @@ map.on('load', () => {
 });
 
 let cameraWrite = Promise.resolve();
-map.on('moveend', () => {
+map.on('moveend', (e) => {
+  if (ORBIT_EVENT in e) return; // посреди вращения мышью — дождёмся конца жеста
   refreshOverpass(); scheduleIndoorBadges(); showOverpassStatus();
   if (!focus && !new URLSearchParams(location.search).has('edit')) {
     const c = map.getCenter();
@@ -1311,6 +1312,9 @@ function explodeMerged(features: TileBuildingFeature[]): GeoJSON.Feature<GeoJSON
 }
 
 let lastFilterSig = '';
+/** id тайловых зданий под Overpass в последнем setFilter: векторные тайлы приходят и уходят при каждом повороте, а
+ * setFilter перестраивает бакеты всех тайлов слоя (рывки по 200 мс) — при тех же клетках только дополняем набор. */
+let filterOverpassIds = new Set<number>();
 /** Области загрузки слоя JOSM: он скачан не по тайлам — тайловые здания прячем только внутри областей, иначе на
  * краю слоя прогал до границы тайла. Пусто (JOSM не отдал <bounds>) — прячем тайлы целиком, как у Overpass. */
 let josmAreas: Bbox[] = [];
@@ -1329,11 +1333,14 @@ function updateTileFilter() {
   // setFilter перестраивает бакеты всех тайлов слоя — вызываем, только если набор скрытого изменился
   const tileSet = new Set(overpassTiles);
   const hiddenMerged = byAreas ? mergedKeys.filter((m) => tileSet.has(m.tile) && inJosmAreas(m.lon, m.lat)).map((m) => m.key) : [];
-  const sig = [replacedIds.length, hiddenIds.join(), overpassTiles.sort().join(), overpassIds.length, byAreas, hiddenMerged.length].join('|');
-  if (sig === lastFilterSig) return;
+  const sig = [replacedIds.length, hiddenIds.join(), overpassTiles.sort().join(), byAreas, hiddenMerged.length].join('|');
+  if (sig === lastFilterSig) {
+    if (overpassIds.every((id) => filterOverpassIds.has(id))) return;
+    for (const id of overpassIds) filterOverpassIds.add(id);
+  } else filterOverpassIds = new Set(overpassIds);
   lastFilterSig = sig;
-  console.debug(`[perf] setFilter: скрыто ${overpassIds.length} фич тайлов под Overpass`);
-  map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...hiddenIds, ...overpassIds])]);
+  console.debug(`[perf] setFilter: скрыто ${filterOverpassIds.size} фич тайлов под Overpass`);
+  map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...hiddenIds, ...filterOverpassIds])]);
   // Выбранное здание тайла заменили данные API: его подсветка осталась бы внутри здания (видна сквозь прозрачные)
   if (highlightedTile !== undefined && [...replacedIds, ...hiddenIds, ...overpassIds].includes(highlightedTile)) clearTileHighlight();
   map.setFilter(REMAINDERS_LAYER, notIn(hiddenIds));
@@ -10313,19 +10320,21 @@ function scheduleMapIssues() {
   if (focus) return;
   mapIssuesDirty = true;
   const now = performance.now();
-  if (!mapIssuesTimer) mapIssuesSince = now;
+  if (!mapIssuesTimer || map.isMoving() || orbit.dragging) mapIssuesSince = now;
   clearTimeout(mapIssuesTimer);
   const wait = Math.max(0, Math.min(MAP_ISSUES_QUIET_MS, mapIssuesSince + MAP_ISSUES_MAX_WAIT_MS - now));
   mapIssuesTimer = setTimeout(() => {
     const run = () => {
       mapIssuesTimer = undefined;
+      // Идёт жест или анимация камеры — не дёргаем кадры: moveend поставит проверку заново (отсчёт ожидания — с него)
+      if (map.isMoving() || orbit.dragging) return;
       if (!focus) renderIssues();
     };
     if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 1000 });
     else run();
   }, wait);
 }
-map.on('moveend', scheduleMapIssues);
+map.on('moveend', (e) => { if (!(ORBIT_EVENT in e)) scheduleMapIssues(); });
 
 /** Значок проблем в строке списка: ошибка — красный, предупреждение — жёлтый; текст — во всплывающей подсказке. */
 function issueMark(list: Issue[] | undefined): string {

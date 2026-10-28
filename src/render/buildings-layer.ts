@@ -379,12 +379,22 @@ class MeshGroup {
   planShell?: { bases: Float32Array[]; sig: string; shell: Shell };
   /** Висящие части в режиме этажей (ключ → низ, ниже которого части нет): см. floatingParts. */
   lift?: Map<string, number>;
+  /** Кеши оболочки нескольких последних вариантов (у этажей свои открытые крыши; выход из этажей — тоже вариант). */
+  shellCaches?: Map<string, NonNullable<MeshGroup['shellCache']>>;
   /** Кеш оболочки по частям (см. applyShell): sig — скрытые/голые объекты и стекло. */
   shellCache?: {
     sig: string;
     lifted: Map<Item, { src: Float32Array; lift: number; out: { positions: Float32Array; wallVertices: number } }>;
     solids: Map<Item, { base: Float32Array; solid: PreparedSolid }>;
     trimmed: Map<Item, { base: Float32Array; deps: PreparedSolid[]; positions: Float32Array; wallVertices: number }>;
+    /** Подъёмы висящих частей — по тем же объектам (оболочка досчитывается порциями, не считать их каждый кадр). */
+    floating?: { feats: Feature3D[]; lift: Map<string, number> };
+    /** Рамки граней частей в плане — по тем же массивам вершин. */
+    boxes?: WeakMap<Float32Array, [number, number, number, number]>;
+    /** Соседи части — пока не менялся набор объёмов (solidsGen): порции не ищут их заново по всем частям. */
+    deps?: WeakMap<Item, { base: Float32Array; gen: number; deps: PreparedSolid[] }>;
+    solidsGen?: number;
+    solidsCount?: number;
   };
   /** Сечения оболочки по высоте (см. sectionAt): те же, пока не менялись объёмы частей. */
   sections?: { solids: PreparedSolid[]; at: Map<number, ClipMulti> };
@@ -1169,9 +1179,9 @@ export class BuildingsLayer implements CustomLayerInterface {
    * ещё нет (крыши считаются в воркере). Кеш — по набору объёмов: пересчёт только при изменении частей.
    */
   sectionAt(g: MeshGroup, h: number): ClipMulti | undefined {
-    const cache = g.shellCache;
+    const cache = g.shellCache!;
     if (!cache || !g.shellOf) return;
-    const solids = g.items.filter((it) => shellSolid(g, it)).map((it) => cache.solids.get(it)?.solid).filter((s): s is PreparedSolid => !!s);
+    const solids = g.items.filter((it) => shellSolid(g, it, it.full?.positions)).map((it) => cache.solids.get(it)?.solid).filter((s): s is PreparedSolid => !!s);
     const memo = g.sections;
     if (!memo || memo.solids.length !== solids.length || memo.solids.some((s, i) => s !== solids[i])) g.sections = { solids, at: new Map() };
     const at = g.sections!.at;
@@ -4514,15 +4524,24 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Крыши ещё считаются в воркере — оболочку посчитаем, когда придёт последняя (иначе пересчёт на каждую порцию)
     if (g.items.some((it) => it.pending && !g.hidden.has(it.feature.key))) return;
     // Кеш по частям: крыши приходят из воркера по одной — пересчитываются только изменившаяся часть и её соседи
-    if (g.shellCache?.sig !== hidden) g.shellCache = { sig: hidden, lifted: new Map(), solids: new Map(), trimmed: new Map() };
-    const cache = g.shellCache;
-    let done = 0;
+    if (g.shellCache?.sig !== hidden) {
+      const caches = g.shellCaches ??= new Map();
+      g.shellCache = caches.get(hidden) ?? { sig: hidden, lifted: new Map(), solids: new Map(), trimmed: new Map() };
+      caches.delete(hidden);
+      caches.set(hidden, g.shellCache);
+      while (caches.size > SHELL_CACHES) caches.delete(caches.keys().next().value!);
+    }
+    const cache = g.shellCache!;
+    let done = 0, incomplete = false;
     timed('этажи: оболочка здания', () => {
-      // Не дольше SHELL_BUDGET_MS: дальше грани остаются как есть (большие комплексы из сотен частей)
-      const deadline = performance.now() + SHELL_BUDGET_MS;
       // Висящие части (забытый min_height) — без столба от земли до низа охватывающей части
-      const floating = timed('этажи: оболочка: висящие части', () => floatingParts(g.items.filter((it) => !g.hidden.has(it.feature.key)).map((it) => it.feature)));
-      g.lift = new Map([...floating].map(([k, f]) => [k, f.lift]));
+      const feats = g.items.filter((it) => !g.hidden.has(it.feature.key)).map((it) => it.feature);
+      const fl = cache.floating;
+      if (!fl || fl.feats.length !== feats.length || fl.feats.some((f, i) => f !== feats[i])) {
+        const floating = timed('этажи: оболочка: висящие части', () => floatingParts(feats));
+        cache.floating = { feats, lift: new Map([...floating].map(([k, f]) => [k, f.lift])) };
+      }
+      g.lift = cache.floating!.lift;
       const base = new Map<Item, { positions: Float32Array; wallVertices: number }>();
       for (const it of g.items) {
         it.full ??= { positions: it.positions, wallVertices: it.wallVertices };
@@ -4547,8 +4566,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       const solids = new Map<Item, PreparedSolid>();
       const tSolids = performance.now();
       for (const it of g.items) {
-        if (!shellSolid(g, it)) continue;
         const full = base.get(it)!;
+        if (!shellSolid(g, it, full.positions)) continue;
         const hit = cache.solids.get(it);
         if (hit && hit.base === full.positions) { solids.set(it, hit.solid); continue; }
         const h = computeHeights(it.tags);
@@ -4564,9 +4583,17 @@ export class BuildingsLayer implements CustomLayerInterface {
         });
         cache.solids.set(it, { base: full.positions, solid });
         solids.set(it, solid);
+        cache.solidsGen = (cache.solidsGen ?? 0) + 1;
       }
+      // Набор объёмов мог и сократиться (часть заменили) — тоже другое поколение
+      if (cache.solidsCount !== solids.size) cache.solidsGen = (cache.solidsGen ?? 0) + 1;
+      cache.solidsCount = solids.size;
+      const gen = cache.solidsGen ?? 0;
+      const depsMemo = cache.deps ??= new WeakMap();
       recordMs('этажи: оболочка: объёмы частей', performance.now() - tSolids, `${solids.size}`);
       let tTrim = 0, tEdges = 0, tDeps = 0;
+      // Бюджет — на обрезку граней: остальное выше кешируется по частям и в следующих порциях почти бесплатно
+      const deadline = performance.now() + SHELL_BUDGET_MS;
       // Кандидаты в соседи — один раз: openRoofInPlan на каждую пару (сотни частей собора) — десятки секунд
       const neighbours = [...solids].filter(([o]) => !this.openRoofInPlan(g, o));
       for (const it of g.items) {
@@ -4578,12 +4605,16 @@ export class BuildingsLayer implements CustomLayerInterface {
           continue;
         }
         // Соседи — объёмы, чей прямоугольник в плане задевает часть
-        const b = positionsBox(full.positions);
+        const boxes = cache.boxes ??= new WeakMap();
+        const b = boxes.get(full.positions) ?? boxes.set(full.positions, positionsBox(full.positions)).get(full.positions)!;
         const t0 = performance.now();
-        const deps = neighbours.filter(([o, sd]) => o !== it && sd.box[0] <= b[2] + 0.1 && sd.box[2] >= b[0] - 0.1 && sd.box[1] <= b[3] + 0.1 && sd.box[3] >= b[1] - 0.1).map(([, sd]) => sd);
+        const memo = depsMemo.get(it);
+        const deps = memo && memo.base === full.positions && memo.gen === gen ? memo.deps
+          : neighbours.filter(([o, sd]) => o !== it && sd.box[0] <= b[2] + 0.1 && sd.box[2] >= b[0] - 0.1 && sd.box[1] <= b[3] + 0.1 && sd.box[3] >= b[1] - 0.1).map(([, sd]) => sd);
+        if (deps !== memo?.deps) depsMemo.set(it, { base: full.positions, gen, deps });
         tDeps += performance.now() - t0;
         const hit = cache.trimmed.get(it);
-        if (hit && hit.base === full.positions && hit.deps.length === deps.length && hit.deps.every((d, i) => d === deps[i])) {
+        if (hit && hit.base === full.positions && (hit.deps === deps || (hit.deps.length === deps.length && hit.deps.every((d, i) => d === deps[i])))) {
           if (it.positions !== hit.positions) {
             it.positions = hit.positions;
             it.wallVertices = hit.wallVertices;
@@ -4594,16 +4625,23 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (!deps.length) {
           it.positions = full.positions;
           it.wallVertices = full.wallVertices;
+        } else if (done > 0 && performance.now() > deadline) {
+          // Время порции вышло — пока как есть, досчитает продолжение (continueShell); рёбра — только если сменились грани
+          incomplete = true;
+          if (it.positions === full.positions) continue;
+          it.positions = full.positions;
+          it.wallVertices = full.wallVertices;
         } else {
           const n = full.positions.length / 3, end = n - it.floorVertices;
           const polys = (g.renderFootprints.get(it.feature.key) ?? it.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
           const t1 = performance.now();
-          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, deps, thinItem(it), deadline);
-          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, deps, thinItem(it), deadline);
+          // Часть — целиком: прерванная на середине не кешируется, и крупная (дольше порции) не досчиталась бы никогда
+          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, deps, thinItem(it));
+          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, deps, thinItem(it));
           // Перекрытия (крыша под соседней частью) внутри непрозрачного соседа — внутренняя грань оболочки. Число вершин
           // плит не меняется (floorVertices считается по исходным): убранное — вырожденными треугольниками
           let floors: ArrayLike<number> = full.positions.subarray(end * 3);
-          const cut = trimTriangles(full.positions, end, n, polys, false, deps, true, deadline);
+          const cut = trimTriangles(full.positions, end, n, polys, false, deps, true);
           if (cut.length <= floors.length) { const f = new Float32Array(floors.length); f.set(cut); floors = f; }
           const pos = new Float32Array(walls.length + roof.length + it.floorVertices * 3);
           pos.set(walls, 0);
@@ -4614,8 +4652,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           done++;
           tTrim += performance.now() - t1;
         }
-        // Не досчитанное к дедлайну в кеш не идёт — досчитается при следующем обновлении
-        if (performance.now() <= deadline) cache.trimmed.set(it, { base: full.positions, deps, positions: it.positions, wallVertices: it.wallVertices });
+        cache.trimmed.set(it, { base: full.positions, deps, positions: it.positions, wallVertices: it.wallVertices });
         const t2 = performance.now();
         if (it.edges) it.edges = itemEdges(it);
         tEdges += performance.now() - t2;
@@ -4626,9 +4663,28 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Заменённые части (пришла крыша, правка) — из кеша вон
       const live = new Set(g.items);
       for (const m of [cache.lifted, cache.solids, cache.trimmed] as Map<Item, unknown>[]) for (const k of m.keys()) if (!live.has(k)) m.delete(k);
-      if (performance.now() > deadline) console.warn(`[levels] оболочка здания не досчитана за ${SHELL_BUDGET_MS} мс — часть граней внутри частей осталась`);
-    }, () => `${g.items.length} объектов, пересчитано ${done}`);
+    }, () => `${g.items.length} объектов, пересчитано ${done}${incomplete ? ', остальное — в фоне' : ''}`);
+    // Не досчитано — оболочку не запоминаем: следующий вызов продолжит с кеша по частям
+    if (incomplete) { this.continueShell(g); return; }
     g.shellOf = { bases: g.items.map((it) => it.full!.positions), hidden };
+  }
+
+  /** Досчитать оболочку по кадрам (по SHELL_BUDGET_MS) и один раз пересобрать геометрию, когда готова. */
+  private shellContinuing?: MeshGroup;
+  private continueShell(g: MeshGroup) {
+    if (this.shellContinuing === g) return;
+    this.shellContinuing = g;
+    const step = () => {
+      // Вышли из этажей или из режима здания — продолжать нечего (applyShell сам вернёт исходные грани)
+      if (!this.level || g !== this.groups.get(FOCUS_GROUP)) { this.shellContinuing = undefined; return; }
+      this.shellContinuing = undefined;
+      this.applyShell(g);
+      if (this.shellContinuing === g) return; // ещё не всё — applyShell запланировал следующую порцию
+      if (g.shellOf) timed('этажи: оболочка готова, слияние', () => this.rebuildGeometry(g));
+      this.map?.triggerRepaint();
+    };
+    this.shellContinuing = g;
+    requestAnimationFrame(() => { if (this.shellContinuing === g) step(); });
   }
 
   /**
@@ -5915,7 +5971,10 @@ function glassRanges(it: Item): [number, number][] {
  * Бюджет расчёта оболочки здания в режиме этажей, мс — страховка: дальше грани остаются как есть. Храм из ~450 частей
  * (relation/3224486) считается около 1.5 с, 600 мс ему не хватало.
  */
-const SHELL_BUDGET_MS = 5000;
+/** Сколько вариантов оболочки (этажей) держать посчитанными. */
+const SHELL_CACHES = 6;
+/** Порция обрезки граней оболочки за кадр, мс: остальное досчитывается в следующих кадрах (continueShell). */
+const SHELL_BUDGET_MS = 40;
 
 /** Объект закрывает собой грани соседей в оболочке: объём с высотой (не навес building:part=roof, не плоский след). */
 /** Прямоугольник треугольников в плане: [x0, y0, x1, y1]. */
@@ -5930,8 +5989,9 @@ function positionsBox(pos: ArrayLike<number>): [number, number, number, number] 
   return b;
 }
 
-function shellSolid(g: MeshGroup, it: Item): boolean {
-  return !g.hidden.has(it.feature.key) && !strokeOnly(g, it) && !thinItem(it) && !isRoofPart(it.tags) && it.positions.length > 0;
+/** positions — по каким граням судить (оболочка — по исходным: обрезанная целиком часть всё равно объём для соседей). */
+function shellSolid(g: MeshGroup, it: Item, positions = it.positions): boolean {
+  return !g.hidden.has(it.feature.key) && !strokeOnly(g, it) && !thinItem(it) && !isRoofPart(it.tags) && positions.length > 0;
 }
 
 function isRoofPart(tags: Record<string, string>): boolean {

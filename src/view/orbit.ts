@@ -6,6 +6,9 @@ import { Event as MlEvent, MercatorCoordinate, type MapEventType, type LngLat, t
  */
 export const ORBIT_EVENT = 'orbitDrag';
 
+/** Тишина колеса, после которой зум считается законченным (moveend), мс. */
+const WHEEL_END_MS = 150;
+
 /** Точка, вокруг которой вращаем: координаты и высота над землёй, м. */
 export interface Pivot {
   lngLat: LngLat; altitude: number;
@@ -119,6 +122,7 @@ export class CursorOrbit {
 
   /** Камера сдвинулась за текущий жест вращения. */
   private moved = false;
+  private wheelEnd?: ReturnType<typeof setTimeout>;
 
   /** Идёт вращение мышью: MapLibre считает, что карта стоит (isMoving() — false). */
   get dragging(): boolean {
@@ -169,7 +173,12 @@ export class CursorOrbit {
       f = hi;
       opts = f < 0.999 ? at(f) : undefined;
     }
-    if (opts) this.map.jumpTo(opts);
+    if (!opts) return;
+    // Каждый щелчок колеса — свой jumpTo и свой moveend (при резком зуме — каждые 8 мс): помечаем их, а настоящий
+    // moveend — один, когда колесо затихло, как у зума самого MapLibre
+    this.map.jumpTo(opts, { [ORBIT_EVENT]: true });
+    clearTimeout(this.wheelEnd);
+    this.wheelEnd = setTimeout(() => this.map.fire(new MlEvent('moveend') as MapEventType['moveend']), WHEEL_END_MS);
   };
 
   /** Камера относительно точки t (метры: x — восток, y — север, z — вверх) и масштаб меркатора у t. */

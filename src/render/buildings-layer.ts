@@ -18,6 +18,7 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, type Heights } from '../osm/heights';
 import { clipAbove, prepareSolid, sectionOf, trimCoplanarWalls, trimTriangles, type PreparedSolid } from './shell-trim';
+import { trimInWorker, trimSync, trimWorkersAvailable, type TrimJob, type TrimResult } from './shell-trim-pool';
 import { areaLedgeTriangles } from './area-ledge';
 import { floatingParts } from '../osm/floating';
 import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
@@ -4625,6 +4626,15 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (!deps.length) {
           it.positions = full.positions;
           it.wallVertices = full.wallVertices;
+        } else if (trimWorkersAvailable()) {
+          // В воркер: пока считается — исходные грани; результат ляжет в кеш, и оболочка соберётся заново
+          incomplete = true;
+          this.queueTrim(g, cache, it, full, deps);
+          if (it.positions === full.positions) continue;
+          it.positions = full.positions;
+          it.wallVertices = full.wallVertices;
+          if (it.edges) it.edges = itemEdges(it);
+          continue;
         } else if (done > 0 && performance.now() > deadline) {
           // Время порции вышло — пока как есть, досчитает продолжение (continueShell); рёбра — только если сменились грани
           incomplete = true;
@@ -4632,23 +4642,11 @@ export class BuildingsLayer implements CustomLayerInterface {
           it.positions = full.positions;
           it.wallVertices = full.wallVertices;
         } else {
-          const n = full.positions.length / 3, end = n - it.floorVertices;
-          const polys = (g.renderFootprints.get(it.feature.key) ?? it.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
           const t1 = performance.now();
           // Часть — целиком: прерванная на середине не кешируется, и крупная (дольше порции) не досчиталась бы никогда
-          const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, deps, thinItem(it));
-          const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, deps, thinItem(it));
-          // Перекрытия (крыша под соседней частью) внутри непрозрачного соседа — внутренняя грань оболочки. Число вершин
-          // плит не меняется (floorVertices считается по исходным): убранное — вырожденными треугольниками
-          let floors: ArrayLike<number> = full.positions.subarray(end * 3);
-          const cut = trimTriangles(full.positions, end, n, polys, false, deps, true);
-          if (cut.length <= floors.length) { const f = new Float32Array(floors.length); f.set(cut); floors = f; }
-          const pos = new Float32Array(walls.length + roof.length + it.floorVertices * 3);
-          pos.set(walls, 0);
-          pos.set(roof, walls.length);
-          pos.set(floors, walls.length + roof.length);
-          it.positions = pos;
-          it.wallVertices = walls.length / 3;
+          const r = composeTrim(full, it.floorVertices, trimSync(this.trimJob(g, it, full, []), deps));
+          it.positions = r.positions;
+          it.wallVertices = r.wallVertices;
           done++;
           tTrim += performance.now() - t1;
         }
@@ -4669,10 +4667,43 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.shellOf = { bases: g.items.map((it) => it.full!.positions), hidden };
   }
 
-  /** Досчитать оболочку по кадрам (по SHELL_BUDGET_MS) и один раз пересобрать геометрию, когда готова. */
+  /** Задание обрезки части: её грани, след в метрах сцены и соседи. */
+  private trimJob(g: MeshGroup, it: Item, full: { positions: Float32Array; wallVertices: number }, deps: PreparedSolid[]): TrimJob {
+    const polys = (g.renderFootprints.get(it.feature.key) ?? it.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+    return { positions: full.positions, wallVertices: full.wallVertices, floorVertices: it.floorVertices, polys,
+      glassWalls: glassEnabled && !!it.glassWalls, glassRoof: glassEnabled && !!it.glassRoof, thin: thinItem(it), deps };
+  }
+
+  /** Части в воркерах обрезки: не отправлять ту же (с теми же гранями и соседями) повторно. */
+  private trimQueued = new WeakMap<Item, { base: Float32Array; deps: PreparedSolid[] }>();
+  private trimPending = 0;
+
+  private queueTrim(g: MeshGroup, cache: NonNullable<MeshGroup['shellCache']>, it: Item, full: { positions: Float32Array; wallVertices: number }, deps: PreparedSolid[]) {
+    const q = this.trimQueued.get(it);
+    if (q && q.base === full.positions && q.deps === deps) return;
+    this.trimQueued.set(it, { base: full.positions, deps });
+    this.trimPending++;
+    const done = () => {
+      if (this.trimQueued.get(it)?.deps === deps) this.trimQueued.delete(it);
+      if (--this.trimPending === 0 && this.shellContinuing === g) requestAnimationFrame(() => this.continueShell(g, true));
+    };
+    trimInWorker(this.trimJob(g, it, full, deps)).then((r) => {
+      // Часть могли заменить, пока считалось: applyShell сверяет грани и соседей записи, устаревшая не подойдёт
+      const t = composeTrim(full, it.floorVertices, r);
+      cache.trimmed.set(it, { base: full.positions, deps, positions: t.positions, wallVertices: t.wallVertices });
+    }, (err) => console.warn('[levels] обрезка граней в воркере', it.feature.key, err)).finally(done);
+  }
+
+  /**
+   * Досчитать оболочку и один раз пересобрать геометрию, когда готова: с воркерами — когда придут все результаты
+   * (resume), без них — порциями по SHELL_BUDGET_MS за кадр.
+   */
   private shellContinuing?: MeshGroup;
-  private continueShell(g: MeshGroup) {
+  private continueShell(g: MeshGroup, resume = false) {
+    if (resume) { if (this.shellContinuing !== g) return; this.shellContinuing = undefined; }
     if (this.shellContinuing === g) return;
+    // Ждём воркеры: продолжим по последнему результату (queueTrim)
+    if (this.trimPending > 0 && !resume) { this.shellContinuing = g; return; }
     this.shellContinuing = g;
     const step = () => {
       // Вышли из этажей или из режима здания — продолжать нечего (applyShell сам вернёт исходные грани)
@@ -5978,6 +6009,18 @@ const SHELL_BUDGET_MS = 40;
 
 /** Объект закрывает собой грани соседей в оболочке: объём с высотой (не навес building:part=roof, не плоский след). */
 /** Прямоугольник треугольников в плане: [x0, y0, x1, y1]. */
+/** Грани части после обрезки: стены, крыша и плиты (их число вершин не меняется — убранное вырожденными). */
+function composeTrim(full: { positions: Float32Array }, floorVertices: number, r: TrimResult): { positions: Float32Array; wallVertices: number } {
+  const end = full.positions.length / 3 - floorVertices;
+  let floors: ArrayLike<number> = full.positions.subarray(end * 3);
+  if (r.cut.length <= floors.length) { const f = new Float32Array(floors.length); f.set(r.cut); floors = f; }
+  const pos = new Float32Array(r.walls.length + r.roof.length + floorVertices * 3);
+  pos.set(r.walls, 0);
+  pos.set(r.roof, r.walls.length);
+  pos.set(floors, r.walls.length + r.roof.length);
+  return { positions: pos, wallVertices: r.walls.length / 3 };
+}
+
 function positionsBox(pos: ArrayLike<number>): [number, number, number, number] {
   const b: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
   for (let i = 0; i + 2 < pos.length; i += 3) {

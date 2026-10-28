@@ -72,7 +72,7 @@ import { suggestComment, isIndoorChange, commentBuildingName } from './edit/chan
 import { EditSession, type ObjectEdit, type SessionSnapshot, type Tagged, type TagChange } from './edit/session';
 import { Autosave, type SavedEdits } from './edit/autosave';
 import { onSkeletons } from './render/skeleton';
-import { timed } from './perf';
+import { recordMs, timed } from './perf';
 import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmStatus, josmUndo, josmUnderlayHistory, josmUnderlayStep, watchJosmUnderlays, minElementId, refreshJosmStatus, sendJosmSelection, watchJosmSelection, type JosmChange, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
 import { deprecations, idFieldLabel, idOptions, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
 import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, setDateFields, type InheritSource } from './edit/tag-form';
@@ -10243,8 +10243,11 @@ function featureIssues(f: Feature3D): Issue[] {
   return issues;
 }
 
-/** Проверки объектов, реально показанных в режиме карты; неполные отношения проверяем по загруженным членам. */
-function visibleMapIssues(): Issue[] {
+/**
+ * Проверки объектов, реально показанных в режиме карты; неполные отношения проверяем по загруженным членам.
+ * Генератор: между шагами (yield) прогон можно отложить — на малых зумах в кадре тысячи объектов (сотни мс).
+ */
+function* visibleMapIssues(): Generator<void, Issue[]> {
   const rendered = overpass.renderedFeatures().map((r) => r.feature);
   const seen = new Set<string>();
   const groups = new Map<string, BuildingGroup>();
@@ -10256,20 +10259,62 @@ function visibleMapIssues(): Issue[] {
     if (group) groups.set(group.key, group);
     else singles.push(f);
   }
-  const issues = timed('проверка отдельных объектов', () => singles.flatMap(featureIssues), () => `${singles.length}`);
+  yield;
+  const issues: Issue[] = [];
+  for (let i = 0; i < singles.length; i++) {
+    issues.push(...featureIssues(singles[i]));
+    if (i % 100 === 99) yield;
+  }
   issueCacheMisses = 0;
-  timed('проверка отношений', () => {
-    for (const group of groups.values()) {
-      if (groupSources(group).length === group.members.length) issues.push(...buildingIssues(group));
-      else for (const f of groupFeatures(group)) issues.push(...featureIssues(f));
-    }
-  }, () => `${groups.size}, пересчитано ${issueCacheMisses}`);
+  let n = 0;
+  for (const group of groups.values()) {
+    if (groupSources(group).length === group.members.length) issues.push(...buildingIssues(group));
+    else for (const f of groupFeatures(group)) issues.push(...featureIssues(f));
+    if (++n % 10 === 0) yield;
+  }
+  yield;
   const byKey = new Map(rendered.map((f) => [f.key, f]));
   issues.push(...timed('проверка копий (карта)', () => duplicateIssues([...seen].map((k) => byKey.get(k)!), rendered), () => `${rendered.length}`));
+  yield;
   issues.push(...timed('проверка частей без отношения', () => orphanPartIssues(singles)));
+  yield;
   issues.push(...timed('проверка зданий без отношения', () => implicitIssues(singles), (r) => `${r.length}`));
+  yield;
   issues.push(...timed('проверка частей вне отношения', () => strayPartIssues(singles), (r) => `${r.length}`));
   return issues;
+}
+
+/** Порция проверки карты в простое браузера, мс. */
+const MAP_ISSUES_SLICE_MS = 12;
+let mapIssuesJob: Generator<void, Issue[]> | undefined;
+
+/**
+ * Проверка карты — порциями в простое браузера; панель обновится, когда готово (до того — прежний список).
+ * Камера сдвинулась посреди прогона — бросаем: moveend поставит заново. Данные сменились — досчитываем и начинаем снова.
+ */
+function runMapIssues() {
+  if (mapIssuesJob) return;
+  mapIssuesDirty = false;
+  const job = mapIssuesJob = visibleMapIssues();
+  const t0 = performance.now();
+  let busy = 0;
+  const later = (f: (d?: IdleDeadline) => void) => 'requestIdleCallback' in window ? requestIdleCallback(f, { timeout: 200 }) : setTimeout(f, 0);
+  const step = (d?: IdleDeadline) => {
+    if (job !== mapIssuesJob) return;
+    if (focus || map.isMoving() || orbit.dragging) { mapIssuesJob = undefined; mapIssuesDirty = true; return; }
+    const start = performance.now();
+    const until = start + Math.max(4, Math.min(MAP_ISSUES_SLICE_MS, d && !d.didTimeout ? d.timeRemaining() : MAP_ISSUES_SLICE_MS));
+    let r: IteratorResult<void, Issue[]>;
+    do r = job.next(); while (!r.done && performance.now() < until);
+    busy += performance.now() - start;
+    if (!r.done) { later(step); return; }
+    mapIssuesJob = undefined;
+    recordMs('проверка карты', busy, `${r.value.length}; отношений пересчитано ${issueCacheMisses}; готово за ${Math.round(performance.now() - t0)} мс`);
+    mapIssues = r.value;
+    if (mapIssuesDirty) runMapIssues();
+    renderIssues();
+  };
+  later(step);
 }
 
 /**
@@ -10402,7 +10447,7 @@ function renderIssues() {
   focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
   // Слой зданий выключен — проверку карты не считаем (пересчитаем, когда включат)
   if (!focus && !buildingsView.shown) mapIssues = [];
-  else if (!focus && mapIssuesDirty) { mapIssues = timed('проверка карты', visibleMapIssues, (r) => `${r.length}`); mapIssuesDirty = false; }
+  else if (!focus && mapIssuesDirty) runMapIssues();
   // Есть выбор — только проблемы выбранных объектов (в режиме здания само здание целиком не фильтрует)
   const picked = issueFilterKeys();
   if (focus) picked.delete(focus.key);

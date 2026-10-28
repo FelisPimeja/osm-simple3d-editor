@@ -3740,7 +3740,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.pending.set(key, token);
     const g = new MeshGroup(center);
     const todo = features.filter(shouldRender);
-    // Стыки — тоже порциями: тайл у горизонта то входит в кадр, то уходит, и сборку часто отменяют на середине
+    // Стыки — тоже порциями: тайл у горизонта то входит в кадр, то уходит, и сборку часто отменяют на середине;
+    // и начало (остатки контуров) — не в вызывающем кадре: туда же попадают moveend и показ соседних тайлов
+    await new Promise(requestAnimationFrame);
+    if (this.pending.get(key) !== token) return;
     const contacts = timed(`${this.id}: стыки тайла (начало)`, () => contactsBuilder(g, todo));
     for (let done = false; !done;) {
       await new Promise(requestAnimationFrame);

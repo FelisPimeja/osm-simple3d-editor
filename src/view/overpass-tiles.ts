@@ -76,6 +76,9 @@ export class OverpassTiles {
   private readonly rendered = new Map<string, RenderedFeature>();
   /** Какие контуры каждого показанного тайла скрыты из-за частей — чтобы перестраивать тайл, только если это изменилось. */
   private readonly hiddenOutlines = new Map<string, string>();
+  /** Тайлы, вошедшие в кадр, ждут показа: по одному за кадр, а не все разом в moveend (секунды после рывка карты). */
+  private readonly showQueue = new Set<string>();
+  private showScheduled = false;
   /** Ключи тайлов в IndexedDB — для режима cached не нужно опрашивать базу по каждому тайлу экрана. */
   private stored = new Set<string>();
   /** Отношения type=building из загруженных тайлов и обратный индекс «член → группа». */
@@ -434,7 +437,7 @@ export class OverpassTiles {
       if (e?.state === 'ready') {
         if (!this.networkWanted.has(key)) e.refreshing?.abort();
         this.touch(key, e);
-        if (!this.layer.hasGroup(key) && !this.hiddenOutlines.has(key)) this.show(key);
+        if (!this.layer.hasGroup(key) && !this.hiddenOutlines.has(key)) this.showSoon(key);
       }
     }
     this.pump();
@@ -902,6 +905,23 @@ export class OverpassTiles {
     if (!isBareOutlineTags(f.tags)) return false;
     const g = this.groups.get(this.memberGroup.get(f.key) ?? '');
     return !!g && g.roles[g.members.indexOf(f.key)] === 'outline';
+  }
+
+  private showSoon(key: string) {
+    this.showQueue.add(key);
+    if (this.showScheduled) return;
+    this.showScheduled = true;
+    const next = () => {
+      for (const k of this.showQueue) {
+        this.showQueue.delete(k);
+        // Пока ждал — ушёл из вида или уже показан другим путём (пришли данные, правка)
+        if (!this.wanted.includes(k) || this.layer.hasGroup(k) || this.hiddenOutlines.has(k) || this.cache.get(k)?.state !== 'ready') continue;
+        this.show(k);
+        break;
+      }
+      if (this.showQueue.size) requestAnimationFrame(next); else this.showScheduled = false;
+    };
+    requestAnimationFrame(next);
   }
 
   private show(key: string) {

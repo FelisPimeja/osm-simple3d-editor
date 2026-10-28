@@ -13,6 +13,7 @@ import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type Tree
 import { scatterTreesAsync, TreeGroup } from '../render/trees';
 import { TREE_STRIDE, TreeField } from '../render/tree-scatter';
 import { parseRoads, type RoadWay } from '../osm/roads';
+import { frameDeadline } from '../render/frame-budget';
 
 export const OVERPASS_TILE_ZOOM = GRID_ZOOM;
 /** Сколько тайлов держать в кеше данных. */
@@ -77,7 +78,8 @@ export class OverpassTiles {
   /** Какие контуры каждого показанного тайла скрыты из-за частей — чтобы перестраивать тайл, только если это изменилось. */
   private readonly hiddenOutlines = new Map<string, string>();
   /** Тайлы, вошедшие в кадр, ждут показа: по одному за кадр, а не все разом в moveend (секунды после рывка карты). */
-  private readonly showQueue = new Set<string>();
+  /** new — показать, если ещё нет; force — показать заново (пришли данные); recheck — заново, если сменились скрытые контуры. */
+  private readonly showQueue = new Map<string, 'new' | 'force' | 'recheck'>();
   private showScheduled = false;
   /** Ключи тайлов в IndexedDB — для режима cached не нужно опрашивать базу по каждому тайлу экрана. */
   private stored = new Set<string>();
@@ -765,11 +767,9 @@ export class OverpassTiles {
     this.revision++;
     const e = this.cache.get(key);
     if (e?.state === 'ready') this.indexGroups(e.groups);
-    if (this.wanted.includes(key)) this.show(key);
-    for (const n of neighbours(key)) {
-      if (!this.hiddenOutlines.has(n)) continue;
-      if (this.ownedFeatures(n).hidden !== this.hiddenOutlines.get(n)) this.show(n);
-    }
+    // Показ и перепроверка соседей (части у контуров — десятки мс на плотном тайле) — по очереди в бюджете кадров
+    if (this.wanted.includes(key)) this.showSoon(key, 'force');
+    for (const n of neighbours(key)) if (this.hiddenOutlines.has(n)) this.showSoon(n, 'recheck');
     // Лес из нового тайла может накрывать и уже показанные (у большого массива узлы — далеко за их границей)
     if (e?.state === 'ready' && e.trees?.woods.length) for (const k of this.wanted) if (k !== key) this.showTrees(k);
   }
@@ -907,15 +907,24 @@ export class OverpassTiles {
     return !!g && g.roles[g.members.indexOf(f.key)] === 'outline';
   }
 
-  private showSoon(key: string) {
-    this.showQueue.add(key);
+  private showSoon(key: string, mode: 'new' | 'force' | 'recheck' = 'new') {
+    const was = this.showQueue.get(key);
+    const rank = { new: 0, recheck: 1, force: 2 };
+    if (!was || rank[mode] > rank[was]) this.showQueue.set(key, mode);
     if (this.showScheduled) return;
     this.showScheduled = true;
-    const next = () => {
-      for (const k of this.showQueue) {
+    const next = (t: number) => {
+      // Бюджет кадра общий со сборкой тайлов: занят — ждём следующего кадра
+      if (performance.now() >= frameDeadline(t)) { requestAnimationFrame(next); return; }
+      for (const [k, mode] of this.showQueue) {
         this.showQueue.delete(k);
-        // Пока ждал — ушёл из вида или уже показан другим путём (пришли данные, правка)
-        if (!this.wanted.includes(k) || this.layer.hasGroup(k) || this.hiddenOutlines.has(k) || this.cache.get(k)?.state !== 'ready') continue;
+        if (mode === 'recheck') {
+          // Сосед пришедшего тайла: его контуры могли «увидеть» части по ту сторону границы
+          if (!this.hiddenOutlines.has(k)) continue;
+          if (this.ownedFeatures(k).hidden === this.hiddenOutlines.get(k)) break; // проверка сама дорогая — кадр занят
+        } else if (!this.wanted.includes(k) || this.cache.get(k)?.state !== 'ready'
+          // Пока ждал — показан другим путём (правка, соседний тайл)
+          || (mode === 'new' && (this.layer.hasGroup(k) || this.hiddenOutlines.has(k)))) continue;
         this.show(k);
         break;
       }

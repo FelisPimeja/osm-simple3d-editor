@@ -18,6 +18,7 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, type Heights } from '../osm/heights';
 import { clipAbove, prepareSolid, sectionOf, trimCoplanarWalls, trimTriangles, type PreparedSolid } from './shell-trim';
+import { nextFrameSlot } from './frame-budget';
 import { trimInWorker, trimSync, trimWorkersAvailable, type TrimJob, type TrimResult } from './shell-trim-pool';
 import { areaLedgeTriangles } from './area-ledge';
 import { floatingParts } from '../osm/floating';
@@ -300,8 +301,6 @@ const MAP_HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
   color: 0x2563eb, dashSize: 1, gapSize: 0.7, transparent: true, opacity: 0.8,
   depthFunc: THREE.GreaterDepth, depthWrite: false,
 });
-/** Бюджет асинхронной сборки группы на кадр, мс. */
-const FRAME_BUDGET_MS = 8;
 
 /** Здание внутри группы: треугольники в локальных метрах и всё, что нужно для раскраски и выбора. */
 interface Item {
@@ -3753,20 +3752,20 @@ export class BuildingsLayer implements CustomLayerInterface {
     const todo = features.filter(shouldRender);
     // Стыки — тоже порциями: тайл у горизонта то входит в кадр, то уходит, и сборку часто отменяют на середине;
     // и начало (остатки контуров) — не в вызывающем кадре: туда же попадают moveend и показ соседних тайлов
-    await new Promise(requestAnimationFrame);
+    // Бюджет кадра — общий для всех сборок (nextFrameSlot): при зуме собираются сразу несколько тайлов
+    await nextFrameSlot();
     if (this.pending.get(key) !== token) return;
     const contacts = timed(`${this.id}: стыки тайла (начало)`, () => contactsBuilder(g, todo));
     for (let done = false; !done;) {
-      await new Promise(requestAnimationFrame);
+      const deadline = await nextFrameSlot();
       if (this.pending.get(key) !== token) return;
-      done = timed(`${this.id}: стыки тайла (порция)`, () => contacts.step(performance.now() + FRAME_BUDGET_MS));
+      done = timed(`${this.id}: стыки тайла (порция)`, () => contacts.step(deadline));
     }
     g.contacts = contacts.contacts;
     let i = 0;
     while (i < todo.length) {
-      await new Promise(requestAnimationFrame);
+      const deadline = await nextFrameSlot();
       if (this.pending.get(key) !== token) return;
-      const deadline = performance.now() + FRAME_BUDGET_MS;
       timed(`${this.id}: треугольники (порция)`, () => {
         while (i < todo.length && performance.now() < deadline) this.addItem(g, todo[i++]);
       });
@@ -3836,8 +3835,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const todo = g.items.map((it) => it.feature).filter(pred);
       const done: Feature3D[] = [];
       while (done.length < todo.length) {
-        await new Promise(requestAnimationFrame);
-        const deadline = performance.now() + FRAME_BUDGET_MS;
+        const deadline = await nextFrameSlot();
         while (done.length < todo.length && performance.now() < deadline) done.push(todo[done.length]);
         if (this.groups.get(key) !== g) break; // группу убрали или заменили, пока ждали кадр
       }

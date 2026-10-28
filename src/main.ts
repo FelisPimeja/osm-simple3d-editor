@@ -1888,6 +1888,13 @@ function implicitWarning(g: BuildingGroup): string {
 }
 
 /** Члены группы для отрисовки: из сессии (с правками) или из тайлов. */
+/** Исходные объекты членов группы (до вида по роли) — дёшево, для сверки кешей; удалённые в сессии — нет. */
+function groupSources(g: BuildingGroup): Feature3D[] {
+  return g.members.map((k) => session.isDeleted(k) ? undefined
+    : (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature ?? overpass.findFeature(k))
+    .filter((f): f is Feature3D => !!f);
+}
+
 function groupFeatures(g: BuildingGroup): Feature3D[] {
   // Не нарисованные объёмом (подземные) — из загруженных данных
   return g.members.map((k, i) => {
@@ -10180,13 +10187,16 @@ loadDeprecated(() => { setDeprecatedTags(deprecations()); issueCache.clear(); fe
 
 /** Проверить здание: члены с правками сессии, без удалённых. */
 function buildingIssues(g: BuildingGroup): Issue[] {
-  const feats = groupFeatures(g).filter((f) => !session.isDeleted(f.key));
+  // Сверяем исходные объекты: groupFeatures у контуров каждый раз отдаёт новые копии (вид по роли), и кеш промахивался
+  // на каждом отношении с контуром; входы — с правками узлов, они меняют объект
+  const sources = groupSources(g).map(withEntranceEdits);
   const roles = g.roles.join();
   const hit = issueCache.get(g.key);
-  if (hit && hit.roles === roles && hit.feats.length === feats.length && hit.feats.every((f, i) => f === feats[i])) return hit.issues;
+  if (hit && hit.roles === roles && hit.feats.length === sources.length && hit.feats.every((f, i) => f === sources[i])) return hit.issues;
+  const feats = groupFeatures(g).filter((f) => !session.isDeleted(f.key));
   const issues = timed('проверка здания', () => validateBuilding(g, feats), () => `${g.key}, ${feats.length}`);
   if (issueCache.size > 2000) issueCache.clear();
-  issueCache.set(g.key, { feats, roles, issues });
+  issueCache.set(g.key, { feats: sources, roles, issues });
   return issues;
 }
 
@@ -10211,15 +10221,16 @@ function visibleMapIssues(): Issue[] {
     if (group) groups.set(group.key, group);
     else singles.push(f);
   }
-  const issues = singles.flatMap(featureIssues);
-  for (const group of groups.values()) {
-    const available = groupFeatures(group).filter((f) => !session.isDeleted(f.key));
-    if (available.length === group.members.length) issues.push(...buildingIssues(group));
-    else for (const f of available) issues.push(...featureIssues(f));
-  }
+  const issues = timed('проверка отдельных объектов', () => singles.flatMap(featureIssues), () => `${singles.length}`);
+  timed('проверка отношений', () => {
+    for (const group of groups.values()) {
+      if (groupSources(group).length === group.members.length) issues.push(...buildingIssues(group));
+      else for (const f of groupFeatures(group)) issues.push(...featureIssues(f));
+    }
+  }, () => `${groups.size}`);
   const byKey = new Map(rendered.map((f) => [f.key, f]));
-  issues.push(...duplicateIssues([...seen].map((k) => byKey.get(k)!), rendered));
-  issues.push(...orphanPartIssues(singles));
+  issues.push(...timed('проверка копий (карта)', () => duplicateIssues([...seen].map((k) => byKey.get(k)!), rendered), () => `${rendered.length}`));
+  issues.push(...timed('проверка частей без отношения', () => orphanPartIssues(singles)));
   issues.push(...timed('проверка зданий без отношения', () => implicitIssues(singles), (r) => `${r.length}`));
   issues.push(...timed('проверка частей вне отношения', () => strayPartIssues(singles), (r) => `${r.length}`));
   return issues;

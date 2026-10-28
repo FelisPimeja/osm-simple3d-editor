@@ -434,13 +434,23 @@ export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[
     const explicit = groupByOutline.get(b.key);
     const candidates = new Set<string>();
     const explicitParts = explicit && new Set(explicit.members.filter((_, i) => explicit.roles[i] === 'part'));
+    // An explicit building can be modelled by a ground body and an overhanging
+    // upper tier. Together they replace the outline, even if the ground body
+    // alone covers less than 90%. An isolated raised canopy does not.
+    const groundTop = explicitParts ? Math.max(-Infinity, ...[...explicitParts].flatMap(key => {
+      const f=byKey.get(key);if(!f)return [];
+      const h=computeHeights(f.tags);
+      return h.source!=='default'&&h.min<=heights.min+.5 ? [h.top] : [];
+    })) : -Infinity;
     for (let i = Math.floor(w / CELL); i <= Math.floor(e / CELL); i++) {
       for (let j = Math.floor(s / CELL); j <= Math.floor(n / CELL); j++) {
         for (const part of grid.get(`${i},${j}`) ?? []) {
           if (explicit ? !explicitParts!.has(part.key) : assignedParts.has(part.key)) continue;
           // Вычитание 2D-контура проходит через всю высоту. Приподнятая часть
           // (ярус, навес) не должна проделывать сквозную дыру в нижнем объёме.
-          if (part.min <= heights.min + 0.5 && part.min < top - ON_TOP_TOLERANCE && inside(part.c)) candidates.add(part.key);
+          const grounded = part.min <= heights.min + 0.5 && part.min < top - ON_TOP_TOLERANCE;
+          const supportedTier = explicit && part.min <= groundTop + 0.05 && part.min < top - 0.01;
+          if ((grounded || supportedTier) && inside(part.c)) candidates.add(part.key);
         }
       }
     }

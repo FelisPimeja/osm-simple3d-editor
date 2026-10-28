@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import {before,after,test} from 'node:test';
+import {createServer} from 'vite';
+import * as THREE from 'three';
+let vite,BuildingsLayer;
+before(async()=>{globalThis.window={};vite=await createServer({configFile:false,server:{middlewareMode:true,ws:false,watch:null},appType:'custom'});({BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts'));});
+after(async()=>{delete globalThis.window;await vite.close();});
+for(const wire of [false,true])test(`multi-level wall on a facade keeps its bottom edge, wireframe=${wire}`,()=>{
+ const layer=new BuildingsLayer('test');layer.graphics.edges=true;layer.wireframe=wire;
+ const polygons=[{outer:[[0,0],[4,0],[4,4],[0,4]],inners:[]}];
+ const wall={key:'way/1309503224',kind:'wall',line:true,z:0,noFloor:true,polygons:[{outer:[[0,0],[4,0]],inners:[]}]};
+ layer.level={floor:0,cut:3,items:[wall]};
+ const facade={feature:{key:'building',polygons},tags:{height:'3'},box:new THREE.Box3(new THREE.Vector3(0,0,0),new THREE.Vector3(4,4,3)),wallVertices:6};
+ const root=new THREE.Group();
+ layer.drawPlan(root,{toLocal:p=>p,items:[facade],hidden:new Set(),flat:new Set()},[wall],[],3,false);
+ const segments=[];
+ root.traverse(o=>{if(o instanceof THREE.LineSegments){const p=o.geometry.getAttribute('position');for(let i=0;i+1<p.count;i+=2)if(Math.abs(p.getY(i))<1e-5&&Math.abs(p.getY(i+1))<1e-5&&Math.abs(p.getX(i)-p.getX(i+1))>3.9&&p.getZ(i)<.1)segments.push([p.getZ(i),p.getZ(i+1)]);}});
+ assert.ok(segments.length>0,'facade-owned wall is missing its floor-contact edge');
+ assert.ok(segments.every(([a,b])=>a>.05&&b>.05),'floor-contact edge must stay above floor fills');
+});

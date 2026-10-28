@@ -1,3 +1,4 @@
+import { withEntranceTags } from './edit/entrance-edits';
 import { freeAreaPieces } from './edit/free-area';
 import { pointWallRings, insertWallPoint } from './edit/point-wall-rings';
 import { roomDoorway, solidWall, wallLocalPolygons, cutSolidWall, findSolidDoorBinding, restoreSolidDoor, nearestSolidFace, type WallPolygon, normalizeSolidDoorEdits, projectedOpeningIndoor } from './edit/solid-wall-doors';
@@ -667,15 +668,7 @@ function syncSessionNodes(keys: string[]) {
 function withEntranceEdits(f: Feature3D): Feature3D {
   // Объект из данных без правок узлов — входы уже по данным
   if (!sessionNodeTags.size && !session.has(f.key)) return f;
-  const out = new Map<number, Record<string, string>>();
-  for (const p of f.polygons) for (const id of [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]) {
-    // Узел в сессии — по её тегам; иначе — по данным (правленый путь в сессии хранится без входов)
-    const t = sessionNodeTags.get(id) ?? dataEntrances.get(id);
-    if (t?.entrance) out.set(id, t);
-  }
-  const was = f.entrances ?? [];
-  if (was.length === out.size && was.every((e) => out.get(e.id) === e.tags)) return f;
-  return { ...f, entrances: out.size ? [...out].map(([id, tags]) => ({ id, tags })) : undefined };
+  return withEntranceTags(f, sessionNodeTags, dataEntrances, f.entrances ?? overpass.cachedFeature(f.key)?.entrances);
 }
 overpass.setExtras(createdShapes);
 let selectedKey: string | undefined;
@@ -1912,7 +1905,7 @@ function focusFeature(g: BuildingGroup, f: Feature3D, role = g.roles[g.members.i
       const p = (session.get(key) as Feature3D | undefined) ?? overpass.get(key)?.feature ?? overpass.findFeature(key);
       return p ? [{ ...p, kind: 'part' as const }] : [];
     });
-    markOutlinesWithParts([...parts, probe], [probe]);
+    markOutlinesWithParts([...parts, probe], [probe], [g]);
     hasParts = !outlineVolume(g, f.key, f.tags) && probe.hasParts;
   }
   return (kind && f.kind !== kind) || hasParts !== f.hasParts ? { ...f, kind: kind ?? f.kind, hasParts } : f;
@@ -1949,7 +1942,7 @@ function outlineCovered(g: BuildingGroup, key: string): boolean {
   if (!outline) return false;
   const probe: Feature3D = { ...outline, kind: 'building', hasParts: false };
   const parts = feats.filter((f, i) => f.key !== key && g.roles[g.members.indexOf(f.key)] === 'part' && i >= 0).map((f) => ({ ...f, kind: 'part' as const }));
-  markOutlinesWithParts([...parts, probe], [probe]);
+  markOutlinesWithParts([...parts, probe], [probe], [g]);
   return probe.hasParts;
 }
 
@@ -8291,7 +8284,7 @@ function rememberIndoorRelations(elements: OsmElement[], indoor: IndoorFeature[]
     indoorRelationSources.set(f.key, { ...f, type: 'relation', id: rel.id, version: rel.version, kind: 'part', hasParts: false, ways });
   }
 }
-function indoorRelationTopology(edits: ObjectEdit[]): ObjectEdit[] {
+function indoorRelationTopology(edits: ObjectEdit[], inserts: Insert[] = []): ObjectEdit[] {
   const changed = edits.filter(e => e.key.startsWith('relation/') && e.polygons && !e.members && !e.create && !e.delete);
   if (!changed.length) return edits;
   const current = focus ? buildingIndoor(focus) : [];
@@ -8313,7 +8306,7 @@ function indoorRelationTopology(edits: ObjectEdit[]): ObjectEdit[] {
     trackIndoor(f.key, current.find(g => g.key === f.key));
     session.track({ key: f.key, version: f.version, tags: f.tags, relMembers: f.ways.map(w => ({type:'way',ref:w.id,role:w.role})) });
   }
-  const topo = topologyEdits(items, [], coords, new Set(), context);
+  const topo = topologyEdits(inserts.length ? [] : items, inserts, coords, new Set(), context);
   if (typeof topo === 'string') throw new Error(topo);
   const merged = new Map(edits.map(e => [e.key,e]));
   for (const e of topo) merged.set(e.key,{...merged.get(e.key),...e,polygons:merged.get(e.key)?.polygons ?? e.polygons});
@@ -9549,6 +9542,7 @@ function placePoint(screen: [number, number]) {
     return;
   }
   const edits: ObjectEdit[] = [];
+  const wallInserts: Insert[] = [];
   let id: number;
   if (t.node !== undefined && t.node > 0) {
     // Готовая вершина из данных — теги на неё
@@ -9570,6 +9564,11 @@ function placePoint(screen: [number, number]) {
     }
     for (const [k, { f, sides }] of byKey) {
       trackIndoor(k, f);
+      for (const side of sides) {
+        const p = f.polygons[side.polygon];
+        const ids = side.ring ? p.innerIds![side.ring - 1] : p.outerIds!;
+        wallInserts.push({ id, u: ids[side.edge], v: ids[(side.edge + 1) % ids.length] });
+      }
       edits.push({ key: k, ...insertWallPoint(f, sides, t.at, id) });
     }
     // Вход — и в пути здания (контур, части по фасаду)
@@ -9584,7 +9583,7 @@ function placePoint(screen: [number, number]) {
       edits.push(...out);
     }
   }
-  session.editMany(indoorRelationTopology(edits));
+  session.editMany(indoorRelationTopology(edits, wallInserts));
   const key = `node/${id}`;
   // И готовая вершина из данных: без тегов её не было среди точек этажа
   indoorCreated.set(key, { key, kind: 'poi', tags: session.get(key)?.tags ?? tags, polygons: [], point: t.at, levels: [n] });
@@ -10060,7 +10059,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
   const strays = hasParts && Number.isFinite(w) ? overpass.allFeatures().filter((f) => f.kind === 'part' && !members.has(f.key) && f.polygons.length
     && f.polygons[0].outer.every(([x, y]) => x >= w && x <= e && y >= s && y <= nn)
     && outlines.some((o) => o.polygons.some((q) => pointInRing(pointOnSurface(f.polygons[0]), q.outer)))) : [];
-  const partFeats = [...feats.filter((f) => !hasParts || f.kind === 'part'), ...strays];
+  const partFeats = [...feats.filter((f) => !hasParts || f.kind === 'part' || !f.hasParts), ...strays];
   // По содержимому, а не по ревизии тайлов: тайлы приходят порциями, а здание в них то же — пересчёт (~1 с) зря
   const sig = JSON.stringify([levels.map((l) => [l.n, l.floor, l.ceil]),
     partFeats.map((f) => [f.key, f.tags, f.polygons]),

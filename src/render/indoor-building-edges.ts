@@ -1,7 +1,7 @@
 /** Hide building edges covered by actual indoor wall faces (including lintels).
  * The indoor layer supplies its own corners and jambs. Keep all uncovered heights.
  */
-export function trimIndoorBuildingEdges(edges: Float32Array, walls: ArrayLike<number>): Float32Array {
+export function trimIndoorBuildingEdges(edges: Float32Array, walls: ArrayLike<number>, facadeCorners: [number, number][] = []): Float32Array {
   if (!walls.length) return edges;
   const cell = 4, eps = 0.02;
   // Данные треугольников — один раз: начало a, направление (dx, dy) в плане, вершины в осях (вдоль, z), габарит z
@@ -41,11 +41,22 @@ export function trimIndoorBuildingEdges(edges: Float32Array, walls: ArrayLike<nu
         (grid.get(k) ?? grid.set(k, []).get(k)!).push(t);
       }
   }
+  // Facade corners are real silhouette edges, even when an indoor wall shares
+  // their plane. Indoor seam suppression must not remove these verticals.
+  const cornerGrid=new Map<string,[number,number][]>();
+  for(const p of facadeCorners){const k=`${Math.floor(p[0]/eps)},${Math.floor(p[1]/eps)}`;(cornerGrid.get(k)??cornerGrid.set(k,[]).get(k)!).push(p);}
+  const cornerAt=(x:number,y:number)=>{
+    const cx=Math.floor(x/eps),cy=Math.floor(y/eps);
+    for(let i=cx-1;i<=cx+1;i++)for(let j=cy-1;j<=cy+1;j++)
+      if(cornerGrid.get(`${i},${j}`)?.some(p=>Math.hypot(p[0]-x,p[1]-y)<=eps))return true;
+    return false;
+  };
   const out: number[] = [];
   const seen = new Int32Array(count).fill(-1);
   const cross = (ax: number, ay: number, bx: number, by: number) => ax * by - ay * bx;
   for (let i = 0; i + 5 < edges.length; i += 6) {
     const x = edges[i], y = edges[i + 1], z = edges[i + 2], X = edges[i + 3], Y = edges[i + 4], Z = edges[i + 5];
+    if(Math.hypot(X-x,Y-y)<1e-5&&cornerAt(x,y)){out.push(x,y,z,X,Y,Z);continue;}
     const ez0 = Math.min(z, Z), ez1 = Math.max(z, Z);
     let spans: [number, number][] = [[0, 1]];
     done: for (let cx = Math.floor(Math.min(x, X) / cell); cx <= Math.floor(Math.max(x, X) / cell); cx++)

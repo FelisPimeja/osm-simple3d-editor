@@ -56,7 +56,7 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
   for (const l of levels) {
     const onLevel = indoor.filter((f) => !f.line && f.levels.includes(l.n));
     const levelPolys = onLevel.filter((f) => f.kind === 'level').flatMap((f) => f.polygons.map((p) => p.map(open)));
-    const partPolys = parts.filter((p) => p.min <= l.floor + 0.5 && p.wallTop >= l.ceil - 0.5).flatMap((p) => p.polygons.map((q) => q.map(open)));
+    const partPolys = parts.filter((p) => p.min <= l.floor + 0.5 && p.wallTop > l.floor + 0.01).flatMap((p) => p.polygons.map((q) => q.map(open)));
     // Разметка пола нужна лишь для перекрытия явных многоуровневых пустот. Неразмеченные участки остаются полом.
     const mappedPolys = onLevel.filter((f) => f.kind !== 'level' && (f.floors ?? [Math.min(...f.levels)]).includes(l.n)).flatMap((f) => f.polygons.map((p) => p.map(open)));
     const mapped = unionOf(mappedPolys);

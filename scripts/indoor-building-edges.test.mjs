@@ -29,3 +29,10 @@ test('diagonal and horizontal edges inside the doorway plane are clipped too', (
   const edges=new Float32Array([-.2,0,0,.2,0,3,-1,0,1,1,0,1]);
   assert.equal(trimIndoorBuildingEdges(edges,wall(-2,2,0,3)).length,0);
 });
+
+test('real facade corner vertical survives indoor wall suppression',()=>{
+ const input=new Float32Array([...edge(0,-3,6),...edge(1,0,3)]);
+ const walls=wall(-2,2,0,3);
+ const result=trimIndoorBuildingEdges(input,walls,[[0,0]]);
+ assert.deepEqual([...result],[...edge(0,-3,6)]);
+});

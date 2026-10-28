@@ -14,7 +14,8 @@ export function insertInLine(ids: number[], ins: Insert[]): number[] | undefined
   let changed = false;
   for (let j = 1; j < ids.length; j++) {
     const a = ids[j - 1], b = ids[j];
-    const matches = ins.filter((n) => (n.u === a && n.v === b) || (n.u === b && n.v === a));
+    // A shared edge can be reported by both adjacent rooms. Insert each node once.
+    const matches = [...new Map(ins.filter((n) => (n.u === a && n.v === b) || (n.u === b && n.v === a)).map(n => [n.id, n])).values()];
     matches.sort((x, y) => ((x.u === a ? x.t : x.t === undefined ? undefined : 1 - x.t) ?? 0)
       - ((y.u === a ? y.t : y.t === undefined ? undefined : 1 - y.t) ?? 0));
     for (const n of matches) { out.push(n.id); changed = true; }

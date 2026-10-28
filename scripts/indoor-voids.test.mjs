@@ -140,3 +140,54 @@ test('white base floor occupies only the area not covered by room floors',async(
  }
  assert.ok(Math.abs(white-300)<1);assert.ok(Math.abs(colour-100)<1);
 });
+
+test('floor plan removes flat building-part faces beneath room floors and restores them on exit',async()=>{
+ const {BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts');
+ const layer=new BuildingsLayer('test'),ll=([x,y])=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ const polygons=[{outer:outer.map(ll),inners:[]}];
+ layer.setFocus([
+  {key:'way/1',id:1,type:'way',version:1,kind:'building',hasParts:false,tags:{building:'yes',height:'9'},polygons},
+  {key:'way/2',id:2,type:'way',version:1,kind:'part',tags:{'building:part':'yes'},polygons},
+ ]);
+ const group=[...layer.groups.values()].find(g=>g.byKey.has('way/2'));
+ const faceArea=()=>{
+  const p=group.mesh.geometry.getAttribute('position');let area=0;
+  for(let i=0;i+2<p.count;i+=3)if([i,i+1,i+2].every(j=>Math.abs(p.getZ(j))<.001))
+   area+=Math.abs((p.getX(i+1)-p.getX(i))*(p.getY(i+2)-p.getY(i))-(p.getY(i+1)-p.getY(i))*(p.getX(i+2)-p.getX(i)))/2;
+  return area;
+ };
+ assert.ok(faceArea()>399,'unraised part starts with a flat white face');
+ layer.setLevel({floor:0,cut:3,items:[{key:'room',kind:'room',z:0,polygons}],doors:[]});
+ assert.equal(faceArea(),0,'floor plan must not retain structural faces under its floors');
+ layer.setLevel(undefined);
+ assert.ok(faceArea()>399,'full-building view restores source faces');
+});
+
+test('low sloping annex roof opens in floor plan and restores in full-building view',async()=>{
+ const {BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts');
+ const layer=new BuildingsLayer('test'),ll=([x,y])=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ layer.setFocus([{key:'relation/17948425',id:17948425,type:'relation',version:1,kind:'part',hasParts:false,
+ tags:{'building:part':'yes',height:'2.84','roof:shape':'skillion','roof:height':'1.67','roof:direction':'95'},
+ polygons:[{outer:square(0,0,4,2).map(ll),inners:[]}]}]);
+ layer.map={getCanvas:()=>({width:800,height:600,clientWidth:800}),triggerRepaint(){}};
+ const group=[...layer.groups.values()].find(g=>g.byKey.has('relation/17948425'));
+ const roofBuffer=()=>{
+  const it=group.byKey.get('relation/17948425');
+  return group.mesh.geometry.getAttribute('position').array.slice((it.start+it.wallVertices)*3,(it.start+it.positions.length/3-it.floorVertices)*3);
+ };
+ assert.ok(roofBuffer().some(v=>v!==0));
+ layer.setLevel({floor:0,cut:3.5,items:[],doors:[]});
+ assert.ok(roofBuffer().length>0);assert.ok(roofBuffer().every(v=>v===0));
+ assert.ok(layer.indoorObj.children.some(o=>o.isLineSegments2&&o.geometry.getAttribute('instanceStart')&&Array.from(o.geometry.getAttribute('instanceStart').data.array).some((v,i,a)=>i%6===2&&Math.abs(v-a[i+3])>.1)),'heavy outline retains sloping segments');
+ layer.setLevel(undefined);assert.ok(roofBuffer().some(v=>v!==0));
+});
+
+
+test('a low sloping annex still has an explicit stairwell void at its upper floor',()=>{
+ const levels=[{n:-1,floor:-3.5,ceil:0},{n:0,floor:0,ceil:3.5}];
+ const plans=buildPlans(levels,[{polygons:[[outer]],min:0,wallTop:1.17}],
+  [{kind:'room',polygons:[[outer]],levels:[-1,0],floors:[-1]}]);
+ const voids=findVoids(0,plans);
+ assert.equal(voids.length,1);assert.equal(multiArea(voids[0].polygon),400);
+ assert.deepEqual(voids[0].through,[-1]);
+});

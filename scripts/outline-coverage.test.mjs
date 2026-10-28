@@ -33,3 +33,15 @@ test('render remainder subtracts only parts with their own height and retains so
  assert.deepEqual(pc.xor(rest.map(p=>[p.outer]),[[[.0002,0],[.001,0],[.001,.001],[.0002,.001]]]),[]);
  assert.deepEqual(b,source);
 });
+test('17948502 explicit ground body and upper tier together replace the building outline',async()=>{
+ const {readFileSync}=await import('node:fs');
+ const {parseBuildings}=await vite.ssrLoadModule('/src/osm/model.ts');
+ const {features,groups}=parseBuildings(JSON.parse(readFileSync(new URL('./fixtures/outline-17948502.json',import.meta.url))));
+ markOutlinesWithParts(features,features,groups);
+ assert.equal(features.find(f=>f.key==='relation/17948502').hasParts,true);
+});
+test('an isolated raised tier still leaves the lower outline volume',()=>{
+ const b=outline(),p=feature('way/2','part',0,0,.001,.001,{height:'20',min_height:'15'});
+ const group={members:[b.key,p.key],roles:['outline','part']};
+ markOutlinesWithParts([b,p],[b],[group]);assert.equal(b.hasParts,false);
+});

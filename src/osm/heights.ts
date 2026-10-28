@@ -1,4 +1,4 @@
-export const LEVEL_HEIGHT = 3;
+export const LEVEL_HEIGHT = 3.5;
 const DEFAULT_ROOF_HEIGHT = 3;
 /** Высота стен без height и building:levels — один этаж (официального значения в Simple 3D нет). */
 const DEFAULT_WALL_HEIGHT = 3.5;
@@ -73,7 +73,7 @@ export function computeHeights(tags: Record<string, string>): Heights {
   top = Math.max(top, min);
   // У части-кровли без указанного низа оставляем короткую стенку под крышей.
   const roofOnly = tags['building:part'] === 'roof' || tags.building === 'roof';
-  if (roofOnly && tags.min_height === undefined && minLevel === undefined) {
+  if (roofOnly && levels === undefined && tags.min_height === undefined && minLevel === undefined) {
     min = Math.max(0, top - roofHeight - 0.3);
   }
   if (roofOnly && roofShape !== 'flat' && tags['roof:height'] === undefined && roofLevels === undefined

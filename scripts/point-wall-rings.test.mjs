@@ -19,3 +19,14 @@ test('solid polygon walls are eligible; POIs are excluded',()=>{
  assert.equal(pointWallRings({...wall,line:false}).length,1);
  assert.equal(pointWallRings({...wall,point:[0,0],kind:'poi'}).length,0);
 });
+
+test('door insertion in a shared member way preserves its ID and inserts the node only once',async()=>{
+ const {insertInLine,insertInRing}=await import('../src/edit/topology.ts');
+ const inserts=[{id:-1,u:1,v:2},{id:-1,u:2,v:1}];
+ const line=insertInLine([1,2,3],inserts);
+ assert.deepEqual(line,[1,-1,2,3]);
+ const at=id=>id===-1?[1,0]:[id,0];
+ const a=insertInRing([1,2,3,4],[[0,0],[2,0],[2,2],[0,2]],inserts,at);
+ const b=insertInRing([2,1,5,6],[[2,0],[0,0],[0,-2],[2,-2]],inserts,at);
+ assert.deepEqual(a.ids,[1,-1,2,3,4]);assert.deepEqual(b.ids,[2,-1,1,5,6]);
+});

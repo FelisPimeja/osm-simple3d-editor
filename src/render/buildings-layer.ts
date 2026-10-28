@@ -1,3 +1,5 @@
+import { wireframeEdges } from './wireframe-edges';
+import { openRoofOutline } from './open-roof';
 import { outlineRemainders } from './outline-remainder';
 import { closedWallCap } from './indoor-wall-cap';
 import { cutEscalatorOpenings, escalatorFloorHoles, escalatorOpeningMasks, escalatorOpeningOutline } from './escalator-openings';
@@ -353,6 +355,7 @@ class MeshGroup {
   readonly byKey = new Map<string, Item>();
   mesh?: THREE.Mesh;
   edges?: THREE.LineSegments;
+  wireHidden?: THREE.LineSegments;
   /** Слитая геометрия устарела: слой скрыт, пересборка отложена до показа. */
   stale = false;
   /** Скрытые (только для показа) объекты: не рисуются, не выбираются, без привязок. */
@@ -452,6 +455,7 @@ class MeshGroup {
   }
 
   disposeEdges() {
+    if(this.wireHidden){this.wireHidden.geometry.dispose();(this.wireHidden.material as THREE.Material).dispose();this.scene.remove(this.wireHidden);this.wireHidden=undefined;}
     if (!this.edges) return;
     this.edges.geometry.dispose();
     this.scene.remove(this.edges);
@@ -619,8 +623,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (pass === 'all') return () => {};
     DEPTH_ONLY_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
     const fills = g.entranceObj?.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh && !o.userData.entrancePoint) ?? [];
-    const swapped = [g.mesh, g.glass, ...fills].filter((o): o is THREE.Mesh => !!o).map((o) => [o, o.material] as const);
-    for (const [o] of swapped) o.material = DEPTH_ONLY_MATERIAL;
+    const planFills: THREE.Mesh[] = [];
+    if (g === this.groups.get(FOCUS_GROUP)) for (const root of [this.indoorObj, this.indoorSelObj]) root?.traverseVisible(o => {
+      if (o instanceof THREE.Mesh && !(o.material instanceof LineMaterial)) planFills.push(o);
+    });
+    const swapped = [g.mesh, g.glass, ...fills, ...planFills].filter((o): o is THREE.Mesh => !!o).map((o) => [o, o.material, o.renderOrder] as const);
+    for (const [o] of swapped) { o.material = DEPTH_ONLY_MATERIAL; o.renderOrder = -1000; }
     // Половина прохода: прячем то, что рисует другая половина
     const hidden: THREE.Object3D[] = [];
     if (pass !== 'wire') {
@@ -635,7 +643,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const o of hidden) o.visible = false;
     }
     return () => {
-      for (const [o, m] of swapped) o.material = m;
+      for (const [o, m, order] of swapped) { o.material = m; o.renderOrder = order; }
       for (const o of hidden) o.visible = true;
     };
   }
@@ -645,6 +653,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (on === this.wireframe) return;
     this.wireframe = on;
     this.setGraphics({ ...this.graphics, edges: this.userEdges });
+    if (this.level) { this.applyLevel(); this.applyIndoorSelection(); }
     this.updateHiddenEdges();
   }
 
@@ -1001,6 +1010,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       else if (o instanceof Line2) o.material = keys.has(key) ? ESCALATOR_SELECTED_HANDRAIL : o.userData.escalatorMaterial;
     });
     const items = [...this.level?.items ?? [], ...this.level?.highlights ?? []].filter((i) => keys.has(i.key));
+    if (this.level && this.wireframe) for (const b of this.level.below ?? []) items.push(...b.items.filter(it => keys.has(it.key) && !items.some(other=>other.key===it.key)));
     if (this.level) items.push(...this.roomWallSelection, ...(this.freeArea ? [this.freeArea] : []));
     if (!g || (!items.length && ![...keys].some((key) => this.doorOpeningEdges.has(key)))) return;
     const root = new THREE.Group();
@@ -1274,13 +1284,23 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Периметр — сечение оболочки на высоте среза (под скатом — уже следа); пока оболочки нет — объединение следов
     const section = this.sectionAt(g, top);
     this.planBySection = !!section;
-    if ((section?.length || spans.length) && this.map) {
+    if ((section?.length || spans.length || g.items.some(it => this.openRoofInPlan(g, it))) && this.map) {
       let union: ClipMulti = section ?? [];
       if (!section) try { union = polygonClipping.union(spans[0], ...spans.slice(1)); } catch (err) { console.warn('[levels] периметр не построен', err); }
       const canvas = this.map.getCanvas();
       const dpr = canvas.width / Math.max(1, canvas.clientWidth);
       const mat = new LineMaterial({ color: 0x000000, linewidth: PERIMETER_WIDTH_PX * dpr });
       mat.resolution.set(canvas.width, canvas.height);
+      // A low sloping annex is opened along its roof, rather than capped at
+      // another horizontal level. Preserve the slope in the heavy outline.
+      for (const it of g.items) {
+        if (!this.openRoofInPlan(g, it)) continue;
+        const end = it.positions.length - it.floorVertices * 3;
+        const outline = openRoofOutline(it.positions.subarray(it.wallVertices * 3, end), this.level.floor, it.positions.subarray(0, it.wallVertices * 3));
+        if (!outline.length) continue;
+        const geo = new LineSegmentsGeometry(); geo.setPositions(outline);
+        const line = new LineSegments2(geo, mat); line.frustumCulled = false; root.add(line);
+      }
       for (const poly of [...union, ...columnSections]) for (const ring of poly) {
         const geo = new LineGeometry();
         geo.setPositions(ring.flatMap(([x, y]) => [x, y, top]));
@@ -1570,7 +1590,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const key = [objId(g), shell ? objId(shell) : 0, top, +this.graphics.edges, +glassEnabled,
       items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.noFloor}:${+!!it.cutOnly}:${+!!it.areaLedge}`).join(','),
       doorList.map((d) => d.join(',')).join(';'), doorModels.join(';'),
-      JSON.stringify([this.level?.doorCuts,...(this.level?.below??[]).map(b=>b.doorCuts),ownVoids]),
+      JSON.stringify([this.level?.doorCuts,...(this.level?.below??[]).map(b=>b.doorCuts),ownVoids,this.level?.items.map(it=>[it.key,it.noFloor]),g.items.filter(it=>this.openRoofInPlan(g,it)).map(it=>it.feature.key)]),
       escalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.width}:${e.incline}:${objId(e.line)}`).join(',')].join('|');
     let plan = this.palePlans.get(key);
     if (plan) {
@@ -1579,6 +1599,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.indoorGlassBlockers = this.indoorGlassBlockers.concat(plan.blockers);
     } else {
       const group = new THREE.Group();
+      group.userData.indoorBelow = true;
       const occ = this.indoorEdgeOccluders.length, blk = this.indoorGlassBlockers.length;
       this.drawPlanBody(group, g, items, doorList, top, true, shell, escalators, ownVoids);
       plan = { group, occluders: this.indoorEdgeOccluders.slice(occ), blockers: this.indoorGlassBlockers.slice(blk) };
@@ -1626,7 +1647,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi)) continue;
         const h = computeHeights(bi.tags);
         if ((g.lift?.get(bi.feature.key) ?? h.min) > floor + 0.1 || h.wallTop <= floor + 0.1) continue;
-        for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
+        for (const p of g.renderFootprints?.get(bi.feature.key) ?? bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
           const ring = r.map(g.toLocal);
           for (let i = 0; i < ring.length; i++) addLedgeWall(ring[i], ring[(i + 1) % ring.length]);
         }
@@ -1758,6 +1779,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     const cutTopLines: number[] = [];
     const continuingRooms = new Set(!pale ? items.filter(it => it.kind === 'room' && this.level?.below?.some(b => b.items.some(other => other.key === it.key && other.kind === 'room'))).map(it => it.key) : []);
     let omitFloorSeam = false;
+    let facadeFloorEdge = false;
+    let omitCutTop = false;
+    const continuesAbove = (it: IndoorItem) => pale && !!this.level?.items.some(other => other.key === it.key && other.noFloor);
     let linearCutTop = true;
     const edgeSurfaces = new Map<string, number[][]>();
     let edgeOcclusionOnly = false;
@@ -1775,6 +1799,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, ends = true, jambA = Infinity, jambB = Infinity) => {
       if (edgeOcclusionOnly) {
         this.indoorEdgeOccluders.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
+        // A facade can own the wall face, but the indoor wall still owns its
+        // floor contact. Preserve that edge without recreating the face.
+        if (facadeFloorEdge && !omitFloorSeam && Math.abs(z0 - floorLevel) < 1e-3 && !uncovered(ax, ay, bx, by).length) {
+          const z = Math.abs(z0 - floorLevel) < 1e-3 ? z0 + FLOOR_EDGE_LIFT : z0;
+          edges.push(ax, ay, z, bx, by, z);
+        }
         return;
       }
       // Две грани: лицевая смотрит вправо от a→b, обратная — влево; у каждой цвет помещения со своей стороны
@@ -1794,7 +1824,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         for (let k = 0; k < face.length / 3; k++) wallCols.push(c.r, c.g, c.b);
       }
       // Use the same 2 px cut outline for linear walls and solid polygon faces.
-      (!pale ? cutTopLines : lines).push(ax, ay, z1a, bx, by, z1b);
+      if (!omitCutTop) (!pale ? cutTopLines : lines).push(ax, ay, z1a, bx, by, z1b);
       if (!this.graphics.edges) return;
       if (masks.length) for (const value of escalatorOpeningOutline(faces[0], masks)) openingEdges.push(value);
       // Реальные грани после вырезания дверей: конец соседней стены внутри
@@ -1976,7 +2006,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Контур, тонкий объект и стекло стену помещения не заменяют; стыка с ними тоже нет: оболочка такой сосед
       // не режет — непрозрачная стена за стеклом остаётся, и стена помещения легла бы в её плоскость
       const facade = !strokeOnly(g, bi) && !thinItem(bi) && !(glassEnabled && bi.glassWalls);
-      for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) for (let i = 0; i < r.length; i++) {
+      for (const p of g.renderFootprints?.get(bi.feature.key) ?? bi.feature.polygons) for (const r of [p.outer, ...p.inners]) for (let i = 0; i < r.length; i++) {
         const sig = edgeSig(r[i], r[(i + 1) % r.length]);
         (partEdges.get(sig) ?? partEdges.set(sig, []).get(sig)!).push({ lo, hi, facade });
       }
@@ -2010,11 +2040,24 @@ export class BuildingsLayer implements CustomLayerInterface {
     /** Полосы стыков на фасадных рёбрах: стена по ребру только на эту высоту (после объявления wall/slab). */
     const junctionPatches: [number, number, number, number, number, number][] = [];
     const facadeDone = new Set<string>();
+    // These faces already come from the sloping building shell. A room or
+    // indoor=wall on the same boundary must not erect another vertical wall
+    // up to the neighbouring (higher) roof, nor invent a horizontal junction.
+    for (const bi of g.items) {
+      if (!this.openRoofInPlan(g, bi) || span(bi)[0] > z0 + 0.01) continue;
+      for (const p of g.renderFootprints?.get(bi.feature.key) ?? bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
+        const rp = r.map(g.toLocal);
+        for (let i = 0; i < r.length; i++) {
+          facadeDone.add(edgeSig(r[i], r[(i + 1) % r.length]));
+          taken.push([...rp[i], ...rp[(i + 1) % rp.length]]);
+        }
+      }
+    }
     for (const bi of g.items) {
       if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi) || (glassEnabled && bi.glassWalls)) continue;
       const [lo, hi] = span(bi);
       if (hi <= z0 + 0.01 || lo >= top - 0.01) continue;
-      for (const p of bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
+      for (const p of g.renderFootprints?.get(bi.feature.key) ?? bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
         const rp = r.map(g.toLocal);
         for (let i = 0; i < rp.length; i++) {
           const sig = edgeSig(r[i], r[(i + 1) % r.length]);
@@ -2060,7 +2103,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         // Даже если фасад уже заменил геометрию indoor-стены, его рёбра
         // внутри этой плоскости должны скрываться по контуру плана.
         edgeOcclusionOnly = true;
+        facadeFloorEdge = true;
         shellWall(ax, ay, bx, by, z0);
+        facadeFloorEdge = false;
         edgeOcclusionOnly = false;
       }
       const previousLinear: boolean = linearCutTop;
@@ -2077,6 +2122,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Сначала стены-линии (точная геометрия стен, без повторов между собой и с периметром), потом помещения
     for (const it of items) {
       if (!it.line) continue;
+      omitCutTop = continuesAbove(it);
       for (const p of it.polygons) {
         const pts = p.outer.map(g.toLocal);
         // Замкнутая стена (короб, шахта, тонкая стена-контур) — с крышкой сечения, а не открытой коробкой.
@@ -2094,6 +2140,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       return Number(solid(b.kind)) - Number(solid(a.kind)) || order.indexOf(a.kind) - order.indexOf(b.kind);
     })) {
       const solid = it.kind === 'wall' || it.kind === 'column';
+      omitCutTop = continuesAbove(it);
       omitFloorSeam = !!it.noFloor || continuingRooms.has(it.key);
       const z = floorZ(it);
       for (const p of it.polygons) {
@@ -2125,6 +2172,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
     }
     omitFloorSeam = false;
+    omitCutTop = false;
     // Дверь в просвете между двумя толстыми стенами (колонны, стены-полигоны): перемычка — объёмом на всю толщину.
     // Стена помещения даёт её только с одной стороны — без низа, крышки и обратной грани проём сквозной
     {
@@ -4264,6 +4312,13 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** A few recent floor configurations per part; edits replace the source array and invalidate the cache. */
   private doorCuts = new WeakMap<Item, { source: Float32Array; wallVertices: number; entries: Map<string, { positions: Float32Array; wallVertices: number }> }>();
 
+  private openRoofInPlan(g: MeshGroup, it: Item): boolean {
+    if (!this.level || g !== this.groups.get(FOCUS_GROUP) || g.hidden.has(it.feature.key) || strokeOnly(g, it)) return false;
+    const h = computeHeights(it.tags);
+    return h.roofShape !== 'flat' && h.roofHeight > 0 && h.top > this.level.floor
+      && h.top < (this.cutZ() ?? this.level.cut);
+  }
+
   private rebuildGeometry(g: MeshGroup) {
     // Скрытый слой на карте не рисуется — не сливаем геометрию зря, соберём при показе
     if (!this.visible && !this.focused) { g.stale = true; return; }
@@ -4335,8 +4390,22 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const it of g.items) {
       if (g.hidden.has(it.feature.key) || strokeOnly(g, it)) continue;
       positions.set(it.positions, it.start * 3);
+      if (this.openRoofInPlan(g, it)) positions.fill(0, (it.start + it.wallVertices) * 3,
+        (it.start + it.positions.length / 3 - it.floorVertices) * 3);
       // Стеклянные диапазоны — в отдельный буфер, в общем остаются нулями
       for (const [a, b] of glassRanges(it)) positions.fill(0, (it.start + a) * 3, (it.start + b) * 3);
+    }
+    // The floor plan supplies the floor here. Flat parts and structural slabs
+    // at the same elevation otherwise fight with its coloured room surfaces.
+    // Only change the render buffer: source geometry remains available for picking
+    // and is restored automatically when leaving the floor plan.
+    if (this.level && g === this.groups.get(FOCUS_GROUP)) {
+      const floor = this.level.floor;
+      for (let i = 0; i + 8 < positions.length; i += 9) {
+        const z = positions[i + 2];
+        if (Math.abs(z - floor) < 0.1 && Math.abs(positions[i + 5] - z) < 1e-5
+          && Math.abs(positions[i + 8] - z) < 1e-5) positions.fill(0, i, i + 9);
+      }
     }
     timed('геометрия: пустоты', () => this.cutVoids(g, positions));
     const geom = new THREE.BufferGeometry();
@@ -4430,7 +4499,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // На срезе этажа стекло соседа закрывает стену, как непрозрачная: граница частей внутри здания
     // (стена высокой части за стеклянной пристройкой) иначе прошла бы поперёк помещений
     const glassShell = glassEnabled && !this.level;
-    const hidden = `${[...g.hidden].sort().join(',')}|${[...g.flat].sort().join(',')}|${glassShell}`;
+    const hidden = `${[...g.hidden].sort().join(',')}|${[...g.flat].sort().join(',')}|${glassShell}|${g.items.filter(it => this.openRoofInPlan(g, it)).map(it => it.feature.key).join(',')}`;
     if (g.shellOf && g.shellOf.hidden === hidden && g.shellOf.bases.length === bases.length && g.shellOf.bases.every((b, i) => b === bases[i])) return;
     // Крыши ещё считаются в воркере — оболочку посчитаем, когда придёт последняя (иначе пересчёт на каждую порцию)
     if (g.items.some((it) => it.pending && !g.hidden.has(it.feature.key))) return;
@@ -4474,7 +4543,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const h = computeHeights(it.tags);
         const end = full.positions.length / 3 - it.floorVertices;
         const solid = prepareSolid({
-          polys: it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })),
+          polys: (g.renderFootprints.get(it.feature.key) ?? it.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })),
           min: g.lift.get(it.feature.key) ?? h.min,
           // Неподдерживаемая крыша — стены до самого верха
           wallTop: it.roofApproximated ? h.top : h.wallTop,
@@ -4495,7 +4564,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
         // Соседи — объёмы, чей прямоугольник в плане задевает часть
         const b = positionsBox(full.positions);
-        const deps = [...solids].filter(([o, sd]) => o !== it && sd.box[0] <= b[2] + 0.1 && sd.box[2] >= b[0] - 0.1 && sd.box[1] <= b[3] + 0.1 && sd.box[3] >= b[1] - 0.1).map(([, sd]) => sd);
+        const deps = [...solids].filter(([o, sd]) => o !== it && !this.openRoofInPlan(g, o) && sd.box[0] <= b[2] + 0.1 && sd.box[2] >= b[0] - 0.1 && sd.box[1] <= b[3] + 0.1 && sd.box[3] >= b[1] - 0.1).map(([, sd]) => sd);
         const hit = cache.trimmed.get(it);
         if (hit && hit.base === full.positions && hit.deps.length === deps.length && hit.deps.every((d, i) => d === deps[i])) {
           if (it.positions !== hit.positions) {
@@ -4510,7 +4579,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           it.wallVertices = full.wallVertices;
         } else {
           const n = full.positions.length / 3, end = n - it.floorVertices;
-          const polys = it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+          const polys = (g.renderFootprints.get(it.feature.key) ?? it.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
           const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, deps, thinItem(it), deadline);
           const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, deps, thinItem(it), deadline);
           // Перекрытия (крыша под соседней частью) внутри непрозрачного соседа — внутренняя грань оболочки. Число вершин
@@ -4562,7 +4631,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           const h = computeHeights(o.it.tags);
           const n = o.it.positions.length / 3;
           o.solid = prepareSolid({
-            polys: o.it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })),
+            polys: (g.renderFootprints.get(o.it.feature.key) ?? o.it.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) })),
             min: g.lift?.get(o.it.feature.key) ?? h.min, wallTop: o.it.roofApproximated ? h.top : h.wallTop,
             roof: o.it.positions.subarray(o.it.wallVertices * 3, (n - o.it.floorVertices) * 3),
             glassWalls: false, glassRoof: glassEnabled && o.it.glassRoof,
@@ -4572,7 +4641,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       });
       let walls = it.positions.subarray(0, it.wallVertices * 3);
       if (deps.length) {
-        const polys = it.feature.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+        const polys = (g.renderFootprints.get(it.feature.key) ?? it.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
         walls = new Float32Array(trimTriangles(it.positions, 0, it.wallVertices, polys, true, deps));
       }
       it.glassTrim = { src: it.positions, walls, deps: refs };
@@ -4687,9 +4756,26 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it)), EDGE_MATERIAL, !!this.graphics.partSeams);
     if (this.level && g === this.groups.get(FOCUS_GROUP)) {
       const positions = g.edges.geometry.getAttribute('position').array as Float32Array;
-      g.edges.geometry.setAttribute('position', new THREE.BufferAttribute(trimIndoorBuildingEdges(positions, this.indoorEdgeOccluders), 3));
+      const corners: Pt[]=[];
+      // Classify corners on the merged exterior, not on each part: a corner
+      // of two adjoining boxes can be a straight facade seam in the building.
+      const section=this.sectionAt(g,this.level.floor+0.1);
+      const rings=section?.flatMap(p=>p.map(r=>r.slice(0,-1) as Pt[])) ?? [];
+      for(const ring of rings)for(let i=0;i<ring.length;i++){
+        const a=ring[(i+ring.length-1)%ring.length],b=ring[i],c=ring[(i+1)%ring.length];
+        const ux=b[0]-a[0],uy=b[1]-a[1],vx=c[0]-b[0],vy=c[1]-b[1];
+        if(Math.abs(ux*vy-uy*vx)>Math.hypot(ux,uy)*Math.hypot(vx,vy)*Math.sin(5*Math.PI/180))corners.push(b);
+      }
+      g.edges.geometry.setAttribute('position', new THREE.BufferAttribute(trimIndoorBuildingEdges(positions, this.indoorEdgeOccluders, corners), 3));
     }
     g.scene.add(g.edges);
+    if (this.wireframe && g === this.groups.get(FOCUS_GROUP)) {
+      const positions=wireframeEdges([g.edges,...(this.indoorObj?[this.indoorObj]:[])],this.level?.floor);
+      const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(positions,3));
+      const material=new THREE.LineDashedMaterial({color:0x555555,dashSize:.25,gapSize:.15,depthFunc:THREE.GreaterDepth,depthWrite:false,clippingPlanes:MATERIAL.clippingPlanes});
+      const hidden=new THREE.LineSegments(geometry,material);hidden.computeLineDistances();hidden.renderOrder=998;hidden.frustumCulled=false;
+      g.wireHidden=hidden;g.scene.add(hidden);
+    }
   }
 
   private issueLevels = new Map<string, 'error' | 'warning'>();
@@ -5936,7 +6022,7 @@ function prepItem(g: MeshGroup, f: Feature3D) {
   // Контур под частями и здания нулевой высоты — плоский след на земле: видно и можно выделить;
   // без высоты и этажей — тоже, если высоту по умолчанию выключили в настройках; части в режиме здания — всегда
   const flat = f.hasParts || g.flat.has(f.key);
-  const unraised = heights.source === 'default' && (!raiseDefault || (g.noDefaultHeight && f.kind === 'part'));
+  const unraised = heights.source === 'default' && (f.kind === 'building' || !raiseDefault || (g.noDefaultHeight && f.kind === 'part'));
   if (flat || unraised || heights.top - heights.min < MIN_THICKNESS) {
     const min = flat ? 0 : heights.min;
     heights = { ...heights, min, wallTop: min + g.footprint, top: min + g.footprint, roofShape: 'flat', roofHeight: 0 };

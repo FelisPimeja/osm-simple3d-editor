@@ -24,7 +24,7 @@ import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
 import { dropPartSeams } from './part-seams';
 import { edgePass } from './edge-pass';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
-import { timed } from '../perf';
+import { recordMs, timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
 import { setTreesMonochrome, setTreesSeasonal, type TreeGroup } from './trees';
 import { UnderlayMeshes } from './underlay-meshes';
@@ -4521,7 +4521,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Не дольше SHELL_BUDGET_MS: дальше грани остаются как есть (большие комплексы из сотен частей)
       const deadline = performance.now() + SHELL_BUDGET_MS;
       // Висящие части (забытый min_height) — без столба от земли до низа охватывающей части
-      const floating = floatingParts(g.items.filter((it) => !g.hidden.has(it.feature.key)).map((it) => it.feature));
+      const floating = timed('этажи: оболочка: висящие части', () => floatingParts(g.items.filter((it) => !g.hidden.has(it.feature.key)).map((it) => it.feature)));
       g.lift = new Map([...floating].map(([k, f]) => [k, f.lift]));
       const base = new Map<Item, { positions: Float32Array; wallVertices: number }>();
       for (const it of g.items) {
@@ -4571,10 +4571,13 @@ export class BuildingsLayer implements CustomLayerInterface {
           it.wallVertices = full.wallVertices;
           if (it.edges) it.edges = itemEdges(it);
           continue;
+      const tSolids = performance.now();
         }
         // Соседи — объёмы, чей прямоугольник в плане задевает часть
         const b = positionsBox(full.positions);
-        const deps = [...solids].filter(([o, sd]) => o !== it && !this.openRoofInPlan(g, o) && sd.box[0] <= b[2] + 0.1 && sd.box[2] >= b[0] - 0.1 && sd.box[1] <= b[3] + 0.1 && sd.box[3] >= b[1] - 0.1).map(([, sd]) => sd);
+        const t0 = performance.now();
+        const deps = neighbours.filter(([o, sd]) => o !== it && sd.box[0] <= b[2] + 0.1 && sd.box[2] >= b[0] - 0.1 && sd.box[1] <= b[3] + 0.1 && sd.box[3] >= b[1] - 0.1).map(([, sd]) => sd);
+        tDeps += performance.now() - t0;
         const hit = cache.trimmed.get(it);
         if (hit && hit.base === full.positions && hit.deps.length === deps.length && hit.deps.every((d, i) => d === deps[i])) {
           if (it.positions !== hit.positions) {
@@ -4590,6 +4593,10 @@ export class BuildingsLayer implements CustomLayerInterface {
         } else {
           const n = full.positions.length / 3, end = n - it.floorVertices;
           const polys = (g.renderFootprints.get(it.feature.key) ?? it.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
+      recordMs('этажи: оболочка: объёмы частей', performance.now() - tSolids, `${solids.size}`);
+      let tTrim = 0, tEdges = 0, tDeps = 0;
+      // Кандидаты в соседи — один раз: openRoofInPlan на каждую пару (сотни частей собора) — десятки секунд
+      const neighbours = [...solids].filter(([o]) => !this.openRoofInPlan(g, o));
           const walls = trimTriangles(full.positions, 0, full.wallVertices, polys, glassEnabled && it.glassWalls, deps, thinItem(it), deadline);
           const roof = trimTriangles(full.positions, full.wallVertices, end, polys, glassEnabled && it.glassRoof, deps, thinItem(it), deadline);
           // Перекрытия (крыша под соседней частью) внутри непрозрачного соседа — внутренняя грань оболочки. Число вершин
@@ -4616,6 +4623,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }, () => `${g.items.length} объектов, пересчитано ${done}`);
     g.shellOf = { bases: g.items.map((it) => it.full!.positions), hidden };
   }
+          const t1 = performance.now();
 
   /**
    * Стеклянные стены, совпадающие с непрозрачной соседней частью того же слоя (стеклянная пристройка к стене),
@@ -4630,11 +4638,17 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const it of glassy) {
       others ??= g.items.filter((o) => shellSolid(g, o) || (isRoofPart(o.tags) && !thinItem(o)
         && !g.hidden.has(o.feature.key) && !strokeOnly(g, o))).map((o) => ({ it: o, box: positionsBox(o.positions) }));
+          tTrim += performance.now() - t1;
       const b = positionsBox(it.positions.subarray(0, it.wallVertices * 3));
       const key = it.feature.key;
       const near = others.filter((o) => (!(glassEnabled && o.it.glassWalls) || o.it.feature.key < key) && o.it !== it && o.box[0] <= b[2] + 0.1 && o.box[2] >= b[0] - 0.1 && o.box[1] <= b[3] + 0.1 && o.box[3] >= b[1] - 0.1);
+        const t2 = performance.now();
       const refs = near.map((o) => o.it.positions);
+        tEdges += performance.now() - t2;
       const cached = it.glassTrim;
+      recordMs('этажи: оболочка: соседи', tDeps);
+      recordMs('этажи: оболочка: обрезка граней', tTrim);
+      recordMs('этажи: оболочка: рёбра', tEdges);
       if (cached?.src === it.positions && cached.deps.length === refs.length && cached.deps.every((p, i) => p === refs[i])) continue;
       const deps = near.map((o) => {
         if (!o.solid) {

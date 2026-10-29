@@ -82,6 +82,8 @@ const INDOOR_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, ve
 const WALL_SIDE_PROBE = 0.05;
 /** Выделенное помещение: заливка цветом выделения частей и контур. */
 const INDOOR_SELECT_MATERIAL = new THREE.MeshBasicMaterial({ color: HIGHLIGHT, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
+/** Выделенное помещение в каркасе — как заливка выделенной части (SELECTED_FILL_MATERIAL). */
+const INDOOR_SELECT_WIRE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 /** Маркер двери на полу проёма: плоский кружок (вид сверху и сбоку) — на любом ракурсе виден. */
 const DOOR_GEO = new THREE.SphereGeometry(0.08, 16, 8).scale(1, 1, 0.35);
 const DOOR_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000 });
@@ -679,15 +681,19 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (pass === 'all') return () => {};
     DEPTH_ONLY_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
     const fills = g.entranceObj?.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh && !o.userData.entrancePoint) ?? [];
-    const planFills: THREE.Mesh[] = [], tints: THREE.Mesh[] = [];
+    const planFills: THREE.Mesh[] = [], tints: THREE.Mesh[] = [], selFills: THREE.Mesh[] = [];
     if (g === this.groups.get(FOCUS_GROUP)) {
-      for (const root of [this.indoorObj, this.indoorSelObj]) root?.traverseVisible(o => {
+      this.indoorObj?.traverseVisible(o => {
         if (!(o instanceof THREE.Mesh) || o.material instanceof LineMaterial) return;
         // Цветная грань фасада в каркасе не нужна, а в глубину она мерцала бы с оболочкой и заливкой выделения части
         (o.name === 'indoor-facade-tint' ? tints : planFills).push(o);
       });
+      // Выделенное помещение в каркасе — полупрозрачной заливкой, как выделенная часть
+      this.indoorSelObj?.traverseVisible(o => { if (o instanceof THREE.Mesh && !(o.material instanceof LineMaterial)) selFills.push(o); });
     }
     for (const o of tints) o.visible = false;
+    const selSwapped = selFills.map((o) => [o, o.material] as const);
+    for (const [o] of selSwapped) o.material = INDOOR_SELECT_WIRE_MATERIAL;
     const swapped = [g.mesh, g.glass, ...fills, ...planFills].filter((o): o is THREE.Mesh => !!o).map((o) => [o, o.material, o.renderOrder] as const);
     for (const [o] of swapped) { o.material = DEPTH_ONLY_MATERIAL; o.renderOrder = -1000; }
     // Половина прохода: прячем то, что рисует другая половина
@@ -705,6 +711,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     return () => {
       for (const [o, m, order] of swapped) { o.material = m; o.renderOrder = order; }
+      for (const [o, m] of selSwapped) o.material = m;
       for (const o of [...hidden, ...tints]) o.visible = true;
     };
   }

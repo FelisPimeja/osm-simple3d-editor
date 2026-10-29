@@ -229,7 +229,20 @@ const INDOOR_EDGE_TURN = Math.PI / 15;
 /** Вертикаль контура подземной части — в углах с поворотом не меньше этого, рад. */
 const UNDERGROUND_POST_TURN = 0.35;
 /** Вертикали контура подземной части — не ближе этого друг к другу, м. */
-const UNDERGROUND_POST_GAP_M = 4;
+const UNDERGROUND_POST_GAP_M = 1;
+
+/** Вершины выпуклой оболочки кольца (номера). */
+function hullIndices(pts: Pt[]): Set<number> {
+  const order = pts.map((_, i) => i).sort((a, b) => pts[a][0] - pts[b][0] || pts[a][1] - pts[b][1]);
+  const cross = (o: number, a: number, b: number) =>
+    (pts[a][0] - pts[o][0]) * (pts[b][1] - pts[o][1]) - (pts[a][1] - pts[o][1]) * (pts[b][0] - pts[o][0]);
+  const half = (list: number[]) => {
+    const h: number[] = [];
+    for (const i of list) { while (h.length >= 2 && cross(h[h.length - 2], h[h.length - 1], i) <= 1e-9) h.pop(); h.push(i); }
+    return h;
+  };
+  return new Set([...half(order), ...half([...order].reverse())]);
+}
 
 /** Поворот контура в вершине i, рад (0 — прямая). */
 function turnAt(pts: Pt[], i: number): number {
@@ -3492,13 +3505,15 @@ export class BuildingsLayer implements CustomLayerInterface {
       const segs: [THREE.Vector3, THREE.Vector3][] = [];
       for (const ring of spec.rings) {
         const loc = cornersOnly(ring.map(g.toLocal));
+        // Углы выпуклой оболочки — всегда с вертикалью (маленький выступ, угол здания); прореживаются только зубцы внутри
+        const hull = hullIndices(loc);
         let last: Pt | undefined;
         for (let i = 0; i < loc.length; i++) {
           const [x0, y0] = loc[i], [x1, y1] = loc[(i + 1) % loc.length];
           // Кольца на глубине и на земле (контур подземного здания на земле сам не обведён)
           for (const z of [spec.depth, 0]) segs.push([new THREE.Vector3(x0, y0, z), new THREE.Vector3(x1, y1, z)]);
           // Вертикали — только в заметных углах и не теснее UNDERGROUND_POST_GAP_M (зубцы контура — без частокола)
-          if (turnAt(loc, i) < UNDERGROUND_POST_TURN || (last && Math.hypot(x0 - last[0], y0 - last[1]) < UNDERGROUND_POST_GAP_M)) continue;
+          if (turnAt(loc, i) < UNDERGROUND_POST_TURN || (!hull.has(i) && last && Math.hypot(x0 - last[0], y0 - last[1]) < UNDERGROUND_POST_GAP_M)) continue;
           segs.push([new THREE.Vector3(x0, y0, spec.depth), new THREE.Vector3(x0, y0, 0)]);
           last = loc[i];
         }

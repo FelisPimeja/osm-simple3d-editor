@@ -127,6 +127,21 @@ const THIN_HOLE_WIDTH = 0.6;
 const FACADE_TINT_INSET = 0.02;
 const WALL_MERGE_COS = Math.cos(THREE.MathUtils.degToRad(10));
 const INDOOR_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
+/** Положение камеры в локальных координатах сцены режима здания (обновляется перед её отрисовкой). */
+const SIDE_EYE = { value: new THREE.Vector3() };
+/**
+ * Вертикаль стыка стен стоит ровно в стыке, то есть в плоскости стены, в которую упирается: проверка глубины её
+ * оттуда не прячет. Атрибут side — нормаль этой плоскости в сторону своей стены: с другой стороны ребро не рисуется.
+ * У прочих линий атрибута нет (0) — не отсекаются.
+ */
+function withSideCull(material: THREE.LineBasicMaterial) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.sideEye = SIDE_EYE;
+    shader.vertexShader = 'attribute vec3 side;\nuniform vec3 sideEye;\n' + shader.vertexShader.replace('#include <project_vertex>',
+      '#include <project_vertex>\n  if (dot(sideEye - position, side) < 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);');
+  };
+}
+
 /** Floor contacts remain depth-tested, with a small bias against coplanar floor faces. */
 const FLOOR_CONTACT_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
 FLOOR_CONTACT_MATERIAL.onBeforeCompile = shader => {
@@ -135,6 +150,7 @@ FLOOR_CONTACT_MATERIAL.onBeforeCompile = shader => {
 /** Этаж под вторым светом — бледнее: стены и крышки высветлены, полы смешаны с белым, линии светлее. */
 const INDOOR_PALE_WALL = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x777777, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 const INDOOR_PALE_LINE = new THREE.LineBasicMaterial({ color: 0xc4c0bb });
+withSideCull(INDOOR_PALE_LINE);
 const PALE_MIX = 0.5;
 /** Чаша бассейна: стенки и дно — светлый кафель; вода — полупрозрачная, на POOL_WATER_DROP ниже пола. */
 const POOL_TILE_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
@@ -213,8 +229,6 @@ const AO_FADE_SHARE = 0.5;
 const AO_MIN = 0.55;
 /** Порог угла между гранями для контуров, градусы: швы триангуляции на плоских гранях не рисуем. */
 const EDGE_ANGLE = 25;
-/** Сдвиг вертикали в конце стены внутрь неё, м: за примыкающей стеной вертикаль не просвечивает. */
-const EDGE_INSET = 0.03;
 /** Пунктир подземной части здания: виден только не закрытый зданием участок (земля карты глубину не пишет). */
 const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, dashSize: 0.25, gapSize: 0.15, depthWrite: false, transparent: true, opacity: 0.85 });
 /** Выбранный контур подземной части — целиком, сквозь здание. */
@@ -265,6 +279,7 @@ function cornersOnly(ring: Pt[]): Pt[] {
 }
 const EDGE_OPACITY = 0.55;
 const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: EDGE_OPACITY });
+withSideCull(EDGE_MATERIAL);
 /** Проход отрисовки: обычный или режим контуров (грани зданий только пишут глубину). */
 /**
  * Проход отрисовки групп: 'all' — как есть; 'wire' — режим контуров (грани зданий только в глубину);
@@ -732,6 +747,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const g of this.activeGroups()) {
       // Выбор и камера берут projectionMatrix с глубиной MapLibre — сжатая только на время отрисовки
       const pick = g.camera.projectionMatrix = this.lastMain.clone().multiply(g.model);
+      if (this.level && g === this.groups.get(FOCUS_GROUP)) cameraEye(pick, SIDE_EYE.value);
       g.camera.projectionMatrix = main.clone().multiply(g.model);
       this.resetState();
       const restore = this.filterPass(g, pass);
@@ -2365,6 +2381,20 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     // Вертикаль — в конце стены или где стены сходятся не по прямой (продолжение стены — без шва)
     const edgeCos = Math.cos(INDOOR_EDGE_TURN);
+    const sideEdges: number[] = [], sideDirs: number[] = [];
+    /** Нормаль стены или фасада, в которые упирается конец (x, y) стены, уходящей в сторону dir, — к этой стене. */
+    const abutment = (x: number, y: number, dir: [number, number, number]): [number, number] | undefined => {
+      for (const [ax, ay, bx, by] of taken.near(x, y, x, y)) {
+        const len = Math.hypot(bx - ax, by - ay);
+        if (len < 1e-6) continue;
+        const dx = (bx - ax) / len, dy = (by - ay) / len;
+        if (Math.abs(dx * dir[0] + dy * dir[1]) > edgeCos) continue; // вдоль своей стены — не упор
+        const t = (x - ax) * dx + (y - ay) * dy;
+        if (t < -0.02 || t > len + 0.02 || Math.abs((x - ax) * dy - (y - ay) * dx) > 0.02) continue;
+        const nx = -dy, ny = dx, s = nx * dir[0] + ny * dir[1] >= 0 ? 1 : -1;
+        return [nx * s, ny * s];
+      }
+    };
     for (const e of ends.values()) {
       const opposite = (a: [number, number, number], b: [number, number, number]) => {
         const dot = a[0] * b[0] + a[1] * b[1];
@@ -2403,20 +2433,41 @@ export class BuildingsLayer implements CustomLayerInterface {
       // внутрь примыкающей стены (у сквозной пары направлений — противоположные)
       const odd = e.dirs.length === 1 ? e.dirs[0]
         : e.dirs.length === 3 ? e.dirs.find((d, i) => e.dirs.some((o, j) => j !== i && !opposite(d, o)) && !e.dirs.some((o, j) => j !== i && opposite(d, o))) : undefined;
-      const [x, y] = odd ? [e.x + odd[0] * EDGE_INSET, e.y + odd[1] * EDGE_INSET] : [e.x, e.y];
-      for (const [lo, hi] of spans) if (hi - lo > 0.01) edges.push(x, y, lo, x, y, hi);
+      // Упирается в стену или фасад — ровно в стыке, а с обратной стороны той стены отсекается шейдером (side)
+      const plane = odd && abutment(e.x, e.y, odd);
+      for (const [lo, hi] of spans) if (hi - lo > 0.01) {
+        if (plane) { sideEdges.push(e.x, e.y, lo, e.x, e.y, hi); sideDirs.push(plane[0], plane[1]); }
+        else edges.push(e.x, e.y, lo, e.x, e.y, hi);
+      }
     }
     if (edges.length || openingEdges.length) {
       const eg = new THREE.BufferGeometry();
-      // У откоса проёма есть толстая линия: вертикаль конца стены (сдвинута внутрь на EDGE_INSET) рядом с ней — лишняя
+      // У откоса проёма есть толстая линия: вертикаль конца стены на нём — лишняя
       const jambs = new Float32Array(cutTopLines.filter((_, i) => { const k = i - i % 6; return Math.abs(cutTopLines[k + 2] - cutTopLines[k + 5]) > 1e-3; }));
-      const trimmed = dropCoveredSegments(trimIndoorBuildingEdges(new Float32Array(edges), openingMasks), jambs, EDGE_INSET + 0.005);
+      const trimmed = dropCoveredSegments(trimIndoorBuildingEdges(new Float32Array(edges), openingMasks), jambs, 0.005);
       const all = new Float32Array(trimmed.length + openingEdges.length);
       all.set(trimmed); all.set(openingEdges, trimmed.length);
       eg.setAttribute('position', new THREE.BufferAttribute(all, 3));
       const es = new THREE.LineSegments(eg, pale ? INDOOR_PALE_LINE : EDGE_MATERIAL);
       es.frustumCulled = false;
       root.add(es);
+    }
+    if (sideEdges.length) {
+      // Те же обрезки, что у остальных рёбер, — по отрезку: нормаль идёт за каждым получившимся куском
+      const pos: number[] = [], side: number[] = [];
+      const jambs = new Float32Array(cutTopLines.filter((_, i) => { const k = i - i % 6; return Math.abs(cutTopLines[k + 2] - cutTopLines[k + 5]) > 1e-3; }));
+      for (let i = 0; i < sideEdges.length; i += 6) {
+        const pieces = dropCoveredSegments(trimIndoorBuildingEdges(new Float32Array(sideEdges.slice(i, i + 6)), openingMasks), jambs, 0.005);
+        const [nx, ny] = [sideDirs[i / 3], sideDirs[i / 3 + 1]];
+        for (let k = 0; k < pieces.length; k += 3) { pos.push(pieces[k], pieces[k + 1], pieces[k + 2]); side.push(nx, ny, 0); }
+      }
+      const sg = new THREE.BufferGeometry();
+      sg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      sg.setAttribute('side', new THREE.Float32BufferAttribute(side, 3));
+      const ss = new THREE.LineSegments(sg, pale ? INDOOR_PALE_LINE : EDGE_MATERIAL);
+      ss.name = 'indoor-junction-edges';
+      ss.frustumCulled = false;
+      root.add(ss);
     }
     if(floorContactEdges.length){
       const positions=trimIndoorBuildingEdges(new Float32Array(floorContactEdges),openingMasks);
@@ -5750,6 +5801,16 @@ export function dropCoveredSegments(edges: Float32Array, covers: Float32Array, e
     if (!covered) for (let k = 0; k < 6; k++) out.push(edges[i + k]);
   }
   return new Float32Array(out);
+}
+
+/** Положение камеры в координатах модели по матрице модель→клип: точка, где x, y и w клипа равны нулю. */
+function cameraEye(m: THREE.Matrix4, out: THREE.Vector3): THREE.Vector3 {
+  const e = m.elements; // по столбцам: строка r, столбец c — e[c * 4 + r]
+  const row = (r: number) => [e[r], e[4 + r], e[8 + r], e[12 + r]];
+  const [x, y, w] = [row(0), row(1), row(3)];
+  const a = new THREE.Matrix3().set(x[0], x[1], x[2], y[0], y[1], y[2], w[0], w[1], w[2]);
+  if (Math.abs(a.determinant()) < 1e-20) return out;
+  return out.set(-x[3], -y[3], -w[3]).applyMatrix3(a.invert());
 }
 
 /** Номер объекта для ключей кешей (по идентичности). */

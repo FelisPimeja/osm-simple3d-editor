@@ -3108,6 +3108,7 @@ function startPaint() {
 const offsetBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="offset"]')!;
 const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
   (point, back) => {
+    if (shownLevel) return levelOffsetTarget(point, back);
     const member = (k: string) => !!focus?.members.includes(k) && !hiddenInFocus(k);
     // Ребро (вершина, середина) верхнего или нижнего контура плоской грани — сразу эта грань
     const snap = overpassLayer.snapAt(point, member);
@@ -3136,6 +3137,7 @@ const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
     return { key, face, z: face === 'top' ? box.max.z : box.min.z, ring: poly.outer, inners: poly.inners };
   },
   (t, shape) => {
+    if (t.inward) return createLevelWallBand(t, shape);
     const tags = entity(t.key)?.tags ?? {};
     const fmt = (v: number) => String(Math.round(v * 100) / 100);
     const out: Record<string, string> = { 'building:part': 'yes' };
@@ -3224,9 +3226,63 @@ function faceTarget(key: string, at: [number, number], z: number): OffsetTarget 
   return { key, face: top ? 'top' : 'bottom', z: top ? box.max.z : box.min.z, ring: poly.outer, inners: poly.inners };
 }
 
+/**
+ * «Отступ» на плане этажа — буфер стен: грань — контур здания на этаже (сечение оболочки), Shift — оболочка
+ * части здания, проходящей через этаж. Отступ только внутрь.
+ */
+function levelOffsetTarget(point: [number, number], back: boolean): OffsetTarget | string | undefined {
+  if (!focus || !shownLevel) return;
+  const z = shownLevel.floor;
+  const q = overpassLayer.focusRay(point)?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+  if (!q) return;
+  const at: [number, number] = [q.x, q.y];
+  type P = { key: string; outer: [number, number][]; inners: [number, number][][] };
+  let polys: P[] = [];
+  if (!back) {
+    const local = (r: LonLat[]) => r.map((c) => overpassLayer.focusToLocal(c)!);
+    polys = (levelSection(shownLevel) ?? []).map((p) => ({ key: focus!.key, outer: local(p[0]), inners: p.slice(1).map(local) }));
+  } else {
+    // Части, чья оболочка проходит через пол этажа
+    for (const f of groupFeatures(focus)) {
+      const box = overpassLayer.focusItemBox(f.key);
+      if (f.kind !== 'part' || hiddenInFocus(f.key) || !box || box.min.z > z + 0.1 || box.max.z < z + 0.1) continue;
+      for (const p of overpassLayer.focusPolygons(f.key) ?? []) polys.push({ key: f.key, ...p });
+    }
+  }
+  const inside = polys.filter((p) => pointInRing(at, p.outer) && !p.inners.some((r) => pointInRing(at, r)));
+  // Вложенные части — самая маленькая под курсором
+  const poly = inside.sort((a, b) => Math.abs(ringArea(a.outer)) - Math.abs(ringArea(b.outer)))[0];
+  if (!poly) return back ? tr('Буфер стен: Shift+клик внутри части здания на этом этаже.') : tr('Буфер стен: клик внутри контура этажа.');
+  return { key: poly.key, face: 'bottom', z, ring: poly.outer, inners: poly.inners, inward: true };
+}
+
+/** Буфер стен: полоса между гранью и её отступом внутрь — полигональная стена indoor=wall этажа. */
+function createLevelWallBand(t: OffsetTarget, shape: [number, number][][][]): string | undefined {
+  if (!focus || !shownLevel) return tr('Нет этажа.');
+  const close = <T,>(r: T[]) => [...r, r[0]];
+  let band: [number, number][][][];
+  try {
+    band = polygonClipping.difference([t.ring, ...t.inners].map(close) as never, ...shape.map((p) => p.map(close)) as never[]) as unknown as [number, number][][][];
+  } catch (err) { console.warn('[wall-band]', err); return tr('Не удалось построить буфер.'); }
+  const toLL = (r: [number, number][]) => r.slice(0, -1).map((p) => overpassLayer.focusToLngLat(p[0], p[1])! as LonLat);
+  const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point && !f.line)]);
+  const edits: ObjectEdit[] = [];
+  const made = band.map((p) => indoorCreateEdits({ outer: toLL(p[0]), inners: p.slice(1).map(toLL) }, { indoor: 'wall', level: String(shownLevel!.n) }, nodeFor, edits))
+    .filter((m): m is IndoorFeature => !!m);
+  if (!made.length) return tr('Буфер вырожден: у него нет площади.');
+  session.editMany(edits);
+  for (const m of made) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
+  indoorEditRev++;
+  renderLevels();
+  made.map((m) => buildingIndoorFor(m.key)).filter((f): f is IndoorFeature => !!f).forEach((f, i) => selectIndoor(f, i > 0));
+  setStatus(tr('Создано: {keys} (indoor=wall, этаж {n}).', { keys: made.map((m) => m.key).join(', '), n: levelLabel(shownLevel.n) }));
+  return;
+}
+
 function startOffset() {
   if (!focus) return;
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop();
+  offsetTool.levelHint = shownLevel ? tr('Буфер стен: клик внутри контура этажа (Shift+клик — оболочка части здания). Esc — выйти.') : undefined;
   offsetTool.start();
 }
 

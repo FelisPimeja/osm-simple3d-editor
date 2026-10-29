@@ -1333,5 +1333,13 @@
   "Не удалось найти противоположную грань стены.": "Could not find the opposite wall face.",
   "Проём удаляет стену целиком — уменьшите ширину двери.": "The opening removes the entire wall; reduce the door width.",
   "Дверь в полигональной стене: вырез насквозь по нормали выбранной грани. Клик — поставить.": "Door in a polygon wall: cut through its thickness, perpendicular to the selected face. Click to place.",
-  "Выбрать контур этажа": "Select level outline"
+  "Выбрать контур этажа": "Select level outline",
+  "Буфер стен — от контура внутрь: ведите курсор внутрь. Клик или толщина + Enter — полигональная стена, Esc — отмена.": "Wall buffer — inward from the outline: move the cursor inside. Click or thickness + Enter — polygonal wall, Esc — cancel.",
+  "Толщина": "Thickness",
+  "Буфер стен: Shift+клик внутри части здания на этом этаже.": "Wall buffer: Shift+click inside a building part on this level.",
+  "Буфер стен: клик внутри контура этажа.": "Wall buffer: click inside the level outline.",
+  "Не удалось построить буфер.": "Could not build the buffer.",
+  "Буфер вырожден: у него нет площади.": "The buffer is degenerate: it has no area.",
+  "Создано: {keys} (indoor=wall, этаж {n}).": "Created: {keys} (indoor=wall, level {n}).",
+  "Буфер стен: клик внутри контура этажа (Shift+клик — оболочка части здания). Esc — выйти.": "Wall buffer: click inside the level outline (Shift+click — building part shell). Esc — exit."
 }

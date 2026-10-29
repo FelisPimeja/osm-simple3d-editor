@@ -6,7 +6,11 @@ import { tr } from '../i18n';
 type Pt = [number, number];
 
 /** Плоская грань, от контура которой откладываем: объект, верх или низ, высота и контур (метры сцены). */
-export interface OffsetTarget { key: string; face: 'top' | 'bottom'; z: number; ring: Pt[]; inners: Pt[][] }
+export interface OffsetTarget {
+  key: string; face: 'top' | 'bottom'; z: number; ring: Pt[]; inners: Pt[][];
+  /** Только внутрь (буфер стен этажа от контура): наружу отступ не идёт. */
+  inward?: boolean;
+}
 
 /** Короче этого отступ не считаем (контур совпал бы с исходным), м. */
 const MIN_OFFSET = 0.05;
@@ -44,8 +48,11 @@ export class OffsetTool {
 
   start() {
     this.state = 'pick';
-    this.onState(tr('Отступ: клик по плоской грани или по её ребру (Shift+клик по объекту — низ). Esc — выйти.'));
+    this.onState(this.levelHint ?? tr('Отступ: клик по плоской грани или по её ребру (Shift+клик по объекту — низ). Esc — выйти.'));
   }
+
+  /** Подсказка выбора на плане этажа (undefined — обычный режим). */
+  levelHint?: string;
 
   stop() {
     this.cancel();
@@ -63,7 +70,9 @@ export class OffsetTool {
       this.d = 0;
       this.typed = '';
       this.state = 'offset';
-      this.onState(tr('Отступ — от внешнего контура грани: ведите курсор наружу или внутрь. Клик — новый контур, число + Enter — отступ в метрах (минус — внутрь), Esc — отмена.'));
+      this.onState(t.inward
+        ? tr('Буфер стен — от контура внутрь: ведите курсор внутрь. Клик или толщина + Enter — полигональная стена, Esc — отмена.')
+        : tr('Отступ — от внешнего контура грани: ведите курсор наружу или внутрь. Клик — новый контур, число + Enter — отступ в метрах (минус — внутрь), Esc — отмена.'));
       // Начинаем с самого контура: точка клика (внутри грани) не задаёт отступ
       this.preview();
       return;
@@ -79,6 +88,7 @@ export class OffsetTool {
     const q = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -this.target.z), new THREE.Vector3());
     if (!q) return;
     this.d = signedDistance(this.target.ring, [q.x, q.y]);
+    if (this.target.inward) this.d = Math.min(this.d, 0);
     this.preview();
   }
 
@@ -108,7 +118,7 @@ export class OffsetTool {
       const v = Number(this.typed);
       if (!this.typed || !Number.isFinite(v)) return true;
       // Без знака — в ту сторону, куда ведут курсор
-      this.apply(this.typed.startsWith('-') ? v : v * (this.d < 0 ? -1 : 1));
+      this.apply(this.typed.startsWith('-') || this.target?.inward ? -Math.abs(v) : v * (this.d < 0 ? -1 : 1));
       return true;
     }
     return false;
@@ -130,15 +140,15 @@ export class OffsetTool {
     const t = this.target;
     if (!t) return;
     const typed = Number(this.typed);
-    const d = this.typed && Number.isFinite(typed) ? (this.typed.startsWith('-') ? typed : typed * (this.d < 0 ? -1 : 1)) : this.d;
+    const d = this.typed && Number.isFinite(typed) ? (this.typed.startsWith('-') || t.inward ? -Math.abs(typed) : typed * (this.d < 0 ? -1 : 1)) : this.d;
     const r: OffsetShape | string = Math.abs(d) >= MIN_OFFSET ? offsetPolygon(t, d) : [[t.ring, ...t.inners]];
     // Все кольца всех частей; не получилось — исходный контур
     const rings = typeof r === 'string' ? [t.ring, ...t.inners] : r.flat();
     this.layer.setOutline(rings.map((ring) => ring.map((p) => new THREE.Vector3(p[0], p[1], t.z))), 2);
     this.vcb.hidden = false;
     const holes = typeof r === 'string' ? '' : `${r.length > 1 ? ` · ${tr('частей: {n}', { n: r.length })}` : ''}${t.inners.length || r.some((p) => p.length > 1) ? ` · ${tr('дворов: {n}', { n: r.reduce((n, p) => n + p.length - 1, 0) })}` : ''}`;
-    this.vcb.innerHTML = `<span class="vcb-label">${tr('Отступ')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || Math.abs(d).toFixed(2)}</span> ${tr('м')}
-      <span class="vcb-axis">${d < 0 ? tr('внутрь') : tr('наружу')}${typeof r === 'string' ? ` · ${r}` : holes}</span>`;
+    this.vcb.innerHTML = `<span class="vcb-label">${t.inward ? tr('Толщина') : tr('Отступ')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || Math.abs(d).toFixed(2)}</span> ${tr('м')}
+      <span class="vcb-axis">${d < 0 || t.inward ? tr('внутрь') : tr('наружу')}${typeof r === 'string' ? ` · ${r}` : holes}</span>`;
   }
 
   private cancel() {

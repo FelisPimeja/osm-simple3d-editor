@@ -850,6 +850,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   private indoorSelObj?: THREE.Group;
   private roomWallSelection: IndoorItem[] = [];
   private indoorWallPositions: number[] = [];
+  /** Толстые линии среза и откосов проёмов выбранного этажа: совпадающие с ними рёбра оболочки не рисуются. */
+  private indoorStrokes: Float32Array = new Float32Array();
   private indoorEdgeOccluders: number[] = [];
   private indoorGlassBlockers: number[] = [];
   private escalatorObjects = new Map<string, THREE.Group>();
@@ -1227,6 +1229,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private applyLevel() {
     this.doorOpeningEdges.clear();
     this.indoorWallPositions = [];
+    this.indoorStrokes = new Float32Array();
     this.indoorEdgeOccluders = [];
     this.indoorGlassBlockers = [];
     this.escalatorObjects.clear();
@@ -2432,6 +2435,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     if (cutTopLines.length && this.map) {
       const positions = trimIndoorBuildingEdges(new Float32Array(cutTopLines), openingMasks);
+      if (!pale) this.indoorStrokes = positions;
       const geometry = new LineSegmentsGeometry();
       geometry.setPositions(positions);
       const canvas = this.map.getCanvas();
@@ -5007,7 +5011,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         const ux=b[0]-a[0],uy=b[1]-a[1],vx=c[0]-b[0],vy=c[1]-b[1];
         if(Math.abs(ux*vy-uy*vx)>Math.hypot(ux,uy)*Math.hypot(vx,vy)*Math.sin(5*Math.PI/180))corners.push(b);
       }
-      g.edges.geometry.setAttribute('position', new THREE.BufferAttribute(trimIndoorBuildingEdges(positions, this.indoorEdgeOccluders, corners), 3));
+      // Откос проёма в фасаде — и ребро оболочки, и толстая линия плана: оставляем только толстую
+      const trimmed = dropCoveredSegments(trimIndoorBuildingEdges(positions, this.indoorEdgeOccluders, corners), this.indoorStrokes);
+      g.edges.geometry.setAttribute('position', new THREE.BufferAttribute(trimmed, 3));
     }
     g.scene.add(g.edges);
     if (this.wireframe && g === this.groups.get(FOCUS_GROUP)) {
@@ -5717,6 +5723,31 @@ export function decor<T extends THREE.Object3D>(o: T): T {
   o.userData.decor = true;
   o.raycast = () => {};
   return o;
+}
+
+/** Отрезки edges, целиком лежащие на каком-нибудь отрезке covers (с точностью eps, м), — выброшены. */
+export function dropCoveredSegments(edges: Float32Array, covers: Float32Array, eps = 0.02): Float32Array {
+  if (!covers.length) return edges;
+  const onSeg = (px: number, py: number, pz: number, c: number) => {
+    const ax = covers[c], ay = covers[c + 1], az = covers[c + 2], dx = covers[c + 3] - ax, dy = covers[c + 4] - ay, dz = covers[c + 5] - az;
+    const l2 = dx * dx + dy * dy + dz * dz;
+    const t = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy + (pz - az) * dz) / l2)) : 0;
+    return Math.hypot(ax + t * dx - px, ay + t * dy - py, az + t * dz - pz) <= eps;
+  };
+  // Сетка 4 м по плану: отрезок сравнивается только с покрытиями своей ячейки
+  const grid = new Map<string, number[]>();
+  for (let c = 0; c + 5 < covers.length; c += 6)
+    for (const k of planCells(covers[c], covers[c + 1], covers[c + 3], covers[c + 4], eps)) (grid.get(k) ?? grid.set(k, []).get(k)!).push(c);
+  const out: number[] = [];
+  for (let i = 0; i + 5 < edges.length; i += 6) {
+    let covered = false;
+    for (const c of grid.get(planCells(edges[i], edges[i + 1], edges[i], edges[i + 1], 0)[0]) ?? []) {
+      covered = onSeg(edges[i], edges[i + 1], edges[i + 2], c) && onSeg(edges[i + 3], edges[i + 4], edges[i + 5], c);
+      if (covered) break;
+    }
+    if (!covered) for (let k = 0; k < 6; k++) out.push(edges[i + k]);
+  }
+  return new Float32Array(out);
 }
 
 /** Номер объекта для ключей кешей (по идентичности). */

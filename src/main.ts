@@ -8909,7 +8909,8 @@ function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | 
   const ray = overpassLayer.focusRay(point);
   const hit = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -shownLevel.floor), new THREE.Vector3());
   const ll = hit && overpassLayer.focusToLngLat(hit.x, hit.y);
-  const section = ll && levelSection(shownLevel);
+  // Подземный этаж только из indoor-данных (подземной части в OSM нет): пустоты — в пределах следа здания на земле
+  const section = ll && (levelSection(shownLevel) ?? (shownLevel.floor < 0 ? overpassLayer.focusSection(0.1) : undefined));
   if (!ll || !section?.length) return;
   const local = (p: LonLat) => overpassLayer.focusToLocal(p)!;
   const close = (r: LonLat[]) => { const points = r.map(local); return [...points, points[0]]; };

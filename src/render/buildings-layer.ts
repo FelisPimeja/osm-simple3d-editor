@@ -95,8 +95,9 @@ const ENTRANCE_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
 ENTRANCE_LINE_MATERIAL.onBeforeCompile = shader => {
   shader.vertexShader = shader.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  gl_Position.z -= 2e-5 * gl_Position.w;');
 };
-export const ENTRANCE_WIDTH = 1;
-export const ENTRANCE_HEIGHT = 2;
+/** Вход на фасаде — того же размера, что проём двери на плане этажа: ширина по тегу width, иначе DOOR_WIDTH. */
+export const ENTRANCE_WIDTH = DOOR_WIDTH;
+export const ENTRANCE_HEIGHT = DOOR_HEIGHT;
 /** Насколько прямоугольник входа вынесен из плоскости стены, м. */
 const ENTRANCE_OFFSET = 0.03;
 /** Вход со скрытого объекта режима здания виден, если стоит не дальше этого от стены видимого, м. */
@@ -4100,7 +4101,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const u = (hit.x - c.x) * e.t[0] + (hit.y - c.y) * e.t[1], v = hit.z - e.z;
       const t = hit.distanceTo(ray.origin);
       // Чуть шире самого прямоугольника — попасть проще
-      if (Math.abs(u) <= ENTRANCE_WIDTH / 2 + 0.15 && v >= -0.15 && v <= ENTRANCE_HEIGHT + 0.15 && t < bestT) { best = e.id; bestT = t; }
+      if (Math.abs(u) <= (e.width ?? ENTRANCE_WIDTH) / 2 + 0.15 && v >= -0.15 && v <= ENTRANCE_HEIGHT + 0.15 && t < bestT) { best = e.id; bestT = t; }
     }
     return best;
   }
@@ -4134,7 +4135,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
           if (!tags.has(id) || (best.get(id)?.rank ?? Infinity) <= rank) return;
           const place = entrancePlace(rings, r, i, min);
-          if (place && (!offstage || onShownWall(place.p))) best.set(id, { place: { id, ...place }, rank });
+          if (place && (!offstage || onShownWall(place.p))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
         }));
       }
     }
@@ -4148,7 +4149,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Floor plans use the actual door opening and the indoor door marker.
       if (this.level && g === this.groups.get(FOCUS_GROUP)) continue;
       const out = e.id === this.entranceSelected ? selected : plain;
-      const w = ENTRANCE_WIDTH / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
+      const w = (e.width ?? ENTRANCE_WIDTH) / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
       const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w];
       const z0 = e.z, z1 = e.z + ENTRANCE_HEIGHT;
       out.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z1, a[0], a[1], z0, b[0], b[1], z1, a[0], a[1], z1);
@@ -6202,7 +6203,7 @@ function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
 }
 /** Вход на стене: точка у основания (м сцены), направление стены t и наружная нормаль n (единичные), низ z. */
-export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number }
+export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number }
 
 /**
  * Место входа у вершины i кольца r (кольца в метрах сцены, 0 — внешнее): стена — по соседним вершинам

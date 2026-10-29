@@ -7574,12 +7574,16 @@ let levelSignature = '';
  */
 function focusLevels(g: BuildingGroup, info: Map<number, LevelInfo> = new Map()): Level[] {
   const byN = new Map<number, Level & { rank: number }>();
-  for (const f of groupFeatures(g)) {
+  const feats = groupFeatures(g);
+  for (const f of feats) {
     const t = f.tags;
     const levels = Number(t['building:levels']);
     if (!Number.isFinite(levels) || levels <= 0) continue;
     const under = Math.max(0, Math.round(Number(t['building:levels:underground']) || 0));
-    const h = computeHeights(t);
+    let h = computeHeights(t);
+    // Контур с этажностью без высоты, а у частей высоты без этажности: верх стен — по основной части
+    const mainTop = f.kind === 'building' && h.source === 'levels' ? mainPartTop(feats, h.min, levels) : undefined;
+    if (mainTop !== undefined) h = { ...h, wallTop: mainTop, top: mainTop + h.roofHeight };
     // Без building:min_level у поднятой части (надстройка на крыше) нижний этаж — по min_height, а не нулевой
     const minLevel = t['building:min_level'] !== undefined ? Number(t['building:min_level']) || 0
       : h.min > 0 ? Math.round(h.min / LEVEL_HEIGHT) : 0;
@@ -7597,6 +7601,24 @@ function focusLevels(g: BuildingGroup, info: Map<number, LevelInfo> = new Map())
     for (const l of partLevels({ min: h.min, wallTop: h.wallTop, levels, minLevel, under, step }, info)) add(l.n, l.floor, l.ceil, l.explicit, l.overflow);
   }
   return [...byN.values()].map(({ n, floor, ceil, src, explicit, overflow }) => ({ n, floor, ceil, src, explicit, ...(overflow ? { overflow } : {}) })).sort((a, b) => b.n - a.n);
+}
+
+/**
+ * Верх стен основной части здания: у частей с явной высотой без этажности, стоящих на земле, с высотой, делимой на
+ * levels этажей допустимого шага, — у самой большой по площади (relation/21547936: контур в 2 этажа без высоты,
+ * основная часть 6 м — этажи по 3 м, а не по 3.5; одноэтажные пристройки по 3 м — не в счёт).
+ */
+function mainPartTop(feats: ReturnType<typeof groupFeatures>, min: number, levels: number): number | undefined {
+  let best: { area: number; top: number } | undefined;
+  for (const f of feats) {
+    if (f.kind !== 'part' || f.tags['building:levels'] !== undefined) continue;
+    const h = computeHeights(f.tags);
+    const step = (h.wallTop - min) / levels;
+    if (h.source !== 'height' || h.min > 0.5 || step < MIN_LEVEL_STEP || step > MAX_LEVEL_STEP) continue;
+    const area = f.polygons.reduce((s, p) => s + ringArea(p.outer) - p.inners.reduce((a, r) => a + ringArea(r), 0), 0);
+    if (!best || area > best.area) best = { area, top: h.wallTop };
+  }
+  return best?.top;
 }
 
 /**

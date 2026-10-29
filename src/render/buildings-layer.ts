@@ -331,6 +331,21 @@ THIN_MATERIAL.polygonOffsetFactor = -1;
 THIN_MATERIAL.polygonOffsetUnits = -4;
 /** Режим контуров: грани только пишут глубину — рёбра за ними скрыты, а самих граней не видно. */
 const DEPTH_ONLY_MATERIAL = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+/**
+ * Пол выбранного этажа (м сцены). Горизонтальные грани оболочки выше него и ниже среза — крыши частей внутри
+ * этажа (relation/21547936: часть 6 м при этаже 3.5–7 м) — не рисуются: иначе накрывают план крышкой.
+ */
+const SHELL_FLOOR = { value: Infinity };
+function withLevelRoofCut<T extends THREE.Material>(material: T): T {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.shellFloor = SHELL_FLOOR;
+    shader.vertexShader = 'varying vec3 vShellPos;\n' + shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vShellPos = position;');
+    shader.fragmentShader = 'varying vec3 vShellPos;\nuniform float shellFloor;\n' + shader.fragmentShader.replace('void main() {',
+      'void main() {\n  if (vShellPos.z > shellFloor + 0.05 && abs(normalize(cross(dFdx(vShellPos), dFdy(vShellPos))).z) > 0.99) discard;');
+  };
+  return material;
+}
+for (const m of [MATERIAL, THIN_MATERIAL, DEPTH_ONLY_MATERIAL]) withLevelRoofCut(m);
 /** Видимые рёбра в режиме контуров — темнее обычных: кроме них от здания может ничего не остаться. */
 const WIRE_EDGE_OPACITY = 0.9;
 /** Рёбра выделенного в режиме контуров: цвет и толщина, px. */
@@ -1332,6 +1347,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.escalatorObjects.clear();
     // Чуть ниже потолка: днища частей, начинающихся на потолке, и крыши частей на этой высоте не накрывают план
     const cut = this.levelCut = this.cutZ();
+    SHELL_FLOOR.value = cut !== undefined ? this.level!.floor : Infinity;
     const planes = cut !== undefined ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), cut)] : null;
     // Входы на контуре — тоже: у частей выше среза они висели бы в воздухе
     for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL, ENTRANCE_MATERIAL, ENTRANCE_SELECTED_MATERIAL, ENTRANCE_LINE_MATERIAL]) m.clippingPlanes = planes;

@@ -115,6 +115,9 @@ const DOOR_PICK_PX = 10;
 /** Полы помещений, коридоров и площадок — цвет вершин по виду. */
 /** Пол лежит на отметке этажа; сдвиг глубины — чтобы линии на полу (швы, низ стен) не тонули в нём. */
 const INDOOR_FLOOR_MATERIAL = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+/** Чёрная крышка среза стен-полигонов и колонн; в каркасе — полупрозрачная. */
+const INDOOR_CUT_CAP_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+const INDOOR_CUT_CAP_WIRE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 /** Крышка сечения замкнутых стен и колонн — освещается как верх здания. */
 const INDOOR_CAP_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 /** Стена помещения совпадает с уже нарисованной (периметр, indoor=wall, соседнее помещение): ближе этого, м. */
@@ -696,12 +699,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (pass === 'all') return () => {};
     DEPTH_ONLY_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
     const fills = g.entranceObj?.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh && !o.userData.entrancePoint) ?? [];
-    const planFills: THREE.Mesh[] = [], tints: THREE.Mesh[] = [], selFills: THREE.Mesh[] = [];
+    const planFills: THREE.Mesh[] = [], tints: THREE.Mesh[] = [], selFills: THREE.Mesh[] = [], cutCaps: THREE.Mesh[] = [];
     if (g === this.groups.get(FOCUS_GROUP)) {
       this.indoorObj?.traverseVisible(o => {
         if (!(o instanceof THREE.Mesh) || o.material instanceof LineMaterial) return;
         // Цветная грань фасада в каркасе не нужна, а в глубину она мерцала бы с оболочкой и заливкой выделения части
-        (o.name === 'indoor-facade-tint' ? tints : planFills).push(o);
+        // Чёрная крышка среза стен и колонн — полупрозрачной: видна, как в сплошном стиле, но не закрывает рёбер
+        (o.name === 'indoor-facade-tint' ? tints : o.name === 'indoor-cut-cap' ? cutCaps : planFills).push(o);
       });
       // Выделенное помещение в каркасе — полупрозрачной заливкой, как выделенная часть
       this.indoorSelObj?.traverseVisible(o => { if (o instanceof THREE.Mesh && !(o.material instanceof LineMaterial)) selFills.push(o); });
@@ -709,6 +713,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const o of tints) o.visible = false;
     const selSwapped = selFills.map((o) => [o, o.material] as const);
     for (const [o] of selSwapped) o.material = INDOOR_SELECT_WIRE_MATERIAL;
+    for (const o of cutCaps) o.material = INDOOR_CUT_CAP_WIRE_MATERIAL;
     const swapped = [g.mesh, g.glass, ...fills, ...planFills].filter((o): o is THREE.Mesh => !!o).map((o) => [o, o.material, o.renderOrder] as const);
     for (const [o] of swapped) { o.material = DEPTH_ONLY_MATERIAL; o.renderOrder = -1000; }
     // Половина прохода: прячем то, что рисует другая половина
@@ -727,6 +732,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     return () => {
       for (const [o, m, order] of swapped) { o.material = m; o.renderOrder = order; }
       for (const [o, m] of selSwapped) o.material = m;
+      for (const o of cutCaps) o.material = INDOOR_CUT_CAP_MATERIAL;
       for (const o of [...hidden, ...tints]) o.visible = true;
     };
   }
@@ -1872,7 +1878,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   private drawPlanBody(root: THREE.Group, g: MeshGroup, items: IndoorItem[], doorList: LonLat[], top: number, pale: boolean, shell: Shell | undefined, escalators: NonNullable<IndoorLevel['escalators']>, floorVoids?: LonLat[][][]) {
-    const capPos: number[] = [], floorPos: number[] = [], floorCol: number[] = [];
+    const capPos: number[] = [], floorPos: number[] = [], floorCol: number[] = [], cutPos: number[] = [];
     const white = new THREE.Color(0xffffff);
     const fill = (outer: Pt[], holes: Pt[][], z: number | ((x: number, y: number) => number), colour?: number) => {
       const v2 = (r: Pt[]) => r.map(([x, y]) => new THREE.Vector2(x, y));
@@ -1882,7 +1888,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       const pts = [...contour, ...hs.flat()];
       const c = colour === undefined ? undefined : new THREE.Color(colour);
       if (c && pale) c.lerp(white, PALE_MIX);
+      const cut = colour === 0x000000 && !pale;
       for (const tri of THREE.ShapeUtils.triangulateShape(contour, hs)) for (const i of tri) {
+        if (cut) { cutPos.push(pts[i].x, pts[i].y, typeof z === 'number' ? z : z(pts[i].x, pts[i].y)); continue; }
         (c ? floorPos : capPos).push(pts[i].x, pts[i].y, typeof z === 'number' ? z : z(pts[i].x, pts[i].y));
         if (c) floorCol.push(c.r, c.g, c.b);
       }
@@ -1895,6 +1903,14 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (col) geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
         geo.computeVertexNormals();
         const mesh = new THREE.Mesh(geo, mat);
+        mesh.frustumCulled = false;
+        root.add(mesh);
+      }
+      if (cutPos.length) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(cutPos, 3));
+        const mesh = new THREE.Mesh(geo, INDOOR_CUT_CAP_MATERIAL);
+        mesh.name = 'indoor-cut-cap';
         mesh.frustumCulled = false;
         root.add(mesh);
       }

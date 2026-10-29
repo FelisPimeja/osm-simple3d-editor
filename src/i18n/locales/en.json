@@ -1332,5 +1332,6 @@
   "Дверь не находится на грани полигональной стены.": "The door is not on a polygon wall face.",
   "Не удалось найти противоположную грань стены.": "Could not find the opposite wall face.",
   "Проём удаляет стену целиком — уменьшите ширину двери.": "The opening removes the entire wall; reduce the door width.",
-  "Дверь в полигональной стене: вырез насквозь по нормали выбранной грани. Клик — поставить.": "Door in a polygon wall: cut through its thickness, perpendicular to the selected face. Click to place."
+  "Дверь в полигональной стене: вырез насквозь по нормали выбранной грани. Клик — поставить.": "Door in a polygon wall: cut through its thickness, perpendicular to the selected face. Click to place.",
+  "Выбрать контур этажа": "Select level outline"
 }

@@ -10187,11 +10187,29 @@ levelsEl.addEventListener('click', (e) => {
   currentLevel = n;
   linkLevel = undefined;
   renderLevels();
-  // Этаж размечен indoor=level — щелчок выделяет его (контур подсвечен, свойства — его форма); Esc — свойства этажа
-  const l = n !== undefined && focus ? buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === n) : undefined;
-  const fs = l ? levelFeatures(l) : [];
-  if (fs.length) { select(undefined); fs.forEach((f, i) => selectIndoor(f, i > 0)); }
 });
+/** Контуры этажа n (indoor=level), если он ими размечен. */
+function levelOutlineFeatures(n: number): IndoorFeature[] {
+  const l = focus ? buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === n) : undefined;
+  return l ? levelFeatures(l) : [];
+}
+/** Этаж под правым кликом в панели «Этажи» — для пунктов меню. */
+let ctxLevel: number | undefined;
+levelsEl.addEventListener('contextmenu', (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-level]');
+  if (!li || !focus || li.dataset.level === '') return;
+  e.preventDefault();
+  ctxLevel = Number(li.dataset.level);
+  const has = levelOutlineFeatures(ctxLevel).length > 0;
+  ctxMenu.innerHTML = `<li><button type="button" data-ctx="level-outline"${has ? '' : ' disabled'}>${tr('Выбрать контур этажа')}</button></li>`;
+  placeCtxMenu(e.clientX, e.clientY);
+});
+/** Выбрать контур этажа n (indoor=level): переключиться на этаж и выделить его контуры. */
+function selectLevelOutline(n: number) {
+  if (currentLevel !== n) { currentLevel = n; linkLevel = undefined; renderLevels(); }
+  const fs = levelOutlineFeatures(n);
+  if (fs.length) { select(undefined); fs.forEach((f, i) => selectIndoor(f, i > 0)); }
+}
 infoEl.addEventListener('click', (e) => {
   const ilink = (e.target as HTMLElement).closest<HTMLElement>('[data-select-indoor]');
   if (!ilink) return;
@@ -11077,6 +11095,7 @@ ctxMenu.addEventListener('click', (e) => {
   }
   if (!action || !focus) return;
   closeCtxMenu();
+  if (action === 'level-outline') { if (ctxLevel !== undefined) selectLevelOutline(ctxLevel); return; }
   if (action === 'indoor-hide') return hideSelectedIndoor();
   if (action === 'indoor-delete') return deleteIndoorSelection();
   if (action === 'indoor-merge') return mergeSelected();

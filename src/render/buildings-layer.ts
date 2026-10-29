@@ -121,6 +121,8 @@ const SOLID_MERGE_DIST = 0.03;
 const THIN_HOLE_WIDTH = 0.6;
 /** Подъём нижнего ребра стены над уровнем этажа: выше верхнего слоя пола (помещения, +0.05). */
 const FLOOR_EDGE_LIFT = 0.055;
+/** Отступ внутрь цветной грани помещения на фасаде от плоскости оболочки здания. */
+const FACADE_TINT_INSET = 0.02;
 const WALL_MERGE_COS = Math.cos(THREE.MathUtils.degToRad(10));
 const INDOOR_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
 /** Floor contacts remain depth-tested, with a small bias against coplanar floor faces. */
@@ -1817,6 +1819,23 @@ export class BuildingsLayer implements CustomLayerInterface {
     const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, ends = true, jambA = Infinity, jambB = Infinity) => {
       if (edgeOcclusionOnly) {
         this.indoorEdgeOccluders.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
+        if (facadeOwnFloorEdge) {
+          // Стену здания рисует оболочка; изнутри фасад красится в цвет помещения —
+          // гранью чуть внутрь от плоскости фасада, чтобы не мерцать с оболочкой.
+          const l0 = Math.hypot(bx - ax, by - ay) || 1, ux = (by - ay) / l0, uy = -(bx - ax) / l0;
+          const mx = (ax + bx) / 2, my = (ay + by) / 2;
+          for (const side of [1, -1]) {
+            const c = sideColour(mx + side * ux * WALL_SIDE_PROBE, my + side * uy * WALL_SIDE_PROBE);
+            if (c === WHITE_WALL) continue;
+            const ox = side * ux * FACADE_TINT_INSET, oy = side * uy * FACADE_TINT_INSET;
+            const [px, py, qx, qy] = [ax + ox, ay + oy, bx + ox, by + oy];
+            const face = side > 0
+              ? [px, py, z0, qx, qy, z0, qx, qy, z1b, px, py, z0, qx, qy, z1b, px, py, z1a]
+              : [px, py, z0, qx, qy, z1b, qx, qy, z0, px, py, z0, px, py, z1a, qx, qy, z1b];
+            for (const value of face) walls.push(value);
+            for (let k = 0; k < 6; k++) wallCols.push(c.r, c.g, c.b);
+          }
+        }
         // A facade can own the wall face, but the indoor wall still owns its
         // floor contact. Preserve that edge without recreating the face.
         if (facadeOwnFloorEdge ? Math.abs(z0 - floorLevel) < 1e-3

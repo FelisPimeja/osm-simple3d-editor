@@ -8942,6 +8942,7 @@ function renderFreeArea(a: { n: number; polygon: Polygon }) {
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
     input.addEventListener('change', () => { if (input.value.trim()) createFromFreeArea({ [input.dataset.indoorTag!]: input.value.trim() }); });
   }
+  updateTagsClip();
 }
 
 /** Пустая площадь → indoor-объект (по умолчанию indoor=area) этажа; вершины на соседях — их узлы. Выделяется. */
@@ -11704,6 +11705,8 @@ function renderSelected() {
 // Копировать и вставить теги (кнопки в шапке «Свойств»): все теги одного объекта — на выбранные другие
 /** Не переносятся: type задаёт устройство отношения (мультиполигон, здание), а не свойства объекта. */
 const UNCOPIED_TAGS = new Set(['type']);
+/** Ключ неразмеченной площади в буфере тегов. */
+const FREE_AREA_CLIP = 'free-area/0';
 
 /**
  * Выбранные объекты, теги которых можно копировать и менять: части и контуры (в сессии), indoor-объекты плана
@@ -11715,6 +11718,8 @@ function tagClipTargets(): TagClipTarget[] {
     const key = `node/${selectedEntrance}`;
     return [{ key, tags: session.get(key)?.tags ?? entranceTags(selectedEntrance) ?? {} }];
   }
+  // Неразмеченная площадь: вставка тегов создаёт по ней объект (копировать с неё нечего)
+  if (freeArea && !selection.length && !indoorSelection.length) return [{ key: FREE_AREA_CLIP, tags: {} }];
   if (indoorSelection.length) return indoorSelection.filter((f) => !f.key.startsWith('level-new/')).map((f) => {
     const key = indoorKey(f.key);
     return { key, tags: session.get(key)?.tags ?? f.tags };
@@ -11724,6 +11729,8 @@ function tagClipTargets(): TagClipTarget[] {
 
 /** Записать теги выбранным объектам одним шагом истории — тем же путём, что их формы свойств. */
 function setClipTags(edits: TagClipTarget[]) {
+  // Этаж — тот, где площадь, а не источника тегов
+  if (edits[0]?.key === FREE_AREA_CLIP) { const { level: _l, repeat_on: _r, ...tags } = edits[0].tags; createFromFreeArea(tags); return; }
   if (selectedEntrance !== undefined) { for (const e of edits) setEntranceTags(selectedEntrance, e.tags); return; }
   if (indoorSelection.length) { setIndoorTags(edits); renderIndoorSelection(); return; }
   session.editMany(edits);
@@ -11732,7 +11739,7 @@ function setClipTags(edits: TagClipTarget[]) {
 function updateTagsClip() {
   const keys = tagClipTargets().map((t) => t.key);
   tagsClip.hidden = !keys.length && !copiedTags;
-  copyTagsBtn.disabled = keys.length !== 1;
+  copyTagsBtn.disabled = keys.length !== 1 || keys[0] === FREE_AREA_CLIP;
   pasteTagsBtn.disabled = !copiedTags || !keys.length || (keys.length === 1 && keys[0] === copiedTags.from);
   pasteTagsBtn.title = copiedTags ? tr('Вставить теги {key} ({n})', { key: copiedTags.from, n: Object.keys(copiedTags.tags).length }) : tr('Вставить теги');
 }

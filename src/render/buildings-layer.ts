@@ -1937,7 +1937,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         for (let k = 0; k < face.length / 3; k++) wallCols.push(c.r, c.g, c.b);
       }
       // Use the same 2 px cut outline for linear walls and solid polygon faces.
-      if (!omitCutTop) (!pale ? cutTopLines : lines).push(ax, ay, z1a, bx, by, z1b);
+      // У нижнего этажа верх среза — в плоскости пола выбранного: обводка просвечивала бы сквозь него
+      if (!omitCutTop && !pale) cutTopLines.push(ax, ay, z1a, bx, by, z1b);
       if (!this.graphics.edges) return;
       if (masks.length) for (const value of escalatorOpeningOutline(faces[0], masks)) openingEdges.push(value);
       // Реальные грани после вырезания дверей: конец соседней стены внутри
@@ -2227,6 +2228,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     /** Крышка сечения (колонна, стена-полигон, короб): на срезе, а под скатом — по скату; целиком над крышей — нет крышки. */
     const cap = (outer: Pt[], holes: Pt[][], z0: number, black = false) => {
+      // Нижний этаж срезан по полу выбранного: крышка легла бы в плоскость этого пола и мерцала с ним
+      if (pale) return;
       const colour = black && !pale ? 0x000000 : undefined;
       if (!shell) { fill(outer, holes, top, colour); return; }
       const zOf = (x: number, y: number) => Math.max(z0, Math.min(top, shell.at(x, y, z0) ?? top));

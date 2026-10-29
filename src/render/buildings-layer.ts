@@ -2567,7 +2567,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       ss.name = 'indoor-junction-edges';
       ss.frustumCulled = false;
       root.add(ss);
-      if (this.wireframe) {
+      // Только у выбранного этажа: пунктир без проверки глубины у нижних просвечивал бы сквозь пол
+      if (this.wireframe && !pale) {
         // Глубина тут не поможет (ребро в плоскости стены упора) — сторону решает тот же side, наоборот
         const hidden = new THREE.LineSegments(sg, JUNCTION_HIDDEN_MATERIAL);
         hidden.computeLineDistances();

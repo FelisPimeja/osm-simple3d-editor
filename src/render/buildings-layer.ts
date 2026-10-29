@@ -134,13 +134,16 @@ const SIDE_EYE = { value: new THREE.Vector3() };
  * оттуда не прячет. Атрибут side — нормаль этой плоскости в сторону своей стены: с другой стороны ребро не рисуется.
  * У прочих линий атрибута нет (0) — не отсекаются.
  */
-function withSideCull(material: THREE.LineBasicMaterial) {
+function withSideCull<T extends THREE.LineBasicMaterial>(material: T, back = false): T {
   material.onBeforeCompile = (shader) => {
     shader.uniforms.sideEye = SIDE_EYE;
     shader.vertexShader = 'attribute vec3 side;\nuniform vec3 sideEye;\n' + shader.vertexShader.replace('#include <project_vertex>',
-      '#include <project_vertex>\n  if (dot(sideEye - position, side) < 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);');
+      `#include <project_vertex>\n  if (dot(sideEye - position, side) ${back ? '>' : '<'} 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);`);
   };
+  return material;
 }
+/** Каркас: вертикаль стыка с обратной стороны стены упора — пунктиром, как прочие скрытые рёбра. */
+const JUNCTION_HIDDEN_MATERIAL = withSideCull(new THREE.LineDashedMaterial({ color: 0x555555, dashSize: 0.25, gapSize: 0.15, depthTest: false, depthWrite: false }), true);
 
 /** Floor contacts remain depth-tested, with a small bias against coplanar floor faces. */
 const FLOOR_CONTACT_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
@@ -2468,6 +2471,15 @@ export class BuildingsLayer implements CustomLayerInterface {
       ss.name = 'indoor-junction-edges';
       ss.frustumCulled = false;
       root.add(ss);
+      if (this.wireframe) {
+        // Глубина тут не поможет (ребро в плоскости стены упора) — сторону решает тот же side, наоборот
+        const hidden = new THREE.LineSegments(sg, JUNCTION_HIDDEN_MATERIAL);
+        hidden.computeLineDistances();
+        hidden.name = 'indoor-junction-hidden';
+        hidden.frustumCulled = false;
+        hidden.renderOrder = 998;
+        root.add(hidden);
+      }
     }
     if(floorContactEdges.length){
       const positions=trimIndoorBuildingEdges(new Float32Array(floorContactEdges),openingMasks);

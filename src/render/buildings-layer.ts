@@ -98,8 +98,8 @@ ENTRANCE_LINE_MATERIAL.onBeforeCompile = shader => {
 /** Вход на фасаде — того же размера, что проём двери на плане этажа: ширина по тегу width, иначе DOOR_WIDTH. */
 export const ENTRANCE_WIDTH = DOOR_WIDTH;
 export const ENTRANCE_HEIGHT = DOOR_HEIGHT;
-/** Насколько прямоугольник входа вынесен из плоскости стены, м. */
-const ENTRANCE_OFFSET = 0.03;
+/** Прямоугольник входа лежит в плоскости стены (как проём на плане этажа); от мерцания — сдвиг глубины материала. */
+const ENTRANCE_OFFSET = 0;
 /** Вход со скрытого объекта режима здания виден, если стоит не дальше этого от стены видимого, м. */
 const ENTRANCE_ON_WALL = 0.3;
 /** Расстояние от точки до отрезка ab. */

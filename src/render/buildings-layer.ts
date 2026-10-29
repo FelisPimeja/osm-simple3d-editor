@@ -2402,10 +2402,11 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     omitFloorSeam = false;
     omitCutTop = false;
-    // Дверь в просвете между двумя толстыми стенами (колонны, стены-полигоны): перемычка — объёмом на всю толщину.
+    // Дверь в просвете между двумя колоннами: перемычка — объёмом на всю толщину.
     // Стена помещения даёт её только с одной стороны — без низа, крышки и обратной грани проём сквозной
     {
-      const solids = items.filter((it) => !it.line && (it.kind === 'wall' || it.kind === 'column'))
+      // Только колонны: между стенами-полигонами (indoor=wall) проём даёт сама линейная стена, своей перемычкой
+      const solids = items.filter((it) => !it.line && it.kind === 'column')
         .flatMap((it) => it.polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => ({ z: it.z, ring: r.map(g.toLocal) }))));
       for (const door of doors) {
         const [px, py] = door.at;

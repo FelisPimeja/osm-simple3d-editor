@@ -69,6 +69,8 @@ const LINTEL_MAX_GAP = DOOR_WIDTH * 2 + 0.2;
 const LINTEL_MAX_DEPTH = 0.5;
 /** Плита под полом этажа — по сечению оболочки чуть выше пола, м. */
 const SLAB_PROBE = 0.1;
+/** Толщина перекрытия: потолок нижнего этажа — на столько ниже пола верхнего, м. */
+const SLAB_THICKNESS = 0.3;
 /** Насколько ниже потолка этажа проходит срез, м. */
 const CUT_BELOW_CEIL = 0.1;
 /** Части, начинающиеся не ниже этого под потолком этажа, считаются потолком (срез — под их днищем), м. */
@@ -1344,6 +1346,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       const mappedLevels: ClipMulti = this.level.items.filter(it => it.kind === 'level').flatMap(it => it.polygons.map(p =>
         [p.outer, ...p.inners].map(r => { const points = r.map(g.toLocal); return [...points, points[0]]; })));
       const floorSection = mappedLevels.length ? polygonClipping.union(mappedLevels[0], ...mappedLevels.slice(1)) : this.sectionAt(g, this.level.floor + SLAB_PROBE);
+      // Низ перекрытия (потолок нижнего этажа) — под всем сечением, кроме пустот: «додуманная» геометрия
+      let underside: ClipMulti = [];
+      try { underside = floorSection ? polygonClipping.difference(floorSection, ...holes, ...shafts, ...pools, ...stairs) : []; } catch (err) { console.warn('[levels] низ перекрытия не построен', err); }
       try { slab = floorSection ? polygonClipping.difference(floorSection, ...holes, ...shafts, ...pools, ...stairs, ...mappedFloors) : spans.length ? polygonClipping.difference(polygonClipping.union(spans[0], ...spans.slice(1)), ...holes, ...shafts, ...pools, ...stairs, ...mappedFloors) : []; } catch (err) { console.warn('[levels] плита не построена', err); }
       const pos: number[] = [];
       for (const poly of slab) {
@@ -1359,6 +1364,13 @@ export class BuildingsLayer implements CustomLayerInterface {
         const mesh = new THREE.Mesh(geo, INDOOR_SLAB_MATERIAL);
         mesh.frustumCulled = false;
         root.add(mesh);
+      }
+      const below = z - SLAB_THICKNESS, under: number[] = [];
+      for (const poly of underside) {
+        const v2 = (r: Pt[]) => r.slice(0, -1).map(([x, y]) => new THREE.Vector2(x, y));
+        const contour = v2(poly[0] as Pt[]), hs = poly.slice(1).map((r) => v2(r as Pt[]));
+        const pts = [...contour, ...hs.flat()];
+        for (const tri of THREE.ShapeUtils.triangulateShape(contour, hs)) for (const i of tri) under.push(pts[i].x, pts[i].y, below);
       }
       // Обводка пустот на уровне пола — край перекрытия
       const edge: number[] = [];
@@ -1383,7 +1395,21 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const poly of holes) for (const r of poly) for (let i = 0; i + 1 < r.length; i++) {
         const [ax,ay] = r[i], [bx,by] = r[i+1];
         for (const [lo,hi] of uncoveredSpans(ax,ay,bx,by,wallSpans,.03))
-          edge.push(ax+(bx-ax)*lo,ay+(by-ay)*lo,this.level.floor+.01,ax+(bx-ax)*hi,ay+(by-ay)*hi,this.level.floor+.01);
+        {
+          const [x0, y0, x1, y1] = [ax+(bx-ax)*lo, ay+(by-ay)*lo, ax+(bx-ax)*hi, ay+(by-ay)*hi], f = this.level.floor, b = f - SLAB_THICKNESS;
+          edge.push(x0, y0, f, x1, y1, f, x0, y0, b, x1, y1, b);
+          // Торец перекрытия у пустоты
+          under.push(x0, y0, b, x1, y1, b, x1, y1, f, x0, y0, b, x1, y1, f, x0, y0, f);
+        }
+      }
+      if (under.length) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(under, 3));
+        geo.computeVertexNormals();
+        const mesh = new THREE.Mesh(geo, INDOOR_SLAB_MATERIAL);
+        mesh.name = 'indoor-slab-underside';
+        mesh.frustumCulled = false;
+        root.add(mesh);
       }
       const eg = new THREE.BufferGeometry();
       eg.setAttribute('position', new THREE.Float32BufferAttribute(edge, 3));

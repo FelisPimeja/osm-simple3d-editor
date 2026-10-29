@@ -123,6 +123,11 @@ const THIN_HOLE_WIDTH = 0.6;
 const FLOOR_EDGE_LIFT = 0.055;
 const WALL_MERGE_COS = Math.cos(THREE.MathUtils.degToRad(10));
 const INDOOR_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
+/** Floor contacts remain depth-tested, with a small bias against coplanar floor faces. */
+const FLOOR_CONTACT_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
+FLOOR_CONTACT_MATERIAL.onBeforeCompile = shader => {
+  shader.vertexShader=shader.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n gl_Position.z -= 2e-6 * gl_Position.w;');
+};
 /** Этаж под вторым светом — бледнее: стены и крышки высветлены, полы смешаны с белым, линии светлее. */
 const INDOOR_PALE_WALL = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x777777, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 const INDOOR_PALE_LINE = new THREE.LineBasicMaterial({ color: 0xc4c0bb });
@@ -1786,10 +1791,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     /** Контур проёмов эскалаторов — добавляется после обрезки рёбер масками (иначе их срежет). */
     const openingEdges: number[] = [];
     const edges: number[] = [];
+    const floorContactEdges: number[] = [];
     const cutTopLines: number[] = [];
     const continuingRooms = new Set(!pale ? items.filter(it => it.kind === 'room' && this.level?.below?.some(b => b.items.some(other => other.key === it.key && other.kind === 'room'))).map(it => it.key) : []);
     let omitFloorSeam = false;
     let facadeFloorEdge = false;
+    /** Ребро самого фасада: низ на полу рисуется всегда — и там, где у фасада нет помещения. */
+    let facadeOwnFloorEdge = false;
     let omitCutTop = false;
     const continuesAbove = (it: IndoorItem) => pale && !!this.level?.items.some(other => other.key === it.key && other.noFloor);
     let linearCutTop = true;
@@ -1811,9 +1819,13 @@ export class BuildingsLayer implements CustomLayerInterface {
         this.indoorEdgeOccluders.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
         // A facade can own the wall face, but the indoor wall still owns its
         // floor contact. Preserve that edge without recreating the face.
-        if (facadeFloorEdge && !omitFloorSeam && Math.abs(z0 - floorLevel) < 1e-3 && !uncovered(ax, ay, bx, by).length) {
-          const z = Math.abs(z0 - floorLevel) < 1e-3 ? z0 + FLOOR_EDGE_LIFT : z0;
-          edges.push(ax, ay, z, bx, by, z);
+        if (facadeOwnFloorEdge ? Math.abs(z0 - floorLevel) < 1e-3
+          : facadeFloorEdge && !omitFloorSeam && Math.abs(z0 - floorLevel) < 1e-3 && !uncovered(ax, ay, bx, by).length) {
+          const z = z0 + FLOOR_EDGE_LIFT;
+          // Низ по фасаду уже нарисован самим фасадом — стене помещения остаются только участки вне фасада.
+          const spans: [number, number][] = facadeOwnFloorEdge ? [[0, 1]] : uncovered(ax, ay, bx, by, facadeFloor.near(ax, ay, bx, by));
+          for (const [t0, t1] of spans)
+            floorContactEdges.push(ax + (bx - ax) * t0, ay + (by - ay) * t0, z, ax + (bx - ax) * t1, ay + (by - ay) * t1, z);
         }
         return;
       }
@@ -1846,7 +1858,10 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
       // Низ стены на полу — чуть выше всех слоёв пола (до +0.05 у помещений), иначе пол закрывает ребро
       const zEdge = Math.abs(z0 - floorLevel) < 1e-3 ? z0 + FLOOR_EDGE_LIFT : z0;
-      if (!omitFloorSeam) edges.push(ax, ay, zEdge, bx, by, zEdge);
+      if (!omitFloorSeam) {
+        const target=Math.abs(z0-floorLevel)<1e-3?floorContactEdges:edges;
+        target.push(ax, ay, zEdge, bx, by, zEdge);
+      }
       if (!ends) return; // перемычка над проёмом: вертикали дают откосы соседних кусков
       const l = Math.hypot(bx - ax, by - ay) || 1;
       end(ax, ay, z0, Math.min(z1a, jambA), (bx - ax) / l, (by - ay) / l, l);
@@ -1994,16 +2009,21 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Уже стоящие стены: периметр объектов здания и стены-линии; стены помещений, совпадающие с ними, — пропускаем
     // Сетка 4 м: стена сравнивается только со стенами из соседних ячеек (иначе тысячи × тысячи сравнений)
     type Seg = PlanSeg;
-    const grid = new Map<string, Seg[]>();
     const cells = planCells;
-    const taken = {
-      push(sg: Seg) { for (const c of cells(...sg, 0)) (grid.get(c) ?? grid.set(c, []).get(c)!).push(sg); },
-      near(x0: number, y0: number, x1: number, y1: number): Set<Seg> {
-        const out = new Set<Seg>();
-        for (const c of cells(x0, y0, x1, y1, WALL_MERGE_DIST)) for (const sg of grid.get(c) ?? []) out.add(sg);
-        return out;
-      },
+    const segGrid = () => {
+      const grid = new Map<string, Seg[]>();
+      return {
+        push(sg: Seg) { for (const c of cells(...sg, 0)) (grid.get(c) ?? grid.set(c, []).get(c)!).push(sg); },
+        near(x0: number, y0: number, x1: number, y1: number): Set<Seg> {
+          const out = new Set<Seg>();
+          for (const c of cells(x0, y0, x1, y1, WALL_MERGE_DIST)) for (const sg of grid.get(c) ?? []) out.add(sg);
+          return out;
+        },
+      };
     };
+    const taken = segGrid();
+    /** Фасадные рёбра, у которых низ на полу уже нарисован фасадом. */
+    const facadeFloor = segGrid();
     // Общая граница двух непрозрачных частей рядом (перекрываются по высоте) — стык, а не фасад: стены там нет, стену помещения
     // (колонны) она не заменяет. Части друг над другом с тем же контуром (фасад поясами) — фасад: высоту этажа
     // закрывают вместе
@@ -2081,7 +2101,10 @@ export class BuildingsLayer implements CustomLayerInterface {
           edgeOcclusionOnly = true;
           const previousLinear: boolean = linearCutTop;
           linearCutTop = true;
+          facadeOwnFloorEdge = true;
           wall(...a, ...b, Math.max(z0, lo), Math.min(top, hi), Math.min(top, hi), true);
+          facadeOwnFloorEdge = false;
+          facadeFloor.push([...a, ...b]);
           linearCutTop = previousLinear;
           edgeOcclusionOnly = false;
           taken.push([...a, ...b]);
@@ -2301,6 +2324,23 @@ export class BuildingsLayer implements CustomLayerInterface {
       const es = new THREE.LineSegments(eg, pale ? INDOOR_PALE_LINE : EDGE_MATERIAL);
       es.frustumCulled = false;
       root.add(es);
+    }
+    if(floorContactEdges.length){
+      const positions=trimIndoorBuildingEdges(new Float32Array(floorContactEdges),openingMasks);
+      let line: THREE.LineSegments | LineSegments2;
+      if(this.map){
+        const canvas=this.map.getCanvas(),dpr=canvas.width/Math.max(1,canvas.clientWidth);
+        const geo=new LineSegmentsGeometry();geo.setPositions(positions);
+        const material=new LineMaterial({color:pale?INDOOR_PALE_LINE.color.getHex():0x57534e,linewidth:dpr,depthWrite:false});
+        material.resolution.set(canvas.width,canvas.height);
+        material.onBeforeCompile=shader=>{shader.vertexShader=shader.vertexShader.replace('gl_Position = clip;', 'gl_Position = clip; gl_Position.z -= 2e-6 * gl_Position.w;');};
+        line=new LineSegments2(geo,material);
+      }else{
+        const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.BufferAttribute(positions,3));
+        line=new THREE.LineSegments(geo,pale?INDOOR_PALE_LINE:FLOOR_CONTACT_MATERIAL);
+      }
+      line.name='indoor-floor-contact';line.frustumCulled=false;line.renderOrder=999;
+      root.add(line);
     }
     if (cutTopLines.length && this.map) {
       const positions = trimIndoorBuildingEdges(new Float32Array(cutTopLines), openingMasks);

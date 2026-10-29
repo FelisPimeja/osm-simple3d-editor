@@ -7600,7 +7600,39 @@ function focusLevels(g: BuildingGroup, info: Map<number, LevelInfo> = new Map())
     };
     for (const l of partLevels({ min: h.min, wallTop: h.wallTop, levels, minLevel, under, step }, info)) add(l.n, l.floor, l.ceil, l.explicit, l.overflow);
   }
+  joinLevels([...byN.values()]);
   return [...byN.values()].map(({ n, floor, ceil, src, explicit, overflow }) => ({ n, floor, ceil, src, explicit, ...(overflow ? { overflow } : {}) })).sort((a, b) => b.n - a.n);
+}
+
+/**
+ * Этажи от разных частей — встык: пол этажа на потолке нижнего. Зазор или нахлёст между соседями исправляет
+ * менее надёжный: верхний сдвигается целиком (часть без высоты: 3×3.5 м над частью с явной высотой), у нижнего
+ * потолок доходит до пола верхнего (одноэтажная пристройка со скатом, стены 2 м, под частью с min_height=3).
+ * relation/17946187. Этажи из indoor=level не трогаем.
+ */
+function joinLevels(levels: (Level & { rank: number })[]) {
+  const rank = (l: Level & { rank: number }) => l.explicit ? Infinity : l.rank;
+  const byN = new Map(levels.map((l) => [l.n, l]));
+  const ns = levels.map((l) => l.n).sort((a, b) => a - b);
+  // Вверх от нулевого: надземные
+  for (const n of ns) {
+    if (n < 0) continue;
+    const a = byN.get(n), b = byN.get(n + 1);
+    if (!a || !b || Math.abs(b.floor - a.ceil) < 0.01) continue;
+    if (rank(b) < rank(a) || (b.explicit && a.explicit)) {
+      if (b.explicit) continue;
+      const h = b.ceil - b.floor;
+      b.floor = a.ceil; b.ceil = a.ceil + h;
+    } else if (!a.explicit && b.floor - a.floor >= MIN_LEVEL_STEP && b.floor - a.floor <= MAX_LEVEL_STEP) a.ceil = b.floor;
+  }
+  // Вниз от нулевого: подземные
+  for (const n of [...ns].reverse()) {
+    if (n > 0) continue;
+    const a = byN.get(n - 1), b = byN.get(n);
+    if (!a || !b || a.explicit || Math.abs(b.floor - a.ceil) < 0.01) continue;
+    const h = a.ceil - a.floor;
+    a.ceil = b.floor; a.floor = b.floor - h;
+  }
 }
 
 /**

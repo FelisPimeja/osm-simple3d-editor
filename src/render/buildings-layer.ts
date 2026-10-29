@@ -123,8 +123,12 @@ const PALE_PLAN_CACHE = 24;
 const SOLID_MERGE_DIST = 0.03;
 /** Внутренний контур помещения тоньше этого, м, — стена (объём с крышкой), а не проём. */
 const THIN_HOLE_WIDTH = 0.6;
-/** Отступ внутрь цветной грани помещения на фасаде от плоскости оболочки здания. */
-const FACADE_TINT_INSET = 0.02;
+/**
+ * Цветная грань помещения на фасаде изнутри — в плоскости стены здания: односторонняя (снаружи не видна),
+ * у оболочки выигрывает сдвигом глубины к камере.
+ */
+const FACADE_TINT_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.FrontSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+const FACADE_TINT_PALE = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x777777, side: THREE.FrontSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
 const WALL_MERGE_COS = Math.cos(THREE.MathUtils.degToRad(10));
 const INDOOR_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
 /** Положение камеры в локальных координатах сцены режима здания (обновляется перед её отрисовкой). */
@@ -1837,6 +1841,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const walls: number[] = [];
     /** Цвета вершин стен: каждая сторона — цветом помещения, в которое смотрит. */
     const wallCols: number[] = [];
+    /** Цветные грани помещений на фасаде (FACADE_TINT_MATERIAL). */
+    const tintWalls: number[] = [], tintCols: number[] = [];
     // Полы с цветом назначения (локальные кольца, габарит; помещения раньше коридоров и площадок — меньшие сверху)
     const tinted = items.filter((it) => it.colour !== undefined && !it.line && !it.cutOnly).sort((a, b) => order.indexOf(b.kind) - order.indexOf(a.kind))
       .flatMap((it) => it.polygons.map((p) => {
@@ -1888,20 +1894,18 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (edgeOcclusionOnly) {
         this.indoorEdgeOccluders.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
         if (facadeOwnFloorEdge && !doorGap) {
-          // Стену здания рисует оболочка; изнутри фасад красится в цвет помещения —
-          // гранью чуть внутрь от плоскости фасада, чтобы не мерцать с оболочкой.
+          // Стену здания рисует оболочка; изнутри фасад красится в цвет помещения своей гранью в той же плоскости
           const l0 = Math.hypot(bx - ax, by - ay) || 1, ux = (by - ay) / l0, uy = -(bx - ax) / l0;
           const mx = (ax + bx) / 2, my = (ay + by) / 2;
           for (const side of [1, -1]) {
             const c = sideColour(mx + side * ux * WALL_SIDE_PROBE, my + side * uy * WALL_SIDE_PROBE);
             if (c === WHITE_WALL) continue;
-            const ox = side * ux * FACADE_TINT_INSET, oy = side * uy * FACADE_TINT_INSET;
-            const [px, py, qx, qy] = [ax + ox, ay + oy, bx + ox, by + oy];
+            const [px, py, qx, qy] = [ax, ay, bx, by];
             const face = side > 0
               ? [px, py, z0, qx, qy, z0, qx, qy, z1b, px, py, z0, qx, qy, z1b, px, py, z1a]
               : [px, py, z0, qx, qy, z1b, qx, qy, z0, px, py, z0, px, py, z1a, qx, qy, z1b];
-            for (const value of face) walls.push(value);
-            for (let k = 0; k < 6; k++) wallCols.push(c.r, c.g, c.b);
+            for (const value of face) tintWalls.push(value);
+            for (let k = 0; k < 6; k++) tintCols.push(c.r, c.g, c.b);
           }
         }
         // A facade can own the wall face, but the indoor wall still owns its
@@ -2383,6 +2387,16 @@ export class BuildingsLayer implements CustomLayerInterface {
       geo.setAttribute('color', new THREE.Float32BufferAttribute(wallCols, 3));
       geo.computeVertexNormals();
       const mesh = new THREE.Mesh(geo, pale ? INDOOR_PALE_WALL : INDOOR_WALL_MATERIAL);
+      mesh.frustumCulled = false;
+      root.add(mesh);
+    }
+    if (tintWalls.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(tintWalls, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(tintCols, 3));
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, pale ? FACADE_TINT_PALE : FACADE_TINT_MATERIAL);
+      mesh.name = 'indoor-facade-tint';
       mesh.frustumCulled = false;
       root.add(mesh);
     }

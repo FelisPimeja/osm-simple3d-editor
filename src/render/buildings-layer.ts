@@ -684,6 +684,9 @@ export class BuildingsLayer implements CustomLayerInterface {
   setWireframe(on: boolean) {
     if (on === this.wireframe) return;
     this.wireframe = on;
+    // В каркасе скрытое и так пунктиром: подземный контур виден целиком, а не только где перед ним нет граней
+    UNDERGROUND_MATERIAL.depthTest = !on;
+    UNDERGROUND_MATERIAL.needsUpdate = true;
     this.setGraphics({ ...this.graphics, edges: this.userEdges });
     if (this.level) { this.applyLevel(); this.applyIndoorSelection(); }
     this.updateHiddenEdges();

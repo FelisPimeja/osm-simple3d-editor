@@ -481,7 +481,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .snap-marker.shape { background: #db2777; border-radius: 50%; box-shadow: 0 0 0 3px rgba(219,39,119,.25); }
 
 /* Значки точечных объектов плана этажа (входы, лифты, туалеты, магазины) — как в indoorequal */
-.indoor-pois { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.indoor-pois { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; } /* свой контекст наложения: выделенный значок не выше панелей */
 .indoor-poi { cursor: pointer; position: absolute; left: 0; top: 0; width: 20px; height: 20px; margin: -10px 0 0 -10px; padding: 3px; box-sizing: border-box;
   background: #fff; border: 1px solid #9ca3af; border-radius: 50%; color: #374151; pointer-events: auto; }
 .indoor-poi[hidden] { display: none; }

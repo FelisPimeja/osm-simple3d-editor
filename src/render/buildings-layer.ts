@@ -216,9 +216,9 @@ const EDGE_ANGLE = 25;
 /** Сдвиг вертикали в конце стены внутрь неё, м: за примыкающей стеной вертикаль не просвечивает. */
 const EDGE_INSET = 0.03;
 /** Пунктир подземной части здания: виден только не закрытый зданием участок (земля карты глубину не пишет). */
-const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, dashSize: 0.8, gapSize: 0.5, depthWrite: false, transparent: true, opacity: 0.85 });
+const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, dashSize: 0.25, gapSize: 0.15, depthWrite: false, transparent: true, opacity: 0.85 });
 /** Выбранный контур подземной части — целиком, сквозь здание. */
-const UNDERGROUND_SELECTED = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.8, gapSize: 0.5, depthTest: false, depthWrite: false, transparent: true });
+const UNDERGROUND_SELECTED = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.25, gapSize: 0.15, depthTest: false, depthWrite: false, transparent: true });
 /** Насколько близко к пунктиру подземной части выбирает клик, px. */
 const UNDERGROUND_PICK_PX = 6;
 /** Вершина контура на прямой (поворот меньше этого, рад) — не угол: ни вертикали, ни разрыва пунктира. */

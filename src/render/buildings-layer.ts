@@ -1406,7 +1406,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(under, 3));
         geo.computeVertexNormals();
-        const mesh = new THREE.Mesh(geo, INDOOR_SLAB_MATERIAL);
+        const mesh = decor(new THREE.Mesh(geo, INDOOR_SLAB_MATERIAL));
         mesh.name = 'indoor-slab-underside';
         mesh.frustumCulled = false;
         root.add(mesh);
@@ -5684,6 +5684,17 @@ const FACADE_GAP = 0.5;
 const PLAN_ORDER: IndoorKind[] = ['level', 'area', 'corridor', 'room', 'column', 'wall'];
 /** Пол — на отметке этажа; наложения видов разведены partitionFloors, а не высотой. */
 const planFloorZ = (it: IndoorItem) => it.z;
+
+/**
+ * «Додуманная» геометрия — только для вида (потолок нижнего этажа, торцы перекрытий): её нет в данных,
+ * поэтому к ней нет привязки, выбора и наведения. Такие объекты не попадают в привязки (snaps, indoorSnaps),
+ * окклюдеры рёбер и блокеры стекла; raycast у них пустой.
+ */
+export function decor<T extends THREE.Object3D>(o: T): T {
+  o.userData.decor = true;
+  o.raycast = () => {};
+  return o;
+}
 
 /** Номер объекта для ключей кешей (по идентичности). */
 const objIds = new WeakMap<object, number>();

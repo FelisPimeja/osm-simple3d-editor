@@ -679,10 +679,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (pass === 'all') return () => {};
     DEPTH_ONLY_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
     const fills = g.entranceObj?.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh && !o.userData.entrancePoint) ?? [];
-    const planFills: THREE.Mesh[] = [];
-    if (g === this.groups.get(FOCUS_GROUP)) for (const root of [this.indoorObj, this.indoorSelObj]) root?.traverseVisible(o => {
-      if (o instanceof THREE.Mesh && !(o.material instanceof LineMaterial)) planFills.push(o);
-    });
+    const planFills: THREE.Mesh[] = [], tints: THREE.Mesh[] = [];
+    if (g === this.groups.get(FOCUS_GROUP)) {
+      for (const root of [this.indoorObj, this.indoorSelObj]) root?.traverseVisible(o => {
+        if (!(o instanceof THREE.Mesh) || o.material instanceof LineMaterial) return;
+        // Цветная грань фасада в каркасе не нужна, а в глубину она мерцала бы с оболочкой и заливкой выделения части
+        (o.name === 'indoor-facade-tint' ? tints : planFills).push(o);
+      });
+    }
+    for (const o of tints) o.visible = false;
     const swapped = [g.mesh, g.glass, ...fills, ...planFills].filter((o): o is THREE.Mesh => !!o).map((o) => [o, o.material, o.renderOrder] as const);
     for (const [o] of swapped) { o.material = DEPTH_ONLY_MATERIAL; o.renderOrder = -1000; }
     // Половина прохода: прячем то, что рисует другая половина
@@ -700,7 +705,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     return () => {
       for (const [o, m, order] of swapped) { o.material = m; o.renderOrder = order; }
-      for (const o of hidden) o.visible = true;
+      for (const o of [...hidden, ...tints]) o.visible = true;
     };
   }
 

@@ -23,10 +23,11 @@ test('wire pass removes indoor wall and floor colours while preserving depth and
  const fills=[];layer.indoorObj.traverse(o=>{if(o instanceof THREE.Mesh&&!o.material.isLineMaterial)fills.push([o,o.material,o.renderOrder]);});
  assert.ok(fills.length>=2);
  const restore=layer.filterPass(g,'wire');
- for(const [o] of fills){assert.equal(o.material.colorWrite,false);assert.equal(o.material.depthWrite,true);assert.equal(o.renderOrder,-1000);}
+ // Цветная грань фасада в каркасе спрятана (в глубину она мерцала бы с оболочкой), остальные — только глубина
+ for(const [o] of fills){if(o.name==='indoor-facade-tint'){assert.equal(o.visible,false);continue;}assert.equal(o.material.colorWrite,false);assert.equal(o.material.depthWrite,true);assert.equal(o.renderOrder,-1000);}
  assert.equal(g.wireHidden.material.depthFunc,THREE.GreaterDepth);
  assert.ok(g.wireHidden.geometry.getAttribute('lineDistance'));
- restore();for(const [o,m,order] of fills){assert.equal(o.material,m);assert.equal(o.renderOrder,order);}
+ restore();for(const [o,m,order] of fills){assert.equal(o.material,m);assert.equal(o.renderOrder,order);assert.equal(o.visible,true);}
  layer.setWireframe(false);assert.equal(g.wireHidden,undefined);
 });
 for(const wire of [false,true])test(`current floor keeps exterior corner ribs, wireframe=${wire}`,()=>{

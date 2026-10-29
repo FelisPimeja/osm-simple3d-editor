@@ -1348,7 +1348,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       const floorSection = mappedLevels.length ? polygonClipping.union(mappedLevels[0], ...mappedLevels.slice(1)) : this.sectionAt(g, this.level.floor + SLAB_PROBE);
       // Низ перекрытия (потолок нижнего этажа) — под всем сечением, кроме пустот: «додуманная» геометрия
       let underside: ClipMulti = [];
-      try { underside = floorSection ? polygonClipping.difference(floorSection, ...holes, ...shafts, ...pools, ...stairs) : []; } catch (err) { console.warn('[levels] низ перекрытия не построен', err); }
+      // Под нижним этажом потолка нет: низ плиты торчал бы из-под фасада
+      if (this.level.below?.length) try { underside = floorSection ? polygonClipping.difference(floorSection, ...holes, ...shafts, ...pools, ...stairs) : []; } catch (err) { console.warn('[levels] низ перекрытия не построен', err); }
       try { slab = floorSection ? polygonClipping.difference(floorSection, ...holes, ...shafts, ...pools, ...stairs, ...mappedFloors) : spans.length ? polygonClipping.difference(polygonClipping.union(spans[0], ...spans.slice(1)), ...holes, ...shafts, ...pools, ...stairs, ...mappedFloors) : []; } catch (err) { console.warn('[levels] плита не построена', err); }
       const pos: number[] = [];
       for (const poly of slab) {

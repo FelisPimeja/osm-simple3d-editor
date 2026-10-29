@@ -192,14 +192,22 @@ test('a low sloping annex still has an explicit stairwell void at its upper floo
  assert.deepEqual(voids[0].through,[-1]);
 });
 
-test('slab underside is 0.3 m below the floor and is decor-only geometry',async()=>{
+test('slab underside (ceiling of the floor below) is 0.3 m below the floor and is decor-only geometry',async()=>{
  const {BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts');
  const layer=new BuildingsLayer('test'),ll=([x,y])=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
  layer.setFocus([{key:'way/1',id:1,type:'way',version:1,kind:'building',hasParts:false,tags:{building:'yes',height:'9'},polygons:[{outer:outer.map(ll),inners:[]}]}]);
- layer.setLevel({floor:3,cut:6,items:[],doors:[],voids:[[hole.map(ll)]]});
+ layer.setLevel({floor:3,cut:6,items:[],doors:[],voids:[[hole.map(ll)]],below:[{cut:3,items:[{key:'below',kind:'room',z:0,polygons:[{outer:hole.map(ll),inners:[]}]}]}]});
  const under=layer.indoorObj.getObjectByName('indoor-slab-underside');
  assert.ok(under);assert.equal(under.userData.decor,true);
  const zs=new Set(Array.from(under.geometry.getAttribute('position').array).filter((_,i)=>i%3===2).map(z=>Math.round(z*1000)/1000));
  assert.deepEqual([...zs].sort(),[2.7,3]);
  const hits=[];under.raycast(null,hits);assert.equal(hits.length,0);
+});
+
+test('the lowest floor has no slab underside sticking out under the facade',async()=>{
+ const {BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts');
+ const layer=new BuildingsLayer('test'),ll=([x,y])=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ layer.setFocus([{key:'way/1',id:1,type:'way',version:1,kind:'building',hasParts:false,tags:{building:'yes',height:'9'},polygons:[{outer:outer.map(ll),inners:[]}]}]);
+ layer.setLevel({floor:0,cut:3,items:[],doors:[]});
+ assert.equal(layer.indoorObj.getObjectByName('indoor-slab-underside'),undefined);
 });

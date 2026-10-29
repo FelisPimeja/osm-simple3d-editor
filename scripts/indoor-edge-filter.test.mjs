@@ -33,6 +33,11 @@ for (const floor of [-3, -6, -9]) test(`short nearly straight wall segments at $
 
 // A room wall can end midway along a column face after overlapping pieces are removed.
 // Its endpoint must not create a seam on the column; exposed ends and door jambs remain.
+// Откос проёма — толстая линия (LineSegments2, нужна карта); тонкая вертикаль конца стены рядом с ней не рисуется
+const stubMap = layer => { layer.map = { getCanvas: () => ({ width: 800, height: 600, clientWidth: 800 }), triggerRepaint() {} }; };
+const linePositions = o => o.type === 'LineSegments2' ? o.geometry.getAttribute('instanceStart').data.array
+  : o.type === 'LineSegments' ? o.geometry.getAttribute('position').array : undefined;
+
 for (const pale of [false, true]) test(`overlapping coplanar indoor faces have no endpoint seams, pale=${pale}`, async () => {
   const THREE = await import('three');
   const layer = new BuildingsLayer('test');
@@ -41,6 +46,7 @@ for (const pale of [false, true]) test(`overlapping coplanar indoor faces have n
     polygons: [{ outer: [[0, 0], [4, 0], [4, 1], [0, 1]], inners: [] }] };
   const wall = { key: 'wall', kind: 'wall', line: true, z: 0,
     polygons: [{ outer: [[1, 0], [3, 0]], inners: [] }] };
+  stubMap(layer);
   const g = { toLocal: p => p, items: [], hidden: new Set(), flat: new Set() };
   const verticalXs = (doors, cut = 3) => {
     const root = new THREE.Group();
@@ -48,18 +54,18 @@ for (const pale of [false, true]) test(`overlapping coplanar indoor faces have n
     layer.drawPlan(root, g, [column, wall], doors, cut, pale);
     const xs = [];
     root.traverse(o => {
-      if (o.type !== 'LineSegments') return;
-      const p = o.geometry.getAttribute('position').array;
+      const p = linePositions(o);
+      if (!p) return;
       for (let i = 0; i < p.length; i += 6)
         if (Math.abs(p[i] - p[i+3]) < 1e-6 && Math.abs(p[i+1]) < 1e-6 && Math.abs(p[i+1] - p[i+4]) < 1e-6 && Math.abs(p[i+2] - p[i+5]) > .1) xs.push(p[i]);
     });
-    return xs.sort((a,b) => a-b);
+    return [...new Set(xs.map(x => Math.round(x * 1000) / 1000))].sort((a,b) => a-b);
   };
   assert.deepEqual(verticalXs([]), [0, 4]);
   const jambs = verticalXs([[2, 0]], 2);
   assert.equal(jambs.length, 4);
-  assert.ok(jambs.some(x => Math.abs(x - 1.47) < .001));
-  assert.ok(jambs.some(x => Math.abs(x - 2.53) < .001));
+  assert.ok(jambs.some(x => Math.abs(x - 1.5) < .001));
+  assert.ok(jambs.some(x => Math.abs(x - 2.5) < .001));
 });
 
 for (const pale of [false, true]) test(`segmented wall jambs stop below the lintel, pale=${pale}`, async () => {
@@ -71,12 +77,13 @@ for (const pale of [false, true]) test(`segmented wall jambs stop below the lint
   const item = { key: 'column', kind: 'column', z: 0, polygons: [{
     outer: [[0, 0], [1.65, 0], [2, 0], [2.35, 0], [4, 0], [4, 1], [0, 1]], inners: [] }] };
   layer.level = { floor: 0, cut: 3, items: [item] };
+  stubMap(layer);
   const root = new THREE.Group();
   layer.drawPlan(root, { toLocal: p => p, items: [], hidden: new Set(), flat: new Set() }, [item], [[2, 0]], 3, pale);
   const jambs = [];
   root.traverse(o => {
-    if (o.type !== 'LineSegments') return;
-    const p = o.geometry.getAttribute('position').array;
+    const p = linePositions(o);
+    if (!p) return;
     for (let i = 0; i < p.length; i += 6) {
       if (p[i] < 1 || p[i] > 3 || Math.abs(p[i+1]) > 1e-6 || Math.abs(p[i] - p[i+3]) > 1e-6 || Math.abs(p[i+2] - p[i+5]) < .1) continue;
       jambs.push([p[i+2], p[i+5]]);

@@ -2408,7 +2408,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     if (edges.length || openingEdges.length) {
       const eg = new THREE.BufferGeometry();
-      const trimmed = trimIndoorBuildingEdges(new Float32Array(edges), openingMasks);
+      // У откоса проёма есть толстая линия: вертикаль конца стены (сдвинута внутрь на EDGE_INSET) рядом с ней — лишняя
+      const jambs = new Float32Array(cutTopLines.filter((_, i) => { const k = i - i % 6; return Math.abs(cutTopLines[k + 2] - cutTopLines[k + 5]) > 1e-3; }));
+      const trimmed = dropCoveredSegments(trimIndoorBuildingEdges(new Float32Array(edges), openingMasks), jambs, EDGE_INSET + 0.005);
       const all = new Float32Array(trimmed.length + openingEdges.length);
       all.set(trimmed); all.set(openingEdges, trimmed.length);
       eg.setAttribute('position', new THREE.BufferAttribute(all, 3));

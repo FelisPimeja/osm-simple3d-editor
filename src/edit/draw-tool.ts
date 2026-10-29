@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
+import type { BuildingsLayer, SnapHit, SnapKind } from '../render/buildings-layer';
 import { tr } from '../i18n';
 
 type Pt = [number, number];
@@ -331,6 +331,13 @@ export class DrawTool {
       this.finish((c ? circleRing(c.c, c.r, circleSegments(c.r)) : this.roundRing(this.pts[0], this.pts[1], true)) ?? []);
       return;
     }
+    // Разрез, доведённый до другой линии (стены, стороны помещения), завершается сам, если уже что-то рассекает;
+    // не рассекает (точка посреди помещения, ещё не насквозь) — ждём следующую точку
+    if (this.shape === 'line' && this.pts.length >= 2 && this.snap && ON_LINE.includes(this.snap.kind) && !this.commit(this.pts, this.z)) {
+      this.reset();
+      this.hint();
+      return;
+    }
     if (this.shape === 'rect') {
       const need = this.rectMode === 'three' ? 3 : 2;
       if (this.pts.length === need) { this.finish(this.rectRing(this.pts)!); return; }
@@ -554,7 +561,7 @@ export class DrawTool {
     }
     if (this.shape === 'line') {
       this.onState(this.pts.length
-        ? tr('Разрез: следующая точка; Enter или клик в последнюю точку — рассечь, Backspace — убрать точку, Esc — отмена.')
+        ? tr('Разрез: следующая точка (на стене — рассечь сразу); Enter или клик в последнюю точку — рассечь, Backspace — убрать точку, Esc — отмена.')
         : tr('Рассечь план: проведите линию через помещение или пустую площадь — от стены до стены. Esc — выйти.'));
       return;
     }
@@ -573,6 +580,9 @@ export class DrawTool {
       { mode: RECT_TITLES[this.rectMode], step, esc: this.pts.length ? tr('отмена') : tr('выйти') }));
   }
 }
+
+/** Привязки на существующей линии: разрез, закончившийся на них, пробует рассечь сразу. */
+const ON_LINE: SnapKind[] = ['vertex', 'midpoint', 'edge', 'perpendicular'];
 
 /** Круг: n точек окружности (центр c, радиус r). */
 function circleRing(c: Pt, r: number, n: number): Pt[] {

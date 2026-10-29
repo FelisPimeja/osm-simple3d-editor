@@ -1866,6 +1866,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     let facadeFloorEdge = false;
     /** Ребро самого фасада: низ на полу рисуется всегда — и там, где у фасада нет помещения. */
     let facadeOwnFloorEdge = false;
+    /** Кусок стены в просвете двери: только для отсечения рёбер — без цветной грани фасада. */
+    let doorGap = false;
     let omitCutTop = false;
     const continuesAbove = (it: IndoorItem) => pale && !!this.level?.items.some(other => other.key === it.key && other.noFloor);
     let linearCutTop = true;
@@ -1885,7 +1887,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, ends = true, jambA = Infinity, jambB = Infinity) => {
       if (edgeOcclusionOnly) {
         this.indoorEdgeOccluders.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
-        if (facadeOwnFloorEdge) {
+        if (facadeOwnFloorEdge && !doorGap) {
           // Стену здания рисует оболочка; изнутри фасад красится в цвет помещения —
           // гранью чуть внутрь от плоскости фасада, чтобы не мерцать с оболочкой.
           const l0 = Math.hypot(bx - ax, by - ay) || 1, ux = (by - ay) / l0, uy = -(bx - ax) / l0;
@@ -2047,7 +2049,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         // Отступ только от настоящих откосов, а не от стыков ways внутри двери.
         const a = lo + (lo > 1e-6 ? 0.005 / len : 0);
         const b = hi - (hi < 1 - 1e-6 ? 0.005 / len : 0);
+        doorGap = true;
         if (b > a) slab(...at(a), ...at(b), z0, Math.min(lintel, z1(a)), Math.min(lintel, z1(b)), false);
+        doorGap = false;
         }
         edgeOcclusionOnly = previous;
       }

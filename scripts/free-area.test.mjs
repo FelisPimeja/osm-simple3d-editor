@@ -30,3 +30,13 @@ test('door closes only its actual opening, not an arbitrary gap',()=>{
  assert.equal(freeAreaPieces(box,[],walls,[{at:[5,2],width:1}]).length,2);
  assert.equal(freeAreaPieces(box,[],walls,[{at:[5,3],width:1}]).length,1);
 });
+
+// way/1572293454, way/1572293457: a wall or door bridge ending inside the empty space left a zero-width slit A→B→A
+// in the piece, and the polygon wall made from it got a self-overlapping tail (double jamb, missing end faces).
+test('despike removes zero-width slits, keeps the face',async()=>{
+ const {despike}=await v.ssrLoadModule('/src/edit/free-area.ts');
+ // Like way/1572293454: …, 12174757021, door, 14323940309, door, 12174757021, …
+ const ring=[[0,0],[4,0],[4,1],[4,1.5],[4,1],[4,0],[4,-1],[0,-1],[0,0]];
+ assert.deepEqual(despike(ring),[[0,0],[4,0],[4,-1],[0,-1],[0,0]]);
+ assert.deepEqual(despike([[0,0],[1,0],[1,1],[0,1],[0,0]]),[[0,0],[1,0],[1,1],[0,1],[0,0]]);
+});

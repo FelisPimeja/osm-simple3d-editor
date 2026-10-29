@@ -48,5 +48,21 @@ export function freeAreaPieces(section:MultiPolygon,occupied:MultiPolygon[],wall
   const side:Pt[][]=[[first,...path,last,[last[0]+n[0],last[1]+n[1]],[first[0]+n[0],first[1]+n[1]],first]];
   pieces=pieces.flatMap(face=>finiteCutPieces([...pc.intersection(face,side),...pc.difference(face,side)],path,face,false));
  }
- return pieces;
+ return pieces.map(poly=>poly.map(despike).filter(r=>r.length>=4)).filter(poly=>poly.length);
+}
+/**
+ * Closed ring without zero-width slits: a wall or door bridge that ends inside a face leaves an A→B→A spike
+ * (the ring runs along the cut and back). Such a polygon becomes a wall with a self-overlapping tail.
+ */
+export function despike(ring:Pt[]):Pt[]{
+ const pts=ring.slice(0,-1);
+ for(let changed=true;changed&&pts.length>=3;){
+  changed=false;
+  for(let i=0;i<pts.length&&pts.length>=3;i++){
+   const prev=pts[(i-1+pts.length)%pts.length],cur=pts[i],next=pts[(i+1)%pts.length];
+   if(same(prev,cur)){pts.splice(i,1);changed=true;break;}
+   if(same(prev,next)){pts.splice(i,1);pts.splice(i%pts.length,1);changed=true;break;}
+  }
+ }
+ return pts.length>=3?[...pts,pts[0]]:[];
 }

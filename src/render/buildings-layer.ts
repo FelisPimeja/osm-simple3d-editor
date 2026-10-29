@@ -2092,13 +2092,26 @@ export class BuildingsLayer implements CustomLayerInterface {
     // These faces already come from the sloping building shell. A room or
     // indoor=wall on the same boundary must not erect another vertical wall
     // up to the neighbouring (higher) roof, nor invent a horizontal junction.
+    // Наружный контур здания на уровне: точка вне всех частей, стоящих на этом полу.
+    const standing = g.items.filter((bi) => !g.hidden.has(bi.feature.key) && span(bi)[0] <= z0 + 0.01 && span(bi)[1] > z0 + 0.01)
+      .flatMap((bi) => (g.renderFootprints?.get(bi.feature.key) ?? bi.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((h) => h.map(g.toLocal)) })));
+    const outside = (x: number, y: number) => !standing.some((p) => pointInLocalRing([x, y], p.outer) && !p.inners.some((h) => pointInLocalRing([x, y], h)));
     for (const bi of g.items) {
       if (!this.openRoofInPlan(g, bi) || span(bi)[0] > z0 + 0.01) continue;
       for (const p of g.renderFootprints?.get(bi.feature.key) ?? bi.feature.polygons) for (const r of [p.outer, ...p.inners]) {
         const rp = r.map(g.toLocal);
         for (let i = 0; i < r.length; i++) {
           facadeDone.add(edgeSig(r[i], r[(i + 1) % r.length]));
-          taken.push([...rp[i], ...rp[(i + 1) % rp.length]]);
+          const [ax, ay] = rp[i], [bx, by] = rp[(i + 1) % rp.length];
+          taken.push([ax, ay, bx, by]);
+          // Стену рисует скатная оболочка; низ на полу по наружному контуру — свой (relation/17948425).
+          const l = Math.hypot(bx - ax, by - ay);
+          if (l < 1e-6 || Math.abs(z0 - floorLevel) > 1e-3) continue;
+          const nx = (by - ay) / l * WALL_SIDE_PROBE, ny = -(bx - ax) / l * WALL_SIDE_PROBE, mx = (ax + bx) / 2, my = (ay + by) / 2;
+          if (outside(mx + nx, my + ny) === outside(mx - nx, my - ny)) continue;
+          const z = z0 + FLOOR_EDGE_LIFT;
+          floorContactEdges.push(ax, ay, z, bx, by, z);
+          facadeFloor.push([ax, ay, bx, by]);
         }
       }
     }
@@ -2172,6 +2185,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Стыки на фасаде (козырёк у стены): стены здания там нет — закрываем полосу стыка по ребру части
     for (const [ax, ay, bx, by, lo, hi] of junctionPatches) slab(ax, ay, bx, by, lo, hi, hi, false);
     // Сначала стены-линии (точная геометрия стен, без повторов между собой и с периметром), потом помещения
+    // Помещения без пола на этом уровне (лестница, второй свет): низ стены-линии по их границе не рисуется.
+    const voids = items.filter((it) => it.kind === 'room' && !it.line && (it.noFloor || continuingRooms.has(it.key)))
+      .flatMap((it) => it.polygons.map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((h) => h.map(g.toLocal)) })));
+    const inVoid = (x: number, y: number) => voids.some((p) => pointInLocalRing([x, y], p.outer) && !p.inners.some((h) => pointInLocalRing([x, y], h)));
+    const bordersVoid = (ax: number, ay: number, bx: number, by: number) => {
+      const l = Math.hypot(bx - ax, by - ay) || 1, nx = (by - ay) / l * WALL_SIDE_PROBE, ny = -(bx - ax) / l * WALL_SIDE_PROBE;
+      const mx = (ax + bx) / 2, my = (ay + by) / 2;
+      return inVoid(mx + nx, my + ny) || inVoid(mx - nx, my - ny);
+    };
     for (const it of items) {
       if (!it.line) continue;
       omitCutTop = continuesAbove(it);
@@ -2181,7 +2203,11 @@ export class BuildingsLayer implements CustomLayerInterface {
         // Её противоположные грани ближе WALL_MERGE_DIST — сливаем только почти совпадающие, как у стен-полигонов
         const capRing = closedWallCap(pts);
         const closed = !!capRing;
-        for (let i = 0; i + 1 < pts.length; i++) wallFree(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], it.z, closed);
+        for (let i = 0; i + 1 < pts.length; i++) {
+          omitFloorSeam = bordersVoid(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
+          wallFree(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], it.z, closed);
+        }
+        omitFloorSeam = false;
         if (capRing) cap(capRing, [], it.z, it.kind === 'wall' || it.kind === 'column');
       }
     }

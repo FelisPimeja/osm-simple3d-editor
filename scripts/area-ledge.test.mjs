@@ -71,8 +71,8 @@ test('renderer adds thickness only to explicit indoor=area, and walls prevent it
   assert.equal(ledges().length, 1);
   const p = ledges()[0].geometry.getAttribute('position').array;
   const zs = p.filter((_, i) => i % 3 === 2);
-  close(Math.min(...zs), 2.73);
-  close(Math.max(...zs), 3.03);
+  close(Math.min(...zs), 2.7);
+  close(Math.max(...zs), 3);
   layer.setLevel({ floor: 3, cut: 6, items: [area, ...walls], voids });
   assert.equal(ledges().length, 0);
   layer.setLevel({ floor: 3, cut: 6, items: [{ ...area, areaLedge: false }], voids });

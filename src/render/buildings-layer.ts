@@ -108,7 +108,8 @@ function distToSegment([px, py]: Pt, [ax, ay]: Pt, [bx, by]: Pt): number {
 /** Насколько близко к маркеру двери выбирает клик, px. */
 const DOOR_PICK_PX = 10;
 /** Полы помещений, коридоров и площадок — цвет вершин по виду. */
-const INDOOR_FLOOR_MATERIAL = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+/** Пол лежит на отметке этажа; сдвиг глубины — чтобы линии на полу (швы, низ стен) не тонули в нём. */
+const INDOOR_FLOOR_MATERIAL = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 /** Крышка сечения замкнутых стен и колонн — освещается как верх здания. */
 const INDOOR_CAP_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 /** Стена помещения совпадает с уже нарисованной (периметр, indoor=wall, соседнее помещение): ближе этого, м. */
@@ -119,8 +120,6 @@ const PALE_PLAN_CACHE = 24;
 const SOLID_MERGE_DIST = 0.03;
 /** Внутренний контур помещения тоньше этого, м, — стена (объём с крышкой), а не проём. */
 const THIN_HOLE_WIDTH = 0.6;
-/** Подъём нижнего ребра стены над уровнем этажа: выше верхнего слоя пола (помещения, +0.05). */
-const FLOOR_EDGE_LIFT = 0.055;
 /** Отступ внутрь цветной грани помещения на фасаде от плоскости оболочки здания. */
 const FACADE_TINT_INSET = 0.02;
 const WALL_MERGE_COS = Math.cos(THREE.MathUtils.degToRad(10));
@@ -142,7 +141,7 @@ const POOL_WATER_DROP = 0.2;
 const VOID_FACE_DZ = 0.1;
 
 /** Перекрытие этажа со вторым светом (плита с дырами под полом) и край пустоты. */
-const INDOOR_SLAB_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+const INDOOR_SLAB_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 const INDOOR_VOID_EDGE = new THREE.LineBasicMaterial({ color: 0x57534e });
 const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0xb0b6ba, side: THREE.DoubleSide });
 const ESCALATOR_SIDE = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
@@ -856,7 +855,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const d = this.doors.find(d => d.key === key), g = this.groups.get(FOCUS_GROUP);
     if (!d || !g) return;
     const [x, y] = g.toLocal(this.doorAt(d));
-    return new THREE.Vector3(x, y, d.z + 0.04);
+    return new THREE.Vector3(x, y, d.z);
   }
   /** Перетаскиваемая дверь — её маркер в этой точке. */
   private doorPreview?: { key: string; at: LonLat };
@@ -1330,7 +1329,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Второй свет: под полом этажа — сплошная плита с дырами-пустотами, под ней бледные планы этажей ниже
     const voids = this.level.voids ?? [];
     {
-      const z = this.level.floor - 0.03;
+      const z = this.level.floor;
       const holes: ClipMulti = voids.map((poly) => poly.map((r) => { const rp = r.map(g.toLocal); return [...rp, rp[0]]; }));
       // Лифтовые шахты выше нижней остановки — тоже дыры в плите (обводка края — только у пустот)
       const shafts: ClipMulti = this.level.items.filter((it) => it.shaft).flatMap((it) => it.polygons.map((p) =>
@@ -1840,7 +1839,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         // floor contact. Preserve that edge without recreating the face.
         if (facadeOwnFloorEdge ? Math.abs(z0 - floorLevel) < 1e-3
           : facadeFloorEdge && !omitFloorSeam && Math.abs(z0 - floorLevel) < 1e-3 && !uncovered(ax, ay, bx, by).length) {
-          const z = z0 + FLOOR_EDGE_LIFT;
+          const z = z0;
           // Низ по фасаду уже нарисован самим фасадом — стене помещения остаются только участки вне фасада.
           const spans: [number, number][] = facadeOwnFloorEdge ? [[0, 1]] : uncovered(ax, ay, bx, by, facadeFloor.near(ax, ay, bx, by));
           for (const [t0, t1] of spans)
@@ -1875,8 +1874,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           const key = `${x},${y}`;
           (edgeSurfaces.get(key) ?? edgeSurfaces.set(key, []).get(key)!).push([ax, ay, bx, by, z0, z1a, z1b]);
         }
-      // Низ стены на полу — чуть выше всех слоёв пола (до +0.05 у помещений), иначе пол закрывает ребро
-      const zEdge = Math.abs(z0 - floorLevel) < 1e-3 ? z0 + FLOOR_EDGE_LIFT : z0;
+      const zEdge = z0;
       if (!omitFloorSeam) {
         const target=Math.abs(z0-floorLevel)<1e-3?floorContactEdges:edges;
         target.push(ax, ay, zEdge, bx, by, zEdge);
@@ -2109,7 +2107,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (l < 1e-6 || Math.abs(z0 - floorLevel) > 1e-3) continue;
           const nx = (by - ay) / l * WALL_SIDE_PROBE, ny = -(bx - ax) / l * WALL_SIDE_PROBE, mx = (ax + bx) / 2, my = (ay + by) / 2;
           if (outside(mx + nx, my + ny) === outside(mx - nx, my - ny)) continue;
-          const z = z0 + FLOOR_EDGE_LIFT;
+          const z = z0;
           floorContactEdges.push(ax, ay, z, bx, by, z);
           facadeFloor.push([ax, ay, bx, by]);
         }
@@ -2244,7 +2242,7 @@ export class BuildingsLayer implements CustomLayerInterface {
               // Стена помещения — там, где её ещё нет (периметр, indoor=wall с проёмами, соседнее помещение)
               wallFree(ax, ay, bx, by, it.z, thin);
             }
-            if (!solid && !omitFloorSeam && !it.noFloor) lines.push(ax, ay, z + 0.005, bx, by, z + 0.005);
+            if (!solid && !omitFloorSeam && !it.noFloor) lines.push(ax, ay, z, bx, by, z);
           }
         }
       }
@@ -2642,7 +2640,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.indoorSnaps ??= (() => {
       const points: SnapPoint[] = [], edges: SnapEdge[] = [];
       for (const item of this.level?.items ?? []) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
-        const pts = ring.map(at => { const [x, y] = g.toLocal(at); return new THREE.Vector3(x, y, item.z + 0.04); });
+        const pts = ring.map(at => { const [x, y] = g.toLocal(at); return new THREE.Vector3(x, y, item.z); });
         for (const p of pts) points.push({ key: item.key, kind: 'vertex', p });
         for (let i = 0; i < pts.length - (item.line ? 1 : 0); i++) {
           const a = pts[i], b = pts[(i + 1) % pts.length];
@@ -5658,7 +5656,8 @@ const FACADE_GAP = 0.5;
 
 /** Порядок слоёв пола плана: этаж целиком, площадки, коридоры, помещения — каждый следующий чуть выше. */
 const PLAN_ORDER: IndoorKind[] = ['level', 'area', 'corridor', 'room', 'column', 'wall'];
-const planFloorZ = (it: IndoorItem) => it.z + 0.02 + Math.min(PLAN_ORDER.indexOf(it.kind), 3) * 0.01;
+/** Пол — на отметке этажа; наложения видов разведены partitionFloors, а не высотой. */
+const planFloorZ = (it: IndoorItem) => it.z;
 
 /** Номер объекта для ключей кешей (по идентичности). */
 const objIds = new WeakMap<object, number>();

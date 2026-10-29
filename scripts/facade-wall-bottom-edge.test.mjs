@@ -16,5 +16,5 @@ for(const wire of [false,true])test(`multi-level wall on a facade keeps its bott
  const segments=[];
  root.traverse(o=>{if(o instanceof THREE.LineSegments){const p=o.geometry.getAttribute('position');for(let i=0;i+1<p.count;i+=2)if(Math.abs(p.getY(i))<1e-5&&Math.abs(p.getY(i+1))<1e-5&&Math.abs(p.getX(i)-p.getX(i+1))>3.9&&p.getZ(i)<.1)segments.push([p.getZ(i),p.getZ(i+1)]);}});
  assert.ok(segments.length>0,'facade-owned wall is missing its floor-contact edge');
- assert.ok(segments.every(([a,b])=>a>.05&&b>.05),'floor-contact edge must stay above floor fills');
+ assert.ok(segments.every(([a,b])=>Math.abs(a)<1e-6&&Math.abs(b)<1e-6),'floor-contact edge lies exactly on the floor');
 });

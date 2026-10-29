@@ -343,7 +343,8 @@ for (const pale of [false, true]) test(`bottom edge of a wall inside an area is 
       if (Math.abs(p[i+1]) < 1e-6 && Math.abs(p[i+4]) < 1e-6 && Math.abs(p[i] - p[i+3]) > 1 && p[i+2] < -5.5) bottom = Math.min(bottom ?? Infinity, p[i+2]);
   });
   assert.ok(bottom !== undefined, 'bottom edge is drawn');
-  assert.ok(bottom > floorTop, `bottom edge ${bottom} is under the floor ${floorTop}`);
+  // Ребро лежит на полу (пол уступает ему сдвигом глубины), а не под ним
+  assert.ok(bottom >= floorTop - 1e-6, `bottom edge ${bottom} is under the floor ${floorTop}`);
 });
 
 // Toilets and cubicles: doors in their walls are narrower (doorWidth); the door's own width tag wins.

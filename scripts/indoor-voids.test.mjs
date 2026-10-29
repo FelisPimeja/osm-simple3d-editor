@@ -55,7 +55,7 @@ test('empty floor receives a full base slab and a pool keeps its opening',async(
  layer.setLevel({floor:3,cut:6,items:[],doors:[]});
  const area=()=>layer.indoorObj.children.filter(o=>o.isMesh).reduce((s,o)=>{
   const p=o.geometry.getAttribute('position');
-  for(let i=0;i+2<p.count;i+=3)if([i,i+1,i+2].every(j=>Math.abs(p.getZ(j)-2.97)<.001))
+  for(let i=0;i+2<p.count;i+=3)if([i,i+1,i+2].every(j=>Math.abs(p.getZ(j)-3)<.001))
    s+=Math.abs((p.getX(i+1)-p.getX(i))*(p.getY(i+2)-p.getY(i))-(p.getY(i+1)-p.getY(i))*(p.getX(i+2)-p.getX(i)))/2;
   return s;
  },0);
@@ -134,8 +134,8 @@ test('white base floor occupies only the area not covered by room floors',async(
   const p=o.geometry.getAttribute('position');
   for(let i=0;i+2<p.count;i+=3){
    const area=Math.abs((p.getX(i+1)-p.getX(i))*(p.getY(i+2)-p.getY(i))-(p.getY(i+1)-p.getY(i))*(p.getX(i+2)-p.getX(i)))/2;
-   if([i,i+1,i+2].every(j=>Math.abs(p.getZ(j)-2.97)<.001))white+=area;
-   if([i,i+1,i+2].every(j=>Math.abs(p.getZ(j)-3.05)<.001))colour+=area;
+   if(![i,i+1,i+2].every(j=>Math.abs(p.getZ(j)-3)<.001))continue;
+   if(o.geometry.getAttribute('color'))colour+=area;else white+=area;
   }
  }
  assert.ok(Math.abs(white-300)<1);assert.ok(Math.abs(colour-100)<1);

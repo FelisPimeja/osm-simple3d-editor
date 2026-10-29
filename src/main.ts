@@ -321,6 +321,7 @@ function setBuildingsView(v: typeof buildingsView) {
   overpassLayer.setVisible(v.shown);
   overpassLayer.setOpacity(v.opacity);
   overpassLayer.setWireframe(v.wireframe);
+  indoorPois.setLabels(!v.wireframe);
   applyTileBuildingsView();
   syncWireBtn();
   if (toggled && !focus) { mapIssuesDirty = true; renderIssues(); refreshOverpass(); scheduleIndoorBadges(); }
@@ -613,6 +614,7 @@ const indoorPois = new IndoorPois(map, overpassLayer, (f, add, point) => {
   }
   selectIndoor(f, add);
 });
+indoorPois.setLabels(!buildingsView.wireframe);
 const overpass = new OverpassTiles(map, overpassLayer, () => {
   syncDataEntrances();
   updateTileFilter();

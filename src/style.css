@@ -485,6 +485,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .indoor-poi { cursor: pointer; position: absolute; left: 0; top: 0; width: 20px; height: 20px; margin: -10px 0 0 -10px; padding: 3px; box-sizing: border-box;
   background: #fff; border: 1px solid #9ca3af; border-radius: 50%; color: #374151; pointer-events: auto; }
 .indoor-poi[hidden] { display: none; }
+.indoor-pois.no-labels .indoor-ref { display: none; }
 .indoor-poi.selected { border-color: #2563eb; box-shadow: 0 0 0 2px #fff, 0 0 0 5px #2563eb; z-index: 1; }
 .indoor-poi.indoor-ref { width: auto; height: auto; margin: 0; padding: 0 4px; border-radius: 3px; font: 11px/15px system-ui, sans-serif;
   white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; background: rgba(255, 255, 255, 0.85); }

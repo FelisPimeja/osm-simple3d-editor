@@ -89,6 +89,11 @@ export class IndoorPois {
     map.on('render', () => this.place());
   }
 
+  /** Подписи (номера и названия помещений) — без них в каркасе: значки остаются. */
+  setLabels(on: boolean) {
+    this.root.classList.toggle('no-labels', !on);
+  }
+
   /** Подсветка выбранных точек; #poi у значка помещения совпадает с ключом самого помещения. */
   setSelection(keys: string[]) {
     this.selected = new Set(keys.map((key) => key.replace(/#poi$/, '')));

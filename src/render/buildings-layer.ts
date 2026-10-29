@@ -1093,7 +1093,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       return;
     }
     if (it.line) return;
-    const z = it.z + 0.06;
+    // На отметке пола, как сам пол: заливку поднимает сдвиг глубины материала, контур — сдвиг в шейдере
+    const z = it.z;
     const lines: number[] = [];
     for (const p of it.polygons) {
       const v2 = (r: LonLat[]) => r.map((c) => new THREE.Vector2(...g.toLocal(c)));

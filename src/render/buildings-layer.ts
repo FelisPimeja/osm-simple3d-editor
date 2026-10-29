@@ -4144,10 +4144,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!best.size) return;
     const root = new THREE.Group();
     const plain: number[] = [], selected: number[] = [], lines: number[] = [];
+    const level = g === this.groups.get(FOCUS_GROUP) ? this.level : undefined;
+    const onPlan = (e: EntrancePlace) => !!level && e.z >= level.floor - 1e-3;
     for (const { place: e } of best.values()) {
       g.entrances.push(e);
-      // Floor plans use the actual door opening and the indoor door marker.
-      if (this.level && g === this.groups.get(FOCUS_GROUP)) continue;
+      // План этажа рисует проём и маркер двери сам; вход ниже выбранного этажа — на сплошном фасаде, нужен прямоугольник
+      if (onPlan(e)) continue;
       const out = e.id === this.entranceSelected ? selected : plain;
       const w = (e.width ?? ENTRANCE_WIDTH) / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
       const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w];
@@ -4165,7 +4167,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       root.add(mesh);
     }
     // Выбранный — точка узла на контуре у основания (за неё вход и переносят), как у дверей на плане этажа
-    const sel = this.level && g === this.groups.get(FOCUS_GROUP) ? undefined : g.entrances.find((e) => e.id === this.entranceSelected);
+    const sel = g.entrances.find((e) => e.id === this.entranceSelected && !onPlan(e));
     if (sel) {
       const dot = new THREE.Mesh(DOOR_GEO, DOOR_MATERIAL);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.025, 8, 24), DOOR_SELECTED_MATERIAL);

@@ -123,6 +123,8 @@ const PALE_PLAN_CACHE = 24;
 const SOLID_MERGE_DIST = 0.03;
 /** Внутренний контур помещения тоньше этого, м, — стена (объём с крышкой), а не проём. */
 const THIN_HOLE_WIDTH = 0.6;
+/** Контуры этажа ниже: светлее рёбер этажа, но читаются и на светлом полу, и поверх синей заливки выделения. */
+const BELOW_OUTLINE_COLOUR = 0x8a847d;
 /**
  * Цветная грань помещения на фасаде изнутри — в плоскости стены здания: односторонняя (снаружи не видна),
  * у оболочки выигрывает сдвигом глубины к камере.
@@ -885,6 +887,66 @@ export class BuildingsLayer implements CustomLayerInterface {
   private doors: DoorItem[] = [];
   private doorObj?: THREE.Group;
   private indoorSnaps?: { points: SnapPoint[]; edges: SnapEdge[] };
+  /** Контуры стен и помещений этажа ниже — опора при разметке (включаются на время инструментов indoor). */
+  private belowOutlines = false;
+  private belowOutlineObj?: THREE.Object3D;
+  private belowOutlinePoints: SnapPoint[] = [];
+
+  setBelowOutlines(on: boolean) {
+    if (on === this.belowOutlines) return;
+    this.belowOutlines = on;
+    this.indoorSnaps = undefined;
+    this.attachBelowOutlines();
+    this.map?.triggerRepaint();
+  }
+
+  /** Бледные контуры этажа прямо под выбранным — на отметке его пола, видны и сквозь заливку выделения. */
+  private attachBelowOutlines() {
+    if (this.belowOutlineObj) {
+      this.belowOutlineObj.parent?.remove(this.belowOutlineObj);
+      (this.belowOutlineObj as THREE.Mesh).geometry.dispose();
+      ((this.belowOutlineObj as THREE.Mesh).material as THREE.Material).dispose();
+      this.belowOutlineObj = undefined;
+    }
+    this.belowOutlinePoints = [];
+    const g = this.groups.get(FOCUS_GROUP), level = this.level;
+    if (!this.belowOutlines || !g || !level || !this.indoorObj) return;
+    const z = (b: NonNullable<IndoorLevel['below']>[number]) => b.items[0]?.z ?? -Infinity;
+    const below = (level.below ?? []).filter((b) => z(b) < level.floor - 1e-3).sort((a, b) => z(b) - z(a))[0];
+    if (!below) return;
+    const pos: number[] = [];
+    for (const it of below.items) {
+      if (it.cutOnly || !(it.line || it.kind === 'room' || it.kind === 'wall' || it.kind === 'column')) continue;
+      for (const p of it.polygons) for (const ring of [p.outer, ...p.inners]) {
+        const rp = ring.map(g.toLocal);
+        for (let i = 0; i < rp.length - (it.line ? 1 : 0); i++) {
+          const a = rp[i], b = rp[(i + 1) % rp.length];
+          pos.push(a[0], a[1], level.floor, b[0], b[1], level.floor);
+        }
+        for (const [x, y] of rp) this.belowOutlinePoints.push({ key: it.key, kind: 'vertex', p: new THREE.Vector3(x, y, level.floor) });
+      }
+    }
+    if (!pos.length) return;
+    let line: THREE.Object3D;
+    if (this.map) {
+      const canvas = this.map.getCanvas(), dpr = canvas.width / Math.max(1, canvas.clientWidth);
+      const geo = new LineSegmentsGeometry(); geo.setPositions(pos);
+      // transparent — в один список с заливкой выделения: renderOrder ставит контуры после неё
+      const material = new LineMaterial({ color: BELOW_OUTLINE_COLOUR, linewidth: dpr, depthWrite: false, transparent: true });
+      material.resolution.set(canvas.width, canvas.height);
+      // Над полом выбранного этажа (та же отметка) — сдвигом глубины к камере
+      material.onBeforeCompile = (shader) => { shader.vertexShader = shader.vertexShader.replace('gl_Position = clip;', 'gl_Position = clip; gl_Position.z -= 2e-6 * gl_Position.w;'); };
+      line = new LineSegments2(geo, material);
+    } else {
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      line = new THREE.LineSegments(geo, INDOOR_PALE_LINE.clone());
+    }
+    line.name = 'indoor-below-outlines';
+    line.frustumCulled = false;
+    line.renderOrder = 998; // после заливки выделения помещения (997)
+    this.indoorObj.add(line);
+    this.belowOutlineObj = line;
+  }
   private doorMoveOffsets = new Map<string, THREE.Vector3>();
 
   private doorAt(d: { key: string; at: LonLat }): LonLat {
@@ -1467,6 +1529,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     timed('этажи: план выбранного этажа', () => this.drawPlan(root, g, this.level!.items, this.previewDoors(this.level!.doors ?? []), top, false, shell()));
     timed('этажи: эскалаторы', () => this.drawEscalators(root, g));
     timed('этажи: слияние геометрии', () => this.rebuildGeometry(g));
+    this.attachBelowOutlines();
   }
 
   /** Эскалатор с горизонтальными ступенями, подступенками и закрытым корпусом. */
@@ -2794,7 +2857,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }) : [];
     // Свои точки инструмента (extra) — мимо фильтра объектов: инструмент сам решил, что они нужны
     const extra = new Set(opts.extra ?? []);
-    for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...doorPoints, ...extra]) {
+    for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...this.belowOutlinePoints, ...doorPoints, ...extra]) {
       if (off.has(s.kind) || (!extra.has(s) && !filter(s.key)) || opts.skip?.(s.p, s.key, s.kind)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;

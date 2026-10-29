@@ -2464,6 +2464,10 @@ map.getCanvasContainer().addEventListener('mouseleave', () => updateSnap(undefin
 
 // --- Инструменты режима здания ---
 const focusToolbar = document.getElementById('focus-tools')!;
+// Инструменты правки геометрии indoor: пока активен любой — видны контуры этажа ниже (опора при разметке, привязка к ним)
+const INDOOR_EDIT_TOOLS = ['rect', 'polygon', 'circle', 'ngon', 'point', 'move', 'rotate', 'scale', 'square', 'push', 'shape', 'split', 'merge', 'offset'];
+new MutationObserver(() => overpassLayer.setBelowOutlines(INDOOR_EDIT_TOOLS.some((t) => focusToolbar.querySelector(`[data-tool="${t}"].active`))))
+  .observe(focusToolbar, { subtree: true, attributes: true, attributeFilter: ['class'] });
 const moveBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="move"]')!;
 const popupEl = document.getElementById('popup')!;
 /** Объект для перемещения выбран первым кликом инструмента (а не заранее). */

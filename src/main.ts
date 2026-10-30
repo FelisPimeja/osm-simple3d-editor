@@ -9168,11 +9168,29 @@ function cutPlan(pts: [number, number][]): string | undefined {
   const unit = (a: [number, number], b: [number, number]): [number, number] => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return [dx / l, dy / l]; };
   // Полуплоскость слева от продлённой ломаной: концы уходят далеко за здание, «левый» край замыкает её
   const FAR = 1e4;
-  const d0 = unit(pts[1], pts[0]), d1 = unit(pts[pts.length - 2], pts[pts.length - 1]);
-  const s0: [number, number] = [pts[0][0] + d0[0] * FAR, pts[0][1] + d0[1] * FAR];
-  const s1: [number, number] = [pts[pts.length - 1][0] + d1[0] * FAR, pts[pts.length - 1][1] + d1[1] * FAR];
-  const c = unit(s0, s1), nl: [number, number] = [-c[1] * FAR, c[0] * FAR];
-  const side = [[s0, ...pts, s1, [s1[0] + nl[0], s1[1] + nl[1]], [s0[0] + nl[0], s0[1] + nl[1]], s0]] as [number, number][][];
+  const halfPlane = (path: [number, number][]) => {
+    const d0 = unit(path[1], path[0]), d1 = unit(path[path.length - 2], path[path.length - 1]);
+    const s0: [number, number] = [path[0][0] + d0[0] * FAR, path[0][1] + d0[1] * FAR];
+    const s1: [number, number] = [path[path.length - 1][0] + d1[0] * FAR, path[path.length - 1][1] + d1[1] * FAR];
+    const c = unit(s0, s1), nl: [number, number] = [-c[1] * FAR, c[0] * FAR];
+    return [[s0, ...path, s1, [s1[0] + nl[0], s1[1] + nl[1]], [s0[0] + nl[0], s0[1] + nl[1]], s0]] as [number, number][][];
+  };
+  // Линейные стены этажа: конец разреза на такой стене — разрез продолжается по ней до её конца у стороны
+  // помещения (ближнего из годных), а не пробивает её насквозь
+  const lineWalls = shownIndoor.filter((f) => f.line && f.kind === 'wall' && f.polygons[0]?.outer.length > 1)
+    .map((f) => f.polygons[0].outer.map((q) => overpassLayer.focusToLocal(q)!));
+  /** Продолжения конца e по линейной стене: части стены от точки попадания к каждому её концу. */
+  const wallRuns = (e: [number, number]): [number, number][][] => {
+    const out: [number, number][][] = [];
+    for (const w of lineWalls) for (let i = 0; i < w.length - 1; i++) {
+      if (segDist2(e, w[i], w[i + 1]) > CUT_ON_SIDE) continue;
+      out.push([...w.slice(0, i + 1)].reverse(), w.slice(i + 1));
+    }
+    return out.filter((r) => r.length);
+  };
+  const runLength = (from: [number, number], run: [number, number][]) => run.reduce((a, q, i) => a + Math.hypot(q[0] - (i ? run[i - 1] : from)[0], q[1] - (i ? run[i - 1] : from)[1]), 0);
+  const startRuns = wallRuns(pts[0]), endRuns = wallRuns(pts[pts.length - 1]);
+  const side = halfPlane(pts);
   const toLocal = (r: LonLat[]) => { const q = r.map((x) => overpassLayer.focusToLocal(x)!); return [...q, q[0]] as [number, number][]; };
   const toPoly = (p: [number, number][][]): Polygon => ({ outer: p[0].slice(0, -1).map((q) => overpassLayer.focusToLngLat(q[0], q[1])! as LonLat),
     inners: p.slice(1).map((r) => r.slice(0, -1).map((q) => overpassLayer.focusToLngLat(q[0], q[1])! as LonLat)), });
@@ -9203,8 +9221,18 @@ function cutPlan(pts: [number, number][]): string | undefined {
   const cut = (p: Polygon): [number, number][][][] => {
     const local = [toLocal(p.outer), ...p.inners.map(toLocal)];
     if (!entered(local)) return [];
+    const onBoundary = (q: [number, number]) => local.some((r) => r.slice(0, -1).some((a, i) => segDist2(q, a, r[i + 1]) <= CUT_ON_SIDE));
+    // Конец на линейной стене: годится продолжение, которое доходит до стороны этого помещения; ближнее — первым
+    const ends = (runs: [number, number][][], e: [number, number]) => {
+      const ok = runs.filter((r) => onBoundary(r[r.length - 1])).sort((a, b) => runLength(e, a) - runLength(e, b));
+      return ok.length ? ok.slice(0, 1) : [[]];
+    };
+    const head = ends(startRuns, pts[0])[0], tail = ends(endRuns, pts[pts.length - 1])[0];
+    const path = [...[...head].reverse(), ...pts, ...tail];
+    const plane = head.length || tail.length ? halfPlane(path) : side;
     try {
-      return finiteCutPieces([...polygonClipping.intersection(local, side), ...polygonClipping.difference(local, side)], pts, local)
+      // По стене — до её конца на стороне, дальше не продлеваем
+      return finiteCutPieces([...polygonClipping.intersection(local, plane), ...polygonClipping.difference(local, plane)], path, local)
         .filter((q) => localArea(q) >= CUT_MIN_AREA);
     } catch (err) { console.warn('[cut-plan]', err); return []; }
   };
@@ -9240,7 +9268,8 @@ function cutPlan(pts: [number, number][]): string | undefined {
       : tr('Разрез ничего не делит: проведите его через помещение или пустую площадь от стены до стены.');
   }
   // Узлы: существующие вершины — их id, новые на линии разреза — общие у кусков
-  const neighbours = [...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point && !f.line)];
+  // Линейные стены — тоже: разрез, продолженный по стене, встаёт на её узлы
+  const neighbours = [...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)];
   const { nodeFor } = sharedNodes(neighbours);
   const edits: ObjectEdit[] = [];
   const created: IndoorFeature[] = [];
@@ -9275,7 +9304,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
   for (const e of edits) for (const p of e.polygons ?? (e.create as Feature3D | undefined)?.polygons ?? []) {
     [p.outer, ...p.inners].forEach((r, i) => r.forEach((q, j) => { const id = (i ? p.innerIds?.[i - 1] : p.outerIds)?.[j]; if (id !== undefined && id < 0) fresh.set(id, q); }));
   }
-  const { patch } = sideInserts(fresh);
+  const { patch, line: patchLine } = sideInserts(fresh);
   // Собственные куски: узел разреза соседнего помещения мог лечь на их сторону
   for (const e of edits) {
     if (e.polygons) e.polygons = e.polygons.map((p) => patch(p) ?? p);
@@ -9288,7 +9317,15 @@ function cutPlan(pts: [number, number][]): string | undefined {
   // Соседние indoor-пути (помещения, этаж) — их кольца с новыми узлами
   for (const f of shownIndoor) {
     const key = indoorKey(f.key);
-    if (f.point || f.line || rebuilt.has(key) || replaced.some((t) => indoorKey(t.f.key) === key) || !key.startsWith('way/') || f.polygons.length !== 1) continue;
+    if (f.point || rebuilt.has(key) || replaced.some((t) => indoorKey(t.f.key) === key) || !key.startsWith('way/') || f.polygons.length !== 1) continue;
+    if (f.line) {
+      const p0 = f.polygons[0], l = p0.outerIds && patchLine(p0.outerIds, p0.outer);
+      if (!l) continue;
+      trackIndoor(key, f);
+      edits.push({ key, line: { ids: l.ids, coords: l.ring }, polygons: [{ outer: l.ring, outerIds: l.ids, inners: [] }] });
+      touched++;
+      continue;
+    }
     const p = patch(f.polygons[0]);
     if (!p) continue;
     trackIndoor(key, f);

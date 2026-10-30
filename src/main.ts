@@ -9160,6 +9160,16 @@ let freeArea: { n: number; polygon: Polygon } | undefined;
  * Неразмеченная площадь этажа под курсором: контур здания на этаже минус помещения, коридоры и площадки этажа;
  * связный кусок, где курсор. В OSM пустота ничем не размечена — объект появится при первой правке.
  */
+/**
+ * Проёмы этажа l: многоуровневые помещения (лестница, зал в два света), которые проходят через этаж без пола на
+ * нём. В план этажа они не попадают, но пустой площадью не являются: заливка и разрез их обходят.
+ */
+function levelOpenings(l: Level): IndoorFeature[] {
+  if (!focus) return [];
+  return buildingIndoor(focus).filter((f) => !f.line && !f.point && ['room', 'area', 'corridor'].includes(f.kind) && f.polygons.length
+    && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels) && !floorLevels(f).includes(l.n));
+}
+
 function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | undefined {
   if (!shownLevel) return;
   const ray = overpassLayer.focusRay(point);
@@ -9170,7 +9180,7 @@ function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | 
   if (!ll || !section?.length) return;
   const local = (p: LonLat) => overpassLayer.focusToLocal(p)!;
   const close = (r: LonLat[]) => { const points = r.map(local); return [...points, points[0]]; };
-  const occupied = shownIndoor.filter(f => (isFloorKind(f) && !f.escalatorArea) || solidWall(f) || f.kind === 'column')
+  const occupied = [...shownIndoor.filter(f => (isFloorKind(f) && !f.escalatorArea) || solidWall(f) || f.kind === 'column'), ...levelOpenings(shownLevel)]
     .map(f => f.polygons.map(p => [close(p.outer), ...p.inners.map(close)]));
   const walls = shownIndoor.filter(f => f.kind === 'wall' && f.line && !solidWall(f)).flatMap(f => f.polygons.map(p => p.outer.map(local)));
   let pieces: [number, number][][][];
@@ -9399,7 +9409,8 @@ function cutPlan(pts: [number, number][]): string | undefined {
   if (section?.length) {
     const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
     try {
-      const holes = rooms.map((f) => f.polygons.map((p) => [close(p.outer), ...p.inners.map(close)]));
+      // Проёмы лестниц и залов в два света — не пустая площадь
+      const holes = [...rooms, ...levelOpenings(level)].map((f) => f.polygons.map((p) => [close(p.outer), ...p.inners.map(close)]));
       for (const q of polygonClipping.difference(section.map((p) => p.map(close)), ...holes)) {
         const pieces = cut({ outer: q[0].slice(0, -1) as LonLat[], inners: q.slice(1).map((r) => r.slice(0, -1) as LonLat[]) });
         if (pieces.length >= 2) free.push(...pieces);

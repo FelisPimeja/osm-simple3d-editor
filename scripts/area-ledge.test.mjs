@@ -65,6 +65,20 @@ function fixture() {
   return { layer, area, voids, walls, ledges, poly };
 }
 
+test('wall drawing only finishes on wall geometry, not on floor polygon vertices',()=>{
+ const {layer,area,walls,poly}=fixture();
+ const g=layer.groups.get('@focus');
+ const snap=(x,y)=>{const [a,b]=g.toLocal(poly(rectangle(x,y,x+1,y+1)).outer[0]);return {local:{x:a,y:b,z:3}};};
+ layer.setLevel({floor:3,cut:6,items:[area]});
+ assert.equal(layer.wallJunctionSnap(snap(6,2)),false);
+ layer.setLevel({floor:3,cut:6,items:[area,...walls]});
+ assert.equal(layer.wallJunctionSnap(snap(6,2)),true);
+ assert.equal(layer.wallJunctionSnap(snap(6,4)),true);
+ assert.equal(layer.wallJunctionSnap(snap(2,2)),false);
+ layer.setLevel({floor:3,cut:6,items:[area],below:[{cut:3,items:walls.map(w=>({...w,z:0}))}]});
+ assert.equal(layer.wallJunctionSnap(snap(6,2)),false);
+});
+
 test('renderer adds thickness only to explicit indoor=area, and walls prevent it', () => {
   const { layer, area, voids, walls, ledges } = fixture();
   layer.setLevel({ floor: 3, cut: 6, items: [area], voids });
@@ -165,4 +179,32 @@ test('several lower levels use their own voids even when the upper opening has a
     const z = mesh.geometry.getAttribute('position').array.filter((_, i) => i % 3 === 2);
     close(Math.max(...z) - Math.min(...z), 0.3);
   }
+});
+
+test('solid railing and its selection stop at the railing height',()=>{
+ const {layer,walls}=fixture();
+ layer.setLevel({floor:3,cut:6,items:walls.map(w=>({...w,railing:true,linearWall:true,railingHeight:1.1}))});
+ const rails=layer.indoorObj.children.filter(o=>o.name==='indoor-railing');
+ assert.equal(rails.length,1);
+ assert.ok(rails[0].isMesh);
+ const edges=layer.indoorObj.getObjectByName('indoor-railing-edges');
+ assert.ok(edges.isLineSegments2);assert.equal(edges.material.linewidth,2);
+ for(const rail of rails){rail.geometry.computeBoundingBox();rail.updateMatrixWorld();const box=rail.geometry.boundingBox.clone().applyMatrix4(rail.matrixWorld);assert.ok(box.max.z<4.14);assert.ok(box.min.z>2.96);}
+ layer.setIndoorSelection(walls.map(w=>w.key));
+ const selected=layer.indoorSelObj.children.filter(o=>o.isMesh&&!o.isLineSegments2);
+ assert.equal(selected.length,1);
+ const positions=selected[0].geometry.getAttribute('position');
+ for(let i=0;i<positions.count;i++)assert.ok(positions.getZ(i)<=4.101);
+
+});
+
+test('railing edges mark endpoints and sharp corners, not collinear vertices',()=>{
+ const {layer,poly}=fixture();
+ const at=(x,y)=>poly(rectangle(x,y,x+1,y+1)).outer[0];
+ layer.setLevel({floor:3,cut:6,items:[{key:'rail',kind:'wall',line:true,railing:true,z:3,polygons:[{outer:[[2,2],[4,2],[6,2],[6,4]].map(([x,y])=>at(x,y)),inners:[]}]}]});
+ const edges=layer.indoorObj.getObjectByName('indoor-railing-edges').geometry;
+ assert.equal(edges.getAttribute('instanceStart').count,3);
+ const verticals=layer.indoorObj.getObjectByName('indoor-railing-verticals');
+ assert.equal(verticals.material.linewidth,1);
+ assert.equal(verticals.geometry.getAttribute('instanceStart').count,3); // Two endpoints + one corner.
 });

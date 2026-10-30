@@ -8289,6 +8289,7 @@ const indoorGeometry = (f: IndoorFeature): PresetGeometry => (indoorKey(f.key).s
  * панель перерисуется.
  */
 function indoorTitle(f: IndoorFeature): string {
+  if(f.tags.barrier==='fence' && f.tags.fence_type==='railing')return tr('Ограждение');
   const own = f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
   if (f.escalator) return own;
   loadPresets(() => { if (indoorSelection.length) renderIndoorSelection(); });
@@ -8337,7 +8338,7 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
  * Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений
  * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance и номер ref (как у пресета iD «Вход / выход»).
  */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.every(f=>f.tags.barrier==='fence' && f.tags.fence_type==='railing') ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
   : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
@@ -8494,7 +8495,8 @@ function indoorFieldLabel(k: string, fs: IndoorFeature[]): string {
 }
 
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
-  const rows = indoorFormTags(fs).map((k) => {
+  const closedWalls=fs.every(f=>f.kind==='wall' && !f.tags.barrier && f.key.startsWith('way/') && !!f.line && f.polygons.length===1 && !!f.polygons[0].outerIds && f.polygons[0].outerIds!.length>=4 && f.polygons[0].outerIds![0]===f.polygons[0].outerIds!.at(-1));
+  const rows = [...indoorFormTags(fs), ...(closedWalls ? ['area'] : [])].map((k) => {
     const values = new Set(fs.map((f) => f.tags[k] ?? ''));
     const mixed = values.size > 1;
     const value = mixed ? '' : [...values][0];
@@ -8503,6 +8505,7 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
     // Тип входа — варианты и подписи из схемы iD (поле entrance пресета «Вход / выход»)
     const options = k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : k === 'entrance' ? idOptions('entrance') : undefined;
     const label = `<span title="${esc(k)}">${esc(indoorFieldLabel(k, fs))}</span>`;
+    if(k==='area')return `<label class="tag-row${changed ? ' changed' : ''}"><span title="area">area</span><select data-indoor-tag="area"${!value ? ' style="color:#888"' : ''}>${!value ? `<option value="" selected disabled hidden>${mixed ? tr('разные значения') : 'yes'}</option>` : ''}<option value="yes"${value==='yes'?' selected':''}>yes</option><option value="no"${value==='no'?' selected':''}>no</option></select></label>`;
     if (options) return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : k === 'entrance' ? tr('не вход') : '—',
         k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : k === 'room' ? ROOM_LABELS : undefined, k) + '</label>';
@@ -9647,6 +9650,23 @@ const POINT_SIDE_PX = 8;
 
 // Инструмент «Стена»: линейная стена indoor=wall этажа по точкам ломаной
 const wallBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="wall"]')!;
+let linearPreset: 'wall'|'railing' = 'wall';
+wallBtn.title=tr('Стена');
+wallBtn.insertAdjacentHTML('beforeend','<span class="flyout-arrow" data-linear-menu data-flyout></span>');
+wallBtn.addEventListener('click',e=>{
+  if(!(e.target as HTMLElement).closest('[data-linear-menu]'))return;
+  e.stopImmediatePropagation();
+  if(rectFlyout){closeRectFlyout();return;}
+  const menu=document.createElement('div');menu.className='tool-flyout';
+  menu.innerHTML=`<button type="button" data-linear="wall">${tr('Стена')}</button><button type="button" data-linear="railing">${tr('Ограждение')}</button>`;
+  menu.addEventListener('click',e=>{
+    const choice=(e.target as HTMLElement).closest<HTMLElement>('[data-linear]');if(!choice)return;
+    e.stopPropagation();linearPreset=choice.dataset.linear as typeof linearPreset;
+    wallBtn.title=linearPreset==='wall'?tr('Стена'):tr('Ограждение');
+    closeRectFlyout();startWall();
+  });
+  wallBtn.after(menu);placeFlyout(menu,wallBtn);rectFlyout=menu;
+});
 wallBtn.addEventListener('click', () => (drawTool.active && drawTool.shape === 'wall' ? drawTool.stop() : startWall()));
 
 function startWall() {
@@ -9714,7 +9734,8 @@ function createIndoorWallLine(pts: [number, number][]): string | undefined {
   const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)]);
   const nodes = pts.map((q) => nodeFor(overpassLayer.focusToLngLat(q[0], q[1])! as LonLat)).filter((q, i, a) => i === 0 || q.id !== a[i - 1].id);
   if (nodes.length < 2) return tr('Стене нужны хотя бы две разные точки.');
-  const key = `way/${nextNewId--}`, tags = { indoor: 'wall', level: String(shownLevel.n) };
+  const key = `way/${nextNewId--}`, tags: Record<string,string> = linearPreset==='railing'
+    ? {barrier:'fence',fence_type:'railing',indoor:'yes',level:String(shownLevel.n)} : { indoor: 'wall', level: String(shownLevel.n) };
   const line = { ids: nodes.map((q) => q.id), coords: nodes.map((q) => q.p) };
   const polygons = [{ outer: line.coords, outerIds: line.ids, inners: [] }];
   const edits: ObjectEdit[] = [{ key, create: { key, version: 0, tags, line, polygons } }];
@@ -9730,7 +9751,7 @@ function createIndoorWallLine(pts: [number, number][]): string | undefined {
   renderLevels();
   const made = buildingIndoorFor(key);
   if (made) selectIndoor(made);
-  setStatus(tr('Создано: {keys} (indoor=wall, этаж {n}).', { keys: key, n: levelLabel(shownLevel.n) })
+  setStatus((linearPreset==='railing' ? tr('Ограждение')+' — '+key : tr('Создано: {keys} (indoor=wall, этаж {n}).', { keys: key, n: levelLabel(shownLevel.n) }))
     + (touched.size ? ' ' + tr('Узлы добавлены в соседей: {n}.', { n: touched.size }) : ''));
   return;
 }
@@ -10636,7 +10657,7 @@ function renderLevelsImpl() {
       items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea
         && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
         && (f.line || f.kind === 'wall' || f.kind === 'column' || f.kind === 'room' || floorLevels(f).includes(l.n)))
-        .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
+        .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && (f.tags.area==='no'||f.tags.barrier==='fence'), railing:f.tags.barrier==='fence'&&f.tags.fence_type==='railing', railingHeight:parseLength(f.tags.height), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
           ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
           ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
           ...(isPool(f) ? { pool: poolDepth(f) } : {}),

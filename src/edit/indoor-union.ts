@@ -1,12 +1,13 @@
 import type { IndoorFeature, LonLat } from '../osm/model';
 /** Closed line walls have a filled cap and are polygonal for union purposes. */
 export const isClosedIndoorWall = (f: IndoorFeature) => f.kind === 'wall' && !!f.line && f.polygons.length === 1
+  && f.tags.area !== 'no' && f.tags.barrier !== 'fence'
   && !!f.polygons[0].outerIds && f.polygons[0].outerIds.length >= 4
   && f.polygons[0].outerIds[0] === f.polygons[0].outerIds.at(-1);
 export const isIndoorUnionPolygon = (f: IndoorFeature) => (!f.line || isClosedIndoorWall(f)) && !f.point && !f.escalator && !f.escalatorArea && !f.key.endsWith('#poi')
   && ['room', 'area', 'corridor', 'level', 'wall'].includes(f.kind);
 export function indoorUnionSignature(f: IndoorFeature): string {
-  const keys = ['indoor', 'room', 'level', 'repeat_on', ...(f.kind === 'wall' ? ['height', 'min_height', 'min_level'] : [])];
+  const keys = ['indoor', 'room', 'level', 'repeat_on', ...(f.kind === 'wall' ? ['height', 'min_height', 'min_level', 'area', 'barrier', 'fence_type'] : [])];
   return JSON.stringify(keys.map(k => f.tags[k] ?? ''));
 }
 

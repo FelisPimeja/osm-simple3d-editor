@@ -335,11 +335,12 @@ export class DrawTool {
       return;
     }
     // Разрез, доведённый до другой линии (стены, стороны помещения), завершается сам, если уже что-то рассекает;
-    // не рассекает (точка посреди помещения, ещё не насквозь) — ждём следующую точку. Стена — завершается всегда.
+    // не рассекает (точка посреди помещения, ещё не насквозь) — ждём следующую точку.
+    // Рисование стены заканчиваем только на настоящей стене, а не на вершине полигона пола.
     // Вершина плана этажа ниже — лишь опора для точки (поворот линии), не конец
     // Точка не на самой привязке (Shift держит ось: вершина задаёт лишь расстояние по ней) — тоже не конец
     if (isOpen(this.shape) && this.pts.length >= 2 && this.snap && ON_LINE.includes(this.snap.kind) && Math.hypot(q[0] - this.snap.local.x, q[1] - this.snap.local.y) < 1e-3
-      && !this.layer.belowOnlySnap(this.snap) && !this.commit(this.pts, this.z)) {
+      && !this.layer.belowOnlySnap(this.snap) && (this.shape !== 'wall' || this.layer.wallJunctionSnap(this.snap)) && !this.commit(this.pts, this.z)) {
       this.reset();
       this.hint();
       return;

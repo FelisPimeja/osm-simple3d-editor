@@ -1371,5 +1371,6 @@
   "{tool}: площадка indoor=area на текущем этаже (level={level}; {key})": "{tool}: indoor=area on the current floor (level={level}; {key})",
   "Полигон": "Polygon",
   "Правильный многоугольник": "Regular polygon",
-  "Выбранные стены должны образовывать единую линию без разветвлений и наложений.": "Selected walls must form a single line without branches or overlaps."
+  "Выбранные стены должны образовывать единую линию без разветвлений и наложений.": "Selected walls must form a single line without branches or overlaps.",
+  "Ограждение": "Railing"
 }

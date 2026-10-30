@@ -130,6 +130,7 @@ export function withIndoorTags(f: IndoorFeature, tags: Record<string, string>): 
 const LINEAR_KEYS = ['highway', 'railway', 'waterway', 'barrier', 'conveying', 'power'];
 
 function indoorKind(tags?: Record<string, string>): IndoorKind | undefined {
+  if (tags?.indoor === 'yes' && tags.barrier === 'fence' && tags.fence_type === 'railing') return 'wall';
   const k = tags?.indoor;
   // indoor=yes — общее «внутреннее пространство», как площадка. Но на линейном объекте (дорожка, рельсы, ограда)
   // это лишь признак «проходит внутри» (way/1154805379: замкнутый highway=footway + indoor=yes) — не площадь

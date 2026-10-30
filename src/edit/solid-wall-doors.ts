@@ -4,7 +4,7 @@ import { parseLevels, type IndoorFeature, type IndoorKind, type LonLat } from '.
 import type { ObjectEdit } from './session';
 type Pt = [number,number];
 export type WallPolygon = Pt[][];
-export const solidWall = (f: IndoorFeature) => f.kind === 'wall' && !f.point && f.polygons.length > 0 && f.polygons.every(p=>p.outer.length>=3) && (!f.line || f.polygons.every(p => !!p.outerIds && p.outerIds.length >= 4 && p.outerIds[0] === p.outerIds.at(-1)));
+export const solidWall = (f: IndoorFeature) => f.kind === 'wall' && f.tags.barrier !== 'fence' && !f.point && f.polygons.length > 0 && f.polygons.every(p=>p.outer.length>=3) && (!f.line || (f.tags.area !== 'no' && f.polygons.every(p => !!p.outerIds && p.outerIds.length >= 4 && p.outerIds[0] === p.outerIds.at(-1))));
 const cross=(a:Pt,b:Pt)=>a[0]*b[1]-a[1]*b[0];
 const sub=(a:Pt,b:Pt):Pt=>[a[0]-b[0],a[1]-b[1]];
 const plus=(a:Pt,b:Pt,t=1):Pt=>[a[0]+b[0]*t,a[1]+b[1]*t];

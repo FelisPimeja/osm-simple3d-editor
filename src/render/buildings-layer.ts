@@ -40,6 +40,9 @@ const MONOCHROME = new THREE.Color('#ffffff');
 
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
 export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
+  /** area=no preserves a closed way as a linear wall. */ linearWall?: boolean;
+  railing?: boolean;
+  railingHeight?: number;
   /** Шахта лифта выше нижней остановки: без своего пола, и пол других объектов этажа по её контуру вырезан. */ shaft?: boolean;
   /** Стены многоуровневой комнаты на верхнем этаже, без своего пола. */ noFloor?: boolean;
   /** Только вырез (этаж, где лифт проходит без остановки): ни пола, ни стен. */ cutOnly?: boolean;
@@ -932,6 +935,24 @@ export class BuildingsLayer implements CustomLayerInterface {
     return this.belowOutlinePoints.some((q) => q.key === s.key && at(q)) && ![...(this.snaps?.points ?? []), ...(this.indoorSnaps?.points ?? [])].some(at);
   }
 
+  /** A floor vertex alone is not a wall junction. Check actual wall boundaries on this level. */
+  wallJunctionSnap(s: { local: THREE.Vector3 }): boolean {
+    const g=this.groups.get(FOCUS_GROUP), level=this.level;
+    if(!g || !level)return false;
+    const q:Pt=[s.local.x,s.local.y];
+    const on=(polygons:Polygon[],line=false)=>polygons.some(p=>[p.outer,...p.inners].some(r=>{
+      const ring=r.map(g.toLocal);
+      return ring.slice(0,line?-1:undefined).some((a,i)=>distToSegment(q,a,ring[(i+1)%ring.length])<.02);
+    }));
+    if(level.items.some(it=>!it.cutOnly && ['room','wall','column'].includes(it.kind) && on(it.polygons,!!it.line)))return true;
+    return g.items.some(it=>{
+      if(g.hidden.has(it.feature.key) || thinItem(it) || strokeOnly(g,it))return false;
+      const h=computeHeights(it.tags);
+      return (g.lift?.get(it.feature.key)??h.min)<=level.floor+.02 && h.wallTop>level.floor+.02
+        && on(g.renderFootprints.get(it.feature.key)??it.feature.polygons);
+    });
+  }
+
   setBelowOutlines(on: boolean) {
     if (on === this.belowOutlines) return;
     this.belowOutlines = on;
@@ -1213,7 +1234,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private addIndoorHighlight(root: THREE.Group, g: MeshGroup, it: IndoorItem) {
     // Стена и колонна — их вертикальные грани от пола до среза
     if (it.kind === 'wall' || it.kind === 'column') {
-      const top = this.levelCut ?? this.level!.cut;
+      const top = it.railing ? Math.min(this.levelCut ?? this.level!.cut,it.z+(it.railingHeight??1.1)) : this.levelCut ?? this.level!.cut;
       const faces: number[] = [], edges: number[] = [];
       for (const p of it.polygons) for (const ring of it.line ? [p.outer] : [p.outer, ...p.inners]) {
         const rp = ring.map(g.toLocal);
@@ -1261,14 +1282,14 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Нижний контур: 2 экранных пикселя, скрытые участки — пунктиром. */
-  private addIndoorPerimeter(root: THREE.Group, positions: number[]) {
+  private addIndoorPerimeter(root: THREE.Group, positions: number[], widthPx = 2) {
     const canvas = this.map?.getCanvas();
     const width = canvas?.width ?? 1, height = canvas?.height ?? 1;
     const dpr = width / Math.max(1, canvas?.clientWidth ?? 1);
     for (const hidden of [true, false]) {
       const geo = new LineSegmentsGeometry();
       geo.setPositions(positions);
-      const material = new LineMaterial({ color: 0x2563eb, linewidth: 2 * dpr,
+      const material = new LineMaterial({ color: 0x2563eb, linewidth: widthPx * dpr,
         depthTest: !hidden, depthWrite: false,
         dashed: hidden, dashSize: 0.25, gapSize: 0.15 });
       // Сначала сквозной пунктир, затем сплошная линия с проверкой глубины.
@@ -1792,7 +1813,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const doorModels = [...this.doors, ...(this.level?.below ?? []).flatMap((b) => b.doorModels ?? [])]
       .filter((d) => Math.abs(d.z - floor) < 0.1).map((d) => `${d.key}@${this.doorAt(d).join(',')}:${JSON.stringify(d.tags ?? {})}`);
     const key = [objId(g), shell ? objId(shell) : 0, top, +this.graphics.edges, +glassEnabled,
-      items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.noFloor}:${+!!it.cutOnly}:${+!!it.areaLedge}`).join(','),
+      items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.noFloor}:${+!!it.cutOnly}:${+!!it.areaLedge}:${+!!it.linearWall}:${+!!it.railing}:${it.railingHeight??1.1}`).join(','),
       doorList.map((d) => d.join(',')).join(';'), doorModels.join(';'),
       JSON.stringify([this.level?.doorCuts,...(this.level?.below??[]).map(b=>b.doorCuts),ownVoids,this.level?.items.map(it=>[it.key,it.noFloor]),g.items.filter(it=>this.openRoofInPlan(g,it)).map(it=>it.feature.key)]),
       escalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.width}:${e.incline}:${objId(e.line)}`).join(',')].join('|');
@@ -2443,12 +2464,50 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     for (const it of items) {
       if (!it.line) continue;
+      if(it.railing){
+        const positions:number[]=[],verticals:number[]=[],faces:number[]=[];
+        const railingTop=Math.min(it.z+(it.railingHeight??1.1),top);
+
+        for(const p of it.polygons){
+          const points=p.outer.map(g.toLocal);
+          const closed=points.length>2 && Math.hypot(points[0][0]-points.at(-1)![0],points[0][1]-points.at(-1)![1])<1e-6;
+          for(let i=1;i<points.length;i++){
+            const [a,b]=[points[i-1],points[i]];
+            if(Math.hypot(b[0]-a[0],b[1]-a[1])<1e-6)continue;
+            faces.push(...a,it.z,...b,it.z,...b,railingTop,...a,it.z,...b,railingTop,...a,railingTop);
+            positions.push(...a,railingTop,...b,railingTop);
+          }
+          const count=closed?points.length-1:points.length;
+          for(let i=0;i<count;i++){
+            const p=points[i],prev=points[(i-1+count)%count],next=points[(i+1)%count];
+            const ux=p[0]-prev[0],uy=p[1]-prev[1],vx=next[0]-p[0],vy=next[1]-p[1];
+            const len=Math.hypot(ux,uy)*Math.hypot(vx,vy);
+            // Straight and gently curving runs have no vertical seams (30 degree threshold).
+            if((!closed&&(i===0||i===count-1)) || (len>1e-12 && (ux*vx+uy*vy)/len<Math.cos(Math.PI/6)))
+              verticals.push(...p,it.z,...p,railingTop);
+          }
+        }
+        if(faces.length){
+          const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(faces,3));geometry.computeVertexNormals();
+          const mesh=new THREE.Mesh(geometry,pale?INDOOR_PALE_WALL:INDOOR_SLAB_MATERIAL);
+          mesh.name='indoor-railing';mesh.userData.key=it.key;mesh.frustumCulled=false;root.add(mesh);
+        }
+        for(const [edges,widthPx,name] of [[positions,2,'indoor-railing-edges'],[verticals,1,'indoor-railing-verticals']] as const){
+          if(!edges.length)continue;
+          const canvas=this.map?.getCanvas(),width=canvas?.width??1024,height=canvas?.height??768;
+          const dpr=canvas?canvas.width/Math.max(1,canvas.clientWidth):1;
+          const geometry=new LineSegmentsGeometry();geometry.setPositions(edges);
+          const material=new LineMaterial({color:pale?0xb8b8b8:0x656d73,linewidth:widthPx*dpr});material.resolution.set(width,height);
+          const line=new LineSegments2(geometry,material);line.name=name;line.frustumCulled=false;root.add(line);
+        }
+        continue;
+      }
       omitCutTop = continuesAbove(it);
       for (const p of it.polygons) {
         const pts = p.outer.map(g.toLocal);
         // Замкнутая стена (короб, шахта, тонкая стена-контур) — с крышкой сечения, а не открытой коробкой.
         // Её противоположные грани ближе WALL_MERGE_DIST — сливаем только почти совпадающие, как у стен-полигонов
-        const capRing = closedWallCap(pts);
+        const capRing = it.linearWall ? undefined : closedWallCap(pts);
         const closed = !!capRing;
         for (let i = 0; i + 1 < pts.length; i++) {
           omitFloorSeam = bordersVoid(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
@@ -3452,13 +3511,13 @@ export class BuildingsLayer implements CustomLayerInterface {
             const t = ((ax - o.x) * nx + (ay - o.y) * ny) / den;
             const hx = o.x + d.x * t, hy = o.y + d.y * t, hz = o.z + d.z * t;
             const u = ((hx - ax) * ex + (hy - ay) * ey) / (len * len);
-            if (u < -0.02 || u > 1.02 || hz < it.z - 0.01 || hz > top + 0.01) continue;
+            if (u < -0.02 || u > 1.02 || hz < it.z - 0.01 || hz > (it.railing?Math.min(top,it.z+(it.railingHeight??1.1)):top) + 0.01) continue;
             if (it.kind === 'room' && Math.abs(t - wallT) > 0.02) continue;
             take(it.key, t, it.kind === 'room' ? { polygon, ring: ringIndex, edge: i } : undefined);
           }
         }
         // Крышка сечения колонны и стены-полигона
-        const capOuter = it.line ? closedWallCap(p.outer.map(g.toLocal)) : p.outer.map(g.toLocal);
+        const capOuter = it.line ? it.linearWall ? undefined : closedWallCap(p.outer.map(g.toLocal)) : p.outer.map(g.toLocal);
         if (it.kind !== 'room' && capOuter && Math.abs(d.z) > 1e-9) {
           const t = (top - o.z) / d.z;
           const q: Pt = [o.x + d.x * t, o.y + d.y * t];

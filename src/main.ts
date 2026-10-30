@@ -8527,7 +8527,7 @@ const LEVEL_PICKER_MAX = 9;
  * Выпадающий список этажей здания у поля level: чекбоксы, выбранные пишутся через «;». Этажей больше
  * LEVEL_PICKER_MAX — показываются ближайшие к текущему этажу. Значения вне списка (дробные, дальние) сохраняются.
  */
-function bindLevelPicker(input: HTMLInputElement, fs: IndoorFeature[]) {
+function bindLevelPicker(input: HTMLInputElement, fs: IndoorFeature[], create?: (tags: Record<string, string>) => void) {
   if (!panelLevels.length) return;
   const wrap = levelWrap(input);
   const key = fs.map((f) => indoorKey(f.key)).join(',');
@@ -8567,6 +8567,12 @@ function bindLevelPicker(input: HTMLInputElement, fs: IndoorFeature[]) {
     const n = Number(cb.value);
     // Отметка добавляет этаж каждому выбранному, снятие — убирает у каждого (остальные этажи у каждого свои)
     const all = levelsOf();
+    if (create) {
+      const set = new Set(all[0]);
+      if (cb.checked) set.add(n); else set.delete(n);
+      create({ level: [...set].sort((a, b) => a - b).join(';') });
+      return;
+    }
     setIndoorTags(fs.map((f, i) => {
       const set = new Set(all[i]);
       if (cb.checked) set.add(n); else set.delete(n);
@@ -9299,6 +9305,8 @@ function renderFreeArea(a: { n: number; polygon: Polygon }) {
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
     input.addEventListener('change', () => { if (input.value.trim()) createFromFreeArea({ [input.dataset.indoorTag!]: input.value.trim() }); });
   }
+  const levelInput = infoEl.querySelector<HTMLInputElement>('[data-indoor-tag="level"]');
+  if (levelInput) { bindLevelHint(levelInput); bindLevelPicker(levelInput, [stub], createFromFreeArea); }
   updateTagsClip();
 }
 

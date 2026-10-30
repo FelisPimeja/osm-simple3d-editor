@@ -201,6 +201,8 @@ export interface IndoorLevel {
   /** Высота пола этажа, м. */
   floor: number;
   items: IndoorItem[];
+  /** Unfilled floor-level outlines for stair/escalator areas. */
+  outlines?: IndoorItem[];
   /** Не рисуются, только подсветка выбора: помещения в несколько этажей выше своего пола (z — пол основания). */
   highlights?: IndoorItem[];
   escalators?: EscalatorItem[];
@@ -1169,7 +1171,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (o instanceof THREE.Mesh && !(o instanceof Line2)) o.material = keys.has(key) ? ESCALATOR_SELECTED : o.userData.escalatorMaterial;
       else if (o instanceof Line2) o.material = keys.has(key) ? ESCALATOR_SELECTED_HANDRAIL : o.userData.escalatorMaterial;
     });
-    const items = [...this.level?.items ?? [], ...this.level?.highlights ?? []].filter((i) => keys.has(i.key));
+    const items = [...this.level?.items ?? [], ...this.level?.highlights ?? [], ...this.level?.outlines ?? []].filter((i) => keys.has(i.key));
     if (this.level && this.wireframe) for (const b of this.level.below ?? []) items.push(...b.items.filter(it => keys.has(it.key) && !items.some(other=>other.key===it.key)));
     if (this.level) items.push(...this.roomWallSelection, ...(this.freeArea ? [this.freeArea] : []));
     if (!g || (!items.length && ![...keys].some((key) => this.doorOpeningEdges.has(key)))) return;
@@ -1369,7 +1371,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Кешированные планы нижних этажей — не освобождать: понадобятся при следующем переключении
       for (const o of [...[...this.palePlans.values()].map((p) => p.group), ...[...this.paleLedges.values()].flatMap((l) => l.meshes)]) o.parent?.remove(o);
       this.indoorObj.traverse((o) => {
-        if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments || o instanceof Line2) o.geometry.dispose();
+        if (o instanceof THREE.Mesh || o instanceof THREE.Line || o instanceof Line2) o.geometry.dispose();
+        if (o.name === 'indoor-steps-outline' && o instanceof THREE.Line) (o.material as THREE.Material).dispose();
         if (o instanceof LineSegments2 && o.material !== ESCALATOR_HANDRAIL && o.material !== ESCALATOR_PALE_HANDRAIL && o.material !== ESCALATOR_SELECTED_HANDRAIL) o.material.dispose();
       });
       this.indoorObj = undefined;
@@ -1378,6 +1381,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!g || !this.level) return;
     const root = new THREE.Group();
     this.indoorObj = root;
+    for(const it of this.level?.outlines ?? [])for(const p of it.polygons)for(const r of [p.outer,...p.inners]){
+      const points=r.map(q=>{const [x,y]=g.toLocal(q);return new THREE.Vector3(x,y,it.z+.01);});
+      if(!points.length)continue;
+      points.push(points[0].clone());
+      const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineDashedMaterial({color:0x666666,dashSize:.2,gapSize:.15,depthTest:false}));
+      line.name='indoor-steps-outline';line.computeLineDistances();line.renderOrder=5;root.add(line);
+    }
     g.scene.add(root);
     // Полы и крышки — двумя слитыми мешами (по мешу на полигон — сотни вызовов отрисовки на этаж)
     const capPos: number[] = [], floorPos: number[] = [], floorCol: number[] = [];
@@ -1529,8 +1539,13 @@ export class BuildingsLayer implements CustomLayerInterface {
           wallSpans.push([...a, ...b]);
         }
       };
+      // The mapped escalator footprint is an outline, not a solid slab fascia.
+      for(const it of this.level.outlines ?? [])for(const p of it.polygons)for(const r of [p.outer,...p.inners])addWallRing(r.map(g.toLocal),true);
       for (const it of this.level.items) if (!it.cutOnly && ['room','wall','column'].includes(it.kind))
         for (const p of it.polygons) for (const r of [p.outer, ...p.inners]) addWallRing(r.map(g.toLocal), !it.line);
+      for (const lower of this.level.below ?? []) if (lower.cut >= this.level.floor - 1e-3)
+        for (const it of lower.items) if (it.z < this.level.floor - 1e-3 && !it.cutOnly && ['room','wall','column'].includes(it.kind))
+          for (const p of it.polygons) for (const r of [p.outer, ...p.inners]) addWallRing(r.map(g.toLocal), !it.line);
       for (const it of g.items) {
         if (g.hidden.has(it.feature.key) || strokeOnly(g, it)) continue;
         const h = computeHeights(it.tags), min = g.lift?.get(it.feature.key) ?? h.min;
@@ -1802,7 +1817,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     root.add(plan.group);
     // Торцы площадок зависят ещё и от пустот выбранного этажа
-    const ledgeKey = `${key}|${(ownVoids ?? []).map(objId).join(',')}|${(this.level?.voids ?? []).map(objId).join(',')}`;
+    const lowerWallsKey = (this.level?.below ?? []).map(b => `${b.cut}:${b.items.map(it => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${+!!it.cutOnly}`).join(',')}`).join(';');
+    const ledgeKey = `${key}|${(ownVoids ?? []).map(objId).join(',')}|${(this.level?.voids ?? []).map(objId).join(',')}|${lowerWallsKey}`;
     let ledges = this.paleLedges.get(ledgeKey);
     if (ledges) {
       this.paleLedges.delete(ledgeKey);
@@ -1841,7 +1857,12 @@ export class BuildingsLayer implements CustomLayerInterface {
           for (let i = 0; i < ring.length; i++) addLedgeWall(ring[i], ring[(i + 1) % ring.length]);
         }
       }
-      for (const it of items) if (it.kind === 'room' || it.kind === 'wall' || it.kind === 'column') {
+      // Стена нижнего этажа, доходящая до пола площадки, уже закрывает торец плиты.
+      // Учитываем её отрезки тем же способом, что стены текущего этажа: частичное
+      // совпадение убирает только перекрытый участок, а не весь свободный край.
+      const belowWalls = (this.level?.below ?? []).filter(b => b.cut >= floor - 1e-3)
+        .flatMap(b => b.items.filter(it => it.z < floor - 1e-3 && !it.cutOnly));
+      for (const it of [...items, ...belowWalls]) if (it.kind === 'room' || it.kind === 'wall' || it.kind === 'column') {
         for (const p of it.polygons) for (const r of it.line ? [p.outer] : [p.outer, ...p.inners]) {
           const ring = r.map(g.toLocal), n = it.line ? ring.length - 1 : ring.length;
           for (let i = 0; i < n; i++) addLedgeWall(ring[i], ring[(i + 1) % ring.length]);

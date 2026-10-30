@@ -1,5 +1,7 @@
 import { withEntranceTags } from './edit/entrance-edits';
 import { cleanPiece, freeAreaPieces } from './edit/free-area';
+import { enclosedDrawings } from './edit/indoor-draw-holes';
+import { joinedWallLine } from './edit/indoor-wall-union';
 import { pointWallRings, insertWallPoint } from './edit/point-wall-rings';
 import { roomDoorway, solidWall, wallLocalPolygons, cutSolidWall, findSolidDoorBinding, restoreSolidDoor, nearestSolidFace, type WallPolygon, normalizeSolidDoorEdits, projectedOpeningIndoor } from './edit/solid-wall-doors';
 import { addFacadeDoors } from './edit/facade-doors';
@@ -3415,6 +3417,8 @@ function toolActiveExceptPoint(): boolean {
 }
 
 // Инструменты «Прямоугольник» (R) и «Полигон» (L): новая часть здания — плоский контур нулевой толщины
+let drawIndoorLevel: number | undefined;
+const indoorDrawTitle = (tool: string, key: string) => tr('{tool}: площадка indoor=area на текущем этаже (level={level}; {key})', { tool, level: drawIndoorLevel!, key });
 const rectBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="rect"]')!;
 const polyBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="polygon"]')!;
 // «Круг» (C) и «Правильный многоугольник» (N): центр и точка на окружности; число углов — в поле у инструмента
@@ -3473,7 +3477,7 @@ function syncRectIcons() {
     btn.innerHTML = `${rectSvg(drawTool.rectMode)}<span class="flyout-arrow" data-flyout title="${tr('Способ построения')}"></span>`;
     const tool = RECT_TITLES[drawTool.rectMode];
     btn.title = part
-      ? tr('{tool}: новая часть (R; Tab или стрелка в углу — способ построения)', { tool })
+      ? drawIndoorLevel !== undefined ? indoorDrawTitle(tool, 'R; Tab') : tr('{tool}: новая часть (R; Tab или стрелка в углу — способ построения)', { tool })
       : tr('{tool}: новое здание (R; Tab или стрелка в углу — способ построения)', { tool });
   }
   try { localStorage.setItem('rect-mode', drawTool.rectMode); } catch { /* нет хранилища */ }
@@ -3537,7 +3541,7 @@ function syncCircleIcons() {
     btn.innerHTML = `${circleSvg(drawTool.circleMode)}<span class="flyout-arrow" data-flyout title="${tr('Способ построения')}"></span>`;
     const tool = CIRCLE_TITLES[drawTool.circleMode];
     btn.title = part
-      ? tr('{tool}: новая часть (C; Tab или стрелка в углу — способ построения)', { tool })
+      ? drawIndoorLevel !== undefined ? indoorDrawTitle(tool, 'C; Tab') : tr('{tool}: новая часть (C; Tab или стрелка в углу — способ построения)', { tool })
       : tr('{tool}: новое здание (C; Tab или стрелка в углу — способ построения)', { tool });
   }
   try { localStorage.setItem('circle-mode', drawTool.circleMode); } catch { /* нет хранилища */ }
@@ -7628,7 +7632,7 @@ window.addEventListener('mouseup', (e) => {
   }
   if (focus && shownLevel && !addingTo && !e.altKey) {
     const inside = shownIndoor.filter((f) => {
-      if (f.escalatorArea || indoorHidden.has(indoorKey(f.key))) return false;
+      if (indoorHidden.has(indoorKey(f.key))) return false;
       const at = f.point ?? (f.polygons[0]?.outer.length ? centroid(f.polygons[0].outer) : undefined);
       if (!at) return false;
       const p = overpassLayer.focusScreenPoint(at, shownLevel!.floor + 0.06);
@@ -7929,6 +7933,7 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   const visible = list.filter((f) => overpass.isVisible(f)).filter((f) => f.kind === 'poi' || !indoorEdited.has(indoorKey(f.key)) || !!f.tags.indoor || (f.escalator && f.tags.highway === 'steps' && !!f.tags.conveying && f.tags.conveying !== 'no'));
   const axes = visible.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
   return visible.map((f) => {
+    if (f.tags.indoor === 'area' && f.tags.room === 'steps' && !f.line) return { ...f, escalatorArea: true };
     if (f.line || !f.polygons.length || !(f.tags.room === 'stairs' || f.tags.stairs === 'yes' || f.tags.conveying)) return f;
     const matched = axes.some((axis) => escalatorAreaMatches(axis, f));
     return matched ? { ...f, escalatorArea: true } : f;
@@ -8200,6 +8205,10 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
   const door = overpassLayer.pickDoor(point);
   const doorF = door ? shownIndoor.find((x) => x.key === door) : undefined;
   if (doorF) return doorF;
+  const floorPoint = hit && overpassLayer.focusToLngLat(hit.x,hit.y);
+  const stepsArea = floorPoint && shownIndoor.find(f => f.escalatorArea && f.polygons.some(p =>
+    (pointInRing(floorPoint,p.outer) || nearRing(floorPoint,p.outer,0.08)) && !p.inners.some(r=>pointInRing(floorPoint,r))));
+  if (stepsArea) return stepsArea;
   const escalator = overpassLayer.pickEscalator(point);
   const solid = overpassLayer.pickIndoorSolid(point);
   if (escalator && (!solid || escalator.t <= solid.t + 0.02)) {
@@ -8642,7 +8651,7 @@ function indoorRelationTopology(edits: ObjectEdit[], inserts: Insert[] = []): Ob
 
 /** Geometry-editable indoor objects; POIs, stairs and floor outlines have separate tools. */
 function editableIndoorGeometry(f: IndoorFeature): boolean {
-  return !f.point && !f.escalator && !f.escalatorArea && ['room', 'area', 'corridor', 'wall', 'column'].includes(f.kind);
+  return !f.point && !f.escalator && ['room', 'area', 'corridor', 'wall', 'column'].includes(f.kind);
 }
 function indoorShapeVertices(t: ShapeTarget): IndoorVertex[] {
   return [t, ...(t.also ?? [])].map(v => ({ key: t.key, poly: v.poly, ring: v.ring, i: v.i }));
@@ -8701,6 +8710,7 @@ function applyIndoorGeometry(op: IndoorOperation, glue: boolean): boolean {
     }
     edits = updateSolidDoorGeometry(edits);
     edits = indoorRelationTopology(edits);
+    dropCollapsedHoles(edits);
     edits = normalizeSolidDoorEdits(edits);
     const sides = [...selectedRoomWalls];
     overpassLayer.setOutline(undefined);
@@ -8828,6 +8838,8 @@ async function deleteIndoorSpaces(fs: IndoorFeature[]) {
  */
 async function mergeIndoor(): Promise<string | undefined> {
   if (!focus || !shownLevel) return tr('Объединять помещения можно на этаже здания.');
+  if (indoorSelection.length >= 2 && indoorSelection.every(f => f.kind === 'wall' && f.line) && !freeExtra.length)
+    return mergeIndoorWallLines([...indoorSelection]);
   const fs = indoorSelection.filter(isIndoorUnionPolygon);
   // Пустая площадь (Shift+клик) — тоже в объединение: её форма, теги — от размеченных
   const extra = freeExtra.filter((a) => a.n === shownLevel!.n);
@@ -8961,6 +8973,33 @@ async function mergeIndoor(): Promise<string | undefined> {
   setStatus(tr('Объединено в {key}: объектов {n}.', { key: resultKey, n: fs.length })
     + (conflicts ? ' ' + tr('Разные значения тегов ({k}) — оставлены у {key}.', { k: conflicts, key: resultKey }) : ''));
   return;
+}
+
+/** Wall union keeps the first way and preserves every vertex of the chain. */
+async function mergeIndoorWallLines(fs: IndoorFeature[]): Promise<string | undefined> {
+  if (new Set(fs.map(indoorUnionSignature)).size > 1) return tr('Для объединения должны совпадать тип, этажи и высота стен.');
+  const line = joinedWallLine(fs);
+  if (!line) return tr('Выбранные стены должны образовывать единую линию без разветвлений и наложений.');
+  const [keep,...rest]=fs;
+  const stamp=JSON.stringify(session.changes()), selectionStamp=indoorSelection.map(f=>f.key).join(','), building=focus?.key;
+  const existing=rest.filter(f=>Number(f.key.split('/')[1])>0);
+  const api=server().api;
+  let parents: {id:number}[][];
+  try { parents=await Promise.all(existing.map(f=>fetchWayRelations(Number(f.key.split('/')[1]),api))); }
+  catch(err) { return tr('Не удалось проверить отношения: {error}',{error:(err as Error).message}); }
+  if (api!==server().api || focus?.key!==building || !shownLevel || stamp!==JSON.stringify(session.changes()) || selectionStamp!==indoorSelection.map(f=>f.key).join(','))
+    return tr('Выбор или данные изменились. Повторите.');
+  const linked=existing.filter((_,i)=>parents[i].some(r=>!session.isDeleted(`relation/${r.id}`)));
+  if(linked.length)return tr('{keys} входит в отношение — объединение его бы удалило.',{keys:linked.map(f=>f.key).join(', ')});
+  const tags={...keep.tags};
+  for(const f of rest)for(const [k,v] of Object.entries(f.tags))if(tags[k]===undefined)tags[k]=v;
+  for(const f of fs)trackIndoor(indoorKey(f.key),f);
+  const polygons=[{outer:line.coords,outerIds:line.ids,inners:[],innerIds:[]}];
+  session.editMany([{key:indoorKey(keep.key),tags,line,polygons},...rest.map(f=>({key:indoorKey(f.key),delete:true}))]);
+  indoorEditRev++;
+  renderLevels();
+  const result=buildingIndoorFor(keep.key);
+  if(result)selectIndoor(result);
 }
 
 /** Удаление стены и материализация остальных сторон помещений — один шаг истории. */
@@ -10360,7 +10399,7 @@ function applyRepeat(fs: IndoorFeature[], copies: Map<number, IndoorFeature>[], 
 }
 
 /**
- * «Прямоугольник» и «Полигон» на плане этажа: помещение indoor=area этого этажа по нарисованному контуру
+ * R / L / C / N на плане этажа: площадка indoor=area этого этажа по нарисованному контуру
  * (в пределах среза этажа). Вершины на соседях — их узлы.
  */
 function createIndoorDrawn(ring: [number, number][]): string | undefined {
@@ -10379,7 +10418,36 @@ function createIndoorDrawn(ring: [number, number][]): string | undefined {
   const edits: ObjectEdit[] = [];
   const made = polys.map((p) => indoorCreateEdits(p, { indoor: 'area', level: String(shownLevel!.n) }, nodeFor, edits)).filter((m): m is IndoorFeature => !!m);
   if (!made.length) return tr('Контур вырожден: у него нет площади.');
+  const containers: IndoorFeature[] = [];
+  for (const f of shownIndoor.filter(f => isIndoorCutPolygon(f) && !f.line)) {
+    const polygons = f.polygons.map(p => {
+      const holes = enclosedDrawings(p, made.flatMap(m => m.polygons));
+      return holes.length ? { ...p, inners: [...p.inners, ...holes.map(h => h.outer)],
+        innerIds: [...(p.innerIds ?? p.inners.map(r => r.map(q => nodeFor(q).id))), ...holes.map(h => h.outerIds!)] } : p;
+    });
+    if (polygons.every((p,i) => p === f.polygons[i])) continue;
+    const key = indoorKey(f.key);
+    trackIndoor(key, f);
+    if (key.startsWith('way/')) {
+      const rings = [polygons[0].outer, ...polygons[0].inners].map(r => nodeRing(r, nodeFor)!);
+      const converted = indoorUnionHoleEdits(f, f.tags, rings, () => nextNewId--);
+      edits.push(...converted.edits);
+      containers.push(converted.feature);
+    } else {
+      const members = session.get(key)?.relMembers ?? indoorRelationSources.get(key)?.ways?.map(w => ({ type: 'way' as const, ref: w.id, role: w.role }));
+      if (!members) return tr('Не хватает данных путей indoor-мультиполигона. Перезагрузите здание.');
+      session.track({ key, version: indoorRelationSources.get(key)?.version ?? 0, tags: f.tags, relMembers: members });
+      const added = polygons.flatMap((p,i) => p.inners.slice(f.polygons[i].inners.length).map(r => {
+        const nodes = nodeRing(r,nodeFor)!;
+        const id = nextNewId--, wk = `way/${id}`;
+        edits.push({key:wk,create:{key:wk,version:0,tags:{},line:{ids:[...nodes.map(n=>n.id),nodes[0].id],coords:[...nodes.map(n=>n.p),nodes[0].p]}}});
+        return {type:'way' as const,ref:id,role:'inner'};
+      }));
+      edits.push({key,polygons,members:[...members,...added]});
+    }
+  }
   session.editMany(edits);
+  for (const f of containers) { indoorCreated.set(f.key,f); indoorEdited.add(f.key); }
   for (const m of made) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
   indoorEditRev++;
   renderLevels();
@@ -10536,6 +10604,11 @@ function renderLevelsImpl() {
     clearInfo();
   }
   shownLevel = level;
+  drawIndoorLevel = level?.n;
+  syncRectIcons();
+  syncCircleIcons();
+  polyBtn.title = level ? indoorDrawTitle(tr('Полигон'), 'L') : tr('Полигон: новая часть (L)');
+  ngonBtn.title = level ? indoorDrawTitle(tr('Правильный многоугольник'), 'N') : tr('Правильный многоугольник: новая часть (N)');
   shownIndoor = onLevel;
   if (selectedRoomWalls.length && (!level || selectedRoomWalls.some((w) => !onLevel.some((f) => f.key === w.key && f.kind === 'room')))) {
     selectIndoor(undefined);
@@ -10556,6 +10629,7 @@ function renderLevelsImpl() {
     });
     return {
       cut: l.ceil,
+      outlines: fs.filter(f=>f.escalatorArea).map((f):IndoorItem=>({key:f.key,kind:f.kind,polygons:f.polygons,z:l.floor})),
       doorCuts,
       // Площадь эскалатора задаёт его след и проём, но не сплошной пол под ступенями.
       // Многоэтажные помещения имеют пол только внизу; стены и колонны есть на всех указанных уровнях.

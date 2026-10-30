@@ -100,6 +100,7 @@ export function restructureRing(ways: RingWay[], ring: number[] | number[][], ro
 
   function addFree(ring: number[]) {
     const n = ring.length;
+    if (n < 3) return;
     const free = ring.map((a, i) => !covered.has(edgeKey(a, ring[(i + 1) % n])));
     if (free.every(Boolean)) {
       const id = alloc();

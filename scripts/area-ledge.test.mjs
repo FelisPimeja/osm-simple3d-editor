@@ -83,6 +83,26 @@ test('renderer adds thickness only to explicit indoor=area, and walls prevent it
   assert.equal(ledges().length, 0);
 });
 
+test('a lower-floor wall reaching the area floor hides its coincident slab edge', () => {
+ const {layer,area,voids,walls,ledges}=fixture();
+ const lower=walls.map(w=>({...w,z:0}));
+ layer.setLevel({floor:3,cut:6,items:[area],voids,below:[{cut:3,items:lower}]});
+ assert.equal(ledges().length,0);
+ // A wall ending below the slab does not cover it.
+ layer.setLevel({floor:3,cut:6,items:[area],voids,below:[{cut:2,items:lower}]});
+ assert.equal(ledges().length,1);
+});
+
+test('a partial lower wall leaves the uncovered slab edge visible', () => {
+ const {layer,area,voids,ledges,poly}=fixture();
+ layer.setLevel({floor:3,cut:6,items:[area],voids});
+ const full=surface(ledges()[0].geometry.getAttribute('position').array);
+ const wall={key:'lower-wall',kind:'wall',line:true,z:0,polygons:[{outer:[poly(rectangle(6,2,7,4)).outer[0],poly(rectangle(6,2,7,4)).outer[3]],inners:[]}]};
+ layer.setLevel({floor:3,cut:6,items:[area],voids,below:[{cut:3,items:[wall]}]});
+ assert.equal(ledges().length,1);
+ assert.ok(Math.abs(full-surface(ledges()[0].geometry.getAttribute('position').array)-.6)<.002);
+});
+
 test('room boundaries and solid walls prevent thickness, including a doorway', () => {
   const { layer, area, voids, walls, ledges, poly } = fixture();
   const room = { key: 'way/4', kind: 'room', z: 3, polygons: [poly(rectangle(6, 2, 8, 6))] };

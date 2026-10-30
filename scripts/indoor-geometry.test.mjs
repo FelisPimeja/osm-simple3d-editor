@@ -72,3 +72,14 @@ test('multipolygon ring edits can be passed to the member-way topology layer',()
  assert.equal(edit.polygons[0].outer.length,5);
  assert.ok(edit.polygons[0].outerIds[1]<0);
 });
+
+test('removing vertices collapses an inner ring without deleting the outer ring',()=>{
+ const f=a();f.polygons[0].inners=[[[.5,.5],[1,.5],[1,1],[.5,1]]];f.polygons[0].innerIds=[[10,11,12,13]];
+ const op={type:'remove',vertices:[{key:f.key,poly:0,ring:1,i:0},{key:f.key,poly:0,ring:1,i:1}]};
+ const before=structuredClone(f);
+ const result=editIndoorGeometry([f],op,true,fresh)[0].polygons[0];
+ assert.deepEqual(result.inners,[]);assert.deepEqual(result.outer,f.polygons[0].outer);assert.deepEqual(f,before);
+ const rel={...f,key:'relation/18372778'};
+ const edits=editIndoorGeometry([rel],{...op,vertices:op.vertices.map(v=>({...v,key:rel.key}))},true,fresh,true);
+ assert.deepEqual(edits[0].polygons[0].innerIds,[[]]);
+});

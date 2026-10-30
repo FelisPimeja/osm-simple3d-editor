@@ -109,8 +109,8 @@ test('opening outline skips walls, retains exposed slab edges, and clips partial
  const layer=new BuildingsLayer('test'),ll=([x,y])=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
  layer.setFocus([{key:'way/1',id:1,type:'way',version:1,kind:'building',hasParts:false,tags:{building:'yes',height:'9'},polygons:[{outer:outer.map(ll),inners:[]}]}]);
  const room={key:'stairs',kind:'room',z:3,noFloor:true,polygons:[{outer:hole.map(ll),inners:[]}]};
- const length=items=>{
-  layer.setLevel({floor:3,cut:6,items,doors:[],voids:[[hole.map(ll)]]});
+ const length=(items,below=[])=>{
+  layer.setLevel({floor:3,cut:6,items,doors:[],voids:[[hole.map(ll)]],below});
   let length=0;
   for(const o of layer.indoorObj.children.filter(o=>o.isLineSegments&&o.name!=='indoor-floor-contact')){
    const p=o.geometry.getAttribute('position');
@@ -122,6 +122,10 @@ test('opening outline skips walls, retains exposed slab edges, and clips partial
  assert.ok(Math.abs(length([])-40)<.1);
  assert.equal(length([room]),0);
  assert.ok(Math.abs(length([{key:'wall',kind:'wall',line:true,z:3,polygons:[{outer:[[5,5],[10,5]].map(ll),inners:[]}]}])-35)<.1);
+ assert.equal(length([],[{cut:3,items:[{...room,z:0}]}]),0);
+ const underside=layer.indoorObj.getObjectByName('indoor-slab-underside').geometry.getAttribute('position');
+ for(let i=0;i<underside.count;i+=3)assert.ok([0,1,2].every(j=>Math.abs(underside.getZ(i+j)-2.7)<.001),'no vertical slab fascia over the lower room wall');
+ assert.ok(Math.abs(length([],[{cut:2,items:[{...room,z:0}]}])-40)<.1);
 });
 
 test('white base floor occupies only the area not covered by room floors',async()=>{
@@ -200,7 +204,7 @@ test('slab underside (ceiling of the floor below) is 0.3 m below the floor and i
  const under=layer.indoorObj.getObjectByName('indoor-slab-underside');
  assert.ok(under);assert.equal(under.userData.decor,true);
  const zs=new Set(Array.from(under.geometry.getAttribute('position').array).filter((_,i)=>i%3===2).map(z=>Math.round(z*1000)/1000));
- assert.deepEqual([...zs].sort(),[2.7,3]);
+ assert.deepEqual([...zs].sort(),[2.7]); // Нижняя комната закрывает вертикальные торцы до отметки пола.
  const hits=[];under.raycast(null,hits);assert.equal(hits.length,0);
 });
 
@@ -219,4 +223,19 @@ test('a multilevel room cuts through an area that contains it, not through a par
  assert.ok(Math.abs(findVoids(1,buildPlans(levels,[part],[stairs,around])).reduce((s,v)=>s+multiArea(v.polygon),0)-15)<1e-6);
  const gallery={kind:'area',polygons:[[square(0,0,6.5,20)]],levels:[1],floors:[1]};
  assert.ok(Math.abs(findVoids(1,buildPlans(levels,[part],[stairs,gallery])).reduce((s,v)=>s+multiArea(v.polygon),0)-7.5)<1e-6);
+});
+
+test('escalator area is a dashed floor outline and suppresses the opening fascia',async()=>{
+ const {BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts');
+ const layer=new BuildingsLayer('test'),ll=([x,y])=>[37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
+ layer.setFocus([{key:'way/1',kind:'building',hasParts:false,tags:{building:'yes',height:'9'},polygons:[{outer:outer.map(ll),inners:[]}]}]);
+ const outline={key:'stairs-area',kind:'area',z:3,polygons:[{outer:hole.map(ll),inners:[]}]};
+ layer.setLevel({floor:3,cut:6,items:[],outlines:[outline],voids:[[hole.map(ll)]],below:[{cut:3,items:[]}]});
+ const line=layer.indoorObj.getObjectByName('indoor-steps-outline');
+ assert.ok(line?.isLine);assert.ok(line.material.isLineDashedMaterial);
+ const p=line.geometry.getAttribute('position');
+ for(let i=0;i<p.count;i++)assert.ok(Math.abs(p.getZ(i)-3.01)<.001);
+ const under=layer.indoorObj.getObjectByName('indoor-slab-underside').geometry.getAttribute('position');
+ for(let i=0;i<under.count;i++)assert.ok(Math.abs(under.getZ(i)-2.7)<.001);
+ assert.equal(layer.indoorObj.getObjectByName('indoor-area-underside'),undefined);
 });

@@ -1367,5 +1367,9 @@
   "Очистить правки": "Clear edits",
   "Точка: щелчок на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа. Shift — вести точку вдоль стены. Esc — выйти.": "Point: click a room wall — door, an outer wall — entrance, inside — a level object. Shift — slide the point along the wall. Esc — exit.",
   "Неразмеченная площадь в выделении: {n}. J — объединить с выделенными помещениями (теги — от них).": "Unmapped area in the selection: {n}. J — merge with the selected rooms (their tags are kept).",
-  "С неразмеченной площадью объединяются объекты с одинаковыми тегами — у выделенных они разные.": "Unmapped area merges only with objects that have identical tags — the selected ones differ."
+  "С неразмеченной площадью объединяются объекты с одинаковыми тегами — у выделенных они разные.": "Unmapped area merges only with objects that have identical tags — the selected ones differ.",
+  "{tool}: площадка indoor=area на текущем этаже (level={level}; {key})": "{tool}: indoor=area on the current floor (level={level}; {key})",
+  "Полигон": "Polygon",
+  "Правильный многоугольник": "Regular polygon",
+  "Выбранные стены должны образовывать единую линию без разветвлений и наложений.": "Selected walls must form a single line without branches or overlaps."
 }

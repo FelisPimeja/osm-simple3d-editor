@@ -99,16 +99,21 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
       });
       const closedLine = !!f.line && r.ids.length > 2 && r.ids[0] === r.ids[r.ids.length-1];
       if (closedLine && ids.length && ids[0] !== ids[ids.length-1]) { ids.push(ids[0]); coords.push(coords[0]); }
-      if (changed&&coords.length<(closedLine?4:f.line?2:3)) throw new Error('После изменения останется слишком мало узлов.');
+      if (changed&&coords.length<(closedLine?4:f.line?2:3)) {
+        // Keep the original ring index until relation topology removes its member ways.
+        if (op.type==='remove' && !f.line && r.ring>0) return {...r,coords:[],ids:[]};
+        throw new Error('После изменения останется слишком мало узлов.');
+      }
       return {...r,coords,ids};
     });
     if (!changed) continue;
     for (const r of output) {
+      if (r.ring>0 && !r.coords.length) continue;
       const closed = !!f.line && !!r.ids && r.ids.length > 2 && r.ids[0] === r.ids[r.ids.length-1];
       validateRing(closed ? r.coords.slice(0,-1) : r.coords, !!f.line && !closed);
     }
     const polygons:Polygon[]=f.polygons.map((p,poly)=>{
-      const rr=output.filter(r=>r.poly===poly);
+      const rr=output.filter(r=>r.poly===poly && (relationTopology || r.ring===0 || r.coords.length));
       return {...p,outer:rr[0].coords,outerIds:rr[0].ids,inners:rr.slice(1).map(r=>r.coords),innerIds:rr.slice(1).map(r=>r.ids!)};
     });
     edits.push(f.line ? {key:f.key,line:{coords:polygons[0].outer,ids:polygons[0].outerIds!}} : {key:f.key,polygons});

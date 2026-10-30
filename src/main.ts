@@ -1,5 +1,5 @@
 import { withEntranceTags } from './edit/entrance-edits';
-import { freeAreaPieces } from './edit/free-area';
+import { cleanPiece, freeAreaPieces } from './edit/free-area';
 import { pointWallRings, insertWallPoint } from './edit/point-wall-rings';
 import { roomDoorway, solidWall, wallLocalPolygons, cutSolidWall, findSolidDoorBinding, restoreSolidDoor, nearestSolidFace, type WallPolygon, normalizeSolidDoorEdits, projectedOpeningIndoor } from './edit/solid-wall-doors';
 import { addFacadeDoors } from './edit/facade-doors';
@@ -9377,7 +9377,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
     try {
       // По стене — до её конца на стороне, дальше не продлеваем
       return finiteCutPieces([...polygonClipping.intersection(local, plane), ...polygonClipping.difference(local, plane)], path, local)
-        .filter((q) => localArea(q) >= CUT_MIN_AREA);
+        .flatMap((q) => cleanPiece(q, CUT_MIN_AREA)).filter((q) => localArea(q) >= CUT_MIN_AREA);
     } catch (err) { console.warn('[cut-plan]', err); return []; }
   };
   const rooms = shownIndoor.filter((f) => isIndoorCutPolygon(f) && f.polygons.length);
@@ -9475,6 +9475,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
     trackIndoor(key, f);
     edits.push({ key, polygons: [p] });
     touched++;
+      // Узкие клинья и сшивки в точке (сторона помещения почти вдоль контура этажа) — прочь: куски без шипов и «ножек»
   }
   session.editMany(edits);
   for (const m of created) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }

@@ -40,3 +40,35 @@ test('despike removes zero-width slits, keeps the face',async()=>{
  assert.deepEqual(despike(ring),[[0,0],[4,0],[4,-1],[0,-1],[0,0]]);
  assert.deepEqual(despike([[0,0],[1,0],[1,1],[0,1],[0,0]]),[[0,0],[1,0],[1,1],[0,1],[0,0]]);
 });
+
+// way/-272 → way/-274 (w219440454): узел контура этажа на 13 см левее грани колонны — пустая площадь получила клин
+// длиной 2,3 м вверх и 1,6 м вниз вдоль стены, стена из куска — шип.
+test('despike removes narrow wedges along the outline, keeps real corners',async()=>{
+ const {despike}=await v.ssrLoadModule('/src/edit/free-area.ts');
+ const ring=[[-0.13,2.83],[0,0],[0.1,-2.12],[0.02,-0.5],[0.5,-0.48],[0.45,0.52],[-0.02,0.5],[-0.13,2.83]];
+ assert.deepEqual(despike(ring),[[0,0],[0.02,-0.5],[0.5,-0.48],[0.45,0.52],[-0.02,0.5],[0,0]]);
+ const sharp=[[0,0],[10,0],[0,1.2],[0,0]];
+ assert.deepEqual(despike(sharp),sharp);
+});
+
+// way/-294 (w219440454): проём лестницы у самой стены — пустая площадь из двух кусков, сшитых в узле -41,
+// и «ножка» нулевой ширины вдоль стены.
+test('cleanPiece splits a ring pinched at a vertex and drops the zero-width leg',async()=>{
+ const {cleanPiece}=await v.ssrLoadModule('/src/edit/free-area.ts');
+ const ring=[[0,0],[0.3,-6.31],[0.43,-9.17],[0.48,-10.17],[0.53,-11.32],[9.01,-10.92],[8.77,-5.92],[4.53,-6.11],[0.3,-6.31],[0.16,-3.31],[4.39,-3.11],[4.24,0.2],[0,0]];
+ const out=cleanPiece([ring]);
+ assert.equal(out.length,2);
+ const upper=out.find(p=>p[0].some(q=>q[1]>0));
+ assert.ok(!upper[0].some(q=>q[1]<-3.5),JSON.stringify(upper));
+});
+
+// relation/-297 (w219440454): проём лестницы — внутреннее кольцо, касающееся внешнего контура (узлы -212, -41 на
+// его стороне, -45 — его вершина): не двор, а вырез, делящий площадь на два куска.
+test('cleanPiece turns an inner ring touching the outer into a notch and splits the piece',async()=>{
+ const {cleanPiece}=await v.ssrLoadModule('/src/edit/free-area.ts');
+ const outer=[[0,0],[0.43,-9.17],[0.48,-10.17],[0.53,-11.32],[9.01,-10.92],[8.47,0.4],[7.93,0.37],[6.93,0.33],[6.36,0.3],[6.51,-3.02],[5.33,-3.07],[4.39,-3.11],[4.24,0.2],[0,0]];
+ const inner=[[4.39,-3.11],[4.53,-6.11],[0.3,-6.31],[0.16,-3.31],[4.39,-3.11]];
+ const out=cleanPiece([outer,inner]);
+ assert.equal(out.length,2,JSON.stringify(out));
+ assert.ok(out.every(p=>p.length===1));
+});

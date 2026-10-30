@@ -211,3 +211,12 @@ test('the lowest floor has no slab underside sticking out under the facade',asyn
  layer.setLevel({floor:0,cut:3,items:[],doors:[]});
  assert.equal(layer.indoorObj.getObjectByName('indoor-slab-underside'),undefined);
 });
+// way/-275 (w219440454): room=stairs level=0;1 внутри неразмеченной площади indoor=area level=1 — площадка-контейнер
+// не пол над лестницей; частичная площадка (галерея над залом) — пол.
+test('a multilevel room cuts through an area that contains it, not through a partial one',()=>{
+ const stairs={kind:'room',polygons:[[square(5,5,8,10)]],levels:[0,1],floors:[0]};
+ const around={kind:'area',polygons:[[outer]],levels:[1],floors:[1]};
+ assert.ok(Math.abs(findVoids(1,buildPlans(levels,[part],[stairs,around])).reduce((s,v)=>s+multiArea(v.polygon),0)-15)<1e-6);
+ const gallery={kind:'area',polygons:[[square(0,0,6.5,20)]],levels:[1],floors:[1]};
+ assert.ok(Math.abs(findVoids(1,buildPlans(levels,[part],[stairs,gallery])).reduce((s,v)=>s+multiArea(v.polygon),0)-7.5)<1e-6);
+});

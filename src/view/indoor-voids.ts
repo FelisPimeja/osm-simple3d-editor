@@ -71,7 +71,15 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
       && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels)
       && !(f.floors ?? [Math.min(...f.levels)]).includes(l.n))
       .flatMap(f => f.polygons.map(p => p.map(open)));
-    const explicitVoids = spaces.length ? safe(() => polygonClipping.intersection(floor, polygonClipping.difference(unionOf(spaces), mapped))) : [];
+    // Пол этажа над пустотой: размеченное с полом здесь. Площадка (indoor=area), целиком содержащая пустоту, —
+    // зона-контейнер (неразмеченная площадь вокруг лестницы), не пол над ней; частичная (галерея) — пол
+    const floored = onLevel.filter((f) => f.kind !== 'level' && (f.floors ?? [Math.min(...f.levels)]).includes(l.n));
+    const contains = (outer: Pt[][][], inner: Pt[][]) => { const a = multiArea([inner as never]); return a > 1e-6 && multiArea(safe(() => polygonClipping.intersection(outer as never, [inner] as never))) >= a * .999; };
+    const open1 = spaces.map(space => {
+      const blockers = floored.filter(f => !(f.kind === 'area' && contains(f.polygons.map(p => p.map(open)), space))).flatMap(f => f.polygons.map(p => p.map(open)));
+      return safe(() => polygonClipping.intersection(floor, polygonClipping.difference([space] as never, unionOf(blockers))));
+    }).filter(m => m.length);
+    const explicitVoids = open1.length ? safe(() => polygonClipping.union(open1[0], ...open1.slice(1))) : [];
     plans.set(l.n, { floor, mapped, explicitVoids });
   }
   return plans;

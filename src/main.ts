@@ -1520,14 +1520,21 @@ map.on('click', (e) => {
   }
   // План этажа: клик по полу помещения — его теги в свойствах
   // Shift+клик при выбранном indoor-объекте — добавить к выбранным или убрать (иначе Shift — части здания)
-  const indoorAdd = e.originalEvent.shiftKey && (indoorSelection.length > 0 || selectedRoomWalls.length > 0);
+  const indoorAdd = e.originalEvent.shiftKey && (indoorSelection.length > 0 || selectedRoomWalls.length > 0 || !!freeArea);
   if (focus && shownLevel && !addingTo && (!e.originalEvent.shiftKey || indoorAdd) && !e.originalEvent.altKey) {
     const wall = roomWallAt([e.point.x, e.point.y]);
     if (wall) { selectRoomWall(wall, e.originalEvent.shiftKey); return; }
     // На этаже приоритет у помещений: части здания — Shift/Alt-кликом или при «Всё здание»
     const room = indoorAt([e.point.x, e.point.y]);
+    // Выделена пустая площадь, Shift+клик по помещению — площадь остаётся в выделении вместе с ним
+    if (room && indoorAdd && freeArea) { const a = freeArea; selectIndoor(room); freeExtra = [a]; showFreeExtra(); return; }
     if (room) { selectIndoor(room, indoorAdd); return; }
-    if (indoorAdd) return; // Shift+клик мимо — выбор не сбрасываем
+    if (indoorAdd) {
+      // Shift+клик по пустой площади при выделенных помещениях — добавить её к выделению; мимо — выбор не сбрасываем
+      const free = indoorSelection.length ? freeAreaAt([e.point.x, e.point.y]) : undefined;
+      if (free) toggleFreeExtra(free);
+      return;
+    }
     const free = freeAreaAt([e.point.x, e.point.y]);
     if (free) { selectFreeArea(free); return; }
   }
@@ -7513,7 +7520,7 @@ function toolHint(hint: string | undefined, error = false) {
 
 /** Выделить объект (или группу); false — выделять нечего. */
 function select(key: string | undefined): boolean {
-  if (freeArea) { freeArea = undefined; overpassLayer.setFreeArea(undefined); }
+  if (freeArea || freeExtra.length) { freeArea = undefined; freeExtra = []; overpassLayer.setFreeArea(undefined); }
   if (selectedEntrance !== undefined) { cancelEntranceDrag(); selectedEntrance = undefined; overpassLayer.setEntranceSelection(undefined); }
   clearTreeSelection();
   roadsLayer.select([]);
@@ -8247,6 +8254,8 @@ function selectRoomWall(wall: RoomWall, add = false) {
  */
 function selectIndoor(f: IndoorFeature | undefined, add = false) {
   if (freeArea) { freeArea = undefined; overpassLayer.setFreeArea(undefined); }
+  // Пустая площадь в выделении — пока к нему добавляют (Shift), иначе снимается
+  if (!add && freeExtra.length) { freeExtra = []; overpassLayer.setFreeArea(undefined); }
   selectedRoomWalls = [];
   overpassLayer.setRoomWallSelection([]);
   if (f) clearTreeSelection();
@@ -8812,20 +8821,41 @@ async function deleteIndoorSpaces(fs: IndoorFeature[]) {
 async function mergeIndoor(): Promise<string | undefined> {
   if (!focus || !shownLevel) return tr('Объединять помещения можно на этаже здания.');
   const fs = indoorSelection.filter(isIndoorUnionPolygon);
-  if (fs.length < 2 || fs.length !== indoorSelection.length) return tr('Выделите два или больше помещения, коридора, площадки или полигональной стены.');
-  if (fs.some((f) => !f.key.startsWith('way/') || f.polygons.length !== 1 || !f.polygons[0].outerIds)) return tr('Мультиполигоны пока не объединяются — только помещения-пути.');
-  if (fs.some((f) => f.polygons[0].inners.length)) return tr('Внутри объединения получилась дыра — такое пока не поддерживается.');
+  // Пустая площадь (Shift+клик) — тоже в объединение: её форма, теги — от размеченных
+  const extra = freeExtra.filter((a) => a.n === shownLevel!.n);
+  if (fs.length + extra.length < 2 || !fs.length || fs.length !== indoorSelection.length) return tr('Выделите два или больше помещения, коридора, площадки или полигональной стены.');
+  // Мультиполигоны — тоже: объединяются все их кольца (с дырами); нужны id узлов и, у отношения, его пути-члены
+  const isRel = (f: IndoorFeature) => indoorKey(f.key).startsWith('relation/');
+  /** Пути-члены мультиполигона: загруженного — из данных, созданного в сессии — из сессии. */
+  const relWaysOf = (f: IndoorFeature): MemberWay[] | undefined => {
+    const src = indoorRelationSources.get(f.key)?.ways;
+    if (src) return src;
+    const members = session.get(indoorKey(f.key))?.relMembers;
+    const ways = members?.filter((m) => m.type === 'way').map((m) => { const w = session.get(`way/${m.ref}`); return w?.line ? { id: m.ref, role: m.role, nodes: w.line.ids, tags: w.tags } : undefined; });
+    return ways?.length && ways.every(Boolean) ? ways as MemberWay[] : undefined;
+  };
+  if (fs.some((f) => !f.polygons.length || f.polygons.some((p) => !p.outerIds) || (isRel(f) && !relWaysOf(f))))
+    return tr('Не хватает данных путей indoor-мультиполигона. Перезагрузите здание.');
+  if (fs.some((f) => !isRel(f) && (f.polygons.length !== 1 || f.polygons[0].inners.length))) return tr('Внутри объединения получилась дыра — такое пока не поддерживается.');
   if (new Set(fs.map(indoorUnionSignature)).size > 1) return tr('Для объединения должны совпадать тип, этажи и высота стен.');
+  // С пустой площадью теги результата — от размеченных: у нескольких они должны совпадать целиком
+  const ownTags = (f: IndoorFeature) => JSON.stringify(Object.entries(f.tags).filter(([k]) => k !== 'type').sort());
+  if (extra.length && new Set(fs.map(ownTags)).size > 1) return tr('С неразмеченной площадью объединяются объекты с одинаковыми тегами — у выделенных они разные.');
   const toLocal = (r: LonLat[]) => { const q = r.map((x) => overpassLayer.focusToLocal(x)!); return [...q, q[0]] as [number, number][]; };
   let union: [number, number][][][];
-  try { union = polygonClipping.union(...fs.map((f) => [toLocal(f.polygons[0].outer)]) as [[[number, number][]]]); } catch (err) { console.warn('[merge-indoor]', err); return tr('Не удалось объединить контуры.'); }
+  try { union = polygonClipping.union(...[...fs.flatMap((f) => f.polygons), ...extra.map((a) => a.polygon)].map((p) => [toLocal(p.outer), ...p.inners.map(toLocal)]) as [[[number, number][]]]); } catch (err) { console.warn('[merge-indoor]', err); return tr('Не удалось объединить контуры.'); }
+  // Вырожденные кольца (три узла на прямой у мультиполигона) — не кусок объединения
+  union = union.filter((q) => ringArea(q[0].slice(0, -1)) >= CUT_MIN_AREA).map((q) => [q[0], ...q.slice(1).filter((r) => ringArea(r.slice(0, -1)) >= CUT_MIN_AREA)]);
   if (union.length !== 1) return tr('Объекты не соприкасаются — объединяются только помещения с общей стороной.');
-  const sorted = [...fs].sort((a, b) => polyArea(b.polygons[0]) - polyArea(a.polygons[0]));
+  const area = (f: IndoorFeature) => f.polygons.reduce((a, p) => a + polyArea(p), 0);
+  // Историю хранит наибольший путь; одни мультиполигоны — результат новым объектом с тегами наибольшего
+  const sorted = [...fs].sort((a, b) => Number(isRel(a)) - Number(isRel(b)) || area(b) - area(a));
   const [keep, ...rest] = sorted;
   const keepKey = indoorKey(keep.key);
+  const fresh = isRel(keep);
   // Пути в составе отношений не удаляем молча
   const api = server().api, stamp = JSON.stringify(session.changes());
-  const existing = rest.filter((f) => Number(f.key.split('/')[1]) > 0);
+  const existing = rest.filter((f) => !isRel(f) && Number(f.key.split('/')[1]) > 0);
   let parents: { id: number }[][];
   try { parents = await Promise.all(existing.map((f) => fetchWayRelations(Number(f.key.split('/')[1]), api))); } catch (err) { return tr('Не удалось проверить отношения: {error}', { error: (err as Error).message }); }
   if (JSON.stringify(session.changes()) !== stamp || !shownLevel) return tr('Выбор или данные изменились. Повторите.');
@@ -8851,10 +8881,51 @@ async function mergeIndoor(): Promise<string | undefined> {
   const tags = { ...keep.tags };
   let conflicts = 0;
   for (const f of rest) for (const [k, v] of Object.entries(f.tags)) {
+    if (k === 'type') continue; // type=multipolygon — признак отношения, не помещения
     if (tags[k] === undefined) tags[k] = v;
     else if (tags[k] !== v) conflicts++;
   }
   for (const f of fs) trackIndoor(indoorKey(f.key), f);
+  // Удаляемые мультиполигоны — с путями-членами без тегов, которые больше ни в одном отношении (свои — новые)
+  const relDeletes: ObjectEdit[] = [];
+  for (const f of fs.filter(isRel)) {
+    const ways = relWaysOf(f)!;
+    if (!session.get(indoorKey(f.key))?.relMembers) session.track({ key: f.key, version: indoorRelationSources.get(f.key)?.version ?? 0, tags: f.tags, relMembers: ways.map((w) => ({ type: 'way', ref: w.id, role: w.role })) });
+    for (const w of ways) {
+      const wk = `way/${w.id}`;
+      if (Object.keys(w.tags ?? {}).length || relDeletes.some((e) => e.key === wk)) continue;
+      if (w.id > 0) {
+        let rels: { id: number }[];
+        try { rels = await fetchWayRelations(w.id, api); } catch (err) { return tr('Не удалось проверить отношения: {error}', { error: (err as Error).message }); }
+        if (rels.some((x) => !fs.some((g) => indoorKey(g.key) === `relation/${x.id}`) && !session.isDeleted(`relation/${x.id}`))) continue;
+      }
+      if (!session.has(wk)) {
+        const at = new Map(f.polygons.flatMap((p) => [...p.outer.map((c, i) => [p.outerIds![i], c] as const), ...p.inners.flatMap((r, j) => r.map((c, i) => [p.innerIds?.[j]?.[i] ?? 0, c] as const))]));
+        if (!w.nodes.every((n) => at.has(n))) continue;
+        session.track({ key: wk, version: 0, tags: {}, line: { ids: w.nodes, coords: w.nodes.map((n) => at.get(n)!) } });
+      }
+      relDeletes.push({ key: wk, delete: true });
+    }
+  }
+  if (fresh) {
+    const edits: ObjectEdit[] = [];
+    const outer = pts, inners = union[0].slice(1).map(r => nodeRing(r.slice(0,-1).map(q => overpassLayer.focusToLngLat(q[0],q[1])! as LonLat),nodeFor));
+    if (inners.some(r => !r)) return tr('Не удалось объединить контуры.');
+    const ownTags = Object.fromEntries(Object.entries(tags).filter(([k]) => k !== 'type'));
+    const made = indoorCreateEdits({ outer: outer.map((q) => q.p), inners: (inners as NonNullable<typeof ring>[]).map((r) => r.map((q) => q.p)) }, ownTags, nodeFor, edits);
+    if (!made) return tr('Не удалось объединить контуры.');
+    selectIndoor(undefined);
+    session.editMany([...edits, ...fs.map((f) => ({ key: indoorKey(f.key), delete: true })), ...relDeletes]);
+    for (const f of fs) indoorCreated.delete(indoorKey(f.key));
+    indoorCreated.set(made.key, made); indoorEdited.add(made.key);
+    indoorEditRev++;
+    renderLevels();
+    const g = buildingIndoorFor(made.key);
+    if (g) selectIndoor(g);
+    setStatus(tr('Объединено в {key}: объектов {n}.', { key: made.key, n: fs.length })
+      + (conflicts ? ' ' + tr('Разные значения тегов ({k}) — оставлены у {key}.', { k: conflicts, key: made.key }) : ''));
+    return;
+  }
   const holeRings = union[0].slice(1).map(r => nodeRing(r.slice(0,-1).map(q => overpassLayer.focusToLngLat(q[0],q[1])! as LonLat),nodeFor));
   if (holeRings.some(r => !r)) return tr('Не удалось объединить контуры.');
   const withHoles = holeRings.length ? indoorUnionHoleEdits(keep,tags,[pts,...holeRings as NonNullable<typeof ring>[]],()=>nextNewId--) : undefined;
@@ -8862,6 +8933,7 @@ async function mergeIndoor(): Promise<string | undefined> {
   const edits: ObjectEdit[] = [
     ...(withHoles?.edits ?? [{ key: keepKey, tags, ...indoorUnionGeometry(keep, pts) }]),
     ...rest.map((f) => ({ key: indoorKey(f.key), delete: true })),
+    ...relDeletes,
   ];
   selectIndoor(undefined);
   session.editMany(edits);
@@ -9157,6 +9229,21 @@ function nodeRing(ring: LonLat[], nodeFor: (p: LonLat) => { p: LonLat; id: numbe
 
 /** Выбранный кусок неразмеченной площади этажа: n — этаж, polygon — lon/lat (кольца без замыкающей точки). */
 let freeArea: { n: number; polygon: Polygon } | undefined;
+/** Куски неразмеченной площади в выделении вместе с indoor-объектами (Shift+клик): для «Объединить» (J). */
+let freeExtra: { n: number; polygon: Polygon }[] = [];
+
+/** Подсветка кусков пустой площади, добавленных к выделению помещений. */
+function showFreeExtra() {
+  overpassLayer.setFreeArea(freeExtra.length ? { key: 'free-area', kind: 'area', polygons: freeExtra.map((a) => a.polygon), z: shownLevel?.floor ?? 0 } : undefined);
+}
+
+/** Shift+клик по пустой площади при выделенных помещениях: добавить кусок к выделению или убрать. */
+function toggleFreeExtra(a: { n: number; polygon: Polygon }) {
+  const same = (b: { polygon: Polygon }) => b.polygon.outer.length === a.polygon.outer.length && b.polygon.outer.every((p, i) => p[0] === a.polygon.outer[i][0] && p[1] === a.polygon.outer[i][1]);
+  freeExtra = freeExtra.some(same) ? freeExtra.filter((b) => !same(b)) : [...freeExtra, a];
+  showFreeExtra();
+  setStatus(tr('Неразмеченная площадь в выделении: {n}. J — объединить с выделенными помещениями (теги — от них).', { n: freeExtra.length }));
+}
 
 /**
  * Неразмеченная площадь этажа под курсором: контур здания на этаже минус помещения, коридоры и площадки этажа;
@@ -9388,6 +9475,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
     const plane = head.length || tail.length ? halfPlane(path) : side;
     try {
       // По стене — до её конца на стороне, дальше не продлеваем
+      // Узкие клинья и сшивки в точке (сторона помещения почти вдоль контура этажа) — прочь: куски без шипов и «ножек»
       return finiteCutPieces([...polygonClipping.intersection(local, plane), ...polygonClipping.difference(local, plane)], path, local)
         .flatMap((q) => cleanPiece(q, CUT_MIN_AREA)).filter((q) => localArea(q) >= CUT_MIN_AREA);
     } catch (err) { console.warn('[cut-plan]', err); return []; }
@@ -9488,7 +9576,6 @@ function cutPlan(pts: [number, number][]): string | undefined {
     trackIndoor(key, f);
     edits.push({ key, polygons: [p] });
     touched++;
-      // Узкие клинья и сшивки в точке (сторона помещения почти вдоль контура этажа) — прочь: куски без шипов и «ножек»
   }
   session.editMany(edits);
   for (const m of created) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
@@ -10404,6 +10491,7 @@ function renderLevelsImpl() {
   if (infoSig !== infoLevel) {
     infoLevel = infoSig;
     if (freeArea && freeArea.n !== currentLevel) { freeArea = undefined; overpassLayer.setFreeArea(undefined); }
+    if (freeExtra.some((a) => a.n !== currentLevel)) { freeExtra = []; overpassLayer.setFreeArea(undefined); }
     if (!selection.length && !indoorSelection.length) queueMicrotask(() => { if (!selection.length && !indoorSelection.length) renderSelected(); });
   }
   // Пока этаж из ссылки не появился в панели — он остаётся в адресе

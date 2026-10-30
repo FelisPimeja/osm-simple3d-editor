@@ -1341,5 +1341,14 @@
   "Не удалось построить буфер.": "Could not build the buffer.",
   "Буфер вырожден: у него нет площади.": "The buffer is degenerate: it has no area.",
   "Создано: {keys} (indoor=wall, этаж {n}).": "Created: {keys} (indoor=wall, level {n}).",
-  "Буфер стен: клик внутри контура этажа (Shift+клик — оболочка части здания). Esc — выйти.": "Wall buffer: click inside the level outline (Shift+click — building part shell). Esc — exit."
+  "Буфер стен: клик внутри контура этажа (Shift+клик — оболочка части здания). Esc — выйти.": "Wall buffer: click inside the level outline (Shift+click — building part shell). Esc — exit.",
+  "Стена: следующая точка (на другой линии — закончить); Enter или клик в последнюю точку — закончить, Backspace — убрать точку, Esc — отмена.": "Wall: next point (on another line — finish); Enter or click the last point — finish, Backspace — remove point, Esc — cancel.",
+  "Стена: кликните начало линейной стены на плане этажа. Esc — выйти.": "Wall: click the start of a line wall on the floor plan. Esc — exit.",
+  "Стены рисуются на плане этажа — выберите этаж в панели «Этажи».": "Walls are drawn on a floor plan — pick a level in the Levels panel.",
+  "Стене нужны хотя бы две разные точки.": "A wall needs at least two distinct points.",
+  "Рисует на плане этажа линейную стену — путь indoor=wall этого этажа.": "Draws a line wall on the floor plan — an indoor=wall way on this level.",
+  "Клики — точки стены; точка на другой линии (стене, стороне помещения) заканчивает стену.": "Clicks add wall points; a point on another line (wall, room side) finishes the wall.",
+  "Enter или клик в последнюю точку — закончить, число + Enter — длина участка, Backspace — убрать точку.": "Enter or click the last point — finish, number + Enter — segment length, Backspace — remove point.",
+  "Shift — держать ось здания. Esc — отмена.": "Shift — hold the building axis. Esc — cancel.",
+  "Узлы добавлены в соседей: {n}.": "Nodes added to neighbours: {n}."
 }

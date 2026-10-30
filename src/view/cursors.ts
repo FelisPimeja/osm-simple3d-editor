@@ -2,7 +2,7 @@
  * Курсоры карты: по умолчанию — обычная стрелка (вместо руки MapLibre), у инструментов режима здания —
  * стрелка со значком инструмента в углу. Картинки — SVG в data URI, собираются один раз.
  */
-export type ToolCursor = 'move' | 'rotate' | 'scale' | 'push' | 'split' | 'rect' | 'polygon' | 'circle' | 'ngon' | 'measure' | 'paint' | 'pick' | 'offset' | 'shape';
+export type ToolCursor = 'move' | 'rotate' | 'scale' | 'push' | 'split' | 'rect' | 'polygon' | 'circle' | 'ngon' | 'measure' | 'paint' | 'pick' | 'offset' | 'shape' | 'wall';
 
 /** Значки инструментов (viewBox 0 0 20 20, линии), как на кнопках панели. */
 const ICONS: Record<ToolCursor, string> = {
@@ -15,6 +15,7 @@ const ICONS: Record<ToolCursor, string> = {
   polygon: '<path d="M4 15l-1-7 6-5 8 4-2 8z"/>',
   circle: '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="1.2" fill="currentColor"/>',
   ngon: '<path d="M10 3l6.1 3.5v7L10 17l-6.1-3.5v-7z"/><circle cx="10" cy="10" r="1.2" fill="currentColor"/>',
+  wall: '<path d="M3 16l5-11 9 4" stroke-width="3"/>',
   offset: '<path d="M2.5 2.5h15v15h-15z" stroke-dasharray="2.2 1.8"/><path d="M6.5 6.5h7v7h-7z"/>',
   measure: '<path d="M2.5 13.5l11-11 4 4-11 11z"/><path d="M6 10l1.5 1.5M8.5 7.5l1.5 1.5M11 5l1.5 1.5"/>',
   paint: '<path d="M4 7h10l-1.5 9h-7z"/><path d="M4.6 10.5h8.8l-.9 5.5h-7z" fill="currentColor" fill-opacity=".35" stroke="none"/><path d="M5.5 7a3.5 3.5 0 0 1 7 0"/><path d="M14 7.5c1.8.2 2.8 1.4 3 3"/><path d="M17 13s1.2 1.5 1.2 2.3a1.2 1.2 0 0 1-2.4 0c0-.8 1.2-2.3 1.2-2.3z" fill="currentColor"/>',

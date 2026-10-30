@@ -4,8 +4,11 @@ import { tr } from '../i18n';
 
 type Pt = [number, number];
 
-/** line — открытая ломаная (разрез плана этажа): Enter или клик в последнюю точку завершает. */
-export type DrawShape = 'polygon' | 'rect' | 'circle' | 'ngon' | 'line';
+/** line — открытая ломаная (разрез плана этажа), wall — тоже ломаная (линейная стена этажа): Enter или клик в последнюю точку завершает. */
+export type DrawShape = 'polygon' | 'rect' | 'circle' | 'ngon' | 'line' | 'wall';
+
+/** Открытая ломаная (не контур). */
+const isOpen = (s: DrawShape) => s === 'line' || s === 'wall';
 /** Фигуры «центр + точка на окружности». */
 const ROUND: DrawShape[] = ['circle', 'ngon'];
 /** Способ построения прямоугольника: по двум углам вдоль осей здания, по трём точкам (повёрнутый), от центра. */
@@ -160,7 +163,7 @@ export class DrawTool {
     if (this.state !== 'draw') return false;
     const q = this.pointAt(point);
     if (!q) return true;
-    if (this.shape === 'line' && this.pts.length >= 2) {
+    if (isOpen(this.shape) && this.pts.length >= 2) {
       const last = this.pts[this.pts.length - 1];
       const px = this.layer.focusProject(new THREE.Vector3(last[0], last[1], this.z));
       if (px && Math.hypot(px[0] - point[0], px[1] - point[1]) < CLOSE_PX) { this.finishLine(); return true; }
@@ -222,7 +225,7 @@ export class DrawTool {
     if (e.key === 'Enter') {
       if (this.typed) this.applyTyped();
       else if (this.shape === 'polygon' && this.pts.length >= 3) this.finish(this.pts);
-      else if (this.shape === 'line' && this.pts.length >= 2) this.finishLine();
+      else if (isOpen(this.shape) && this.pts.length >= 2) this.finishLine();
       return true;
     }
     return false;
@@ -332,8 +335,8 @@ export class DrawTool {
       return;
     }
     // Разрез, доведённый до другой линии (стены, стороны помещения), завершается сам, если уже что-то рассекает;
-    // не рассекает (точка посреди помещения, ещё не насквозь) — ждём следующую точку
-    if (this.shape === 'line' && this.pts.length >= 2 && this.snap && ON_LINE.includes(this.snap.kind) && !this.commit(this.pts, this.z)) {
+    // не рассекает (точка посреди помещения, ещё не насквозь) — ждём следующую точку. Стена — завершается всегда
+    if (isOpen(this.shape) && this.pts.length >= 2 && this.snap && ON_LINE.includes(this.snap.kind) && !this.commit(this.pts, this.z)) {
       this.reset();
       this.hint();
       return;
@@ -557,6 +560,12 @@ export class DrawTool {
       this.onState(this.pts.length
         ? tr('{what}: {target} (число + Enter — радиус). Esc — отмена.', { what, target: this.shape === 'circle' ? tr('точка на окружности') : tr('вершина') })
         : tr('{what}: кликните центр на земле или на плоской крыше. Esc — выйти.', { what }));
+      return;
+    }
+    if (this.shape === 'wall') {
+      this.onState(this.pts.length
+        ? tr('Стена: следующая точка (на другой линии — закончить); Enter или клик в последнюю точку — закончить, Backspace — убрать точку, Esc — отмена.')
+        : tr('Стена: кликните начало линейной стены на плане этажа. Esc — выйти.'));
       return;
     }
     if (this.shape === 'line') {

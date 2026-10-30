@@ -2465,7 +2465,7 @@ map.getCanvasContainer().addEventListener('mouseleave', () => updateSnap(undefin
 // --- Инструменты режима здания ---
 const focusToolbar = document.getElementById('focus-tools')!;
 // Инструменты правки геометрии indoor: пока активен любой — видны контуры этажа ниже (опора при разметке, привязка к ним)
-const INDOOR_EDIT_TOOLS = ['rect', 'polygon', 'circle', 'ngon', 'point', 'move', 'rotate', 'scale', 'square', 'push', 'shape', 'split', 'merge', 'offset'];
+const INDOOR_EDIT_TOOLS = ['rect', 'polygon', 'circle', 'ngon', 'point', 'move', 'rotate', 'scale', 'square', 'push', 'shape', 'split', 'merge', 'offset', 'wall'];
 new MutationObserver(() => overpassLayer.setBelowOutlines(INDOOR_EDIT_TOOLS.some((t) => focusToolbar.querySelector(`[data-tool="${t}"].active`))))
   .observe(focusToolbar, { subtree: true, attributes: true, attributeFilter: ['class'] });
 const moveBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="move"]')!;
@@ -3422,6 +3422,7 @@ const drawTool = new DrawTool(overpassLayer, map.getContainer(), createDrawn, (h
   circleBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'circle');
   ngonBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'ngon');
   splitBtn.classList.toggle('active', splitTool.active || (drawTool.active && drawTool.shape === 'line'));
+  wallBtn.classList.toggle('active', drawTool.active && drawTool.shape === 'wall');
   try { localStorage.setItem('ngon-sides', String(drawTool.sides)); } catch { /* нет хранилища */ }
   syncCursor();
   toolHint(hint, error);
@@ -3693,6 +3694,7 @@ const SHARE_EPS = 0.03;
 function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<string, string>): string | undefined {
   if (sketching) return createSketched(ring);
   if (drawTool.shape === 'line') return cutPlan(ring);
+  if (drawTool.shape === 'wall') return createIndoorWallLine(ring);
   if (focus && shownLevel && !tagsFor) return createIndoorDrawn(ring);
   if (!focus) return tr('Нет здания.');
   const lngLat = (p: [number, number]) => overpassLayer.focusToLngLat(p[0], p[1])!;
@@ -9113,6 +9115,45 @@ const CUT_REACH = 0.5;
 /** Точка линии ближе этого к стороне, м, — на стороне (конец линии, привязанный к стене). */
 const CUT_ON_SIDE = 0.02;
 
+/** Новый узел ближе этого к стороне соседа, м, — на ней: вставляется в эту сторону. */
+const ON_EDGE = 0.02;
+
+/**
+ * Вставка новых узлов fresh (id → координаты) в стороны колец, на которых они лежат. patch — полигон с ними
+ * (undefined — не изменился), line — то же для открытой линии (без стороны «последний — первый»).
+ */
+function sideInserts(fresh: Map<number, LonLat>) {
+  const withInserts = (ids: number[], ring: LonLat[], closed = true): { ids: number[]; ring: LonLat[] } | undefined => {
+    const loc = ring.map((q) => overpassLayer.focusToLocal(q)!);
+    const outIds: number[] = [], outRing: LonLat[] = [];
+    let changed = false;
+    for (let i = 0; i < ids.length; i++) {
+      outIds.push(ids[i]); outRing.push(ring[i]);
+      if (!closed && i === ids.length - 1) break;
+      const a = loc[i], b = loc[(i + 1) % loc.length];
+      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy || 1;
+      const on: { id: number; p: LonLat; t: number }[] = [];
+      for (const [id, p] of fresh) {
+        if (ids.includes(id)) continue;
+        const q = overpassLayer.focusToLocal(p)!;
+        const t = ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2;
+        if (t <= 1e-6 || t >= 1 - 1e-6 || segDist2(q, a, b) > ON_EDGE) continue;
+        on.push({ id, p, t });
+      }
+      on.sort((x, y) => x.t - y.t).forEach((x) => { outIds.push(x.id); outRing.push(x.p); changed = true; });
+    }
+    return changed ? { ids: outIds, ring: outRing } : undefined;
+  };
+  const patch = (p: Polygon): Polygon | undefined => {
+    if (!p.outerIds) return;
+    const o = withInserts(p.outerIds, p.outer);
+    const ins = p.inners.map((r, i) => (p.innerIds?.[i] ? withInserts(p.innerIds[i], r) : undefined));
+    if (!o && !ins.some(Boolean)) return;
+    return { outer: o?.ring ?? p.outer, outerIds: o?.ids ?? p.outerIds, inners: p.inners.map((r, i) => ins[i]?.ring ?? r), innerIds: p.innerIds?.map((r, i) => ins[i]?.ids ?? r) };
+  };
+  return { patch, line: (ids: number[], coords: LonLat[]) => withInserts(ids, coords, false) };
+}
+
 /**
  * «Рассечь» на плане этажа: ломаная pts (метры сцены, концы — за стенами) делит помещения, коридоры, площадки
  * и пустую площадь, которые пересекает. Помещение-путь сохраняет историю на большем куске, остальные куски —
@@ -9234,34 +9275,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
   for (const e of edits) for (const p of e.polygons ?? (e.create as Feature3D | undefined)?.polygons ?? []) {
     [p.outer, ...p.inners].forEach((r, i) => r.forEach((q, j) => { const id = (i ? p.innerIds?.[i - 1] : p.outerIds)?.[j]; if (id !== undefined && id < 0) fresh.set(id, q); }));
   }
-  const ON_EDGE = 0.02;
-  const withInserts = (ids: number[], ring: LonLat[]): { ids: number[]; ring: LonLat[] } | undefined => {
-    const loc = ring.map((q) => overpassLayer.focusToLocal(q)!);
-    const outIds: number[] = [], outRing: LonLat[] = [];
-    let changed = false;
-    for (let i = 0; i < ids.length; i++) {
-      outIds.push(ids[i]); outRing.push(ring[i]);
-      const a = loc[i], b = loc[(i + 1) % loc.length];
-      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy || 1;
-      const on: { id: number; p: LonLat; t: number }[] = [];
-      for (const [id, p] of fresh) {
-        if (ids.includes(id)) continue;
-        const q = overpassLayer.focusToLocal(p)!;
-        const t = ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2;
-        if (t <= 1e-6 || t >= 1 - 1e-6 || segDist2(q, a, b) > ON_EDGE) continue;
-        on.push({ id, p, t });
-      }
-      on.sort((x, y) => x.t - y.t).forEach((x) => { outIds.push(x.id); outRing.push(x.p); changed = true; });
-    }
-    return changed ? { ids: outIds, ring: outRing } : undefined;
-  };
-  const patch = (p: Polygon): Polygon | undefined => {
-    if (!p.outerIds) return;
-    const o = withInserts(p.outerIds, p.outer);
-    const ins = p.inners.map((r, i) => (p.innerIds?.[i] ? withInserts(p.innerIds[i], r) : undefined));
-    if (!o && !ins.some(Boolean)) return;
-    return { outer: o?.ring ?? p.outer, outerIds: o?.ids ?? p.outerIds, inners: p.inners.map((r, i) => ins[i]?.ring ?? r), innerIds: p.innerIds?.map((r, i) => ins[i]?.ids ?? r) };
-  };
+  const { patch } = sideInserts(fresh);
   // Собственные куски: узел разреза соседнего помещения мог лечь на их сторону
   for (const e of edits) {
     if (e.polygons) e.polygons = e.polygons.map((p) => patch(p) ?? p);
@@ -9299,6 +9313,96 @@ const pointBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="poin
 pointBtn.addEventListener('click', () => (pointPick ? stopPoint() : startPoint()));
 /** Точка ближе стольких px к стороне — на стороне (дверь, вход). */
 const POINT_SIDE_PX = 8;
+
+// Инструмент «Стена»: линейная стена indoor=wall этажа по точкам ломаной
+const wallBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="wall"]')!;
+wallBtn.addEventListener('click', () => (drawTool.active && drawTool.shape === 'wall' ? drawTool.stop() : startWall()));
+
+function startWall() {
+  if (!focus) return;
+  if (!shownLevel) { setStatus(tr('Стены рисуются на плане этажа — выберите этаж в панели «Этажи».'), true); return; }
+  if (pointPick) stopPoint();
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop();
+  measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
+  select(undefined);
+  drawTool.begin('wall');
+}
+
+/** Ломаная (метры сцены) — путь indoor=wall этажа; вершины на узлах соседей — их узлы. */
+/**
+ * Новые узлы nodes (вершины нового или вставленного объекта) на сторонах indoor-соседей этажа (помещений, этажа,
+ * стен; у мультиполигонов — их путей-членов) — вставить в эти стороны. skip — сами новые объекты. Пути здания
+ * не трогаем (как и разрез плана). Строка — ошибка.
+ */
+function indoorSideInsertEdits(nodes: { id: number; p: LonLat }[], skip: Set<string>): { edits: ObjectEdit[]; touched: Set<string> } | string {
+  if (!focus || !shownLevel) return { edits: [], touched: new Set() };
+  // Точки на сторонах indoor-соседей (помещений, этажа, других стен; у мультиполигонов — их путей-членов) —
+  // вставить в эти стороны. Пути здания не трогаем (как и разрез плана)
+  const current = buildingIndoor(focus);
+  const context: Feature3D[] = current.filter((f) => !f.point && !skip.has(f.key) && f.levels.includes(shownLevel!.n)).map((f) => ({ ...indoorRelationSources.get(f.key), ...f,
+    type: f.key.startsWith('relation/') ? 'relation' as const : 'way' as const, id: Number(f.key.split('/')[1]), version: 0, kind: 'part' as const, hasParts: false }));
+  const fresh: FreshNode[] = [];
+  /** Соседи, в чьи стороны встанут узлы: topologyEdits правит только объекты сессии. */
+  const hit = new Set<Feature3D>();
+  const coord = new Map(nodes.map((q) => [q.id, q.p] as const));
+  for (const q of nodes) {
+    const at = overpassLayer.focusToLocal(q.p)!;
+    let best: FreshNode | undefined, bd = ON_EDGE;
+    for (const f of context) for (const poly of f.polygons) for (const [ring, ids] of [[poly.outer, poly.outerIds], ...poly.inners.map((r, j) => [r, poly.innerIds?.[j]] as const)] as const) {
+      if (!ids || ids.includes(q.id)) continue;
+      const loc = ring.map((c) => overpassLayer.focusToLocal(c)!);
+      const n = current.find((g) => g.key === f.key)?.line ? loc.length - 1 : loc.length;
+      for (let i = 0; i < n; i++) {
+        const a = loc[i], b = loc[(i + 1) % loc.length], d = segDist2(at, a, b);
+        if (d < bd && Math.hypot(at[0] - a[0], at[1] - a[1]) > 1e-3 && Math.hypot(at[0] - b[0], at[1] - b[1]) > 1e-3) { bd = d; best = { id: q.id, p: at, u: ids[i], v: ids[(i + 1) % ids.length] }; }
+      }
+    }
+    if (best) fresh.push(best);
+  }
+  // Сторона общая у нескольких помещений — узел встанет во все
+  for (const f of context) if (f.polygons.some((p) => [p.outerIds, ...(p.innerIds ?? [])].some((ids) => ids && fresh.some((x) => ids.includes(x.u) && ids.includes(x.v))))) hit.add(f);
+  for (const f of hit) {
+    trackIndoor(f.key, current.find((g) => g.key === f.key));
+    if (f.type === 'relation' && f.ways) session.track({ key: f.key, version: f.version, tags: f.tags, relMembers: f.ways.map((w) => ({ type: 'way', ref: w.id, role: w.role })) });
+  }
+  const building = new Set(groupFeatures(focus).map((f) => f.key));
+  const around = fresh.length ? topologyEdits([], freshInserts(fresh, coord), coord, new Set(), context) : [];
+  if (typeof around === 'string') return around;
+  const edits: ObjectEdit[] = [];
+  const touched = new Set<string>();
+  for (const e of around) {
+    if (building.has(e.key) || skip.has(e.key)) continue;
+    if ([...hit].some((f) => f.key === e.key)) touched.add(e.key);
+    edits.push(e);
+  }
+  return { edits, touched };
+}
+
+function createIndoorWallLine(pts: [number, number][]): string | undefined {
+  if (!focus || !shownLevel) return tr('Нет этажа.');
+  const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)]);
+  const nodes = pts.map((q) => nodeFor(overpassLayer.focusToLngLat(q[0], q[1])! as LonLat)).filter((q, i, a) => i === 0 || q.id !== a[i - 1].id);
+  if (nodes.length < 2) return tr('Стене нужны хотя бы две разные точки.');
+  const key = `way/${nextNewId--}`, tags = { indoor: 'wall', level: String(shownLevel.n) };
+  const line = { ids: nodes.map((q) => q.id), coords: nodes.map((q) => q.p) };
+  const polygons = [{ outer: line.coords, outerIds: line.ids, inners: [] }];
+  const edits: ObjectEdit[] = [{ key, create: { key, version: 0, tags, line, polygons } }];
+  // Точки стены на сторонах indoor-соседей — вставить в эти стороны
+  const ins = indoorSideInsertEdits(nodes, new Set([key]));
+  if (typeof ins === 'string') return ins;
+  edits.push(...ins.edits);
+  const touched = ins.touched;
+  session.editMany(edits);
+  indoorCreated.set(key, { key, kind: 'wall', line: true, polygons, tags, levels: [shownLevel.n] });
+  indoorEdited.add(key);
+  indoorEditRev++;
+  renderLevels();
+  const made = buildingIndoorFor(key);
+  if (made) selectIndoor(made);
+  setStatus(tr('Создано: {keys} (indoor=wall, этаж {n}).', { keys: key, n: levelLabel(shownLevel.n) })
+    + (touched.size ? ' ' + tr('Узлы добавлены в соседей: {n}.', { n: touched.size }) : ''));
+  return;
+}
 
 function startPoint() {
   if (!focus) return;
@@ -11296,6 +11400,11 @@ const HELP: Record<string, HelpTopic> = {
     tr('Число углов — в поле «Углов» внизу (3–64), запоминается.'),
     tr('Клик — центр, второй клик — вершина (задаёт радиус и поворот).'),
     tr('Число + Enter — радиус в метрах. Esc — отмена.'),
+  ] },
+  wall: { title: tr('Стена'), desc: tr('Рисует на плане этажа линейную стену — путь indoor=wall этого этажа.'), items: [
+    tr('Клики — точки стены; точка на другой линии (стене, стороне помещения) заканчивает стену.'),
+    tr('Enter или клик в последнюю точку — закончить, число + Enter — длина участка, Backspace — убрать точку.'),
+    tr('Shift — держать ось здания. Esc — отмена.'),
   ] },
   offset: { title: tr('Отступ (O)'), desc: tr('Строит новый плоский контур, параллельный контуру плоской крыши или низа части, — например, для парапета, надстройки или козырька.'), items: [
     tr('Наведите на плоскую крышу (Shift — на низ части): контур отступает наружу или внутрь по стороне курсора.'),

@@ -128,8 +128,10 @@ const PALE_PLAN_CACHE = 24;
 const SOLID_MERGE_DIST = 0.03;
 /** Внутренний контур помещения тоньше этого, м, — стена (объём с крышкой), а не проём. */
 const THIN_HOLE_WIDTH = 0.6;
-/** Контуры этажа ниже: светлее рёбер этажа, но читаются и на светлом полу, и поверх синей заливки выделения. */
-const BELOW_OUTLINE_COLOUR = 0x8a847d;
+/** Контуры этажа ниже: заметно бледнее рёбер этажа (не путать с ними), но читаются и на светлом полу, и поверх синей заливки выделения. */
+const BELOW_OUTLINE_COLOUR = 0xd6d2cc;
+/** Непрозрачность контуров этажа ниже. */
+const BELOW_OUTLINE_OPACITY = 0.55;
 /**
  * Цветная грань помещения на фасаде изнутри — в плоскости стены здания: односторонняя (снаружи не видна),
  * у оболочки выигрывает сдвигом глубины к камере.
@@ -971,7 +973,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const canvas = this.map.getCanvas(), dpr = canvas.width / Math.max(1, canvas.clientWidth);
       const geo = new LineSegmentsGeometry(); geo.setPositions(pos);
       // transparent — в один список с заливкой выделения: renderOrder ставит контуры после неё
-      const material = new LineMaterial({ color: BELOW_OUTLINE_COLOUR, linewidth: dpr, depthWrite: false, transparent: true });
+      const material = new LineMaterial({ color: BELOW_OUTLINE_COLOUR, linewidth: dpr, depthWrite: false, transparent: true, opacity: BELOW_OUTLINE_OPACITY });
       material.resolution.set(canvas.width, canvas.height);
       // Над полом выбранного этажа (та же отметка) — сдвигом глубины к камере
       material.onBeforeCompile = (shader) => { shader.vertexShader = shader.vertexShader.replace('gl_Position = clip;', 'gl_Position = clip; gl_Position.z -= 2e-6 * gl_Position.w;'); };

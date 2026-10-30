@@ -12466,6 +12466,7 @@ const editsHistory = document.getElementById('edits-history')!;
 const EDITS_FORMAT = 'osm-simple3d-edits';
 const editsClip = document.getElementById('edits-clip')!;
 const copyEditsBtn = editsClip.querySelector<HTMLButtonElement>('[data-copy-edits]')!;
+const clearEditsBtn = editsClip.querySelector<HTMLButtonElement>('[data-clear-edits]')!;
 editsClip.hidden = !!josmMode;
 const undoBtn = editsHistory.querySelector<HTMLButtonElement>('[data-undo]')!;
 const redoBtn = editsHistory.querySelector<HTMLButtonElement>('[data-redo]')!;
@@ -13551,6 +13552,7 @@ function scheduleAutosave() {
 // Копировать / вставить правки целиком (JSON) — разбирать правки, которые не уходят на сервер
 function updateEditsClip() {
   copyEditsBtn.disabled = !session.changes().length && !session.hasDataHistory();
+  clearEditsBtn.disabled = !session.changes().length && !session.hasDataHistory();
 }
 editsClip.addEventListener('click', (e) => {
   e.stopPropagation(); // не сворачивать панель
@@ -13564,6 +13566,8 @@ editsClip.addEventListener('click', (e) => {
       (err) => setStatus(tr('Не удалось скопировать: {err}', { err: (err as Error).message }), true));
   } else if (t.closest('[data-paste-edits]')) {
     void pasteEdits();
+  } else if (t.closest('[data-clear-edits]')) {
+    clearEdits();
   }
 });
 
@@ -13609,6 +13613,25 @@ function applyEditsText(text: string) {
   resetSession();
   onSessionChange(old); // прежние правки — с карты долой
   restoreEdits({ count: rec.count ?? 0, data: rec.data });
+}
+
+/** «Очистить»: все правки прочь одним шагом (с подтверждением; отменить нельзя). */
+function clearEdits() {
+  const n = session.changes().length;
+  if (!n && !session.hasDataHistory()) return;
+  // Подтверждение своим окном: встроенные браузеры (панель приложения) молча гасят confirm()
+  showPopup(`<h3>${tr('Очистить правки')}</h3><p>${trn(n, 'Отменить все правки ({n} объект)? Вернуть их будет нельзя.|Отменить все правки ({n} объекта)? Вернуть их будет нельзя.|Отменить все правки ({n} объектов)? Вернуть их будет нельзя.')}</p>
+    <p><button type="button" data-clear-confirm>${tr('Очистить')}</button></p>`, tr('Отмена'));
+  popupEl.querySelector('[data-clear-confirm]')!.addEventListener('click', () => { showPopup(''); doClearEdits(); });
+}
+
+function doClearEdits() {
+  stopAllTools();
+  const old = session.snapshot().features.map((f) => f.key);
+  clearSelection();
+  resetSession();
+  onSessionChange(old); // прежние правки — с карты долой
+  setStatus(tr('Правки очищены.'));
 }
 
 /** Пустая сессия: правки, созданные здания и помещения — забыты. */

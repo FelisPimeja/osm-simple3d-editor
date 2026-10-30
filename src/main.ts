@@ -11368,6 +11368,38 @@ function flyToIssueBuilding(issue: Issue) {
   if (camera) map.flyTo({ center: camera.center, zoom: camera.zoom, duration: 900, essential: true });
 }
 
+let contextIssue: Issue | undefined;
+issuesEl.addEventListener('contextmenu', (e) => {
+  const li=(e.target as HTMLElement).closest<HTMLElement>('li[data-i]');
+  const issue=li && shownIssues[Number(li.dataset.i)];
+  if(!issue)return;
+  e.preventDefault();e.stopPropagation();
+  contextIssue=issue;
+  ctxMenu.innerHTML='<li><button type="button" data-ctx="issue-zoom">Zoom to</button></li>';
+  placeCtxMenu(e.clientX,e.clientY);
+});
+
+/** Prefer the exact diagnostic geometry; otherwise frame the affected objects. */
+function zoomToIssue(issue: Issue) {
+  const points: LonLat[]=[...(issue.points ?? [])];
+  if(!points.length && issue.area)for(const p of issue.area)points.push(...p.outer);
+  if(!points.length)for(const key of [issue.key,issue.other]){
+    if(!key)continue;
+    const indoor=buildingIndoorFor(key);
+    if(indoor?.point)points.push(indoor.point);
+    const object=entity(key) as Feature3D|undefined;
+    const features=indoor ? [indoor] : object?.polygons?.length ? [object] : groupOf(key) ? groupFeatures(groupOf(key)!) : [];
+    for(const f of features)for(const p of f?.polygons ?? [])points.push(...p.outer);
+  }
+  if(!points.length)return;
+  const indoor=buildingIndoorFor(issue.key);
+  if(indoor && !shownIndoor.some(f=>f.key===indoor.key)) {currentLevel=indoor.levels[0];renderLevels();}
+  selectedIssueIds.clear();selectedIssueIds.add(issueId(issue));syncSelectedIssues();
+  const xs=points.map(p=>p[0]),ys=points.map(p=>p[1]);
+  const camera=map.cameraForBounds([[Math.min(...xs),Math.min(...ys)],[Math.max(...xs),Math.max(...ys)]],{padding:100,maxZoom:23});
+  if(camera)map.flyTo({center:camera.center,zoom:camera.zoom,duration:700,essential:true});
+}
+
 issuesEl.addEventListener('click', (e) => {
   const fix = (e.target as HTMLElement).closest<HTMLElement>('.issue-fix');
   if (fix) { applyFixes([shownIssues[Number(fix.dataset.i)]]); return; }
@@ -11719,6 +11751,7 @@ function openYandexPanorama(at: maplibregl.LngLat) {
 ctxMenu.addEventListener('click', (e) => {
   const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ctx]:not(:disabled)');
   const action = button?.dataset.ctx;
+  if(action==='issue-zoom') {const issue=contextIssue;closeCtxMenu();contextIssue=undefined;if(issue)zoomToIssue(issue);return;}
   if (action === 'yandex-pano') {
     closeCtxMenu();
     if (ctxLngLat) openYandexPanorama(ctxLngLat);

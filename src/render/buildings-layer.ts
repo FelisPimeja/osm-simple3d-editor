@@ -1966,6 +1966,22 @@ export class BuildingsLayer implements CustomLayerInterface {
         return { outer, holes, box, colour: new THREE.Color(it.colour!) };
       }));
     const WHITE_WALL = new THREE.Color(0xffffff);
+    /** Доли отрезка a→b, где он пересекает стороны цветных помещений (там может смениться цвет стены). */
+    const tintCrossings = (ax: number, ay: number, bx: number, by: number): number[] => {
+      const out: number[] = [];
+      const dx = bx - ax, dy = by - ay;
+      for (const t of tinted) {
+        if (Math.max(ax, bx) < t.box[0] || Math.min(ax, bx) > t.box[2] || Math.max(ay, by) < t.box[1] || Math.min(ay, by) > t.box[3]) continue;
+        for (const r of [t.outer, ...t.holes]) for (let i = 0; i < r.length; i++) {
+          const [cx, cy] = r[i], [ex, ey] = r[(i + 1) % r.length], fx = ex - cx, fy = ey - cy;
+          const den = dx * fy - dy * fx;
+          if (Math.abs(den) < 1e-12) continue;
+          const u = ((cx - ax) * fy - (cy - ay) * fx) / den, v = ((cx - ax) * dy - (cy - ay) * dx) / den;
+          if (u > 0 && u < 1 && v >= 0 && v <= 1) out.push(u);
+        }
+      }
+      return out;
+    };
     /** Цвет стены со стороны точки (x, y): пол помещения под ней, иначе белый. */
     const sideColour = (x: number, y: number): THREE.Color => {
       for (const t of tinted) {
@@ -2011,16 +2027,25 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (facadeOwnFloorEdge && !doorGap) {
           // Стену здания рисует оболочка; изнутри фасад красится в цвет помещения своей гранью в той же плоскости
           const l0 = Math.hypot(bx - ax, by - ay) || 1, ux = (by - ay) / l0, uy = -(bx - ax) / l0;
-          const mx = (ax + bx) / 2, my = (ay + by) / 2;
           for (const side of [1, -1]) {
-            const c = sideColour(mx + side * ux * WALL_SIDE_PROBE, my + side * uy * WALL_SIDE_PROBE);
-            if (c === WHITE_WALL) continue;
-            const [px, py, qx, qy] = [ax, ay, bx, by];
-            const face = side > 0
-              ? [px, py, z0, qx, qy, z0, qx, qy, z1b, px, py, z0, qx, qy, z1b, px, py, z1a]
-              : [px, py, z0, qx, qy, z1b, qx, qy, z0, px, py, z0, px, py, z1a, qx, qy, z1b];
-            for (const value of face) tintWalls.push(value);
-            for (let k = 0; k < 6; k++) tintCols.push(c.r, c.g, c.b);
+            // Кусок фасада может выходить за помещение (начинаться в толще стены за углом): цвет — по участкам между
+            // пересечениями со сторонами помещений, а не одним по середине куска
+            const ox = side * ux * WALL_SIDE_PROBE, oy = side * uy * WALL_SIDE_PROBE;
+            const ts = [0, 1, ...tintCrossings(ax + ox, ay + oy, bx + ox, by + oy)].sort((x, y) => x - y);
+            for (let i = 0; i < ts.length - 1; i++) {
+              const t0 = ts[i], t1 = ts[i + 1];
+              if (t1 - t0 < 1e-6) continue;
+              const tm = (t0 + t1) / 2;
+              const c = sideColour(ax + (bx - ax) * tm + ox, ay + (by - ay) * tm + oy);
+              if (c === WHITE_WALL) continue;
+              const px = ax + (bx - ax) * t0, py = ay + (by - ay) * t0, qx = ax + (bx - ax) * t1, qy = ay + (by - ay) * t1;
+              const za = z1a + (z1b - z1a) * t0, zb = z1a + (z1b - z1a) * t1;
+              const face = side > 0
+                ? [px, py, z0, qx, qy, z0, qx, qy, zb, px, py, z0, qx, qy, zb, px, py, za]
+                : [px, py, z0, qx, qy, zb, qx, qy, z0, px, py, z0, px, py, za, qx, qy, zb];
+              for (const value of face) tintWalls.push(value);
+              for (let k = 0; k < 6; k++) tintCols.push(c.r, c.g, c.b);
+            }
           }
         }
         // A facade can own the wall face, but the indoor wall still owns its
@@ -2041,15 +2066,28 @@ export class BuildingsLayer implements CustomLayerInterface {
         [ax, ay, z0, bx, by, z1b, bx, by, z0, ax, ay, z0, ax, ay, z1a, bx, by, z1b],
       ];
       const l0 = Math.hypot(bx - ax, by - ay) || 1, nx = (by - ay) / l0 * WALL_SIDE_PROBE, ny = -(bx - ax) / l0 * WALL_SIDE_PROBE;
-      const mx = (ax + bx) / 2, my = (ay + by) / 2;
-      const colours = [sideColour(mx + nx, my + ny), sideColour(mx - nx, my - ny)];
       const masks = escalatorOpeningMasks(faces[0], escalatorCuts);
       for (const value of masks) openingMasks.push(value);
-      for (let side = 0; side < 2; side++) {
-        const face = masks.length ? trimCoplanarWalls(faces[side], masks) : faces[side];
-        for (const value of face) walls.push(value);
-        const c = colours[side];
-        for (let k = 0; k < face.length / 3; k++) wallCols.push(c.r, c.g, c.b);
+      // Длинная грань (сторона толстой стены вдоль нескольких помещений) — цвет по участкам между пересечениями
+      // со сторонами помещений, а не один по середине: иначе кусок у угла комнаты берёт цвет соседа
+      const ts = [...new Set([0, 1, ...tintCrossings(ax + nx, ay + ny, bx + nx, by + ny), ...tintCrossings(ax - nx, ay - ny, bx - nx, by - ny)])].sort((x, y) => x - y);
+      for (let i = 0; i < ts.length - 1; i++) {
+        const t0 = ts[i], t1 = ts[i + 1];
+        if (t1 - t0 < 1e-6) continue;
+        const px = ax + (bx - ax) * t0, py = ay + (by - ay) * t0, qx = ax + (bx - ax) * t1, qy = ay + (by - ay) * t1;
+        const za = z1a + (z1b - z1a) * t0, zb = z1a + (z1b - z1a) * t1;
+        const mx = (px + qx) / 2, my = (py + qy) / 2;
+        const colours = [sideColour(mx + nx, my + ny), sideColour(mx - nx, my - ny)];
+        const part = ts.length === 2 ? faces : [
+          [px, py, z0, qx, qy, z0, qx, qy, zb, px, py, z0, qx, qy, zb, px, py, za],
+          [px, py, z0, qx, qy, zb, qx, qy, z0, px, py, z0, px, py, za, qx, qy, zb],
+        ];
+        for (let side = 0; side < 2; side++) {
+          const face = masks.length ? trimCoplanarWalls(part[side], masks) : part[side];
+          for (const value of face) walls.push(value);
+          const c = colours[side];
+          for (let k = 0; k < face.length / 3; k++) wallCols.push(c.r, c.g, c.b);
+        }
       }
       // Use the same 2 px cut outline for linear walls and solid polygon faces.
       // У нижнего этажа верх среза — в плоскости пола выбранного: обводка просвечивала бы сквозь него

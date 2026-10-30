@@ -1350,5 +1350,12 @@
   "Клики — точки стены; точка на другой линии (стене, стороне помещения) заканчивает стену.": "Clicks add wall points; a point on another line (wall, room side) finishes the wall.",
   "Enter или клик в последнюю точку — закончить, число + Enter — длина участка, Backspace — убрать точку.": "Enter or click the last point — finish, number + Enter — segment length, Backspace — remove point.",
   "Shift — держать ось здания. Esc — отмена.": "Shift — hold the building axis. Esc — cancel.",
-  "Узлы добавлены в соседей: {n}.": "Nodes added to neighbours: {n}."
+  "Узлы добавлены в соседей: {n}.": "Nodes added to neighbours: {n}.",
+  "Копируются помещения, площадки, стены и колонны (не точки и не эскалаторы).": "Rooms, areas, walls and columns are copied (not points or escalators).",
+  "Копирование indoor ({n}{skipped}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.": "Copying indoor ({n}{skipped}): click a base point — the copy will follow the cursor by it when pasted. Esc — cancel.",
+  "пропущено {n}": "skipped {n}",
+  "Скопировано indoor-объектов: {n}. Ctrl+V на плане этажа — вставить (копия поедет за курсором).": "Indoor objects copied: {n}. Ctrl+V on a floor plan — paste (the copy follows the cursor).",
+  "Indoor-объекты вставляются на план этажа — выберите этаж в панели «Этажи».": "Indoor objects are pasted onto a floor plan — pick a level in the Levels panel.",
+  "Вставлено indoor-объектов: {n} ({level}).": "Indoor objects pasted: {n} ({level}).",
+  "Общих узлов с соседями: {n}.": "Shared nodes with neighbours: {n}."
 }

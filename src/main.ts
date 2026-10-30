@@ -3798,13 +3798,15 @@ function attachParts(edits: Parameters<typeof session.editMany>[0], wayIds: (num
 }
 
 /** Буфер копирования: части (теги и контуры) и базовая точка (lng/lat и высота) — вставляются новыми путями. */
-let clipboard: { items: { tags: Record<string, string>; polygons: Feature3D['polygons'] }[]; base: { lngLat: LonLat; z: number } } | undefined;
+/** indoor — indoor-объекты плана этажа (помещения, стены, колонны; line — линейная стена): вставляются на показанный этаж. */
+let clipboard: { items: { tags: Record<string, string>; polygons: Feature3D['polygons']; line?: boolean }[]; base: { lngLat: LonLat; z: number }; indoor?: boolean } | undefined;
 /** Ctrl+C: части скопированы, ждём клика по базовой точке. */
-let copyPick: { items: NonNullable<typeof clipboard>['items'] } | undefined;
+let copyPick: { items: NonNullable<typeof clipboard>['items']; indoor?: boolean } | undefined;
 
 /** Ctrl+C в режиме здания: выделенные части (простые пути; контур здания — нет), затем клик — базовая точка. */
 function copySelected() {
   if (!focus) return;
+  if (shownLevel && (indoorSelection.length || selectedRoomWalls.length)) return copyIndoor();
   const keys = selection.filter((k) => focus!.members.includes(k));
   const items: NonNullable<typeof clipboard>['items'] = [];
   let skipped = 0;
@@ -3823,6 +3825,25 @@ function copySelected() {
   if (lastPointer) updateSnap(lastPointer);
 }
 
+/** Ctrl+C на плане этажа: выделенные помещения, площадки, стены и колонны (точки и эскалаторы — нет). */
+function copyIndoor() {
+  const fs = indoorSelection.filter(editableIndoorGeometry);
+  for (const w of selectedRoomWalls) { const f = buildingIndoorFor(w.key); if (f && editableIndoorGeometry(f) && !fs.includes(f)) fs.push(f); }
+  const skipped = indoorSelection.length - fs.filter((f) => indoorSelection.includes(f)).length;
+  const items: NonNullable<typeof clipboard>['items'] = fs.flatMap((f) => f.polygons.length ? [{
+    // Этаж берёт вставка; type=multipolygon поставит создание с дырами
+    tags: Object.fromEntries(Object.entries(f.tags).filter(([k]) => k !== 'level' && k !== 'repeat_on' && k !== 'type')),
+    polygons: f.polygons.map((p) => ({ outer: p.outer.map((c) => [...c] as LonLat), inners: p.inners.map((r) => r.map((c) => [...c] as LonLat)) })),
+    line: f.line,
+  }] : []);
+  if (!items.length) return setStatus(tr('Копируются помещения, площадки, стены и колонны (не точки и не эскалаторы).'), true);
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  copyPick = { items, indoor: true };
+  setStatus(tr('Копирование indoor ({n}{skipped}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.',
+    { n: items.length, skipped: skipped ? ', ' + tr('пропущено {n}', { n: skipped }) : '' }));
+  if (lastPointer) updateSnap(lastPointer);
+}
+
 /** Клик в режиме выбора базовой точки: привязка, иначе поверхность под курсором, иначе земля. */
 function pickCopyBase(point: [number, number]) {
   if (!copyPick) return;
@@ -3835,10 +3856,12 @@ function pickCopyBase(point: [number, number]) {
   if (!p) return setStatus(tr('Кликните по точке здания или земли.'), true);
   const ll = overpassLayer.focusToLngLat(p.x, p.y);
   if (!ll) return;
-  clipboard = { items: copyPick.items, base: { lngLat: ll, z: p.z } };
+  clipboard = { items: copyPick.items, base: { lngLat: ll, z: p.z }, indoor: copyPick.indoor };
   copyPick = undefined;
   updateSnap(undefined);
-  setStatus(tr('Скопировано частей: {n}. Ctrl+V — вставить (копия поедет за курсором).', { n: clipboard.items.length }));
+  setStatus(clipboard.indoor
+    ? tr('Скопировано indoor-объектов: {n}. Ctrl+V на плане этажа — вставить (копия поедет за курсором).', { n: clipboard.items.length })
+    : tr('Скопировано частей: {n}. Ctrl+V — вставить (копия поедет за курсором).', { n: clipboard.items.length }));
 }
 
 function cancelCopyPick() {
@@ -3854,6 +3877,7 @@ function cancelCopyPick() {
  */
 function pasteClipboard() {
   if (!focus || !clipboard) return setStatus(tr('Буфер пуст: выберите части, Ctrl+C и клик по базовой точке.'), true);
+  if (clipboard.indoor) return pasteIndoor(clipboard);
   const edits: Parameters<typeof session.editMany>[0] = [];
   const wayIds: number[] = [];
   const keys: string[] = [];
@@ -3887,6 +3911,104 @@ function pasteClipboard() {
     tr('Вставка ({n}): кликните, куда поставить базовую точку. Shift/стрелки — ось, число + Enter — сдвиг. Esc — отмена вставки.', { n: keys.length }),
     () => setStatus(tr('Вставлено частей: {n}.', { n: keys.length })),
     () => { selectAfterHistory(session.undo()); setStatus(tr('Вставка отменена.')); });
+}
+
+/**
+ * Ctrl+V indoor-объектов: копии на показанном этаже (level — этот этаж) новыми путями со своими узлами, сразу
+ * привязаны к курсору за базовую точку; клик — место. Esc — вставка отменяется целиком.
+ */
+function pasteIndoor(cb: NonNullable<typeof clipboard>) {
+  if (!focus || !shownLevel) return setStatus(tr('Indoor-объекты вставляются на план этажа — выберите этаж в панели «Этажи».'), true);
+  const level = shownLevel.n;
+  const edits: ObjectEdit[] = [];
+  const made: IndoorFeature[] = [];
+  const fresh = (p: LonLat) => ({ p: [...p] as LonLat, id: nextNewId-- });
+  for (const c of cb.items) {
+    const tags = { ...c.tags, level: String(level) };
+    if (c.line) {
+      const nodes = c.polygons[0].outer.map(fresh);
+      const key = `way/${nextNewId--}`, line = { ids: nodes.map((q) => q.id), coords: nodes.map((q) => q.p) };
+      const polygons = [{ outer: line.coords, outerIds: line.ids, inners: [] }];
+      edits.push({ key, create: { key, version: 0, tags, line, polygons } });
+      made.push({ key, kind: 'wall', line: true, polygons, tags, levels: [level] });
+      continue;
+    }
+    for (const p of c.polygons) { const m = indoorCreateEdits(p, tags, fresh, edits); if (m) made.push(m); }
+  }
+  if (!made.length) return;
+  session.editMany(edits);
+  for (const m of made) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
+  indoorEditRev++;
+  renderLevels();
+  const fs = made.map((m) => buildingIndoorFor(m.key)).filter((f): f is IndoorFeature => !!f);
+  fs.forEach((f, i) => selectIndoor(f, i > 0));
+  const b = overpassLayer.focusToLocal(cb.base.lngLat);
+  if (!b) return;
+  pushTool.stop(); shapeTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
+  moveTool.drag(fs.map((f) => f.key), new THREE.Vector3(b[0], b[1], shownLevel.floor),
+    tr('Вставка ({n}): кликните, куда поставить базовую точку. Shift/стрелки — ось, число + Enter — сдвиг. Esc — отмена вставки.', { n: fs.length }),
+    () => {
+      const joined = joinPastedIndoor(fs.map((f) => indoorKey(f.key)));
+      setStatus(tr('Вставлено indoor-объектов: {n} ({level}).', { n: fs.length, level: levelLabel(level) })
+        + (typeof joined === 'string' ? ' ' + joined : joined ? ' ' + tr('Общих узлов с соседями: {n}.', { n: joined }) : ''));
+    },
+    () => { selectAfterHistory(session.undo()); setStatus(tr('Вставка отменена.')); });
+}
+
+/** Вершина вставленного объекта ближе этого к узлу соседа, м, — встаёт на этот узел. */
+const PASTE_JOIN = 0.02;
+
+/**
+ * Вставленные indoor-пути после установки — в топологию этажа: вершина на узле соседа (или здания) берёт его узел,
+ * вершина на стороне соседа вставляется в неё, узел соседа на стороне вставленного — в его сторону. Отдельный
+ * шаг истории. Мультиполигоны не склеиваются. Число общих узлов; строка — ошибка.
+ */
+function joinPastedIndoor(keys: string[]): number | string {
+  if (!focus || !shownLevel) return 0;
+  const skip = new Set(keys);
+  const pasted = keys.map((k) => buildingIndoorFor(k)).filter((f): f is IndoorFeature => !!f && f.key.startsWith('way/') && f.polygons.length === 1 && !!f.polygons[0].outerIds);
+  const others = [...buildingIndoor(focus).filter((f) => !f.point && !skip.has(indoorKey(f.key)) && f.levels.includes(shownLevel!.n)), ...groupFeatures(focus)];
+  const nodes = new Map<number, LonLat>();
+  for (const f of others) for (const p of f.polygons) {
+    p.outerIds?.forEach((id, i) => nodes.set(id, p.outer[i]));
+    p.innerIds?.forEach((ids, j) => ids.forEach((id, i) => nodes.set(id, p.inners[j][i])));
+  }
+  const loc = [...nodes].map(([id, p]) => ({ id, p, at: overpassLayer.focusToLocal(p)! }));
+  const { patch, line: patchLine } = sideInserts(nodes);
+  const edits: ObjectEdit[] = [];
+  const loose: { id: number; p: LonLat }[] = [];
+  let shared = 0;
+  for (const f of pasted) {
+    const p0 = f.polygons[0];
+    // Вершины на узлах соседей — их узлы
+    let ids: number[] = [], ring: LonLat[] = [];
+    p0.outer.forEach((c, i) => {
+      const at = overpassLayer.focusToLocal(c)!;
+      const hit = loc.find((q) => Math.hypot(q.at[0] - at[0], q.at[1] - at[1]) < PASTE_JOIN);
+      const id = hit?.id ?? p0.outerIds![i];
+      if (ids.at(-1) === id) return;
+      if (hit) shared++; else loose.push({ id, p: c });
+      ids.push(id); ring.push(hit?.p ?? c);
+    });
+    if (!f.line && ids.length > 1 && ids[0] === ids.at(-1)) { ids.pop(); ring.pop(); }
+    if (ids.length < (f.line ? 2 : 3)) continue;
+    // Узлы соседей на сторонах вставленного — в эти стороны
+    const poly = f.line ? undefined : patch({ outer: ring, outerIds: ids, inners: p0.inners, innerIds: p0.innerIds });
+    const ins = f.line ? patchLine(ids, ring) : poly && { ids: poly.outerIds!, ring: poly.outer };
+    if (ins) { shared += ins.ids.length - ids.length; ids = ins.ids; ring = ins.ring; }
+    const polygons = [{ ...p0, outer: ring, outerIds: ids }];
+    edits.push(f.line ? { key: f.key, line: { ids, coords: ring }, polygons } : { key: f.key, polygons });
+  }
+  // Вершины вставленного на сторонах соседей — в эти стороны
+  const side = indoorSideInsertEdits(loose, skip);
+  if (typeof side === 'string') return side;
+  edits.push(...side.edits);
+  shared += side.touched.size ? loose.filter((q) => side.edits.some((e) => [...(e.polygons ?? []).flatMap((p) => [p.outerIds ?? [], ...(p.innerIds ?? [])]), e.line?.ids ?? []].some((r) => r.includes(q.id)))).length : 0;
+  if (!shared) return 0;
+  session.editMany(edits);
+  indoorEditRev++;
+  renderLevels();
+  return shared;
 }
 
 function segDist2([px, py]: [number, number], [ax, ay]: [number, number], [bx, by]: [number, number]): number {
@@ -7106,7 +7228,7 @@ document.addEventListener('keydown', (e) => {
   // Ctrl/Cmd+C, Ctrl/Cmd+V — копировать и вставить части здания (по физической клавише — и в русской раскладке)
   // Выделен текст на странице (строка состояния, панель) — Ctrl+C копирует его, как обычно
   const textSelected = !!window.getSelection()?.toString();
-  if (focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === 'KeyV' || (e.code === 'KeyC' && selection.length && !textSelected)) && !toolActive()) {
+  if (focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === 'KeyV' || (e.code === 'KeyC' && (selection.length || (shownLevel && (indoorSelection.length || selectedRoomWalls.length))) && !textSelected)) && !toolActive()) {
     e.preventDefault();
     closeCtxMenu();
     if (e.code === 'KeyC') copySelected(); else pasteClipboard();

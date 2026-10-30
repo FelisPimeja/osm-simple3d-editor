@@ -925,6 +925,12 @@ export class BuildingsLayer implements CustomLayerInterface {
   private belowOutlineObj?: THREE.Object3D;
   private belowOutlinePoints: SnapPoint[] = [];
 
+  /** Привязка только к контуру этажа ниже (вершина его плана, которой нет у объектов этого этажа и здания). */
+  belowOnlySnap(s: { key: string; local: THREE.Vector3 }): boolean {
+    const at = (q: SnapPoint) => q.p.distanceToSquared(s.local) < 1e-6;
+    return this.belowOutlinePoints.some((q) => q.key === s.key && at(q)) && ![...(this.snaps?.points ?? []), ...(this.indoorSnaps?.points ?? [])].some(at);
+  }
+
   setBelowOutlines(on: boolean) {
     if (on === this.belowOutlines) return;
     this.belowOutlines = on;

@@ -8058,9 +8058,11 @@ function updateUndergroundOutlines(feats: Feature3D[]) {
   }))) });
 }
 
+/** Запрос с иконки карты: выбрать план после входа и догрузки indoor. Первый этаж — level=0. */
+let badgePlanBuilding: string | undefined;
 const indoorBadges = new IndoorBadges(map, overpassLayer, ICON_PLAN, (key) => {
   const g = groupOf(key) ?? soloGroup(key);
-  if (g) enterFocus(g);
+  if (g) { badgePlanBuilding = g.key; enterFocus(g); renderLevels(); }
 });
 
 let badgeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -10453,6 +10455,7 @@ function renderLevels() {
 function renderLevelsImpl() {
   levelsPanel.hidden = !focus;
   if (!focus) {
+    badgePlanBuilding = undefined;
     levelsEl.innerHTML = '';
     overpassLayer.setUnderground(undefined);
     indoorPois.set([], 0);
@@ -10482,6 +10485,16 @@ function renderLevelsImpl() {
   loadFocusIndoor(focus);
   const indoor = buildingIndoor(focus);
   const levels = buildingLevels(focus, indoor);
+  const planned = plannedLevels(focus, levels, indoor);
+  if (badgePlanBuilding !== undefined) {
+    if (badgePlanBuilding === focus.key) {
+      // При равном расстоянии предпочитаем нижний этаж. Используем те же отметки, что и панель.
+      const nearest = [...planned].sort((a, b) => Math.abs(a) - Math.abs(b) || a - b)[0];
+      if (nearest !== undefined) { currentLevel = nearest; linkLevel = undefined; }
+      // После догрузки повторяем выбор: в тайлах мог отсутствовать план первого этажа.
+      if (josmMode || focusIndoor.has(focus.key)) badgePlanBuilding = undefined;
+    } else badgePlanBuilding = undefined;
+  }
   panelLevels = levels.map((l) => l.n);
   panelLevelRefs = new Map(levels.filter((l) => l.ref).map((l) => [l.n, l.ref!]));
   if (linkLevel !== undefined && levels.some((l) => l.n === linkLevel)) { currentLevel = linkLevel; linkLevel = undefined; }
@@ -10498,7 +10511,6 @@ function renderLevelsImpl() {
   setLevelParam(currentLevel ?? linkLevel);
   syncUnderlayLevels(levels);
   levelsCount.textContent = levels.length ? `(${levels.length})` : '';
-  const planned = plannedLevels(focus, levels, indoor);
   levelsEl.innerHTML = levels.length
     ? `<li class="${currentLevel === undefined ? 'selected' : ''}" data-level=""><span class="lv-name"><span class="lv-plan"></span>${tr('Всё здание')}</span></li>` + levels.map((l, i) =>
       // Заголовки групп: перед первым надземным и первым подземным этажом (список — сверху вниз)
@@ -10719,6 +10731,7 @@ levelsEl.addEventListener('click', (e) => {
   if (link) { e.preventDefault(); select(link.dataset.select); return; }
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-level]');
   if (!li) return;
+  badgePlanBuilding = undefined;
   const n = li.dataset.level === '' ? undefined : Number(li.dataset.level);
   currentLevel = n;
   linkLevel = undefined;

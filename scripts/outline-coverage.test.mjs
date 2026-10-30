@@ -40,8 +40,24 @@ test('17948502 explicit ground body and upper tier together replace the building
  markOutlinesWithParts(features,features,groups);
  assert.equal(features.find(f=>f.key==='relation/17948502').hasParts,true);
 });
-test('an isolated raised tier still leaves the lower outline volume',()=>{
+test('an explicit raised part replaces the outline while a spatially found one keeps the base',()=>{
  const b=outline(),p=feature('way/2','part',0,0,.001,.001,{height:'20',min_height:'15'});
  const group={members:[b.key,p.key],roles:['outline','part']};
+ markOutlinesWithParts([b,p],[b]);assert.equal(b.hasParts,false);
+ markOutlinesWithParts([b,p],[b],[group]);assert.equal(b.hasParts,true);
+});
+test('17747395: all explicit parts cover the outline, including parts without height and raised canopies',async()=>{
+ const {readFileSync}=await import('node:fs');
+ const {parseBuildings}=await vite.ssrLoadModule('/src/osm/model.ts');
+ const {features,groups}=parseBuildings(JSON.parse(readFileSync(new URL('./fixtures/outline-17747395.json',import.meta.url))));
+ const b=features.find(f=>f.key==='relation/17747395');
+ markOutlinesWithParts(features,features,groups);
+ assert.equal(b.hasParts,true);
+});
+test('explicit parts intersecting the outline count even when their centre is outside',()=>{
+ const b=outline(),p=feature('way/2','part',-.002,0,.001,.001,{'building:part':'yes'});
+ const group={members:[b.key,p.key],roles:['outline','part']};
+ markOutlinesWithParts([b,p],[b],[group]);assert.equal(b.hasParts,true);
+ p.polygons[0].outer=p.polygons[0].outer.map(([x,y])=>[x+.01,y]);
  markOutlinesWithParts([b,p],[b],[group]);assert.equal(b.hasParts,false);
 });

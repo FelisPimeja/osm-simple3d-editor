@@ -1362,5 +1362,6 @@
   "Вставка дверей ({n}): клик по стене помещения или наружной стене — копия двери. Esc — закончить.": "Pasting doors ({n}): click a room wall or an outer wall — a door copy. Esc — finish.",
   "Дверь ставится на стену помещения или наружную стену.": "A door goes on a room wall or an outer wall.",
   "Правки очищены.": "Edits cleared.",
-  "Очистить правки": "Clear edits"
+  "Очистить правки": "Clear edits",
+  "Точка: щелчок на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа. Shift — вести точку вдоль стены. Esc — выйти.": "Point: click a room wall — door, an outer wall — entrance, inside — a level object. Shift — slide the point along the wall. Esc — exit."
 }

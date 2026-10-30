@@ -2409,7 +2409,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
   if (point && rotateTool.active) rotateTool.move(point);
   if (point && scaleTool.active) scaleTool.move(point);
   if (point && offsetTool.active) offsetTool.move(point);
-  if (pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || scaleTool.active || copyPick) {
+  if (pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || scaleTool.active || copyPick || pointPick) {
     // Рассечение: подсвечиваем вершины и середины рёбер объектов (концы разреза)
     currentSnap = pushTool.active ? (pushTool.state === 'push' ? pushTool.snap : undefined)
       : shapeTool.active ? (point ? shapeTool.snap : undefined)
@@ -2908,6 +2908,8 @@ for (const type of ['keydown', 'keyup'] as const) {
     if (e.key !== 'Shift' || shiftHeld === (type === 'keydown')) return;
     shiftHeld = type === 'keydown';
     if (pushTool.state === 'pick') pushTool.hover(lastPointer, shiftHeld);
+    // «Точка»: Shift держит стену — отпустили, снять; нажали — зафиксировать стену под курсором
+    if (pointPick) { pointLock = undefined; if (lastPointer) updateSnap(lastPointer); }
   });
 }
 window.addEventListener('blur', () => { shiftHeld = false; if (pushTool.state === 'pick') pushTool.hover(undefined, false); });
@@ -9606,13 +9608,14 @@ function startPoint() {
   pointBtn.classList.add('active');
   document.querySelector('.indoor-pois')?.classList.add('passthrough');
   syncCursor();
-  toolHint(tr('Точка: щелчок на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа. Esc — выйти.'));
+  toolHint(tr('Точка: щелчок на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа. Shift — вести точку вдоль стены. Esc — выйти.'));
 }
 
 function stopPoint() {
   if (!pointPick) return;
   pointPick = false;
   doorPaste = undefined;
+  pointLock = undefined;
   pointBtn.classList.remove('active');
   document.querySelector('.indoor-pois')?.classList.remove('passthrough');
   overpassLayer.setDrawPreview(undefined);
@@ -9627,10 +9630,30 @@ interface PointTarget {
   node?: number;
   indoor: { f: IndoorFeature; polygon: number; ring: number; edge: number }[];
   building: { u: number; v: number; cu: LonLat; cv: LonLat }[];
+  /** Сторона стены, на которой точка (метры сцены): Shift держит точку на ней. */
+  side?: [[number, number], [number, number]];
+}
+
+/** Shift в «Точке»: сторона стены, вдоль которой ходит точка (курсор и привязки проецируются на неё). */
+let pointLock: [[number, number], [number, number]] | undefined;
+
+/** Экранная точка «Точки» с привязкой: вершина, середина, ребро, перпендикуляр — их место, иначе курсор. */
+function pointSnapped(screen: [number, number]): [number, number] {
+  const s = overpassLayer.snapAt(screen);
+  const snapped = s && s.kind !== 'center' && s.kind !== 'grid' ? s : undefined;
+  if (!pointLock || !shownLevel) return snapped?.point ?? screen;
+  // Стена зафиксирована: место привязки (вершина соседа и т. п.) или курсора — проекцией на её сторону
+  const z = shownLevel.floor;
+  const hit = snapped ? snapped.local : overpassLayer.focusRay(screen)?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+  if (!hit) return screen;
+  const [a, b] = pointLock, dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((hit.x - a[0]) * dx + (hit.y - a[1]) * dy) / l2));
+  return overpassLayer.focusProject(new THREE.Vector3(a[0] + dx * t, a[1] + dy * t, z)) ?? screen;
 }
 
 function pointTarget(screen: [number, number]): PointTarget | undefined {
   if (!focus || !shownLevel) return;
+  screen = pointSnapped(screen);
   const z = shownLevel.floor;
   const ray = overpassLayer.focusRay(screen);
   const hit = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
@@ -9691,11 +9714,13 @@ function pointTarget(screen: [number, number]): PointTarget | undefined {
   // Не на стене этажа и не на фасаде — точка внутри
   if (!outside && (node !== undefined ? !best.r.indoor : !indoor.length)) return { at: overpassLayer.focusToLngLat(p[0], p[1])! as LonLat, local: p, kind: 'poi', indoor: [], building: [] };
   // Внутри здания вход не ставим в пути частей (общая стена двух частей — не фасад)
-  return { at, local: q, kind: outside ? 'entrance' : 'door', node, indoor, building: outside ? building : [] };
+  return { at, local: q, kind: outside ? 'entrance' : 'door', node, indoor, building: outside ? building : [], side: [a, b] };
 }
 
 function hoverPoint(screen: [number, number]) {
   const t = pointTarget(screen);
+  // Shift: стена под точкой — зафиксирована, пока клавиша зажата
+  if (shiftHeld && !pointLock && t?.side) pointLock = t.side;
   if (!t || !shownLevel) { overpassLayer.setDrawPreview(undefined); return; }
   const solid=t.indoor.find(s=>solidWall(s.f))?.f;
   if(solid){

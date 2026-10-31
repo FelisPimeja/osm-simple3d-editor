@@ -113,7 +113,7 @@ const POI_KEYS = ['door', 'entrance', 'amenity', 'shop', 'office', 'tourism', 'e
 /** Узел или помещение — точечный объект плана этажа. */
 export function isIndoorPoi(tags?: Record<string, string>): boolean {
   if (!tags) return false;
-  if (tags.room === 'toilet' || tags.room === 'toilets' || tags.room === 'stairs' || tags.room === 'elevator' || tags.room === 'reception') return true;
+  if (tags.room === 'toilet' || tags.room === 'toilets' || tags.room === 'stairs' || tags.room === 'elevator' || tags.room === 'reception' || tags.room === 'security') return true;
   if (tags.indoor === 'door' || tags.highway === 'elevator' || tags.elevator === 'yes' || tags.stairs === 'yes' || tags.highway === 'steps') return true;
   return POI_KEYS.some((k) => tags[k] !== undefined && tags[k] !== 'no');
 }

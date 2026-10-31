@@ -51,6 +51,7 @@ export function poiIcon(t: Record<string, string>): string | undefined {
   if (t.amenity && AMENITY[t.amenity]) return AMENITY[t.amenity];
   if (t.room === 'toilet' || t.room === 'toilets') return 'toilet';
   if (t.room === 'reception' || t.amenity === 'reception_desk' || t.tourism === 'information') return 'information';
+  if (t.room === 'security') return 'police';
   if (t.tourism === 'museum' || t.tourism === 'gallery') return 'museum';
   if (t.tourism === 'artwork') return 'art-gallery';
   if (t.healthcare) return 'doctor';

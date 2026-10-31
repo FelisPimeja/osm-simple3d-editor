@@ -22,7 +22,7 @@ import { nextFrameSlot } from './frame-budget';
 import { trimInWorker, trimSync, trimWorkersAvailable, type TrimJob, type TrimResult } from './shell-trim-pool';
 import { areaLedgeTriangles } from './area-ledge';
 import { floatingParts } from '../osm/floating';
-import type { Feature3D, IndoorKind, LonLat, Polygon } from '../osm/model';
+import { pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
 import { dropPartSeams } from './part-seams';
 import { edgePass } from './edge-pass';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
@@ -1610,6 +1610,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       timed('этажи: планы нижних этажей', () => { for (const b of this.level!.below ?? []) this.drawPlan(root, g, b.items, b.doors ?? [], b.cut, true, shell(), b.voids); }, () => `${this.level!.below!.length} этажей`);
     }
     timed('этажи: план выбранного этажа', () => this.drawPlan(root, g, this.level!.items, this.previewDoors(this.level!.doors ?? []), top, false, shell()));
+    this.drawOpenRoofs(root, g, top);
     timed('этажи: эскалаторы', () => this.drawEscalators(root, g));
     timed('этажи: слияние геометрии', () => this.rebuildGeometry(g));
     this.attachBelowOutlines();
@@ -4799,6 +4800,38 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** A few recent floor configurations per part; edits replace the source array and invalidate the cache. */
   private doorCuts = new WeakMap<Item, { source: Float32Array; wallVertices: number; entries: Map<string, { positions: Float32Array; wallVertices: number }> }>();
 
+  /** Внутри части есть план выбранного этажа (проверка по одной точке). */
+  private planCovers(it: Item): boolean {
+    if (!it.feature.polygons.length) return true;
+    const at = pointOnSurface(it.feature.polygons[0]);
+    return !!this.level?.items.some((f) => !f.line && !f.cutOnly && f.kind !== 'wall' && f.kind !== 'column'
+      && f.polygons.some((q) => pointInRing(at, q.outer) && !q.inners.some((r) => pointInRing(at, r))));
+  }
+
+  /**
+   * Плоские крыши частей внутри высоты этажа шейдер снимает, чтобы не накрывать план (SHELL_FLOOR). Где плана нет
+   * (навес, переход рядом со зданием), крыша нужна: она рисуется отдельно, мимо этого шейдера.
+   */
+  private drawOpenRoofs(root: THREE.Object3D, g: MeshGroup, top: number) {
+    const out: number[] = [], floor = this.level!.floor;
+    for (const it of g.items) {
+      const h = computeHeights(it.tags);
+      if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || h.top <= floor + 0.05 || h.top >= top || this.planCovers(it)) continue;
+      const end = it.positions.length / 3 - it.floorVertices, p = it.positions;
+      for (let i = it.wallVertices * 3; i + 8 < end * 3; i += 9) {
+        if (Math.abs(p[i + 2] - p[i + 5]) < 1e-4 && Math.abs(p[i + 5] - p[i + 8]) < 1e-4) out.push(...p.subarray(i, i + 9));
+      }
+    }
+    if (!out.length) return;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, INDOOR_SLAB_MATERIAL);
+    mesh.name = 'indoor-open-roofs';
+    mesh.frustumCulled = false;
+    root.add(mesh);
+  }
+
   private openRoofInPlan(g: MeshGroup, it: Item): boolean {
     if (!this.level || g !== this.groups.get(FOCUS_GROUP) || g.hidden.has(it.feature.key) || strokeOnly(g, it)) return false;
     const h = computeHeights(it.tags);
@@ -4888,11 +4921,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     // and is restored automatically when leaving the floor plan.
     if (this.level && g === this.groups.get(FOCUS_GROUP)) {
       const floor = this.level.floor;
+      // Плоская крыша части, кончающейся на этом этаже (переход под этажом), где плана нет, остаётся: заменить её нечем
+      const roofs = g.items.filter((it) => !g.hidden.has(it.feature.key) && !strokeOnly(g, it)
+        && Math.abs(computeHeights(it.tags).top - floor) < 0.1 && !this.planCovers(it)).map((it) => ({ at: it.start * 3, kept: positions.slice(it.start * 3, (it.start + it.positions.length / 3) * 3) }));
       for (let i = 0; i + 8 < positions.length; i += 9) {
         const z = positions[i + 2];
         if (Math.abs(z - floor) < 0.1 && Math.abs(positions[i + 5] - z) < 1e-5
           && Math.abs(positions[i + 8] - z) < 1e-5) positions.fill(0, i, i + 9);
       }
+      for (const r of roofs) positions.set(r.kept, r.at);
     }
     timed('геометрия: пустоты', () => this.cutVoids(g, positions));
     const geom = new THREE.BufferGeometry();

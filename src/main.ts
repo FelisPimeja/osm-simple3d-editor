@@ -1,11 +1,11 @@
 import { withEntranceTags } from './edit/entrance-edits';
 import { cleanPiece, freeAreaPieces } from './edit/free-area';
-import { enclosedDrawings } from './edit/indoor-draw-holes';
 import { joinedWallLine } from './edit/indoor-wall-union';
 import { pointWallRings, insertWallPoint } from './edit/point-wall-rings';
 import { roomDoorway, solidWall, wallLocalPolygons, cutSolidWall, findSolidDoorBinding, restoreSolidDoor, nearestSolidFace, type WallPolygon, normalizeSolidDoorEdits, projectedOpeningIndoor } from './edit/solid-wall-doors';
 import { addFacadeDoors } from './edit/facade-doors';
 import { indoorAnchor } from './edit/indoor-anchor';
+import { levelDetachNodes } from './edit/level-detach';
 import { isIndoorCutPolygon, isIndoorUnionPolygon, indoorUnionSignature, indoorUnionGeometry, indoorUnionHoleEdits } from './edit/indoor-union';
 import { finiteCutPieces } from './edit/finite-cut';
 import { editIndoorGeometry, type IndoorOperation, type IndoorVertex } from './edit/indoor-geometry';
@@ -8567,13 +8567,13 @@ const INDOOR_LABELS: Record<string, string> = {
   room: tr('Помещение'), corridor: tr('Коридор'), area: tr('Зона без стен'), level: tr('Этаж'), wall: tr('Стена'),
   column: tr('Колонна'), door: tr('Дверь'), yes: tr('Не указано'),
 };
-const ROOM_VALUES = ['corridor', 'shop', 'office', 'toilets', 'toilet', 'stairs', 'elevator', 'restaurant', 'storage', 'class', 'conference', 'kitchen', 'waiting', 'entrance', 'auditorium', 'bedroom', 'living_room', 'bathroom', 'reception', 'classroom', 'laboratory', 'utility', 'hall', 'lobby', 'lecture_hall', 'workshop', 'library', 'lounge', 'computer', 'dressing', 'dining', 'archive', 'yes'];
+const ROOM_VALUES = ['corridor', 'shop', 'office', 'toilets', 'toilet', 'stairs', 'elevator', 'restaurant', 'storage', 'class', 'conference', 'kitchen', 'waiting', 'entrance', 'auditorium', 'bedroom', 'living_room', 'bathroom', 'reception', 'classroom', 'laboratory', 'utility', 'hall', 'lobby', 'lecture_hall', 'workshop', 'library', 'lounge', 'computer', 'dressing', 'dining', 'archive', 'security', 'sports', 'yes'];
 const ROOM_LABELS: Record<string, string> = {
   corridor: tr('Коридор'), shop: tr('Магазин'), office: tr('Офис'), toilets: tr('Туалеты'), toilet: tr('Туалет'), stairs: tr('Лестница'),
   elevator: tr('Лифт'), restaurant: tr('Ресторан'), technical: tr('Техническое помещение'), storage: tr('Кладовая'),
   class: tr('Учебный класс'), conference: tr('Переговорная'), kitchen: tr('Кухня'), waiting: tr('Зал ожидания'),
   entrance: tr('Вход'), auditorium: tr('Аудитория'), bedroom: tr('Спальня'), living_room: tr('Гостиная'),
-  bathroom: tr('Ванная'), reception: tr('Ресепшн'), classroom: tr('Класс'), laboratory: tr('Лаборатория'), utility: tr('Подсобное помещение'), hall: tr('Холл'), lobby: tr('Вестибюль'), lecture_hall: tr('Лекционный зал'), workshop: tr('Мастерская'), library: tr('Библиотека'), lounge: tr('Комната отдыха'), computer: tr('Компьютерный класс'), dressing: tr('Раздевалка / примерочная'), dining: tr('Столовая'), archive: tr('Архив'), yes: tr('Не указано'),
+  bathroom: tr('Ванная'), reception: tr('Ресепшн'), classroom: tr('Класс'), laboratory: tr('Лаборатория'), utility: tr('Подсобное помещение'), hall: tr('Холл'), lobby: tr('Вестибюль'), lecture_hall: tr('Лекционный зал'), workshop: tr('Мастерская'), library: tr('Библиотека'), lounge: tr('Комната отдыха'), computer: tr('Компьютерный класс'), dressing: tr('Раздевалка / примерочная'), dining: tr('Столовая'), archive: tr('Архив'), security: tr('Пост охраны'), sports: tr('Спортзал'), yes: tr('Не указано'),
 };
 
 /** Поля правки indoor, level и room у выбранного indoor-объекта. */
@@ -8848,7 +8848,11 @@ function isVertex(at: LonLat): boolean {
  */
 function deleteDoors(fs: IndoorFeature[]) {
   try {
-    const edits=batchSolidDoorEdits(fs,()=>({}));
+    // Дверь нескольких этажей остаётся на других: снимается только показанный этаж
+    const n=shownLevel?.n,shared=fs.filter(f=>f.tags.level&&parseLevels(f.tags.level).length>1&&parseLevels(f.tags.level).includes(n!));
+    for(const f of shared)trackIndoor(f.key,f);
+    const left=shared.map(f=>({key:f.key,tags:{...f.tags,level:parseLevels(f.tags.level).filter(l=>l!==n).join(';')}}));
+    const edits=[...left,...batchSolidDoorEdits(fs.filter(f=>!shared.includes(f)),()=>({}))];
     selectIndoor(undefined);clearInfo();commitSolidDoorEdits(edits);
     setStatus(trn(fs.length, 'Удалена {n} дверь.|Удалено {n} двери.|Удалено {n} дверей.'));
   }catch(err){setStatus((err as Error).message,true);}
@@ -10328,10 +10332,55 @@ function placePoint(screen: [number, number]) {
   else stopPoint();
 }
 
+/**
+ * Дверь на стене, общей с другими этажами: у этажа — своя геометрия. Его объекты получают новые узлы на участке с
+ * общими узлами, другие этажи остаются на прежних путях. Объекты на нескольких этажах (площадка 0;1) разделить нельзя,
+ * они остаются на прежних узлах. Новые номера узлов; undefined — отделять нечего.
+ */
+function detachLevelWall(t: PointTarget, n: number): Map<number, number> | undefined {
+  if (!focus || t.kind !== 'door') return;
+  const rings = (f: IndoorFeature) => f.polygons.flatMap((p) => [p.outerIds, ...(p.innerIds ?? [])]).filter((r): r is number[] => !!r);
+  const all = buildingIndoor(focus).filter((f) => !f.point && !f.key.endsWith('#poi'));
+  const own = all.filter((f) => f.levels.length === 1 && f.levels[0] === n);
+  const shared = new Set(all.filter((f) => !own.includes(f)).flatMap((f) => rings(f).flat()));
+  const sides = t.indoor.filter((s) => own.some((f) => f.key === s.f.key));
+  const anchors = t.node !== undefined ? [t.node] : sides.flatMap((s) => {
+    const p = s.f.polygons[s.polygon], ids = s.ring ? p.innerIds?.[s.ring - 1] : p.outerIds;
+    return ids ? [ids[s.edge], ids[(s.edge + 1) % ids.length]] : [];
+  });
+  if (!anchors.length || (t.node === undefined && !anchors.every((id) => shared.has(id)))) return;
+  const pinned = new Set(shownIndoor.filter((f) => f.point && f.levels.length === 1).flatMap((f) => (f.key.startsWith('node/') ? [Number(f.key.split('/')[1])] : [])));
+  const nodes = levelDetachNodes(own.flatMap((f) => rings(f).map((ids) => ({ ids, closed: !f.line || ids[0] === ids[ids.length - 1] }))), anchors, shared, pinned);
+  if (!nodes.size) return;
+  const fresh = new Map([...nodes].map((id) => [id, nextNewId--]));
+  const remap = (ids: number[]) => ids.map((id) => fresh.get(id) ?? id);
+  const edits: ObjectEdit[] = [];
+  for (const f of own) {
+    if (!rings(f).flat().some((id) => fresh.has(id))) continue;
+    const key = indoorKey(f.key);
+    trackIndoor(key, f);
+    const polygons = f.polygons.map((p) => ({ ...p, outerIds: p.outerIds && remap(p.outerIds), innerIds: p.innerIds?.map(remap) }));
+    edits.push(f.line ? { key, line: { coords: polygons[0].outer, ids: polygons[0].outerIds! } } : { key, polygons });
+  }
+  session.editMany(indoorRelationTopology(edits));
+  indoorEditRev++;
+  renderLevels();
+  return fresh;
+}
+
 function placePointAt(screen: [number, number]) {
-  const t = pointTarget(screen);
+  let t = pointTarget(screen);
   if (!t || !focus || !shownLevel) return;
   const n = shownLevel.n;
+  if (!t.indoor.some(s => solidWall(s.f))) {
+    const fresh = detachLevelWall(t, n);
+    const next = fresh && pointTarget(screen);
+    if (fresh && next) {
+      // Дверь — только в стены этажа: площадка нескольких этажей остаётся на прежних узлах
+      const own = next.indoor.filter((s) => s.f.levels.length === 1);
+      t = { ...next, indoor: own.length ? own : next.indoor, node: next.node !== undefined ? fresh.get(next.node) ?? next.node : undefined };
+    }
+  }
   // Вставка скопированной двери: только на стену, теги — копии
   const pasted = doorPaste?.[0];
   if (pasted && t.kind === 'poi') { setStatus(tr('Дверь ставится на стену помещения или наружную стену.'), true); return; }
@@ -10347,14 +10396,19 @@ function placePointAt(screen: [number, number]) {
   const edits: ObjectEdit[] = [];
   const wallInserts: Insert[] = [];
   let id: number;
-  if (t.node !== undefined && t.node > 0) {
-    // Готовая вершина из данных — теги на неё
+  // Узел, который этаж не смог забрать себе (площадка нескольких этажей): level дополняется, а не перезаписывается
+  const nodeKey = t.node !== undefined ? `node/${t.node}` : undefined;
+  const nodeTags = nodeKey ? session.get(nodeKey)?.tags ?? buildingIndoor(focus).find((f) => f.key === nodeKey)?.tags ?? {} : {};
+  if (t.node !== undefined && (t.node > 0 || Object.keys(nodeTags).length)) {
+    // Готовая вершина — теги на неё
     id = t.node;
     const key = `node/${id}`;
     const existing = shownIndoor.find((f) => f.key === key);
     if (existing) { selectIndoor(existing); setStatus(tr('Здесь уже есть точка {key}.', { key })); return; }
-    trackIndoor(key, { key, kind: 'poi', tags: { ...(session.get(key)?.tags ?? {}) }, polygons: [], point: t.at, levels: [n] });
-    edits.push({ key, tags: { ...(session.get(key)?.tags ?? {}), ...tags } });
+    const levels = [...new Set([...parseLevels(nodeTags.level), n])].sort((a, b) => a - b);
+    tags.level = levels.join(';');
+    trackIndoor(key, { key, kind: 'poi', tags: { ...nodeTags }, polygons: [], point: t.at, levels });
+    edits.push({ key, tags: { ...nodeTags, ...tags } });
   } else {
     id = t.node ?? nextNewId--;
     const key = `node/${id}`;
@@ -10389,7 +10443,7 @@ function placePointAt(screen: [number, number]) {
   session.editMany(indoorRelationTopology(edits, wallInserts));
   const key = `node/${id}`;
   // И готовая вершина из данных: без тегов её не было среди точек этажа
-  indoorCreated.set(key, { key, kind: 'poi', tags: session.get(key)?.tags ?? tags, polygons: [], point: t.at, levels: [n] });
+  indoorCreated.set(key, { key, kind: 'poi', tags: session.get(key)?.tags ?? tags, polygons: [], point: t.at, levels: parseLevels(tags.level) });
   indoorEdited.add(key);
   indoorEditRev++;
   renderLevels();
@@ -10581,36 +10635,7 @@ function createIndoorDrawn(ring: [number, number][]): string | undefined {
   const edits: ObjectEdit[] = [];
   const made = polys.map((p) => indoorCreateEdits(p, { indoor: 'area', level: String(shownLevel!.n) }, nodeFor, edits)).filter((m): m is IndoorFeature => !!m);
   if (!made.length) return tr('Контур вырожден: у него нет площади.');
-  const containers: IndoorFeature[] = [];
-  for (const f of shownIndoor.filter(f => isIndoorCutPolygon(f) && !f.line)) {
-    const polygons = f.polygons.map(p => {
-      const holes = enclosedDrawings(p, made.flatMap(m => m.polygons));
-      return holes.length ? { ...p, inners: [...p.inners, ...holes.map(h => h.outer)],
-        innerIds: [...(p.innerIds ?? p.inners.map(r => r.map(q => nodeFor(q).id))), ...holes.map(h => h.outerIds!)] } : p;
-    });
-    if (polygons.every((p,i) => p === f.polygons[i])) continue;
-    const key = indoorKey(f.key);
-    trackIndoor(key, f);
-    if (key.startsWith('way/')) {
-      const rings = [polygons[0].outer, ...polygons[0].inners].map(r => nodeRing(r, nodeFor)!);
-      const converted = indoorUnionHoleEdits(f, f.tags, rings, () => nextNewId--);
-      edits.push(...converted.edits);
-      containers.push(converted.feature);
-    } else {
-      const members = session.get(key)?.relMembers ?? indoorRelationSources.get(key)?.ways?.map(w => ({ type: 'way' as const, ref: w.id, role: w.role }));
-      if (!members) return tr('Не хватает данных путей indoor-мультиполигона. Перезагрузите здание.');
-      session.track({ key, version: indoorRelationSources.get(key)?.version ?? 0, tags: f.tags, relMembers: members });
-      const added = polygons.flatMap((p,i) => p.inners.slice(f.polygons[i].inners.length).map(r => {
-        const nodes = nodeRing(r,nodeFor)!;
-        const id = nextNewId--, wk = `way/${id}`;
-        edits.push({key:wk,create:{key:wk,version:0,tags:{},line:{ids:[...nodes.map(n=>n.id),nodes[0].id],coords:[...nodes.map(n=>n.p),nodes[0].p]}}});
-        return {type:'way' as const,ref:id,role:'inner'};
-      }));
-      edits.push({key,polygons,members:[...members,...added]});
-    }
-  }
   session.editMany(edits);
-  for (const f of containers) { indoorCreated.set(f.key,f); indoorEdited.add(f.key); }
   for (const m of made) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
   indoorEditRev++;
   renderLevels();

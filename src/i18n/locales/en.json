@@ -1391,5 +1391,7 @@
   "У room={room} нет тега {tag}.": "room={room} has no {tag} tag.",
   "добавить {tag}": "add {tag}",
   "Раздевалка / примерочная": "Dressing / fitting room",
-  "Углы выровнены. Отменить — Ctrl+Z.": "Corners squared. Undo with Ctrl+Z."
+  "Углы выровнены. Отменить — Ctrl+Z.": "Corners squared. Undo with Ctrl+Z.",
+  "Пост охраны": "Security room",
+  "Спортзал": "Sports room"
 }

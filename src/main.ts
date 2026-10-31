@@ -8094,7 +8094,9 @@ function withSessionIndoor(all: Map<string, IndoorFeature>, bbox?: Bbox): Indoor
     if (bbox && (!at || at[0] < bbox[0] || at[0] > bbox[2] || at[1] < bbox[1] || at[1] > bbox[3])) continue;
     all.set(key, made);
   }
-  return [...all.values()].filter((f) => !session.isDeleted(indoorKey(f.key)) && (!indoorCreated.has(f.key) || !!session.get(f.key))).map((f) => {
+  // Путь-стена, отданный кольцу другого этажа (теги сняты), больше не indoor-объект
+  const untagged = (f: IndoorFeature) => !!f.line && indoorEdited.has(indoorKey(f.key)) && !Object.keys(session.get(indoorKey(f.key))?.tags ?? { keep: 1 }).length;
+  return [...all.values()].filter((f) => !session.isDeleted(indoorKey(f.key)) && (!indoorCreated.has(f.key) || !!session.get(f.key)) && !untagged(f)).map((f) => {
     const e = indoorEdited.has(indoorKey(f.key)) ? session.get(indoorKey(f.key)) : undefined;
     if (!e) return f;
     const g = withIndoorTags(f, e.tags);
@@ -10481,7 +10483,18 @@ function detachLevelWall(t: PointTarget, n: number): Map<number, number> | undef
     const key = indoorKey(f.key);
     trackIndoor(key, f);
     const polygons = f.polygons.map((p) => ({ ...p, outerIds: p.outerIds && remap(p.outerIds), innerIds: p.innerIds?.map(remap) }));
-    edits.push(f.line ? { key, line: { coords: polygons[0].outer, ids: polygons[0].outerIds! } } : { key, polygons });
+    const line = f.line ? { coords: polygons[0].outer, ids: polygons[0].outerIds! } : undefined;
+    const id = Number(key.split('/')[1]);
+    const foreign = !!line && (session.parentsOf(key).some((p) => !own.some((o) => o.key === p.key))
+      || all.some((g) => !own.includes(g) && indoorRelationSources.get(g.key)?.ways?.some((w) => w.id === id)));
+    if (line && foreign) {
+      // Путь в кольце другого этажа остаётся на своих узлах без тегов стены, этажу — новый путь-стена
+      const wall = `way/${nextNewId--}`;
+      indoorEdited.add(key);
+      edits.push({ key, tags: {} }, { key: wall, create: { key: wall, version: 0, tags: { ...f.tags }, line, polygons } });
+      indoorCreated.set(wall, { ...f, key: wall, polygons });
+      indoorEdited.add(wall);
+    } else edits.push(line ? { key, line } : { key, polygons });
   }
   session.editMany(indoorRelationTopology(edits));
   indoorEditRev++;

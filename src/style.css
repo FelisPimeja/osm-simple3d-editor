@@ -151,6 +151,7 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 #status:empty { display: none; }
 #status a, #status button { pointer-events: auto; }
 #status.error { color: #b91c1c; }
+.status-action { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 /* Копировать сообщение: сама строка не ловит мышь (клики проходят на карту), поэтому текст не выделить */
 .status-copy { pointer-events: auto; flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; border: 0; border-radius: 4px;
   background: none; color: #6b7280; font: inherit; font-size: 12px; cursor: pointer; }

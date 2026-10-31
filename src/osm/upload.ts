@@ -317,16 +317,20 @@ type Payload = Parameters<typeof buildOsmChange>[0];
  * Путь, который мы удаляем (ушёл с колец наших зданий), но который в составе чужого отношения из пакета
  * (площадь, куда вписаны куски разрезанного соседнего пути): if-unused его всё равно оставил бы, а
  * dropDanglingMembers выкинул бы его из этого отношения — кольцо разомкнулось бы. Удаление снимаем.
+ * То же для отношений из правок, если путь не удалён явно, а попал в пакет вслед за своим мультиполигоном: общий
+ * путь двух мультиполигонов нужен оставшемуся.
  */
 function keepForeignMembers(payload: Payload, editKeys: Set<string>) {
-  const used = new Set<number>();
+  const used = new Set<number>(), edited = new Set<number>();
   for (const p of payload) {
-    if (p.element.type !== 'relation' || p.deleted || p.created || editKeys.has(`relation/${p.element.id}`)) continue;
-    for (const m of p.element.members) if (m.type === 'way') used.add(m.ref);
+    if (p.element.type !== 'relation' || p.deleted || p.created) continue;
+    const set = editKeys.has(`relation/${p.element.id}`) ? edited : used;
+    for (const m of p.element.members) if (m.type === 'way') set.add(m.ref);
   }
   for (let i = payload.length - 1; i >= 0; i--) {
     const p = payload[i];
-    if (p.deleted && p.element.type === 'way' && used.has(p.element.id)) payload.splice(i, 1);
+    if (!p.deleted || p.element.type !== 'way') continue;
+    if (used.has(p.element.id) || (edited.has(p.element.id) && !editKeys.has(`way/${p.element.id}`))) payload.splice(i, 1);
   }
 }
 

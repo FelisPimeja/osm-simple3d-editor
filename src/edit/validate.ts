@@ -682,13 +682,22 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
   return out;
 }
 
+/** Значения room, к которым нужен парный тег amenity. */
+export const ROOM_PAIRED_AMENITY: Record<string, string> = { reception: 'reception_desk', dressing: 'dressing_room' };
+
+/** Значения, которые сводим к одному, — их нет в списке iD. */
+const OWN_DEPRECATED: readonly Deprecation[] = [
+  { old: { room: 'service' }, replace: { room: 'utility' } },
+  { old: { room: 'technical' }, replace: { room: 'utility' } },
+];
+
 /**
  * Устаревшие теги по списку iD (deprecated.json): предупреждение и замена, как «Обновить теги» в iD. Наши
  * проверки ошибочных ключей (WRONG_KEYS) точнее — их не повторяем. Замены с $1 подставляют старое значение.
  */
 export function validateDeprecated(key: string, t: Record<string, string>, list: readonly Deprecation[] = deprecatedList): Issue[] {
   const out: Issue[] = [];
-  for (const d of list) {
+  for (const d of [...list, ...OWN_DEPRECATED]) {
     const old = Object.entries(d.old);
     if (!old.every(([k, v]) => t[k] !== undefined && (v === '*' || t[k] === v))) continue;
     if (old.length === 1 && old[0][0] in WRONG_KEYS) continue;
@@ -703,6 +712,13 @@ export function validateDeprecated(key: string, t: Record<string, string>, list:
     Object.assign(tags, replace);
     out.push({ key, level: 'warning', code: 'deprecated', text: tr('{tag} — устаревший тег, сейчас пишут {replace}.', { tag: was, replace: now }),
       ...(clash ? {} : { fix: { label: tr('заменить на {replace}', { replace: now }), tags } }) });
+  }
+  // room остаётся (им размечают в форме), рядом нужен тег из вики
+  const paired = ROOM_PAIRED_AMENITY[t.room];
+  if (paired && t.amenity === undefined) {
+    const tag = `amenity=${paired}`;
+    out.push({ key, level: 'warning', code: 'room-amenity', text: tr('У room={room} нет тега {tag}.', { room: t.room, tag }),
+      fix: { label: tr('добавить {tag}', { tag }), tags: { amenity: paired } } });
   }
   return out;
 }

@@ -62,5 +62,40 @@ export function orthogonalize(rings: Pt[][], maxDeg = MAX_DEVIATION_DEG): { ring
   return { rings: out, maxDeviation };
 }
 
+/**
+ * То же для незамкнутой линии: углы — пересечения соседних прямых, концы проецируются на свою прямую.
+ * Строка — почему нельзя.
+ */
+export function orthogonalizeLine(line: Pt[], maxDeg = MAX_DEVIATION_DEG): Pt[] | string {
+  const n = line.length - 1;
+  if (n < 2) return 'few';
+  let sx = 0, sy = 0;
+  for (let k = 0; k < n; k++) {
+    const [ax, ay] = line[k], [bx, by] = line[k + 1];
+    const len = Math.hypot(bx - ax, by - ay), phi = Math.atan2(by - ay, bx - ax);
+    sx += len * Math.cos(4 * phi); sy += len * Math.sin(4 * phi);
+  }
+  const theta = Math.atan2(sy, sx) / 4, cos = Math.cos(theta), sin = Math.sin(theta);
+  const p = line.map(([x, y]): Pt => [x * cos + y * sin, -x * sin + y * cos]);
+  const lines: { dir: 0 | 1; w: number; acc: number }[] = [];
+  const lineOf: number[] = [];
+  for (let k = 0; k < n; k++) {
+    const a = p[k], b = p[k + 1], dx = Math.abs(b[0] - a[0]), dy = Math.abs(b[1] - a[1]), len = Math.hypot(dx, dy);
+    if ((Math.atan2(Math.min(dx, dy), Math.max(dx, dy)) * 180) / Math.PI > maxDeg) return 'skewed';
+    const dir = dx >= dy ? 0 : 1, last = lines[lines.length - 1];
+    const cur = last && (last.dir === dir || len < 1e-6) ? last : (lines.push({ dir, w: 0, acc: 0 }), lines[lines.length - 1]);
+    cur.w += len; cur.acc += len * (cur.dir === 0 ? (a[1] + b[1]) / 2 : (a[0] + b[0]) / 2);
+    lineOf.push(lines.length - 1);
+  }
+  const value = (l: { w: number; acc: number }) => l.acc / (l.w || 1);
+  return p.map((q, k) => {
+    const before = lines[lineOf[Math.max(k - 1, 0)]], after = lines[lineOf[Math.min(k, n - 1)]];
+    const [x, y]: Pt = before === after
+      ? (after.dir === 0 ? [q[0], value(after)] : [value(after), q[1]])
+      : before.dir === 0 ? [value(after), value(before)] : [value(before), value(after)];
+    return [x * cos - y * sin, x * sin + y * cos];
+  });
+}
+
 /** Насколько сторона может отклоняться от прямого угла, чтобы её выровнять, градусы (в iD — 13°). */
 export const MAX_DEVIATION_DEG = 20;

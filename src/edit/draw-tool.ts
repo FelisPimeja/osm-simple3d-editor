@@ -1,3 +1,4 @@
+import { localAxes, type AxisRing } from './local-axes';
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit, SnapKind } from '../render/buildings-layer';
 import { tr } from '../i18n';
@@ -63,6 +64,11 @@ export class DrawTool {
   state: 'off' | 'draw' = 'off';
   snap?: SnapHit;
   private pts: Pt[] = [];
+  /** Оси от объектов у первой точки; undefined — оси здания. */
+  private frame?: NonNullable<BuildingsLayer['focusAxes']>;
+  /** Контуры и линии плана, от которых берутся оси (задаёт main). */
+  axisRings?: () => AxisRing[];
+  private get axes() { return this.frame ?? this.layer.focusAxes; }
   private z = 0;
   private cursor?: Pt;
   private axis?: 0 | 1;
@@ -254,7 +260,7 @@ export class DrawTool {
       // Ось зафиксирована: точка привязки или курсора — проекцией на ось от последней точки
       const q = this.snap ? [this.snap.local.x, this.snap.local.y] as Pt : this.planePoint(point);
       if (!q) return;
-      const ax = this.locked ? this.layer.focusAxes?.y ?? [0, 1] : this.layer.focusAxes?.x ?? [1, 0];
+      const ax = this.locked ? this.axes?.y ?? [0, 1] : this.axes?.x ?? [1, 0];
       const t = (q[0] - last[0]) * ax[0] + (q[1] - last[1]) * ax[1];
       this.axis = this.locked;
       return [last[0] + ax[0] * t, last[1] + ax[1] * t];
@@ -300,7 +306,7 @@ export class DrawTool {
 
   /** Направление от a к q почти вдоль оси здания — точно по оси. */
   private lockAxis(a: Pt, q: Pt): Pt {
-    const f = this.layer.focusAxes;
+    const f = this.axes;
     if (!f) return q;
     const d: Pt = [q[0] - a[0], q[1] - a[1]];
     const len = Math.hypot(d[0], d[1]);
@@ -322,6 +328,10 @@ export class DrawTool {
     const last = this.pts[this.pts.length - 1];
     if (last && Math.hypot(q[0] - last[0], q[1] - last[1]) < 0.01) return;
     this.pts.push(q);
+    if (this.pts.length === 1) {
+      const f = this.layer.focusAxes, axes = f && this.axisRings ? localAxes(q, this.axisRings(), f.x) : undefined;
+      this.frame = f && axes && { ...f, ...axes };
+    }
     if (this.shape === 'circle' && this.circleMode === 'three') {
       if (this.pts.length < 3) { this.hint(); this.preview(); return; }
       const c = this.circleOf(this.pts);
@@ -375,7 +385,7 @@ export class DrawTool {
     const [a, b] = p;
     if (this.circleMode !== 'corner') { const r = Math.hypot(b[0] - a[0], b[1] - a[1]); return r > 1e-3 ? { c: a, r } : undefined; }
     // Касательные — оси здания через вершину угла; диаметр — больший катет до курсора, в его четверть
-    const f = this.layer.focusAxes;
+    const f = this.axes;
     const ax: Pt = f?.x ?? [1, 0], ay: Pt = f?.y ?? [0, 1];
     const d: Pt = [b[0] - a[0], b[1] - a[1]];
     const u = d[0] * ax[0] + d[1] * ax[1], v = d[0] * ay[0] + d[1] * ay[1];
@@ -387,7 +397,7 @@ export class DrawTool {
 
   /** Прямоугольник по введённым точкам (последняя может быть курсором). */
   private rectRing(p: Pt[]): Pt[] | undefined {
-    const f = this.layer.focusAxes;
+    const f = this.axes;
     const ax: Pt = f?.x ?? [1, 0], ay: Pt = f?.y ?? [0, 1];
     const dot = (v: Pt, u: Pt) => v[0] * u[0] + v[1] * u[1];
     const at = (o: Pt, u: number, v: number, x: Pt = ax, y: Pt = ay): Pt => [o[0] + x[0] * u + y[0] * v, o[1] + x[1] * u + y[1] * v];
@@ -420,7 +430,7 @@ export class DrawTool {
     const len = Math.hypot(dir[0], dir[1]);
     if (this.shape === 'circle' && this.circleMode === 'corner') {
       // Радиус: круг в четверти угла, где курсор
-      const f = this.layer.focusAxes;
+      const f = this.axes;
       const ax: Pt = f?.x ?? [1, 0], ay: Pt = f?.y ?? [0, 1];
       const su = Math.sign(dir[0] * ax[0] + dir[1] * ax[1]) || 1, sv = Math.sign(dir[0] * ay[0] + dir[1] * ay[1]) || 1;
       if (!(nums[0] > 0)) { this.onState(tr('Радиус должен быть больше нуля.'), true); return; }
@@ -430,14 +440,14 @@ export class DrawTool {
     }
     if (ROUND.includes(this.shape)) {
       // Радиус — в сторону курсора (без направления — по оси x здания)
-      const ax = this.layer.focusAxes?.x ?? [1, 0];
+      const ax = this.axes?.x ?? [1, 0];
       const u: Pt = len > 1e-6 ? [dir[0] / len, dir[1] / len] : [ax[0], ax[1]];
       if (!(nums[0] > 0)) { this.onState(tr('Радиус должен быть больше нуля.'), true); return; }
       this.add([last[0] + u[0] * nums[0], last[1] + u[1] * nums[0]]);
       return;
     }
     if (this.shape === 'rect' && this.rectMode !== 'three' || this.shape === 'rect' && this.pts.length === 2) {
-      const f = this.layer.focusAxes;
+      const f = this.axes;
       if (this.rectMode === 'three') {
         // Ширина повёрнутого прямоугольника: в сторону курсора
         const [a, b] = this.pts;
@@ -495,6 +505,7 @@ export class DrawTool {
     this.dimRing = undefined;
     this.dims.innerHTML = '';
     this.pts = [];
+    this.frame = undefined;
     this.cursor = undefined;
     this.snap = undefined;
     this.typed = '';
@@ -515,7 +526,7 @@ export class DrawTool {
       : round ? (pts.length === 2 ? this.roundRing(pts[0], pts[1]) : undefined) : pts;
     this.layer.setDrawPreview(ring?.map(v), this.shape === 'rect' || round);
     // Размеры: у прямоугольника — ширина и глубина (две соседние стороны), у полигона — все стороны и тянущаяся
-    this.dimRing = circ ? { pts: [circ.c, [circ.c[0] + circ.r * (this.layer.focusAxes?.x[0] ?? 1), circ.c[1] + circ.r * (this.layer.focusAxes?.x[1] ?? 0)]], closed: false }
+    this.dimRing = circ ? { pts: [circ.c, [circ.c[0] + circ.r * (this.axes?.x[0] ?? 1), circ.c[1] + circ.r * (this.axes?.x[1] ?? 0)]], closed: false }
       : round ? (pts.length === 2 ? { pts: [pts[0], pts[1]], closed: false } : undefined)
       : !ring || ring.length < 2 ? undefined
       : this.shape === 'rect' ? { pts: ring.length > 2 ? ring.slice(0, 3) : ring, closed: false }
@@ -523,7 +534,7 @@ export class DrawTool {
     this.relabel();
     // Ось, по которой выровнено текущее ребро, — цветом оси
     const last = this.pts[this.pts.length - 1];
-    if (last && this.cursor && this.axis !== undefined) this.layer.setMoveGuide({ from: v(last), to: v(this.cursor), axis: this.axis, locked: this.locked });
+    if (last && this.cursor && this.axis !== undefined) this.layer.setMoveGuide({ from: v(last), to: v(this.cursor), axis: this.axis, locked: this.locked, axes: this.axes });
     else this.layer.setMoveGuide(undefined);
     this.updateVcb();
   }

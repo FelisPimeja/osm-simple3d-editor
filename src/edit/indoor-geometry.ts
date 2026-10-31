@@ -2,7 +2,8 @@ import type { IndoorFeature, LonLat, Polygon } from '../osm/model';
 import type { ObjectEdit } from './session';
 
 export interface IndoorVertex { key: string; poly: number; ring: number; i: number }
-export type IndoorOperation = { type: 'move'; vertices: IndoorVertex[]; delta: LonLat }
+/** to — свои места вершин (по порядку vertices) вместо общего сдвига delta. */
+export type IndoorOperation = { type: 'move'; vertices: IndoorVertex[]; delta: LonLat; to?: LonLat[] }
   | { type: 'insert'; vertex: IndoorVertex; at: LonLat; fraction: number }
   | { type: 'remove'; vertices: IndoorVertex[] };
 const rings = (f: IndoorFeature) => f.polygons.flatMap((p, poly) => [
@@ -34,11 +35,11 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
   const active = all.filter(f=>owners.some(o=>overlaps(o,f)));
   const moves = new Map<number,LonLat>(), removed = new Set<number>();
   let insertion: {id:number;u:number;v:number;at:LonLat}|undefined;
-  for (const v of vertices) {
+  for (const [index,v] of vertices.entries()) {
     const f=all.find(f=>f.key===v.key), r=f&&rings(f).find(r=>r.poly===v.poly&&r.ring===v.ring);
     if (!f || !r?.ids || r.ids.length!==r.coords.length || r.ids[v.i]===undefined) throw new Error('Не хватает данных узлов indoor-объекта. Перезагрузите здание.');
     if (!relationTopology && f.key.startsWith('relation/') && (op.type!=='move' || !glue)) throw new Error('Для мультиполигона доступно перемещение вершин с соседями; изменение состава узлов пока не поддерживается.');
-    if (op.type==='move') moves.set(r.ids[v.i],[r.coords[v.i][0]+op.delta[0],r.coords[v.i][1]+op.delta[1]]);
+    if (op.type==='move') moves.set(r.ids[v.i],op.to?.[index]??[r.coords[v.i][0]+op.delta[0],r.coords[v.i][1]+op.delta[1]]);
     if (op.type==='remove') removed.add(r.ids[v.i]);
     if (op.type==='insert') {
       const next=v.i+1;

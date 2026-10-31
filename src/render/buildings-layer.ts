@@ -1054,6 +1054,10 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   private applyDoors() {
+    return timed('двери: модели', () => this.applyDoorsImpl());
+  }
+
+  private applyDoorsImpl() {
     if (this.doorObj) {
       this.doorObj.parent?.remove(this.doorObj);
       this.doorObj.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose(); });
@@ -1177,6 +1181,10 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   private applyIndoorSelection() {
+    return timed('этажи: подсветка indoor', () => this.applyIndoorSelectionImpl());
+  }
+
+  private applyIndoorSelectionImpl() {
     if (this.indoorSelObj) {
       this.indoorSelObj.parent?.remove(this.indoorSelObj);
       this.indoorSelObj.traverse((o) => {
@@ -3693,6 +3701,10 @@ export class BuildingsLayer implements CustomLayerInterface {
   private movingEdges?: THREE.LineSegments;
 
   private updateHiddenEdges() {
+    return timed('здание: рёбра выделения', () => this.updateHiddenEdgesImpl());
+  }
+
+  private updateHiddenEdgesImpl() {
     for (const g of [...this.selEdges.keys()]) if (![...this.groups.values()].includes(g)) this.selEdges.delete(g);
     for (const g of this.groups.values()) this.updateSelEdges(g);
   }

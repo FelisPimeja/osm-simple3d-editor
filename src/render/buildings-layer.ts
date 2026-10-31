@@ -2563,7 +2563,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (!it.line) continue;
       if(it.railing){
         const positions:number[]=[],verticals:number[]=[],faces:number[]=[];
-        const railingTop=Math.min(it.z+(it.railingHeight??1.1),top);
+        // Срез этажа ниже может доходить до пола выбранного: стена заканчивается под перекрытием, а не на нём
+        const railingTop=Math.min(it.z+(it.railingHeight??1.1),top,pale&&this.level?this.level.floor-SLAB_THICKNESS:Infinity);
 
         for(const p of it.polygons){
           const line=p.outer.map(g.toLocal);

@@ -451,8 +451,8 @@ function crossingPoints(r: [number, number][]): [number, number][] {
 
 /** Проблемы геометрии одного объекта. */
 export function validateGeometry(f: Feature3D): Issue[] {
-  // Открытая линия (линейная стена) — не контур: площади у неё нет
-  if (!f.polygons.length || (f as { line?: unknown }).line) return [];
+  // Открытая линия (линейная стена) и узел (дверь в сессии — «полигон» из одной точки) — не контуры: площади у них нет
+  if (!f.polygons.length || (f as { line?: unknown }).line || f.key.startsWith('node/')) return [];
   const p = projector(f.polygons[0].outer[0]);
   const out: Issue[] = [];
   for (const poly of f.polygons) {

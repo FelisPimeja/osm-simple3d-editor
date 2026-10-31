@@ -1723,6 +1723,20 @@ export class BuildingsLayer implements CustomLayerInterface {
         const p = at(d);
         quad(body, edge(p, -1, p.z - boxDepth), edge(p, 1, p.z - boxDepth), edge(p, 1), edge(p, -1));
       }
+      // Срез плоскостью этажа: сплошной короб не должен быть полым — крышка там, где срез проходит внутри него
+      const cut = this.levelCut;
+      if (cut !== undefined) {
+        const samples = Math.ceil(length / 0.05);
+        for (let i = 0; i < samples; i++) {
+          const a = at(length * i / samples), b = at(length * (i + 1) / samples), mid = (a.z + b.z) / 2;
+          // Верх короба — проступь, а не наклонная линия: ступень стоит выше неё на свою высоту
+          const middle = length * (i + 0.5) / samples, step = Math.max(1, distances.findIndex((d) => d >= middle));
+          const first = at(distances[step - 1]), last = at(distances[step]);
+          const tread = step === 1 || step === distances.length - 1 ? first.z : ascending ? last.z : first.z;
+          if (tread < cut || mid - boxDepth > cut) continue;
+          quad(body, edge(a, -1, cut - 0.002), edge(b, -1, cut - 0.002), edge(b, 1, cut - 0.002), edge(a, 1, cut - 0.002));
+        }
+      }
       // Поручень идёт горизонтально над площадками и огибает торцы стеклянных опор.
       const bend = Math.min(0.6, ramp / 4);
       const railZ = (d: number) => {

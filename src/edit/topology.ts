@@ -1,3 +1,4 @@
+import type { LonLat } from '../osm/model';
 /**
  * Правка топологии контуров без нахлёстов: новые узлы на общих сторонах вставляются во все пути с этой
  * стороной, а пути мультиполигона, которые лишь частью остаются в его новом кольце, разрезаются —
@@ -47,6 +48,27 @@ export interface Restructured {
 }
 
 const edgeKey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
+
+/**
+ * Узлы, которые появились в пути-члене, но не дошли до кольца отношения (путь — ещё и стена, правка шла через неё):
+ * вставляет их между теми же соседями. Без этого стороны пути не лягут на кольцо и он окажется в отношении дважды.
+ */
+export function syncRingNodes(ids: number[], coords: LonLat[], lines: { ids: number[]; coords: LonLat[] }[]): { ids: number[]; coords: LonLat[] } {
+  const out = { ids: [...ids], coords: [...coords] };
+  for (const line of lines) {
+    for (let a = 0; a < line.ids.length; a++) {
+      if (!out.ids.includes(line.ids[a])) continue;
+      let b = a + 1;
+      while (b < line.ids.length && !out.ids.includes(line.ids[b])) b++;
+      if (b >= line.ids.length || b === a + 1) continue;
+      const n = out.ids.length, u = out.ids.indexOf(line.ids[a]), v = out.ids.indexOf(line.ids[b]);
+      const run = line.ids.slice(a + 1, b).map((id, i) => ({ id, at: line.coords[a + 1 + i] }));
+      if ((u + 1) % n === v) { out.ids.splice(u + 1, 0, ...run.map(r => r.id)); out.coords.splice(u + 1, 0, ...run.map(r => r.at)); }
+      else if ((v + 1) % n === u) { run.reverse(); out.ids.splice(v + 1, 0, ...run.map(r => r.id)); out.coords.splice(v + 1, 0, ...run.map(r => r.at)); }
+    }
+  }
+  return out;
+}
 
 /**
  * Пути кольца мультиполигона под новое кольцо ring (узлы по порядку, без повтора первого).

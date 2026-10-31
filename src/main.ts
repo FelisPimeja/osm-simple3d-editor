@@ -58,7 +58,7 @@ import { CursorOrbit, ORBIT_EVENT } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
 import { pushHeightTags, lockedPushUnits, isFreshFlat, roofHeightTags, levelsNote, heightSplitTags } from './edit/push-height';
 import { SplitTool, type CutPoint, type SideRange } from './edit/split-tool';
-import { insertInLine, insertInRing, restructureRing, type Insert, type RingWay } from './edit/topology';
+import { insertInLine, insertInRing, restructureRing, syncRingNodes, type Insert, type RingWay } from './edit/topology';
 import type { AxisRing } from './edit/local-axes';
 import { MAX_DEVIATION_DEG, orthogonalize, orthogonalizeLine } from './edit/orthogonalize';
 import type { Pt } from './render/building-geometry';
@@ -1540,6 +1540,12 @@ map.on('click', (e) => {
     }
     const free = freeAreaAt([e.point.x, e.point.y]);
     if (free) { selectFreeArea(free); return; }
+  }
+  // Alt+клик на этаже: перебор наложенных помещений от меньшего к большему, за последним — части здания
+  if (focus && shownLevel && !addingTo && e.originalEvent.altKey && !e.originalEvent.shiftKey) {
+    const stack = indoorStackAt([e.point.x, e.point.y]);
+    const next = stack[stack.findIndex((f) => f.key === selectedIndoor?.key) + 1];
+    if (next) { selectIndoor(next); return; }
   }
   if (selectedIndoor || selectedRoomWalls.length) selectIndoor(undefined);
   // Контур подземной части (режим здания, всё здание): только подсветка, объекта OSM за ним нет
@@ -8318,13 +8324,20 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
     const f = shownIndoor.find((x) => x.key === solid.key);
     if (f) return f;
   }
+  return indoorStackAt(point)[0];
+}
+
+/** Все помещения показанного этажа под курсором: от самого маленького к самому большому. */
+function indoorStackAt(point: [number, number]): IndoorFeature[] {
+  if (!shownLevel) return [];
+  const hit = overpassLayer.focusRay(point)?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -shownLevel.floor), new THREE.Vector3());
   const ll = hit && overpassLayer.focusToLngLat(hit.x, hit.y);
-  if (!ll) return;
+  if (!ll) return [];
   const inside = (p: Polygon) => pointInRing(ll, p.outer) && !p.inners.some((r) => pointInRing(ll, r));
   return shownIndoor
     // indoor=level — не помещение: пол этажа вне помещений — пустая площадь (freeAreaAt), сам этаж — из панели «Этажи»
     .filter((f) => !f.line && !f.escalatorArea && f.kind !== 'poi' && f.kind !== 'wall' && f.kind !== 'column' && f.kind !== 'level' && f.polygons.some(inside))
-    .sort((a, b) => a.polygons.reduce((s, p) => s + polyArea(p), 0) - b.polygons.reduce((s, p) => s + polyArea(p), 0))[0];
+    .sort((a, b) => a.polygons.reduce((s, p) => s + polyArea(p), 0) - b.polygons.reduce((s, p) => s + polyArea(p), 0));
 }
 
 /** Выбранные indoor-объекты (Shift+клик добавляет и убирает); selectedIndoor — первый из них. */
@@ -8733,7 +8746,10 @@ function indoorRelationTopology(edits: ObjectEdit[], inserts: Insert[] = []): Ob
     if (!f?.ways) throw new Error('Не хватает данных путей indoor-мультиполигона. Перезагрузите здание.');
     trackIndoor(f.key, current.find(g => g.key === f.key));
     session.track({ key: f.key, version: f.version, tags: f.tags, relMembers: f.ways.map(w => ({type:'way',ref:w.id,role:w.role})) });
-    return { f, rewrites: e.polygons!.flatMap((p, poly) => [{ poly, ring: 0, ids: p.outerIds!, coords: p.outer }, ...p.inners.map((coords,i) => ({ poly, ring: i+1, ids: p.innerIds![i], coords }))]) };
+    const members = new Set(f.ways.map(w => `way/${w.id}`));
+    const lines = session.lineEntities().filter(t => members.has(t.key)).map(t => t.line!);
+    const sync = (ids: number[], coords: LonLat[]) => syncRingNodes(ids, coords, lines);
+    return { f, rewrites: e.polygons!.flatMap((p, poly) => [{ poly, ring: 0, ...sync(p.outerIds!, p.outer) }, ...p.inners.map((coords,i) => ({ poly, ring: i+1, ...sync(p.innerIds![i], coords) }))]) };
   });
   const coords = new Map<number, LonLat>();
   for (const e of edits) for (const p of e.polygons ?? []) {

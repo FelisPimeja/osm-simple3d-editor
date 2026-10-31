@@ -4,6 +4,7 @@ import type { EditSession } from './session';
 import { tr, trn } from '../i18n';
 import { idFieldLabel, idOptions, valueLabels } from '../osm/presets';
 import { parseDate } from '../osm/dates';
+import { placeCombo } from './combo-place';
 
 type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour' | 'combo' | 'date' | 'edtf';
 
@@ -490,7 +491,7 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     const field = t.closest('.combo-field')!;
     const ul = field.querySelector<HTMLElement>('.combo-list')!;
     const input = field.querySelector<HTMLInputElement>('input')!;
-    if (btn) { closeCombos(ul); filterCombo(ul, ''); ul.hidden = !ul.hidden; if (!ul.hidden) input.focus(); return; }
+    if (btn) { closeCombos(ul); filterCombo(ul, ''); ul.hidden = !ul.hidden; if (!ul.hidden) { placeCombo(ul); input.focus(); } return; }
     ul.hidden = true;
     input.value = li!.dataset.value!;
     // Выбор из списка завершает ввод: фокус снимаем, чтобы горячие клавиши (W, …) не печатались в поле
@@ -522,6 +523,7 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     if (!ul) return;
     const shown = filterCombo(ul, input.value);
     ul.hidden = !input.value.trim() || !shown.length || (shown.length === 1 && shown[0].dataset.value === input.value.trim());
+    placeCombo(ul);
     shown[0]?.classList.toggle('active', !!input.value.trim());
   });
   // Tab в пустом поле с подсказкой — подставить её; фокус уходит дальше обычным Tab
@@ -541,7 +543,7 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     const i = shown.findIndex((li) => li.classList.contains('active'));
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      if (ul.hidden) { filterCombo(ul, ''); ul.hidden = false; }
+      if (ul.hidden) { filterCombo(ul, ''); ul.hidden = false; placeCombo(ul); }
       const list = [...ul.querySelectorAll<HTMLElement>('li:not(.nomatch)')];
       const j = e.key === 'ArrowDown' ? Math.min(list.length - 1, i + 1) : Math.max(0, i - 1);
       for (const li of list) li.classList.toggle('active', li === list[j]);

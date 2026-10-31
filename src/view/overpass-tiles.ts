@@ -336,7 +336,9 @@ export class OverpassTiles {
   cachedFeature(key: string): Feature3D | undefined {
     for (const e of this.cache.values()) {
       if (e.state !== 'ready') continue;
-      const feature = e.features.find((f) => f.key === key);
+      let idx = this.featureIndex.get(e.features);
+      if (!idx) this.featureIndex.set(e.features, idx = new Map(e.features.map((f) => [f.key, f])));
+      const feature = idx.get(key);
       if (feature) return feature;
     }
   }

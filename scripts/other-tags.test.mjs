@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import {before,after,test} from 'node:test';
 import {createServer} from 'vite';
-let vite, otherTagEntries, renderOtherTags, bindOtherTags, multiTagValues, renderMultiOtherTags;
+let vite, tagSuggestions, otherTagEntries, renderOtherTags, bindOtherTags, multiTagValues, renderMultiOtherTags;
 before(async()=>{
  globalThis.localStorage={getItem:()=> 'en'};
  vite=await createServer({configFile:false,server:{middlewareMode:true,ws:false,watch:null},appType:'custom'});
- ({otherTagEntries,renderOtherTags,bindOtherTags,multiTagValues,renderMultiOtherTags}=await vite.ssrLoadModule('/src/edit/other-tags.ts'));
+ ({tagSuggestions,otherTagEntries,renderOtherTags,bindOtherTags,multiTagValues,renderMultiOtherTags}=await vite.ssrLoadModule('/src/edit/other-tags.ts'));
 });
 after(async()=>{await vite.close();delete globalThis.localStorage;});
 test('only visible specialized fields are excluded, including indoor fields',()=>{
@@ -72,4 +72,9 @@ test('multi-selection Other tags renders non-shared keys, excluding specialized 
  assert.match(html,/data-other-value="material" value="" class="mixed"/);
  assert.doesNotMatch(html,/data-other-value="level"/);
  assert.match(html,/placeholder="[^"]+"/);
+});
+test('suggestions put prefix matches first and skip the exact value',()=>{
+ assert.deepEqual(tagSuggestions('sh',['bishop','shop','shelter']),['shop','shelter','bishop']);
+ assert.deepEqual(tagSuggestions('shop',['shop','shop:x']),['shop:x']);
+ assert.deepEqual(tagSuggestions('',['a','b'],1),['a']);
 });

@@ -25,8 +25,9 @@ export const idFieldLabel = (key: string): string | undefined => pick(FIELDS[key
 /** Варианты значений поля из iD (если у поля есть список). */
 export const idOptions = (key: string): string[] | undefined => FIELDS[key]?.options;
 
-/** Known OSM keys for free-form tag suggestions. */
-export const idTagKeys = (): string[] => Object.keys(FIELDS).sort();
+/** Ключи и значения схемы для подсказок «Других тегов»; словарь грузится при первом вводе. */
+export const loadIdTags = (): Promise<Record<string, string[]>> =>
+  import('./id-tags.json').then((m) => m.default as Record<string, string[]>);
 
 /** Подписи значений из iD, поверх — свои (own). */
 export function valueLabels(key: string, own?: Record<string, string>): Record<string, string> {

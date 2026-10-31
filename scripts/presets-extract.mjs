@@ -2,8 +2,8 @@
  * Выжимка схемы тегов iD (@openstreetmap/id-tagging-schema) для полей редактора: подписи полей и значений
  * на наших языках. Вся схема с переводами — мегабайты, нам нужна малая часть: берём поля из белого списка
  * и подписи значений из полей и однотеговых пресетов (indoor=room → «Комната в здании»).
- * Отдельно (грузятся лениво) — пресеты для названия объекта по тегам: id-presets.json; и замены устаревших
- * тегов для валидатора: id-deprecated.json.
+ * Отдельно (грузятся лениво) — пресеты для названия объекта по тегам: id-presets.json; замены устаревших
+ * тегов для валидатора: id-deprecated.json; ключи и значения для подсказок «Других тегов»: id-tags.json.
  * Обновление схемы: npm update @openstreetmap/id-tagging-schema && npm run presets:extract.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -65,4 +65,16 @@ for (const [id, p] of Object.entries(presets)) {
 }
 write('id-presets.json', { version, presets: list });
 write('id-deprecated.json', dist('deprecated.json'));
+
+// Подсказки «Других тегов»: все ключи схемы и их значения. Без шаблонов (name:, *) — это не настоящие ключи
+const known = new Map();
+const addKey = (k) => { if (!/[:*]$/.test(k) && !known.has(k)) known.set(k, new Set()); return known.get(k); };
+for (const p of Object.values(presets)) for (const tags of [p.tags, p.addTags]) {
+  for (const [k, v] of Object.entries(tags ?? {})) { const s = addKey(k); if (v !== '*') s?.add(v); }
+}
+for (const f of Object.values(fields)) for (const k of [f.key, ...(f.keys ?? [])].filter(Boolean)) {
+  const s = addKey(k);
+  for (const v of f.options ?? []) if (typeof v === 'string') s?.add(v);
+}
+write('id-tags.json', Object.fromEntries([...known].sort(([a], [b]) => a.localeCompare(b)).map(([k, s]) => [k, [...s].sort()])));
 console.log(`id-tagging-schema ${version}: ${Object.keys(out.fields).length} полей, ${list.length} пресетов`);

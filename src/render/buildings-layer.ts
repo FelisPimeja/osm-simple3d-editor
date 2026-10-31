@@ -2337,7 +2337,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // закрывают вместе
     const edgeSig = (a: LonLat, b: LonLat) => [a, b].map((q) => `${q[0].toFixed(8)},${q[1].toFixed(8)}`).sort().join('|');
     const span = (bi: Item) => { const h = computeHeights(bi.tags); return [g.lift?.get(bi.feature.key) ?? h.min, h.wallTop] as const; };
-    const partEdges = new Map<string, { lo: number; hi: number; facade: boolean }[]>();
+    const partEdges = new Map<string, { lo: number; hi: number; facade: boolean; glass: boolean }[]>();
     for (const bi of g.items) {
       if (g.hidden.has(bi.feature.key)) continue;
       const [lo, hi] = span(bi);
@@ -2346,7 +2346,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const facade = !strokeOnly(g, bi) && !thinItem(bi) && !(glassEnabled && bi.glassWalls);
       for (const p of g.renderFootprints?.get(bi.feature.key) ?? bi.feature.polygons) for (const r of [p.outer, ...p.inners]) for (let i = 0; i < r.length; i++) {
         const sig = edgeSig(r[i], r[(i + 1) % r.length]);
-        (partEdges.get(sig) ?? partEdges.set(sig, []).get(sig)!).push({ lo, hi, facade });
+        (partEdges.get(sig) ?? partEdges.set(sig, []).get(sig)!).push({ lo, hi, facade, glass: glassEnabled && bi.glassWalls && !strokeOnly(g, bi) && !thinItem(bi) });
       }
     }
     const z0 = items[0].z;
@@ -2358,6 +2358,8 @@ export class BuildingsLayer implements CustomLayerInterface {
      * undefined — не фасад: стена помещения нужна.
      */
     const facadeCovers = (sig: string): [number, number][] | undefined => {
+      // Граница со стеклянной частью — внутри объёма здания: этаж идёт через неё, стена там только размеченная
+      if (partEdges.get(sig)?.some((e) => e.glass && e.hi > z0 + 0.01 && e.lo < top - 0.01)) return undefined;
       const list = (partEdges.get(sig) ?? []).filter((e) => e.facade && e.hi > z0 + 0.01 && e.lo < top - 0.01);
       const cuts = [...new Set([z0, top, ...list.flatMap((e) => [e.lo, e.hi]).filter((z) => z > z0 && z < top)])].sort((x, y) => x - y);
       let open = 0;

@@ -1272,6 +1272,8 @@
   "Не удалось проверить отношения: {error}": "Couldn't check relations: {error}",
   "Выбор или данные изменились. Повторите.": "The selection or data changed. Try again.",
   "{keys} входит в отношение — объединение его бы удалило.": "{keys} is a relation member — merging would delete it.",
+  "Объединяем: {list}. Это может занять время…": "Merging {list}. It may take some time…",
+  "неразмеченная площадь": "unmapped space",
   "Объединено в {key}: объектов {n}.": "Merged into {key}: {n} objects.",
   "Разные значения тегов ({k}) — оставлены у {key}.": "Conflicting tag values ({k}) — kept from {key}.",
   "Объединить": "Merge",

@@ -2724,10 +2724,30 @@ const LOOK_TAGS = /^(building:colou?r|building:material|roof:colou?r|roof:materi
 const mergeBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="merge"]')!;
 mergeBtn.addEventListener('click', () => mergeSelected());
 
+let indoorMerging = false;
+/** Объединение может идти долго (сложные контуры, запрос к серверу): до результата в строке состояния — сообщение со спиннером. */
+async function runIndoorMerge() {
+  if (indoorMerging) return;
+  indoorMerging = true;
+  const names = [...indoorSelection.map((f) => indoorKey(f.key)), ...(freeExtra.length ? [tr('неразмеченная площадь')] : [])];
+  busyStatus(tr('Объединяем: {list}. Это может занять время…', { list: names.join(', ') }));
+  // Сначала показать сообщение: расчёт контуров занимает поток
+  await new Promise((done) => requestAnimationFrame(() => setTimeout(done)));
+  try {
+    const err = await mergeIndoor();
+    if (err) setStatus(err, true);
+  } catch (err) {
+    setStatus((err as Error).message, true);
+  } finally {
+    indoorMerging = false;
+    endBusyStatus();
+  }
+}
+
 function mergeSelected() {
   if (!focus) return;
   // План этажа: выделены помещения — объединяем их
-  if (shownLevel && !selection.length && indoorSelection.length) { void mergeIndoor().then((err) => { if (err) setStatus(err, true); }); return; }
+  if (shownLevel && !selection.length && indoorSelection.length) { void runIndoorMerge(); return; }
   const pending = isSolo(focus) && focus.roles.includes('part') ? implicitRelation(focus.members[0], implicitParts(focus)) : undefined;
   const err = mergeIn(pending);
   if (pending && !session.get(pending.key)) editGroups.delete(pending.key);
@@ -7599,6 +7619,19 @@ function setStatus(text: string, error = false, html = '') {
   messageTimer = setTimeout(() => { messageUntil = 0; showOverpassStatus(); }, messageUntil - Date.now());
 }
 
+/** Сообщение о фоновой операции: держится, пока её не сменит результат (setStatus) или endBusyStatus. */
+function busyStatus(text: string) {
+  clearTimeout(messageTimer);
+  messageUntil = Infinity;
+  panelStatus(text);
+  statusEl.insertAdjacentHTML('afterbegin', '<span class="status-spinner" aria-hidden="true"></span>');
+}
+function endBusyStatus() {
+  if (!statusEl.querySelector('.status-spinner')) return;
+  messageUntil = 0;
+  showOverpassStatus();
+}
+
 /** Только строка состояния в панели (фоновое: загрузка тайлов) — без всплывающего сообщения. */
 function panelStatus(text: string, error = false) {
   statusEl.textContent = text;
@@ -8973,6 +9006,7 @@ function indoorSpaceEdits(fs: IndoorFeature[], parents: Awaited<ReturnType<typeo
  * уходят из контура (у соседей остаются), лишние вершины на прямой — тоже, если больше никому не нужны.
  * Прочие теги — у большего, недостающие добавляются от остальных. Строка — почему нельзя.
  */
+const WAY_RELATIONS_BATCH = 8;
 async function mergeIndoor(): Promise<string | undefined> {
   if (!focus || !shownLevel) return tr('Объединять помещения можно на этаже здания.');
   if (indoorSelection.length >= 2 && indoorSelection.every(f => f.kind === 'wall' && f.line) && !freeExtra.length)
@@ -9045,6 +9079,17 @@ async function mergeIndoor(): Promise<string | undefined> {
   for (const f of fs) trackIndoor(indoorKey(f.key), f);
   // Удаляемые мультиполигоны — с путями-членами без тегов, которые больше ни в одном отношении (свои — новые)
   const relDeletes: ObjectEdit[] = [];
+  // У большого коридора — сотни путей: проверяем пачками, по одному запросу это минуты
+  const wayIds = [...new Set(fs.filter(isRel).flatMap((f) => relWaysOf(f)!).filter((w) => w.id > 0 && !Object.keys(w.tags ?? {}).length).map((w) => w.id))];
+  const wayRels = new Map<number, { id: number }[]>();
+  try {
+    for (let i = 0; i < wayIds.length; i += WAY_RELATIONS_BATCH) {
+      const batch = wayIds.slice(i, i + WAY_RELATIONS_BATCH);
+      const found = await Promise.all(batch.map((id) => fetchWayRelations(id, api)));
+      batch.forEach((id, j) => wayRels.set(id, found[j]));
+    }
+  } catch (err) { return tr('Не удалось проверить отношения: {error}', { error: (err as Error).message }); }
+  if (JSON.stringify(session.changes()) !== stamp || !shownLevel) return tr('Выбор или данные изменились. Повторите.');
   for (const f of fs.filter(isRel)) {
     const ways = relWaysOf(f)!;
     if (!session.get(indoorKey(f.key))?.relMembers) session.track({ key: f.key, version: indoorRelationSources.get(f.key)?.version ?? 0, tags: f.tags, relMembers: ways.map((w) => ({ type: 'way', ref: w.id, role: w.role })) });
@@ -9052,9 +9097,7 @@ async function mergeIndoor(): Promise<string | undefined> {
       const wk = `way/${w.id}`;
       if (Object.keys(w.tags ?? {}).length || relDeletes.some((e) => e.key === wk)) continue;
       if (w.id > 0) {
-        let rels: { id: number }[];
-        try { rels = await fetchWayRelations(w.id, api); } catch (err) { return tr('Не удалось проверить отношения: {error}', { error: (err as Error).message }); }
-        if (rels.some((x) => !fs.some((g) => indoorKey(g.key) === `relation/${x.id}`) && !session.isDeleted(`relation/${x.id}`))) continue;
+        if (wayRels.get(w.id)!.some((x) => !fs.some((g) => indoorKey(g.key) === `relation/${x.id}`) && !session.isDeleted(`relation/${x.id}`))) continue;
       }
       if (!session.has(wk)) {
         const at = new Map(f.polygons.flatMap((p) => [...p.outer.map((c, i) => [p.outerIds![i], c] as const), ...p.inners.flatMap((r, j) => r.map((c, i) => [p.innerIds?.[j]?.[i] ?? 0, c] as const))]));

@@ -757,3 +757,6 @@ body.mobile #issues-panel { display: none !important; }
 .change-list > li:focus-within .ch-revert { opacity: 1; }
 .ch-discard-tag { border: 0; background: transparent; color: #777; cursor: pointer; font-size: 16px; padding: 0 4px; }
 .ch-discard-tag:hover, .ch-discard-tag:focus-visible { color: #b91c1c; background: #fee2e2; }
+
+.status-spinner { display: inline-block; width: 11px; height: 11px; margin-right: 6px; box-sizing: border-box; vertical-align: -1px; border: 2px solid #cbd5e1; border-top-color: #374151; border-radius: 50%; animation: status-spin .8s linear infinite; }
+@keyframes status-spin { to { transform: rotate(360deg); } }

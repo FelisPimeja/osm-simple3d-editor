@@ -24,6 +24,7 @@ import { areaLedgeTriangles } from './area-ledge';
 import { floatingParts } from '../osm/floating';
 import { pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
 import { dropPartSeams } from './part-seams';
+import { COUNTER_DEPTH, counterRing } from './counter-ring';
 import { edgePass } from './edge-pass';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { recordMs, timed } from '../perf';
@@ -42,6 +43,8 @@ const MONOCHROME = new THREE.Color('#ffffff');
 export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
   /** area=no preserves a closed way as a linear wall. */ linearWall?: boolean;
   railing?: boolean;
+  /** material=glass у стены-линии или ограждения. */ glass?: boolean;
+  /** Прилавок: объём с глубиной вправо от пути. */ counter?: boolean;
   railingHeight?: number;
   /** Шахта лифта выше нижней остановки: без своего пола, и пол других объектов этажа по её контуру вырезан. */ shaft?: boolean;
   /** Стены многоуровневой комнаты на верхнем этаже, без своего пола. */ noFloor?: boolean;
@@ -179,6 +182,9 @@ const POOL_WATER_DROP = 0.2;
 const VOID_FACE_DZ = 0.1;
 
 /** Перекрытие этажа со вторым светом (плита с дырами под полом) и край пустоты. */
+/** Стеклянная стена, а не низкая преграда: двери в ней — проёмы. */
+const tallGlass = (it: IndoorItem) => !!it.glass && !it.counter && (it.railingHeight ?? 0) > DOOR_HEIGHT;
+const INDOOR_GLASS_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xbfe3e6, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
 const INDOOR_SLAB_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 const INDOOR_VOID_EDGE = new THREE.LineBasicMaterial({ color: 0x57534e });
 const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0xb0b6ba, side: THREE.DoubleSide });
@@ -1244,15 +1250,45 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (it.kind === 'wall' || it.kind === 'column') {
       const top = it.railing ? Math.min(this.levelCut ?? this.level!.cut,it.z+(it.railingHeight??1.1)) : this.levelCut ?? this.level!.cut;
       const faces: number[] = [], edges: number[] = [];
+      // Проёмы этого этажа: те же, что вырезаны в самой стене
+      const openings = it.railing && !tallGlass(it) ? [] : [...(this.level!.doors ?? []).map((at) => {
+        const [x, y] = g.toLocal(at);
+        const door = this.doors.find((d) => Math.abs(d.z - it.z) < 0.1 && Math.hypot(...g.toLocal(this.doorAt(d)).map((v, i) => v - [x, y][i])) < 0.01);
+        return { x, y, diameter: revolvingDoorDiameter(door?.tags), width: tagWidth(door?.tags ?? {}) };
+      }), ...(this.level!.doorCuts ?? []).map((c) => { const [x, y] = g.toLocal(c.at); return { x, y, diameter: undefined, width: c.width }; })];
       for (const p of it.polygons) for (const ring of it.line ? [p.outer] : [p.outer, ...p.inners]) {
-        const rp = ring.map(g.toLocal);
+        const footprint = it.counter ? this.counterFootprint(g, it, ring.map(g.toLocal), this.level!.items) : undefined;
+        const rp = footprint ?? ring.map(g.toLocal);
+        if (footprint) for (const t of THREE.ShapeUtils.triangulateShape(footprint.map((q) => new THREE.Vector2(...q)), [])) for (const i of t) faces.push(...footprint[i], top);
         const closed = !it.line || (rp.length > 2 && Math.hypot(rp[0][0] - rp.at(-1)![0], rp[0][1] - rp.at(-1)![1]) < 1e-3);
         if (closed && rp.length > 1 && Math.hypot(rp[0][0] - rp.at(-1)![0], rp[0][1] - rp.at(-1)![1]) < 1e-3) rp.pop();
         const n = closed ? rp.length : rp.length - 1;
         for (let i = 0; i < n; i++) {
           const [ax, ay] = rp[i], [bx, by] = rp[(i + 1) % rp.length];
-          faces.push(ax, ay, it.z, bx, by, it.z, bx, by, top, ax, ay, it.z, bx, by, top, ax, ay, top);
-          edges.push(ax, ay, it.z, bx, by, it.z);
+          const len = Math.hypot(bx - ax, by - ay);
+          const gaps: [number, number][] = [];
+          for (const door of openings) {
+            if (len < 1e-6) break;
+            const dx = (bx - ax) / len, dy = (by - ay) / len;
+            const half = doorOpeningHalfWidth((door.x - ax) * dy - (door.y - ay) * dx, door.diameter, door.width ?? DOOR_WIDTH, DOOR_SNAP);
+            const t = (door.x - ax) * dx + (door.y - ay) * dy;
+            if (half && t + half > 0 && t - half < len) gaps.push([Math.max(0, t - half) / len, Math.min(len, t + half) / len]);
+          }
+          gaps.sort((p, q) => p[0] - q[0]);
+          const x = (t: number) => ax + (bx - ax) * t, y = (t: number) => ay + (by - ay) * t;
+          const part = (lo: number, hi: number, z0: number, z1: number) => {
+            if (hi - lo < 1e-6 || z1 - z0 < 1e-6) return;
+            faces.push(x(lo), y(lo), z0, x(hi), y(hi), z0, x(hi), y(hi), z1, x(lo), y(lo), z0, x(hi), y(hi), z1, x(lo), y(lo), z1);
+          };
+          let from = 0;
+          for (const [lo, hi] of gaps) {
+            part(from, lo, it.z, top);
+            part(Math.max(from, lo), hi, Math.min(top, it.z + DOOR_HEIGHT), top); // перемычка над дверью
+            if (lo > from) edges.push(x(from), y(from), it.z, x(lo), y(lo), it.z);
+            from = Math.max(from, hi);
+          }
+          part(from, 1, it.z, top);
+          if (from < 1) edges.push(x(from), y(from), it.z, bx, by, it.z);
         }
       }
       const fg = new THREE.BufferGeometry();
@@ -1287,6 +1323,33 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
     }
     this.addIndoorPerimeter(root, lines);
+  }
+
+  /** Торец прилавка лежит на стороне соседней стены. */
+  private counterEndOnWall(a: Pt, b: Pt, g: MeshGroup, it: IndoorItem, items: IndoorItem[]): boolean {
+    const near = (p: Pt) => this.counterEnds(g, it, items).some(([c, d]) => {
+      const ex = d[0] - c[0], ey = d[1] - c[1], len = Math.hypot(ex, ey), t = ((p[0] - c[0]) * ex + (p[1] - c[1]) * ey) / (len * len || 1);
+      return len > 1e-6 && t > -0.02 && t < 1.02 && Math.abs((p[0] - c[0]) * ey - (p[1] - c[1]) * ex) / len < 0.05;
+    });
+    return near(a) && near(b);
+  }
+
+  /** След прилавка с подрезкой торцов по стенам и помещениям этажа, к которым он примыкает. */
+  private counterFootprint(g: MeshGroup, it: IndoorItem, line: Pt[], items: IndoorItem[]): Pt[] {
+    return counterRing(line, undefined, this.counterEnds(g, it, items));
+  }
+
+  /** Стороны стен и помещений этажа: к ним может примыкать прилавок. */
+  private counterEnds(g: MeshGroup, it: IndoorItem, items: IndoorItem[]): [Pt, Pt][] {
+    const ends: [Pt, Pt][] = [];
+    for (const other of items) {
+      if (other.key === it.key || other.counter || !['wall', 'room', 'area', 'corridor'].includes(other.kind)) continue;
+      for (const p of other.polygons) for (const r of other.line ? [p.outer] : [p.outer, ...p.inners]) {
+        const rp = r.map(g.toLocal);
+        for (let i = 0; i < (other.line ? rp.length - 1 : rp.length); i++) ends.push([rp[i], rp[(i + 1) % rp.length]]);
+      }
+    }
+    return ends;
   }
 
   /** Нижний контур: 2 экранных пикселя, скрытые участки — пунктиром. */
@@ -1836,7 +1899,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const doorModels = [...this.doors, ...(this.level?.below ?? []).flatMap((b) => b.doorModels ?? [])]
       .filter((d) => Math.abs(d.z - floor) < 0.1).map((d) => `${d.key}@${this.doorAt(d).join(',')}:${JSON.stringify(d.tags ?? {})}`);
     const key = [objId(g), shell ? objId(shell) : 0, top, +this.graphics.edges, +glassEnabled,
-      items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.noFloor}:${+!!it.cutOnly}:${+!!it.areaLedge}:${+!!it.linearWall}:${+!!it.railing}:${it.railingHeight??1.1}`).join(','),
+      items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.noFloor}:${+!!it.cutOnly}:${+!!it.areaLedge}:${+!!it.linearWall}:${+!!it.railing}:${it.railingHeight??1.1}:${+!!it.counter}:${+!!it.glass}`).join(','),
       doorList.map((d) => d.join(',')).join(';'), doorModels.join(';'),
       JSON.stringify([this.level?.doorCuts,...(this.level?.below??[]).map(b=>b.doorCuts),ownVoids,this.level?.items.map(it=>[it.key,it.noFloor]),g.items.filter(it=>this.openRoofInPlan(g,it)).map(it=>it.feature.key)]),
       escalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.width}:${e.incline}:${objId(e.line)}`).join(',')].join('|');
@@ -2221,6 +2284,14 @@ export class BuildingsLayer implements CustomLayerInterface {
       return found.sort((p, q) => p - q).map((k) => doors[k]);
     };
     /** Стена с дверными проёмами (DOOR_WIDTH × DOOR_HEIGHT) там, где на ней стоит дверь. */
+    // Дверь в прилавке или ограждении — без проёма: стена помещения на этом участке их заменена, рамку не рисуем
+    const lowLines = items.filter((it) => it.railing && it.line).flatMap((it) => it.polygons.map((p) => p.outer.map(g.toLocal)));
+    const onLowLine = ([x, y]: Pt) => lowLines.some((l) => l.some((a, i) => {
+      const b = l[i + 1];
+      if (!b) return false;
+      const ex = b[0] - a[0], ey = b[1] - a[1], len = Math.hypot(ex, ey), t = ((x - a[0]) * ex + (y - a[1]) * ey) / (len * len || 1);
+      return len > 1e-6 && t >= 0 && t <= 1 && Math.abs((x - a[0]) * ey - (y - a[1]) * ex) / len < 0.05;
+    }));
     const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, footprintProcessed = false) => {
       const len = Math.hypot(bx - ax, by - ay);
       const gaps: [number, number][] = [];
@@ -2228,6 +2299,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (len > 1e-6) {
         const dx = (bx - ax) / len, dy = (by - ay) / len;
         for (const door of doorsNear(ax, ay, bx, by)) {
+          if (onLowLine(door.at as Pt)) continue;
           const [px, py] = door.at;
           const distance = (px - ax) * dy - (py - ay) * dx;
           const t = (px - ax) * dx + (py - ay) * dy;
@@ -2494,12 +2566,58 @@ export class BuildingsLayer implements CustomLayerInterface {
         const railingTop=Math.min(it.z+(it.railingHeight??1.1),top);
 
         for(const p of it.polygons){
-          const points=p.outer.map(g.toLocal);
+          const line=p.outer.map(g.toLocal);
+          // Явный объект на контуре заменяет подразумеваемую стену помещения: участок занят
+          for(let i=1;i<line.length;i++)taken.push([line[i-1][0],line[i-1][1],line[i][0],line[i][1]]);
+          const ring=it.counter?this.counterFootprint(g,it,line,items):undefined;
+          const points=ring?[...ring,ring[0]]:line;
+          if(ring){
+            // Крышка — цвета помещения, в сторону которого отстроен прилавок
+            const n=ring.length,probe:Pt=[(ring[0][0]+ring[1][0]+ring[n-1][0]+ring[n-2][0])/4,(ring[0][1]+ring[1][1]+ring[n-1][1]+ring[n-2][1])/4];
+            const room=items.filter(f=>!f.line&&!f.cutOnly&&['room','area','corridor'].includes(f.kind)).flatMap(f=>f.polygons.map(q=>({f,q,outer:q.outer.map(g.toLocal)})))
+              .filter(({q,outer})=>pointInLocalRing(probe,outer)&&!q.inners.some(h=>pointInLocalRing(probe,h.map(g.toLocal))))
+              .sort((u,v)=>Math.abs(THREE.ShapeUtils.area(u.outer.map(c=>new THREE.Vector2(...c))))-Math.abs(THREE.ShapeUtils.area(v.outer.map(c=>new THREE.Vector2(...c)))))[0]?.f;
+            fill(ring,[],railingTop,room?room.colour??INDOOR_COLOURS[room.kind]:undefined);
+            // Дверь в прилавке — без проёма: откидная секция, два разреза поперёк по краям
+            for(let i=1;i<line.length;i++){
+              const [a,b]=[line[i-1],line[i]],len=Math.hypot(b[0]-a[0],b[1]-a[1]);
+              if(len<1e-6)continue;
+              const ux=(b[0]-a[0])/len,uy=(b[1]-a[1])/len;
+              for(const at of doorList){
+                const [x,y]=g.toLocal(at),t=(x-a[0])*ux+(y-a[1])*uy;
+                if(t<0||t>len||Math.abs((x-a[0])*uy-(y-a[1])*ux)>0.05)continue;
+                for(const side of [-1,1]){
+                  const q=Math.max(0,Math.min(len,t+side*DOOR_WIDTH/2)),cx=a[0]+ux*q,cy=a[1]+uy*q;
+                  positions.push(cx,cy,railingTop,cx+uy*COUNTER_DEPTH,cy-ux*COUNTER_DEPTH,railingTop);
+                  verticals.push(cx,cy,it.z,cx,cy,railingTop);
+                }
+              }
+            }
+          }
           const closed=points.length>2 && Math.hypot(points[0][0]-points.at(-1)![0],points[0][1]-points.at(-1)![1])<1e-6;
           for(let i=1;i<points.length;i++){
             const [a,b]=[points[i-1],points[i]];
             if(Math.hypot(b[0]-a[0],b[1]-a[1])<1e-6)continue;
-            faces.push(...a,it.z,...b,it.z,...b,railingTop,...a,it.z,...b,railingTop,...a,railingTop);
+            // Подрезанный торец лежит в плоскости стены: своей грани у него нет
+            const quad=(p:Pt,q:Pt,z0:number,z1:number)=>faces.push(...p,z0,...q,z0,...q,z1,...p,z0,...q,z1,...p,z1);
+            if(tallGlass(it)){
+              // Стеклянная стена: дверь — проём с рамкой, над ней стекло
+              const len=Math.hypot(b[0]-a[0],b[1]-a[1]),ux=(b[0]-a[0])/len,uy=(b[1]-a[1])/len,lintel=Math.min(railingTop,it.z+DOOR_HEIGHT);
+              const at=(t:number):Pt=>[a[0]+ux*t,a[1]+uy*t];
+              const gaps=doorList.map(c=>g.toLocal(c)).filter(([x,y])=>Math.abs((x-a[0])*uy-(y-a[1])*ux)<0.05)
+                .map(([x,y])=>(x-a[0])*ux+(y-a[1])*uy).filter(t=>t>=0&&t<=len).sort((m,n)=>m-n);
+              let from=0;
+              for(const t of gaps){
+                const lo=Math.max(from,t-DOOR_WIDTH/2),hi=Math.min(len,t+DOOR_WIDTH/2);
+                if(lo>from)quad(at(from),at(lo),it.z,railingTop);
+                quad(at(lo),at(hi),lintel,railingTop);
+                positions.push(...at(lo),lintel,...at(hi),lintel);
+                for(const e of [lo,hi])positions.push(...at(e),it.z,...at(e),lintel);
+                from=hi;
+              }
+              if(from<len)quad(at(from),b,it.z,railingTop);
+            }else if(!(ring&&(i===ring.length/2||i===ring.length)&&this.counterEndOnWall(a,b,g,it,items)))
+              quad(a,b,it.z,railingTop);
             positions.push(...a,railingTop,...b,railingTop);
           }
           const count=closed?points.length-1:points.length;
@@ -2514,7 +2632,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
         if(faces.length){
           const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(faces,3));geometry.computeVertexNormals();
-          const mesh=new THREE.Mesh(geometry,pale?INDOOR_PALE_WALL:INDOOR_SLAB_MATERIAL);
+          const mesh=new THREE.Mesh(geometry,it.glass?INDOOR_GLASS_MATERIAL:pale?INDOOR_PALE_WALL:INDOOR_SLAB_MATERIAL);
           mesh.name='indoor-railing';mesh.userData.key=it.key;mesh.frustumCulled=false;root.add(mesh);
         }
         for(const [edges,widthPx,name] of [[positions,2,'indoor-railing-edges'],[verticals,1,'indoor-railing-verticals']] as const){
@@ -3542,9 +3660,9 @@ export class BuildingsLayer implements CustomLayerInterface {
           }
         }
         // Крышка сечения колонны и стены-полигона
-        const capOuter = it.line ? it.linearWall ? undefined : closedWallCap(p.outer.map(g.toLocal)) : p.outer.map(g.toLocal);
+        const capOuter = it.counter ? this.counterFootprint(g, it, p.outer.map(g.toLocal), lv.items) : it.line ? it.linearWall ? undefined : closedWallCap(p.outer.map(g.toLocal)) : p.outer.map(g.toLocal);
         if (it.kind !== 'room' && capOuter && Math.abs(d.z) > 1e-9) {
-          const t = (top - o.z) / d.z;
+          const t = ((it.counter ? Math.min(top, it.z + (it.railingHeight ?? 1.1)) : top) - o.z) / d.z;
           const q: Pt = [o.x + d.x * t, o.y + d.y * t];
           if (pointInLocalRing(q, capOuter) && (it.line || !p.inners.some((h) => pointInLocalRing(q, h.map(g.toLocal))))) take(it.key, t);
         }
@@ -4046,7 +4164,7 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Жирная обводка замкнутых контуров поверх всего — например, грань, от которой пойдёт отступ (с дворами);
    * widthPx 0 — без обводки; fill — полупрозрачная заливка грани (кольца в одной плоскости; кольцо внутри другого — дыра).
    */
-  setOutline(rings: THREE.Vector3[][] | undefined, widthPx = 3, fill = false) {
+  setOutline(rings: THREE.Vector3[][] | undefined, widthPx = 3, fill = false, closed = true) {
     const g = this.groups.get(FOCUS_GROUP);
     for (const l of this.outline) { l.parent?.remove(l); l.geometry.dispose(); l.material.dispose(); }
     this.outline = [];
@@ -4073,7 +4191,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const points of rings) {
         if (points.length < 2) continue;
         const geo = new LineGeometry();
-        geo.setPositions([...points, points[0]].flatMap((p) => [p.x, p.y, p.z]));
+        geo.setPositions((closed ? [...points, points[0]] : points).flatMap((p) => [p.x, p.y, p.z]));
         const mat = new LineMaterial({ color: 0x2563eb, linewidth: widthPx * dpr, depthTest: false, depthWrite: false, transparent: true });
         mat.resolution.set(canvas.width, canvas.height);
         const line = new Line2(geo, mat);
@@ -6070,8 +6188,9 @@ function uncoveredSpans(ax: number, ay: number, bx: number, by: number, segments
   for (const [px, py, qx, qy] of segments) {
     const l = Math.hypot(qx - px, qy - py);
     if (l < 1e-6 || Math.abs(((qx - px) * dx + (qy - py) * dy) / l) < WALL_MERGE_COS) continue;
-    // Оба конца отрезка — близко к прямой ребра
-    if (Math.abs((px - ax) * dy - (py - ay) * dx) > mergeDist || Math.abs((qx - ax) * dy - (qy - ay) * dx) > mergeDist) continue;
+    // Оба конца отрезка — близко к прямой ребра, или (длинный отрезок при коротком ребре) оба конца ребра — к прямой отрезка
+    const ux = (qx - px) / l, uy = (qy - py) / l;
+    if ((Math.abs((px - ax) * dy - (py - ay) * dx) > mergeDist || Math.abs((qx - ax) * dy - (qy - ay) * dx) > mergeDist) && (Math.abs((ax - px) * uy - (ay - py) * ux) > mergeDist || Math.abs((bx - px) * uy - (by - py) * ux) > mergeDist)) continue;
     const t0 = ((px - ax) * dx + (py - ay) * dy) / len, t1 = ((qx - ax) * dx + (qy - ay) * dy) / len;
     const lo = Math.max(0, Math.min(t0, t1)), hi = Math.min(1, Math.max(t0, t1));
     if ((hi - lo) * len > 1e-6) cover.push([lo, hi]);

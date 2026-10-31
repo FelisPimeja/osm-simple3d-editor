@@ -285,7 +285,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .all-tags summary { cursor: pointer; font-size: 12px; color: #555; margin: 4px 0; }
 /* Панель правок: строки как в списке частей, отмена/повтор — значками в заголовке */
 .head-tools { display: flex; gap: 2px; }
-.head-tools[hidden] { display: none; }
+.head-tools[hidden], .head-tools [hidden] { display: none; }
 .icon-btn { width: 26px; height: 26px; padding: 3px; border: 0; border-radius: 4px; background: transparent; color: #444; cursor: pointer; display: grid; place-items: center; }
 .icon-btn svg { width: 18px; height: 18px; display: block; }
 .icon-btn:hover:not(:disabled) { background: #f0f2f5; color: #000; }

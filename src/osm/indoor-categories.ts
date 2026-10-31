@@ -40,7 +40,7 @@ const ROOM: Partial<Record<string, IndoorCategory>> = {
   corridor: 'circulation', hall: 'circulation', lobby: 'circulation', foyer: 'circulation', stairs: 'circulation', elevator: 'circulation',
   escalator: 'circulation', entrance: 'circulation', waiting: 'circulation', steps: 'circulation',
   technical: 'technical', warehouse: 'technical', storage: 'technical', utility: 'technical', kitchen: 'technical', server: 'technical', electrical: 'technical',
-  shop: 'shop', restaurant: 'food', cafe: 'food', food_court: 'food', dining: 'food',
+  shop: 'shop', restaurant: 'food', cafe: 'food', food_court: 'food', foodcourt: 'food', dining: 'food',
   office: 'office', class: 'office', classroom: 'office', auditorium: 'office', amphitheatre: 'office', conference: 'office',
   laboratory: 'office', library: 'office', reception: 'office', sport: 'office', sports: 'office', toilets: 'office', toilet: 'office', bathroom: 'office', shower: 'office',
   lecture_hall: 'office', lecture: 'office', meeting: 'office', computer: 'office', study: 'office', administration: 'office', workshop: 'office',

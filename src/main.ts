@@ -6984,8 +6984,8 @@ function diffTags(before: Record<string, string>, after: Record<string, string>)
 }
 
 /** Попап посреди карты; пустой html — закрыть. */
-function showPopup(html: string, close = tr('Понятно')) {
-  popupEl.innerHTML = html ? `<div class="popup-card">${html}<p><button type="button" data-popup-close>${close}</button></p></div>` : '';
+function showPopup(html: string, close: string | null = tr('Понятно')) {
+  popupEl.innerHTML = html ? `<div class="popup-card">${html}${close === null ? '' : `<p><button type="button" data-popup-close>${close}</button></p>`}</div>` : '';
   if (!html) renderSelected(); // вернуть обычную подсветку
 }
 popupEl.addEventListener('click', (e) => {
@@ -10660,7 +10660,7 @@ function openRepeatDialog() {
     ${radio('copies', tr('Отдельные копии'), tr('по объекту на этаж, правятся по отдельности'))}
     ${radio('repeat_on', tr('repeat_on'), tr('один объект, повторяется на этажах (вики советует скупо)'))}
     ${radio('level', tr('Один объект на нескольких этажах'), tr('level=0;1;2 — лестница, лифт, шахта'))}
-    <p><button type="button" data-repeat-apply>${tr('Применить')}</button></p>`, tr('Отмена'));
+    <p class="repeat-actions"><button type="button" data-repeat-apply>${tr('Применить')}</button><button type="button" data-popup-close>${tr('Отмена')}</button></p>`, null);
   for (const el of popupEl.querySelectorAll<HTMLInputElement>('[data-mixed]')) el.indeterminate = true;
   const touched = new Set<number>();
   for (const el of popupEl.querySelectorAll<HTMLInputElement>('[data-repeat-level]')) el.addEventListener('change', () => touched.add(Number(el.dataset.repeatLevel)));

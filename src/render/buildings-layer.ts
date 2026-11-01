@@ -194,6 +194,11 @@ const ESCALATOR_STEP = new THREE.MeshLambertMaterial({ color: 0x9da5aa, side: TH
 const ESCALATOR_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xb9d3dc, side: THREE.DoubleSide,
   transparent: true, opacity: 0.4, depthWrite: false });
 const ESCALATOR_HANDRAIL = new LineMaterial({ color: 0x656d73, linewidth: 5 });
+/** Нижние рёбра боковин в каркасе: видимое — сплошной линией, скрытое — пунктиром, как рёбра зданий. */
+const ESCALATOR_WIRE = new THREE.LineBasicMaterial({ color: 0x333333 });
+const ESCALATOR_WIRE_HIDDEN = new THREE.LineDashedMaterial({ color: 0x555555, dashSize: 0.25, gapSize: 0.15, depthFunc: THREE.GreaterDepth, depthWrite: false });
+/** Рёбра чуть снаружи короба: на самой его грани глубина делила бы линию на сплошную и пунктирную половины. */
+const ESCALATOR_WIRE_OFFSET = 0.03;
 const ESCALATOR_SELECTED = new THREE.MeshLambertMaterial({ color: HIGHLIGHT, side: THREE.DoubleSide });
 const ESCALATOR_SELECTED_HANDRAIL = new LineMaterial({ color: HIGHLIGHT.getHex(), linewidth: 5 });
 const ESCALATOR_PALE_BELT = new THREE.MeshLambertMaterial({ color: 0xd8dbdd, side: THREE.DoubleSide });
@@ -1905,6 +1910,23 @@ export class BuildingsLayer implements CustomLayerInterface {
         line.frustumCulled = false;
         line.userData.escalatorMaterial = handrail;
         model.add(line);
+      }
+      if (this.wireframe && !item.pale) {
+        for (const sign of [-1, 1]) for (const material of [ESCALATOR_WIRE, ESCALATOR_WIRE_HIDDEN]) {
+          material.clippingPlanes = MATERIAL.clippingPlanes;
+          const points = [0, landing, length - landing, length].map((d) => {
+            const p = at(d), w = sign * (halfWidth + ESCALATOR_WIRE_OFFSET);
+            return [p.x + w * p.nx, p.y + w * p.ny, p.z - boxDepth - ESCALATOR_WIRE_OFFSET];
+          });
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(points.slice(1).flatMap((b, i) => [...points[i], ...b]), 3));
+          const line = new THREE.LineSegments(geometry, material);
+          line.computeLineDistances();
+          line.renderOrder = 998;
+          line.frustumCulled = false;
+          line.userData.silhouette = true; // свой пунктир: в общий пунктир каркаса не попадает
+          model.add(line);
+        }
       }
       const mesh = (positions: number[], material: THREE.Material) => {
         if (!positions.length) return;

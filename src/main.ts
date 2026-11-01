@@ -8712,7 +8712,7 @@ const INDOOR_LENGTHS = new Set(['height', 'width', 'diameter', 'depth', 'max_dep
 const indoorInputValue = (input: HTMLInputElement) => withUnit(input.value, input.dataset.unit as LengthUnit | undefined);
 
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
-  const closedWalls=fs.every(f=>f.kind==='wall' && !f.tags.barrier && f.key.startsWith('way/') && !!f.line && f.polygons.length===1 && !!f.polygons[0].outerIds && f.polygons[0].outerIds!.length>=4 && f.polygons[0].outerIds![0]===f.polygons[0].outerIds!.at(-1));
+  const closedWalls=fs.every(f=>f.kind==='wall' && !f.tags.barrier && f.key.startsWith('way/') && f.polygons.length===1 && !f.polygons[0].inners.length && !!f.polygons[0].outerIds && (f.line ? f.polygons[0].outerIds!.length>=4 && f.polygons[0].outerIds![0]===f.polygons[0].outerIds!.at(-1) : f.polygons[0].outerIds!.length>=3));
   const plainWalls = fs.every((f) => f.kind === 'wall' && !f.tags.barrier);
   const rows = [...new Set([...indoorFormTags(fs), ...(plainWalls ? ['wall', 'height', 'material'] : []), ...(closedWalls ? ['area'] : [])])].map((k) => {
     const values = new Set(fs.map((f) => f.tags[k] ?? ''));
@@ -9594,9 +9594,10 @@ function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | 
   if (!ll || !section?.length) return;
   const local = (p: LonLat) => overpassLayer.focusToLocal(p)!;
   const close = (r: LonLat[]) => { const points = r.map(local); return [...points, points[0]]; };
-  const occupied = [...shownIndoor.filter(f => (isFloorKind(f) && !f.escalatorArea) || solidWall(f) || f.kind === 'column'), ...levelOpenings(shownLevel)]
+  const indoor = shownIndoor.map(wallAsLine);
+  const occupied = [...indoor.filter(f => (isFloorKind(f) && !f.escalatorArea) || solidWall(f) || f.kind === 'column'), ...levelOpenings(shownLevel)]
     .map(f => f.polygons.map(p => [close(p.outer), ...p.inners.map(close)]));
-  const walls = shownIndoor.filter(f => f.kind === 'wall' && f.line && !solidWall(f)).flatMap(f => f.polygons.map(p => p.outer.map(local)));
+  const walls = indoor.filter(f => f.kind === 'wall' && f.line && !solidWall(f)).flatMap(f => f.polygons.map(p => p.outer.map(local)));
   let pieces: [number, number][][][];
   try { pieces = freeAreaPieces(section.map(p => p.map(close)), occupied, walls, shownIndoor.filter(isDoor).map(d => ({at: local(d.point!), width: openingDoorWidth(d.tags)}))); } catch (err) { console.warn('[free-area]', err); return; }
   const toLngLat = (r: [number,number][]) => r.slice(0,-1).map(p => overpassLayer.focusToLngLat(...p)! as LonLat);
@@ -10002,6 +10003,13 @@ function indoorSideInsertEdits(nodes: { id: number; p: LonLat }[], skip: Set<str
     edits.push(e);
   }
   return { edits, touched };
+}
+
+/** Нарисованная контуром стена с area=no — замкнутая линия, как такая же стена из данных (кольцо с повтором первой точки). */
+function wallAsLine(f: IndoorFeature): IndoorFeature {
+  if (f.kind !== 'wall' || f.line || f.tags.area !== 'no' || !f.key.startsWith('way/') || f.polygons.length !== 1) return f;
+  const { outer, outerIds } = f.polygons[0];
+  return { ...f, line: true, polygons: [{ ...f.polygons[0], outer: [...outer, outer[0]], ...(outerIds ? { outerIds: [...outerIds, outerIds[0]] } : {}) }] };
 }
 
 function createIndoorWallLine(pts: [number, number][], own?: Record<string, string>): string | undefined {
@@ -10981,7 +10989,7 @@ function renderLevelsImpl() {
       items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea
         && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
         && (f.line || f.kind === 'wall' || f.kind === 'column' || f.kind === 'room' || floorLevels(f).includes(l.n)))
-        .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && (f.tags.area==='no'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), railing:(f.tags.barrier==='fence'&&f.tags.fence_type==='railing')||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
+        .map(wallAsLine).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && (f.tags.area==='no'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), railing:(f.tags.barrier==='fence'&&f.tags.fence_type==='railing')||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
           ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
           ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
           ...(isPool(f) ? { pool: poolDepth(f) } : {}),

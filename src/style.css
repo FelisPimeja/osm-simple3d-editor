@@ -765,3 +765,5 @@ body.mobile #issues-panel { display: none !important; }
 .length-field { position: relative; display: block; width: 100%; }
 .length-field input[type="text"] { padding-right: 22px; }
 .length-unit { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); color: #9ca3af; font-size: 12px; pointer-events: none; }
+.inherit-field:has(.length-field) .length-unit { right: 24px; }
+.inherit-field:has(.length-field) .length-field input[type="text"] { padding-right: 40px; }

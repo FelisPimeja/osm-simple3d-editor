@@ -7935,11 +7935,19 @@ let levelSignature = '';
 function focusLevels(g: BuildingGroup, info: Map<number, LevelInfo> = new Map()): Level[] {
   const byN = new Map<number, Level & { rank: number }>();
   const feats = groupFeatures(g);
+  const add = (src: string, rank: number, n: number, floor: number, ceil: number, explicit: boolean, overflow?: boolean) => {
+    const cur = byN.get(n);
+    if (!cur || rank > cur.rank) byN.set(n, { n, floor, ceil, rank, src, explicit, overflow });
+  };
   for (const f of feats) {
     const t = f.tags;
     const levels = Number(t['building:levels']);
-    if (!Number.isFinite(levels) || levels <= 0) continue;
     const under = Math.max(0, Math.round(Number(t['building:levels:underground']) || 0));
+    // Подвалы не зависят от надземной этажности: у части с одной height (стилобат) они тоже есть
+    const basements = () => {
+      for (const l of partLevels({ min: 0, wallTop: 0, levels: 0, minLevel: 0, under, step: LEVEL_HEIGHT }, info)) add(f.key, f.kind === 'part' ? 1 : 0, l.n, l.floor, l.ceil, l.explicit);
+    };
+    if (!Number.isFinite(levels) || levels <= 0) { basements(); continue; }
     let h = computeHeights(t);
     // Контур с этажностью без высоты, а у частей высоты без этажности: верх стен — по основной части
     const mainTop = f.kind === 'building' && h.source === 'levels' ? mainPartTop(feats, h.min, levels) : undefined;
@@ -7949,16 +7957,12 @@ function focusLevels(g: BuildingGroup, info: Map<number, LevelInfo> = new Map())
       : h.min > 0 ? Math.round(h.min / LEVEL_HEIGHT) : 0;
     const step = levels > minLevel ? (h.wallTop - h.min) / (levels - minLevel) : LEVEL_HEIGHT;
     // Противоречивые теги (23 этажа в 3 м и т. п.) — такую часть в сетку этажей не берём
-    if (step < MIN_LEVEL_STEP || step > MAX_LEVEL_STEP) continue;
+    if (step < MIN_LEVEL_STEP || step > MAX_LEVEL_STEP) { basements(); continue; }
     // Этаж, который описывают несколько объектов, берём у самого надёжного: часть точнее контура (контур
     // под частями — обычно общая этажность с высотой по умолчанию), явная высота точнее этажей × 3 м;
     // при равенстве — у объекта с большим числом этажей. Шаг у каждой части свой: первые этажи бывают выше
     const rank = (f.kind === 'part' ? 2000 : 0) + (h.source === 'height' ? 1000 : 0) + levels;
-    const add = (n: number, floor: number, ceil: number, explicit: boolean, overflow?: boolean) => {
-      const cur = byN.get(n);
-      if (!cur || rank > cur.rank) byN.set(n, { n, floor, ceil, rank, src: f.key, explicit, overflow });
-    };
-    for (const l of partLevels({ min: h.min, wallTop: h.wallTop, levels, minLevel, under, step }, info)) add(l.n, l.floor, l.ceil, l.explicit, l.overflow);
+    for (const l of partLevels({ min: h.min, wallTop: h.wallTop, levels, minLevel, under, step }, info)) add(f.key, rank, l.n, l.floor, l.ceil, l.explicit, l.overflow);
   }
   joinLevels([...byN.values()]);
   return [...byN.values()].map(({ n, floor, ceil, src, explicit, overflow }) => ({ n, floor, ceil, src, explicit, ...(overflow ? { overflow } : {}) })).sort((a, b) => b.n - a.n);
@@ -10842,14 +10846,19 @@ function levelIssue(l: Level): string | undefined {
  * Подземная часть здания для пунктира в общем виде: глубина — пол нижнего подземного этажа; контур — части
  * с building:levels:underground, а если подвал известен только из indoor-данных — контур здания (или все части).
  */
-function undergroundOutline(g: BuildingGroup, levels: Level[]): { rings: LonLat[][]; depth: number } | undefined {
+function undergroundOutline(g: BuildingGroup, levels: Level[]): { rings: LonLat[][]; depth: number }[] | undefined {
   const depth = Math.min(0, ...levels.filter((l) => l.n < 0).map((l) => l.floor));
   if (depth > -0.5) return undefined;
   const feats = groupFeatures(g);
-  let src = feats.filter((f) => Number(f.tags['building:levels:underground']) > 0);
-  if (!src.length) src = feats.filter((f) => f.kind === 'building');
-  if (!src.length) src = feats;
-  return { rings: src.flatMap((f) => f.polygons.flatMap((p) => [p.outer, ...p.inners])), depth };
+  const ringsOf = (f: Feature3D) => f.polygons.flatMap((p) => [p.outer, ...p.inners]);
+  // У каждой части своя глубина: пол её нижнего подвала
+  const own = feats.filter((f) => Number(f.tags['building:levels:underground']) > 0);
+  if (own.length) return own.map((f) => ({
+    rings: ringsOf(f),
+    depth: levels.find((l) => l.n === -Math.round(Number(f.tags['building:levels:underground'])))?.floor ?? depth,
+  }));
+  const src = feats.filter((f) => f.kind === 'building');
+  return [{ rings: (src.length ? src : feats).flatMap(ringsOf), depth }];
 }
 
 function renderLevels() {
@@ -14007,7 +14016,9 @@ function levelsAboveOutline(f: Feature3D): string | false {
     + ' ' + tr('на контуре принято указывать максимальную этажность — поправьте контур или часть.');
 }
 
-function describeOsm({ feature: f, roofApproximated }: RenderedFeature, form?: string): string {
+function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: string): string {
+  // Отрисованный объект в режиме здания отстаёт от правок: теги — из сессии, иначе новый тег не виден в списке
+  const f = { ...feature, tags: session.get(feature.key)?.tags ?? feature.tags };
   const h = computeHeights(f.tags);
   const warn = [
     roofApproximated && tr('Форма крыши «{shape}» пока не поддерживается для этой геометрии — показаны стены до верха и плоская крыша.', { shape: h.roofShape }),

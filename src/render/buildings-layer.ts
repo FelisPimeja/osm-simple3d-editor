@@ -3974,7 +3974,7 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   private snapLine?: THREE.Line;
   private underground?: THREE.LineSegments;
-  private undergroundSpec?: { rings: LonLat[][]; depth: number };
+  private undergroundSpec?: { rings: LonLat[][]; depth: number }[];
   /** Отрезки пунктира подземной части (локальные метры здания режима) — для выбора кликом. */
   private undergroundSegs: [THREE.Vector3, THREE.Vector3][] = [];
   private undergroundSelected = false;
@@ -3984,8 +3984,8 @@ export class BuildingsLayer implements CustomLayerInterface {
    * вертикали в заметных углах. Виден только не закрытый зданием участок;
    * выбранный — синий и целиком, сквозь здание. undefined — убрать.
    */
-  setUnderground(spec: { rings: LonLat[][]; depth: number } | undefined) {
-    const same = (a?: typeof spec, b?: typeof spec) => a === b || (!!a && !!b && a.depth === b.depth && JSON.stringify(a.rings) === JSON.stringify(b.rings));
+  setUnderground(spec: { rings: LonLat[][]; depth: number }[] | undefined) {
+    const same = (a?: typeof spec, b?: typeof spec) => a === b || (!!a && !!b && JSON.stringify(a) === JSON.stringify(b));
     if (same(spec, this.undergroundSpec)) return;
     this.undergroundSpec = spec;
     if (!spec) this.undergroundSelected = false;
@@ -4052,7 +4052,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!g || !spec) return;
     if (!this.underground) {
       const segs: [THREE.Vector3, THREE.Vector3][] = [];
-      for (const ring of spec.rings) {
+      for (const { rings, depth } of spec) for (const ring of rings) {
         const loc = cornersOnly(ring.map(g.toLocal));
         // Углы выпуклой оболочки — всегда с вертикалью (маленький выступ, угол здания); прореживаются только зубцы внутри
         const hull = hullIndices(loc);
@@ -4060,10 +4060,10 @@ export class BuildingsLayer implements CustomLayerInterface {
         for (let i = 0; i < loc.length; i++) {
           const [x0, y0] = loc[i], [x1, y1] = loc[(i + 1) % loc.length];
           // Кольца на глубине и на земле (контур подземного здания на земле сам не обведён)
-          for (const z of [spec.depth, 0]) segs.push([new THREE.Vector3(x0, y0, z), new THREE.Vector3(x1, y1, z)]);
+          for (const z of [depth, 0]) segs.push([new THREE.Vector3(x0, y0, z), new THREE.Vector3(x1, y1, z)]);
           // Вертикали — только в заметных углах и не теснее UNDERGROUND_POST_GAP_M (зубцы контура — без частокола)
           if (turnAt(loc, i) < UNDERGROUND_POST_TURN || (!hull.has(i) && last && Math.hypot(x0 - last[0], y0 - last[1]) < UNDERGROUND_POST_GAP_M)) continue;
-          segs.push([new THREE.Vector3(x0, y0, spec.depth), new THREE.Vector3(x0, y0, 0)]);
+          segs.push([new THREE.Vector3(x0, y0, depth), new THREE.Vector3(x0, y0, 0)]);
           last = loc[i];
         }
       }

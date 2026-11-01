@@ -39,3 +39,13 @@ test('flat roofs with zero roof levels do not warn about roof levels', () => {
   assert.ok(!validateTags('way/1', tags, true).some(i => i.code === 'roof-detail'));
   assert.ok(validateTags('way/1', { ...tags, 'building:part': 'yes' }, true).some(i => i.code === 'roof-detail' && !i.fix));
 });
+
+test('building:levels:underground must be a non-negative integer', () => {
+  const errors = (value) => validateTags('way/1', { building: 'yes', 'building:levels:underground': value }, false)
+    .filter((i) => i.code === 'number');
+  assert.equal(errors('2').length, 0);
+  assert.equal(errors('0').length, 0);
+  assert.equal(errors('-2').length, 1);
+  assert.equal(errors('1.5').length, 1);
+  assert.equal(errors('two').length, 1);
+});

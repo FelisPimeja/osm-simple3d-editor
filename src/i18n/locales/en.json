@@ -1404,5 +1404,6 @@
   "Пост охраны": "Security room",
   "Спортзал": "Sports room",
   "Проблемы выбранных объектов: {n} из {all}": "Issues of selected objects: {n} of {all}",
-  "Исправить {n} из {all}": "Fix {n} of {all}"
+  "Исправить {n} из {all}": "Fix {n} of {all}",
+  "{tag} — нужно целое неотрицательное число подземных этажей.": "{tag}: must be a non-negative whole number of underground levels."
 }

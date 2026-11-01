@@ -190,6 +190,8 @@ export function validateTags(key: string, t: Record<string, string>, hasParts = 
     else if (!Number.isInteger(n)) add('error', 'number', tr('{tag} — этажи считают целыми; дробную высоту задают через {key}.',
       { tag: `${k}=${t[k]}`, key: k === 'building:min_level' ? 'min_height' : k === 'roof:levels' ? 'roof:height' : 'height' }));
   }
+  const under = t['building:levels:underground'];
+  if (under !== undefined && !(Number.isInteger(Number(under)) && Number(under) >= 0)) add('error', 'number', tr('{tag} — нужно целое неотрицательное число подземных этажей.', { tag: `building:levels:underground=${under}` }));
   if (t['building:min_level'] !== undefined && Number(t['building:min_level']) === 0) add('warning', 'levels', tr('building:min_level=0 — лишний тег: часть и так начинается с земли.'), set({ 'building:min_level': undefined }));
   if (t['building:min_level'] !== undefined && t['building:levels'] === undefined) add('warning', 'levels', tr('building:min_level без building:levels — число этажей части не определено.'));
   if (Number(t['building:levels']) === 0 && !(Number(t['building:levels:underground']) > 0)) add('warning', 'levels', tr('building:levels=0 — у здания нет надземных этажей (подземное — с building:levels:underground).'));

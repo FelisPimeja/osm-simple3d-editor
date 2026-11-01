@@ -595,6 +595,11 @@ export class BuildingsLayer implements CustomLayerInterface {
   private focused = false;
   /** Матрица проекции MapLibre из последнего кадра — чтобы проецировать сцену режима здания до её первой отрисовки. */
   private lastMain?: THREE.Matrix4;
+  /** Глубину не сжимать: рядом рисуются мосты с глубиной MapLibre, иначе здания всегда оказываются ближе них. */
+  plainDepth: () => boolean = () => false;
+  private drawMain(options: CustomRenderMethodInput): THREE.Matrix4 {
+    return this.plainDepth() ? new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]) : depthMain(options);
+  }
   private selectedTreeKey?: string;
   /** Локальная система координат здания в режиме одного здания (в метрах сцены режима). */
   focusAxes?: LocalFrame;
@@ -631,21 +636,21 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Но заливки (полы помещений) — до подложек: поднятая над полом подложка иначе оказывалась под ним
     const overFirst = this.visible && this.wireframe;
     const split = overFirst && underlays && this.underlays.hasOver();
-    if (underlays) this.underlays.render(depthMain(options), 'under');
+    if (underlays) this.underlays.render(this.drawMain(options), 'under');
     if (split) {
       timed(`${this.id}: кадр (CPU)`, () => this.renderWire(options, 'wire-fills'), () => `${this.groups.size} групп`);
-      this.underlays.render(depthMain(options), 'over');
+      this.underlays.render(this.drawMain(options), 'over');
       this.renderWire(options, 'wire-lines');
     } else {
-      if (underlays && overFirst) this.underlays.render(depthMain(options), 'over');
+      if (underlays && overFirst) this.underlays.render(this.drawMain(options), 'over');
       if (this.visible) timed(`${this.id}: кадр (CPU)`, () => this.renderTranslucent(options), () => `${this.groups.size} групп`);
     }
-    if (underlays && !overFirst) this.underlays.render(depthMain(options), 'over');
-    if (underlays) this.underlays.render(depthMain(options), 'outline');
+    if (underlays && !overFirst) this.underlays.render(this.drawMain(options), 'over');
+    if (underlays) this.underlays.render(this.drawMain(options), 'outline');
     // Накладки инструментов (транспортир, оси, превью линий) — последними: поверх и подложек, поднятых над землёй
     const fg = this.groups.get(FOCUS_GROUP);
     if (this.toolOverlay.children.length && fg && this.focused) {
-      this.toolCamera.projectionMatrix = depthMain(options).clone().multiply(fg.model);
+      this.toolCamera.projectionMatrix = this.drawMain(options).clone().multiply(fg.model);
       this.renderer.resetState();
       this.renderer.render(this.toolOverlay, this.toolCamera);
     }
@@ -795,7 +800,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const renderer = this.renderer!;
     this.lastMain = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
     this.scaleGizmos();
-    const main = depthMain(options);
+    const main = this.drawMain(options);
     let triangles = 0;
     for (const g of this.activeGroups()) {
       // Выбор и камера берут projectionMatrix с глубиной MapLibre — сжатая только на время отрисовки

@@ -633,6 +633,7 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
 roadsLayer.onBuilt = () => overpass.setTreeCuts(roadsLayer.treeCuts);
 // В режиме здания карта вокруг убрана — мосты и тоннели тоже
 roadsLayer.hidden = () => focusScene();
+overpassLayer.plainDepth = () => roadsLayer.isEnabled && !roadsLayer.hidden();
 /**
  * Созданные в сессии здания и части (с контуром). Новые indoor-объекты (помещения, площадки, этажи) — не объёмы:
  * они живут в плане этажа (indoorCreated), в 3D-слой зданий не идут.

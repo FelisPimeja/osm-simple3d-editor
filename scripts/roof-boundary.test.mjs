@@ -77,3 +77,14 @@ test('issue 39: gambrel slope keeps its bent eave', () => {
   const top = ([x, y]) => `${x.toFixed(3)},${y.toFixed(3)},15.000`;
   for (let i = 0; i < ring.length; i++) assert.ok(edges.has(`${top(ring[i])}|${top(ring[(i + 1) % ring.length])}`), `wall edge ${i}`);
 });
+
+test('issue 41: apse apex stands at the middle of a side split by a node', () => {
+  // OSM way/1086428998, local coordinates in metres (OSM contributors, ODbL).
+  const ring = [[0, 0], [8.52, -3.23], [13.11, -7.29], [15.84, -12.33], [17.07, -18.6], [16.31, -24.58], [13.53, -30.39], [9.49, -34.45],
+    [3.61, -37.79], [-4.73, -37.82], [-2.37, -18.9]];
+  const { roof } = buildTriangles([{ outer: ring, inners: [] }],
+    { min: 24, wallTop: 24, top: 36, roofHeight: 12, roofShape: 'apse_gabled', source: 'height' }, {});
+  let apex;
+  for (let i = 0; i < roof.length; i += 3) if (roof[i + 2] === 36) apex = [roof[i], roof[i + 1]];
+  assert.ok(Math.hypot(apex[0] + 2.365, apex[1] + 18.91) < 0.05, `apex ${apex}`);
+});

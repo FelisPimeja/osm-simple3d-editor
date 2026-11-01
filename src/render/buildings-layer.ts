@@ -308,20 +308,35 @@ function cornersOnly(ring: Pt[]): Pt[] {
 const EDGE_OPACITY = 0.55;
 const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: EDGE_OPACITY });
 withSideCull(EDGE_MATERIAL);
-/** Край гладкой стены: стык виден, только если одна из его стен смотрит на камеру, а другая — нет. Камера у группы своя. */
-function silhouetteMaterial(): THREE.LineBasicMaterial {
-  const material = new THREE.LineBasicMaterial({ color: EDGE_MATERIAL.color, transparent: true, opacity: EDGE_MATERIAL.opacity, clippingPlanes: MATERIAL.clippingPlanes });
-  const eye = { value: new THREE.Vector3() };
-  material.userData.eye = eye;
+/** Сдвиг глубины края к камере, м: грань у края почти вдоль луча, polygonOffset её не отодвигает. */
+const SILHOUETTE_DEPTH = 0.5;
+/** Край гладкой поверхности — копия материала рёбер: стык виден, только если одна его грань смотрит на камеру, другая — нет. */
+function silhouetteMaterial<T extends THREE.LineBasicMaterial>(source: T, eye: { value: THREE.Vector3 }): T {
+  const material = source.clone() as T;
+  material.clippingPlanes = MATERIAL.clippingPlanes;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.silhouetteEye = eye;
     shader.vertexShader = 'attribute vec3 faceA;\nattribute vec3 faceB;\nuniform vec3 silhouetteEye;\n' + shader.vertexShader.replace('#include <project_vertex>',
       `#include <project_vertex>
   vec3 toEye = silhouetteEye - position;
-  // Грань у края почти вдоль луча: polygonOffset её не отодвигает, и глубину ребра берём ближе к камере
   if (dot(toEye, faceA) * dot(toEye, faceB) > 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
   else {
-    vec4 nearer = projectionMatrix * modelViewMatrix * vec4(position + normalize(silhouetteEye - position) * 0.5, 1.0);
+    vec4 nearer = projectionMatrix * modelViewMatrix * vec4(position + normalize(toEye) * ${SILHOUETTE_DEPTH.toFixed(1)}, 1.0);
+    gl_Position.z = nearer.z / nearer.w * gl_Position.w;
+  }`);
+  };
+  return material;
+}
+/** То же для толстой линии выделения: концы отрезка — в атрибутах экземпляра. */
+function silhouetteThick(material: LineMaterial, eye: { value: THREE.Vector3 }): LineMaterial {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.silhouetteEye = eye;
+    shader.vertexShader = 'attribute vec3 faceA;\nattribute vec3 faceB;\nuniform vec3 silhouetteEye;\n' + shader.vertexShader.replace('#include <fog_vertex>',
+      `#include <fog_vertex>
+  vec3 toEye = silhouetteEye - instanceStart;
+  if (dot(toEye, faceA) * dot(toEye, faceB) > 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  else {
+    vec4 nearer = projectionMatrix * modelViewMatrix * vec4(instanceStart + normalize(toEye) * ${SILHOUETTE_DEPTH.toFixed(1)}, 1.0);
     gl_Position.z = nearer.z / nearer.w * gl_Position.w;
   }`);
   };
@@ -455,6 +470,8 @@ class MeshGroup {
   mesh?: THREE.Mesh;
   edges?: THREE.LineSegments;
   wireHidden?: THREE.LineSegments;
+  /** Камера в координатах группы — для материалов силуэтов. */
+  readonly silhouetteEye = { value: new THREE.Vector3() };
   /** Слитая геометрия устарела: слой скрыт, пересборка отложена до показа. */
   stale = false;
   /** Скрытые (только для показа) объекты: не рисуются, не выбираются, без привязок. */
@@ -562,7 +579,7 @@ class MeshGroup {
   }
 
   disposeEdges() {
-    if(this.wireHidden){this.wireHidden.geometry.dispose();(this.wireHidden.material as THREE.Material).dispose();this.scene.remove(this.wireHidden);this.wireHidden=undefined;}
+    if(this.wireHidden){for(const c of this.wireHidden.children)((c as THREE.LineSegments).material as THREE.Material).dispose();this.wireHidden.geometry.dispose();(this.wireHidden.material as THREE.Material).dispose();this.scene.remove(this.wireHidden);this.wireHidden=undefined;}
     if (!this.edges) return;
     for (const c of this.edges.children) if (c instanceof THREE.LineSegments) { c.geometry.dispose(); (c.material as THREE.Material).dispose(); }
     this.edges.geometry.dispose();
@@ -827,8 +844,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Выбор и камера берут projectionMatrix с глубиной MapLibre — сжатая только на время отрисовки
       const pick = g.camera.projectionMatrix = this.lastMain.clone().multiply(g.model);
       if (this.level && g === this.groups.get(FOCUS_GROUP)) cameraEye(pick, SIDE_EYE.value);
+      cameraEye(pick, g.silhouetteEye.value);
       const silhouette = g.edges?.children[0] as THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | undefined;
-      if (silhouette) { cameraEye(pick, silhouette.material.userData.eye.value); silhouette.material.opacity = EDGE_MATERIAL.opacity; }
+      if (silhouette) silhouette.material.opacity = EDGE_MATERIAL.opacity;
       g.camera.projectionMatrix = main.clone().multiply(g.model);
       this.resetState();
       const restore = this.filterPass(g, pass);
@@ -3882,7 +3900,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const o of this.selEdges.get(g) ?? []) {
       o.parent?.remove(o);
       o.geometry.dispose();
-      if (o instanceof LineSegments2) o.material.dispose();
+      if (o instanceof LineSegments2 || o.userData.silhouette) (o.material as THREE.Material).dispose();
     }
     this.selEdges.delete(g);
     const inFocus = g === this.groups.get(FOCUS_GROUP);
@@ -3897,6 +3915,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       hidden.computeLineDistances();
       hidden.renderOrder = 999; // после зданий: глубина уже записана
       out.push(hidden);
+      const back = silhouetteLines(dashed, inFocus ? HIDDEN_EDGE_MATERIAL : MAP_HIDDEN_EDGE_MATERIAL, g.silhouetteEye);
+      if (back) { back.computeLineDistances(); back.renderOrder = 999; out.push(back); }
     }
     // Видимые рёбра выделенного — толстой синей обводкой: в режиме контуров и в обычном режиме здания
     if ((this.wireframe || inFocus) && selected.length && this.map) {
@@ -3914,6 +3934,23 @@ export class BuildingsLayer implements CustomLayerInterface {
       lines.frustumCulled = false;
       lines.renderOrder = 998; // после серых рёбер
       out.push(lines);
+      const edge = silhouetteData(selected);
+      if (edge) {
+        const sg = new LineSegmentsGeometry();
+        sg.setPositions(edge.lines);
+        const perSegment = new Float32Array(edge.faces.length / 2);
+        for (let i = 0; i < perSegment.length; i += 6) perSegment.set(edge.faces.subarray(i * 2, i * 2 + 6), i);
+        const buffer = new THREE.InstancedInterleavedBuffer(perSegment, 6, 1);
+        sg.setAttribute('faceA', new THREE.InterleavedBufferAttribute(buffer, 3, 0));
+        sg.setAttribute('faceB', new THREE.InterleavedBufferAttribute(buffer, 3, 3));
+        const smat = silhouetteThick(mat.clone(), g.silhouetteEye);
+        smat.clippingPlanes = MATERIAL.clippingPlanes;
+        smat.resolution.set(canvas.width, canvas.height);
+        const thick = new LineSegments2(sg, smat);
+        thick.frustumCulled = false;
+        thick.renderOrder = 998;
+        out.push(thick);
+      }
     }
     // Заливка выделенного — только в режиме контуров (в обычном у граней своя)
     if (this.wireframe && selected.length) {
@@ -5532,7 +5569,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!this.graphics.edges || !g.mesh) return;
     const edgeItems = g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it));
     g.edges = edgeLines(edgeItems, EDGE_MATERIAL, !!this.graphics.partSeams);
-    const silhouettes = silhouetteLines(edgeItems);
+    const silhouettes = silhouetteLines(edgeItems, EDGE_MATERIAL, g.silhouetteEye);
     if (silhouettes) g.edges.add(silhouettes);
     if (this.level && g === this.groups.get(FOCUS_GROUP)) {
       const positions = g.edges.geometry.getAttribute('position').array as Float32Array;
@@ -5556,6 +5593,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(positions,3));
       const material=new THREE.LineDashedMaterial({color:0x555555,dashSize:.25,gapSize:.15,depthFunc:THREE.GreaterDepth,depthWrite:false,clippingPlanes:MATERIAL.clippingPlanes});
       const hidden=new THREE.LineSegments(geometry,material);hidden.computeLineDistances();hidden.renderOrder=998;hidden.frustumCulled=false;
+      const shown=g.edges.children[0] as THREE.LineSegments|undefined;
+      if(shown){const back=new THREE.LineSegments(shown.geometry,silhouetteMaterial(material,g.silhouetteEye));back.computeLineDistances();back.renderOrder=998;back.frustumCulled=false;back.userData.silhouette=true;hidden.add(back);}
       g.wireHidden=hidden;g.scene.add(hidden);
     }
   }
@@ -5838,8 +5877,8 @@ function matchSegments(a: Float32Array, b: Float32Array): [Float32Array, Float32
 }
 
 const silhouetteCache = new WeakMap<Float32Array, { wallVertices: number; roofEnd: number; edges: SilhouetteEdges }>();
-/** Края гладких стен объектов одним LineSegments; нет таких — undefined. */
-function silhouetteLines(items: Item[]): THREE.LineSegments | undefined {
+/** Края гладких поверхностей объектов; нет таких — undefined. */
+function silhouetteData(items: Item[]): SilhouetteEdges | undefined {
   const parts = items.map((it) => {
     const roofEnd = CURVED_ROOFS.has(it.tags['roof:shape'] ?? 'flat') ? it.positions.length / 3 - it.floorVertices : it.wallVertices;
     const hit = silhouetteCache.get(it.positions);
@@ -5853,12 +5892,19 @@ function silhouetteLines(items: Item[]): THREE.LineSegments | undefined {
   const lines = new Float32Array(count), faces = new Float32Array(count * 2);
   let l = 0, f = 0;
   for (const e of parts) { lines.set(e.lines, l); faces.set(e.faces, f); l += e.lines.length; f += e.faces.length; }
+  return { lines, faces };
+}
+
+/** Края гладких поверхностей объектов одним LineSegments с копией материала source. */
+function silhouetteLines(items: Item[], source: THREE.LineBasicMaterial, eye: { value: THREE.Vector3 }): THREE.LineSegments | undefined {
+  const edges = silhouetteData(items);
+  if (!edges) return undefined;
   const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(lines, 3));
-  const interleaved = new THREE.InterleavedBuffer(faces, 6);
+  geom.setAttribute('position', new THREE.BufferAttribute(edges.lines, 3));
+  const interleaved = new THREE.InterleavedBuffer(edges.faces, 6);
   geom.setAttribute('faceA', new THREE.InterleavedBufferAttribute(interleaved, 3, 0));
   geom.setAttribute('faceB', new THREE.InterleavedBufferAttribute(interleaved, 3, 3));
-  const out = new THREE.LineSegments(geom, silhouetteMaterial());
+  const out = new THREE.LineSegments(geom, silhouetteMaterial(source, eye));
   out.frustumCulled = false;
   out.userData.silhouette = true;
   return out;

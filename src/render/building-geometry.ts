@@ -167,13 +167,23 @@ function addPyramid(out: number[], ring: Pt[], z0: number, z1: number) {
   }
 }
 
+/** Излом меньше этого (рад) — та же сторона торца. */
+const APSE_STRAIGHT_RAD = 2 * Math.PI / 180;
+
 /**
  * Апсида (apse_gabled): полуконус, примыкающий к двускатной крыше. Плоский торец — над самой длинной
  * стороной контура (вертикальный фронтон), вершина — над её серединой, от неё скаты к остальным сторонам.
  * roof:direction — куда спускается скат (как у односкатной): торец — на стороне, что смотрит в обратную
  * сторону; из таких — самая длинная с поправкой на угол (длина × косинус).
  */
-function addApse(roof: number[], walls: number[], ring: Pt[], z0: number, z1: number, direction?: string) {
+function addApse(roof: number[], walls: number[], outline: Pt[], z0: number, z1: number, direction?: string) {
+  // Сторона из нескольких отрезков на одной прямой (way/1086428998: узел посередине торца) — одна сторона
+  const straight = outline.filter((p, i) => {
+    const a = outline[(i + outline.length - 1) % outline.length], b = outline[(i + 1) % outline.length];
+    const ux = p[0] - a[0], uy = p[1] - a[1], vx = b[0] - p[0], vy = b[1] - p[1];
+    return Math.abs(Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy)) >= APSE_STRAIGHT_RAD;
+  });
+  const ring = straight.length >= 3 ? straight : outline;
   const deg = direction === undefined ? NaN : CARDINAL[direction.trim().toUpperCase()] ?? Number(direction);
   const rad = (deg * Math.PI) / 180;
   // Торец смотрит против ската; x — восток, y — север

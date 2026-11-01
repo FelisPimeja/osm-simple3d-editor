@@ -26,6 +26,7 @@ import { pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonL
 import { dropPartSeams } from './part-seams';
 import { COUNTER_DEPTH, counterRing } from './counter-ring';
 import { edgePass } from './edge-pass';
+import { silhouetteEdges, type SilhouetteEdges } from './silhouette-edges';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { recordMs, timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
@@ -307,6 +308,25 @@ function cornersOnly(ring: Pt[]): Pt[] {
 const EDGE_OPACITY = 0.55;
 const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: EDGE_OPACITY });
 withSideCull(EDGE_MATERIAL);
+/** Край гладкой стены: стык виден, только если одна из его стен смотрит на камеру, а другая — нет. Камера у группы своя. */
+function silhouetteMaterial(): THREE.LineBasicMaterial {
+  const material = new THREE.LineBasicMaterial({ color: EDGE_MATERIAL.color, transparent: true, opacity: EDGE_MATERIAL.opacity, clippingPlanes: MATERIAL.clippingPlanes });
+  const eye = { value: new THREE.Vector3() };
+  material.userData.eye = eye;
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.silhouetteEye = eye;
+    shader.vertexShader = 'attribute vec4 faces;\nuniform vec3 silhouetteEye;\n' + shader.vertexShader.replace('#include <project_vertex>',
+      `#include <project_vertex>
+  vec2 toEye = silhouetteEye.xy - position.xy;
+  // Грань у края почти вдоль луча: polygonOffset её не отодвигает, и глубину ребра берём ближе к камере
+  if (dot(toEye, faces.xy) * dot(toEye, faces.zw) > 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  else {
+    vec4 nearer = projectionMatrix * modelViewMatrix * vec4(position + normalize(silhouetteEye - position) * 0.5, 1.0);
+    gl_Position.z = nearer.z / nearer.w * gl_Position.w;
+  }`);
+  };
+  return material;
+}
 /** Проход отрисовки: обычный или режим контуров (грани зданий только пишут глубину). */
 /**
  * Проход отрисовки групп: 'all' — как есть; 'wire' — режим контуров (грани зданий только в глубину);
@@ -544,6 +564,7 @@ class MeshGroup {
   disposeEdges() {
     if(this.wireHidden){this.wireHidden.geometry.dispose();(this.wireHidden.material as THREE.Material).dispose();this.scene.remove(this.wireHidden);this.wireHidden=undefined;}
     if (!this.edges) return;
+    for (const c of this.edges.children) if (c instanceof THREE.LineSegments) { c.geometry.dispose(); (c.material as THREE.Material).dispose(); }
     this.edges.geometry.dispose();
     this.scene.remove(this.edges);
     this.edges = undefined;
@@ -806,6 +827,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Выбор и камера берут projectionMatrix с глубиной MapLibre — сжатая только на время отрисовки
       const pick = g.camera.projectionMatrix = this.lastMain.clone().multiply(g.model);
       if (this.level && g === this.groups.get(FOCUS_GROUP)) cameraEye(pick, SIDE_EYE.value);
+      const silhouette = g.edges?.children[0] as THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | undefined;
+      if (silhouette) { cameraEye(pick, silhouette.material.userData.eye.value); silhouette.material.opacity = EDGE_MATERIAL.opacity; }
       g.camera.projectionMatrix = main.clone().multiply(g.model);
       this.resetState();
       const restore = this.filterPass(g, pass);
@@ -5507,7 +5530,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Пересборка тайла: рёбра выделенного — по новым треугольникам (в режиме здания ими ведают его правки)
     if (g !== this.groups.get(FOCUS_GROUP)) this.updateSelEdges(g);
     if (!this.graphics.edges || !g.mesh) return;
-    g.edges = edgeLines(g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it)), EDGE_MATERIAL, !!this.graphics.partSeams);
+    const edgeItems = g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it));
+    g.edges = edgeLines(edgeItems, EDGE_MATERIAL, !!this.graphics.partSeams);
+    const silhouettes = silhouetteLines(edgeItems);
+    if (silhouettes) g.edges.add(silhouettes);
     if (this.level && g === this.groups.get(FOCUS_GROUP)) {
       const positions = g.edges.geometry.getAttribute('position').array as Float32Array;
       const corners: Pt[]=[];
@@ -5809,6 +5835,30 @@ function matchSegments(a: Float32Array, b: Float32Array): [Float32Array, Float32
     for (let i = 0; i < la.length; i++) { outA.set(la[i], o); outB.set(lb[i], o); o += 6; }
   }
   return [outA, outB];
+}
+
+const silhouetteCache = new WeakMap<Float32Array, { wallVertices: number; edges: SilhouetteEdges }>();
+/** Края гладких стен объектов одним LineSegments; нет таких — undefined. */
+function silhouetteLines(items: Item[]): THREE.LineSegments | undefined {
+  const parts = items.map((it) => {
+    const hit = silhouetteCache.get(it.positions);
+    if (hit?.wallVertices === it.wallVertices) return hit.edges;
+    const edges = silhouetteEdges(it.positions, it.wallVertices, EDGE_ANGLE);
+    silhouetteCache.set(it.positions, { wallVertices: it.wallVertices, edges });
+    return edges;
+  });
+  const count = parts.reduce((n, e) => n + e.lines.length, 0);
+  if (!count) return undefined;
+  const lines = new Float32Array(count), faces = new Float32Array(count / 3 * 4);
+  let l = 0, f = 0;
+  for (const e of parts) { lines.set(e.lines, l); faces.set(e.faces, f); l += e.lines.length; f += e.faces.length; }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(lines, 3));
+  geom.setAttribute('faces', new THREE.BufferAttribute(faces, 4));
+  const out = new THREE.LineSegments(geom, silhouetteMaterial());
+  out.frustumCulled = false;
+  out.userData.silhouette = true;
+  return out;
 }
 
 /** Buffers are immutable here; moving previews modify only the merged mesh. */

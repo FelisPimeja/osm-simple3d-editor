@@ -61,3 +61,7 @@ Edits uploaded to OpenStreetMap and other map projects with this editor are made
 
 The code is distributed under the [ISC](LICENSE) license. Map data is licensed by the respective projects
 (ODbL for OpenStreetMap and OpenHistoricalMap, its own license for OpenGeofiction).
+
+## Credits
+
+The Push/Pull toolbar icon is adapted from [charm-icons](https://github.com/jaynewey/charm-icons) by jaynewey (MIT License).

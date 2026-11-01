@@ -2543,7 +2543,7 @@ function startRotate() {
   if (!keys.length && !underlaySelection.length) return setStatus(tr('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Повернуть».'), true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
-    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
   }
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   rotateTool.start(keys, underlaySelection);
@@ -2574,7 +2574,7 @@ function startScale() {
   if (!keys.length && !underlaySelection.length) return setStatus(tr('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Масштаб».'), true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
-    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
   }
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   scaleTool.start(keys, underlaySelection);
@@ -2656,7 +2656,7 @@ function squareSelected() {
   if (!keys.length) return setStatus(tr('Сначала выберите в здании части (или несколько с Shift), затем «Выровнять углы».'), true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (features.some((f) => !nodeIds(f))) {
-    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
   }
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
@@ -2775,7 +2775,7 @@ function mergeIn(pending: EditGroup | undefined): string | undefined {
   if (keys.some((k) => focus!.roles[focus!.members.indexOf(k)] !== 'part')) return tr('Объединять можно только части, контур здания (outline) — нет.');
   const features = keys.map((k) => entity(k) as Feature3D | undefined);
   if (features.some((f) => !f?.polygons?.length || !nodeIds(f))) {
-    return tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+    return tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.');
   }
   const parts = features as Feature3D[];
   if (parts.some((f) => f.type === 'relation' && (f.tags.type !== 'multipolygon' || !relWays(f)))) {
@@ -4173,7 +4173,7 @@ function splitReason(key: string): string | undefined {
   const shape = f.tags['roof:shape'];
   const h = computeHeights(f.tags);
   if (!(outline && overpassLayer.focusFlat(key)) && shape && shape !== 'flat' && h.top - h.min > 0.1) return tr('Резать можно плоский объект или с плоской крышей, здесь roof:shape={shape}.', { shape });
-  if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+  if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
   return;
 }
 
@@ -4235,7 +4235,7 @@ function sideCutRange(key: string): SideRange | string {
   if (overpassLayer.focusFlat(key) || (isOutlineIn(focus, key) && !isSolo(focus)) || (isSolo(focus) && key === focus.members[0] && focus.roles.includes('part')))
     return tr('Контур здания (outline) по высоте не делится — режьте его части.');
   if (f.type === 'relation' && (f.tags.type !== 'multipolygon' || !relWays(f))) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
-  if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+  if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
   const h = computeHeights(f.tags);
   const base = box.min.z - h.min;
   const lo = box.min.z, hi = base + h.wallTop;
@@ -4513,7 +4513,7 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
     const tp = polygons[polyIndex];
     const rIds = touch.ring ? tp?.innerIds?.[touch.ring - 1] : tp?.outerIds;
     const rCoords = touch.ring ? tp?.inners[touch.ring - 1] : tp?.outer;
-    if (!rIds || !rCoords) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+    if (!rIds || !rCoords) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
     if (touch.vertex !== undefined) { touchId = rIds[touch.vertex]; touchAt = rCoords[touch.vertex]; }
     else {
       // Новый узел на стороне — в контур этого объекта и во все пути и объекты с этой стороной
@@ -4745,7 +4745,7 @@ function splitAtHole(f: Feature3D, g: EditGroup, a: CutPoint, b: CutPoint, bends
   const poly = f.polygons[a.poly];
   const k = a.ring - 1;
   const hIds = poly.innerIds?.[k];
-  if (!hIds || f.type !== 'relation') return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+  if (!hIds || f.type !== 'relation') return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
   const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
   const outer = poly.outer.map(local);
   const holes = poly.inners.map((h) => h.map(local));
@@ -5268,7 +5268,7 @@ function allowPushSide(t: PushTarget): boolean {
   const f = entity(t.key) as Feature3D | undefined;
   const nodes = f && t.edge ? sideNodes(f, t.edge) : undefined;
   if (!nodes || (f!.type === 'relation' && !relWays(f!))) {
-    setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
+    setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
     return false;
   }
   return true;
@@ -6667,7 +6667,7 @@ function entranceMoveEdits(n: number, t: EntranceTarget): ObjectEdit[] | string 
   const f = entity(t.key) as Feature3D | undefined;
   const p = f?.polygons?.[t.poly];
   const rids = p && (t.ring ? p.innerIds?.[t.ring - 1] : p.outerIds);
-  if (!rids) return tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+  if (!rids) return tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.');
   const live = liveFeatures();
   const coords = new Map<number, LonLat>();
   const ways = new Map<number, { nodes: number[]; tags: Record<string, string> }>();
@@ -6785,7 +6785,7 @@ function removeShapeVertex(t: ShapeTarget, merged: boolean) {
   const f = entity(t.key) as Feature3D | undefined;
   const rings = f?.polygons && shapeRings(f, t);
   if (!f || !rings || (f.type === 'relation' && !relWays(f))) {
-    return setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
+    return setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
   }
   const after = rings.map((r) => ({ poly: r.poly, ring: r.ring, ids: r.ids.filter((_, k) => !r.ks.includes(k)), coords: r.coords.filter((_, k) => !r.ks.includes(k)) }));
   // Внутреннее кольцо вырождается в линию (слили вершины треугольника) — убираем кольцо целиком
@@ -6897,7 +6897,7 @@ function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
       : tr('Высота стен {key}: {h} м. Отменить — Ctrl+Z.', { key, h: (h.wallTop - h.min).toFixed(2) }));
     return true;
   }
-  const noIds = tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках графики.');
+  const noIds = tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
   if (f.type === 'relation' && !relWays(f)) return fail(noIds);
   let edits: ObjectEdit[] | string;
   if (t.insert !== undefined) {
@@ -7057,7 +7057,7 @@ function startMove() {
   const keys = indoor.length ? indoor.map(f => f.key) : doors.length ? doors.map(d => d.key) : selection.filter((k) => focus!.members.includes(k));
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (!doors.length && !indoor.length && features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
-    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках графики.'), true);
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
   }
   pushTool.stop(); shapeTool.stop();
   splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
@@ -7436,6 +7436,7 @@ document.addEventListener('keydown', (e) => {
     : e.code === 'KeyA' && !e.shiftKey ? 'square'
     : e.code === 'KeyJ' && !e.shiftKey ? 'merge'
     : e.code === 'KeyX' && !e.shiftKey ? 'point'
+    : e.code === 'KeyF' && !e.shiftKey ? 'wall'
     : e.code === 'KeyH' ? (e.shiftKey ? 'show-all' : 'hide')
     : e.code === 'KeyI' && !e.shiftKey ? 'isolate'
     : e.code === 'KeyR' && !e.shiftKey ? 'rect'
@@ -7448,7 +7449,7 @@ document.addEventListener('keydown', (e) => {
   cancelCopyPick();
   if (action === 'move') { if (!startEntranceDrag('pick')) startMove(); } else if (action === 'push') startPush(); else if (action === 'shape') startShape(); else if (action === 'split') startSplit();
   else if (action === 'rotate') startRotate(); else if (action === 'scale') startScale(); else if (action === 'square') squareSelected(); else if (action === 'merge') mergeSelected(); else if (action === 'point') { if (pointPick) stopPoint(); else startPoint(); }
-  else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
+  else if (action === 'wall') startWall(); else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);
 }, { capture: true });
 document.addEventListener('keyup', (e) => { offsetTool.key(e); splitTool.key(e); shapeTool.key(e); if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e) || scaleTool.key(e)) e.preventDefault(); });
@@ -9927,7 +9928,7 @@ const POINT_SIDE_PX = 8;
 // Инструмент «Стена»: линейная стена indoor=wall этажа по точкам ломаной
 const wallBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="wall"]')!;
 let linearPreset: 'wall'|'railing' = 'wall';
-wallBtn.title=tr('Стена');
+wallBtn.title=`${tr('Стена')} (F)`;
 wallBtn.insertAdjacentHTML('beforeend','<span class="flyout-arrow" data-linear-menu data-flyout></span>');
 wallBtn.addEventListener('click',e=>{
   if(!(e.target as HTMLElement).closest('[data-linear-menu]'))return;
@@ -9938,12 +9939,17 @@ wallBtn.addEventListener('click',e=>{
   menu.addEventListener('click',e=>{
     const choice=(e.target as HTMLElement).closest<HTMLElement>('[data-linear]');if(!choice)return;
     e.stopPropagation();linearPreset=choice.dataset.linear as typeof linearPreset;
-    wallBtn.title=linearPreset==='wall'?tr('Стена'):tr('Ограждение');
+    wallBtn.title=`${linearPreset==='wall'?tr('Стена'):tr('Ограждение')} (F)`;
     closeRectFlyout();startWall();
   });
   wallBtn.after(menu);placeFlyout(menu,wallBtn);rectFlyout=menu;
 });
 wallBtn.addEventListener('click', () => (drawTool.active && drawTool.shape === 'wall' ? drawTool.stop() : startWall()));
+
+/** Точка и Стена работают только на плане этажа: в режиме объёмов их кнопок нет. */
+function syncPlanTools() {
+  pointBtn.hidden = wallBtn.hidden = !shownLevel;
+}
 
 function startWall() {
   if (!focus) return;
@@ -10889,6 +10895,7 @@ function renderLevelsImpl() {
     overpassLayer.setUnderground(undefined);
     indoorPois.set([], 0);
     shownLevel = undefined;
+    syncPlanTools();
     shownIndoor = [];
     selectedIndoor = undefined;
     indoorSelection = [];
@@ -10957,6 +10964,7 @@ function renderLevelsImpl() {
     clearInfo();
   }
   shownLevel = level;
+  syncPlanTools();
   drawIndoorLevel = level?.n;
   syncRectIcons();
   syncCircleIcons();
@@ -12257,7 +12265,7 @@ const HELP: Record<string, HelpTopic> = {
     tr('Клик — центр, второй клик — вершина (задаёт радиус и поворот).'),
     tr('Число + Enter — радиус в метрах. Esc — отмена.'),
   ] },
-  wall: { title: tr('Стена'), desc: tr('Рисует на плане этажа линейную стену — путь indoor=wall этого этажа.'), items: [
+  wall: { title: `${tr('Стена')} (F)`, desc: tr('Рисует на плане этажа линейную стену — путь indoor=wall этого этажа.'), items: [
     tr('Клики — точки стены; точка на другой линии (стене, стороне помещения) заканчивает стену.'),
     tr('Enter или клик в последнюю точку — закончить, число + Enter — длина участка, Backspace — убрать точку.'),
     tr('Shift — держать ось здания. Esc — отмена.'),
@@ -12314,6 +12322,18 @@ const SNAP_KINDS: [SnapKind, string][] = [
   ['perpendicular', tr('Перпендикуляр')], ['extension', tr('Продолжение ребра')], ['grid', tr('Узлы сетки')], ['shape', tr('Центр фигуры')],
   ['tracking', tr('Откладывание от вершины')],
 ];
+/** Значки типов привязок: геометрия серая, сама точка привязки — полным цветом. */
+const SNAP_ICONS: Partial<Record<SnapKind, string>> = {
+  vertex: '<path class="g" d="M4 17V4h13"/><rect x="2" y="2" width="4" height="4" fill="currentColor"/>',
+  midpoint: '<path class="g" d="M2 13h16"/><path d="M10 7l3.5 6h-7z" fill="currentColor"/>',
+  center: '<circle class="g" cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="2" fill="currentColor"/>',
+  edge: '<path class="g" d="M3 17L17 3"/><path d="M10.500 6.500l3 3M13.500 6.500l-3 3"/>',
+  perpendicular: '<path class="g" d="M2 16h16M10 16V3"/><path d="M10 11h5v5"/>',
+  extension: '<path class="g" d="M2 15l6-4"/><path class="g" d="M11 9l7-4.500" stroke-dasharray="1.600 2.400"/><circle cx="9" cy="10.300" r="2" fill="currentColor"/>',
+  grid: '<path class="g" d="M3 7h14M3 13h14M7 3v14M13 3v14"/><circle cx="13" cy="7" r="2" fill="currentColor"/>',
+  shape: '<path class="g" d="M3 3h14v14H3z"/><path d="M10 7v6M7 10h6"/>',
+  tracking: '<circle cx="4" cy="10" r="2" fill="currentColor"/><path class="g" d="M7 10h7" stroke-dasharray="1.600 2.400"/><path d="M16 6.500v7"/>',
+};
 try { for (const k of JSON.parse(localStorage.getItem('snaps-off') ?? '[]') as SnapKind[]) overpassLayer.snapKindsOff.add(k); } catch { /* нет хранилища */ }
 snapsBtn.insertAdjacentHTML('beforeend', `<span class="flyout-arrow" data-flyout title="${tr('Типы привязок')}"></span>`);
 let snapsFlyout: HTMLElement | undefined;
@@ -12324,7 +12344,7 @@ function renderSnapsFlyout() {
   // «Все привязки» — включить все типы; доступен, только если какой-то выключен
   snapsFlyout.innerHTML = `<button type="button" class="flyout-all" data-snap-all${off.size ? '' : ' disabled'}>${tr('Включить все привязки')}</button>
     <div class="flyout-sep"></div>
-    ${SNAP_KINDS.map(([k, label]) => `<label class="flyout-check${overpassLayer.snapsEnabled ? '' : ' disabled'}"><input type="checkbox" data-snap-kind="${k}"${off.has(k) ? '' : ' checked'}${overpassLayer.snapsEnabled ? '' : ' disabled'}> ${label}</label>`).join('')}`;
+    ${SNAP_KINDS.map(([k, label]) => `<label class="flyout-check${overpassLayer.snapsEnabled ? '' : ' disabled'}"><input type="checkbox" data-snap-kind="${k}"${off.has(k) ? '' : ' checked'}${overpassLayer.snapsEnabled ? '' : ' disabled'}> <svg class="snap-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">${SNAP_ICONS[k]}</svg>${label}</label>`).join('')}`;
 }
 snapsBtn.addEventListener('click', (e) => {
   if (!(e.target as HTMLElement).closest('[data-flyout]')) return;
@@ -14339,7 +14359,7 @@ function clearEdits() {
   if (!n && !session.hasDataHistory()) return;
   // Подтверждение своим окном: встроенные браузеры (панель приложения) молча гасят confirm()
   showPopup(`<h3>${tr('Очистить правки')}</h3><p>${trn(n, 'Отменить все правки ({n} объект)? Вернуть их будет нельзя.|Отменить все правки ({n} объекта)? Вернуть их будет нельзя.|Отменить все правки ({n} объектов)? Вернуть их будет нельзя.')}</p>
-    <p><button type="button" data-clear-confirm>${tr('Очистить')}</button></p>`, tr('Отмена'));
+    <p class="repeat-actions"><button type="button" data-clear-confirm>${tr('Очистить')}</button><button type="button" data-popup-close>${tr('Отмена')}</button></p>`, null);
   popupEl.querySelector('[data-clear-confirm]')!.addEventListener('click', () => { showPopup(''); doClearEdits(); });
 }
 

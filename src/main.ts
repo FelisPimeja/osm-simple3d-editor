@@ -183,6 +183,9 @@ if (import.meta.env.PROD) maplibregl.setWorkerUrl(new URL('maplibre/maplibre-gl-
 /** Хэш карты из адреса до создания карты: в режиме здания наклон бывает больше, чем MapLibre примет вне его. */
 const startHash = location.hash.slice(1).split('/').map(Number);
 const startHashValid = startHash.length >= 3 && startHash.every(Number.isFinite);
+// Наклон ниже горизонта при нулевой высоте центра: MapLibre падает ещё при создании карты (NaN в положении камеры),
+// страница остаётся пустой. Карте — предел наклона, настоящий наклон вернёт вход в здание по startHash
+if (startHash[4] > 85) history.replaceState(history.state, '', `#${[...startHash.slice(0, 4), 85, ...startHash.slice(5)].join('/')}`);
 const savedCamera = startHashValid ? undefined : await loadCamera();
 const mapContainer = document.getElementById('map')!;
 const worldZoom = Math.min(0, Math.log2(Math.min(mapContainer.clientWidth, mapContainer.clientHeight) / 512));

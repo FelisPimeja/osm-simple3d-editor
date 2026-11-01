@@ -624,7 +624,7 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
   syncDataEntrances();
   updateTileFilter();
   showOverpassStatus();
-  if (focus) { renderLevels(); renderIssues(); }
+  if (focus) { syncStrayParts(); renderLevels(); renderIssues(); }
   else scheduleMapIssues(); // пришли здания видимых тайлов
   scheduleIndoorBadges();
   tileBorders.setTiles(overpass.tiles());
@@ -2102,8 +2102,8 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
       if (session.has(g.key)) session.refresh(copy);
       if (editGroups.has(g.key)) { editGroups.set(g.key, copy); rebuildGroupIndex(); }
     }
-    drill = focus = freshGroup;
-    overpassLayer.setFocus(groupFeatures(freshGroup), bareOutlines(freshGroup));
+    drill = focus = withStrayParts(freshGroup);
+    overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
     syncFocusHidden();
     paintSelection();
     renderSelected();
@@ -2116,7 +2116,8 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
   }
 }
 
-function enterFocus(g: BuildingGroup, flyIn = true) {
+function enterFocus(group: BuildingGroup, flyIn = true) {
+  const g = withStrayParts(group);
   // Вход в здание посреди наброска на карте (двойной клик при включённом R / L): набросок закрыть сейчас —
   // иначе его закрытие позже (пробел, Esc) снимет сцену режима здания вместе с собой
   if (sketching) drawTool.stop();
@@ -11340,6 +11341,27 @@ function strayPartsOf(g: BuildingGroup): Issue[] {
   return strayPartIssues(looseFeatures(bboxOf(outline)));
 }
 
+/**
+ * Сцена режима здания: члены отношения и части вне отношений внутри его контура. Копия только для показа —
+ * состав отношения меняют группы сессии, предложение добавить часть остаётся за проверкой.
+ */
+function withStrayParts(g: BuildingGroup): BuildingGroup {
+  const strays = strayPartsOf(g).map((i) => i.key).filter((k) => !g.members.includes(k));
+  return strays.length ? { ...g, members: [...g.members, ...strays], roles: [...g.roles, ...strays.map(() => 'part')] } : g;
+}
+
+/** Части могли прийти с тайлами позже входа в здание — добавить их в сцену. */
+function syncStrayParts() {
+  if (!focus || isSolo(focus)) return;
+  const g = groupOf(focus.key);
+  if (!g) return;
+  const view = withStrayParts(g);
+  if (view.members.length === focus.members.length && view.members.every((k) => focus!.members.includes(k))) return;
+  drill = focus = view;
+  overpassLayer.setFocus(groupFeatures(view), bareOutlines(view));
+  syncFocusHidden();
+}
+
 /** Здания без отношения (контур и части внутри) среди объектов scope — предложение собрать отношение. */
 function implicitIssues(scope: Feature3D[]): Issue[] {
   const seen = new Set<string>();
@@ -13042,14 +13064,14 @@ function onSessionChange(keys: string[]) {
     // Отменили создание отношения из отдельного здания — назад к нему одному
     const outline = focus.members.find((_, i) => focus!.roles[i] === 'outline');
     const back = !g && focus.id < 0 && outline ? soloGroup(outline) : undefined;
-    if (g || back) { drill = focus = (g ?? back)!; overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus)); syncFocusHidden(); setEditParam(isSolo(focus) ? focus.members[0] : focus.key); } else closeFocus();
+    if (g || back) { drill = focus = withStrayParts((g ?? back)!); overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus)); syncFocusHidden(); setEditParam(isSolo(focus) ? focus.members[0] : focus.key); } else closeFocus();
   } else if (isSolo(focus)) {
     // Повтор рассечения: отдельное здание снова в отношении
     const g = groupOf(focus!.members[0]);
     // Здание без отношения получило отношение (правка или кнопка) — та же сцена, выделение сохраняется
     if (g && focus!.members.every((k, i) => focus!.roles[i] === '' || g.members.includes(k))) {
-      drill = focus = g;
-      overpassLayer.setFocus(groupFeatures(g), bareOutlines(g));
+      drill = focus = withStrayParts(g);
+      overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
       syncFocusHidden();
       setEditParam(g.key);
       paintSelection();
@@ -13359,8 +13381,8 @@ async function doUpload() {
       const renamed = (k: string) => saved.get(k)?.newKey ?? k;
       const fresh = isSolo(focus) ? soloGroup(renamed(focus.members[0])) : groupOf(renamed(focus.key));
       if (fresh) {
-        drill = focus = fresh;
-        overpassLayer.setFocus(groupFeatures(fresh), bareOutlines(fresh));
+        drill = focus = withStrayParts(fresh);
+        overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
         syncFocusHidden();
         paintSelection();
         renderSelected();
@@ -13830,8 +13852,8 @@ async function pollJosm() {
       if (focus) {
         const fresh = isSolo(focus) ? focus : groupOf(focus.key);
         if (fresh) {
-          drill = focus = fresh;
-          overpassLayer.setFocus(groupFeatures(fresh), bareOutlines(fresh));
+          drill = focus = withStrayParts(fresh);
+          overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
           syncFocusHidden();
           levelSignature = '';
           renderLevels();

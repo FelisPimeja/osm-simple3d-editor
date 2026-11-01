@@ -39,7 +39,7 @@
   "Не рисовать ребро между соседними частями, если их грани у него продолжают друг друга (фасад через две части, часть на части с тем же контуром). Сборка рёбер заметно дольше": "Don't draw the edge between adjacent parts where their faces continue each other (a facade across two parts, a part on top of another with the same outline). Building edges takes noticeably longer",
   "Выключить стёкла": "Disable glass",
   "Поднимать здания с дефолтной высотой": "Extrude buildings to the default height",
-  "У зданий и частей без height и building:levels — стены 3,5 м по умолчанию; выключено — плоский след (на своём min_height)": "Buildings and parts without height and building:levels get 3.5 m walls by default; when off, a flat footprint (at its min_height)",
+  "У зданий и частей без height и building:levels — стены 3 м по умолчанию; выключено — плоский след (на своём min_height)": "Buildings and parts without height and building:levels get 3 m walls by default; when off, a flat footprint (at its min_height)",
   "Кэш тайлов: —": "Tile cache: —",
   "Очистить": "Clear",
   "Перезагрузить видимые тайлы": "Reload visible tiles",

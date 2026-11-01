@@ -9,10 +9,10 @@ before(async()=>{
  ({BuildingsLayer}=await vite.ssrLoadModule('/src/render/buildings-layer.ts'));
 });
 after(async()=>{delete globalThis.window;await vite.close();});
-test('building levels use 3.5 metres and explicit height takes precedence',()=>{
- assert.equal(computeHeights({'building:levels':'5'}).top,17.5);
+test('building levels use 3 metres and explicit height takes precedence',()=>{
+ assert.equal(computeHeights({'building:levels':'5'}).top,15);
  assert.equal(computeHeights({'building:levels':'5',height:'19'}).top,19);
- assert.equal(computeHeights({'building:levels':'5','building:min_level':'2'}).min,7);
+ assert.equal(computeHeights({'building:levels':'5','building:min_level':'2'}).min,6);
 });
 for(const defaults of [false,true])test(`simple building without height follows the default height setting (defaults=${defaults})`,()=>{
  const layer=new BuildingsLayer('test');
@@ -21,14 +21,14 @@ for(const defaults of [false,true])test(`simple building without height follows 
  layer.setFocus([make(1,{'building:levels':'5'}),make(2,{})]);
  const group=[...layer.groups.values()].find(g=>g.byKey.has('way/1'));
  const top=id=>Math.max(...Array.from(group.byKey.get(`way/${id}`).positions).filter((_,i)=>i%3===2));
- assert.equal(top(1),17.5);
+ assert.equal(top(1),15);
  if(defaults)assert.equal(top(2),computeHeights({building:'yes'}).top);
  else assert.ok(top(2)<.2);
 });
 
 test('way/651766391: explicit levels on a roof building retain the whole level',()=>{
  const h=computeHeights({building:'roof','building:levels':'1','roof:shape':'flat'});
- assert.equal(h.min,0);assert.equal(h.wallTop,3.5);assert.equal(h.top,3.5);
+ assert.equal(h.min,0);assert.equal(h.wallTop,3);assert.equal(h.top,3);
 });
 
 for(const defaults of [false,true])test(`parts use the same heights on the map and in focus (defaults=${defaults})`,()=>{
@@ -42,7 +42,7 @@ for(const defaults of [false,true])test(`parts use the same heights on the map a
  const top=(group,key)=>Math.max(...Array.from(layer.groups.get(group).byKey.get(key).positions).filter((_,i)=>i%3===2));
  layer.setFocus(features);
  for(const [i,f] of features.entries()){
-  const expected=[0,9,7][i];
+  const expected=[0,9,6][i];
   // Плоский след на карте имеет небольшой сдвиг над землёй.
   assert.ok(Math.abs(top('tile',f.key)-expected)<.2);
   assert.equal(top('@focus',f.key),expected);

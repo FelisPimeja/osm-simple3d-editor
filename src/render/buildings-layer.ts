@@ -261,6 +261,8 @@ const EDGE_ANGLE = 25;
 const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, dashSize: 0.25, gapSize: 0.15, depthWrite: false, transparent: true, opacity: 0.85 });
 /** Выбранный контур подземной части — целиком, сквозь здание. */
 const UNDERGROUND_SELECTED = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.25, gapSize: 0.15, depthTest: false, depthWrite: false, transparent: true });
+/** Низ видимой стены выше входа не больше чем на это, м — иначе вход не на ней. */
+const ENTRANCE_WALL_RISE = 0.5;
 /** Насколько близко к пунктиру подземной части выбирает клик, px. */
 const UNDERGROUND_PICK_PX = 6;
 /** Вершина контура на прямой (поворот меньше этого, рад) — не угол: ни вертикали, ни разрыва пунктира. */
@@ -3997,6 +3999,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  private undergroundHidden = false;
+  /** Изоляция части: подземный контур к ней не относится. */
+  setUndergroundHidden(on: boolean) {
+    this.undergroundHidden = on;
+    if (this.underground) this.underground.visible = !on;
+    this.map?.triggerRepaint();
+  }
+
   /** Выделить контур подземной части (подсветка сквозь здание). */
   selectUnderground(on: boolean) {
     if (this.undergroundSelected === on) return;
@@ -4009,6 +4019,7 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Клик по контуру подземной части: ближе UNDERGROUND_PICK_PX к видимому участку пунктира (не за гранью здания).
    */
   pickUnderground(point: PointLike): boolean {
+    if (this.undergroundHidden) return false;
     const g = this.groups.get(FOCUS_GROUP);
     if (!g || !this.underground || !this.map) return false;
     const [px, py] = Array.isArray(point) ? point : [point.x, point.y];
@@ -4058,6 +4069,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
       this.undergroundSegs = segs;
       this.underground = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(segs.flat()), this.undergroundSelected ? UNDERGROUND_SELECTED : UNDERGROUND_MATERIAL);
+      this.underground.visible = !this.undergroundHidden;
       this.underground.computeLineDistances();
       this.underground.frustumCulled = false;
       this.underground.renderOrder = 998;
@@ -4670,9 +4682,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Режим здания: вход со скрытого объекта (контур скрыт по умолчанию; глазик, изоляция) — только на стене
     // видимого, иначе при изоляции части висели бы входы чужих стен. На карте скрыт голый контур — его входы нужны
     const shown = g === this.groups.get(FOCUS_GROUP)
-      ? g.items.filter((it) => !g.hidden.has(it.feature.key)).flatMap((it) => it.feature.polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => r.map(g.toLocal))))
+      ? g.items.filter((it) => !g.hidden.has(it.feature.key)).flatMap((it) => it.feature.polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => ({ ring: r.map(g.toLocal), min: g.lift?.get(it.feature.key) ?? computeHeights(it.tags).min }))))
       : undefined;
-    const onShownWall = (q: Pt) => shown!.some((r) => r.some((a, i) => distToSegment(q, a, r[(i + 1) % r.length]) <= ENTRANCE_ON_WALL));
+    // Стена должна доходить до входа и по высоте: верхний объём над той же линией плана — не его стена
+    const onShownWall = (q: Pt, z: number) => shown!.some(({ ring, min }) => min <= z + ENTRANCE_WALL_RISE && ring.some((a, i) => distToSegment(q, a, ring[(i + 1) % ring.length]) <= ENTRANCE_ON_WALL));
     // Узел в нескольких объектах (контур и часть, соседние части) — на самой низкой видимой стене
     const best = new Map<number, { place: EntrancePlace; rank: number }>();
     for (const it of g.items) {
@@ -4691,7 +4704,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
           if (!tags.has(id) || (best.get(id)?.rank ?? Infinity) <= rank) return;
           const place = entrancePlace(rings, r, i, min);
-          if (place && (!offstage || onShownWall(place.p))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
+          if (place && (!offstage || onShownWall(place.p, min))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
         }));
       }
     }

@@ -29,3 +29,16 @@ test('box corners and straight walls give no candidates', () => {
   const p = prism([[0, 0], [5, 0], [10, 0], [10, 10], [0, 10]]);
   assert.equal(silhouetteEdges(p, p.length / 3, 25).lines.length, 0);
 });
+
+test('cone slopes are candidates only when the roof is passed', () => {
+  const n = 16, roof = [];
+  for (let i = 0; i < n; i++) {
+    const [a, b] = [i, i + 1].map((k) => [Math.cos(k * 2 * Math.PI / n), Math.sin(k * 2 * Math.PI / n)]);
+    roof.push(a[0], a[1], 0, b[0], b[1], 0, 0, 0, 2);
+  }
+  const p = new Float32Array(roof);
+  assert.equal(silhouetteEdges(p, 0, 25).lines.length, 0);
+  const edges = silhouetteEdges(p, 0, 25, n * 3);
+  assert.equal(edges.lines.length, n * 6);
+  assert.equal(edges.faces.length, n * 12);
+});

@@ -315,11 +315,11 @@ function silhouetteMaterial(): THREE.LineBasicMaterial {
   material.userData.eye = eye;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.silhouetteEye = eye;
-    shader.vertexShader = 'attribute vec4 faces;\nuniform vec3 silhouetteEye;\n' + shader.vertexShader.replace('#include <project_vertex>',
+    shader.vertexShader = 'attribute vec3 faceA;\nattribute vec3 faceB;\nuniform vec3 silhouetteEye;\n' + shader.vertexShader.replace('#include <project_vertex>',
       `#include <project_vertex>
-  vec2 toEye = silhouetteEye.xy - position.xy;
+  vec3 toEye = silhouetteEye - position;
   // Грань у края почти вдоль луча: polygonOffset её не отодвигает, и глубину ребра берём ближе к камере
-  if (dot(toEye, faces.xy) * dot(toEye, faces.zw) > 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  if (dot(toEye, faceA) * dot(toEye, faceB) > 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
   else {
     vec4 nearer = projectionMatrix * modelViewMatrix * vec4(position + normalize(silhouetteEye - position) * 0.5, 1.0);
     gl_Position.z = nearer.z / nearer.w * gl_Position.w;
@@ -5837,24 +5837,27 @@ function matchSegments(a: Float32Array, b: Float32Array): [Float32Array, Float32
   return [outA, outB];
 }
 
-const silhouetteCache = new WeakMap<Float32Array, { wallVertices: number; edges: SilhouetteEdges }>();
+const silhouetteCache = new WeakMap<Float32Array, { wallVertices: number; roofEnd: number; edges: SilhouetteEdges }>();
 /** Края гладких стен объектов одним LineSegments; нет таких — undefined. */
 function silhouetteLines(items: Item[]): THREE.LineSegments | undefined {
   const parts = items.map((it) => {
+    const roofEnd = CURVED_ROOFS.has(it.tags['roof:shape'] ?? 'flat') ? it.positions.length / 3 - it.floorVertices : it.wallVertices;
     const hit = silhouetteCache.get(it.positions);
-    if (hit?.wallVertices === it.wallVertices) return hit.edges;
-    const edges = silhouetteEdges(it.positions, it.wallVertices, EDGE_ANGLE);
-    silhouetteCache.set(it.positions, { wallVertices: it.wallVertices, edges });
+    if (hit?.wallVertices === it.wallVertices && hit.roofEnd === roofEnd) return hit.edges;
+    const edges = silhouetteEdges(it.positions, it.wallVertices, EDGE_ANGLE, roofEnd);
+    silhouetteCache.set(it.positions, { wallVertices: it.wallVertices, roofEnd, edges });
     return edges;
   });
   const count = parts.reduce((n, e) => n + e.lines.length, 0);
   if (!count) return undefined;
-  const lines = new Float32Array(count), faces = new Float32Array(count / 3 * 4);
+  const lines = new Float32Array(count), faces = new Float32Array(count * 2);
   let l = 0, f = 0;
   for (const e of parts) { lines.set(e.lines, l); faces.set(e.faces, f); l += e.lines.length; f += e.faces.length; }
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(lines, 3));
-  geom.setAttribute('faces', new THREE.BufferAttribute(faces, 4));
+  const interleaved = new THREE.InterleavedBuffer(faces, 6);
+  geom.setAttribute('faceA', new THREE.InterleavedBufferAttribute(interleaved, 3, 0));
+  geom.setAttribute('faceB', new THREE.InterleavedBufferAttribute(interleaved, 3, 3));
   const out = new THREE.LineSegments(geom, silhouetteMaterial());
   out.frustumCulled = false;
   out.userData.silhouette = true;

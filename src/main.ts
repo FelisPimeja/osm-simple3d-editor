@@ -11456,6 +11456,8 @@ function renderIssues() {
   const picked = issueFilterKeys();
   if (focus) picked.delete(focus.key);
   issueFilterSig = [...issueFilterKeys()].sort().join(',');
+  // Выделение сделано из самой панели — список не сужаем, иначе нельзя выбрать проблемы разных объектов
+  if (issueFilterSig === issueListPin) picked.clear();
   const mine = (i: Issue) => !picked.size || picked.has(i.key) || (!!i.other && picked.has(i.other))
     || (!focus && picked.has(issueBuildingKey(i)));
   const simpleShown = simpleIssues.filter(mine), indoorShown = indoorIssues.filter(mine);
@@ -11463,8 +11465,11 @@ function renderIssues() {
   // Список пересобирается — строки под курсором уже нет, превью исправления снимаем
   if (fixPreviewed) { fixPreviewed = undefined; overpassLayer.setFixPreview(undefined); }
   hoveredIssue = undefined;
+  const allIssues = focus ? focusIssues : mapIssues;
   issuesPanel.hidden = !currentIssues.length;
-  if (issuesPanel.hidden) { issuesEl.innerHTML = ''; shownIssues = []; selectedIssueIds.clear(); highlightIssues(); return; }
+  const knownIds = new Set(allIssues.map(issueId));
+  for (const id of selectedIssueIds) if (!knownIds.has(id)) selectedIssueIds.delete(id);
+  if (issuesPanel.hidden) { issuesEl.innerHTML = ''; shownIssues = []; syncIssueFix(); highlightIssues(); return; }
   const errors = currentIssues.filter((i) => i.level === 'error').length;
   const warnings = currentIssues.length - errors;
   issuesCount.textContent = `(${[errors ? tr('ошибок {n}', { n: errors }) : '', warnings || !errors ? tr('предупреждений {n}', { n: warnings }) : ''].filter(Boolean).join(', ')})`;
@@ -11475,8 +11480,6 @@ function renderIssues() {
     (mapGroups.get(key) ?? mapGroups.set(key, []).get(key)!).push(issue);
   }
   shownIssues = focus ? [...sorted(simpleShown), ...sorted(indoorShown)] : [...mapGroups.values()].flatMap(sorted);
-  const currentIds = new Set(shownIssues.map(issueId));
-  for (const id of selectedIssueIds) if (!currentIds.has(id)) selectedIssueIds.delete(id);
   const group = (title: string, list: Issue[], start: number, buildingKey?: string) => list.length ? `<section class="issue-group${buildingKey ? ' issue-building' : ''}${buildingKey && selection.includes(buildingKey) ? ' selected' : ''}"${buildingKey ? ` data-building-key="${esc(buildingKey)}"` : ''}>
     <h2>${esc(title)} <span class="hint">(${list.length})</span></h2>
     <ul class="issue-list">${list.map((i, offset) => {
@@ -11486,13 +11489,31 @@ function renderIssues() {
         <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span>
         ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</li>`;
     }).join('')}</ul></section>` : '';
-  issuesEl.innerHTML = focus ? group('Simple 3D', shownIssues.slice(0, simpleShown.length), 0)
+  const filterNote = currentIssues.length < allIssues.length
+    ? `<div class="issue-filter">${tr('Проблемы выбранных объектов: {n} из {all}', { n: currentIssues.length, all: allIssues.length })} <button type="button" class="issue-show-all">${tr('Показать все')}</button></div>` : '';
+  const scrolled = issuesEl.scrollTop;
+  issuesEl.innerHTML = filterNote + (focus ? group('Simple 3D', shownIssues.slice(0, simpleShown.length), 0)
     + group('Indoor', shownIssues.slice(simpleShown.length), simpleShown.length)
-    : [...mapGroups].map(([key, list], i, all) => group(key, sorted(list), all.slice(0, i).reduce((n, [, prev]) => n + prev.length, 0), key)).join('');
-  const fixable = shownIssues.filter((i) => i.fix && selectedIssueIds.has(issueId(i))).length;
-  issuesFixAll.hidden = !fixable;
-  issuesFixAll.textContent = tr('Исправить выделенное ({n})', { n: fixable });
+    : [...mapGroups].map(([key, list], i, all) => group(key, sorted(list), all.slice(0, i).reduce((n, [, prev]) => n + prev.length, 0), key)).join(''));
+  issuesEl.scrollTop = scrolled;
+  syncIssueFix();
   highlightIssues();
+}
+
+/** Выбранные проблемы, в том числе скрытые фильтром по выделению: набор не теряется от клика по карте. */
+const pickedIssues = () => (focus ? focusIssues : mapIssues).filter((i) => selectedIssueIds.has(issueId(i)));
+
+function syncIssueFix() {
+  const picked = pickedIssues(), fixable = picked.filter((i) => i.fix).length;
+  issuesFixAll.hidden = !fixable;
+  issuesFixAll.textContent = fixable < picked.length ? tr('Исправить {n} из {all}', { n: fixable, all: picked.length }) : tr('Исправить выделенное ({n})', { n: fixable });
+}
+
+/** Подпись выделения, при котором список проблем показан целиком (выделяли из панели или нажали «Показать все»). */
+let issueListPin: string | undefined;
+function pinIssueList() {
+  issueListPin = [...issueFilterKeys()].sort().join(',');
+  renderIssues();
 }
 
 /** Выбранные объекты (части, здания, indoor): панель проверки показывает только их проблемы. */
@@ -11543,7 +11564,7 @@ function highlightIssues() {
 
 function highlightIssuesImpl() {
   const levels = new Map<string, 'error' | 'warning'>();
-  const selected = shownIssues.filter((issue) => selectedIssueIds.has(issueId(issue)));
+  const selected = pickedIssues();
   const active = [...(issuesAll.checked ? focus ? focusIssues : mapIssues : []), ...selected, ...(hoveredIssue ? [hoveredIssue] : [])];
   for (const issue of active) {
     for (const key of [issue.key, issue.other]) if (key && levels.get(key) !== 'error') levels.set(key, issue.level);
@@ -11565,9 +11586,7 @@ function syncSelectedIssues() {
     li.classList.toggle('issue-picked', !!issue && selectedIssueIds.has(issueId(issue)));
     li.classList.toggle('selected', !!issue && (selection.includes(issue.key) || (!!issue.other && selection.includes(issue.other))));
   }
-  const count = shownIssues.filter((issue) => issue.fix && selectedIssueIds.has(issueId(issue))).length;
-  issuesFixAll.hidden = !count;
-  issuesFixAll.textContent = tr('Исправить выделенное ({n})', { n: count });
+  syncIssueFix();
   highlightIssues();
 }
 
@@ -11701,7 +11720,7 @@ async function splitRoomsByLevel(list: Issue[]) {
   setStatus(tr('Разделено по этажам: {n} копий. Отменить — Ctrl+Z.', { n: created.length }));
 }
 
-issuesFixAll.addEventListener('click', () => applyFixes(shownIssues.filter((i) => i.fix && selectedIssueIds.has(issueId(i)))));
+issuesFixAll.addEventListener('click', () => applyFixes(pickedIssues().filter((i) => i.fix)));
 
 /** Пролёт к зданию проблемы без перехода в режим отдельного здания. */
 function flyToIssueBuilding(issue: Issue) {
@@ -11752,6 +11771,7 @@ function zoomToIssue(issue: Issue) {
 issuesEl.addEventListener('click', (e) => {
   const fix = (e.target as HTMLElement).closest<HTMLElement>('.issue-fix');
   if (fix) { applyFixes([shownIssues[Number(fix.dataset.i)]]); return; }
+  if ((e.target as HTMLElement).closest('.issue-show-all')) { pinIssueList(); return; }
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
   if (!li) return;
   const issue = shownIssues[Number(li.dataset.i)];
@@ -11760,6 +11780,11 @@ issuesEl.addEventListener('click', (e) => {
   if (e.shiftKey) {
     if (selectedIssueIds.has(id)) selectedIssueIds.delete(id); else selectedIssueIds.add(id);
     syncSelectedIssues();
+    // Выделение объектов следует за набором проблем
+    const wanted = new Set(pickedIssues().flatMap((i) => focus ? [i.key, i.other ?? ''] : [issueBuildingKey(i)]).filter((k) => k && !!entity(k)));
+    select(undefined);
+    for (const k of wanted) toggleSelection(k);
+    pinIssueList();
     return;
   }
   selectedIssueIds.clear();
@@ -11769,16 +11794,19 @@ issuesEl.addEventListener('click', (e) => {
   if (indoor) {
     if (!shownIndoor.some((f) => f.key === indoor.key)) { currentLevel = indoor.levels[0]; renderLevels(); }
     selectIndoor(indoor, false);
+    pinIssueList();
     return;
   }
   if (!entity(li.dataset.key!)) return;
   if (!focus && issue) {
     select(issueBuildingKey(issue));
     flyToIssueBuilding(issue);
+    pinIssueList();
     return;
   }
   select(li.dataset.key);
   if (li.dataset.other && entity(li.dataset.other)) toggleSelection(li.dataset.other);
+  pinIssueList();
 });
 issuesEl.addEventListener('mouseover', (e) => {
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');

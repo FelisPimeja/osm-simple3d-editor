@@ -608,6 +608,8 @@ body.mobile #issues-panel { display: none !important; }
 .issues-fix-all { width: 100%; padding: 4px 8px; font-size: 13px; border: 1px solid #6b8fd6; border-radius: 4px; background: #eef3ff; cursor: pointer; }
 .issues-fix-all:hover { background: #dbe7ff; }
 .issues-fix-all[hidden] { display: none; }
+.issue-filter { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; color: #555; }
+.issue-show-all { padding: 0; border: 0; background: none; font: inherit; color: #2563eb; cursor: pointer; white-space: nowrap; }
 
 /* Настройки пользователя: кнопка в панели и окно */
 .settings-open { display: flex; align-items: center; gap: 6px; width: 100%; margin: 0 0 8px; padding: 5px 8px;

@@ -1402,5 +1402,7 @@
   "Раздевалка / примерочная": "Dressing / fitting room",
   "Углы выровнены. Отменить — Ctrl+Z.": "Corners squared. Undo with Ctrl+Z.",
   "Пост охраны": "Security room",
-  "Спортзал": "Sports room"
+  "Спортзал": "Sports room",
+  "Проблемы выбранных объектов: {n} из {all}": "Issues of selected objects: {n} of {all}",
+  "Исправить {n} из {all}": "Fix {n} of {all}"
 }

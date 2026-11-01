@@ -730,7 +730,9 @@ function triangulate3(poly: V3[]): [V3, V3, V3][] {
     n[1] += (a[2] - b[2]) * (a[0] + b[0]);
     n[2] += (a[0] - b[0]) * (a[1] + b[1]);
   }
-  const drop = n.map(Math.abs).indexOf(Math.max(...n.map(Math.abs)));
+  // Скат — в плане: на проекции вдоль стороны изогнутый карниз (t = 0) лёг бы в прямую и выпал из триангуляции
+  const longest = Math.max(...n.map(Math.abs));
+  const drop = Math.abs(n[2]) > longest * 0.1 ? 2 : n.map(Math.abs).indexOf(longest);
   const [u, v] = [0, 1, 2].filter((i) => i !== drop);
   const pts = poly.map((p) => new THREE.Vector2(p[u], p[v]));
   return THREE.ShapeUtils.triangulateShape(pts, []).map(([a, b, c]) => [poly[a], poly[b], poly[c]]);

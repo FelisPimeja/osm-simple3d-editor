@@ -61,3 +61,19 @@ test('boundary restoration preserves winding, shared vertices and the cached ske
   const reverse = restoreRoofBoundary({ ...sk, polygons: sk.polygons.map(f => [...f].reverse()) }, [ring]);
   assert.deepEqual(reverse.polygons[0], [4, 1, 5, 0]);
 });
+
+test('issue 39: gambrel slope keeps its bent eave', () => {
+  // OSM way/579925214, local coordinates in metres (OSM contributors, ODbL).
+  const ring = [[9.769, 27.541], [6.76, 25.281], [1.4, 21.34], [-1.694, 18.602], [-6.354, 14.449], [-14.388, 7.214], [-10.133, 3.64],
+    [2.925, -7.525], [7.523, -11.466], [8.804, -12.579], [20.441, 1.269], [10.504, 9.651], [18.02, 15.373]];
+  const result = buildTriangles([{ outer: ring, inners: [] }],
+    { min: 0, wallTop: 15, top: 21, roofHeight: 6, roofShape: 'gambrel', source: 'levels' }, {});
+  const surface = [...result.roof, ...result.walls.slice(result.gableStart)];
+  const key = (i) => `${surface[i].toFixed(3)},${surface[i + 1].toFixed(3)},${surface[i + 2].toFixed(3)}`;
+  const edges = new Set();
+  for (let i = 0; i < surface.length; i += 9) for (const [a, b] of [[0, 3], [3, 6], [6, 0]]) {
+    edges.add(`${key(i + a)}|${key(i + b)}`); edges.add(`${key(i + b)}|${key(i + a)}`);
+  }
+  const top = ([x, y]) => `${x.toFixed(3)},${y.toFixed(3)},15.000`;
+  for (let i = 0; i < ring.length; i++) assert.ok(edges.has(`${top(ring[i])}|${top(ring[(i + 1) % ring.length])}`), `wall edge ${i}`);
+});

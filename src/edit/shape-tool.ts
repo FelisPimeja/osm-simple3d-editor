@@ -1,3 +1,4 @@
+import { fromInputUnit, showLength, unitLabel } from '../osm/units';
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit, SnapOpts } from '../render/buildings-layer';
 import { linkedNote, glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
@@ -391,7 +392,7 @@ export class ShapeTool {
     if (/^[\d.,-]$/.test(e.key)) { this.typed += e.key === ',' ? '.' : e.key; this.updateVcb(); return true; }
     if (e.key === 'Backspace') { this.typed = this.typed.slice(0, -1); this.updateVcb(); return true; }
     if (e.key === 'Enter') {
-      const dist = Number(this.typed);
+      const dist = this.step ? Number(this.typed) : fromInputUnit(Number(this.typed));
       if (!this.typed || !Number.isFinite(dist) || !this.target) return true;
       // Крыша — число со знаком по вертикали
       // В этажах — число этажей
@@ -738,23 +739,23 @@ export class ShapeTool {
     if (this.target?.roof || this.target?.eave) {
       const w = this.walls(this.target.key);
       const dz = this.offset.z, roof = !!this.target.roof, step = this.step;
-      const value = this.typed || (dz >= 0 ? '+' : '') + (step ? String(Math.round(dz / step)) : dz.toFixed(2));
-      const info = !w ? '' : `<span class="vcb-axis">${roof ? tr('высота крыши {h} м', { h: (w.roof + dz).toFixed(2) })
-        : tr('высота стен {h} м', { h: (w.top - w.min + dz).toFixed(2) })}</span>`;
+      const value = this.typed || (dz >= 0 ? '+' : '') + (step ? String(Math.round(dz / step)) : showLength(dz));
+      const info = !w ? '' : `<span class="vcb-axis">${roof ? tr('высота крыши {h}', { h: `${showLength(w.roof + dz)} ${unitLabel()}` })
+        : tr('высота стен {h}', { h: `${showLength(w.top - w.min + dz)} ${unitLabel()}` })}</span>`;
       // Какие теги меняются — видно до применения
       const changes = this.tagChanges?.(this.target, dz);
-      this.vcb.innerHTML = `<span class="vcb-label">${roof ? tr('Крыша') : tr('Верх стен')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${step ? tr('эт.') : tr('м')}
+      this.vcb.innerHTML = `<span class="vcb-label">${roof ? tr('Крыша') : tr('Верх стен')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${step ? tr('эт.') : unitLabel()}
         <span class="vcb-axis">${this.snap ? tr('до точки') : tr('по вертикали')}</span>${info}${changes ? `<span class="vcb-axis vcb-tags">${changes}</span>` : ''}`;
       return;
     }
     const d = this.locked ?? this.dir;
     const along = !d ? tr('свободно') : this.locked ? tr('{dir} (зафиксировано)', { dir: d.axis === undefined ? d.name : tr('ось {axis}', { axis: d.name }) })
       : d.axis === undefined ? d.name : tr('ось {axis}', { axis: d.name });
-    const value = this.typed || this.offset.length().toFixed(2);
+    const value = this.typed || showLength(this.offset.length());
     const linked = this.glue ? linkedNote(this.linked) : '';
     const problem = this.merge ? `<span class="vcb-axis vcb-linked">${tr('слить с соседней')}</span>`
       : this.problem ? `<span class="vcb-axis vcb-error">${this.problem}</span>` : '';
-    this.vcb.innerHTML = `<span class="vcb-label">${tr('Вершина')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
+    this.vcb.innerHTML = `<span class="vcb-label">${tr('Вершина')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${unitLabel()}
       <span class="vcb-axis">${this.snap ? tr('к точке · {along}', { along }) : along}</span>${linked}${problem}${glue}`;
   }
 }

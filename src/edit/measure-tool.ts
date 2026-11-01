@@ -1,3 +1,4 @@
+import { showLength, unitLabel } from '../osm/units';
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import { tr } from '../i18n';
@@ -156,8 +157,8 @@ export class MeasureTool {
         <span class="vcb-axis">${flat < 1e-3 ? '' : compass(deg)}</span>`;
       return;
     }
-    this.vcb.innerHTML = `<span class="vcb-label">${done ? tr('Замер') : tr('Расстояние')}</span><span class="vcb-value">${d.length().toFixed(2)}</span> ${tr('м')}
-      <span class="vcb-axis">${this.locked !== undefined ? `${tr('по оси {axis} (Shift)', { axis: 'xyz'[this.locked] })} · ` : ''}${tr('по горизонтали {h} · по высоте {v}', { h: flat.toFixed(2), v: `${d.z >= 0 ? '+' : ''}${d.z.toFixed(2)}` })}</span>`;
+    this.vcb.innerHTML = `<span class="vcb-label">${done ? tr('Замер') : tr('Расстояние')}</span><span class="vcb-value">${showLength(d.length())}</span> ${unitLabel()}
+      <span class="vcb-axis">${this.locked !== undefined ? `${tr('по оси {axis} (Shift)', { axis: 'xyz'[this.locked] })} · ` : ''}${tr('по горизонтали {h} · по высоте {v}', { h: showLength(flat), v: `${d.z >= 0 ? '+' : ''}${showLength(d.z)}` })}</span>`;
   }
 
   private reset() {

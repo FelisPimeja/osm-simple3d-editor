@@ -1,3 +1,4 @@
+import { looseLength } from '../osm/heights';
 import { isBridge, isElevated, isRailTags, isTunnel, MinHeap, roadLevel, type RoadWay } from '../osm/roads';
 import { pointInRing, type LonLat } from '../osm/model';
 
@@ -236,7 +237,7 @@ const PATHS = new Set(['footway', 'cycleway', 'path', 'steps', 'pedestrian', 'br
 
 /** Ширина проезжей части, м: width, иначе lanes × 3.5, иначе по классу дороги. */
 export function roadWidth(tags: Record<string, string>): number {
-  const w = Number.parseFloat(tags.width ?? '');
+  const w = looseLength(tags.width);
   if (Number.isFinite(w) && w > 0.5 && w < 80) return w;
   const lanes = Number.parseFloat(tags.lanes ?? '');
   if (Number.isFinite(lanes) && lanes > 0 && lanes < 20) return lanes * 3.5 + 1;

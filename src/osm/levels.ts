@@ -1,5 +1,5 @@
 import type { IndoorFeature } from './model';
-import { LEVEL_HEIGHT } from './heights';
+import { LEVEL_HEIGHT, looseLength } from './heights';
 
 /** Правдоподобный шаг этажа, м: часть с шагом вне этих границ в сетку этажей не попадает. */
 export const MIN_LEVEL_STEP = 2, MAX_LEVEL_STEP = 10;
@@ -29,7 +29,7 @@ export function indoorLevelInfo(indoor: IndoorFeature[]): Map<number, LevelInfo>
     // indoor=level, совмещённый с частью или зданием (way/666671146: building:part + height=4.2/8.4/12.6), —
     // height там по Simple 3D (верх части), а не высота этажа: не читаем и не правим
     const own = !f.tags['building:part'] && !f.tags.building;
-    const h = own ? parseFloat(f.tags.height ?? '') : NaN;
+    const h = own ? looseLength(f.tags.height) : NaN;
     const height = Number.isFinite(h) && h >= MIN_LEVEL_STEP && h <= MAX_LEVEL_STEP ? h : undefined;
     for (const n of f.levels) {
       const cur = out.get(n);

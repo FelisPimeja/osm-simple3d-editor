@@ -1,3 +1,4 @@
+import { showLength, unitLabel } from '../osm/units';
 import * as THREE from 'three';
 import { LngLat } from 'maplibre-gl';
 import type { BuildingsLayer, FocusHit, SnapHit } from '../render/buildings-layer';
@@ -96,7 +97,7 @@ export class SplitTool {
         this.z = side.z;
         this.state = 'cut';
         this.guide(side.p);
-        this.onState(tr('Разрез по высоте {h} м: кликните по другому боковому ребру этого объекта. Esc — отмена.', { h: side.z.toFixed(2) }));
+        this.onState(tr('Разрез по высоте {h}: кликните по другому боковому ребру этого объекта. Esc — отмена.', { h: `${showLength(side.z)} ${unitLabel()}` }));
         return true;
       }
       // Плоский контур здания (outline под частями) — тоже: в нём вырезают кольцо
@@ -521,22 +522,22 @@ export class SplitTool {
         // Ребро за ближней поверхностью не видно
         if (hits.length && hits[0].t < t * Math.sqrt(dir.lengthSq()) - 0.3) return;
         let z = from ? from.z : Math.max(range.lo, Math.min(range.hi, o.z + t * dir.z));
-        let label = `${z.toFixed(2)} ${tr('м')}`, kind: SnapHit['kind'] = 'edge';
+        let label = `${showLength(z)} ${unitLabel()}`, kind: SnapHit['kind'] = 'edge';
         if (atRoof) {
           z = range.hi;
-          label = `${range.roofBase} · ${z.toFixed(2)} ${tr('м')}`;
+          label = `${range.roofBase} · ${showLength(z)} ${unitLabel()}`;
           kind = 'vertex';
         } else if (onTrack) {
           if (track.local.z <= range.lo || track.local.z >= range.hi) return;
           z = track.local.z;
-          label = track.kind === 'tracked' ? `${tr('Отложенная точка')} · ${z.toFixed(2)} ${tr('м')}` : `${Math.abs(track.dist ?? 0).toFixed(2)} ${tr('м')}`;
+          label = track.kind === 'tracked' ? `${tr('Отложенная точка')} · ${showLength(z)} ${unitLabel()}` : `${showLength(Math.abs(track.dist ?? 0))} ${unitLabel()}`;
           kind = track.kind;
         } else if (!from) {
           let near = SIDE_MARK_PX;
           for (const m of range.marks) {
             const q = px(v[0], v[1], m.z);
             const dm = q ? Math.hypot(q[0] - point[0], q[1] - point[1]) : Infinity;
-            if (dm < near) { near = dm; z = m.z; label = `${m.label} · ${m.z.toFixed(2)} ${tr('м')}`; kind = 'tracked'; }
+            if (dm < near) { near = dm; z = m.z; label = `${m.label} · ${showLength(m.z)} ${unitLabel()}`; kind = 'tracked'; }
           }
         } else { label = tr('Боковое ребро'); kind = 'vertex'; }
         const at = new THREE.Vector3(v[0], v[1], z);

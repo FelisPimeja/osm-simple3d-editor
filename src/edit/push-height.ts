@@ -1,4 +1,5 @@
 import { computeHeights, LEVEL_HEIGHT, type Heights } from '../osm/heights';
+import { writeLength } from '../osm/units';
 import { tr } from '../i18n';
 import type { PushFace, PushUnits } from './push-tool';
 
@@ -23,7 +24,7 @@ export function pushHeightTags(tags: Record<string, string>, face: PushFace, dz:
     if (levels) {
       out['building:levels'] = fmt(Number(tags['building:levels'] ?? h.wallTop / LEVEL_HEIGHT) + dz / LEVEL_HEIGHT);
     }
-    if (!levels || (tags.height && !fresh)) out.height = fmt(h.top + dz);
+    if (!levels || (tags.height && !fresh)) out.height = writeLength(h.top + dz, tags.height);
     else if (fresh) {
       delete out.height;
       if (tags.min_height) {
@@ -38,7 +39,7 @@ export function pushHeightTags(tags: Record<string, string>, face: PushFace, dz:
       else delete out['building:min_level'];
     }
     if (!levels || tags.min_height) {
-      if (min > 1e-4) out.min_height = fmt(min);
+      if (min > 1e-4) out.min_height = writeLength(min, tags.min_height ?? tags.height);
       else delete out.min_height;
     }
   }
@@ -56,8 +57,8 @@ export function roofHeightTags(tags: Record<string, string>, dz: number): Record
   const h = computeHeights(tags), out = { ...tags };
   const fmt = (n: number) => String(Math.round(n * 100) / 100);
   const roof = Math.max(MIN_ROOF_HEIGHT, h.roofHeight + dz);
-  out['roof:height'] = fmt(roof);
-  if (tags.height !== undefined) out.height = fmt(h.wallTop + roof);
+  out['roof:height'] = writeLength(roof, tags['roof:height'] ?? tags.height);
+  if (tags.height !== undefined) out.height = writeLength(h.wallTop + roof, tags.height);
   return out;
 }
 
@@ -86,14 +87,14 @@ export function heightSplitTags(tags: Record<string, string>, at: number, h: Hei
     upper['building:min_level'] = k;
   }
   if (tags.height !== undefined || tags.min_height !== undefined || !onLevel) {
-    lower.height = fmt(at);
-    upper.min_height = fmt(at);
+    lower.height = writeLength(at, tags.height ?? tags.min_height);
+    upper.min_height = writeLength(at, tags.min_height ?? tags.height);
   }
   // Высота по умолчанию у верхней части иначе сместилась бы (считается от низа)
-  if (h.source === 'default') upper.height = fmt(h.top);
+  if (h.source === 'default') upper.height = writeLength(h.top, tags.height);
   // Крыша без стен (разрез по её основанию): building:part=roof, высота крыши — явно, а не по умолчанию для формы
   if (Math.abs(at - h.wallTop) < 0.05 && h.roofHeight > 0) {
-    if (tags['roof:height'] === undefined && tags['roof:levels'] === undefined) upper['roof:height'] = fmt(h.roofHeight);
+    if (tags['roof:height'] === undefined && tags['roof:levels'] === undefined) upper['roof:height'] = writeLength(h.roofHeight, tags.height);
     if (tags['building:part'] !== undefined) upper['building:part'] = 'roof';
   }
   return { lower, upper };

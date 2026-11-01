@@ -1,3 +1,4 @@
+import { looseLength } from './heights';
 import type { OsmElement, OsmNode, OsmRelation, OsmWay } from './api';
 import { joinRings, pointInRing, type LonLat } from './model';
 
@@ -42,7 +43,7 @@ export function leafOf(tags: Record<string, string>): LeafType | undefined {
 /** Число из тега в метрах («12», «12 m», «12.5м»); undefined — нет или нелепое. */
 function meters(v: string | undefined, max: number): number | undefined {
   if (!v) return undefined;
-  const n = parseFloat(v.replace(',', '.'));
+  const n = looseLength(v.replace(',', '.').replace(/\s*м$/, ''));
   return Number.isFinite(n) && n > 0 && n <= max ? n : undefined;
 }
 

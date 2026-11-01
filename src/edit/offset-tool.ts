@@ -1,3 +1,4 @@
+import { fromInputUnit, showLength, unitLabel } from '../osm/units';
 import * as THREE from 'three';
 import type { BuildingsLayer } from '../render/buildings-layer';
 import polygonClipping from 'polygon-clipping';
@@ -115,7 +116,7 @@ export class OffsetTool {
     if (/^[\d.,-]$/.test(e.key)) { this.typed += e.key === ',' ? '.' : e.key; this.preview(); return true; }
     if (e.key === 'Backspace') { this.typed = this.typed.slice(0, -1); this.preview(); return true; }
     if (e.key === 'Enter') {
-      const v = Number(this.typed);
+      const v = fromInputUnit(Number(this.typed));
       if (!this.typed || !Number.isFinite(v)) return true;
       // Без знака — в ту сторону, куда ведут курсор
       this.apply(this.typed.startsWith('-') || this.target?.inward ? -Math.abs(v) : v * (this.d < 0 ? -1 : 1));
@@ -139,7 +140,7 @@ export class OffsetTool {
   private preview() {
     const t = this.target;
     if (!t) return;
-    const typed = Number(this.typed);
+    const typed = fromInputUnit(Number(this.typed));
     const d = this.typed && Number.isFinite(typed) ? (this.typed.startsWith('-') || t.inward ? -Math.abs(typed) : typed * (this.d < 0 ? -1 : 1)) : this.d;
     const r: OffsetShape | string = Math.abs(d) >= MIN_OFFSET ? offsetPolygon(t, d) : [[t.ring, ...t.inners]];
     // Все кольца всех частей; не получилось — исходный контур
@@ -147,7 +148,7 @@ export class OffsetTool {
     this.layer.setOutline(rings.map((ring) => ring.map((p) => new THREE.Vector3(p[0], p[1], t.z))), 2);
     this.vcb.hidden = false;
     const holes = typeof r === 'string' ? '' : `${r.length > 1 ? ` · ${tr('частей: {n}', { n: r.length })}` : ''}${t.inners.length || r.some((p) => p.length > 1) ? ` · ${tr('дворов: {n}', { n: r.reduce((n, p) => n + p.length - 1, 0) })}` : ''}`;
-    this.vcb.innerHTML = `<span class="vcb-label">${t.inward ? tr('Толщина') : tr('Отступ')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || Math.abs(d).toFixed(2)}</span> ${tr('м')}
+    this.vcb.innerHTML = `<span class="vcb-label">${t.inward ? tr('Толщина') : tr('Отступ')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || showLength(Math.abs(d))}</span> ${unitLabel()}
       <span class="vcb-axis">${d < 0 || t.inward ? tr('внутрь') : tr('наружу')}${typeof r === 'string' ? ` · ${r}` : holes}</span>`;
   }
 

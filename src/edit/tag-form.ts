@@ -1,6 +1,7 @@
 import { INHERITABLE, inheritedTags, inheritedValue } from '../osm/inherit';
-import { computeHeights, LEVEL_HEIGHT, parseLength, roofHeightOf, roofShapeOf } from '../osm/heights';
+import { computeHeights, FOOT, LEVEL_HEIGHT, parseLength, roofHeightOf, roofShapeOf } from '../osm/heights';
 import type { EditSession } from './session';
+import { hasOwnUnit, lengthNumber, lengthUnitOf, withUnit, writeLength, type LengthUnit } from '../osm/units';
 import { tr, trn } from '../i18n';
 import { idFieldLabel, idOptions, valueLabels } from '../osm/presets';
 import { parseDate } from '../osm/dates';
@@ -88,12 +89,12 @@ const FIELDS = ([
   // «-» — удалить ключ (объект перестаёт быть частью), no — явно не часть
   { tag: 'building:part', type: 'combo', options: [...Object.keys(PART_VALUES), 'no', REMOVE_VALUE],
     labels: { ...PART_VALUES, no: tr('Не часть'), [REMOVE_VALUE]: tr('Без ключа — удалить тег') }, placeholder: 'yes', empty: 'yes' },
-  { tag: 'height', label: tr('Высота, м'), type: 'length', placeholder: tr('до верха крыши') },
-  { tag: 'min_height', label: tr('Низ, м'), type: 'length' },
+  { tag: 'height', label: tr('Высота'), type: 'length', placeholder: tr('до верха крыши') },
+  { tag: 'min_height', label: tr('Низ'), type: 'length' },
   { tag: 'building:levels', label: tr('Этажей'), type: 'int' },
   { tag: 'building:min_level', label: tr('Нижний этаж'), type: 'int' },
   { tag: 'roof:shape', label: tr('Форма крыши'), type: 'combo', options: ROOF_SHAPES, labels: ROOF_SHAPE_LABELS, icons: ROOF_ICONS },
-  { tag: 'roof:height', label: tr('Высота крыши, м'), type: 'length' },
+  { tag: 'roof:height', label: tr('Высота крыши'), type: 'length' },
   { tag: 'roof:levels', label: tr('Этажей в крыше'), type: 'int' },
   { tag: 'roof:direction', label: tr('Направление ската'), type: 'direction', placeholder: tr('0–360 или N, SE…') },
   { tag: 'roof:orientation', label: tr('Конёк'), type: 'select', options: ['along', 'across'] },
@@ -120,11 +121,14 @@ const FORMULA = /^=\s*([+\-*/])\s*(\d+(?:[.,]\d+)?)$/;
 function applyFormula(type: FieldType, input: string, current: string | undefined): string | undefined {
   const m = FORMULA.exec(input.trim());
   if (!m) return input;
-  const cur = parseFloat(current ?? '');
+  const metres = type === 'length' ? parseLength(current) : undefined;
+  const unit = lengthUnitOf(current);
+  const cur = metres === undefined ? parseFloat(current ?? '') : unit === 'ft' ? metres / FOOT : metres;
   if (!Number.isFinite(cur)) return;
   const n = Number(m[2].replace(',', '.'));
   let v = m[1] === '+' ? cur + n : m[1] === '-' ? cur - n : m[1] === '*' ? cur * n : n ? cur / n : cur;
   if (type === 'direction') v = ((v % 360) + 360) % 360;
+  if (type === 'length') return writeLength(unit === 'ft' ? v * FOOT : v, current);
   v = type === 'int' ? Math.round(v) : Math.round(v * 100) / 100;
   return String(v);
 }
@@ -139,7 +143,7 @@ function isValid(type: FieldType, v: string): boolean {
   if (!v) return true;
   if (NUMERIC.has(type) && FORMULA.test(v)) return true;
   switch (type) {
-    case 'length': return /^-?\d+(\.\d+)?( ?m)?$/.test(v);
+    case 'length': return parseLength(v) !== undefined;
     case 'int': return /^-?\d+$/.test(v);
     case 'direction': return CARDINALS.has(v.toUpperCase()) || (/^\d+(\.\d+)?$/.test(v) && Number(v) <= 360);
     case 'colour': return CSS.supports('color', v.split(';')[0].trim());
@@ -268,7 +272,10 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
     const sugHint = sug ? tr('Не задано — у {source}: {value}. Tab — подставить.', { source: sug.from.label, value: sug.value }) : '';
     const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || defHint || sugHint || was || field.tag)}"${
       sug ? ` data-suggest="${esc(sug.value)}"` : ''}`;
-    const shown = inherited ?? def?.value ?? sug?.value;
+    const unit = lengthUnitOf(value || inherited);
+    // Умолчание считается в метрах, поле — в своей единице
+    const defShown = def && field.type === 'length' ? lengthNumber(Number(def.value), unit) : def?.value;
+    const shown = inherited ?? defShown ?? sug?.value;
     const grey = inherited ? ' class="inherited"' : def ? ' class="inherited defaulted"' : sug ? ' class="suggested"' : '';
     const badge = (input: string) => withBadge(input, hint || defHint || sugHint, def ? ICON_DEFAULT : sug ? ICON_SUGGEST : ICON_INHERIT);
     let control: string;
@@ -289,7 +296,8 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
       control = `<span class="colour-field"><input type="color" value="${toHex(value || shown)}" data-picker-for="${esc(field.tag)}"${grey} />
         ${badge(`<input type="text" ${common} value="${esc(value)}" placeholder="${esc(shown ?? tr('#rrggbb или имя'))}" />`)}</span>`;
     } else {
-      control = badge(`<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${sug ? grey : ''} value="${esc(value)}" placeholder="${esc(shown ?? field.placeholder ?? '')}" />`);
+      const input = `<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${sug ? grey : ''} value="${esc(value)}" placeholder="${esc(shown ?? field.placeholder ?? '')}"${field.type === 'length' ? ` data-unit="${unit}"` : ''} />`;
+      control = badge(field.type === 'length' ? lengthField(input, unit, value || shown || '') : input);
       if (field.type === 'direction') control = directionField(control);
       if (field.type === 'int') control = stepper(control);
     }
@@ -355,7 +363,9 @@ export function renderMultiTagForm(keys: string[], session: EditSession, suggest
       control = `<span class="colour-field"><input type="color" value="${toHex(value || vs.find(Boolean))}" data-picker-for="${esc(field.tag)}"${cls} />
         <input type="text" ${common}${cls} value="${esc(value)}" placeholder="${mixed ? tr('разные') : tr('#rrggbb или имя')}" /></span>`;
     } else {
-      control = `<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${cls} value="${esc(value)}" placeholder="${esc(mixed ? tr('разные') : field.placeholder ?? '')}" />`;
+      const unit = lengthUnitOf(value);
+      const input = `<input type="text" inputmode="${field.type === 'int' ? 'numeric' : 'text'}" ${common}${cls} value="${esc(value)}" placeholder="${esc(mixed ? tr('разные') : field.placeholder ?? '')}"${field.type === 'length' ? ` data-unit="${unit}"` : ''} />`;
+      control = field.type === 'length' ? lengthField(input, unit, value) : input;
       if (field.type === 'direction') control = directionField(control);
       if (field.type === 'int') control = stepper(control);
     }
@@ -369,6 +379,11 @@ export function renderMultiTagForm(keys: string[], session: EditSession, suggest
  * Поле со списком частых значений и своим вводом. Свой список вместо datalist: тот прячет варианты,
  * не совпадающие с введённым, и стрелку показывает только при наведении.
  */
+/** Поле длины с серой подписью единицы; подпись прячется, когда единица написана в самом поле. */
+export function lengthField(input: string, unit: LengthUnit, value: string): string {
+  return `<span class="length-field">${input}<span class="length-unit"${hasOwnUnit(value) ? ' hidden' : ''}>${unit === 'ft' ? 'ft' : tr('м')}</span></span>`;
+}
+
 function combo(field: Field, common: string, value: string, placeholder: string, cls: string, inherited?: string): string {
   // Нестандартное значение из данных — тоже в списке, чтобы его было видно
   const options = [...new Set([...(value && !field.options!.includes(value) ? [value] : []), ...field.options!])];
@@ -421,7 +436,7 @@ function roofOnTop(before: Record<string, string>, after: Record<string, string>
   if (!height && before['building:levels'] === undefined) return;
   const pitched = roofShapeOf(after) !== 'flat';
   const apply = tag === 'roof:shape' ? pitched && roofShapeOf(before) === 'flat' : tag === 'roof:height' && pitched && height;
-  if (apply) after.height = num(computeHeights(before).wallTop + roofHeightOf(after));
+  if (apply) after.height = writeLength(computeHeights(before).wallTop + roofHeightOf(after), before.height);
 }
 
 /** Обработчики формы (делегирование на контейнер; вешается один раз). */
@@ -443,8 +458,9 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     const edits = keys.flatMap((key) => {
       const f = s.get(key);
       if (!f) return [];
-      const v = applyFormula(type as FieldType, input.value, f.tags[tag]);
-      if (v === undefined) return [];
+      const formula = applyFormula(type as FieldType, input.value, f.tags[tag]);
+      if (formula === undefined) return [];
+      const v = withUnit(formula, input.dataset.unit as LengthUnit | undefined);
       const tags = { ...f.tags };
       // Пустая «Часть здания» — по умолчанию yes (без тега объект перестал бы быть частью)
       const empty = FIELDS.find((x) => x.tag === tag)?.empty;
@@ -476,6 +492,8 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
   // Подсветка ошибок сразу при вводе, применение — по change (Enter или уход с поля)
   container.addEventListener('input', (e) => {
     const el = e.target as HTMLInputElement;
+    const unitEl = el.dataset.unit ? el.parentElement?.querySelector<HTMLElement>('.length-unit') : undefined;
+    if (unitEl) unitEl.hidden = hasOwnUnit(el.value || el.placeholder);
     if (el.dataset.tag && el.dataset.type) el.classList.toggle('invalid', !isValid(el.dataset.type as FieldType, el.value));
   });
   // Список «Части здания»: стрелка открывает и закрывает, выбор пишет значение и применяет

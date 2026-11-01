@@ -1,3 +1,4 @@
+import { fromInputUnit, showLength, unitLabel } from '../osm/units';
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit, SnapOpts } from '../render/buildings-layer';
 import { LEVEL_HEIGHT } from '../osm/heights';
@@ -275,7 +276,7 @@ export class PushTool {
     if (/^[\d.,-]$/.test(e.key)) { this.typed += e.key === ',' ? '.' : e.key; this.updateVcb(); return true; }
     if (e.key === 'Backspace') { this.typed = this.typed.slice(0, -1); this.updateVcb(); return true; }
     if (e.key === 'Enter') {
-      const v = Number(this.typed) * (this.levelsNow ? LEVEL_HEIGHT : 1);
+      const v = this.levelsNow ? Number(this.typed) * LEVEL_HEIGHT : fromInputUnit(Number(this.typed));
       if (!this.typed || !Number.isFinite(v) || !this.target) return true;
       // Без знака — в ту сторону, куда тянули курсором
       const dz = this.typed.startsWith('-') ? v : this.dz < 0 ? -v : v;
@@ -319,13 +320,13 @@ export class PushTool {
     const t = this.state === 'push' ? this.target : undefined;
     const levels = this.levelsNow;
     const shown = levels ? Math.round(this.dz / LEVEL_HEIGHT) : this.dz;
-    const value = this.typed || (shown >= 0 ? '+' : '') + (levels ? String(shown) : shown.toFixed(2));
+    const value = this.typed || (shown >= 0 ? '+' : '') + (levels ? String(shown) : showLength(shown));
     const locked = t && this.unitConstraint?.(t);
     const units = `<span class="vcb-units" title="${tr('Единицы сдвига верха и низа (Tab)')}">${(['m', 'levels'] as const)
-      .map((u) => `<button type="button" data-units="${u}"${locked && u !== locked ? ' aria-disabled="true"' : ''}${u === this.units ? ' class="active"' : ''}>${u === 'm' ? tr('м') : tr('этажи')}</button>`).join('')}</span>`;
+      .map((u) => `<button type="button" data-units="${u}"${locked && u !== locked ? ' aria-disabled="true"' : ''}${u === this.units ? ' class="active"' : ''}>${u === 'm' ? unitLabel() : tr('этажи')}</button>`).join('')}</span>`;
     const glue = glueSwitch(this.glue, tr('Общие с соседями углы стены: «с соседями» — соседи тянутся следом, «отдельно» — стена отделяется от них (D)'));
     this.vcb.innerHTML = t
-      ? `<span class="vcb-label">${{ top: tr('Верх'), bottom: tr('Низ'), side: tr('Стена') }[t.face]}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${levels ? tr('эт.') : tr('м')}
+      ? `<span class="vcb-label">${{ top: tr('Верх'), bottom: tr('Низ'), side: tr('Стена') }[t.face]}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${levels ? tr('эт.') : unitLabel()}
       <span class="vcb-axis">${this.snap ? tr('до точки') : t.face === 'side' ? tr('по нормали') : tr('по вертикали')}</span>${t.face === 'side' && this.glue && this.linked ? `<span class="vcb-axis vcb-linked">${trn(this.linked, 'тянет {n} соседа|тянет {n} соседей|тянет {n} соседей')}</span>` : ''}${t.face === 'side' ? glue : units}`
       : `<span class="vcb-label">${tr('Сдвиг')}</span>${units}${glue}`;
   }

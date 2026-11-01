@@ -1,3 +1,4 @@
+import { fromInputUnit, showLength, unitLabel } from '../osm/units';
 import { localAxes, type AxisRing } from './local-axes';
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit, SnapKind } from '../render/buildings-layer';
@@ -421,7 +422,7 @@ export class DrawTool {
 
   /** Число + Enter: длина стороны (полигон, первая сторона по трём точкам) или «ширина;глубина». */
   private applyTyped() {
-    const nums = this.typed.split(';').map(Number);
+    const nums = this.typed.split(';').map((v) => fromInputUnit(Number(v)));
     this.typed = '';
     if (nums.some((n) => !Number.isFinite(n))) { this.updateVcb(); return; }
     const last = this.pts[this.pts.length - 1];
@@ -496,7 +497,7 @@ export class DrawTool {
       if (len < 0.05) continue;
       const px = this.layer.focusProject(new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, this.z));
       if (!px) continue;
-      html += `<span class="draw-dim${i === r.current ? ' current' : ''}" style="left:${px[0].toFixed(1)}px;top:${px[1].toFixed(1)}px">${len.toFixed(2)} ${tr('м')}</span>`;
+      html += `<span class="draw-dim${i === r.current ? ' current' : ''}" style="left:${px[0].toFixed(1)}px;top:${px[1].toFixed(1)}px">${showLength(len)} ${unitLabel()}</span>`;
     }
     this.dims.innerHTML = html;
   }
@@ -547,14 +548,14 @@ export class DrawTool {
     if (ROUND.includes(this.shape)) {
       label = tr('Радиус');
       const c = this.shape === 'circle' ? this.circleOf([...this.pts, this.cursor]) : undefined;
-      value = (c ? c.r : Math.hypot(this.cursor[0] - last[0], this.cursor[1] - last[1])).toFixed(2);
+      value = showLength(c ? c.r : Math.hypot(this.cursor[0] - last[0], this.cursor[1] - last[1]));
     } else if (this.shape === 'rect' && !(this.rectMode === 'three' && this.pts.length === 1)) {
       const r = this.rectRing([...this.pts, this.cursor]);
       const side = (i: number) => r && r.length === 4 ? Math.hypot(r[i + 1][0] - r[i][0], r[i + 1][1] - r[i][1]) : 0;
       label = this.rectMode === 'three' ? tr('Ширина') : tr('Размер');
-      value = this.rectMode === 'three' ? side(1).toFixed(2) : `${side(0).toFixed(2)}; ${side(1).toFixed(2)}`;
-    } else value = Math.hypot(this.cursor[0] - last[0], this.cursor[1] - last[1]).toFixed(2);
-    this.vcb.innerHTML = `<span class="vcb-label">${label}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || value}</span> ${tr('м')}
+      value = this.rectMode === 'three' ? showLength(side(1)) : `${showLength(side(0))}; ${showLength(side(1))}`;
+    } else value = showLength(Math.hypot(this.cursor[0] - last[0], this.cursor[1] - last[1]));
+    this.vcb.innerHTML = `<span class="vcb-label">${label}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || value}</span> ${unitLabel()}
       <span class="vcb-axis">${this.snap ? tr('привязка') : this.axis === 0 ? tr('по оси X') : this.axis === 1 ? tr('по оси Y') : ''}${this.locked !== undefined ? ' (Shift)' : ''}</span>`;
   }
 

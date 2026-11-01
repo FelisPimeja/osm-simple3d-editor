@@ -81,6 +81,7 @@ import { deprecations, idFieldLabel, idOptions, loadDeprecated, loadPresets, mat
 import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, setDateFields, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
+import { fromInputUnit, showLength, unitLabel, hasOwnUnit, lengthUnitOf, setUnitSystem, unitSystem, withUnit, writeLength, type LengthUnit, type UnitSystem } from './osm/units';
 import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from './settings';
 import { LOADER_TIMING, CUBE_SHAPES, MorphLoader } from './view/morph-loader';
 import { createUnderlay, deleteUnderlay, fitToBuilding, fitToView, isUnderlayFile, loadUnderlays, saveUnderlay, type Underlay } from './view/underlays';
@@ -2366,8 +2367,8 @@ function updateTracking() {
   const live = t && t.axis !== undefined && t.dist !== undefined;
   trackVcb.hidden = !t || (!trackTyped && !live);
   if (trackVcb.hidden) return;
-  const value = trackTyped || Math.abs(t!.dist ?? 0).toFixed(2);
-  trackVcb.innerHTML = `<span class="vcb-label">${tr('От вершины')}</span><span class="vcb-value${trackTyped ? ' typed' : ''}">${value}</span> ${tr('м')}
+  const value = trackTyped || showLength(Math.abs(t!.dist ?? 0));
+  trackVcb.innerHTML = `<span class="vcb-label">${tr('От вершины')}</span><span class="vcb-value${trackTyped ? ' typed' : ''}">${value}</span> ${unitLabel()}
     <span class="vcb-axis">${tr('Enter — отложить точку, минус — в обратную сторону, Esc — сбросить')}</span>`;
 }
 
@@ -2396,7 +2397,7 @@ function trackKey(e: KeyboardEvent): boolean {
     return true;
   }
   if (e.key === 'Enter') {
-    const v = Number(trackTyped);
+    const v = fromInputUnit(Number(trackTyped));
     if (Number.isFinite(v) && trackAxis) {
       overpassLayer.placeTracked(v, trackAxis.axis, trackAxis.side);
       trackTyped = '';
@@ -2447,7 +2448,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
     snapEl.hidden = !currentSnap;
     if (currentSnap) {
       snapEl.className = `snap-marker ${currentSnap.kind}`;
-      snapEl.dataset.label = currentSnap.kind === 'tracking' ? `${Math.abs(currentSnap.dist ?? 0).toFixed(2)} ${tr('м')}` : currentSnap.label ?? SNAP_LABELS[currentSnap.kind];
+      snapEl.dataset.label = currentSnap.kind === 'tracking' ? `${showLength(Math.abs(currentSnap.dist ?? 0))} ${unitLabel()}` : currentSnap.label ?? SNAP_LABELS[currentSnap.kind];
       snapEl.style.left = `${currentSnap.point[0]}px`;
       snapEl.style.top = `${currentSnap.point[1]}px`;
     }
@@ -2959,7 +2960,7 @@ function mergeStacked(parts: Feature3D[], g: EditGroup | undefined): string | un
   // Крыша (building:part=roof) со стенами под ней — уже не просто крыша: вид части — от нижней
   if (tags['building:part'] === 'roof' && lower.tags['building:part'] !== 'roof') tags['building:part'] = lower.tags['building:part'] ?? 'yes';
   // Верх задан этажами, а низ — метрами (или наоборот): верх в метрах тоже, иначе этажи считались бы от земли не так
-  if (tags.height === undefined && tags['building:levels'] === undefined) tags.height = String(Math.round(order[order.length - 1].h.top * 100) / 100);
+  if (tags.height === undefined && tags['building:levels'] === undefined) tags.height = writeLength(order[order.length - 1].h.top, tags.min_height);
   const others = parts.filter((f) => f !== keeper);
   const edits: ObjectEdit[] = [{ key: keeper.key, tags }, ...others.map((f) => ({ key: f.key, delete: true }))];
   if (g) edits.push(groupMembersEdit(g, g.relMembers.filter((m) => !others.some((f) => f.key === `${m.type}/${m.ref}`))));
@@ -3255,8 +3256,8 @@ const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
       out['building:levels'] = String(level);
       if (level > 0) out['building:min_level'] = String(level);
     } else {
-      out.height = fmt(t.z);
-      if (t.z > 0.01) out.min_height = fmt(t.z);
+      out.height = writeLength(t.z, tags.height);
+      if (t.z > 0.01) out.min_height = writeLength(t.z, tags.height);
     }
     return shape.length === 1 && shape[0].length === 1 ? createDrawn(shape[0][0], t.z, out) : createDrawnMultipolygon(shape, t.z, out);
   },
@@ -3870,8 +3871,8 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
   const fmt = (v: number) => String(Math.round(v * 100) / 100);
   // Всё нарисованное в режиме здания — части этого здания (и снаружи контура: контур потом расширяется
   // кнопкой «Обновить контур»); у отдельного здания — в новом отношении
-  const tags: Record<string, string> = tagsFor ?? { 'building:part': 'yes', height: fmt(z) };
-  if (!tagsFor && z > 0.01) tags.min_height = fmt(z);
+  const tags: Record<string, string> = tagsFor ?? { 'building:part': 'yes', height: writeLength(z) };
+  if (!tagsFor && z > 0.01) tags.min_height = writeLength(z);
   const part: Feature3D = { key, type: 'way', id: wayId, version: 0, kind: 'part', tags,
     polygons: [{ outer: ids.map((id) => coord.get(id)!), inners: [], outerIds: ids, innerIds: [] }], hasParts: false };
   const edits: Parameters<typeof session.editMany>[0] = [
@@ -4301,7 +4302,7 @@ function splitAtHeightIn(key: string, z: number, pending: EditGroup | undefined)
       ways: relMembers.map((m) => ({ id: m.ref, role: m.role, nodes: lineNodes.get(m.ref)! })), relMembers };
     return created;
   };
-  const fmt = (n: number) => `${Math.round(n * 100) / 100} ${tr('м')}`;
+  const fmt = (n: number) => `${showLength(n)} ${unitLabel()}`;
 
   if (solo) {
     const parts = [copyOf(lower), copyOf(upper)];
@@ -7297,10 +7298,9 @@ function levelSafeEdits(keys: string[], edits: ObjectEdit[] | string, moves: Map
 function shiftHeights(tags: Record<string, string>, dz: number): Record<string, string> {
   const h = computeHeights(tags);
   const out = { ...tags };
-  const fmt = (v: number) => String(Math.round(v * 100) / 100);
   const min = h.min + dz;
-  if (min > 1e-4 || tags.min_height) out.min_height = fmt(min); else delete out.min_height;
-  out.height = fmt(h.top + dz);
+  if (min > 1e-4 || tags.min_height) out.min_height = writeLength(min, tags.min_height ?? tags.height); else delete out.min_height;
+  out.height = writeLength(h.top + dz, tags.height);
   return out;
 }
 
@@ -8453,13 +8453,13 @@ function renderRoomWallCard(walls: RoomWall[]) {
     + `<input type="text" data-room-wall-tag="${k}" placeholder="${esc(placeholder)}" spellcheck="false" autocomplete="off"></label>`;
   infoEl.insertAdjacentHTML('beforeend', `<div class="tag-form">${row(tr('Вид'), 'indoor', 'wall')}${row(tr('Этаж'), 'level', room.tags.level ?? String(shownLevel!.n))}`
     + `<label class="tag-row"><span title="wall">${tr('Тип стены')}</span><select data-room-wall-tag="wall"><option value="">—</option>${WALL_VALUES.map((v) => `<option value="${v}">${esc(WALL_LABELS[v])}</option>`).join('')}</select></label>`
-    + `${row(tr('Высота, м'), 'height', '—')}${row(tr('Материал'), 'material', '—')}</div>`
+    + `${row(tr('Высота'), 'height', '—')}${row(tr('Материал'), 'material', '—')}</div>`
     + `<p class="hint">${tr('Стена построена по контуру indoor=room. Изменение любого поля создаст здесь линейную стену с этими значениями.')}</p>`);
   for (const input of infoEl.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-room-wall-tag]')) input.addEventListener('change', () => {
-    const k = input.dataset.roomWallTag!, value = input.value.trim();
+    const k = input.dataset.roomWallTag!, value = k === 'height' ? withUnit(input.value.trim(), lengthUnitOf()) : input.value.trim();
     if (!value) return;
     const own: Record<string, string> = { [k]: value };
-    if (k === 'wall' && value === 'counter') own.height = COUNTER_HEIGHT;
+    if (k === 'wall' && value === 'counter') own.height = writeLength(COUNTER_HEIGHT);
     overrideRoomWalls(own);
   });
 }
@@ -8598,7 +8598,7 @@ function entranceDoors(fs: IndoorFeature[]): boolean {
 /** Обработчики формы: правка поля — у всех выбранных одним шагом истории. */
 function bindIndoorForm(fs: IndoorFeature[]) {
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
-    input.addEventListener('change', () => setIndoorTags(fs.map((f) => ({ key: indoorKey(f.key), tags: { ...f.tags, [input.dataset.indoorTag!]: input.value } })), input.dataset.indoorTag));
+    input.addEventListener('change', () => setIndoorTags(fs.map((f) => ({ key: indoorKey(f.key), tags: { ...f.tags, [input.dataset.indoorTag!]: indoorInputValue(input) } })), input.dataset.indoorTag));
   }
   const levelInput = infoEl.querySelector<HTMLInputElement>('[data-indoor-tag="level"]');
   if (levelInput) { bindLevelHint(levelInput); bindLevelPicker(levelInput, fs); }
@@ -8678,7 +8678,9 @@ const INDOOR_LABELS: Record<string, string> = {
 /** Уточнение стены (wall=*). counter — прилавок: низкая стена, наше соглашение, в OSM устоявшегося тега нет. */
 const WALL_VALUES = ['counter'];
 const WALL_LABELS: Record<string, string> = { counter: tr('Прилавок') };
-const COUNTER_HEIGHT = '1.1';
+const COUNTER_HEIGHT = 1.1;
+/** Высота нового ограждения, м: типичная высота перил. */
+const RAILING_HEIGHT = 1.1;
 const ROOM_VALUES = ['corridor', 'shop', 'office', 'toilets', 'toilet', 'stairs', 'elevator', 'restaurant', 'storage', 'class', 'conference', 'kitchen', 'waiting', 'entrance', 'auditorium', 'bedroom', 'living_room', 'bathroom', 'reception', 'classroom', 'laboratory', 'utility', 'hall', 'lobby', 'lecture_hall', 'workshop', 'library', 'lounge', 'computer', 'dressing', 'dining', 'foodcourt', 'archive', 'security', 'sports', 'yes'];
 const ROOM_LABELS: Record<string, string> = {
   corridor: tr('Коридор'), shop: tr('Магазин'), office: tr('Офис'), toilets: tr('Туалеты'), toilet: tr('Туалет'), stairs: tr('Лестница'),
@@ -8696,14 +8698,18 @@ const ROOM_LABELS: Record<string, string> = {
 function indoorFieldLabel(k: string, fs: IndoorFeature[]): string {
   const level = fs.every((f) => f.kind === 'level');
   const own: Record<string, string> = {
-    height: level ? tr('Высота этажа, м') : tr('Высота, м'), 'level:ref': tr('Обозначение этажа'), name: tr('Название'), ref: tr('Номер'),
+    height: level ? tr('Высота этажа') : tr('Высота'), 'level:ref': tr('Обозначение этажа'), name: tr('Название'), ref: tr('Номер'),
     // У iD и indoor, и room — «Тип»: рядом не различить
-    indoor: tr('Вид'), room: tr('Назначение'), width: tr('Ширина, м'), diameter: tr('Диаметр'),
+    indoor: tr('Вид'), room: tr('Назначение'), width: tr('Ширина'), diameter: tr('Диаметр'),
     // У iD — «Тип»: рядом с типом двери не различить
     entrance: tr('Тип входа'), wall: tr('Тип стены'),
   };
   return own[k] ?? idFieldLabel(k) ?? k;
 }
+
+/** Поля длины в форме indoor: голое число получает единицу поля. */
+const INDOOR_LENGTHS = new Set(['height', 'width', 'diameter', 'depth', 'max_depth']);
+const indoorInputValue = (input: HTMLInputElement) => withUnit(input.value, input.dataset.unit as LengthUnit | undefined);
 
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
   const closedWalls=fs.every(f=>f.kind==='wall' && !f.tags.barrier && f.key.startsWith('way/') && !!f.line && f.polygons.length===1 && !!f.polygons[0].outerIds && f.polygons[0].outerIds!.length>=4 && f.polygons[0].outerIds![0]===f.polygons[0].outerIds!.at(-1));
@@ -8721,8 +8727,11 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
     if (options) return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : k === 'entrance' ? tr('не вход') : '—',
         k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : k === 'room' ? ROOM_LABELS : k === 'wall' ? WALL_LABELS : undefined, k) + '</label>';
+    const unit = INDOOR_LENGTHS.has(k) ? lengthUnitOf(value) : undefined;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
-      + `<input type="text" data-indoor-tag="${k}" value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : placeholders[k] ?? (k === 'diameter' ? '2.4 m' : '—')}" spellcheck="false" autocomplete="off"></label>`;
+      + (unit ? '<span class="length-field">' : '')
+      + `<input type="text" data-indoor-tag="${k}"${unit ? ` data-unit="${unit}"` : ''} value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : placeholders[k] ?? '—'}" spellcheck="false" autocomplete="off">`
+      + (unit ? `<span class="length-unit"${hasOwnUnit(value) ? ' hidden' : ''}>${unit === 'ft' ? 'ft' : tr('м')}</span></span>` : '') + '</label>';
   }).join('');
   const hint = fs.every(isDoor) ? `<p class="hint">${tr('Для перемещения дверей используйте инструмент «Переместить» (M).')}</p>` : '';
   return `<div class="tag-form">${rows}</div>${hint}`;
@@ -9409,8 +9418,8 @@ function setIndoorTags(edits: { key: string; tags: Record<string, string> }[], c
     // Ресепшн и раздевалка размечаются и room, и amenity: второй тег следует за выбранным в поле значением
     // Прилавок низкий: высота по умолчанию приходит с типом и уходит с ним, своя высота остаётся
     if (changedTag === 'wall') {
-      if (tags.wall === 'counter') tags.height ??= COUNTER_HEIGHT;
-      else if (tags.height === COUNTER_HEIGHT) delete tags.height;
+      if (tags.wall === 'counter') tags.height ??= writeLength(COUNTER_HEIGHT);
+      else if (Math.abs((parseLength(tags.height) ?? 0) - COUNTER_HEIGHT) < 0.01) delete tags.height;
     }
     if (changedTag === 'room') {
       const paired = ROOM_PAIRED_AMENITY[tags.room];
@@ -9611,7 +9620,7 @@ function renderFreeArea(a: { n: number; polygon: Polygon }) {
     + indoorForm([stub], { indoor: 'area' })
     + `<p class="hint">${tr('В OSM пустота ничем не размечена: правка любого поля создаст объект (по умолчанию indoor=area) с этими тегами.')}</p>`;
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
-    input.addEventListener('change', () => { if (input.value.trim()) createFromFreeArea({ [input.dataset.indoorTag!]: input.value.trim() }); });
+    input.addEventListener('change', () => { if (input.value.trim()) createFromFreeArea({ [input.dataset.indoorTag!]: indoorInputValue(input).trim() }); });
   }
   const levelInput = infoEl.querySelector<HTMLInputElement>('[data-indoor-tag="level"]');
   if (levelInput) { bindLevelHint(levelInput); bindLevelPicker(levelInput, [stub], createFromFreeArea); }
@@ -10001,7 +10010,7 @@ function createIndoorWallLine(pts: [number, number][], own?: Record<string, stri
   const nodes = pts.map((q) => nodeFor(overpassLayer.focusToLngLat(q[0], q[1])! as LonLat)).filter((q, i, a) => i === 0 || q.id !== a[i - 1].id);
   if (nodes.length < 2) return tr('Стене нужны хотя бы две разные точки.');
   const key = `way/${nextNewId--}`, tags: Record<string,string> = own ? { indoor: 'wall', level: String(shownLevel.n), ...own } : linearPreset==='railing'
-    ? {barrier:'fence',fence_type:'railing',indoor:'yes',level:String(shownLevel.n)} : { indoor: 'wall', level: String(shownLevel.n) };
+    ? {barrier:'fence',fence_type:'railing',height:writeLength(RAILING_HEIGHT),indoor:'yes',level:String(shownLevel.n)} : { indoor: 'wall', level: String(shownLevel.n) };
   const line = { ids: nodes.map((q) => q.id), coords: nodes.map((q) => q.p) };
   const polygons = [{ outer: line.coords, outerIds: line.ids, inners: [] }];
   const edits: ObjectEdit[] = [{ key, create: { key, version: 0, tags, line, polygons } }];
@@ -12905,7 +12914,7 @@ function renderSelectedImpl() {
     const fs = l ? levelFeatures(l) : [];
     if (fs.length) bindIndoorForm(fs);
     else if (l) for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
-      input.addEventListener('change', () => { if (input.value.trim()) levelFromOutline(l.n, { [input.dataset.indoorTag!]: input.value.trim() }); });
+      input.addEventListener('change', () => { if (input.value.trim()) levelFromOutline(l.n, { [input.dataset.indoorTag!]: indoorInputValue(input).trim() }); });
     }
     return;
   }
@@ -13578,6 +13587,23 @@ const settingsDialog = document.getElementById('settings-dialog') as HTMLDialogE
 const settingsSyncEl = document.getElementById('settings-sync')!;
 const langSelect = document.getElementById('lang-select') as HTMLSelectElement;
 const keepGfxToggle = document.getElementById('keep-gfx') as HTMLInputElement;
+const unitsSelect = document.getElementById('units-select') as HTMLSelectElement;
+registerSetting({
+  key: 'units',
+  local: () => (unitSystem() === 'imperial' ? 'imperial' : undefined),
+  apply: (v) => {
+    const next: UnitSystem = v === 'imperial' ? 'imperial' : 'metric';
+    if (next === unitSystem()) return 'same';
+    setUnitSystem(next);
+    renderSelected();
+    return 'live';
+  },
+});
+unitsSelect.addEventListener('change', () => {
+  setUnitSystem(unitsSelect.value as UnitSystem);
+  void saveSetting('units');
+  renderSelected();
+});
 keepGfxToggle.addEventListener('change', () => {
   setKeepGraphics(keepGfxToggle.checked);
   void saveSetting('graphics'); // включили — записать текущие, выключили — убрать из профиля
@@ -13601,6 +13627,7 @@ function renderSettingsSync() {
 document.getElementById('settings-open')!.addEventListener('click', () => {
   langSelect.value = lang;
   keepGfxToggle.checked = keepGraphics();
+  unitsSelect.value = unitSystem();
   renderSettingsSync();
   settingsDialog.showModal();
 });

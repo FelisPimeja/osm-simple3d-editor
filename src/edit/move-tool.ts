@@ -1,3 +1,4 @@
+import { fromInputUnit, showLength, unitLabel } from '../osm/units';
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import { tr } from '../i18n';
@@ -232,7 +233,7 @@ export class MoveTool {
     if (/^[\d.,-]$/.test(e.key)) { this.typed += e.key === ',' ? '.' : e.key; this.updateVcb(); return true; }
     if (e.key === 'Backspace') { this.typed = this.typed.slice(0, -1); this.updateVcb(); return true; }
     if (e.key === 'Enter') {
-      const dist = Number(this.typed);
+      const dist = fromInputUnit(Number(this.typed));
       if (!this.typed || !Number.isFinite(dist)) return true;
       const axes = this.axes()!;
       // Направление — ось (в сторону курсора) или текущее направление движения
@@ -316,8 +317,8 @@ export class MoveTool {
     this.vcb.hidden = false;
     const along = this.locked !== undefined ? tr('ось {axis} (зафиксирована)', { axis: AXIS_NAMES[this.locked] })
       : this.axis !== undefined ? tr('ось {axis}', { axis: AXIS_NAMES[this.axis] }) : tr('свободно');
-    const value = this.typed || this.offset.length().toFixed(2);
-    this.vcb.innerHTML = `<span class="vcb-label">${tr('Расстояние')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${tr('м')}
+    const value = this.typed || showLength(this.offset.length());
+    this.vcb.innerHTML = `<span class="vcb-label">${tr('Расстояние')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${unitLabel()}
       <span class="vcb-axis">${this.snap ? tr('к точке · {along}', { along }) : along}</span>${
       // Только подложки — соседей нет
       this.keys.size ? `${this.glue ? linkedNote(this.linked) : ''}${glueSwitch(this.glue)}` : ''}`;

@@ -16,7 +16,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
-import { computeHeights, type Heights } from '../osm/heights';
+import { computeHeights, looseLength, type Heights } from '../osm/heights';
 import { clipAbove, prepareSolid, sectionOf, trimCoplanarWalls, trimTriangles, type PreparedSolid } from './shell-trim';
 import { nextFrameSlot } from './frame-budget';
 import { trimInWorker, trimSync, trimWorkersAvailable, type TrimJob, type TrimResult } from './shell-trim-pool';
@@ -67,7 +67,7 @@ const DOOR_SNAP = 0.15;
 export const TOILET_DOOR_WIDTH = 0.8;
 /** Ширина из тега width двери (м), если правдоподобна. */
 const tagWidth = (tags?: Record<string, string>) => {
-  const w = parseFloat(tags?.width ?? '');
+  const w = looseLength(tags?.width);
   return w >= 0.5 && w <= 4 ? w : undefined;
 };
 /** Перемычка во всю толщину — только в просвете размером с дверь (до двустворчатой) в стене толщиной до 0,5 м:

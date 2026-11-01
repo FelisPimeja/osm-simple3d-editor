@@ -1,3 +1,4 @@
+import { fromInputUnit, toInputUnit, unitLabel } from '../osm/units';
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import type { UnderlayTarget } from './underlay-target';
@@ -205,7 +206,7 @@ export class ScaleTool {
     if (e.key === 'Enter') {
       const pct = this.typed.endsWith('%');
       // По расстоянию — число в метрах: масштаб — оно, делённое на текущую длину отрезка
-      const k = this.mode === 'distance' ? Number(this.typed) / this.refLen : Number(pct ? this.typed.slice(0, -1) : this.typed) / (pct ? 100 : 1);
+      const k = this.mode === 'distance' ? fromInputUnit(Number(this.typed)) / this.refLen : Number(pct ? this.typed.slice(0, -1) : this.typed) / (pct ? 100 : 1);
       if (this.typed && Number.isFinite(k) && k >= MIN_FACTOR) {
         this.factor = k;
         this.matrix = this.lift(this.factorMatrix(k));
@@ -385,8 +386,8 @@ export class ScaleTool {
     let value = '';
     if (this.state === 'scale' && this.mode === 'distance') {
       // Длина отрезка сейчас (введённая — какой станет), м, и множитель
-      const k = this.typed ? Number(this.typed) / this.refLen : this.factor;
-      value = `<span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || fmt(this.refLen * this.factor)}</span> ${tr('м')}<span class="vcb-axis">${
+      const k = this.typed ? fromInputUnit(Number(this.typed)) / this.refLen : this.factor;
+      value = `<span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || fmt(toInputUnit(this.refLen * this.factor))}</span> ${unitLabel()}<span class="vcb-axis">${
         tr('длина отрезка · ×{k}', { k: Number.isFinite(k) ? fmt(k) : '—' })}</span>`;
     } else if (this.state === 'scale') {
       const along = this.axis ? tr('вдоль оси здания (Shift)') : this.snap ? tr('привязка') : tr('равномерно');

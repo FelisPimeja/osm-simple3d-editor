@@ -14,15 +14,28 @@ export interface Heights {
   source: 'height' | 'levels' | 'default';
 }
 
-/** Разбирает '12', '12 m', '40 ft', "40'", `7'4"` (футы и дюймы). */
+export const FOOT = 0.3048;
+const INCH = 0.0254;
+/** Единицы длины из вики Map_features/Units с их псевдонимами, в метрах. */
+const LENGTH_UNITS: Record<string, number> = {
+  m: 1, metre: 1, metres: 1, meter: 1, meters: 1,
+  km: 1000, kilometre: 1000, kilometres: 1000, kilometer: 1000, kilometers: 1000,
+  mi: 1609.344, mile: 1609.344, miles: 1609.344, nmi: 1852,
+  ft: FOOT, feet: FOOT, foot: FOOT, "'": FOOT, yd: 0.9144, yds: 0.9144,
+};
+
+/** Разбирает '12', '12 m', '0.2 km', '40 ft', "40'", `7'4"` (футы и дюймы); результат в метрах. */
 export function parseLength(v?: string): number | undefined {
-  const fi = v?.trim().match(/^(\d+)'(\d+(?:\.\d+)?)"$/);
-  if (fi) return Number(fi[1]) * 0.3048 + Number(fi[2]) * 0.0254;
-  const m = v?.trim().match(/^(-?\d+(?:\.\d+)?)\s*(m|ft|')?$/);
+  const fi = v?.trim().match(/^(\d+)'\s*(\d+(?:\.\d+)?)"$/);
+  if (fi) return Number(fi[1]) * FOOT + Number(fi[2]) * INCH;
+  const m = v?.trim().match(/^(-?\d+(?:\.\d+)?)\s*([a-z]+|')?$/i);
   if (!m) return;
-  const n = Number(m[1]);
-  return m[2] === 'ft' || m[2] === "'" ? n * 0.3048 : n;
+  const k = m[2] ? LENGTH_UNITS[m[2].toLowerCase()] : 1;
+  return k === undefined ? undefined : Number(m[1]) * k;
 }
+
+/** Как parseLength, но из нестрогого значения ('3;4', '3-4') берёт первое число; нет числа — NaN. */
+export const looseLength = (v?: string): number => parseLength(v) ?? parseFloat(v ?? '');
 
 function parseNum(v?: string): number | undefined {
   const n = v === undefined ? NaN : Number(v);

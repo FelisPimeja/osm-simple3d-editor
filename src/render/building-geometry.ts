@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Heights } from '../osm/heights';
+import { looseLength, type Heights } from '../osm/heights';
 import { skeletonOf, type Skeleton } from './skeleton';
 import { tr } from '../i18n';
 import { extendGables, weldRoofSkeleton, restoreRoofBoundary } from './roof-gables';
@@ -793,7 +793,7 @@ const STEP_HEIGHT = 0.15;
 /** Число ступеней: step_count, иначе по step:height (по умолчанию 15 см). */
 function stepCount(tags: Record<string, string>, rise: number): number {
   const n = parseInt(tags['step_count'] ?? '', 10);
-  const sh = parseFloat(tags['step:height'] ?? '');
+  const sh = looseLength(tags['step:height']);
   const count = n > 0 ? n : Math.round(rise / (sh > 0 ? sh : STEP_HEIGHT));
   return Math.max(1, Math.min(count, 500));
 }

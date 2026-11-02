@@ -14,7 +14,7 @@ body:not(.mobile) #left-col {
 }
 body:not(.mobile) #left-col > #panel { grid-column: 2; grid-row: 1; max-height: 100%; }
 body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
-#right-col { right: 12px; }
+#right-col { right: 12px; z-index: 3; } /* выше атрибуции MapLibre (z-index: 2) */
 #toolbars { display: flex; flex-direction: column; gap: 8px; align-self: flex-start; }
 #toolbars:not(:has(.toolbar:not([hidden]))) { display: none; }
 .toolbar { display: flex; flex-direction: column; gap: 4px; padding: 4px; background: rgba(255,255,255,.95);
@@ -141,9 +141,9 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
   .maplibregl-ctrl-top-right { right: 0; }
 }
 #statusbar {
-  position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 2;
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 2;
   display: flex; flex-direction: column; align-items: center; gap: 4px; box-sizing: border-box;
-  max-width: calc(100% - 700px); padding: 6px 14px; border-radius: 8px;
+  width: max-content; max-width: calc(100% - 700px); padding: 6px 14px; border-radius: 8px;
   background: rgba(255,255,255,.96); box-shadow: 0 2px 8px rgba(0,0,0,.18); font-size: 14px; line-height: 1.35; pointer-events: none;
 }
 #statusbar:not(:has(#status:not(:empty), #op-indicator:not([hidden]), #loading-card:not([hidden]))) { display: none; }
@@ -165,7 +165,10 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 .status-line .status-copy { order: -1; margin-top: 1px; }
 .status-line:not(:has(#status:not(:empty))) { display: none; }
 .status-copy[data-done] { color: #15803d; }
-@media (max-width: 1000px) { #statusbar { width: max-content; max-width: calc(100% - 24px); bottom: 56px; } .vcb { bottom: calc(64px + var(--statusbar-h, 0px)); } .vcb.vcb-track { bottom: calc(104px + var(--statusbar-h, 0px)); } }
+body:not(.mobile) .vcb { box-sizing: border-box; bottom: calc(20px + var(--statusbar-h, 0px)); }
+/* Над основным полем инструмента, какой бы высоты оно ни стало */
+body:not(.mobile) .vcb.vcb-track { bottom: calc(28px + var(--statusbar-h, 0px) + var(--vcb-h, 0px)); }
+@media (max-width: 1000px) { body.mobile #statusbar { max-width: calc(100% - 24px); } body.mobile .vcb { bottom: calc(64px + var(--statusbar-h, 0px)); } body.mobile .vcb.vcb-track { bottom: calc(104px + var(--statusbar-h, 0px)); } }
 /* Мобильная версия: над карточкой здания и панелями, прижатыми к низу (отступ считает main.ts) */
 body.mobile #statusbar { bottom: calc(var(--mobile-bottom, 44px) + 16px); }
 /* Правая колонка (панель «Этажи») — над карточкой здания, а не под ней */

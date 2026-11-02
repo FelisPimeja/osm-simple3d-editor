@@ -13968,7 +13968,32 @@ if (josmMode) setTimeout(pollJosm, 2000);
 const statusbar = document.getElementById('statusbar')!;
 // В одной системе координат со строкой состояния (контейнер карты бывает выше окна)
 statusbar.after(...map.getContainer().querySelectorAll<HTMLElement>(':scope > .vcb'));
-new ResizeObserver(() => document.body.style.setProperty('--statusbar-h', `${statusbar.offsetHeight}px`)).observe(statusbar);
+/** По центру экрана; мешают панели на этой высоте — сдвиг ровно настолько, а не хватает места — перенос текста. */
+function fitBetweenPanels(el: HTMLElement) {
+  const s = el.style;
+  if (document.body.classList.contains('mobile')) { s.left = s.transform = s.maxWidth = s.visibility = ''; return; }
+  if (!el.offsetWidth) return;
+  const box = (el.offsetParent ?? document.body).getBoundingClientRect(), rect = el.getBoundingClientRect();
+  const panels = (id: string) => [...document.getElementById(id)!.children].map((c) => c.getBoundingClientRect())
+    .filter((r) => r.width && r.bottom > rect.top && r.top < rect.bottom);
+  // Раскрытая атрибуция (при загрузке MapLibre раскрывает её сам) — такое же препятствие; совсем не оставила места — строка прячется
+  const attrib = document.querySelector('.maplibregl-ctrl-attrib.maplibregl-compact-show')?.getBoundingClientRect();
+  const blocks = [...panels('right-col'), ...(attrib && attrib.top < rect.bottom ? [attrib] : [])];
+  const gap = 12;
+  const left = Math.max(0, ...panels('left-col').map((r) => r.right - box.left)) + gap;
+  const right = Math.min(box.width, ...blocks.map((r) => r.left - box.left)) - gap;
+  s.transform = 'none';
+  s.maxWidth = `${right - left}px`;
+  s.left = `${Math.max(left, Math.min((box.width - el.offsetWidth) / 2, right - el.offsetWidth))}px`;
+  s.visibility = right - left < 200 ? 'hidden' : '';
+}
+const vcbs = [...document.querySelectorAll<HTMLElement>('.vcb')];
+const statusbarWatch = new ResizeObserver(() => {
+  document.body.style.setProperty('--statusbar-h', `${statusbar.offsetHeight}px`);
+  for (const el of [statusbar, ...vcbs]) fitBetweenPanels(el);
+  document.body.style.setProperty('--vcb-h', `${Math.max(0, ...vcbs.filter((v) => !v.classList.contains('vcb-track')).map((v) => v.offsetHeight))}px`);
+});
+for (const el of [statusbar, ...vcbs, map.getContainer(), ...document.querySelectorAll('#left-col > *, #right-col > *, .maplibregl-ctrl-attrib')]) statusbarWatch.observe(el);
 
 /** Источник тайлов для текущего сервера: его /map API (свой кеш; у боевого — прежняя база кеша). */
 function tileSource(): TileSource {

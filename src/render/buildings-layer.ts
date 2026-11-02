@@ -3897,6 +3897,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (it) this.paintItem(g, it);
       }
       if (g.strokes || [prev, key].some((k) => k && g.byKey.has(k))) this.applyStrokes(g);
+      if (g.entrances.length && [prev, key].some((k) => k && g.byKey.has(k))) this.applyEntrances(g);
     }
     this.updateHiddenEdges();
     this.map?.triggerRepaint();
@@ -4710,7 +4711,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     const onShownWall = (q: Pt, z: number) => shown!.some(({ ring, min }) => min <= z + ENTRANCE_WALL_RISE && ring.some((a, i) => distToSegment(q, a, ring[(i + 1) % ring.length]) <= ENTRANCE_ON_WALL));
     // Узел в нескольких объектах (контур и часть, соседние части) — на самой низкой видимой стене
     const best = new Map<number, { place: EntrancePlace; rank: number }>();
+    // На карте вход красится вместе с выделенным зданием; в режиме здания выбирают сам вход
+    const lit = new Set<number>();
+    const onMap = g !== this.groups.get(FOCUS_GROUP);
     for (const it of g.items) {
+      if (onMap && (this.selected.has(it.feature.key) || this.hovered === it.feature.key)) {
+        for (const p of it.feature.polygons) for (const ids of [p.outerIds, ...(p.innerIds ?? [])]) ids?.forEach((id) => { if (tags.has(id)) lit.add(id); });
+      }
       // При выключенной дефолтной высоте у плоского объекта нет фасада для входа.
       if (!raiseDefault && computeHeights(it.tags).source === 'default') continue;
       const offstage = !!shown && g.hidden.has(it.feature.key);
@@ -4741,7 +4748,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       g.entrances.push(e);
       // План этажа рисует проём и маркер двери сам; вход ниже выбранного этажа — на сплошном фасаде, нужен прямоугольник
       if (onPlan(e)) continue;
-      const out = e.id === this.entranceSelected ? selected : plain;
+      const out = e.id === this.entranceSelected || lit.has(e.id) ? selected : plain;
       const w = (e.width ?? ENTRANCE_WIDTH) / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
       const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w];
       const z0 = e.z, z1 = e.z + ENTRANCE_HEIGHT;
@@ -4922,6 +4929,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (item) this.paintItem(g, item);
       }
       if (g.strokes || [...prev, ...this.selected].some((k) => g.byKey.has(k))) this.applyStrokes(g);
+      if (g.entrances.length && [...prev, ...this.selected].some((k) => g.byKey.has(k))) this.applyEntrances(g);
     }
     this.updateHiddenEdges();
     this.map?.triggerRepaint();

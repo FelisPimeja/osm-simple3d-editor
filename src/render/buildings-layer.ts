@@ -218,6 +218,8 @@ export interface IndoorLevel {
   items: IndoorItem[];
   /** Unfilled floor-level outlines for stair/escalator areas. */
   outlines?: IndoorItem[];
+  /** Проёмы линейных эскалаторов: вырез в полу без торца перекрытия. */
+  bareVoids?: LonLat[][][];
   /** Не рисуются, только подсветка выбора: помещения в несколько этажей выше своего пола (z — пол основания). */
   highlights?: IndoorItem[];
   escalators?: EscalatorItem[];
@@ -1688,6 +1690,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for(const it of this.level.outlines ?? [])for(const p of it.polygons)for(const r of [p.outer,...p.inners])addWallRing(r.map(g.toLocal),true);
       for (const it of this.level.items) if (!it.cutOnly && ['room','wall','column'].includes(it.kind))
         for (const p of it.polygons) for (const r of [p.outer, ...p.inners]) addWallRing(r.map(g.toLocal), !it.line);
+      for(const poly of this.level.bareVoids ?? [])for(const r of poly)addWallRing(r.map(g.toLocal),true);
       for (const lower of this.level.below ?? []) if (lower.cut >= this.level.floor - 1e-3)
         for (const it of lower.items) if (it.z < this.level.floor - 1e-3 && !it.cutOnly && ['room','wall','column'].includes(it.kind))
           for (const p of it.polygons) for (const r of [p.outer, ...p.inners]) addWallRing(r.map(g.toLocal), !it.line);

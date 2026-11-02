@@ -11094,6 +11094,7 @@ function renderLevelsImpl() {
     ...plan, floor: level!.floor,
     escalators, cutEscalators,
     voids: voids.map((v) => v.polygon).flat(),
+    bareVoids: voids.filter((v) => v.bare).flatMap((v) => v.polygon),
     // Пустота прорезает пол этажа и полы промежуточных этажей (у самого нижнего — пол атриума)
     voidCuts: voids.map((v) => ({
       polygon: v.polygon,
@@ -11107,7 +11108,7 @@ function renderLevelsImpl() {
 /** Пустоты (второй свет) этажа n здания: lon/lat; кеш — по зданию, данным и этажу. */
 /** Чем последний раз пересобраны перекрытия стеклянных частей здания режима. */
 let glassVoidsSig = '';
-type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[] }[]>;
+type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[]; bare?: boolean }[]>;
 /** Пустоты (второй свет) всех этажей здания, lon/lat; кеш — по зданию и данным. */
 const voidsCache = new Map<string, { sig: string; map: LevelVoids }>();
 function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
@@ -11140,7 +11141,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
       .map((f) => { const h = computeHeights(f.tags); return { polygons: f.polygons.map(poly), min: h.min, wallTop: h.wallTop }; });
     const plans = buildPlans(levels, parts, indoor.filter((f) => f.kind !== 'poi').map((f) => ({ kind: f.kind, levels: f.levels, floors: floorLevels(f), line: f.line, polygons: f.polygons.map(poly) })));
     for (const l of levels) {
-      const list = findVoids(l.n, plans).map((v) => ({ polygon: v.polygon.map((p) => p.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))), through: v.through }));
+      const list: NonNullable<ReturnType<LevelVoids['get']>> = findVoids(l.n, plans).map((v) => ({ polygon: v.polygon.map((p) => p.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))), through: v.through }));
       // Лифтовая шахта — сквозной проём до нижней остановки (через этажи без остановок тоже)
       for (const f of indoor.filter((f) => f.levels.length && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels) && isElevatorRoom(f, indoor))) {
         const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
@@ -11167,7 +11168,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
           if (len < 0.1) continue;
           const nx = -(b[1] - a[1]) / len * width * 0.55, ny = (b[0] - a[0]) / len * width * 0.55;
           const ring: [number, number][] = [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]];
-          list.push({ polygon: [[ring.map(geo)]], through });
+          list.push({ polygon: [[ring.map(geo)]], through, bare: true });
         }
       }
       if (list.length) out.set(l.n, list);

@@ -60,11 +60,13 @@ export function cutSolidWall(polys:WallPolygon[],at:Pt,face:[Pt,Pt],width:number
  return {pieces,gap,front:[a,center,b] as [Pt,Pt,Pt],normal};
 }
 
-export interface SolidDoorBinding { connector:IndoorFeature; walls:IndoorFeature[]; gap:Pt[]; face:[Pt,Pt] }
+export interface SolidDoorBinding { connector:IndoorFeature; walls:IndoorFeature[]; gap:Pt[]; face:[Pt,Pt]; jambLines:IndoorFeature[] }
+/** Unglued wall ends count as jambs when they touch the connector's end and stand this close to the door, m. */
+const JAMB_SNAP=0.1,JAMB_REACH=1;
 /** Recover the connection using shared OSM nodes, without private tags or session-only metadata. */
 export function findSolidDoorBinding(all:IndoorFeature[],door:IndoorFeature,local:(p:LonLat)=>Pt):SolidDoorBinding|undefined {
  if(!door.point) return;
- const id=Number(door.key.split('/')[1]);
+ const id=Number(door.key.split('/')[1]),doorAt=local(door.point);
  const connectors=all.filter(f=>f.kind==='wall'&&f.line&&!solidWall(f)&&f.levels.some(l=>door.levels.includes(l)));
  for(const connector of connectors){
   if(connector.polygons.length!==1) continue;
@@ -76,17 +78,27 @@ export function findSolidDoorBinding(all:IndoorFeature[],door:IndoorFeature,loca
   const sides=(node:number,at:Pt)=>all.filter(f=>solidWall(f)&&f.levels.some(l=>door.levels.includes(l))).flatMap(f=>f.polygons.flatMap(poly=>[poly.outer,...poly.inners].flatMap((ring,ri)=>{
    const rids=ri?poly.innerIds?.[ri-1]:poly.outerIds;if(!rids) return [];
    const count=f.line?ring.length-1:ring.length;
-   const out:{f:IndoorFeature;back:Pt;direction:Pt;length:number}[]=[];
-   for(let i=0;i<count;i++) if(rids[i]===node) for(const j of [(i+count-1)%count,(i+1)%count]){
-    const back=local(ring[j]),d=sub(back,at),length=Math.hypot(...d);
-    if(length>0.005&&Math.abs(dot(d,tangent))/length<0.02) out.push({f,back,direction:[d[0]/length,d[1]/length],length});
+   const out:{f:IndoorFeature;front:Pt;back:Pt;direction:Pt;length:number}[]=[];
+   for(let i=0;i<count;i++){
+    const front=local(ring[i]);
+    if(rids[i]!==node&&(Math.hypot(...sub(front,at))>JAMB_SNAP||Math.hypot(...sub(front,doorAt))>JAMB_REACH)) continue;
+    for(const j of [(i+count-1)%count,(i+1)%count]){
+     const back=local(ring[j]),d=sub(back,front),length=Math.hypot(...d);
+     if(length>0.005&&Math.abs(dot(d,tangent))/length<0.02) out.push({f,front,back,direction:[d[0]/length,d[1]/length],length});
+    }
    }
    return out;
   })));
   for(const sa of sides(ids[0],a).sort((x,y)=>x.length-y.length)){
    const sb=sides(ids.at(-1)!,b).find(s=>dot(s.direction,sa.direction)>0.999);
    if(!sb) continue;
-   return {connector,walls:[...new Map([sa.f,sb.f].map(f=>[f.key,f])).values()],gap:[a,b,sb.back,sa.back,a],face:[a,b]};
+   // Separate ways redrawing a jamb would be left standing when the jamb moves or the opening closes.
+   const onJamb=(f:IndoorFeature,s:{front:Pt;back:Pt})=>{
+    const q=f.polygons[0]?.outer.map(local);
+    return q?.length===2&&q.every(p=>[s.front,s.back].some(e=>Math.hypot(...sub(p,e))<0.01))&&Math.hypot(...sub(q[0],q[1]))>0.005;
+   };
+   const jambLines=all.filter(f=>f!==connector&&f.kind==='wall'&&f.line&&f.polygons.length===1&&f.levels.every(l=>door.levels.includes(l))&&(onJamb(f,sa)||onJamb(f,sb)));
+   return {connector,walls:[...new Map([sa.f,sb.f].map(f=>[f.key,f])).values()],gap:[sa.front,sb.front,sb.back,sa.back,sa.front],face:[sa.front,sb.front],jambLines};
   }
  }
 }

@@ -10231,6 +10231,7 @@ function updateSolidDoorGeometry(input:ObjectEdit[]):ObjectEdit[]{
     const coords=cut.front.map(p=>overpassLayer.focusToLngLat(...p)! as LonLat),newIds=[nodeFor(coords[0]).id,Number(door.key.split('/')[1]),nodeFor(coords[2]).id];
     extra.push({key:binding.connector.key,line:{ids:newIds,coords},polygons:[{outer:coords,outerIds:newIds,inners:[]}]},
       {key:door.key,polygons:[{outer:[coords[1]],outerIds:[newIds[1]],inners:[]}]});
+    for(const f of binding.jambLines)extra.push({key:f.key,delete:true});
     for(const e of extra)pending.set(e.key,{...pending.get(e.key),...e});
   }
   return syncDoorwayRooms([...pending.values()]);
@@ -10440,7 +10441,8 @@ function solidDoorEditsImpl(door:IndoorFeature,at:LonLat|undefined,tags=door.tag
     indoorCreated.set(key,{key,kind:'wall',line:true,tags:wallTags,polygons,levels:door.levels});indoorEdited.add(key);
     return edits;
   }
-  const restored=restoreSolidDoor(binding,local),edits:ObjectEdit[]=[];
+  const restored=restoreSolidDoor(binding,local),edits:ObjectEdit[]=binding.jambLines.map(f=>({key:f.key,delete:true}));
+  for(const f of binding.jambLines)trackIndoor(f.key,f);
   trackIndoor(binding.connector.key,binding.connector);
   const face=at?nearestSolidFace(restored,local(at)):undefined;
   if(face){

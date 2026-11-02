@@ -137,3 +137,17 @@ test('OSM door node with millimetre rounding is not treated as the end of a usab
  const face=nearestSolidFace(poly,[5,.005],.03);
  assert.ok(face);assert.doesNotThrow(()=>cutSolidWall(poly,face.at,face.face,1));
 });
+
+test('door binding finds unglued wall ends near the door and collects ways redrawing jambs',()=>{
+ const ring=(pts,ids)=>[{outer:pts,outerIds:ids,inners:[]}];
+ const wall=(key,pts,ids,line=true)=>({key,kind:'wall',line,tags:{indoor:'wall'},levels:[0],polygons:ring(pts,ids)});
+ const left=wall('way/1',[[-3,0],[-1,0],[-1,.5],[-3,.5],[-3,0]],[1,2,3,4,1]);
+ const right=wall('way/2',[[1,0],[3,0],[3,.5],[1,.5],[1,0]],[5,6,7,8,5]);
+ const connector=wall('way/3',[[-.95,0],[0,0],[.95,0]],[20,9,21]);
+ const door={key:'node/9',kind:'poi',point:[0,0],tags:{door:'yes'},levels:[0],polygons:[]};
+ const dup=wall('way/4',[[-1,0],[-1,.5]],[2,3]);
+ const b=findSolidDoorBinding([left,right,connector,door,dup],door,identity);
+ assert.ok(b);assert.deepEqual(b.face,[[-1,0],[1,0]]);assert.deepEqual(b.jambLines.map(f=>f.key),['way/4']);
+ const far={...connector,polygons:ring([[-1.9,0],[0,0],[1.9,0]],[20,9,21])};
+ assert.equal(findSolidDoorBinding([left,right,far,door],door,identity),undefined);
+});

@@ -2362,6 +2362,18 @@ export class BuildingsLayer implements CustomLayerInterface {
       const ex = b[0] - a[0], ey = b[1] - a[1], len = Math.hypot(ex, ey), t = ((x - a[0]) * ex + (y - a[1]) * ey) / (len * len || 1);
       return len > 1e-6 && t >= 0 && t <= 1 && Math.abs((x - a[0]) * ey - (y - a[1]) * ex) / len < 0.05;
     }));
+    /** Parts of an edge inside doorway footprints, except the front connector's own edge. */
+    const doorwaySpans = (ax: number, ay: number, bx: number, by: number) => {
+      const nearby = new Set<Pt[]>(), spans: [number, number][] = [];
+      for (const key of planCells(ax, ay, bx, by, 0)) for (const polygon of footprintGrid.get(key) ?? []) nearby.add(polygon);
+      for (const p of nearby) {
+        const dx=p[1][0]-p[0][0],dy=p[1][1]-p[0][1],l=Math.hypot(dx,dy);
+        const onFront=l>1e-6&&Math.abs((ax-p[0][0])*dy-(ay-p[0][1])*dx)/l<0.002&&Math.abs((bx-p[0][0])*dy-(by-p[0][1])*dx)/l<0.002;
+        if (onFront) continue;
+        const span=wallDoorwaySpan([ax,ay],[bx,by],p);if(span)spans.push(span);
+      }
+      return spans.sort((a,b)=>a[0]-b[0]);
+    };
     const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, footprintProcessed = false) => {
       const len = Math.hypot(bx - ax, by - ay);
       const gaps: [number, number][] = [];
@@ -2384,16 +2396,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       // The notch is open through the entire cut height. Only its front connector
       // carries a door lintel; an old room perimeter at the rear must disappear fully.
       if (linearCutTop && !footprintProcessed) {
-        const nearby = new Set<Pt[]>(), spans: [number, number][] = [];
-        for (const key of planCells(ax, ay, bx, by, 0)) for (const polygon of footprintGrid.get(key) ?? []) nearby.add(polygon);
-        for (const p of nearby) {
-          const dx=p[1][0]-p[0][0],dy=p[1][1]-p[0][1],l=Math.hypot(dx,dy);
-          const onFront=l>1e-6&&Math.abs((ax-p[0][0])*dy-(ay-p[0][1])*dx)/l<0.002&&Math.abs((bx-p[0][0])*dy-(by-p[0][1])*dx)/l<0.002;
-          if (onFront) continue;
-          const span=wallDoorwaySpan([ax,ay],[bx,by],p);if(span)spans.push(span);
-        }
+        const spans = doorwaySpans(ax, ay, bx, by);
         if(spans.length){
-          spans.sort((a,b)=>a[0]-b[0]);let from=0;
+          let from=0;
           const draw=(lo:number,hi:number)=>{if(hi-lo>1e-6)wall(ax+(bx-ax)*lo,ay+(by-ay)*lo,ax+(bx-ax)*hi,ay+(by-ay)*hi,z0,z1a+(z1b-z1a)*lo,z1a+(z1b-z1a)*hi,true);};
           for(const [lo,hi] of spans){draw(from,lo);from=Math.max(from,hi);}draw(from,1);return;
         }
@@ -2613,7 +2618,13 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const [t0, t1] of uncovered(ax, ay, bx, by, undefined, solid ? SOLID_MERGE_DIST : WALL_MERGE_DIST)) {
         const x0 = ax + (bx - ax) * t0, y0 = ay + (by - ay) * t0, x1 = ax + (bx - ax) * t1, y1 = ay + (by - ay) * t1;
         shellWall(x0, y0, x1, y1, z0);
-        taken.push([x0, y0, x1, y1]);
+        // A linear wall removed by a doorway draws nothing there: the solid jamb on the same edge must still appear.
+        let from = 0;
+        for (const [lo, hi] of linearCutTop ? doorwaySpans(x0, y0, x1, y1) : []) {
+          if (lo > from) taken.push([x0 + (x1 - x0) * from, y0 + (y1 - y0) * from, x0 + (x1 - x0) * lo, y0 + (y1 - y0) * lo]);
+          from = Math.max(from, hi);
+        }
+        if (from < 1) taken.push([x0 + (x1 - x0) * from, y0 + (y1 - y0) * from, x1, y1]);
       }
       linearCutTop = previousLinear;
     };

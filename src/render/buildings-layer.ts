@@ -2553,6 +2553,12 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
       }
     }
+    // Опорные части на всю высоту этажа: часть внутри такой части (фонарь над залом) фасада не имеет — её стены срезаны оболочкой
+    const enclosing = g.items.filter((bi) => !g.hidden.has(bi.feature.key) && !strokeOnly(g, bi) && !thinItem(bi) && !isRoofPart(bi.tags) && !(glassEnabled && bi.glassWalls)
+      && span(bi)[0] <= z0 + 0.01 && span(bi)[1] >= top - 0.01)
+      .map((bi) => ({ key: bi.feature.key, polys: (g.renderFootprints?.get(bi.feature.key) ?? bi.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((h) => h.map(g.toLocal)) })) }));
+    const enclosed = (key: string, x: number, y: number) => enclosing.some((e) => e.key !== key
+      && e.polys.some((p) => pointInLocalRing([x, y], p.outer) && !p.inners.some((h) => pointInLocalRing([x, y], h))));
     for (const bi of g.items) {
       if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi) || (glassEnabled && bi.glassWalls)) continue;
       const [lo, hi] = span(bi);
@@ -2564,8 +2570,11 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (facadeDone.has(sig)) continue;
           const junctions = facadeCovers(sig);
           if (!junctions) continue;
-          facadeDone.add(sig);
           const a = rp[i], b = rp[(i + 1) % rp.length];
+          const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, nx = (b[1] - a[1]) / l * WALL_SIDE_PROBE, ny = -(b[0] - a[0]) / l * WALL_SIDE_PROBE;
+          const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+          if (enclosed(bi.feature.key, mx + nx, my + ny) && enclosed(bi.feature.key, mx - nx, my - ny)) continue;
+          facadeDone.add(sig);
           // Facade openings also need a contour when the adjacent indoor space
           // is an area/corridor with no implicit walls of its own.
           edgeOcclusionOnly = true;

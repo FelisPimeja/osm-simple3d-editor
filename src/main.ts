@@ -10887,7 +10887,20 @@ function undergroundOutline(g: BuildingGroup, levels: Level[]): { rings: LonLat[
 }
 
 function renderLevels() {
-  scheduleIndoorBadges(); timed('этажи: панель', renderLevelsImpl); }
+  scheduleIndoorBadges(); timed('этажи: панель', renderLevelsImpl); syncModePanels(); }
+
+/** Режим, для которого уже выставлены панели: вручную развёрнутое остаётся, пока режим не сменится. */
+let panelsMode: 'building' | 'plan' | undefined;
+
+/** При входе в режим: на плане этажа свёрнуты части здания, в режиме здания — этажи. */
+function syncModePanels() {
+  const mode = !focus ? undefined : currentLevel === undefined ? 'building' : 'plan';
+  if (mode === panelsMode) return;
+  panelsMode = mode;
+  if (!mode || mobile) return;
+  setCollapsed(outlinerPanel, mode === 'plan');
+  setCollapsed(levelsPanel, mode === 'building');
+}
 
 function renderLevelsImpl() {
   levelsPanel.hidden = !focus;

@@ -11,6 +11,8 @@ import { finiteCutPieces } from './edit/finite-cut';
 import { editIndoorGeometry, type IndoorOperation, type IndoorVertex } from './edit/indoor-geometry';
 import { renderOtherTags, renderMultiOtherTags, multiTagValues, bindOtherTags } from './edit/other-tags';
 import { escalatorAreaMatches, syncEscalatorLevels } from './edit/escalator-levels';
+import { fetchRelationRelations } from './osm/api';
+import { loneOuterWay, replaceMember, wayTagsOf } from './edit/lone-outer';
 import polygonClipping from 'polygon-clipping';
 import * as maplibregl from 'maplibre-gl';
 import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJSONFeature } from 'maplibre-gl';
@@ -13387,13 +13389,49 @@ async function refreshUser() {
   void syncSettings();
 }
 
+/**
+ * Правленые мультиполигоны без дыр из одного пути (дыру закрыли, кусок рассечения без дыры) — обратно в путь с тегами,
+ * одним шагом истории. Только если путь без своих тегов и все родители отношения известны: чужое отношение
+ * со ссылкой на мультиполигон не сломаем. Indoor-отношения живут в своих индексах — не трогаем.
+ */
+async function collapseLoneOuters() {
+  for (const c of session.changes()) {
+    const rel = c.feature as Feature3D;
+    const wayKey = !c.deleted && c.key.startsWith('relation/') ? loneOuterWay(c.after, session.get(c.key)?.relMembers) : undefined;
+    if (!wayKey || rel.polygons?.length !== 1 || rel.polygons[0].inners.length || !rel.polygons[0].outerIds) continue;
+    if (indoorCreated.has(c.key) || indoorEdited.has(c.key) || indoorRelationSources.has(c.key)) continue;
+    if (focus && isSolo(focus) && focus.members.includes(c.key)) continue;
+    const way = session.get(wayKey);
+    if (!way?.line || Object.keys(way.tags).length) continue;
+    const local = [...editGroups.values()].filter((g) => g.relMembers.some((m) => m.type === 'relation' && m.ref === rel.id));
+    let parents: EditGroup[] = local;
+    if (!session.isCreated(c.key)) {
+      let remote;
+      try { remote = await fetchRelationRelations(rel.id); } catch { continue; }
+      const known = remote.map((r) => entity(`relation/${r.id}`) as EditGroup | undefined);
+      if (known.some((g) => !g?.relMembers)) continue;
+      parents = [...new Map([...local, ...known as EditGroup[]].map((g) => [g.key, g])).values()];
+    }
+    const wayId = Number(wayKey.split('/')[1]);
+    Object.assign(way, { type: 'way', id: wayId, kind: rel.kind, hasParts: false });
+    session.editMany([
+      { key: wayKey, tags: wayTagsOf(c.after), polygons: rel.polygons, line: null },
+      { key: c.key, delete: true },
+      ...parents.map((g) => groupMembersEdit(g, replaceMember(g.relMembers, rel.id, wayId))),
+    ]);
+    selection = selection.map((k) => (k === c.key ? wayKey : k));
+    if (selectedKey === c.key) selectedKey = wayKey;
+  }
+}
+
 async function doUpload() {
   if (uploading || deletingIndoorWalls) return;
-  const changes = session.changes();
   const s = server();
   uploading = true;
   renderChanges();
   try {
+    await collapseLoneOuters();
+    const changes = session.changes();
     const edits = changes.map((c) => {
       const g = editGroups.get(c.key);
       const created = !c.created ? undefined

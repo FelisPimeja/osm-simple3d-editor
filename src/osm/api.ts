@@ -217,6 +217,12 @@ export async function fetchElementRelations(key: string, api = server().api): Pr
 }
 
 /** Отношения, в которые входит путь (текущие версии). */
+/** Отношения, в которых состоит отношение. */
+export async function fetchRelationRelations(id: number, api = server().api): Promise<OsmRelation[]> {
+  const res = await getJson(`${api}/relation/${id}/relations.json`);
+  return ((await res.json()) as { elements: OsmRelation[] }).elements;
+}
+
 export async function fetchWayRelations(id: number, api = server().api): Promise<OsmRelation[]> {
   const res = await getJson(`${api}/way/${id}/relations.json`);
   return ((await res.json()) as { elements: OsmRelation[] }).elements;

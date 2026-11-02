@@ -53,7 +53,7 @@ export interface Entry {
   mBefore?: OsmMember[]; mAfter?: OsmMember[];
   gBefore?: Polygon[]; gAfter?: Polygon[];
   /** null — пути-члена не было (правка его добавила): отмена его убирает. */
-  lBefore?: Line | null; lAfter?: Line;
+  lBefore?: Line | null; lAfter?: Line | null;
 }
 /** Действие интерфейса в общей истории (скрытие частей и т. п.): данные не меняет, но отменяется так же. */
 export interface ViewAction {
@@ -72,8 +72,8 @@ export interface ObjectEdit {
   polygons?: Polygon[];
   /** Новый состав членов отношения. */
   members?: OsmMember[];
-  /** Новые узлы пути-члена. */
-  line?: Line;
+  /** Новые узлы пути-члена; null — путь снова сам несёт полигон. */
+  line?: Line | null;
   /** Новый объект (рассечение): создаётся в этом же шаге. */
   create?: Tagged;
   /** Удалить объект (созданный в сессии — просто отменить его создание). */
@@ -221,7 +221,7 @@ export class EditSession {
       const tags = e.tags ?? f.tags;
       step.push({ key: e.key, before: { ...f.tags }, after: { ...tags },
         ...(e.polygons ? { gBefore: f.polygons, gAfter: e.polygons } : {}),
-        ...(e.line ? { lBefore: f.line ?? null, lAfter: e.line } : {}),
+        ...(e.line !== undefined ? { lBefore: f.line ?? null, lAfter: e.line } : {}),
         ...(e.members ? { mBefore: f.relMembers, mAfter: e.members } : {}) });
     }
     if (step.length) this.push(step);
@@ -238,7 +238,7 @@ export class EditSession {
     const f = this.features.get(key);
     const orig = this.originalGeometry.get(key), originalLine = this.originalLine.get(key);
     if (!f) return [];
-    if (f.line ? f.line === originalLine : !f.polygons || !orig || f.polygons === orig) return [];
+    if (f.line ? f.line === originalLine : !f.polygons || (!orig && !originalLine) || f.polygons === orig) return [];
     const was = originalLine ? new Map(originalLine.ids.map((id,i) => [id, originalLine.coords[i]] as const)) : nodeCoords(orig ?? []);
     const now = f.line ? new Map(f.line.ids.map((id,i) => [id, f.line!.coords[i]] as const)) : nodeCoords(f.polygons ?? []);
     const moves: NodeMove[] = [];
@@ -263,7 +263,7 @@ export class EditSession {
     if (!f?.polygons || !key.startsWith('way/')) return;
     const after = ring(f.polygons);
     if (!after) return;
-    const before = this.created.has(key) ? [] : ring(this.originalGeometry.get(key));
+    const before = this.created.has(key) ? [] : this.originalLine.get(key)?.ids ?? ring(this.originalGeometry.get(key));
     if (!before || (before.length === after.length && before.every((id, i) => id === after[i]))) return;
     return { before, after };
   }

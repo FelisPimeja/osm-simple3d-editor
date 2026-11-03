@@ -394,12 +394,17 @@ const DEPTH_ONLY_MATERIAL = new THREE.MeshBasicMaterial({ colorWrite: false, sid
  * этажа (relation/21547936: часть 6 м при этаже 3.5–7 м) — не рисуются: иначе накрывают план крышкой.
  */
 const SHELL_FLOOR = { value: Infinity };
+/**
+ * Ниже стольких метров над полом верх части — предмет на полу (ступени, подиум, тумба: relation/8432837), а не
+ * крышка над планом: его рисуем.
+ */
+const FLOOR_OBJECT_HEIGHT = 2;
 function withLevelRoofCut<T extends THREE.Material>(material: T): T {
   material.onBeforeCompile = (shader) => {
     shader.uniforms.shellFloor = SHELL_FLOOR;
     shader.vertexShader = 'varying vec3 vShellPos;\n' + shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vShellPos = position;');
     shader.fragmentShader = 'varying vec3 vShellPos;\nuniform float shellFloor;\n' + shader.fragmentShader.replace('void main() {',
-      'void main() {\n  if (vShellPos.z > shellFloor + 0.05 && abs(normalize(cross(dFdx(vShellPos), dFdy(vShellPos))).z) > 0.99) discard;');
+      `void main() {\n  if (vShellPos.z > shellFloor + ${FLOOR_OBJECT_HEIGHT.toFixed(1)} && abs(normalize(cross(dFdx(vShellPos), dFdy(vShellPos))).z) > 0.99) discard;`);
   };
   return material;
 }

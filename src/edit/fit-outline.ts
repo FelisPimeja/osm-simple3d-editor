@@ -52,17 +52,21 @@ export function raisedOutside(parts: Feature3D[], outer: Pt[], toLocal: (c: LonL
 
 /**
  * Входы прежнего контура, которых нет в новом кольце ids/coords: лежащий на новой стене встаёт в кольцо на месте,
- * прочий (кроме вершин частей на земле — те на своих местах) переезжает на ближайшую стену. Правит ids/coords на
- * месте; сколько перенесено.
+ * прочий (кроме вершин частей на земле — те на своих местах) переезжает на ближайшую стену. Узел, который есть и в
+ * других путях (вершина нависающей части), не двигается — иначе поедет и их геометрия: на стену встаёт новый узел
+ * (id от newId), ему — теги входа (detached). Правит ids/coords на месте.
  */
 export function keepOutlineEntrances(outline: Feature3D, groundParts: Feature3D[], ids: number[], coords: LonLat[],
-  isEntrance: (id: number) => boolean, toLocal: (c: LonLat) => Pt, toLonLat: (p: Pt) => LonLat): number {
+  isEntrance: (id: number) => boolean, toLocal: (c: LonLat) => Pt, toLonLat: (p: Pt) => LonLat,
+  shared: (id: number) => boolean = () => false, newId: () => number = () => { throw new Error('newId'); },
+): { moved: number; detached: { from: number; to: number; at: LonLat }[] } {
+  const detached: { from: number; to: number; at: LonLat }[] = [];
   const inParts = new Set(groundParts.flatMap((f) => f.polygons.flatMap((p) => [...p.outerIds ?? [], ...(p.innerIds ?? []).flat()])));
   const old = outline.polygons.flatMap((p) => {
     const cs = [...p.outer, ...p.inners.flat()];
     return [...p.outerIds ?? [], ...(p.innerIds ?? []).flat()].map((id, i) => ({ id, c: cs[i] }));
   });
-  let n = 0;
+  let moved = 0;
   for (const { id, c } of old) {
     if (ids.includes(id) || !isEntrance(id)) continue;
     const q = toLocal(c);
@@ -76,9 +80,12 @@ export function keepOutlineEntrances(outline: Feature3D, groundParts: Feature3D[
     }
     const on = best.d < ENTRANCE_ON_WALL;
     if (!on && inParts.has(id)) continue;
-    ids.splice(best.i + 1, 0, id);
-    coords.splice(best.i + 1, 0, on ? c : toLonLat(best.p));
-    if (!on) n++;
+    const at = on ? c : toLonLat(best.p);
+    const to = !on && shared(id) ? newId() : id;
+    if (to !== id) detached.push({ from: id, to, at });
+    ids.splice(best.i + 1, 0, to);
+    coords.splice(best.i + 1, 0, at);
+    if (!on) moved++;
   }
-  return n;
+  return { moved, detached };
 }

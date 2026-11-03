@@ -61,17 +61,23 @@ test('entrances on the outline away from the parts move onto the ground footprin
   const ids = [], coords = [];
   // New ring: footprint corners on fresh ids
   fp.outer.forEach((q, i) => { ids.push(-1 - i); coords.push(toLonLat(q)); });
-  const moved = keepOutlineEntrances(outline, ground(), ids, coords, (id) => !!data.entrances[id], toLocal, toLonLat);
+  // Nodes of the overhanging parts are shared with other ways
+  const inOther = new Set(parts().flatMap((f) => f.polygons[0].outerIds));
+  let next = -1000;
+  const { moved, detached } = keepOutlineEntrances(outline, ground(), ids, coords, (id) => !!data.entrances[id], toLocal, toLonLat,
+    (id) => inOther.has(id), () => next--);
   assert.equal(moved, 5);
-  for (const id of [...FAR, ...ON_RAISED]) {
-    const i = ids.indexOf(id);
-    assert.ok(i >= 0, `entrance ${id} kept in the ring`);
-    assert.ok(dist(toLocal(coords[i]), fp.outer) < 0.05, `entrance ${id} on the footprint`);
-  }
+  const at = (id) => toLocal(coords[ids.indexOf(detached.find((d) => d.from === id)?.to ?? id)]);
+  for (const id of [...FAR, ...ON_RAISED]) assert.ok(dist(at(id), fp.outer) < 0.05, `entrance ${id} on the footprint`);
   for (const id of FAR) {
-    const was = toLocal(data.nodes[id]), now = toLocal(coords[ids.indexOf(id)]);
+    assert.ok(ids.includes(id), `entrance ${id} kept its node`);
+    const was = toLocal(data.nodes[id]), now = at(id);
     assert.ok(Math.hypot(was[0] - now[0], was[1] - now[1]) > 0.5, `entrance ${id} moved off the old outline`);
   }
+  // Vertices of overhanging parts stay where they are: the entrance moves onto a new node
+  assert.deepEqual(detached.map((d) => d.from).sort(), [...ON_RAISED].sort());
+  for (const id of ON_RAISED) assert.ok(!ids.includes(id), `node ${id} not moved into the outline`);
+  for (const d of detached) assert.ok(d.to < 0);
 });
 
 test('entrances without level stay at ground level, even on walls of overhanging parts', () => {

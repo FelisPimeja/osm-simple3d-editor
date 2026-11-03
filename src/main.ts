@@ -5057,10 +5057,23 @@ function fixOutline(fit = false) {
   };
   const { ids, coords } = toNodes(united.outer);
   const holes = united.holes.map(toNodes);
-  const moved = fit ? keepOutlineEntrances(r.outline, r.parts, ids, coords,
-    (id) => !!(sessionNodeTags.get(id) ?? dataEntrances.get(id) ?? entranceTags(id))?.entrance,
-    (c) => overpassLayer.focusToLocal(c)!, (q) => overpassLayer.focusToLngLat(q[0], q[1])!) : 0;
+  const doorTags = (id: number) => sessionNodeTags.get(id) ?? dataEntrances.get(id) ?? entranceTags(id);
+  const { moved, detached } = fit ? keepOutlineEntrances(r.outline, r.parts, ids, coords, (id) => !!doorTags(id)?.entrance,
+    (c) => overpassLayer.focusToLocal(c)!, (q) => overpassLayer.focusToLngLat(q[0], q[1])!,
+    (id) => nodeInOtherWays(id, r.outline), () => nextNewId--) : { moved: 0, detached: [] };
   const edits: Parameters<typeof session.editMany>[0] = [];
+  // Вход с вершины чужого пути — новым узлом на новой стене: теги двери уходят с прежнего узла на новый
+  for (const d of detached) {
+    const tags = { ...doorTags(d.from) ?? {} };
+    const key = `node/${d.from}`;
+    if (!session.has(key)) session.track({ key, version: 0, tags: { ...tags } });
+    const rest = { ...session.get(key)!.tags };
+    for (const k of DOOR_TAG_KEYS) delete rest[k];
+    edits.push({ key, tags: rest });
+    const nk = `node/${d.to}`;
+    edits.push({ key: nk, create: { key: nk, version: 0, tags,
+      polygons: [{ outer: [d.at], inners: [] }] } });
+  }
   const g = entity(focus.key) as EditGroup | undefined;
   if (!g) return setStatus(tr('Отношение здания не найдено.'), true);
   const outlineTags = { ...r.outline.tags };
@@ -5091,6 +5104,16 @@ function fixOutline(fit = false) {
     : tr('Контур {key} обновлён: охватывает все части на земле ({n}). Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length }));
 }
 
+
+/** Узел id есть в путях, кроме путей контура outline (части, соседи, линии). */
+function nodeInOtherWays(id: number, outline: Feature3D): boolean {
+  const own = new Set([outline.key, ...(outline.ways ?? []).map((w) => `way/${w.id}`)]);
+  for (const g of liveFeatures()) {
+    if (!own.has(g.key) && g.polygons.some((p) => [p.outerIds, ...(p.innerIds ?? [])].some((ring) => ring?.includes(id)))) return true;
+    if ((g.ways ?? []).some((w) => !own.has(`way/${w.id}`) && w.nodes.includes(id))) return true;
+  }
+  return session.lineEntities().some((l) => !own.has(l.key) && l.line!.ids.includes(id));
+}
 
 /** У контура свой объём (переносится в часть при «Обновить контур»); height=0 — явно без объёма, так и остаётся. */
 const outlineHasVolume = (t: Record<string, string>) => !isBareOutlineTags(t) && !(Number(t.height) === 0 && !isOutlinePart(t));

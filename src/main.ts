@@ -5095,10 +5095,21 @@ function fixOutline(fit = false) {
     edits.push({ key: g.key, members: [...g.relMembers, { type: 'way', ref: id, role: 'part' }] });
   }
   if (r.outline.type !== 'relation') edits.push({ key: r.outline.key, polygons: [{ outer: coords, inners: [], outerIds: ids, innerIds: [] }], tags: outlineTags });
+  // Нависающие части, оказавшиеся за новым контуром, — layer=1, как советует вики (над тем, что на земле)
+  let layered = 0;
+  if (fit) for (const [i, k] of focus.members.entries()) {
+    const f = focus.roles[i] === 'part' && !session.isDeleted(k) ? entity(k) as Feature3D | undefined : undefined;
+    if (!f?.polygons?.length || partGround(f.tags) !== 'raised' || Number(f.tags.layer) > 0) continue;
+    const inside = (c: LonLat) => { const q = overpassLayer.focusToLocal(c)!;
+      return pointInRing(q, united.outer) || united.outer.some((a, j) => segDist2(q, a, united.outer[(j + 1) % united.outer.length]) < OUTLINE_EPS); };
+    if (f.polygons.every((p) => p.outer.every(inside))) continue;
+    edits.push({ key: f.key, tags: { ...f.tags, layer: '1' } });
+    layered++;
+  }
   overpassLayer.setDrawPreview(undefined);
   session.editMany(edits);
   renderSelected();
-  setStatus(fit ? tr('Контур {key} подогнан под след частей на земле ({n}), входов перенесено на новые стены: {m}. Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length, m: moved })
+  setStatus(fit ? tr('Контур {key} подогнан под след частей на земле ({n}), входов перенесено на новые стены: {m}, нависающим частям за контуром — layer=1: {l}. Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length, m: moved, l: layered })
     : tr('Контур {key} обновлён: охватывает все части на земле ({n}). Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length }));
 }
 

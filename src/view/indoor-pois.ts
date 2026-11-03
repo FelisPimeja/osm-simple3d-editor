@@ -229,7 +229,9 @@ export class IndoorPois {
       if (!it.w) { it.w = el.offsetWidth; it.h = el.offsetHeight; }
       const bw = it.w!, bh = it.h!;
       const x0 = p![0] - bw / 2 - GAP, x1 = p![0] + bw / 2 + GAP;
-      const y0 = (it.below ? p![1] + 12 : p![1] - bh / 2) - GAP, y1 = y0 + bh + 2 * GAP;
+      // Подпись под значком своего помещения стоит вплотную к нему (значок с зазором кончается ровно на +12):
+      // зазор сверху у неё не берём, иначе значок всегда вытеснял бы её
+      const y0 = it.below ? p![1] + 12 : p![1] - bh / 2 - GAP, y1 = (it.below ? p![1] + 12 : p![1] - bh / 2) + bh + GAP;
       const ks = cells(x0, y0, x1, y1);
       const hit = !this.isMarked(it.key) && ks.some((k) => placed.get(k)?.some((b) => b[0] < x1 && b[2] > x0 && b[1] < y1 && b[3] > y0));
       el.classList.toggle('crowded', hit);

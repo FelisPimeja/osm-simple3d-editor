@@ -663,7 +663,9 @@ function syncDataEntrances() {
   const before = dataEntrances.size;
   dataEntrances = overpass.dataEntrances();
   if (!focus || dataEntrances.size === before) return;
-  for (const f of groupFeatures(focus)) if (session.has(f.key)) previewFocus(f);
+  // Одной пачкой: по одному — пересборка всей геометрии здания на каждую часть
+  const g = focus;
+  overpassLayer.previewFocusFeatures(groupFeatures(g).filter((f) => session.has(f.key)).map((f) => focusFeature(g, withEntranceEdits(f))));
   renderOutliner();
 }
 
@@ -1969,6 +1971,17 @@ function groupFeatures(g: BuildingGroup): Feature3D[] {
  * Член группы для сцены режима здания: вид — по роли; контур с building:part (не входящий ещё и ролью part) —
  * объёмом, остальные контуры при частях — плоским следом (hasParts у объекта сессии мог устареть после правки тегов).
  */
+/** Покрывают ли части контур (markOutlinesWithParts) — по содержимому контура и частей. */
+const outlineCoverCache = new Map<string, boolean>();
+/** Короткий хеш строки (cyrb53) — ключ кеша вместо самой подписи в мегабайты. */
+function hashString(str: string): string {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) { const c = str.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${(h2 >>> 0).toString(36)}${(h1 >>> 0).toString(36)}:${str.length}`;
+}
+
 function focusFeature(g: BuildingGroup, f: Feature3D, role = g.roles[g.members.indexOf(f.key)]): Feature3D {
   const kind = role === 'part' ? 'part' : role === 'outline' ? 'building' : undefined;
   let hasParts = f.hasParts;
@@ -1979,8 +1992,19 @@ function focusFeature(g: BuildingGroup, f: Feature3D, role = g.roles[g.members.i
       const p = (session.get(key) as Feature3D | undefined) ?? overpass.get(key)?.feature ?? overpass.findFeature(key);
       return p ? [{ ...p, kind: 'part' as const }] : [];
     });
-    markOutlinesWithParts([...parts, probe], [probe], [g]);
-    hasParts = !outlineVolume(g, f.key, f.tags) && probe.hasParts;
+    // Объединение частей (polygon-clipping) дорогое — у сотен частей секунды (relation/3224486), а зовут на каждую
+    // перерисовку (выделение, догрузка из API — та приносит новые объекты с теми же координатами): кеш по содержимому
+    const sig = hashString(JSON.stringify([f.polygons, f.tags, parts.map((x) => [x.polygons, x.tags])]));
+    // По подписи, а не по зданию: разные вызовы видят набор частей чуть по-разному (517 и 518 у собора) и
+    // вытесняли бы друг друга
+    let covered = outlineCoverCache.get(sig);
+    if (covered === undefined) {
+      markOutlinesWithParts([...parts, probe], [probe], [g]);
+      covered = !!probe.hasParts;
+      outlineCoverCache.set(sig, covered);
+      while (outlineCoverCache.size > 50) outlineCoverCache.delete(outlineCoverCache.keys().next().value!);
+    }
+    hasParts = !outlineVolume(g, f.key, f.tags) && covered;
   }
   return (kind && f.kind !== kind) || hasParts !== f.hasParts ? { ...f, kind: kind ?? f.kind, hasParts } : f;
 }

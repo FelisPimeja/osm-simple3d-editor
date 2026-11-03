@@ -3627,9 +3627,15 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   /** Временно перестроить объект сцены режима здания по другим тегам (превью инструмента «Вытянуть»). */
   previewFocusFeature(f: Feature3D) {
+    this.previewFocusFeatures([f]);
+  }
+
+  /** Несколько объектов разом: геометрия здания пересобирается один раз, а не на каждый. */
+  previewFocusFeatures(fs: Feature3D[]) {
     const g = this.groups.get(FOCUS_GROUP);
-    if (!g?.byKey.has(f.key)) return;
-    this.replaceItems(g, [f]);
+    const list = fs.filter((f) => g?.byKey.has(f.key));
+    if (!g || !list.length) return;
+    this.replaceItems(g, list);
     this.snaps = undefined;
     this.updateHiddenEdges();
   }

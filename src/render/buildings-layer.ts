@@ -3130,6 +3130,13 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   /** Выключенные типы привязок (всплывашка у кнопки привязок). */
   snapKindsOff = new Set<SnapKind>();
+  /** Отметки полов этажей здания режима, м (привязка «Этажи»). */
+  private floorMarks: number[] = [];
+  setFloorMarks(marks: number[]) {
+    if (marks.length === this.floorMarks.length && marks.every((z, i) => Math.abs(z - this.floorMarks[i]) < 1e-3)) return;
+    this.floorMarks = marks;
+    this.snaps = undefined;
+  }
   /** Alt зажат — привязки временно выключены. */
   snapsSuspended = false;
 
@@ -3232,7 +3239,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!this.snapsEnabled || this.snapsSuspended) return;
     const g = this.groups.get(FOCUS_GROUP);
     if (!this.focused || !g || !this.map || !this.lastMain) return;
-    this.snaps ??= timed('привязки: сбор геометрии', () => collectSnaps(g));
+    this.snaps ??= timed('привязки: сбор геометрии', () => collectSnaps(g, this.floorMarks));
     const m = this.lastMain.clone().multiply(g.model);
     const canvas = this.map.getCanvas();
     const v = new THREE.Vector4();
@@ -3702,7 +3709,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   focusSnapPoints(key: string): NonNullable<SnapOpts['extra']> {
     const g = this.groups.get(FOCUS_GROUP);
     if (!g) return [];
-    this.snaps ??= collectSnaps(g);
+    this.snaps ??= collectSnaps(g, this.floorMarks);
     return this.snaps.points.filter((s) => s.key === key).map((s) => ({ kind: s.kind, key: s.key, p: s.p.clone(), label: s.label }));
   }
 
@@ -6526,7 +6533,7 @@ function shellPiecesImpl(shell: Shell, ax: number, ay: number, bx: number, by: n
   return pieces;
 }
 
-export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'shape' | 'grid' | 'perpendicular' | 'edge' | 'extension' | 'tracking' | 'tracked';
+export type SnapKind = 'level' | 'vertex' | 'midpoint' | 'center' | 'shape' | 'grid' | 'perpendicular' | 'edge' | 'extension' | 'tracking' | 'tracked';
 /** Ключ привязки к узлу сетки основания: фильтр snapAt пропускает его, если инструменту нужна и сетка. */
 export const GRID_SNAP_KEY = '@grid';
 /** axis, dist — у оси откладывания: номер оси якоря и расстояние от него со знаком. */
@@ -6559,7 +6566,7 @@ const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
 const SNAP_HIDDEN_PENALTY_PX = 100;
 /** Точка на ребре — последней: курсор у ребра почти всегда, она не должна перебивать вершины и середины. */
-const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, shape: 1, grid: 2, center: 2, extension: 4, edge: 3, tracked: 0, tracking: 2 };
+const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, shape: 1, grid: 2, center: 2, extension: 4, edge: 3, tracked: 0, tracking: 2, level: 1 };
 /** Как далеко за конец ребра тянется его продолжение, м. */
 const EXTENSION_M = 30;
 /** Продолжение ловит курсор ближе обычного (px): иначе срабатывает почти везде вокруг здания. */
@@ -6583,7 +6590,8 @@ const GRID_STEP = 10;
  * Точки привязки здания: вершины контуров внизу и на верху стен, вершины крыши выше стен, середины рёбер (нижних, верхних
  * и вертикальных) и центры габаритов объектов. Крыши пока не учитываются, кроме конька в центре.
  */
-function collectSnaps(g: MeshGroup): { points: SnapPoint[]; edges: SnapEdge[] } {
+/** floors — отметки полов этажей: точки на вертикальных рёбрах и серединах сторон стен на этих высотах. */
+function collectSnaps(g: MeshGroup, floors: number[] = []): { points: SnapPoint[]; edges: SnapEdge[] } {
   const out: SnapPoint[] = [];
   const edges: SnapEdge[] = [];
   const seen = new Set<string>();
@@ -6620,6 +6628,7 @@ function collectSnaps(g: MeshGroup): { points: SnapPoint[]; edges: SnapEdge[] } 
             addEdge(key, ax, ay, z, bx, by, z);
           }
           if (levels.length > 1) { add('midpoint', key, ax, ay, (z0 + z1) / 2); addEdge(key, ax, ay, z0, ax, ay, z1); } // вертикальное ребро
+          for (const z of floors) if (z > z0 + 0.05 && z < z1 - 0.05) { add('level', key, ax, ay, z); add('level', key, (ax + bx) / 2, (ay + by) / 2, z); }
         }
       }
       // Центр фигуры: прямоугольник, правильный многоугольник, окружность — внизу и вверху стен

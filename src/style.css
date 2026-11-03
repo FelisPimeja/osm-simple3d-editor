@@ -224,6 +224,8 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .snap-marker.extension { background: #7c3aed; border-radius: 50%; width: 8px; height: 8px; margin: -5px 0 0 -5px; }
 .snap-marker.tracking { background: #7c3aed; border-radius: 50%; width: 8px; height: 8px; margin: -5px 0 0 -5px; }
 .snap-marker.tracked { background: #7c3aed; }
+/* Отметка этажа — горизонтальная черта */
+.snap-marker.level { background: #0d9488; width: 16px; height: 6px; margin: -4px 0 0 -9px; }
 /* Откладывание от вершины: якорь — кольцо, отложенная точка — ромб */
 .track-marker { position: absolute; pointer-events: none; z-index: 2; width: 14px; height: 14px; margin: -9px 0 0 -9px;
   border: 2px dashed #7c3aed; border-radius: 50%; }

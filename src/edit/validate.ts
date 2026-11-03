@@ -47,6 +47,8 @@ export interface Fix {
   splitNewNodes?: boolean;
   /** Расширить контур здания до объединения с частями («Обновить контур» режима здания). */
   growOutline?: boolean;
+  /** Подогнать контур под объединение частей на земле, входы контура — на новые стены. */
+  fitOutline?: boolean;
 }
 
 /** Высота этажа, ниже и выше которой этажность и высота противоречат друг другу, м. */
@@ -67,6 +69,8 @@ const OUTSIDE_SHARE = 0.03;
  * долю площади: при большем расхождении вероятнее ошибка в части, а не в контуре.
  */
 export const OUTLINE_GROW_SHARE = 0.1;
+/** Насколько контур может отступать от частей, чтобы пробел считался расхождением контуров, а не пропущенной частью, м. */
+const FIT_OUTLINE_DIST = 2.5;
 /**
  * Как часть стоит относительно земли: raised — приподнята (нависает: консоль, козырёк, верхний ярус), underground —
  * под землёй, ground — стоит на земле. По вики (Simple 3D Buildings, «Underground parts»; обсуждение
@@ -408,6 +412,13 @@ function toMulti(polys: Polygon[], p: (c: LonLat) => [number, number]): MultiPol
   return polys.map((q) => [closed(q.outer.map(p)), ...q.inners.map((r) => closed(r.map(p)))]);
 }
 
+/** Расстояние от точки до отрезка, м. */
+function segDist(q: number[], a: number[], b: number[]): number {
+  const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy;
+  const t = l ? Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l)) : 0;
+  return Math.hypot(q[0] - a[0] - t * dx, q[1] - a[1] - t * dy);
+}
+
 function multiArea(m: MultiPolygon): number {
   return m.reduce((s, poly) => s + poly.reduce((t, r, i) => t + (i ? -1 : 1) * ringArea(r.slice(0, -1) as [number, number][]), 0), 0);
 }
@@ -600,8 +611,17 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
       const missing = gap && multiArea(gap);
       if (gap && missing !== undefined && missing > 1 && missing > outlineArea * 0.001) {
         const ring = (r: number[][]) => r.slice(0, -1).map(p.back);
-        out.push({ key: outline.key, level: 'warning', code: 'coverage', text: tr('Части не покрывают {pct}% контура — этот участок не нарисован. Добавьте недостающую часть или проверьте роли в отношении.',
-          { pct: Math.round((missing / outlineArea) * 100) }), area: gap.map(([outer, ...holes]) => ({ outer: ring(outer), inners: holes.map(ring) })) });
+        // Пробел — узкая полоса вдоль наземных частей (с нависающими): контур просто нарисован шире следа, его подгоняют под части
+        const ground = coverParts.filter((f) => partGround(f.tags) !== 'underground');
+        const foot = g.type === 'relation' && g.id !== 0 && ground.length ? safe(() => polygonClipping.union(multi(ground[0]), ...ground.slice(1).map(multi))) : undefined;
+        const edges = foot?.length === 1 ? foot[0].flatMap((r) => r.slice(0, -1).map((a, i) => [a, r[i + 1]] as const)) : [];
+        const fit = edges.length > 0 && gap.every((poly) => poly.every((r) => r.every((q) => edges.some(([a, b]) => segDist(q, a, b) <= FIT_OUTLINE_DIST))));
+        out.push({ key: outline.key, level: 'warning', code: 'coverage', text: fit
+          ? tr('Контур отступает от частей до {dist} м: {pct}% контура не покрыто частями. Похоже, контур нарисован не по следу здания — подгоните его под части.',
+            { dist: fmt(FIT_OUTLINE_DIST), pct: Math.round((missing / outlineArea) * 100) })
+          : tr('Части не покрывают {pct}% контура — этот участок не нарисован. Добавьте недостающую часть или проверьте роли в отношении.',
+            { pct: Math.round((missing / outlineArea) * 100) }), area: gap.map(([outer, ...holes]) => ({ outer: ring(outer), inners: holes.map(ring) })),
+          ...(fit ? { fix: { label: tr('подогнать контур под части (входы — на новые стены)'), tags: {}, fitOutline: true } } : {}) });
       }
     }
     // Высота контура — максимум по частям (Key:building:part)

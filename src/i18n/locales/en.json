@@ -1407,5 +1407,9 @@
   "Проблемы выбранных объектов: {n} из {all}": "Issues of selected objects: {n} of {all}",
   "Исправить {n} из {all}": "Fix {n} of {all}",
   "{tag} — нужно целое неотрицательное число подземных этажей.": "{tag}: must be a non-negative whole number of underground levels.",
-  "У части только building:levels, а у других частей здания — height: в разных рендерах высота этажа своя, и части могут не совпасть по высоте. Задайте части одинаково.": "This part has only building:levels while other parts of the building have height: renderers assume different level heights, so the parts may not line up. Tag the parts the same way."
+  "У части только building:levels, а у других частей здания — height: в разных рендерах высота этажа своя, и части могут не совпасть по высоте. Задайте части одинаково.": "This part has only building:levels while other parts of the building have height: renderers assume different level heights, so the parts may not line up. Tag the parts the same way.",
+  "Контур отступает от частей до {dist} м: {pct}% контура не покрыто частями. Похоже, контур нарисован не по следу здания — подгоните его под части.": "The outline sits up to {dist} m away from the parts: {pct}% of it is not covered by parts. It looks drawn off the building footprint — fit it to the parts.",
+  "подогнать контур под части (входы — на новые стены)": "fit the outline to the parts (entrances move to the new walls)",
+  "Откройте здание, чтобы подогнать его контур.": "Open the building to fit its outline.",
+  "Контур {key} подогнан под наземные части ({n}), входов перенесено на новые стены: {m}. Отменить — Ctrl+Z.": "Outline {key} fitted to the above-ground parts ({n}); entrances moved to the new walls: {m}. Undo — Ctrl+Z."
 }

@@ -2131,11 +2131,10 @@ function enterFocus(group: BuildingGroup, flyIn = true) {
   if (!focus) hideMapLayers();
   const fly = !focus && flyIn;
   if (focus?.key !== g.key) {
-    // Голые контуры (без высоты, всё здание — части) по умолчанию выключены, включаются глазиком
+    // Голый контур (плоский след) виден сразу: по нему видно, сходится ли он с частями и где на нём входы
     session.dropViewActions(); // шаги скрытия — о прежнем здании
     focusHidden.clear();
     indoorHidden.clear();
-    for (const k of bareOutlines(g)) focusHidden.add(k);
   }
   const sameBuilding = focus?.key === g.key;
   drill = focus = g;

@@ -34,7 +34,7 @@ Userscript [osmcha-open-simple3d.user.js](userscripts/osmcha-open-simple3d.user.
 
 ## Открытие из F4map и indoor=
 
-Userscript-скрипты [f4map-open-simple3d.user.js](userscripts/f4map-open-simple3d.user.js) и [indoorequal-open-simple3d.user.js](userscripts/indoorequal-open-simple3d.user.js) добавляют кнопку **Simple3D Editor** в левый нижний угол [F4map](https://demo.f4map.com) и [indoor=](https://indoorequal.org). Кнопка открывает редактор в новой вкладке с текущим центром и масштабом карты (`#масштаб/широта/долгота`). Этаж из indoor= не передаётся: редактор открывает этаж только вместе со зданием (`?edit=`).
+Userscript-скрипты [f4map-open-simple3d.user.js](userscripts/f4map-open-simple3d.user.js) и [indoorequal-open-simple3d.user.js](userscripts/indoorequal-open-simple3d.user.js) добавляют кнопку **Simple3D Editor** в левый нижний угол [F4map](https://demo.f4map.com) и [indoor=](https://indoorequal.org). Кнопка открывает редактор в новой вкладке с текущим центром и масштабом карты (`#масштаб/широта/долгота`); из F4map передаются также поворот и наклон камеры (`#масштаб/широта/долгота/азимут/наклон`). Этаж из indoor= не передаётся: редактор открывает этаж только вместе со зданием (`?edit=`).
 
 ## Использование ИИ
 

@@ -32,7 +32,7 @@ The [osmcha-open-simple3d.user.js](userscripts/osmcha-open-simple3d.user.js) use
 
 ## Open from F4map and indoor=
 
-The [f4map-open-simple3d.user.js](userscripts/f4map-open-simple3d.user.js) and [indoorequal-open-simple3d.user.js](userscripts/indoorequal-open-simple3d.user.js) userscripts add a **Simple3D Editor** button to the lower-left corner of [F4map](https://demo.f4map.com) and [indoor=](https://indoorequal.org). The button opens the editor in a new tab with the current map position and zoom (`#zoom/lat/lon`). The indoor= level is not passed: the editor only opens a level together with a building (`?edit=`).
+The [f4map-open-simple3d.user.js](userscripts/f4map-open-simple3d.user.js) and [indoorequal-open-simple3d.user.js](userscripts/indoorequal-open-simple3d.user.js) userscripts add a **Simple3D Editor** button to the lower-left corner of [F4map](https://demo.f4map.com) and [indoor=](https://indoorequal.org). The button opens the editor in a new tab with the current map position and zoom (`#zoom/lat/lon`); from F4map it also carries the camera heading and tilt (`#zoom/lat/lon/bearing/pitch`). The indoor= level is not passed: the editor only opens a level together with a building (`?edit=`).
 
 ## Interface languages
 

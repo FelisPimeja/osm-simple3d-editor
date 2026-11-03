@@ -32,6 +32,10 @@ Userscript [osm-open-simple3d.user.js](userscripts/osm-open-simple3d.user.js) д
 
 Userscript [osmcha-open-simple3d.user.js](userscripts/osmcha-open-simple3d.user.js) добавляет пункт **Simple3D Editor** в меню **Open with** на странице чейнджсета OSMCha. Установите файл в Tampermonkey или другой менеджер userscript-скриптов и разрешите запросы к `api.openstreetmap.org`. Скрипт берёт границы чейнджсета из OSM API и открывает редактор по ссылке вида `#масштаб/широта/долгота`. Если у чейнджсета нет границ, пункт сообщает, что местоположение недоступно. На [OSMCha OpenHistoricalMap](https://osmcha.openhistoricalmap.org) скрипт берёт границы из API OHM (разрешите запросы к `www.openhistoricalmap.org`) и открывает редактор с сервером OHM (`?server=ohm`) на дату, когда существует больше всего изменённых объектов (по `start_date`/`end_date`, в первую очередь зданий; `&date=`), — чтобы правки были видны.
 
+## Открытие из F4map и indoor=
+
+Userscript-скрипты [f4map-open-simple3d.user.js](userscripts/f4map-open-simple3d.user.js) и [indoorequal-open-simple3d.user.js](userscripts/indoorequal-open-simple3d.user.js) добавляют кнопку **Simple3D Editor** в левый нижний угол [F4map](https://demo.f4map.com) и [indoor=](https://indoorequal.org). Кнопка открывает редактор в новой вкладке с текущим центром и масштабом карты (`#масштаб/широта/долгота`). Этаж из indoor= не передаётся: редактор открывает этаж только вместе со зданием (`?edit=`).
+
 ## Использование ИИ
 
 Проект разрабатывается с помощью ИИ. Бо́льшая часть кода, документации и переводов написана с [Claude](https://claude.ai/) (Anthropic) через Claude Code под руководством сопровождающего проекта, который ставит задачи, проверяет и тестирует изменения и отвечает за каждый коммит. Коммиты, сделанные с участием ИИ, содержат строку `Co-authored-by: Claude <noreply@anthropic.com>`.

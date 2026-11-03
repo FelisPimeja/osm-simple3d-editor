@@ -30,6 +30,10 @@ The [osm-open-simple3d.user.js](userscripts/osm-open-simple3d.user.js) userscrip
 
 The [osmcha-open-simple3d.user.js](userscripts/osmcha-open-simple3d.user.js) userscript adds **Simple3D Editor** to the **Open with** menu on an OSMCha changeset page. Install it in Tampermonkey or another userscript manager and allow requests to `api.openstreetmap.org`. The script reads the changeset bounds from the OSM API and opens the editor with a `#zoom/lat/lon` link. If the changeset has no bounds, the item says the location is unavailable. On [OpenHistoricalMap's OSMCha](https://osmcha.openhistoricalmap.org) it reads the bounds from the OHM API (allow requests to `www.openhistoricalmap.org`) and opens the editor with OHM as the server (`?server=ohm`) at the date when most of the changed features exist (by `start_date`/`end_date`, buildings first; `&date=`), so the edits are visible.
 
+## Open from F4map and indoor=
+
+The [f4map-open-simple3d.user.js](userscripts/f4map-open-simple3d.user.js) and [indoorequal-open-simple3d.user.js](userscripts/indoorequal-open-simple3d.user.js) userscripts add a **Simple3D Editor** button to the lower-left corner of [F4map](https://demo.f4map.com) and [indoor=](https://indoorequal.org). The button opens the editor in a new tab with the current map position and zoom (`#zoom/lat/lon`). The indoor= level is not passed: the editor only opens a level together with a building (`?edit=`).
+
 ## Interface languages
 
 Russian and English. The language is chosen in the settings panel; on first launch it follows the browser and system language

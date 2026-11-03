@@ -16,7 +16,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
-import { computeHeights, looseLength, type Heights } from '../osm/heights';
+import { computeHeights, looseLength, LEVEL_HEIGHT, type Heights } from '../osm/heights';
 import { clipAbove, prepareSolid, sectionOf, trimCoplanarWalls, trimTriangles, type PreparedSolid } from './shell-trim';
 import { nextFrameSlot } from './frame-budget';
 import { trimInWorker, trimSync, trimWorkersAvailable, type TrimJob, type TrimResult } from './shell-trim-pool';
@@ -4760,9 +4760,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));
         [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
           if (!tags.has(id) || (best.get(id)?.rank ?? Infinity) <= rank) return;
-          // Вход — всегда у земли в своей точке: как обозначить вход над землёй, вики не говорит, а стена
-          // нависающей части над той же точкой — не повод поднимать к ней дверь
-          const place = entrancePlace(rings, r, i, 0);
+          // Вход — у земли в своей точке: стена нависающей части над ней — не повод поднимать дверь. Выше — только
+          // дверь indoor=door с level этажа (вход с галереи, наружной лестницы)
+          const place = entrancePlace(rings, r, i, entranceZ(tags.get(id)!, it.tags));
           if (place && (!offstage || onShownWall(place.p))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
         }));
       }
@@ -6955,6 +6955,17 @@ export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; wid
  * Место входа у вершины i кольца r (кольца в метрах сцены, 0 — внешнее): стена — по соседним вершинам
  * (на углу — средняя), наружу — туда, где нет самого объекта.
  */
+/**
+ * Высота входа, м: у земли; дверь indoor=door с level≠0 — на отметке этого этажа. building:levels считают от земли,
+ * вместе с пропущенными building:min_level, — этажи объекта поровну по высоте его стен от земли; без этажности — по 3 м.
+ */
+export function entranceZ(door: Record<string, string>, tags: Record<string, string>): number {
+  const level = door.indoor === 'door' ? parseFloat((door.level ?? '').split(';')[0]) : NaN;
+  if (!Number.isFinite(level) || level === 0) return 0;
+  const levels = Number(tags['building:levels']);
+  return level * (levels > 0 ? computeHeights(tags).wallTop / levels : LEVEL_HEIGHT);
+}
+
 export function entrancePlace(rings: Pt[][], r: number, i: number, z: number): Omit<EntrancePlace, 'id'> | undefined {
   const ring = rings[r], n = ring.length;
   if (n < 3) return;

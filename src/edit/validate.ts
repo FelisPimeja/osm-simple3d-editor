@@ -61,6 +61,11 @@ const MIN_AREA = 0.0001;
  * длинные узкие, но настоящие контуры (ограда в толщину стенки, relation/3023352) иначе выходили вырожденными.
  */
 const MIN_WIDTH = 0.05;
+/**
+ * …и ещё узкий относительно своего размера (средняя ширина меньше этой доли полупериметра): мелкая компактная
+ * деталь (столбик 6×6 см на кресте, way/605698045) тоже уже MIN_WIDTH, но это не щель.
+ */
+const SLIVER_SHARE = 0.1;
 /** Части за контуром: допуск по площади, м² и доля части (погрешности обрисовки). */
 const OUTSIDE_AREA = 1;
 const OUTSIDE_SHARE = 0.03;
@@ -475,7 +480,7 @@ export function validateGeometry(f: Feature3D): Issue[] {
       if (distinct >= 3 && selfIntersects(r)) {
         const text = i ? tr('Внутреннее кольцо самопересекается — объём строится неверно.') : tr('Контур самопересекается — объём строится неверно.');
         out.push({ key: f.key, level: 'error', code: 'self', text, points: crossingPoints(r).map(p.back) });
-      } else if (distinct < 3 || ringArea(r) < MIN_AREA || 2 * ringArea(r) < MIN_WIDTH * perimeter(r)) {
+      } else if (distinct < 3 || ringArea(r) < MIN_AREA || (2 * ringArea(r) < MIN_WIDTH * perimeter(r) && 2 * ringArea(r) < SLIVER_SHARE * perimeter(r) ** 2 / 2)) {
         const params = { points: distinct, area: fmt(ringArea(r)) };
         const text = i ? tr('Внутреннее кольцо вырождено (разных точек: {points}, площадь {area} м²).', params)
           : tr('Контур вырожден (разных точек: {points}, площадь {area} м²).', params);

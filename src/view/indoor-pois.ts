@@ -65,9 +65,17 @@ export function poiIcon(t: Record<string, string>): string | undefined {
   return; // двери — проёмами в стенах, без значков
 }
 
+/** Площадь кольца lon/lat (в градусах², для сравнения помещений между собой). */
+function ringArea(r: LonLat[]): number {
+  let a = 0;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += (r[j][0] - r[i][0]) * (r[j][1] + r[i][1]);
+  return Math.abs(a / 2);
+}
+
 export class IndoorPois {
   private readonly root: HTMLDivElement;
-  private items: { key: string; el: HTMLElement; local: THREE.Vector3; shift?: string }[] = [];
+  /** prio — кто важнее при наложении (больше — главнее); w, h — размер на экране, измеряется один раз. */
+  private items: { key: string; el: HTMLElement; local: THREE.Vector3; shift?: string; below?: boolean; prio: number; w?: number; h?: number }[] = [];
   private selected = new Set<string>();
   private issueHighlighted = new Set<string>();
   private signature = '';
@@ -111,6 +119,7 @@ export class IndoorPois {
       const k = key.replace(/#poi$/, '');
       el.classList.toggle('selected', this.selected.has(k) || this.issueHighlighted.has(k));
     }
+    this.place(); // выделенные — первыми при вытеснении
   }
 
   /**
@@ -148,7 +157,9 @@ export class IndoorPois {
       el.title = [t.name ?? t.ref, t.shop ?? t.amenity ?? t.office ?? t.door ?? t.entrance, f.key.replace('#poi', '')].filter(Boolean).join(' · ');
       this.root.appendChild(el);
       this.byEl.set(el, f);
-      this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], position?.z ?? z + 0.3) });
+      // Значки важнее подписей; вход и лифт — важнее прочих значков
+      const kind = poiIcon(f.tags);
+      this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], position?.z ?? z + 0.3), prio: 2e9 + (kind === 'entrance-alt1' || kind === 'elevator' || kind === 'stairs' ? 1 : 0), w: 20, h: 20 });
     }
     const iconAt = new Map(shown.map((f) => [f.key.replace(/#poi$/, ''), f.point!]));
     for (const f of labelled) {
@@ -163,21 +174,55 @@ export class IndoorPois {
       el.title = [f.tags.name, f.tags.ref && `ref=${f.tags.ref}`, f.key].filter(Boolean).join(' · ');
       this.root.appendChild(el);
       this.byEl.set(el, f);
-      this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], z + 0.3), shift: under ? 'translate(-50%, 12px)' : 'translate(-50%, -50%)' });
+      // Подпись большого помещения важнее подписи маленького
+      this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], z + 0.3), shift: under ? 'translate(-50%, 12px)' : 'translate(-50%, -50%)', below: !!under, prio: ringArea(f.polygons[0].outer) });
     }
+    this.items.sort((a, b) => b.prio - a.prio);
     this.setSelection([...this.selected]);
     this.place();
   }
 
+  /**
+   * Позиции на кадре и вытеснение: по убыванию важности (выделенные — первыми) каждый занимает свой прямоугольник
+   * на экране; кто налезает на уже поставленный, прячется (crowded) — при приближении место найдётся.
+   */
   private place() {
     if (!this.items.length) return;
     const w = this.map.getCanvas().clientWidth, h = this.map.getCanvas().clientHeight;
     const project = this.layer.focusProjector();
-    for (const { el, local, shift } of this.items) {
+    const labels = !this.root.classList.contains('no-labels');
+    const placed = new Map<number, [number, number, number, number][]>();
+    const CELL = 64, GAP = 2;
+    const cells = (x0: number, y0: number, x1: number, y1: number) => {
+      const out: number[] = [];
+      for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++)
+        for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) out.push(i * 100003 + j);
+      return out;
+    };
+    const order = this.selected.size || this.issueHighlighted.size
+      ? [...this.items.filter((it) => this.isMarked(it.key)), ...this.items.filter((it) => !this.isMarked(it.key))] : this.items;
+    for (const it of order) {
+      const { el, local, shift } = it;
       const p = project?.(local);
       const visible = !!p && p[0] > -20 && p[1] > -20 && p[0] < w + 20 && p[1] < h + 20;
       el.hidden = !visible;
-      if (visible) el.style.transform = `translate(${p![0]}px, ${p![1]}px)${shift ? ' ' + shift : ''}`;
+      if (!visible) continue;
+      el.style.transform = `translate(${p![0]}px, ${p![1]}px)${shift ? ' ' + shift : ''}`;
+      if (shift && !labels) continue; // подписи скрыты (каркас) — места не занимают
+      if (!it.w) { it.w = el.offsetWidth; it.h = el.offsetHeight; }
+      const bw = it.w!, bh = it.h!;
+      const x0 = p![0] - bw / 2 - GAP, x1 = p![0] + bw / 2 + GAP;
+      const y0 = (it.below ? p![1] + 12 : p![1] - bh / 2) - GAP, y1 = y0 + bh + 2 * GAP;
+      const ks = cells(x0, y0, x1, y1);
+      const hit = !this.isMarked(it.key) && ks.some((k) => placed.get(k)?.some((b) => b[0] < x1 && b[2] > x0 && b[1] < y1 && b[3] > y0));
+      el.classList.toggle('crowded', hit);
+      if (hit) continue;
+      for (const k of ks) (placed.get(k) ?? placed.set(k, []).get(k)!).push([x0, y0, x1, y1]);
     }
+  }
+
+  private isMarked(key: string) {
+    const k = key.replace(/#poi$/, '');
+    return this.selected.has(k) || this.issueHighlighted.has(k);
   }
 }

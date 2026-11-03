@@ -94,6 +94,14 @@ export class IndoorPois {
       e.preventDefault();
       map.getCanvas().dispatchEvent(new WheelEvent('wheel', e));
     }, { passive: false });
+    // Вращение камеры (средняя, правая или Ctrl+левая кнопка) над значком — тоже карте: вращение слушает canvas,
+    // а нажатие над значком туда не доходило. Дальнейшее движение canvas получит сам (захват указателя)
+    this.root.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' || !(e.button === 1 || e.button === 2 || (e.button === 0 && e.ctrlKey))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      map.getCanvasContainer().dispatchEvent(new PointerEvent('pointerdown', e));
+    });
     map.getContainer().appendChild(this.root);
     map.on('render', () => this.place());
   }

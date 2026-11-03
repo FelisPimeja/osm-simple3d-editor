@@ -84,7 +84,16 @@ export class IndoorPois {
   constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, onPick: (f: IndoorFeature, add: boolean, point: [number,number]) => void) {
     this.root = document.createElement('div');
     this.root.className = 'indoor-pois';
+    // Перетаскивание карты (левая кнопка) над значком — тоже карте: MapLibre начинает его с mousedown на canvas.
+    // Клик по значку — только если мышь почти не сдвинулась, иначе это было перетаскивание
+    let downAt: [number, number] | undefined;
+    this.root.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || e.ctrlKey) return;
+      downAt = [e.clientX, e.clientY];
+      map.getCanvasContainer().dispatchEvent(new MouseEvent('mousedown', e));
+    });
     this.root.addEventListener('click', (e) => {
+      if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) { e.stopPropagation(); return; }
       const el = (e.target as HTMLElement).closest<HTMLElement>('.indoor-poi');
       const f = el && this.byEl.get(el);
       if (f) { e.stopPropagation(); const rect=map.getContainer().getBoundingClientRect(); onPick(f, e.shiftKey, [e.clientX-rect.left,e.clientY-rect.top]); }

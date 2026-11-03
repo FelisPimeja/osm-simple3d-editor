@@ -6683,7 +6683,7 @@ function entranceTargetAt(point: [number, number]): EntranceTarget | undefined {
   const s = Math.max(m, Math.min(1 - m, best.s));
   const p: [number, number] = [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s];
   const withP = rings.map((r, k) => (k === ring ? [...r.slice(0, edge + 1), p, ...r.slice(edge + 1)] : r));
-  const place = entrancePlace(withP, ring, edge + 1, computeHeights(f.tags).min);
+  const place = entrancePlace(withP, ring, edge + 1, 0);
   const lonLat = overpassLayer.focusToLngLat(p[0], p[1]);
   return place && lonLat ? { key: best.key, poly: best.poly, ring, edge, at: lonLat, place } : undefined;
 }

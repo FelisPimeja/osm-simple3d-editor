@@ -268,8 +268,6 @@ const EDGE_ANGLE = 25;
 const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, dashSize: 0.25, gapSize: 0.15, depthWrite: false, transparent: true, opacity: 0.85 });
 /** Выбранный контур подземной части — целиком, сквозь здание. */
 const UNDERGROUND_SELECTED = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.25, gapSize: 0.15, depthTest: false, depthWrite: false, transparent: true });
-/** Низ видимой стены выше входа не больше чем на это, м — иначе вход не на ней. */
-const ENTRANCE_WALL_RISE = 0.5;
 /** Насколько близко к пунктиру подземной части выбирает клик, px. */
 const UNDERGROUND_PICK_PX = 6;
 /** Вершина контура на прямой (поворот меньше этого, рад) — не угол: ни вертикали, ни разрыва пунктира. */
@@ -4737,8 +4735,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const shown = g === this.groups.get(FOCUS_GROUP)
       ? g.items.filter((it) => !g.hidden.has(it.feature.key)).flatMap((it) => it.feature.polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => ({ ring: r.map(g.toLocal), min: g.lift?.get(it.feature.key) ?? computeHeights(it.tags).min }))))
       : undefined;
-    // Стена должна доходить до входа и по высоте: верхний объём над той же линией плана — не его стена
-    const onShownWall = (q: Pt, z: number) => shown!.some(({ ring, min }) => min <= z + ENTRANCE_WALL_RISE && ring.some((a, i) => distToSegment(q, a, ring[(i + 1) % ring.length]) <= ENTRANCE_ON_WALL));
+    // Вход у земли и под нависающим объёмом: видимая стена над той же линией плана — его стена
+    const onShownWall = (q: Pt) => shown!.some(({ ring }) => ring.some((a, i) => distToSegment(q, a, ring[(i + 1) % ring.length]) <= ENTRANCE_ON_WALL));
     // Узел в нескольких объектах (контур и часть, соседние части) — на самой низкой видимой стене
     const best = new Map<number, { place: EntrancePlace; rank: number }>();
     // На карте вход красится вместе с выделенным зданием; в режиме здания выбирают сам вход
@@ -4762,8 +4760,10 @@ export class BuildingsLayer implements CustomLayerInterface {
         const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));
         [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
           if (!tags.has(id) || (best.get(id)?.rank ?? Infinity) <= rank) return;
-          const place = entrancePlace(rings, r, i, min);
-          if (place && (!offstage || onShownWall(place.p, min))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
+          // Вход — всегда у земли в своей точке: как обозначить вход над землёй, вики не говорит, а стена
+          // нависающей части над той же точкой — не повод поднимать к ней дверь
+          const place = entrancePlace(rings, r, i, 0);
+          if (place && (!offstage || onShownWall(place.p))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
         }));
       }
     }

@@ -8610,8 +8610,28 @@ const indoorFormTags = (fs: IndoorFeature[]) => (fs.every(f=>f.tags.barrier==='f
 function isElevatorRoom(f: IndoorFeature, all: IndoorFeature[]): boolean {
   if (f.kind !== 'room' || f.line) return false;
   if (f.tags.room === 'elevator' || f.tags.highway === 'elevator') return true;
-  return all.some((p) => p.kind === 'poi' && p.point && p.tags.highway === 'elevator'
-    && f.polygons.some((q) => pointInRing(p.point!, q.outer) && !q.inners.some((h) => pointInRing(p.point!, h))));
+  return pointsOf(all, elevatorPoints, (p) => p.tags.highway === 'elevator').some((p) => inPolygons(p.point!, f.polygons));
+}
+
+/**
+ * Точечные объекты этажа один раз на массив (помещений сотни, точек тысячи: в relation/13437919 перебор
+ * «каждое помещение × все объекты» занимал секунды). Массивы объектов этажа после сборки не меняются.
+ */
+const elevatorPoints = new WeakMap<IndoorFeature[], IndoorFeature[]>(), levelPoints = new WeakMap<IndoorFeature[], IndoorFeature[]>();
+function pointsOf(all: IndoorFeature[], cache: WeakMap<IndoorFeature[], IndoorFeature[]>, test: (p: IndoorFeature) => boolean): IndoorFeature[] {
+  let out = cache.get(all);
+  if (!out) cache.set(all, out = all.filter((p) => p.kind === 'poi' && !!p.point && test(p)));
+  return out;
+}
+
+/** Точка внутри одного из многоугольников; сначала — грубая проверка по габаритам внешнего кольца. */
+function inPolygons(pt: LonLat, polygons: Polygon[]): boolean {
+  return polygons.some((q) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of q.outer) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    return pt[0] >= x0 && pt[0] <= x1 && pt[1] >= y0 && pt[1] <= y1
+      && pointInRing(pt, q.outer) && !q.inners.some((h) => pointInRing(pt, h));
+  });
 }
 
 /** Туалет или кабинка: двери в его стенах уже обычных. */
@@ -8684,8 +8704,14 @@ const isFloorKind = (f: IndoorFeature) => !f.line && (f.kind === 'room' || f.kin
 
 /** Назначение помещения: по его тегам и по точечным объектам (узлам) этажа внутри него. */
 function categoryOf(f: IndoorFeature, onLevel: IndoorFeature[]): IndoorCategory {
-  const inside = onLevel.filter((p) => p.kind === 'poi' && p.point && !p.key.endsWith('#poi')
-    && f.polygons.some((q) => pointInRing(p.point!, q.outer) && !q.inners.some((h) => pointInRing(p.point!, h))));
+  const pts = pointsOf(onLevel, levelPoints, (p) => !p.key.endsWith('#poi'));
+  if (!pts.length) return indoorCategory(f, []);
+  // Габариты помещения — один раз, а не на каждую точку
+  const boxes = f.polygons.map((q) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of q.outer) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    return [x0, y0, x1, y1]; });
+  const inside = pts.filter((p) => f.polygons.some((q, i) => { const [x0, y0, x1, y1] = boxes[i], pt = p.point!;
+    return pt[0] >= x0 && pt[0] <= x1 && pt[1] >= y0 && pt[1] <= y1 && pointInRing(pt, q.outer) && !q.inners.some((h) => pointInRing(pt, h)); }));
   return indoorCategory(f, inside);
 }
 

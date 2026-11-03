@@ -6407,6 +6407,7 @@ export function decor<T extends THREE.Object3D>(o: T): T {
   return o;
 }
 
+const coverGrids = new WeakMap<Float32Array, { eps: number; grid: Map<string, number[]> }>();
 /** Отрезки edges, целиком лежащие на каком-нибудь отрезке covers (с точностью eps, м), — выброшены. */
 export function dropCoveredSegments(edges: Float32Array, covers: Float32Array, eps = 0.02): Float32Array {
   if (!covers.length) return edges;
@@ -6416,10 +6417,16 @@ export function dropCoveredSegments(edges: Float32Array, covers: Float32Array, e
     const t = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy + (pz - az) * dz) / l2)) : 0;
     return Math.hypot(ax + t * dx - px, ay + t * dy - py, az + t * dz - pz) <= eps;
   };
-  // Сетка 4 м по плану: отрезок сравнивается только с покрытиями своей ячейки
-  const grid = new Map<string, number[]>();
-  for (let c = 0; c + 5 < covers.length; c += 6)
-    for (const k of planCells(covers[c], covers[c + 1], covers[c + 3], covers[c + 4], eps)) (grid.get(k) ?? grid.set(k, []).get(k)!).push(c);
+  // Сетка 4 м по плану: отрезок сравнивается только с покрытиями своей ячейки. Строится один раз на массив
+  // покрытий — рёбра стыков режутся по одному тем же массивом (в relation/13437919 — тысячи раз)
+  let cached = coverGrids.get(covers);
+  if (!cached || cached.eps !== eps) {
+    const grid = new Map<string, number[]>();
+    for (let c = 0; c + 5 < covers.length; c += 6)
+      for (const k of planCells(covers[c], covers[c + 1], covers[c + 3], covers[c + 4], eps)) (grid.get(k) ?? grid.set(k, []).get(k)!).push(c);
+    coverGrids.set(covers, cached = { eps, grid });
+  }
+  const grid = cached.grid;
   const out: number[] = [];
   for (let i = 0; i + 5 < edges.length; i += 6) {
     let covered = false;

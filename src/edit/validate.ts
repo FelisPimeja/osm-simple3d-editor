@@ -728,10 +728,21 @@ const OWN_DEPRECATED: readonly Deprecation[] = [
  * Устаревшие теги по списку iD (deprecated.json): предупреждение и замена, как «Обновить теги» в iD. Наши
  * проверки ошибочных ключей (WRONG_KEYS) точнее — их не повторяем. Замены с $1 подставляют старое значение.
  */
+const deprecatedIndex = new WeakMap<readonly Deprecation[], Map<string, { d: Deprecation; old: [string, string][] }[]>>();
 export function validateDeprecated(key: string, t: Record<string, string>, list: readonly Deprecation[] = deprecatedList): Issue[] {
   const out: Issue[] = [];
-  for (const d of [...list, ...OWN_DEPRECATED]) {
-    const old = Object.entries(d.old);
+  // Записи списка по первому ключу old: на объект — только те, чьи ключи у него есть (список iD — сотни записей)
+  let index = deprecatedIndex.get(list);
+  if (!index) {
+    index = new Map();
+    for (const d of [...list, ...OWN_DEPRECATED]) {
+      const k = Object.keys(d.old)[0];
+      if (k !== undefined) index.set(k, [...index.get(k) ?? [], { d, old: Object.entries(d.old) }]);
+    }
+    deprecatedIndex.set(list, index);
+  }
+  const cands = Object.keys(t).flatMap((k) => index!.get(k) ?? []);
+  for (const { d, old } of cands) {
     if (!old.every(([k, v]) => t[k] !== undefined && (v === '*' || t[k] === v))) continue;
     if (old.length === 1 && old[0][0] in WRONG_KEYS) continue;
     const was = old.map(([k]) => `${k}=${t[k]}`).join(' + ');

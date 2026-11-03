@@ -1072,7 +1072,6 @@
   "Кольцо должно лежать внутри грани.": "The ring must lie inside the face.",
   "Внутри кольца уже есть внутреннее кольцо — так вырезать пока нельзя.": "There is already an inner ring inside this ring — this cut isn't supported yet.",
   "Вырезано кольцо: у {key} дыра, внутри — новая часть {part}. Удалите её (Del) — будет двор, или тяните (P) — башня, атриум.": "Ring cut: {key} now has a hole with a new part {part} inside. Delete it (Del) for a courtyard, or pull it (P) for a tower or atrium.",
-  "Кольцо в отдельном здании-мультиполигоне пока не вырезается: сначала рассеките его на части.": "Rings can't be cut into a standalone multipolygon building yet: split it into parts first.",
   "Выделите две или больше частей (Shift+клик), затем «Объединить».": "Select two or more parts (Shift+click), then Merge.",
   "Объединять можно только части, контур здания (outline) — нет.": "Only parts can be merged, not the building outline.",
   "Для объединения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.": "Merging needs the multipolygon's member ways — reload the visible tiles.",

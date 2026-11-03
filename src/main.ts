@@ -4568,10 +4568,10 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
       { key: outer, part: inner.key }));
   };
 
-  if (f.type === 'relation') {
-    if (solo) return tr('Кольцо в отдельном здании-мультиполигоне пока не вырезается: сначала рассеките его на части.');
-    const members = (f as Tagged).relMembers ?? session.get(f.key)?.relMembers;
-    if (!members) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+  const fMembers = f.type === 'relation' ? (f as Tagged).relMembers ?? session.get(f.key)?.relMembers : undefined;
+  if (f.type === 'relation' && !fMembers) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+  if (f.type === 'relation' && !solo) {
+    const members = fMembers!;
     edits.push({ key: f.key, polygons: polygons.map((p, i) => (i === polyIndex ? withHole : p)), members: [...members, innerMember] });
     if (!outline) edits.push(groupMembersEdit(g!, [...g!.relMembers, innerPart]));
     else if (!session.get(g!.key)) edits.push(groupMembersEdit(g!, g!.relMembers));
@@ -4580,21 +4580,23 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
     return;
   }
 
-  // Путь — внешнее кольцо нового мультиполигона
+  // Путь — внешнее кольцо нового мультиполигона; у отдельного мультиполигона часть — на его же путях плюс новое кольцо
   const outerNodes = [...poly.outerIds, poly.outerIds[0]];
   const relId = nextNewId--;
-  const relMembers = [{ type: 'way' as const, ref: f.id, role: 'outer' }, innerMember];
+  const innerWayMember: MemberWay = { id: innerWay, role: 'inner', nodes: [...ids, ids[0]] };
+  const relMembers: OsmMember[] = fMembers ? [...fMembers, innerMember] : [{ type: 'way', ref: f.id, role: 'outer' }, innerMember];
   const tags = solo ? { ...partTags } : { ...f.tags };
   const rel: Feature3D & { relMembers: typeof relMembers } = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0,
-    kind: solo ? 'part' : f.kind, tags: { type: 'multipolygon', ...tags }, polygons: [withHole], hasParts: false,
-    ways: [{ id: f.id, role: 'outer', nodes: outerNodes }, { id: innerWay, role: 'inner', nodes: [...ids, ids[0]] }], relMembers };
+    kind: solo ? 'part' : f.kind, tags: { type: 'multipolygon', ...tags }, hasParts: false,
+    polygons: fMembers ? polygons.map((p, i) => (i === polyIndex ? withHole : p)) : [withHole],
+    ways: fMembers ? [...(f.ways ?? []), innerWayMember] : [{ id: f.id, role: 'outer', nodes: outerNodes }, innerWayMember], relMembers };
   edits.push({ key: rel.key, create: rel });
   const relPart = { type: 'relation' as const, ref: relId, role: 'part' };
 
   if (solo) {
-    // Отдельное здание остаётся контуром; часть с дырой (на его же пути) и внутренняя — в новом отношении
+    // Отдельное здание остаётся контуром; часть с дырой (на его же путях) и внутренняя — в новом отношении
     const id = nextNewId--;
-    const members: OsmMember[] = [{ type: 'way', ref: f.id, role: 'outline' }, relPart, innerPart];
+    const members: OsmMember[] = [{ type: f.type, ref: f.id, role: 'outline' }, relPart, innerPart];
     const building: EditGroup = { key: `relation/${id}`, type: 'relation', id, version: 0, tags: { type: 'building' },
       members: members.map((m) => `${m.type}/${m.ref}`), roles: members.map((m) => m.role), relMembers: members };
     edits.push({ key: building.key, create: building });

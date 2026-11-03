@@ -199,8 +199,50 @@ export class EditSession {
     this.push([{ key, before: tags, after: tags, mBefore: f.relMembers, mAfter: members }]);
   }
 
+  /** Объекты (из данных и сессии), в кольцах или пути которых есть узлы ids: для propagateMoves. */
+  private nodeOwners?: (ids: Set<number>) => Tagged[];
+  setNodeOwners(fn: (ids: Set<number>) => Tagged[]) { this.nodeOwners = fn; }
+
+  /**
+   * Узел общий у нескольких объектов: правка, сдвинувшая его в одном, сдвигает его и у остальных — тем же шагом
+   * истории. Иначе сцена рисует соседей по-старому, а после отправки они меняются незаметно.
+   */
+  private propagateMoves(edits: ObjectEdit[]): ObjectEdit[] {
+    if (!this.nodeOwners) return edits;
+    const moved = new Map<number, LonLat>();
+    for (const e of edits) {
+      if (e.create || e.delete || (!e.polygons && !e.line)) continue;
+      const f = this.get(e.key);
+      if (!f) continue;
+      const was = f.line ? lineCoords(f.line) : nodeCoords(f.polygons ?? []);
+      const now = e.line ? lineCoords(e.line) : e.polygons ? nodeCoords(e.polygons) : new Map<number, LonLat>();
+      for (const [id, to] of now) {
+        const from = was.get(id);
+        if (from && (from[0] !== to[0] || from[1] !== to[1])) moved.set(id, to);
+      }
+    }
+    if (!moved.size) return edits;
+    const keys = new Set(edits.map((e) => e.key));
+    const out = [...edits];
+    const at = (id: number, c: LonLat) => moved.get(id) ?? c;
+    for (const o of this.nodeOwners(new Set(moved.keys()))) {
+      if (keys.has(o.key) || this.deleted.has(o.key)) continue;
+      keys.add(o.key);
+      const f = this.get(o.key) ?? this.track(o);
+      if (f.line) {
+        out.push({ key: o.key, line: { ids: f.line.ids, coords: f.line.ids.map((id, i) => at(id, f.line!.coords[i])) } });
+      } else if (f.polygons) {
+        out.push({ key: o.key, polygons: f.polygons.map((p) => ({ ...p,
+          outer: p.outer.map((c, i) => at(p.outerIds?.[i] ?? NaN, c)),
+          inners: p.inners.map((r, j) => r.map((c, i) => at(p.innerIds?.[j]?.[i] ?? NaN, c))) })) });
+      }
+    }
+    return out;
+  }
+
   /** Несколько правок тегов и геометрии одним шагом истории (перемещение группы объектов). */
   editMany(edits: ObjectEdit[]) {
+    edits = this.propagateMoves(edits);
     const step: Entry[] = [];
     for (const e of edits) {
       if (e.create) {
@@ -351,10 +393,14 @@ export class EditSession {
     const members = this.membersChanged(key) ? this.originalMembers.get(key)!.map((m) => ({ ...m })) : undefined;
     const geometry = this.originalGeometry.get(key);
     const line = this.originalLine.get(key);
+    // Узлы встают на место и у соседей, с которыми они общие
+    const shared = geometry || line ? this.propagateMoves([{ key, ...(geometry ? { polygons: geometry } : {}), ...(line ? { line } : {}) }]).slice(1) : [];
     this.push([{ key, before: this.deleted.has(key) ? null : { ...f.tags }, after: { ...orig },
       ...(members ? { mBefore: f.relMembers, mAfter: members } : {}),
       ...(geometry ? { gBefore: f.polygons, gAfter: geometry } : {}),
-      ...(line ? { lBefore: f.line, lAfter: line } : {}) }]);
+      ...(line ? { lBefore: f.line, lAfter: line } : {}) },
+      ...shared.map((e) => { const o = this.get(e.key)!; return { key: e.key, before: { ...o.tags }, after: { ...o.tags },
+        ...(e.polygons ? { gBefore: o.polygons, gAfter: e.polygons } : {}), ...(e.line ? { lBefore: o.line ?? null, lAfter: e.line } : {}) }; })]);
     return true;
   }
 
@@ -587,6 +633,10 @@ export class EditSession {
 }
 
 /** id узла → координаты по всем кольцам (без id — пропускаем). */
+function lineCoords(l: Line): Map<number, LonLat> {
+  return new Map(l.ids.map((id, i) => [id, l.coords[i]] as const));
+}
+
 function nodeCoords(polys: Polygon[]): Map<number, LonLat> {
   const out = new Map<number, LonLat>();
   for (const p of polys) {

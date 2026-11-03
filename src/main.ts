@@ -5316,6 +5316,38 @@ function liveFeatures(): Feature3D[] {
   return timed('объекты: полный список', () => liveFeaturesImpl());
 }
 
+/**
+ * Все, у кого есть узлы ids: здания и части (кольца), пути-члены мультиполигонов (из сессии или из данных) — для
+ * сдвига общего узла у всех сразу (session.propagateMoves).
+ */
+function nodeOwners(ids: Set<number>): Tagged[] {
+  const has = (r: number[] | undefined) => !!r?.some((n) => ids.has(n));
+  const out: Tagged[] = [];
+  const coords = new Map<number, LonLat>();
+  const ways = new Map<number, { nodes: number[]; tags: Record<string, string> }>();
+  for (const g of liveFeatures()) {
+    const f = (session.get(g.key) as Feature3D | undefined) ?? g;
+    if (f.polygons?.some((p) => has(p.outerIds) || p.innerIds?.some(has))) out.push(f);
+    for (const p of f.polygons ?? []) {
+      p.outerIds?.forEach((n, i) => coords.set(n, p.outer[i]));
+      p.inners.forEach((r, j) => p.innerIds?.[j]?.forEach((n, i) => coords.set(n, r[i])));
+    }
+    for (const w of g.ways ?? []) if (!ways.has(w.id)) ways.set(w.id, { nodes: w.nodes, tags: w.tags ?? {} });
+  }
+  const seen = new Set(out.map((f) => f.key));
+  for (const l of session.lineEntities()) {
+    seen.add(l.key);
+    if (has(l.line!.ids)) out.push(l);
+  }
+  for (const [id, w] of ways) {
+    const key = `way/${id}`;
+    if (seen.has(key) || session.has(key) || !has(w.nodes) || w.nodes.some((n) => !coords.has(n))) continue;
+    out.push({ key, version: 0, tags: { ...w.tags }, line: { ids: w.nodes, coords: w.nodes.map((n) => coords.get(n)!) } });
+  }
+  return out;
+}
+session.setNodeOwners(nodeOwners);
+
 function liveFeaturesImpl(): Feature3D[] {
   const out = overpass.allFeatures();
   const have = new Set(out.map((f) => f.key));

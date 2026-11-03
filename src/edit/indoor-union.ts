@@ -1,7 +1,7 @@
 import type { IndoorFeature, LonLat } from '../osm/model';
-/** Closed line walls have a filled cap and are polygonal for union purposes. */
+/** Closed walls tagged area=yes have a filled cap and are polygonal for union purposes. */
 export const isClosedIndoorWall = (f: IndoorFeature) => f.kind === 'wall' && !!f.line && f.polygons.length === 1
-  && f.tags.area !== 'no' && f.tags.barrier !== 'fence'
+  && f.tags.area === 'yes' && f.tags.barrier !== 'fence'
   && !!f.polygons[0].outerIds && f.polygons[0].outerIds.length >= 4
   && f.polygons[0].outerIds[0] === f.polygons[0].outerIds.at(-1);
 export const isIndoorUnionPolygon = (f: IndoorFeature) => (!f.line || isClosedIndoorWall(f)) && !f.point && !f.escalator && !f.escalatorArea && !f.key.endsWith('#poi')

@@ -42,7 +42,7 @@ const MONOCHROME = new THREE.Color('#ffffff');
 
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
 export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
-  /** area=no preserves a closed way as a linear wall. */ linearWall?: boolean;
+  /** A closed way without area=yes is a linear wall. */ linearWall?: boolean;
   railing?: boolean;
   /** material=glass у стены-линии или ограждения. */ glass?: boolean;
   /** Прилавок: объём с глубиной вправо от пути. */ counter?: boolean;

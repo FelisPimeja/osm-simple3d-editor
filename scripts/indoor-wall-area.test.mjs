@@ -5,9 +5,10 @@ let vite,solidWall,isClosedIndoorWall,parseBuildings,withIndoorTags;
 before(async()=>{vite=await createServer({configFile:false,server:{middlewareMode:true,ws:false,watch:null},appType:'custom'});({solidWall}=await vite.ssrLoadModule('/src/edit/solid-wall-doors.ts'));({isClosedIndoorWall}=await vite.ssrLoadModule('/src/edit/indoor-union.ts'));({parseBuildings,withIndoorTags}=await vite.ssrLoadModule('/src/osm/model.ts'));});
 after(async()=>await vite.close());
 const elements=[...[[0,0],[1,0],[1,1],[0,1]].map(([lon,lat],i)=>({type:'node',id:i+1,lon,lat})),{type:'way',id:10,version:1,nodes:[1,2,3,4,1],tags:{indoor:'wall',level:'0'}}];
-test('closed way defaults to solid without writing area=yes',()=>{
+test('closed way without area=yes is a linear wall (Proposal:Allow area=yes for indoor=wall)',()=>{
  const f=parseBuildings(elements).indoor[0];
- assert.equal(solidWall(f),true);assert.equal(isClosedIndoorWall(f),true);assert.equal(f.tags.area,undefined);
+ assert.equal(f.line,true);assert.equal(solidWall(f),false);assert.equal(isClosedIndoorWall(f),false);assert.equal(f.tags.area,undefined);
+ assert.equal(solidWall(withIndoorTags(f,{...f.tags,area:'yes'})),true);
 });
 test('area=no preserves the closed line but disables solid interpretation; yes restores it',()=>{
  const f=parseBuildings(elements).indoor[0];

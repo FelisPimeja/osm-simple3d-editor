@@ -17,7 +17,7 @@ test('walls with different heights or levels cannot silently lose volume tags',(
 test('closed line walls may merge but open line walls remain ineligible',async()=>{
  const {indoorUnionGeometry}=await import('../src/edit/indoor-union.ts');
  const ring=[{id:1,p:[0,0]},{id:2,p:[1,0]},{id:3,p:[1,1]}];
- const closed={...wall,line:true,polygons:[{outer:[...ring.map(q=>q.p),ring[0].p],outerIds:[1,2,3,1],inners:[]}]};
+ const closed={...wall,tags:{...wall.tags,area:'yes'},line:true,polygons:[{outer:[...ring.map(q=>q.p),ring[0].p],outerIds:[1,2,3,1],inners:[]}]};
  assert.equal(isIndoorUnionPolygon(closed),true);
  const result=indoorUnionGeometry(closed,ring);
  assert.deepEqual(result.line.ids,[1,2,3,1]);

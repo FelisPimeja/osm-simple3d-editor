@@ -8827,7 +8827,7 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
     // Тип входа — варианты и подписи из схемы iD (поле entrance пресета «Вход / выход»)
     const options = k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : k === 'wall' ? WALL_VALUES : k === 'entrance' ? idOptions('entrance') : undefined;
     const label = `<span title="${esc(k)}">${esc(indoorFieldLabel(k, fs))}</span>`;
-    if(k==='area')return `<label class="tag-row${changed ? ' changed' : ''}"><span title="area">area</span><select data-indoor-tag="area"${!value ? ' style="color:#888"' : ''}>${!value ? `<option value="" selected disabled hidden>${mixed ? tr('разные значения') : 'yes'}</option>` : ''}<option value="yes"${value==='yes'?' selected':''}>yes</option><option value="no"${value==='no'?' selected':''}>no</option></select></label>`;
+    if(k==='area')return `<label class="tag-row${changed ? ' changed' : ''}"><span title="area">area</span><select data-indoor-tag="area"${!value ? ' style="color:#888"' : ''}>${!value ? `<option value="" selected disabled hidden>${mixed ? tr('разные значения') : 'no'}</option>` : ''}<option value="yes"${value==='yes'?' selected':''}>yes</option><option value="no"${value==='no'?' selected':''}>no</option></select></label>`;
     if (options) return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : k === 'entrance' ? tr('не вход') : '—',
         k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : k === 'room' ? ROOM_LABELS : k === 'wall' ? WALL_LABELS : undefined, k) + '</label>';
@@ -9521,6 +9521,8 @@ function setIndoorTags(edits: { key: string; tags: Record<string, string> }[], c
     for (const [k, v] of Object.entries(e.tags)) if (v?.trim()) tags[k] = v.trim();
     // Ресепшн и раздевалка размечаются и room, и amenity: второй тег следует за выбранным в поле значением
     // Прилавок низкий: высота по умолчанию приходит с типом и уходит с ним, своя высота остаётся
+    // Помещение-полигон, ставшее стеной, — площадная стена: area=yes, иначе замкнутый путь — линия по оси
+    if (changedTag === 'indoor' && tags.indoor === 'wall' && f && !f.line && f.key.startsWith('way/') && !tags.barrier) tags.area ??= 'yes';
     if (changedTag === 'wall') {
       if (tags.wall === 'counter') tags.height ??= writeLength(COUNTER_HEIGHT);
       else if (Math.abs((parseLength(tags.height) ?? 0) - COUNTER_HEIGHT) < 0.01) delete tags.height;
@@ -9774,6 +9776,8 @@ function indoorCreateEdits(poly: Polygon, tags: Record<string, string>, nodeFor:
   const inners = poly.inners.map((r) => nodeRing(r, nodeFor)).filter((r): r is NonNullable<typeof r> => !!r);
   tags = { ...tags };
   const kind = (['room', 'corridor', 'area', 'level', 'wall', 'column'].includes(tags.indoor) ? tags.indoor : 'area') as IndoorKind;
+  // Стена контуром — площадная (area=yes); замкнутый путь без него — линейная стена по оси
+  if (kind === 'wall' && !inners.length) tags.area ??= 'yes';
   const polygons = [{ outer: outer.map((q) => q.p), outerIds: outer.map((q) => q.id), inners: inners.map((r) => r.map((q) => q.p)), innerIds: inners.map((r) => r.map((q) => q.id)) }];
   let key: string;
   if (!inners.length) {
@@ -10128,9 +10132,9 @@ function indoorSideInsertEdits(nodes: { id: number; p: LonLat }[], skip: Set<str
   return { edits, touched };
 }
 
-/** Нарисованная контуром стена с area=no — замкнутая линия, как такая же стена из данных (кольцо с повтором первой точки). */
+/** Нарисованная контуром стена без area=yes — замкнутая линия, как такая же стена из данных (кольцо с повтором первой точки). */
 function wallAsLine(f: IndoorFeature): IndoorFeature {
-  if (f.kind !== 'wall' || f.line || f.tags.area !== 'no' || !f.key.startsWith('way/') || f.polygons.length !== 1) return f;
+  if (f.kind !== 'wall' || f.line || f.tags.area === 'yes' || f.tags.barrier || !f.key.startsWith('way/') || f.polygons.length !== 1) return f;
   const { outer, outerIds } = f.polygons[0];
   return { ...f, line: true, polygons: [{ ...f.polygons[0], outer: [...outer, outer[0]], ...(outerIds ? { outerIds: [...outerIds, outerIds[0]] } : {}) }] };
 }
@@ -11134,7 +11138,7 @@ function renderLevelsImpl() {
       items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea
         && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
         && (f.line || f.kind === 'wall' || f.kind === 'column' || f.kind === 'room' || floorLevels(f).includes(l.n)))
-        .map(wallAsLine).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && (f.tags.area==='no'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), railing:(f.tags.barrier==='fence'&&f.tags.fence_type==='railing')||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
+        .map(wallAsLine).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && (f.tags.area!=='yes'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), railing:(f.tags.barrier==='fence'&&f.tags.fence_type==='railing')||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
           ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
           ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
           ...(isPool(f) ? { pool: poolDepth(f) } : {}),

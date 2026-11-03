@@ -29,7 +29,7 @@ test('polygon wall split persists separate selectable geometry, including closed
  const outer=[[0,0],[10,0],[10,1],[0,1]];
  const half=[[[5,-10],[20,-10],[20,10],[5,10],[5,-10]]];
  for(const line of [false,true]){
-  const wall={key:'way/1572319834',kind:'wall',line,tags:{indoor:'wall',level:'0'},levels:[0],
+  const wall={key:'way/1572319834',kind:'wall',line,tags:{indoor:'wall',level:'0',area:'yes'},levels:[0],
    polygons:[{outer:line?[...outer,outer[0]]:outer,outerIds:line?[1,2,3,4,1]:[1,2,3,4],inners:[]}]};
   assert.equal(isIndoorCutPolygon(wall),true);
   assert.equal(isIndoorCutPolygon({...wall,line:true,polygons:[{...wall.polygons[0],outerIds:[1,2,3,4]}]}),false);

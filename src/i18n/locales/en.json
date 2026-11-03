@@ -1411,5 +1411,5 @@
   "Контур отступает от частей до {dist} м: {pct}% контура не покрыто частями. Похоже, контур нарисован не по следу здания — подгоните его под части.": "The outline sits up to {dist} m away from the parts: {pct}% of it is not covered by parts. It looks drawn off the building footprint — fit it to the parts.",
   "подогнать контур под части (входы — на новые стены)": "fit the outline to the parts (entrances move to the new walls)",
   "Откройте здание, чтобы подогнать его контур.": "Open the building to fit its outline.",
-  "Контур {key} подогнан под наземные части ({n}), входов перенесено на новые стены: {m}. Отменить — Ctrl+Z.": "Outline {key} fitted to the above-ground parts ({n}); entrances moved to the new walls: {m}. Undo — Ctrl+Z."
+  "Контур {key} подогнан под след частей на земле ({n}), входов перенесено на новые стены: {m}. Отменить — Ctrl+Z.": "Outline {key} fitted to the ground footprint of the parts ({n}); entrances moved to the new walls: {m}. Undo — Ctrl+Z."
 }

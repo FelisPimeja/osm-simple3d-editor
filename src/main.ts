@@ -5000,13 +5000,13 @@ const OUTLINE_EPS = 0.05;
  * Контур отношения и части, стоящие на земле (приподнятые и подземные выходить за след на земле могут — partGround),
  * и те из них, что выходят за контур хоть одной вершиной.
  */
-function partsOutsideOutline(g: BuildingGroup, raised = false): { outline: Feature3D; parts: Feature3D[]; out: Feature3D[] } | undefined {
+function partsOutsideOutline(g: BuildingGroup): { outline: Feature3D; parts: Feature3D[]; out: Feature3D[] } | undefined {
   const oi = g.roles.indexOf('outline');
   const outline = oi >= 0 ? entity(g.members[oi]) as Feature3D | undefined : undefined;
   if (!outline?.polygons?.length || !overpassLayer.focusToLocal([0, 0])) return;
   const rings = outline.polygons.map((p) => p.outer.map((c) => overpassLayer.focusToLocal(c)!));
   const parts = g.members.filter((k, i) => g.roles[i] === 'part' && !session.isDeleted(k))
-    .map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons?.length && (partGround(f.tags) === 'ground' || raised && partGround(f.tags) === 'raised'));
+    .map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons?.length && partGround(f.tags) === 'ground');
   const inside = (q: [number, number]) => rings.some((ring) => pointInRing(q, ring)
     || ring.some((a, i) => segDist2(q, a, ring[(i + 1) % ring.length]) < OUTLINE_EPS));
   const out = parts.filter((f) => f.polygons.some((p) => p.outer.some((c) => !inside(overpassLayer.focusToLocal(c)!))));
@@ -5050,8 +5050,8 @@ function unitedOutline(outline: Feature3D, parts: Feature3D[], fit = false): { o
  */
 function fixOutline(fit = false) {
   if (!focus || isSolo(focus)) return;
-  // Подгонка — по всему наземному объёму: нависающие этажи тоже рисуют силуэт здания
-  const r = partsOutsideOutline(focus, fit);
+  // Подгонка — по следу на земле: в отношении нависающие части относятся к зданию по членству, не по контуру
+  const r = partsOutsideOutline(focus);
   if (!r) return setStatus(tr('Контур здания — не простой путь: обновить его пока нельзя.'), true);
   const united = unitedOutline(r.outline, r.parts, fit);
   if (typeof united === 'string') return setStatus(united, true);
@@ -5098,7 +5098,7 @@ function fixOutline(fit = false) {
   overpassLayer.setDrawPreview(undefined);
   session.editMany(edits);
   renderSelected();
-  setStatus(fit ? tr('Контур {key} подогнан под наземные части ({n}), входов перенесено на новые стены: {m}. Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length, m: moved })
+  setStatus(fit ? tr('Контур {key} подогнан под след частей на земле ({n}), входов перенесено на новые стены: {m}. Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length, m: moved })
     : tr('Контур {key} обновлён: охватывает все части на земле ({n}). Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length }));
 }
 
@@ -7504,7 +7504,7 @@ infoEl.addEventListener('mouseover', (e) => {
 
 /** Предпросмотр «Обновить контур» (новый контур поверх всего — виден и у скрытого контура); false — убрать. */
 function previewGrownOutline(on: boolean, fit = false) {
-  const r = on && focus ? partsOutsideOutline(focus, fit) : undefined;
+  const r = on && focus ? partsOutsideOutline(focus) : undefined;
   const u = r && unitedOutline(r.outline, r.parts, fit);
   if (!r || !u || typeof u === 'string') return overpassLayer.setDrawPreview(undefined);
   // Прирост — новый контур минус прежний: его и выделяем (на фоне всего контура он бывает в пару м²)

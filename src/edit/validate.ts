@@ -611,8 +611,8 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
       const missing = gap && multiArea(gap);
       if (gap && missing !== undefined && missing > 1 && missing > outlineArea * 0.001) {
         const ring = (r: number[][]) => r.slice(0, -1).map(p.back);
-        // Пробел — узкая полоса вдоль наземных частей (с нависающими): контур просто нарисован шире следа, его подгоняют под части
-        const ground = coverParts.filter((f) => partGround(f.tags) !== 'underground');
+        // Пробел — узкая полоса вдоль следа частей на земле: контур просто нарисован шире следа, его подгоняют под части
+        const ground = coverParts.filter((f) => partGround(f.tags) === 'ground');
         const foot = g.type === 'relation' && g.id !== 0 && ground.length ? safe(() => polygonClipping.union(multi(ground[0]), ...ground.slice(1).map(multi))) : undefined;
         const edges = foot?.length === 1 ? foot[0].flatMap((r) => r.slice(0, -1).map((a, i) => [a, r[i + 1]] as const)) : [];
         const fit = edges.length > 0 && gap.every((poly) => poly.every((r) => r.every((q) => edges.some(([a, b]) => segDist(q, a, b) <= FIT_OUTLINE_DIST))));

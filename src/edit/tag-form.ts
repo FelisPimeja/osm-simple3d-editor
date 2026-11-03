@@ -1,5 +1,5 @@
 import { INHERITABLE, inheritedTags, inheritedValue } from '../osm/inherit';
-import { computeHeights, FOOT, LEVEL_HEIGHT, parseLength, roofHeightOf, roofShapeOf } from '../osm/heights';
+import { computeHeights, FOOT, LEVEL_HEIGHT, parseLength } from '../osm/heights';
 import type { EditSession } from './session';
 import { hasOwnUnit, lengthNumber, lengthUnitOf, withUnit, writeLength, type LengthUnit } from '../osm/units';
 import { tr, trn } from '../i18n';
@@ -425,20 +425,6 @@ function stepper(input: string): string {
     + `<button type="button" class="step-btn" data-step="-1" tabindex="-1" title="${tr('Меньше на 1')}"></button></span></span>`;
 }
 
-/**
- * Крыша — поверх фасада: при выборе скатной формы вместо плоской и при смене roof:height верх стен остаётся
- * на месте, а height растёт на высоту крыши (по схеме height — до конька, и крыша иначе съедала бы фасад).
- * Без height, но с этажами — при выборе формы height записываем: этажи плюс крыша (дальше правки идут как с height).
- */
-function roofOnTop(before: Record<string, string>, after: Record<string, string>, tag: string) {
-  if (before['building:part'] === 'roof' || before.building === 'roof') return;
-  const height = parseLength(before.height) !== undefined;
-  if (!height && before['building:levels'] === undefined) return;
-  const pitched = roofShapeOf(after) !== 'flat';
-  const apply = tag === 'roof:shape' ? pitched && roofShapeOf(before) === 'flat' : tag === 'roof:height' && pitched && height;
-  if (apply) after.height = writeLength(computeHeights(before).wallTop + roofHeightOf(after), before.height);
-}
-
 /** Обработчики формы (делегирование на контейнер; вешается один раз). */
 export function bindTagForms(container: HTMLElement, session: () => EditSession | undefined) {
   const commit = (input: HTMLInputElement | HTMLSelectElement) => {
@@ -467,12 +453,11 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
       if (v.trim() === REMOVE_VALUE && tag === 'building:part') delete tags[tag];
       else if (v.trim()) tags[tag] = v.trim(); else if (empty && !('emptyRemoves' in input.dataset)) tags[tag] = empty; else delete tags[tag];
       if (tags[tag] === f.tags[tag]) return [];
-      roofOnTop(f.tags, tags, tag);
       return [{ key, tags }];
     });
     if (edits.length === 1 && keys.length === 1) {
       const { key, tags } = edits[0];
-      s.setTags(key, { [tag]: tags[tag], ...(tags.height !== s.get(key)!.tags.height ? { height: tags.height } : {}) });
+      s.setTags(key, { [tag]: tags[tag] });
     }
     else if (edits.length) s.editMany(edits);
     // Формула применена — поле покажет новое значение после перерисовки; если ничего не поменялось — очистить

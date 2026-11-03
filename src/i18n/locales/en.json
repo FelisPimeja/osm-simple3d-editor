@@ -1406,5 +1406,6 @@
   "Спортзал": "Sports room",
   "Проблемы выбранных объектов: {n} из {all}": "Issues of selected objects: {n} of {all}",
   "Исправить {n} из {all}": "Fix {n} of {all}",
-  "{tag} — нужно целое неотрицательное число подземных этажей.": "{tag}: must be a non-negative whole number of underground levels."
+  "{tag} — нужно целое неотрицательное число подземных этажей.": "{tag}: must be a non-negative whole number of underground levels.",
+  "У части только building:levels, а у других частей здания — height: в разных рендерах высота этажа своя, и части могут не совпасть по высоте. Задайте части одинаково.": "This part has only building:levels while other parts of the building have height: renderers assume different level heights, so the parts may not line up. Tag the parts the same way."
 }

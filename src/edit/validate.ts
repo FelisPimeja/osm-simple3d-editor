@@ -622,6 +622,17 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
     }
   }
 
+  // Высота частей вперемешку: у одних height, у других только этажи — рендеры считают метры на этаж по-разному,
+  // и такие части съезжают относительно частей с явной высотой
+  const measured = parts.filter((f) => parseLength(f.tags.height) !== undefined);
+  if (measured.length) {
+    for (const f of parts) {
+      if (parseLength(f.tags.height) !== undefined || f.tags['building:levels'] === undefined) continue;
+      out.push({ key: f.key, level: 'warning', code: 'mixed-height',
+        text: tr('У части только building:levels, а у других частей здания — height: в разных рендерах высота этажа своя, и части могут не совпасть по высоте. Задайте части одинаково.') });
+    }
+  }
+
   // Висящая часть: без min_height внутри части, начинающейся выше земли, — столб от земли сквозь неё
   for (const [key, fl] of floatingParts(parts.filter((f) => !broken.has(f.key)))) {
     out.push({ key, other: fl.on, level: 'warning', code: 'floating',

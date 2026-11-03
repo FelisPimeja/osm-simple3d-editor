@@ -11033,6 +11033,8 @@ function renderLevelsImpl() {
     clearInfo();
   }
   shownLevel = level;
+  const hybrids = level ? focus.members.filter((k) => indoor.some((f) => f.key === k)) : [];
+  if (hybrids.join() !== planHiddenParts.join()) { planHiddenParts = hybrids; syncFocusHidden(); }
   syncPlanTools();
   drawIndoorLevel = level?.n;
   syncRectIcons();
@@ -12509,12 +12511,15 @@ function changeFocusHidden(next: Set<string>) {
  * Передать сцене скрытые части: глазиком и по дате слайдера времени. changed — только если набор частей,
  * которых нет в году слайдера, поменялся (правка start_date / end_date): пересборка геометрии не бесплатна.
  */
+/** Части, размеченные ещё и как помещение (building:part + indoor + level): на плане этажа их рисует indoor — объём не дублируем. */
+let planHiddenParts: string[] = [];
+
 function syncFocusHidden(changed = false): boolean {
   if (!focus) return false;
   const dated = new Set(focus.members.filter((k) => { const f = entity(k); return !!f && !overpass.isVisible(f as Feature3D); }));
   if (changed && dated.size === focusDated.size && [...dated].every((k) => focusDated.has(k))) return false;
   focusDated = dated;
-  overpassLayer.setFocusHidden([...focusHidden, ...dated]);
+  overpassLayer.setFocusHidden([...focusHidden, ...dated, ...planHiddenParts]);
   // Изоляция: из многих объёмов виден один
   const volumes = focus.members.filter((k) => !bareOutlines(focus!).includes(k));
   overpassLayer.setUndergroundHidden(volumes.length > 1 && volumes.filter((k) => !focusHidden.has(k)).length === 1);

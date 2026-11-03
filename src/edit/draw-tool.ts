@@ -1,7 +1,8 @@
 import { fromInputUnit, showLength, unitLabel } from '../osm/units';
 import { localAxes, type AxisRing } from './local-axes';
 import * as THREE from 'three';
-import type { BuildingsLayer, SnapHit, SnapKind } from '../render/buildings-layer';
+import type { BuildingsLayer, SnapEdge, SnapHit, SnapKind } from '../render/buildings-layer';
+import { tracePath } from './trace';
 import { tr } from '../i18n';
 
 type Pt = [number, number];
@@ -56,6 +57,13 @@ export const NGON_MIN = 3, NGON_MAX = 64;
  * Полигон замыкается кликом в первую точку или Enter, Backspace убирает последнюю точку. Tab — способ
  * построения прямоугольника. Esc — отмена. Что делать с готовым контуром — решает commit снаружи.
  */
+/** Формы с трассировкой. */
+const TRACED: DrawShape[] = ['polygon', 'wall'];
+const TRACE_KEY = 'simple3d:trace';
+function loadTracing(): boolean {
+  try { return localStorage.getItem(TRACE_KEY) === '1'; } catch { return false; }
+}
+
 export class DrawTool {
   shape: DrawShape = 'polygon';
   rectMode: RectMode = 'corners';
@@ -65,6 +73,11 @@ export class DrawTool {
   state: 'off' | 'draw' = 'off';
   snap?: SnapHit;
   private pts: Pt[] = [];
+  /** Сколько точек добавил каждый клик (с трассировкой — несколько): Backspace убирает их вместе. */
+  private steps: number[] = [];
+  /** Трассировка: путь от последней точки до курсора — по рёбрам привязок (у полигона и стены). */
+  tracing = loadTracing();
+  private traceSrc?: { parts: SnapEdge[][]; all: SnapEdge[] };
   /** Оси от объектов у первой точки; undefined — оси здания. */
   private frame?: NonNullable<BuildingsLayer['focusAxes']>;
   /** Контуры и линии плана, от которых берутся оси (задаёт main). */
@@ -82,6 +95,8 @@ export class DrawTool {
   private readonly vcb: HTMLDivElement;
   /** Форма числа углов (у правильного многоугольника). */
   private readonly opts: HTMLDivElement;
+  /** Переключатель трассировки (у полигона и стены). */
+  private readonly traceOpt: HTMLLabelElement;
   /** Подписи длин сторон контура (HTML поверх карты). */
   private readonly dims: HTMLDivElement;
   /** Стороны для подписей: точки контура, замкнут ли он, какая сторона — текущая (тянется курсором). */
@@ -116,6 +131,15 @@ export class DrawTool {
     // Enter / Esc в поле — назад к рисованию
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); input.blur(); } });
     container.appendChild(this.opts);
+    this.traceOpt = document.createElement('label');
+    this.traceOpt.className = 'draw-opts draw-trace';
+    this.traceOpt.hidden = true;
+    this.traceOpt.title = tr('Путь от последней точки до курсора — по сторонам контуров, помещений и стен');
+    this.traceOpt.innerHTML = `<input type="checkbox" /> ${tr('Трассировка')} (T)`;
+    const box = this.traceOpt.querySelector('input')!;
+    box.checked = this.tracing;
+    box.addEventListener('change', () => { this.setTracing(box.checked); box.blur(); });
+    container.appendChild(this.traceOpt);
     this.dims = document.createElement('div');
     this.dims.className = 'draw-dims';
     container.appendChild(this.dims);
@@ -129,6 +153,7 @@ export class DrawTool {
     this.state = 'draw';
     this.opts.hidden = shape !== 'ngon';
     this.opts.querySelector('input')!.value = String(this.sides);
+    this.traceOpt.hidden = !TRACED.includes(shape);
     this.hint();
   }
 
@@ -162,6 +187,7 @@ export class DrawTool {
   stop() {
     this.reset();
     this.opts.hidden = true;
+    this.traceOpt.hidden = true;
     this.state = 'off';
     this.onState('');
   }
@@ -177,7 +203,10 @@ export class DrawTool {
     }
     if (this.shape === 'polygon' && this.pts.length >= 3) {
       const first = this.layer.focusProject(new THREE.Vector3(this.pts[0][0], this.pts[0][1], this.z));
-      if (first && Math.hypot(first[0] - point[0], first[1] - point[1]) < CLOSE_PX) { this.finish(this.pts); return true; }
+      if (first && Math.hypot(first[0] - point[0], first[1] - point[1]) < CLOSE_PX) {
+        this.finish([...this.pts, ...this.traceTo(this.pts[0])]);
+        return true;
+      }
     }
     this.add(q);
     return true;
@@ -203,6 +232,10 @@ export class DrawTool {
       return true;
     }
     if (e.type !== 'keydown') return false;
+    if (e.code === 'KeyT' && TRACED.includes(this.shape) && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      this.setTracing(!this.tracing);
+      return true;
+    }
     if (e.key === 'Escape') {
       if (this.pts.length) { this.reset(); this.hint(); } else this.stop();
       return true;
@@ -225,7 +258,7 @@ export class DrawTool {
     }
     if (e.key === 'Backspace') {
       if (this.typed) this.typed = this.typed.slice(0, -1);
-      else if (this.pts.length) { this.pts.pop(); if (!this.pts.length) this.hint(); }
+      else if (this.pts.length) { this.pts.splice(-(this.steps.pop() ?? 1)); if (!this.pts.length) this.hint(); }
       this.preview();
       return true;
     }
@@ -328,7 +361,9 @@ export class DrawTool {
     // Двойной клик и повторный клик в ту же точку — не новая вершина
     const last = this.pts[this.pts.length - 1];
     if (last && Math.hypot(q[0] - last[0], q[1] - last[1]) < 0.01) return;
-    this.pts.push(q);
+    const path = last ? this.traceTo(q) : [];
+    this.pts.push(...path, q);
+    this.steps.push(path.length + 1);
     if (this.pts.length === 1) {
       const f = this.layer.focusAxes, axes = f && this.axisRings ? localAxes(q, this.axisRings(), f.x) : undefined;
       this.frame = f && axes && { ...f, ...axes };
@@ -485,6 +520,24 @@ export class DrawTool {
     this.hint();
   }
 
+  setTracing(on: boolean) {
+    this.tracing = on;
+    try { localStorage.setItem(TRACE_KEY, on ? '1' : '0'); } catch { /* без запоминания */ }
+    this.traceOpt.querySelector('input')!.checked = on;
+    this.onState(on ? tr('Трассировка включена: путь до курсора идёт по сторонам контуров, помещений и стен. T — выключить.')
+      : tr('Трассировка выключена. T — включить.'));
+    if (this.lastPoint) this.move(this.lastPoint);
+  }
+
+  /** Промежуточные точки трассировки от последней точки до q (пусто — трассировка выключена или пути нет). */
+  private traceTo(q: Pt): Pt[] {
+    const last = this.pts[this.pts.length - 1];
+    if (!this.tracing || !TRACED.includes(this.shape) || !last) return [];
+    const parts = this.layer.traceEdges();
+    if (!this.traceSrc || parts.some((p, i) => p !== this.traceSrc!.parts[i])) this.traceSrc = { parts, all: parts.flat() };
+    return tracePath(this.traceSrc.all, this.z, last, q) ?? [];
+  }
+
   /** Подписи длин сторон у их середин на экране (и после движения камеры). */
   relabel() {
     const r = this.dimRing;
@@ -506,6 +559,7 @@ export class DrawTool {
     this.dimRing = undefined;
     this.dims.innerHTML = '';
     this.pts = [];
+    this.steps = [];
     this.frame = undefined;
     this.cursor = undefined;
     this.snap = undefined;
@@ -519,7 +573,7 @@ export class DrawTool {
 
   private preview() {
     const v = (p: Pt) => new THREE.Vector3(p[0], p[1], this.z);
-    const pts = this.cursor ? [...this.pts, this.cursor] : this.pts;
+    const pts = this.cursor ? [...this.pts, ...(this.pts.length ? this.traceTo(this.cursor) : []), this.cursor] : this.pts;
     const round = ROUND.includes(this.shape);
     const circ = this.shape === 'circle' ? this.circleOf(pts) : undefined;
     const ring = this.shape === 'rect' ? this.rectRing(pts) : circ ? circleRing(circ.c, circ.r, CIRCLE_PREVIEW)

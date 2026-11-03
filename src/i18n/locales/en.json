@@ -1410,5 +1410,9 @@
   "Контур отступает от частей до {dist} м: {pct}% контура не покрыто частями. Похоже, контур нарисован не по следу здания — подгоните его под части.": "The outline sits up to {dist} m away from the parts: {pct}% of it is not covered by parts. It looks drawn off the building footprint — fit it to the parts.",
   "подогнать контур под части (входы — на новые стены)": "fit the outline to the parts (entrances move to the new walls)",
   "Откройте здание, чтобы подогнать его контур.": "Open the building to fit its outline.",
-  "Контур {key} подогнан под след частей на земле ({n}), входов перенесено на новые стены: {m}, нависающим частям за контуром — layer=1: {l}. Отменить — Ctrl+Z.": "Outline {key} fitted to the ground footprint of the parts ({n}); entrances moved to the new walls: {m}; overhanging parts outside it got layer=1: {l}. Undo — Ctrl+Z."
+  "Контур {key} подогнан под след частей на земле ({n}), входов перенесено на новые стены: {m}, нависающим частям за контуром — layer=1: {l}. Отменить — Ctrl+Z.": "Outline {key} fitted to the ground footprint of the parts ({n}); entrances moved to the new walls: {m}; overhanging parts outside it got layer=1: {l}. Undo — Ctrl+Z.",
+  "Путь от последней точки до курсора — по сторонам контуров, помещений и стен": "Path from the last point to the cursor follows the sides of outlines, rooms and walls",
+  "Трассировка": "Tracing",
+  "Трассировка включена: путь до курсора идёт по сторонам контуров, помещений и стен. T — выключить.": "Tracing on: the path to the cursor follows the sides of outlines, rooms and walls. T to turn off.",
+  "Трассировка выключена. T — включить.": "Tracing off. T to turn on."
 }

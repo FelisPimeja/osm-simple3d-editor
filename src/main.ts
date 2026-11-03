@@ -14353,7 +14353,7 @@ function esc(s: unknown): string { return String(s).replace(/[&<>"]/g, (c) => `&
 const tagTable = (tags: Record<string, unknown>) =>
   `<table>${Object.entries(tags).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
 
-if (import.meta.env.DEV) Object.assign(window, { map, overpassLayer, overpass, orbit, select, enterFocus, getSession: () => session, pointTarget });
+if (import.meta.env.DEV) Object.assign(window, { map, overpassLayer, overpass, orbit, select, enterFocus, getSession: () => session, pointTarget, drawTool });
 
 void openEditLink();
 renderHelp();

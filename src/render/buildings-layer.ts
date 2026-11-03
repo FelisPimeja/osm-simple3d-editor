@@ -3150,6 +3150,11 @@ export class BuildingsLayer implements CustomLayerInterface {
    * opts.noEdge — без точки на ребре (вытягиванию нужны высоты, а не произвольные точки вертикальных рёбер).
    * opts.skip — какие точки (и рёбра с таким концом) не брать: например, едущие вершины и их стороны.
    */
+  /** Рёбра привязок (контуры, части, на этаже — помещения, стены) для трассировки; массивы живут до сброса кеша. */
+  traceEdges(): SnapEdge[][] {
+    return [this.snaps?.edges ?? [], this.indoorSnaps?.edges ?? []];
+  }
+
   snapAt(point: [number, number], filter: (key: string) => boolean = () => true, radius = SNAP_RADIUS_PX,
     opts: SnapOpts = {}): SnapHit | undefined {
     const own = timed('привязки: поиск', () => this.findSnap(point, filter, radius, opts));
@@ -6563,7 +6568,7 @@ export type SnapKind = 'level' | 'vertex' | 'midpoint' | 'center' | 'shape' | 'g
 export const GRID_SNAP_KEY = '@grid';
 /** axis, dist — у оси откладывания: номер оси якоря и расстояние от него со знаком. */
 interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3; label?: string; axis?: number; dist?: number }
-interface SnapEdge { key: string; a: THREE.Vector3; b: THREE.Vector3 }
+export interface SnapEdge { key: string; a: THREE.Vector3; b: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 /** along — у продолжения ребра: конец ребра, от которого идёт продолжение (для пунктира). */
 /**

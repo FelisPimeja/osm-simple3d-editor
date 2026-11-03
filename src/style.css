@@ -777,3 +777,6 @@ body.mobile #issues-panel { display: none !important; }
 .inherit-field:has(.length-field) .length-unit { right: 24px; }
 .inherit-field:has(.length-field) .length-field input[type="text"] { padding-right: 40px; }
 .repeat-actions { display: flex; justify-content: space-between; gap: 8px; }
+.draw-opts.draw-trace { display: flex; align-items: center; gap: 6px; color: #444; cursor: pointer; user-select: none; }
+.draw-opts.draw-trace[hidden] { display: none; }
+.draw-opts.draw-trace input { width: auto; margin: 0; }

@@ -3,21 +3,43 @@ import {finiteCutPieces} from './finite-cut';
 type Pt=[number,number];
 const same=(a:Pt,b:Pt)=>Math.hypot(a[0]-b[0],a[1]-b[1])<.001;
 /** Join shared endpoints, keeping the actual finite extent of wall boundaries. */
+/**
+ * Тот же порядок склейки, что и полным перебором пар (наименьший i, затем наименьший j), но партнёры ищутся по
+ * сетке концов: перебор пар с перезапуском после каждой склейки — O(n³), на этаже ГУМа (relation/3330565,
+ * тысячи стен-линий) клик по пустому месту висел ~20 с.
+ */
 export function joinedWalls(lines:Pt[][]):Pt[][]{
- const chains=lines.filter(l=>l.length>1).map(l=>[...l]);
- let changed=true;
- while(changed){changed=false;
-  outer:for(let i=0;i<chains.length;i++)for(let j=i+1;j<chains.length;j++){
-   let a=chains[i],b=chains[j];
-   if(same(a[0],a.at(-1)!)||same(b[0],b.at(-1)!))continue;
-   if(same(a[0],b[0]))a=[...a].reverse();
-   else if(same(a[0],b.at(-1)!)){[a,b]=[b,a];}
-   else if(same(a.at(-1)!,b.at(-1)!))b=[...b].reverse();
-   if(!same(a.at(-1)!,b[0]))continue;
-   chains[i]=[...a,...b.slice(1)];chains.splice(j,1);changed=true;break outer;
+ const chains:(Pt[]|null)[]=lines.filter(l=>l.length>1).map(l=>[...l]);
+ const CELL=.001,index=new Map<string,Set<number>>();
+ const cell=(p:Pt)=>[Math.round(p[0]/CELL),Math.round(p[1]/CELL)];
+ const ends=(c:Pt[])=>same(c[0],c.at(-1)!)?[]:[c[0],c.at(-1)!];
+ const add=(i:number)=>{for(const p of ends(chains[i]!)){const [x,y]=cell(p),k=`${x},${y}`;(index.get(k)??index.set(k,new Set()).get(k)!).add(i);}};
+ const remove=(i:number)=>{for(const p of ends(chains[i]!)){const [x,y]=cell(p);index.get(`${x},${y}`)?.delete(i);}};
+ const near=(p:Pt)=>{const [x,y]=cell(p),out:number[]=[];for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(const j of index.get(`${x+dx},${y+dy}`)??[])out.push(j);return out;};
+ /** Склейка a и b, как в переборе пар; не сходятся — undefined. */
+ const join=(a:Pt[],b:Pt[]):Pt[]|undefined=>{
+  if(same(a[0],a.at(-1)!)||same(b[0],b.at(-1)!))return;
+  if(same(a[0],b[0]))a=[...a].reverse();
+  else if(same(a[0],b.at(-1)!)){[a,b]=[b,a];}
+  else if(same(a.at(-1)!,b.at(-1)!))b=[...b].reverse();
+  if(!same(a.at(-1)!,b[0]))return;
+  return [...a,...b.slice(1)];
+ };
+ chains.forEach((_,i)=>add(i));
+ // Склейка не даёт партнёра цепочке с меньшим номером, которой его не было (её партнёр j был бы и раньше),
+ // поэтому достаточно идти по i и доклеивать к i, пока есть с кем
+ for(let i=0;i<chains.length;i++){
+  if(!chains[i])continue; // уже приклеена к цепочке с меньшим номером
+  for(;;){
+   const a=chains[i]!;
+   const cands=[...new Set(ends(a).flatMap(near))].filter(j=>j>i&&chains[j]).sort((x,y)=>x-y);
+   let merged:Pt[]|undefined,jj=-1;
+   for(const j of cands){merged=join(a,chains[j]!);if(merged){jj=j;break;}}
+   if(!merged)break;
+   remove(i);remove(jj);chains[i]=merged;chains[jj]=null;add(i);
   }
  }
- return chains;
+ return chains.filter((c):c is Pt[]=>!!c);
 }
 /** Partition empty floor space by real walls, including walls made from several ways. Metres, closed rings. */
 export function freeAreaPieces(section:MultiPolygon,occupied:MultiPolygon[],walls:Pt[][], doors:{at:Pt;width:number}[]=[]):MultiPolygon{

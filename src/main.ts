@@ -9688,6 +9688,9 @@ function levelOpenings(l: Level): IndoorFeature[] {
     && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels) && !floorLevels(f).includes(l.n));
 }
 
+/** Последнее разбиение пустой площади этажа (undefined — polygon-clipping не справился). */
+let freeAreaCache: { sig: string; pieces: [number, number][][][] | undefined } | undefined;
+
 function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | undefined {
   if (!shownLevel) return;
   const ray = overpassLayer.focusRay(point);
@@ -9696,14 +9699,25 @@ function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | 
   // Подземный этаж только из indoor-данных (подземной части в OSM нет): пустоты — в пределах следа здания на земле
   const section = ll && (levelSection(shownLevel) ?? (shownLevel.floor < 0 ? overpassLayer.focusSection(0.1) : undefined));
   if (!ll || !section?.length) return;
+  // Мимо этажа (клик по пустому месту вокруг здания, двойной клик — выход) — разбиение этажа не нужно вовсе:
+  // на большом этаже оно стоит секунды (ГУМ, relation/3330565)
+  if (!section.some((p) => pointInRing(ll, p[0]) && !p.slice(1).some((h) => pointInRing(ll, h)))) return;
   const local = (p: LonLat) => overpassLayer.focusToLocal(p)!;
   const close = (r: LonLat[]) => { const points = r.map(local); return [...points, points[0]]; };
   const indoor = shownIndoor.map(wallAsLine);
   const occupied = [...indoor.filter(f => (isFloorKind(f) && !f.escalatorArea) || solidWall(f) || f.kind === 'column'), ...levelOpenings(shownLevel)]
     .map(f => f.polygons.map(p => [close(p.outer), ...p.inners.map(close)]));
   const walls = indoor.filter(f => f.kind === 'wall' && f.line && !solidWall(f)).flatMap(f => f.polygons.map(p => p.outer.map(local)));
-  let pieces: [number, number][][][];
-  try { pieces = freeAreaPieces(section.map(p => p.map(close)), occupied, walls, shownIndoor.filter(isDoor).map(d => ({at: local(d.point!), width: openingDoorWidth(d.tags)}))); } catch (err) { console.warn('[free-area]', err); return; }
+  const sectionLocal = section.map(p => p.map(close)), doors = shownIndoor.filter(isDoor).map(d => ({at: local(d.point!), width: openingDoorWidth(d.tags)}));
+  // Разбиение этажа — по содержимому: следующий клик по тому же этажу (и неудача polygon-clipping) — из кеша
+  const sig = hashString(JSON.stringify([sectionLocal, occupied, walls, doors]));
+  let pieces: [number, number][][][] | undefined;
+  if (freeAreaCache?.sig === sig) pieces = freeAreaCache.pieces;
+  else {
+    try { pieces = freeAreaPieces(sectionLocal, occupied, walls, doors); } catch (err) { console.warn('[free-area]', err); }
+    freeAreaCache = { sig, pieces };
+  }
+  if (!pieces) return;
   const toLngLat = (r: [number,number][]) => r.slice(0,-1).map(p => overpassLayer.focusToLngLat(...p)! as LonLat);
   const piece = pieces.map(p => ({ outer: toLngLat(p[0]), inners: p.slice(1).map(toLngLat) }))
     .find(p => pointInRing(ll, p.outer) && !p.inners.some(r => pointInRing(ll, r)));

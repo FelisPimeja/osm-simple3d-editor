@@ -189,6 +189,16 @@ export function kindOf(tags?: Record<string, string>): Feature3D['kind'] | undef
   if (tags.building && tags.building !== 'no') return 'building';
 }
 
+/**
+ * Часть здания, размеченная ещё и как помещение (relation/17748313: building:part + indoor=area + level=1,
+ * way/180591366: building:part + indoor=corridor + level=-1) — кроме объёма рисуем и на плане её этажа.
+ */
+function partIndoorKind(kind: Feature3D['kind'], tags?: Record<string, string>): IndoorKind | undefined {
+  if (kind !== 'part' || tags?.level === undefined) return;
+  const ik = indoorKind(tags);
+  return ik === 'area' || ik === 'corridor' || ik === 'room' ? ik : undefined;
+}
+
 export function parseBuildings(elements: OsmElement[]): ParseResult {
   const nodes = new Map<number, OsmNode>();
   const ways = new Map<number, OsmWay>();
@@ -243,7 +253,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
 
   for (const w of ways.values()) {
     const kind = memberKind.get(`way/${w.id}`) ?? kindOf(w.tags);
-    const ik = kind ? undefined : indoorKind(w.tags);
+    const ik = kind ? partIndoorKind(kind, w.tags) : indoorKind(w.tags);
     if (!kind && w.tags?.highway === 'steps' && w.tags.conveying && w.tags.conveying !== 'no' && w.nodes[0] !== w.nodes[w.nodes.length - 1]) {
       const pts = w.nodes.map((id) => nodes.get(id)).filter((n): n is OsmNode => !!n).map((n): LonLat => [n.lon, n.lat]);
       if (pts.length >= 2) {
@@ -276,7 +286,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
       continue;
     }
     const kind = memberKind.get(`relation/${r.id}`) ?? kindOf(r.tags);
-    const ik = kind ? undefined : indoorKind(r.tags);
+    const ik = kind ? partIndoorKind(kind, r.tags) : indoorKind(r.tags);
     if ((!kind && !ik) || r.tags?.type !== 'multipolygon') continue;
     const key = `relation/${r.id}`;
     const segs = { outer: [] as number[][], inner: [] as number[][] };
@@ -304,7 +314,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
       const p = polygons.find((p) => pointInRing(inner[0], p.outer));
       if (p) { p.inners.push(inner); p.innerIds!.push(ring.slice(0, -1)); }
     }
-    if (ik) { if (polygons.length) addIndoor(key, r.tags!, ik, polygons); continue; }
+    if (ik) { if (polygons.length) addIndoor(key, r.tags!, ik, polygons); if (!kind) continue; }
     if (!polygons.length) { skipped.push({ key, reason: 'нет узлов' }); continue; }
     features.push({ key, type: 'relation', id: r.id, version: r.version, tags: r.tags ?? {}, kind: kind!, polygons, hasParts: false, ways: memberWays });
   }

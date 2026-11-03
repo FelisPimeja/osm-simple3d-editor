@@ -12585,7 +12585,7 @@ function syncFocusHidden(changed = false): boolean {
   const dated = new Set(focus.members.filter((k) => { const f = entity(k); return !!f && !overpass.isVisible(f as Feature3D); }));
   if (changed && dated.size === focusDated.size && [...dated].every((k) => focusDated.has(k))) return false;
   focusDated = dated;
-  overpassLayer.setFocusHidden([...focusHidden, ...dated, ...planHiddenParts]);
+  overpassLayer.setFocusHidden([...focusHidden, ...dated, ...planHiddenParts], planHiddenParts.filter((k) => !focusHidden.has(k) && !dated.has(k)));
   // Изоляция: из многих объёмов виден один
   const volumes = focus.members.filter((k) => !bareOutlines(focus!).includes(k));
   overpassLayer.setUndergroundHidden(volumes.length > 1 && volumes.filter((k) => !focusHidden.has(k)).length === 1);

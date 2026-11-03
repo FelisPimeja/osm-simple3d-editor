@@ -190,13 +190,14 @@ export function kindOf(tags?: Record<string, string>): Feature3D['kind'] | undef
 }
 
 /**
- * Часть здания, размеченная ещё и как помещение (relation/17748313: building:part + indoor=area + level=1,
- * way/180591366: building:part + indoor=corridor + level=-1) — кроме объёма рисуем и на плане её этажа.
+ * Часть здания, размеченная ещё и как помещение, стена или колонна (relation/17748313: building:part + indoor=area
+ * + level=1, way/180591366: building:part + indoor=corridor + level=-1) — кроме объёма рисуем и на плане её этажа.
  */
 function partIndoorKind(kind: Feature3D['kind'], tags?: Record<string, string>): IndoorKind | undefined {
   if (kind !== 'part' || tags?.level === undefined) return;
   const ik = indoorKind(tags);
-  return ik === 'area' || ik === 'corridor' || ik === 'room' ? ik : undefined;
+  // Стена и колонна (relation/8432745: building:part + indoor=wall + level=0) — на плане чёрная заливка среза
+  return ik === 'area' || ik === 'corridor' || ik === 'room' || ik === 'wall' || ik === 'column' ? ik : undefined;
 }
 
 export function parseBuildings(elements: OsmElement[]): ParseResult {

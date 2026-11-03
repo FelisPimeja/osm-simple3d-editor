@@ -488,6 +488,8 @@ class MeshGroup {
   stale = false;
   /** Скрытые (только для показа) объекты: не рисуются, не выбираются, без привязок. */
   readonly hidden = new Set<string>();
+  /** Скрытые, но остающиеся объёмом оболочки (часть-гибрид на плане рисует indoor, а срез над ней — по ней). */
+  readonly shellKeep = new Set<string>();
   /** Толщина плоского следа, м. */
   footprint = FOOTPRINT_HEIGHT;
   /** Рисовать плоским следом независимо от высоты (голый контур в режиме здания). */
@@ -3900,11 +3902,14 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Скрыть объекты режима здания (глазик в списке частей) — только показ, на данные не влияет. */
-  setFocusHidden(keys: Iterable<string>) {
+  /** shellKeep — из скрытых те, что остаются объёмом оболочки (срез плана над ними — по ним). */
+  setFocusHidden(keys: Iterable<string>, shellKeep: Iterable<string> = []) {
     const g = this.groups.get(FOCUS_GROUP);
     if (!g) return;
     g.hidden.clear();
     for (const k of keys) g.hidden.add(k);
+    g.shellKeep.clear();
+    for (const k of shellKeep) g.shellKeep.add(k);
     this.snaps = undefined;
     // Соприкасающиеся грани — без скрытых: части, у которых контакты поменялись, пересобираем
     if (g.contacts) {
@@ -5307,7 +5312,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // На срезе этажа стекло соседа закрывает стену, как непрозрачная: граница частей внутри здания
     // (стена высокой части за стеклянной пристройкой) иначе прошла бы поперёк помещений
     const glassShell = glassEnabled && !this.level;
-    const hidden = `${[...g.hidden].sort().join(',')}|${[...g.flat].sort().join(',')}|${glassShell}|${g.items.filter(it => this.openRoofInPlan(g, it)).map(it => it.feature.key).join(',')}`;
+    const hidden = `${[...g.hidden].sort().join(',')}|${[...g.shellKeep].sort().join(',')}|${[...g.flat].sort().join(',')}|${glassShell}|${g.items.filter(it => this.openRoofInPlan(g, it)).map(it => it.feature.key).join(',')}`;
     if (g.shellOf && g.shellOf.hidden === hidden && g.shellOf.bases.length === bases.length && g.shellOf.bases.every((b, i) => b === bases[i])) return;
     // Крыши ещё считаются в воркере — оболочку посчитаем, когда придёт последняя (иначе пересчёт на каждую порцию)
     if (g.items.some((it) => it.pending && !g.hidden.has(it.feature.key))) return;
@@ -6268,9 +6273,11 @@ function buildShell(g: MeshGroup): Shell {
     const sg = [x0, y0, x1, y1];
     for (const c of cellsOf(x0, y0, x1, y1)) (segGrid.get(c) ?? segGrid.set(c, []).get(c)!).push(sg);
   };
-  const hasParts = g.items.some((it) => it.feature.kind === 'part' && !g.hidden.has(it.feature.key));
+  // Скрытая на плане часть-гибрид (shellKeep) — всё равно объём оболочки: срез над ней — по ней
+  const off = (k: string) => g.hidden.has(k) && !g.shellKeep.has(k);
+  const hasParts = g.items.some((it) => it.feature.kind === 'part' && !off(it.feature.key));
   for (const it of g.items) {
-    if (g.hidden.has(it.feature.key) || g.flat.has(it.feature.key)) continue;
+    if (off(it.feature.key) || g.flat.has(it.feature.key)) continue;
     if (hasParts && it.feature.kind === 'building' && it.feature.hasParts) continue;
     const h = computeHeights(it.tags);
     const polys = (g.renderFootprints.get(it.feature.key) ?? it.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((r) => r.map(g.toLocal)) }));
@@ -6919,7 +6926,7 @@ function positionsBox(pos: ArrayLike<number>): [number, number, number, number] 
 
 /** positions — по каким граням судить (оболочка — по исходным: обрезанная целиком часть всё равно объём для соседей). */
 function shellSolid(g: MeshGroup, it: Item, positions = it.positions): boolean {
-  return !g.hidden.has(it.feature.key) && !strokeOnly(g, it) && !thinItem(it) && !isRoofPart(it.tags) && positions.length > 0;
+  return (!g.hidden.has(it.feature.key) || g.shellKeep.has(it.feature.key)) && !strokeOnly(g, it) && !thinItem(it) && !isRoofPart(it.tags) && positions.length > 0;
 }
 
 function isRoofPart(tags: Record<string, string>): boolean {

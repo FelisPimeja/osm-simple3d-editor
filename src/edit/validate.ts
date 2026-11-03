@@ -1,4 +1,4 @@
-import { solidWall, wallLocalPolygons, nearestSolidFace, cutSolidWall, findSolidDoorBinding } from './solid-wall-doors';
+import { solidWall, wallLocalPolygons, nearestSolidFace, cutSolidWall, findSolidDoorBinding, doorIndex } from './solid-wall-doors';
 import polygonClipping, { type MultiPolygon } from 'polygon-clipping';
 import { parseLevels, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type Polygon } from '../osm/model';
 import { computeHeights, parseLength, roofShapeOf } from '../osm/heights';
@@ -893,7 +893,11 @@ export function validateSolidWallDoors(all:IndoorFeature[]):Issue[]{
   const origin=door.point,sx=111320*Math.cos(origin[1]*Math.PI/180);
   const local=(p:LonLat):[number,number]=>[(p[0]-origin[0])*sx,(p[1]-origin[1])*111320];
   if(findSolidDoorBinding(all,door,local))continue;
-  const candidates=all.filter(f=>solidWall(f)&&f.levels.some(l=>door.levels.includes(l)))
+  // Грань ищется в 3 см от двери: стены дальше по габаритам (с запасом ~1 м) не смотрим
+  const near=(f:IndoorFeature)=>f.polygons.some(p=>{let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+   for(const [x,y] of p.outer){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
+   return origin[0]>=x0-1e-5&&origin[0]<=x1+1e-5&&origin[1]>=y0-1e-5&&origin[1]<=y1+1e-5;});
+  const candidates=doorIndex(all).solid.filter(f=>f.levels.some(l=>door.levels.includes(l))&&near(f))
    .map(wall=>({wall,face:nearestSolidFace(wallLocalPolygons(wall,local),[0,0],0.03)})).filter(c=>c.face).sort((a,b)=>a.face!.distance-b.face!.distance);
   const candidate=candidates[0];if(!candidate)continue;
   try{

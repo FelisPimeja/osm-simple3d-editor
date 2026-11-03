@@ -64,10 +64,23 @@ export interface SolidDoorBinding { connector:IndoorFeature; walls:IndoorFeature
 /** Unglued wall ends count as jambs when they touch the connector's end and stand this close to the door, m. */
 const JAMB_SNAP=0.1,JAMB_REACH=1;
 /** Recover the connection using shared OSM nodes, without private tags or session-only metadata. */
+/** Индексы объектов этажа (один раз на массив): дверей сотни, объектов тысячи — без них перебор на каждую дверь. */
+const doorIndexes=new WeakMap<IndoorFeature[],{byNode:Map<number,IndoorFeature[]>;solid:IndoorFeature[]}>();
+export function doorIndex(all:IndoorFeature[]){
+ let x=doorIndexes.get(all);
+ if(!x){
+  const byNode=new Map<number,IndoorFeature[]>();
+  for(const f of all) if(f.kind==='wall'&&f.line&&!solidWall(f)&&f.polygons.length===1)
+   for(const id of new Set(f.polygons[0].outerIds??[])) (byNode.get(id)??byNode.set(id,[]).get(id)!).push(f);
+  doorIndexes.set(all,x={byNode,solid:all.filter(solidWall)});
+ }
+ return x;
+}
 export function findSolidDoorBinding(all:IndoorFeature[],door:IndoorFeature,local:(p:LonLat)=>Pt):SolidDoorBinding|undefined {
  if(!door.point) return;
  const id=Number(door.key.split('/')[1]),doorAt=local(door.point);
- const connectors=all.filter(f=>f.kind==='wall'&&f.line&&!solidWall(f)&&f.levels.some(l=>door.levels.includes(l)));
+ const index=doorIndex(all);
+ const connectors=(index.byNode.get(id)??[]).filter(f=>f.levels.some(l=>door.levels.includes(l)));
  for(const connector of connectors){
   if(connector.polygons.length!==1) continue;
   const p=connector.polygons[0],ids=p.outerIds;
@@ -75,7 +88,7 @@ export function findSolidDoorBinding(all:IndoorFeature[],door:IndoorFeature,loca
   const a=local(p.outer[0]),b=local(p.outer.at(-1)!),v=sub(b,a),len=Math.hypot(...v);
   if(len<0.01) continue;
   const tangent:Pt=[v[0]/len,v[1]/len];
-  const sides=(node:number,at:Pt)=>all.filter(f=>solidWall(f)&&f.levels.some(l=>door.levels.includes(l))).flatMap(f=>f.polygons.flatMap(poly=>[poly.outer,...poly.inners].flatMap((ring,ri)=>{
+  const sides=(node:number,at:Pt)=>index.solid.filter(f=>f.levels.some(l=>door.levels.includes(l))).flatMap(f=>f.polygons.flatMap(poly=>[poly.outer,...poly.inners].flatMap((ring,ri)=>{
    const rids=ri?poly.innerIds?.[ri-1]:poly.outerIds;if(!rids) return [];
    const count=f.line?ring.length-1:ring.length;
    const out:{f:IndoorFeature;front:Pt;back:Pt;direction:Pt;length:number}[]=[];

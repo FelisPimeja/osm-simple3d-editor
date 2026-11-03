@@ -11079,7 +11079,9 @@ function renderLevelsImpl() {
     const shaft = (f: IndoorFeature) => elevators.includes(f) && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels);
     const passing = elevators.filter((f) => shaft(f) && !f.levels.includes(l.n))
       .map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, z: l.floor, shaft: true, cutOnly: true }));
-    const doorCuts=fs.filter(isDoor).flatMap(door=>{
+    // Проёмы дверей дороги (поиск стены у каждой двери), а план часто отбрасывается подписью этажа — считаем при чтении
+    let doorCutsCache: { at: LonLat; width: number; polygon: LonLat[] }[] | undefined;
+    const doorCutsOf=()=>doorCutsCache??=fs.filter(isDoor).flatMap(door=>{
       const binding=findSolidDoorBinding(fs,door,p=>overpassLayer.focusToLocal(p)!);
       if(!binding)return [];
       const [b,a]=[binding.gap[2],binding.gap[3]];
@@ -11088,7 +11090,7 @@ function renderLevelsImpl() {
     return {
       cut: l.ceil,
       outlines: fs.filter(f=>f.escalatorArea).map((f):IndoorItem=>({key:f.key,kind:f.kind,polygons:f.polygons,z:l.floor})),
-      doorCuts,
+      get doorCuts() { return doorCutsOf(); },
       // Площадь эскалатора задаёт его след и проём, но не сплошной пол под ступенями.
       // Многоэтажные помещения имеют пол только внизу; стены и колонны есть на всех указанных уровнях.
       items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea

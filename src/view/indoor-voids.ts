@@ -59,7 +59,18 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
     const partPolys = parts.filter((p) => p.min <= l.floor + 0.5 && p.wallTop > l.floor + 0.01).flatMap((p) => p.polygons.map((q) => q.map(open)));
     // Разметка пола нужна лишь для перекрытия явных многоуровневых пустот. Неразмеченные участки остаются полом.
     const mappedPolys = onLevel.filter((f) => f.kind !== 'level' && (f.floors ?? [Math.min(...f.levels)]).includes(l.n)).flatMap((f) => f.polygons.map((p) => p.map(open)));
-    const mapped = unionOf(mappedPolys);
+    // Объединения дорогие (сотни помещений этажа): mapped нужен лишь этажам под проёмом, контур — этажу с проёмом
+    let mappedCache: MultiPolygon | undefined;
+    const mappedOf = () => (mappedCache ??= unionOf(mappedPolys));
+    const spaces = indoor.filter(f => !f.line && ['room','area','corridor'].includes(f.kind)
+      && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels)
+      && !(f.floors ?? [Math.min(...f.levels)]).includes(l.n))
+      .flatMap(f => f.polygons.map(p => p.map(open)));
+    if (!spaces.length) {
+      plans.set(l.n, { floor: [], get mapped() { return mappedOf(); }, explicitVoids: [] });
+      continue;
+    }
+    const mapped = mappedOf();
     let floor = unionOf(levelPolys.length ? levelPolys : partPolys);
     // Части не дают контур этажа (подземные этажи — части от земли, неточные высоты этажей): весь след здания
     // и всё, что обведено разметкой (дыры размеченного — тоже этаж): под землёй этаж часто шире следа здания
@@ -67,16 +78,19 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
       const outlines = mappedPolys.map((p) => [p[0]]);
       floor = unionOf([...parts.flatMap((p) => p.polygons.map((q) => q.map(open))), ...outlines]);
     }
-    const spaces = indoor.filter(f => !f.line && ['room','area','corridor'].includes(f.kind)
-      && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels)
-      && !(f.floors ?? [Math.min(...f.levels)]).includes(l.n))
-      .flatMap(f => f.polygons.map(p => p.map(open)));
     // Пол этажа над пустотой: размеченное с полом здесь. Площадка (indoor=area), целиком содержащая пустоту, —
     // зона-контейнер (неразмеченная площадь вокруг лестницы), не пол над ней; частичная (галерея) — пол
     const floored = onLevel.filter((f) => f.kind !== 'level' && (f.floors ?? [Math.min(...f.levels)]).includes(l.n));
     const contains = (outer: Pt[][][], inner: Pt[][]) => { const a = multiArea([inner as never]); return a > 1e-6 && multiArea(safe(() => polygonClipping.intersection(outer as never, [inner] as never))) >= a * .999; };
+    // Габариты: пустоту закрывает только пол, задевающий её (на этаже сотни помещений — объединять все дорого)
+    const boxOf = (polys: Pt[][][]) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const p of polys) for (const [x, y] of p[0] ?? []) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      return [x0, y0, x1, y1]; };
+    const flooredBoxes = floored.map((f) => boxOf(f.polygons));
     const open1 = spaces.map(space => {
-      const blockers = floored.filter(f => !(f.kind === 'area' && contains(f.polygons.map(p => p.map(open)), space))).flatMap(f => f.polygons.map(p => p.map(open)));
+      const [sx0, sy0, sx1, sy1] = boxOf([space]);
+      const blockers = floored.filter((f, i) => { const [x0, y0, x1, y1] = flooredBoxes[i]; return x0 <= sx1 && x1 >= sx0 && y0 <= sy1 && y1 >= sy0; })
+        .filter(f => !(f.kind === 'area' && contains(f.polygons.map(p => p.map(open)), space))).flatMap(f => f.polygons.map(p => p.map(open)));
       return safe(() => polygonClipping.intersection(floor, polygonClipping.difference([space] as never, unionOf(blockers))));
     }).filter(m => m.length);
     const explicitVoids = open1.length ? safe(() => polygonClipping.union(open1[0], ...open1.slice(1))) : [];

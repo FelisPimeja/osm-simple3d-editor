@@ -3280,7 +3280,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const off = this.snapKindsOff;
     this.indoorSnaps ??= (() => {
       const points: SnapPoint[] = [], edges: SnapEdge[] = [];
-      for (const item of this.level?.items ?? []) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
+      for (const item of [...this.level?.items ?? [], ...this.level?.outlines ?? []]) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
         const pts = ring.map(at => { const [x, y] = g.toLocal(at); return new THREE.Vector3(x, y, item.z); });
         for (const p of pts) points.push({ key: item.key, kind: 'vertex', p });
         for (let i = 0; i < pts.length - (item.line ? 1 : 0); i++) {

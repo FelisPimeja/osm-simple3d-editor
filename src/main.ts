@@ -8835,6 +8835,7 @@ const INDOOR_LENGTHS = new Set(['height', 'width', 'diameter', 'depth', 'max_dep
 const indoorInputValue = (input: HTMLInputElement) => withUnit(input.value, input.dataset.unit as LengthUnit | undefined);
 
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
+  if (fs.length && fs.every((f) => f.escalator)) placeholders = { width: '1.2', ...placeholders };
   const closedWalls=fs.every(f=>f.kind==='wall' && !f.tags.barrier && f.key.startsWith('way/') && f.polygons.length===1 && !f.polygons[0].inners.length && !!f.polygons[0].outerIds && (f.line ? f.polygons[0].outerIds!.length>=4 && f.polygons[0].outerIds![0]===f.polygons[0].outerIds!.at(-1) : f.polygons[0].outerIds!.length>=3));
   const plainWalls = fs.every((f) => f.kind === 'wall' && !f.tags.barrier);
   const rows = [...new Set([...indoorFormTags(fs), ...(plainWalls ? ['wall', 'height', 'material'] : []), ...(closedWalls ? ['area'] : [])])].map((k) => {

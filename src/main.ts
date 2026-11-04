@@ -1740,7 +1740,7 @@ async function openEditLink() {
     showLoading(tr('{what}: ищу объект на сервере {server}…', { what, server: server().short }));
     try {
       const full = async (t: string, id: number | string) => {
-        const res = await fetch(`${server().api}/${t}/${id}/full.json`);
+        const res = await fetch(`${server().api}/${t}/${id}/full.json`, { cache: 'no-store' });
         if (!res.ok) throw new Error(`API ${res.status}`);
         return ((await res.json()) as { elements: OsmElement[] }).elements;
       };

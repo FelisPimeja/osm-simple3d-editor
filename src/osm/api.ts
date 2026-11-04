@@ -31,7 +31,7 @@ export async function fetchMap(bbox: Bbox, api = server().api, signal?: AbortSig
   let count: number | undefined;
   let contentLength: string | null = null;
   try {
-    const res = await fetch(`${api}/map.json?bbox=${bbox.join(',')}`, { signal });
+    const res = await fetch(`${api}/map.json?bbox=${bbox.join(',')}`, { signal, cache: 'no-store' });
     status = res.status;
     contentLength = res.headers.get('content-length');
     if (!res.ok) {
@@ -95,7 +95,7 @@ export async function fetchRelationFull(id: number, api = server().api, signal?:
   let count: number | undefined;
   let contentLength: string | null = null;
   try {
-    const res = await fetch(`${api}/relation/${id}/full.json`, { signal });
+    const res = await fetch(`${api}/relation/${id}/full.json`, { signal, cache: 'no-store' });
     status = res.status;
     contentLength = res.headers.get('content-length');
     if (!res.ok) throw new ApiError(res.status, apiErrorMessage(res, await res.text()));
@@ -144,7 +144,8 @@ const MAX_WAIT = 120_000;
 async function getJson(url: string): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     const token = server().api === url.slice(0, server().api.length) ? getToken() : undefined;
-    const res = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+    // no-store: браузерный HTTP-кэш не должен подсовывать старую версию (Ctrl+F5 fetch не сбрасывает)
+    const res = await fetch(url, { cache: 'no-store', ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}) });
     if (res.ok) return res;
     const text = await res.text();
     const wait = retryAfterMs(res, text);

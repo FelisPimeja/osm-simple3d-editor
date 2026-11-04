@@ -290,7 +290,7 @@ export class ShapeTool {
       const open = this.isOpen?.(v.key);
       if (!inserted && !t.also?.length && (!open || (v.i >= 2 && v.i + 2 < n))) {
         const corner = sidesMeet(ring[(v.i - 2 + n) % n], prev, ring[(v.i + 2) % n], next);
-        if (corner) this.extraSnaps.push({ kind: 'extension', key: v.key, p: new THREE.Vector3(corner[0], corner[1], t.from.z), label: tr('Продолжение соседних сторон') });
+        if (corner) this.extraSnaps.push({ kind: 'corner', key: v.key, p: new THREE.Vector3(corner[0], corner[1], t.from.z) });
       }
     }
     const note = t.roof || t.eave ? this.levelLock?.(t) : undefined;

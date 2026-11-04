@@ -2351,7 +2351,7 @@ const snapEl = document.createElement('div');
 snapEl.className = 'snap-marker';
 snapEl.hidden = true;
 map.getContainer().appendChild(snapEl);
-const SNAP_LABELS = { vertex: tr('Вершина'), midpoint: tr('Середина'), center: tr('Центр'), shape: tr('Центр фигуры'), grid: tr('Сетка'), perpendicular: tr('Перпендикуляр'), edge: tr('На ребре'), extension: tr('Продолжение'), tracking: tr('От вершины'), tracked: tr('Отложенная точка'), level: tr('Отметка этажа') } as const;
+const SNAP_LABELS = { vertex: tr('Вершина'), midpoint: tr('Середина'), center: tr('Центр'), shape: tr('Центр фигуры'), grid: tr('Сетка'), perpendicular: tr('Перпендикуляр'), edge: tr('На ребре'), extension: tr('Продолжение'), corner: tr('Продолжение соседних сторон'), tracking: tr('От вершины'), tracked: tr('Отложенная точка'), level: tr('Отметка этажа') } as const;
 /** Текущая привязка под курсором — для будущих инструментов геометрии. */
 let currentSnap: SnapHit | undefined;
 
@@ -12468,7 +12468,7 @@ snapsBtn.addEventListener('click', () => toggleSnaps());
 // Типы привязок — галками во всплывашке у кнопки привязок (стрелка в углу); выбор запоминается
 const SNAP_KINDS: [SnapKind, string][] = [
   ['vertex', tr('Вершины')], ['midpoint', tr('Середины рёбер')], ['center', tr('Центры')], ['edge', tr('На ребре')],
-  ['perpendicular', tr('Перпендикуляр')], ['extension', tr('Продолжение ребра')], ['grid', tr('Узлы сетки')], ['shape', tr('Центр фигуры')],
+  ['perpendicular', tr('Перпендикуляр')], ['extension', tr('Продолжение ребра')], ['corner', tr('Продолжение соседних сторон')], ['grid', tr('Узлы сетки')], ['shape', tr('Центр фигуры')],
   ['tracking', tr('Откладывание от вершины')], ['level', tr('Этажи')],
 ];
 /** Значки типов привязок: геометрия серая, сама точка привязки — полным цветом. */
@@ -12479,6 +12479,7 @@ const SNAP_ICONS: Partial<Record<SnapKind, string>> = {
   edge: '<path class="g" d="M3 17L17 3"/><path d="M10.500 6.500l3 3M13.500 6.500l-3 3"/>',
   perpendicular: '<path class="g" d="M2 16h16M10 16V3"/><path d="M10 11h5v5"/>',
   extension: '<path class="g" d="M2 15l6-4"/><path class="g" d="M11 9l7-4.500" stroke-dasharray="1.600 2.400"/><circle cx="9" cy="10.300" r="2" fill="currentColor"/>',
+  corner: '<path class="g" d="M2 15h7M15 18v-7"/><path class="g" d="M9 15h6v-4" stroke-dasharray="1.600 2.400"/><circle cx="15" cy="15" r="2" fill="currentColor"/>',
   grid: '<path class="g" d="M3 7h14M3 13h14M7 3v14M13 3v14"/><circle cx="13" cy="7" r="2" fill="currentColor"/>',
   shape: '<path class="g" d="M3 3h14v14H3z"/><path d="M10 7v6M7 10h6"/>',
   level: '<path class="g" d="M4 3v14M16 3v14"/><path d="M4 7.500h12M4 12.500h12"/>',

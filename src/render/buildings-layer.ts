@@ -6563,7 +6563,7 @@ function shellPiecesImpl(shell: Shell, ax: number, ay: number, bx: number, by: n
   return pieces;
 }
 
-export type SnapKind = 'level' | 'vertex' | 'midpoint' | 'center' | 'shape' | 'grid' | 'perpendicular' | 'edge' | 'extension' | 'tracking' | 'tracked';
+export type SnapKind = 'level' | 'vertex' | 'midpoint' | 'center' | 'shape' | 'grid' | 'perpendicular' | 'edge' | 'extension' | 'corner' | 'tracking' | 'tracked';
 /** Ключ привязки к узлу сетки основания: фильтр snapAt пропускает его, если инструменту нужна и сетка. */
 export const GRID_SNAP_KEY = '@grid';
 /** axis, dist — у оси откладывания: номер оси якоря и расстояние от него со знаком. */
@@ -6596,7 +6596,7 @@ const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
 const SNAP_HIDDEN_PENALTY_PX = 100;
 /** Точка на ребре — последней: курсор у ребра почти всегда, она не должна перебивать вершины и середины. */
-const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, shape: 1, grid: 2, center: 2, extension: 4, edge: 3, tracked: 0, tracking: 2, level: 1 };
+const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, shape: 1, grid: 2, center: 2, extension: 4, corner: 1, edge: 3, tracked: 0, tracking: 2, level: 1 };
 /** Как далеко за конец ребра тянется его продолжение, м. */
 const EXTENSION_M = 30;
 /** Продолжение ловит курсор ближе обычного (px): иначе срабатывает почти везде вокруг здания. */

@@ -222,6 +222,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .snap-marker.perpendicular { background: #db2777; border: 0; box-shadow: none; width: 12px; height: 12px; margin: -6px 0 0 -6px;
   clip-path: polygon(0 0, 22% 0, 22% 78%, 100% 78%, 100% 100%, 0 100%); }
 .snap-marker.extension { background: #7c3aed; border-radius: 50%; width: 8px; height: 8px; margin: -5px 0 0 -5px; }
+.snap-marker.corner { background: #7c3aed; }
 .snap-marker.tracking { background: #7c3aed; border-radius: 50%; width: 8px; height: 8px; margin: -5px 0 0 -5px; }
 .snap-marker.tracked { background: #7c3aed; }
 /* Отметка этажа — горизонтальная черта */

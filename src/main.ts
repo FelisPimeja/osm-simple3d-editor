@@ -9649,7 +9649,16 @@ function levelSection(l: Level): LonLat[][][] | undefined {
   // Подземный этаж: оболочка части под землю не уходит — след части, по тегам которой этаж посчитан
   const src = l.src ? entity(l.src) as Feature3D | undefined : undefined;
   if (src?.polygons?.length) return src.polygons.map((p) => [p.outer, ...p.inners]);
-  return cut;
+  if (l.ceil > 0.01 || !focus) return cut;
+  // Подземный этаж из indoor-данных: след здания у земли, без оболочки — объединение следов частей
+  const ground = overpassLayer.focusSection(0.1);
+  if (ground?.length) return ground;
+  const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
+  const feet = groupFeatures(focus).flatMap((f) => f?.polygons ?? []).map((p) => [close(p.outer), ...p.inners.map(close)]);
+  if (!feet.length) return cut;
+  try {
+    return polygonClipping.union(...(feet as [[[number, number][]]])).map((poly) => poly.map((r) => r.slice(0, -1) as LonLat[]));
+  } catch (err) { console.warn('[level-section]', err); return cut; }
 }
 
 /**

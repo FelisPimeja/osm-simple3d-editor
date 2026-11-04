@@ -10,7 +10,7 @@ import { isIndoorCutPolygon, isIndoorUnionPolygon, indoorUnionSignature, indoorU
 import { finiteCutPieces } from './edit/finite-cut';
 import { editIndoorGeometry, type IndoorOperation, type IndoorVertex } from './edit/indoor-geometry';
 import { renderOtherTags, renderMultiOtherTags, multiTagValues, bindOtherTags } from './edit/other-tags';
-import { escalatorAreaMatches, isStairsAreaTags, stairsOutline, syncEscalatorLevels } from './edit/escalator-levels';
+import { escalatorAreaMatches, isStairsAreaTags, stairsOutline, stairsRoomClip, syncEscalatorLevels } from './edit/escalator-levels';
 import { fetchRelationRelations } from './osm/api';
 import { loneOuterWay, replaceMember, wayTagsOf } from './edit/lone-outer';
 import polygonClipping from 'polygon-clipping';
@@ -55,7 +55,7 @@ import { RoadsLayer } from './render/roads-layer';
 import type { TreePoint } from './osm/trees';
 import { isBridge, isTunnel, roadLevel, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
-import { BuildingsLayer, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, type EntrancePlace, type GraphicsOptions, type IndoorItem, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, type EntrancePlace, type GraphicsOptions, type IndoorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit, ORBIT_EVENT } from './view/orbit';
@@ -8645,7 +8645,7 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
  * Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений
  * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance и номер ref (как у пресета iD «Вход / выход»).
  */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.every(f=>f.tags.barrier==='fence' && f.tags.fence_type==='railing') ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.every(f=>f.tags.barrier==='fence' && f.tags.fence_type==='railing') ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
   : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
@@ -15118,10 +15118,21 @@ function escalatorWidth(f: IndoorFeature): number {
   return f.stairs ? Math.max(0.5, Math.min(10, parseLength(f.tags.width) ?? 1)) : Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2));
 }
 /** Поля модели лестницы: флаг, число ступеней и контур площади (если он ровно один для этой линии). */
-function stairsShape(f: IndoorFeature, all: IndoorFeature[]): { stairs?: true; steps?: number; outline?: LonLat[] } {
+function stairsShape(f: IndoorFeature, all: IndoorFeature[]): { stairs?: true; steps?: number; outline?: LonLat[]; handrails?: StairsRails } {
   if (!f.stairs) return {};
   const n = Number(f.tags.step_count);
-  return { stairs: true, ...(Number.isInteger(n) && n > 0 && n < 200 ? { steps: n } : {}), ...(() => { const o = stairsOutline(f, all); return o ? { outline: o } : {}; })() };
+  const outline = stairsOutline(f, all) ?? stairsRoomClip(f, all, escalatorWidth(f));
+  return { stairs: true, ...(Number.isInteger(n) && n > 0 && n < 200 ? { steps: n } : {}), ...(outline ? { outline } : {}), handrails: stairsRails(f.tags) };
+}
+/** Поручни по handrail (по умолчанию — с обеих сторон); left/right — относительно направления линии. */
+function stairsRails(t: Record<string, string>): StairsRails {
+  const on = (v?: string) => !!v && v !== 'no';
+  const h = t.handrail;
+  if (h === 'no') return { left: false, right: false, center: on(t['handrail:center']) };
+  if (h === 'left' || h === 'right' || h === 'center') return { left: h === 'left', right: h === 'right', center: h === 'center' };
+  const sided = ['handrail:left', 'handrail:right', 'handrail:center'].some((k) => t[k]);
+  if (sided && !h) return { left: on(t['handrail:left']), right: on(t['handrail:right']), center: on(t['handrail:center']) };
+  return { left: true, right: true, center: on(t['handrail:center']) };
 }
 function withLocalOutline<T extends { outline?: LonLat[] }>(s: T, loc: (p: LonLat) => [number, number]) {
   return { ...s, outline: s.outline?.map(loc) };

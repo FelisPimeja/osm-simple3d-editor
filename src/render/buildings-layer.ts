@@ -52,7 +52,9 @@ export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]
   /** Только вырез (этаж, где лифт проходит без остановки): ни пола, ни стен. */ cutOnly?: boolean;
   /** Бассейн: чаша этой глубины (м) под полом этажа, вода чуть ниже пола. */ pool?: number }
 export interface EscalatorItem { key: string; line: LonLat[]; bottom: number; top: number; width: number; incline?: string; pale?: boolean;
-  stairs?: boolean; steps?: number; outline?: LonLat[] }
+  stairs?: boolean; steps?: number; outline?: LonLat[]; handrails?: StairsRails }
+/** Поручни лестницы: стороны — относительно направления линии в OSM. */
+export interface StairsRails { left: boolean; right: boolean; center: boolean }
 
 /** Заливка пола по виду indoor-объекта. */
 const INDOOR_COLOURS: Record<IndoorKind, number> = { level: 0xe7e5e4, area: 0xffffff, corridor: 0xffffff, room: 0xf6ead2, wall: 0xffffff, column: 0xffffff, poi: 0xffffff };
@@ -215,10 +217,17 @@ const ESCALATOR_PALE_STEP = new THREE.MeshLambertMaterial({ color: 0xced2d4, sid
 const ESCALATOR_PALE_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xdce9ed, side: THREE.DoubleSide,
   transparent: true, opacity: 0.4, depthWrite: false });
 const ESCALATOR_PALE_HANDRAIL = new LineMaterial({ color: 0xc4c0bb, linewidth: 5 });
-const STAIRS_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-const STAIRS_PALE = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x555555, side: THREE.DoubleSide });
-const STAIRS_RAIL = new LineMaterial({ color: 0x8a8f93, linewidth: 3 });
-const STAIRS_PALE_RAIL = new LineMaterial({ color: 0xc4c6c8, linewidth: 3 });
+const STAIRS_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 1 });
+const STAIRS_PALE = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x555555, side: THREE.DoubleSide, transparent: true, opacity: 1 });
+const STAIRS_ORDER = 51;
+const STAIRS_RAIL = new LineMaterial({ color: 0x8a8f93, linewidth: 3, transparent: true });
+const STAIRS_PALE_RAIL = new LineMaterial({ color: 0xc4c6c8, linewidth: 3, transparent: true });
+/** Ребро по краю проступи: без него белый марш с некоторых ракурсов не читается. */
+const STAIRS_NOSING = new THREE.LineBasicMaterial({ color: 0x9aa0a4, transparent: true });
+const STAIRS_PALE_NOSING = new THREE.LineBasicMaterial({ color: 0xd4d7d9, transparent: true });
+/** Земля вокруг подземной части марша: только глубина (подземные стены здания не рисуются). */
+// Прозрачный список и свой renderOrder: земля пишет глубину после стен здания и до марша — закрывает только марш
+const STAIRS_EARTH = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, transparent: true, opacity: 1 });
 
 export interface DoorItem { key: string; at: LonLat; z: number; tags?: Record<string, string> }
 
@@ -1544,7 +1553,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL, ENTRANCE_MATERIAL, ENTRANCE_SELECTED_MATERIAL, ENTRANCE_LINE_MATERIAL]) m.clippingPlanes = planes;
     for (const m of [ESCALATOR_BELT, ESCALATOR_SIDE, ESCALATOR_STEP, ESCALATOR_BALUSTRADE, ESCALATOR_HANDRAIL,
       ESCALATOR_PALE_BELT, ESCALATOR_PALE_SIDE, ESCALATOR_PALE_STEP, ESCALATOR_PALE_BALUSTRADE, ESCALATOR_PALE_HANDRAIL,
-      STAIRS_MATERIAL, STAIRS_PALE, STAIRS_RAIL, STAIRS_PALE_RAIL]) m.clippingPlanes = planes;
+      STAIRS_MATERIAL, STAIRS_PALE, STAIRS_RAIL, STAIRS_PALE_RAIL, STAIRS_NOSING, STAIRS_PALE_NOSING]) m.clippingPlanes = planes;
     // Выделенный эскалатор — целиком, без среза потолком этажа
     for (const m of [ESCALATOR_SELECTED, ESCALATOR_SELECTED_HANDRAIL]) m.clippingPlanes = null;
     if (this.indoorObj) {
@@ -1783,7 +1792,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (t > 0 && (!best || t < best.t)) best = { key, t };
     };
     for (const [key, model] of this.escalatorObjects) model.traverse((o) => {
-      if (o instanceof THREE.Mesh && !(o instanceof Line2)) {
+      if (o instanceof THREE.Mesh && !(o instanceof Line2) && o.material !== STAIRS_EARTH) {
         const pos = o.geometry.getAttribute('position');
         if (!pos) return;
         for (let i = 0; i + 2 < pos.count; i += 3) {
@@ -2003,8 +2012,12 @@ export class BuildingsLayer implements CustomLayerInterface {
       const d = (x - a[0]) * ux + (y - a[1]) * uy;
       return Math.max(item.bottom, item.bottom + H * d / length - STAIRS_SLAB);
     };
-    const tris: number[] = [];
-    const rails: [number, number, number][][] = [[], []];
+    const tris: number[] = [], nosing: number[] = [];
+    // Стороны: 0 — меньшее w (справа от подъёма), 1 — большее, 2 — середина. Левая по линии OSM — слева по её ходу
+    const hr = item.handrails ?? { left: true, right: true, center: false };
+    const up = item.incline !== 'down';
+    const railOn = [up ? hr.right : hr.left, up ? hr.left : hr.right, hr.center];
+    const rails: [number, number, number][][] = [[], [], []];
     for (let i = 0; i < count; i++) {
       const d0 = i * run, d1 = (i + 1) * run, z = item.bottom + H * (i + 1) / count;
       let rings: [number, number][][];
@@ -2040,9 +2053,11 @@ export class BuildingsLayer implements CustomLayerInterface {
           for (const k of t) tris.push(ring[k][0], ring[k][1], under(ring[k][0], ring[k][1]));
       }
       if (lo > hi) continue;
+      { const [x0, y0] = P(d0, lo), [x1, y1] = P(d0, hi); nosing.push(x0, y0, z + 0.003, x1, y1, z + 0.003); }
       // Перила: по краю полосы ступени, 0,9 м над ней
       const dm = (d0 + d1) / 2;
-      for (const [side, w] of [[0, lo + 0.04], [1, hi - 0.04]] as const) {
+      for (const [side, w] of [[0, lo + 0.04], [1, hi - 0.04], [2, (lo + hi) / 2]] as const) {
+        if (!railOn[side]) continue;
         const [x, y] = P(dm, w);
         if (!rails[side].length) { const [x0, y0] = P(d0 + 0.05, w); rails[side].push([x0, y0, z], [x0, y0, z + 0.9]); }
         rails[side].push([x, y, z + 0.9]);
@@ -2057,7 +2072,36 @@ export class BuildingsLayer implements CustomLayerInterface {
       const mesh = new THREE.Mesh(geo, material);
       mesh.frustumCulled = false;
       mesh.userData.escalatorMaterial = material;
+      mesh.renderOrder = STAIRS_ORDER;
       model.add(mesh);
+    }
+    // Смотрим с наземного этажа: подземная часть марша видна только сверху, через проём, — с боков её закрывает земля
+    if (this.level && this.level.floor >= -0.01 && item.bottom < -0.01) {
+      const ring = outline ?? [P(0, -half), P(length, -half), P(length, half), P(0, half)];
+      const z0 = item.bottom - 0.3, z1 = Math.min(0, item.top) - 0.01, earth: number[] = [];
+      for (let k = 0; k < ring.length; k++) {
+        const [px, py] = ring[k], [qx, qy] = ring[(k + 1) % ring.length];
+        // Чуть наружу от марша, чтобы не спорить по глубине с его боками
+        const cx = ring.reduce((s, p) => s + p[0], 0) / ring.length, cy = ring.reduce((s, p) => s + p[1], 0) / ring.length;
+        const out = (x: number, y: number): [number, number] => { const d = Math.hypot(x - cx, y - cy) || 1; return [x + (x - cx) / d * 0.03, y + (y - cy) / d * 0.03]; };
+        const [ax, ay] = out(px, py), [bx, by] = out(qx, qy);
+        earth.push(ax, ay, z0, bx, by, z0, bx, by, z1, ax, ay, z0, bx, by, z1, ax, ay, z1);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(earth, 3));
+      const mesh = new THREE.Mesh(geo, STAIRS_EARTH);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = STAIRS_ORDER - 1;
+      mesh.raycast = () => {};
+      model.add(mesh);
+    }
+    if (nosing.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(nosing, 3));
+      const lines = new THREE.LineSegments(geo, item.pale ? STAIRS_PALE_NOSING : STAIRS_NOSING);
+      lines.frustumCulled = false;
+      lines.renderOrder = STAIRS_ORDER;
+      model.add(lines);
     }
     const canvas = this.map!.getCanvas(), dpr = canvas.width / Math.max(1, canvas.clientWidth);
     const rail = item.pale ? STAIRS_PALE_RAIL : STAIRS_RAIL;
@@ -2071,6 +2115,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const line = new Line2(geometry, rail);
       line.frustumCulled = false;
       line.userData.escalatorMaterial = rail;
+      line.renderOrder = STAIRS_ORDER;
       model.add(line);
     }
   }

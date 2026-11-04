@@ -11426,9 +11426,13 @@ function levelIssue(l: Level): string | undefined {
  * Подземная часть здания для пунктира в общем виде: глубина — пол нижнего подземного этажа; контур — части
  * с building:levels:underground, а если подвал известен только из indoor-данных — контур здания (или все части).
  */
-function undergroundOutline(g: BuildingGroup, levels: Level[]): { rings: LonLat[][]; depth: number }[] | undefined {
+function undergroundOutline(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[] = []): { rings: LonLat[][]; depth: number }[] | undefined {
   const depth = Math.min(0, ...levels.filter((l) => l.n < 0).map((l) => l.floor));
   if (depth > -0.5) return undefined;
+  // Контуры подземных этажей (indoor=level) — точнее следа здания: объём каждого — до пола своего этажа
+  const outlined = levels.filter((l) => l.n < 0).map((l) => ({ l, fs: indoor.filter((f) => f.kind === 'level' && !f.line && f.levels.includes(l.n)) }))
+    .filter((x) => x.fs.length);
+  if (outlined.length) return outlined.flatMap(({ l, fs }) => fs.map((f) => ({ rings: f.polygons.flatMap((p) => [p.outer, ...p.inners]), depth: l.floor })));
   const feats = groupFeatures(g);
   const ringsOf = (f: Feature3D) => f.polygons.flatMap((p) => [p.outer, ...p.inners]);
   // У каждой части своя глубина: пол её нижнего подвала
@@ -11530,7 +11534,7 @@ function renderLevelsImpl() {
       + `<span class="lv-name"><span class="lv-plan">${planned.has(l.n) ? ICON_PLAN : ''}</span>${l.ref ? esc(tr('Этаж {ref}', { ref: l.ref })) : LEVEL_NAME(l.n)}${l.name ? ` <span class="lv-sub">${esc(l.name)}</span>` : ''}</span>`
       + `<span class="lv-meta">${levelIssue(l) ? `<span class="lv-warn" title="${esc(levelIssue(l)!)}">!</span>` : ''}<span${l.explicit ? ` class="lv-explicit" title="${esc(tr('Высота этажа задана: height={h} на indoor=level', { h: +(l.ceil - l.floor).toFixed(2) }))}"` : ''}>${tr('{floor}–{ceil} м', { floor: l.floor.toFixed(1), ceil: l.ceil.toFixed(1) })}</span></span></li>`).join('') + levelSources(levels)
     : `<li class="lv-empty">${tr('Нет этажности (building:levels) и indoor-данных')}</li>`;
-  overpassLayer.setUnderground(currentLevel === undefined ? undergroundOutline(focus, levels) : undefined);
+  overpassLayer.setUnderground(currentLevel === undefined ? undergroundOutline(focus, levels, indoor) : undefined);
   const level = levels.find((l) => l.n === currentLevel);
   const onLevel = level ? indoor.filter((f) => f.levels.includes(level.n) && !indoorHidden.has(indoorKey(f.key))) : [];
   const visibleIndoor = indoor.filter((f) => !indoorHidden.has(indoorKey(f.key)));

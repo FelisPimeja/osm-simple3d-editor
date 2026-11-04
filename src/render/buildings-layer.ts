@@ -3305,8 +3305,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     }) : [];
     // Свои точки инструмента (extra) — мимо фильтра объектов: инструмент сам решил, что они нужны
     const extra = new Set(opts.extra ?? []);
+    // На плане этажа геометрия выше среза не нарисована — и привязок к ней нет
+    const planCut = this.level ? (this.levelCut ?? this.level.cut) + 1e-3 : Infinity;
     for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...this.belowOutlinePoints, ...doorPoints, ...extra]) {
-      if (off.has(s.kind) || (!extra.has(s) && !filter(s.key)) || opts.skip?.(s.p, s.key, s.kind)) continue;
+      if (off.has(s.kind) || (!extra.has(s) && !filter(s.key)) || opts.skip?.(s.p, s.key, s.kind) || (!extra.has(s) && s.p.z > planCut)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;
       const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
@@ -3330,7 +3332,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const [id, until] of this.armedEdges) if (until < now) this.armedEdges.delete(id);
     let hovered: { id: string; d: number } | undefined;
     if (ray) for (const e of [...this.snaps.edges, ...this.indoorSnaps.edges]) {
-      if (!filter(e.key) || opts.skip?.(e.a, e.key, 'edge') || opts.skip?.(e.b, e.key, 'edge')) continue;
+      if (!filter(e.key) || opts.skip?.(e.a, e.key, 'edge') || opts.skip?.(e.b, e.key, 'edge') || Math.min(e.a.z, e.b.z) > planCut) continue;
       if (opts.from && !off.has('perpendicular')) {
         ab.subVectors(e.b, e.a);
         const l2 = ab.lengthSq();

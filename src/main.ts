@@ -11591,7 +11591,7 @@ function renderLevelsImpl() {
           pointInRing(p, outer) && !holes.some((hole) => pointInRing(p, hole))));
       }));
       return { key: f.key, line, bottom: low.floor, top: high.floor,
-        width: escalatorWidth(f), incline: f.tags.incline, ...stairsShape(f, visibleIndoor),
+        width: escalatorWidth(f), incline: f.tags.incline, ...stairsShape(f, visibleIndoor), ...(stairsInVoid.has(f.key) ? { noHole: true } : {}),
         pale: !f.levels.includes(level.n), visible: f.levels.includes(level.n) || visibleBelow };
     }).filter((f): f is NonNullable<typeof f> => !!f);
   // Все эскалаторы здания режут проёмы в планах нижних этажей (те не зависят от выбранного этажа и кешируются)
@@ -11656,6 +11656,8 @@ let glassVoidsSig = '';
 type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[]; bare?: boolean }[]>;
 /** Пустоты (второй свет) всех этажей здания, lon/lat; кеш — по зданию и данным. */
 const voidsCache = new Map<string, { sig: string; map: LevelVoids }>();
+/** Лестницы, лежащие в основном в проёме верхнего этажа: своих проёмов в перекрытии не режут. */
+const stairsInVoid = new Set<string>();
 function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
   const feats = groupFeatures(g);
   let w = Infinity, s = Infinity, e = -Infinity, nn = -Infinity;
@@ -11693,6 +11695,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
         if (through.length) list.push({ polygon: f.polygons.map((p) => [p.outer, ...p.inners]), through });
       }
       // Площадь эскалатора — только контур (пунктир): проём в перекрытии режут сами эскалаторы по ширине
+      const base = list.slice();
       for (const f of indoor.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down')
         && f.levels.includes(l.n) && l.n > Math.min(...f.levels))) {
         const line = f.polygons[0]?.outer;
@@ -11705,6 +11708,14 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
         // Площадь лестницы на её этажах — лестничный проём: на верхних этажах вырезается целиком
         const well = f.stairs ? stairsOutline(f, indoor) : undefined;
         if (well) { list.push({ polygon: [[well]], through, bare: true }); continue; }
+        // Марш в основном уже в проёме этажа (атриум): свой проём не режет — иначе клин за краем проёма
+        if (f.stairs) {
+          stairsInVoid.delete(f.key);
+          const a = line[0], b = line[line.length - 1], n = 11;
+          const inside = Array.from({ length: n }, (_, i): LonLat => [a[0] + (b[0] - a[0]) * i / (n - 1), a[1] + (b[1] - a[1]) * i / (n - 1)])
+            .filter((p) => base.some((v) => v.polygon.some(([outer, ...holes]) => pointInRing(p, outer) && !holes.some((h) => pointInRing(p, h))))).length;
+          if (inside >= n * 0.6) { stairsInVoid.add(f.key); continue; }
+        }
         const holes = escalatorFloorHoles([{ line: line.map(loc), bottom: low.floor, top: high.floor, width, incline: f.tags.incline, ...withLocalOutline(stairsShape(f, indoor), loc) }], l.floor);
         for (const poly of holes) list.push({ polygon: [poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))], through, bare: true });
       }

@@ -5,7 +5,9 @@ import type { Pt } from './building-geometry';
 export const escalatorLanding = (length: number) => Math.min(1, length * 0.12);
 export interface EscalatorCut { line: Pt[]; bottom: number; top: number; width: number; incline?: string;
   /** Лестница: без площадок, ступени по step_count (иначе ~0,17 м), тонкая плита под ними. */
-  stairs?: boolean; steps?: number; outline?: Pt[] }
+  stairs?: boolean; steps?: number; outline?: Pt[];
+  /** Лестница в проёме этажа (атриум): своего проёма в перекрытии не режет. */
+  noHole?: boolean }
 /** Число ступеней лестницы на подъём height. */
 export const stairsCount = (e: Pick<EscalatorCut, 'steps' | 'top' | 'bottom'>) => e.steps ?? Math.max(1, Math.round((e.top - e.bottom) / 0.17));
 /** Толщина плиты под лестницей (от линии внутренних углов ступеней). */
@@ -128,7 +130,7 @@ const BODY_DEPTH = 0.7;
 export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number): MultiPolygon {
   const out: Pt[][] = [];
   for (const e of escalators) {
-    if (e.top <= e.bottom || floorZ < e.bottom - .1 || floorZ > e.top + .1) continue;
+    if (e.noHole || e.top <= e.bottom || floorZ < e.bottom - .1 || floorZ > e.top + .1) continue;
     // Эскалатор начинается на этом этаже: короб нижней площадки — приямок под полом, перекрытие над ним не режем
     if (Math.abs(floorZ - e.bottom) < .1) continue;
     const lengths=[0];for(let j=1;j<e.line.length;j++)lengths.push(lengths[j-1]+Math.hypot(e.line[j][0]-e.line[j-1][0],e.line[j][1]-e.line[j-1][1]));

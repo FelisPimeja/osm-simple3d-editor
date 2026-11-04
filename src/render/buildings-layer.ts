@@ -52,7 +52,7 @@ export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]
   /** Только вырез (этаж, где лифт проходит без остановки): ни пола, ни стен. */ cutOnly?: boolean;
   /** Бассейн: чаша этой глубины (м) под полом этажа, вода чуть ниже пола. */ pool?: number }
 export interface EscalatorItem { key: string; line: LonLat[]; bottom: number; top: number; width: number; incline?: string; pale?: boolean;
-  stairs?: boolean; steps?: number; outline?: LonLat[]; handrails?: StairsRails }
+  stairs?: boolean; steps?: number; outline?: LonLat[]; handrails?: StairsRails; noHole?: boolean }
 /** Поручни лестницы: стороны — относительно направления линии в OSM. */
 export interface StairsRails { left: boolean; right: boolean; center: boolean }
 

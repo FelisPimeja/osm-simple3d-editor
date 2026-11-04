@@ -1451,5 +1451,6 @@
   "Наклон лестницы {angle}°: длина {run} м, перепад {rise} м; обычно 25–40°. Проверьте level и длину.": "Stairs slope {angle}°: length {run} m, rise {rise} m; usually 25–40°. Check level and length.",
   "Поручни": "Handrails",
   "Число ступеней": "Step count",
-  "не указано": "not set"
+  "не указано": "not set",
+  "level={value} у лестницы — похоже на несколько маршей друг над другом; каждый соединяет два соседних этажа.": "level={value} on stairs — looks like several flights stacked; each one connects two adjacent levels."
 }

@@ -350,7 +350,7 @@ export function validateRepeatedRooms(features: IndoorFeature[]): Issue[] {
   for (const f of features) {
     const t = f.tags;
     if (f.line || f.escalator || f.escalatorArea || !['room', 'area', 'corridor'].includes(t.indoor)) continue;
-    if (t.stairs === 'yes' || t.room === 'stairs' || t.highway === 'steps' || t.conveying !== undefined
+    if (t.stairs === 'yes' || t.room === 'stairs' || t.highway === 'steps' || t['area:highway'] === 'steps' || t.conveying !== undefined
       || t.room === 'elevator' || t.highway === 'elevator') continue;
     const levels = [...new Set(parseLevels(t.level))].sort((a, b) => a - b);
     if (levels.length < 2) continue;
@@ -379,13 +379,18 @@ export function validateStackedEscalators(features: IndoorFeature[]): Issue[] {
   const out: Issue[] = [];
   for (const f of features) {
     const t = f.tags;
-    if (!t.conveying || t.conveying === 'no' || (t.highway !== 'steps' && t.indoor !== 'area')) continue;
+    const escalator = !!t.conveying && t.conveying !== 'no' && (t.highway === 'steps' || t.indoor === 'area');
+    // Лестница: ось highway=steps или её площадь (stairs=yes, room=stairs, area:highway=steps)
+    const stairs = !escalator && (t.highway === 'steps' || t.stairs === 'yes' || t.room === 'stairs' || t['area:highway'] === 'steps');
+    if (!escalator && !stairs) continue;
     const levels = [...new Set(parseLevels(t.level))].sort((a, b) => a - b);
     if (levels.length < 3) continue;
     const pairs = levels.slice(1).map((l, i) => `${levels[i]};${l}`);
-    const axis = t.highway === 'steps';
+    const axis = t.highway === 'steps' && !!f.line;
     out.push({ key: f.key, level: 'warning', code: 'indoor-level',
-      text: tr('level={value} у эскалатора — похоже на несколько эскалаторов друг над другом; каждый соединяет два соседних этажа.', { value: t.level }),
+      text: stairs
+        ? tr('level={value} у лестницы — похоже на несколько маршей друг над другом; каждый соединяет два соседних этажа.', { value: t.level })
+        : tr('level={value} у эскалатора — похоже на несколько эскалаторов друг над другом; каждый соединяет два соседних этажа.', { value: t.level }),
       fix: { label: tr('разделить: {levels}', { levels: pairs.join(', ') }), tags: { level: pairs[0] }, splitLevels: pairs.slice(1), ...(axis ? { splitNewNodes: true } : {}) } });
   }
   return out;

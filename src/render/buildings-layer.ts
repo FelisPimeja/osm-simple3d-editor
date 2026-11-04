@@ -2088,8 +2088,16 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (this.level && this.level.floor >= -0.01 && item.bottom < -0.01) {
       const ring = outline ?? [P(0, -half), P(length, -half), P(length, half), P(0, half)];
       const z0 = item.bottom - 0.3, z1 = Math.min(0, item.top) - 0.01, earth: number[] = [];
+      // Только стороны вдоль наружной стены здания: внутри (атриум, соседний марш) земли нет
+      const shell: [number, number][][] = g.items.flatMap((it) => it.feature.polygons.map((p) => p.outer.map(g.toLocal)));
+      const nearShell = (x: number, y: number) => shell.some((r) => r.some((a, i) => {
+        const b = r[(i + 1) % r.length], ux = b[0] - a[0], uy = b[1] - a[1], l2 = ux * ux + uy * uy;
+        const t = l2 ? Math.max(0, Math.min(1, ((x - a[0]) * ux + (y - a[1]) * uy) / l2)) : 0;
+        return Math.hypot(x - a[0] - ux * t, y - a[1] - uy * t) < 1;
+      }));
       for (let k = 0; k < ring.length; k++) {
         const [px, py] = ring[k], [qx, qy] = ring[(k + 1) % ring.length];
+        if (!nearShell((px + qx) / 2, (py + qy) / 2)) continue;
         // Чуть наружу от марша, чтобы не спорить по глубине с его боками
         const cx = ring.reduce((s, p) => s + p[0], 0) / ring.length, cy = ring.reduce((s, p) => s + p[1], 0) / ring.length;
         const out = (x: number, y: number): [number, number] => { const d = Math.hypot(x - cx, y - cy) || 1; return [x + (x - cx) / d * 0.03, y + (y - cy) / d * 0.03]; };
@@ -2099,6 +2107,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(earth, 3));
       const mesh = new THREE.Mesh(geo, STAIRS_EARTH);
+      mesh.visible = earth.length > 0;
       mesh.frustumCulled = false;
       mesh.renderOrder = STAIRS_ORDER - 1;
       mesh.raycast = () => {};

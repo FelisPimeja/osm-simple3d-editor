@@ -1444,5 +1444,9 @@
   "Конец эскалатора на этаже {n} — вне помещений и контура этажа.": "Escalator end on level {n} is outside the rooms and the level outline.",
   "Наклон эскалатора {angle}°: наклонная часть {ramp} м (ось {run} м без площадок по концам), перепад {rise} м; обычно 27–35°. Проверьте level и длину.": "Escalator slope {angle}°: inclined part {ramp} m (axis {run} m minus the landings at the ends), rise {rise} m; usually 27–35°. Check level and length.",
   "Высота этажей оценочная (не задана явно) — реальный наклон может быть другим.": "Level heights are estimated (not set explicitly), the real slope may differ.",
-  "Назначение взято с точки внутри: {point}": "Purpose taken from the point inside: {point}"
+  "Назначение взято с точки внутри: {point}": "Purpose taken from the point inside: {point}",
+  "{what}: кликните верхний конец. Esc — отмена.": "{what}: click the upper end. Esc — cancel.",
+  "{what}: кликните нижний конец на плане этажа. Esc — выйти.": "{what}: click the lower end on the floor plan. Esc — exit.",
+  "Лестница {key}: этажи {level}. Концы и этажи — «Формой» (V).": "Stairs {key}: levels {level}. Ends and levels — with Shape (V).",
+  "Наклон лестницы {angle}°: длина {run} м, перепад {rise} м; обычно 25–40°. Проверьте level и длину.": "Stairs slope {angle}°: length {run} m, rise {rise} m; usually 25–40°. Check level and length."
 }

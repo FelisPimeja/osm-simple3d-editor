@@ -79,6 +79,8 @@ export interface IndoorFeature {
   line?: boolean;
   /** Ось эскалатора (highway=steps + conveying=*), либо площадь вокруг такой оси. */
   escalator?: boolean;
+  /** Лестница (highway=steps без conveying) — модель и правка как у эскалатора, escalator тоже true. */
+  stairs?: boolean;
   escalatorArea?: boolean;
   /** Номера этажей из level (+ repeat_on); без level — [0]. */
   levels: number[];
@@ -260,6 +262,12 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
       if (pts.length >= 2) {
         addIndoor(`way/${w.id}`, w.tags, 'area', [{ outer: pts, inners: [], ...(pts.length === w.nodes.length ? { outerIds: w.nodes.slice() } : {}) }], true);
         indoor[indoor.length - 1].escalator = true;
+      }
+    } else if (!kind && isStairsLine(w.tags) && w.nodes[0] !== w.nodes[w.nodes.length - 1] && parseLevels(w.tags!.level).length >= 2) {
+      const pts = w.nodes.map((id) => nodes.get(id)).filter((n): n is OsmNode => !!n).map((n): LonLat => [n.lon, n.lat]);
+      if (pts.length >= 2 && isStraight(pts)) {
+        addIndoor(`way/${w.id}`, w.tags!, 'area', [{ outer: pts, inners: [], ...(pts.length === w.nodes.length ? { outerIds: w.nodes.slice() } : {}) }], true);
+        Object.assign(indoor[indoor.length - 1], { escalator: true, stairs: true });
       }
     } else if (ik === 'wall') {
       // Стена — ломаная (у замкнутой последняя точка повторяет первую — оставляем, чтобы стена замкнулась)
@@ -478,4 +486,18 @@ export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[
       b.hasParts = false;
     }
   }
+}
+
+/** Внутренняя лестница-линия: highway=steps + indoor=yes без конвейера. */
+export const isStairsLine = (t?: Record<string, string>) =>
+  !!t && t.highway === 'steps' && t.indoor === 'yes' && (!t.conveying || t.conveying === 'no');
+
+/** Ломаная без поворотов: все точки не дальше 0,3 м (и 3 % длины) от отрезка между концами. */
+export function isStraight(pts: LonLat[]): boolean {
+  const k = Math.cos(pts[0][1] * Math.PI / 180) * 111320, m = 111320;
+  const a = pts[0], b = pts[pts.length - 1];
+  const dx = (b[0] - a[0]) * k, dy = (b[1] - a[1]) * m, len = Math.hypot(dx, dy);
+  if (len < 1e-6) return false;
+  const tol = Math.min(0.3, len * 0.03);
+  return pts.every((p) => Math.abs(((p[0] - a[0]) * k) * dy - ((p[1] - a[1]) * m) * dx) / len <= tol);
 }

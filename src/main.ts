@@ -10,7 +10,7 @@ import { isIndoorCutPolygon, isIndoorUnionPolygon, indoorUnionSignature, indoorU
 import { finiteCutPieces } from './edit/finite-cut';
 import { editIndoorGeometry, type IndoorOperation, type IndoorVertex } from './edit/indoor-geometry';
 import { renderOtherTags, renderMultiOtherTags, multiTagValues, bindOtherTags } from './edit/other-tags';
-import { escalatorAreaMatches, syncEscalatorLevels } from './edit/escalator-levels';
+import { escalatorAreaMatches, isStairsAreaTags, stairsOutline, syncEscalatorLevels } from './edit/escalator-levels';
 import { fetchRelationRelations } from './osm/api';
 import { loneOuterWay, replaceMember, wayTagsOf } from './edit/lone-outer';
 import polygonClipping from 'polygon-clipping';
@@ -8179,7 +8179,7 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   const axes = visible.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
   return visible.map((f) => {
     if (f.tags.indoor === 'area' && f.tags.room === 'steps' && !f.line) return { ...f, escalatorArea: true };
-    if (f.line || !f.polygons.length || !(f.tags.room === 'stairs' || f.tags.stairs === 'yes' || f.tags.conveying)) return f;
+    if (f.line || !f.polygons.length || !isStairsAreaTags(f.tags)) return f;
     const matched = axes.some((axis) => escalatorAreaMatches(axis, f));
     return matched ? { ...f, escalatorArea: true } : f;
   });
@@ -8592,7 +8592,7 @@ const indoorGeometry = (f: IndoorFeature): PresetGeometry => (indoorKey(f.key).s
 function indoorTitle(f: IndoorFeature): string {
   if(f.tags.barrier==='fence' && f.tags.fence_type==='railing')return tr('Ограждение');
   if(f.tags.wall==='counter')return tr('Прилавок');
-  const own = f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
+  const own = f.stairs ? tr('Лестница') : f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
   if (f.escalator) return own;
   loadPresets(() => { if (indoorSelection.length) renderIndoorSelection(); });
   const p = matchPreset(f.tags, indoorGeometry(f));
@@ -8645,7 +8645,7 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
  * Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений
  * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance и номер ref (как у пресета iD «Вход / выход»).
  */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.every(f=>f.tags.barrier==='fence' && f.tags.fence_type==='railing') ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.every(f=>f.tags.barrier==='fence' && f.tags.fence_type==='railing') ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
   : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : [])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
@@ -8848,7 +8848,7 @@ const INDOOR_LENGTHS = new Set(['height', 'width', 'diameter', 'depth', 'max_dep
 const indoorInputValue = (input: HTMLInputElement) => withUnit(input.value, input.dataset.unit as LengthUnit | undefined);
 
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
-  if (fs.length && fs.every((f) => f.escalator)) placeholders = { width: '1.2', ...placeholders };
+  if (fs.length && fs.every((f) => f.escalator)) placeholders = { width: fs.every((f) => f.stairs) ? '1' : '1.2', ...placeholders };
   const closedWalls=fs.every(f=>f.kind==='wall' && !f.tags.barrier && f.key.startsWith('way/') && f.polygons.length===1 && !f.polygons[0].inners.length && !!f.polygons[0].outerIds && (f.line ? f.polygons[0].outerIds!.length>=4 && f.polygons[0].outerIds![0]===f.polygons[0].outerIds!.at(-1) : f.polygons[0].outerIds!.length>=3));
   const plainWalls = fs.every((f) => f.kind === 'wall' && !f.tags.barrier);
   const rows = [...new Set([...indoorFormTags(fs), ...(plainWalls ? ['wall', 'height', 'material'] : []), ...(closedWalls ? ['area'] : [])])].map((k) => {
@@ -10118,8 +10118,8 @@ const POINT_SIDE_PX = 8;
 
 // Инструмент «Стена»: линейная стена indoor=wall этажа по точкам ломаной
 const wallBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="wall"]')!;
-let linearPreset: 'wall'|'railing'|'escalator' = 'wall';
-const LINEAR_TITLES = { wall: tr('Стена'), railing: tr('Ограждение'), escalator: tr('Эскалатор') };
+let linearPreset: 'wall'|'railing'|'escalator'|'stairs' = 'wall';
+const LINEAR_TITLES = { wall: tr('Стена'), railing: tr('Ограждение'), escalator: tr('Эскалатор'), stairs: tr('Лестница') };
 wallBtn.title=`${tr('Стена')} (F)`;
 wallBtn.insertAdjacentHTML('beforeend','<span class="flyout-arrow" data-linear-menu data-flyout></span>');
 wallBtn.addEventListener('click',e=>{
@@ -10127,7 +10127,7 @@ wallBtn.addEventListener('click',e=>{
   e.stopImmediatePropagation();
   if(rectFlyout){closeRectFlyout();return;}
   const menu=document.createElement('div');menu.className='tool-flyout';
-  menu.innerHTML=`<button type="button" data-linear="wall">${tr('Стена')}</button><button type="button" data-linear="railing">${tr('Ограждение')}</button><button type="button" data-linear="escalator">${tr('Эскалатор')}</button>`;
+  menu.innerHTML=`<button type="button" data-linear="wall">${tr('Стена')}</button><button type="button" data-linear="railing">${tr('Ограждение')}</button><button type="button" data-linear="escalator">${tr('Эскалатор')}</button><button type="button" data-linear="stairs">${tr('Лестница')}</button>`;
   menu.addEventListener('click',e=>{
     const choice=(e.target as HTMLElement).closest<HTMLElement>('[data-linear]');if(!choice)return;
     e.stopPropagation();linearPreset=choice.dataset.linear as typeof linearPreset;
@@ -10150,7 +10150,7 @@ function startWall() {
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop();
   measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
   select(undefined);
-  drawTool.begin('wall', linearPreset === 'escalator' ? 2 : undefined);
+  drawTool.begin('wall', linearPreset === 'escalator' || linearPreset === 'stairs' ? 2 : undefined, linearPreset === 'stairs' ? tr('Лестница') : undefined);
 }
 
 /** Ломаная (метры сцены) — путь indoor=wall этажа; вершины на узлах соседей — их узлы. */
@@ -10212,7 +10212,7 @@ function wallAsLine(f: IndoorFeature): IndoorFeature {
 
 function createIndoorWallLine(pts: [number, number][], own?: Record<string, string>): string | undefined {
   if (!focus || !shownLevel) return tr('Нет этажа.');
-  if (!own && linearPreset === 'escalator') return createEscalator(pts);
+  if (!own && (linearPreset === 'escalator' || linearPreset === 'stairs')) return createEscalator(pts, linearPreset === 'stairs');
   const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)]);
   const nodes = pts.map((q) => nodeFor(overpassLayer.focusToLngLat(q[0], q[1])! as LonLat)).filter((q, i, a) => i === 0 || q.id !== a[i - 1].id);
   if (nodes.length < 2) return tr('Стене нужны хотя бы две разные точки.');
@@ -10262,7 +10262,7 @@ function escalatorEnds(f: IndoorFeature): [number, number] {
 }
 
 /** Новый эскалатор по двум точкам: с текущего этажа на следующий (на верхнем — с предыдущего), путь снизу вверх. */
-function createEscalator(pts: [number, number][]): string | undefined {
+function createEscalator(pts: [number, number][], stairs = false): string | undefined {
   if (!focus || !shownLevel) return tr('Нет этажа.');
   if (pts.length !== 2) return tr('Эскалатору нужны две точки.');
   const ns = focusLevelList().map((l) => l.n).sort((a, b) => a - b);
@@ -10274,7 +10274,8 @@ function createEscalator(pts: [number, number][]): string | undefined {
   // Нарисован с верхнего этажа вниз (выше этажей нет) — путь всё равно снизу вверх
   if (up === undefined) nodes = [nodes[1], nodes[0]];
   const key = `way/${nextNewId--}`;
-  const tags: Record<string, string> = { highway: 'steps', conveying: 'yes', incline: 'up', level: levelSpan(here, up ?? down!) };
+  const tags: Record<string, string> = stairs ? { highway: 'steps', indoor: 'yes', incline: 'up', level: levelSpan(here, up ?? down!) }
+    : { highway: 'steps', conveying: 'yes', incline: 'up', level: levelSpan(here, up ?? down!) };
   const line = { ids: nodes.map((q) => q.id), coords: nodes.map((q) => q.p) };
   const polygons = [{ outer: line.coords, outerIds: line.ids, inners: [] }];
   const edits: ObjectEdit[] = [{ key, create: { key, version: 0, tags, line, polygons } }];
@@ -10282,13 +10283,14 @@ function createEscalator(pts: [number, number][]): string | undefined {
   if (typeof ins === 'string') return ins;
   edits.push(...ins.edits);
   session.editMany(edits);
-  indoorCreated.set(key, { key, kind: 'area', line: true, escalator: true, polygons, tags, levels: parseLevels(tags.level) });
+  indoorCreated.set(key, { key, kind: 'area', line: true, escalator: true, ...(stairs ? { stairs: true } : {}), polygons, tags, levels: parseLevels(tags.level) });
   indoorEdited.add(key);
   indoorEditRev++;
   renderLevels();
   const made = buildingIndoorFor(key);
   if (made) selectIndoor(made);
-  setStatus(tr('Эскалатор {key}: этажи {level}. Направление движения — стрелкой над ним, концы и этажи — «Формой» (V).', { key, level: tags.level }));
+  setStatus(stairs ? tr('Лестница {key}: этажи {level}. Концы и этажи — «Формой» (V).', { key, level: tags.level })
+    : tr('Эскалатор {key}: этажи {level}. Направление движения — стрелкой над ним, концы и этажи — «Формой» (V).', { key, level: tags.level }));
 }
 
 /**
@@ -10363,7 +10365,7 @@ function renderEscalatorUi() {
   arrow.className = 'escalator-arrow';
   arrow.title = tr('Направление движения (conveying={v}); щелчок — сменить', { v: f.tags.conveying ?? 'yes' });
   arrow.textContent = f.tags.conveying === 'reversible' ? '⇅' : '↑';
-  escalatorUi.appendChild(arrow);
+  if (!f.stairs) escalatorUi.appendChild(arrow);
   placeEscalatorUi();
 }
 
@@ -11544,7 +11546,7 @@ function renderLevelsImpl() {
           pointInRing(p, outer) && !holes.some((hole) => pointInRing(p, hole))));
       }));
       return { key: f.key, line, bottom: low.floor, top: high.floor,
-        width: Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2)), incline: f.tags.incline,
+        width: escalatorWidth(f), incline: f.tags.incline, ...stairsShape(f, visibleIndoor),
         pale: !f.levels.includes(level.n), visible: f.levels.includes(level.n) || visibleBelow };
     }).filter((f): f is NonNullable<typeof f> => !!f);
   // Все эскалаторы здания режут проёмы в планах нижних этажей (те не зависят от выбранного этажа и кешируются)
@@ -11651,11 +11653,11 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
         const line = f.polygons[0]?.outer;
         if (!line || line.length < 2) continue;
         const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
-        const width = Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2));
+        const width = escalatorWidth(f);
         const low = levels.find((x) => x.n === Math.min(...f.levels)), high = levels.find((x) => x.n === Math.max(...f.levels));
         if (!low || !high) continue;
         // Проём — там, где короб проходит сквозь перекрытие (как у модели), а не по всей линии с площадками
-        const holes = escalatorFloorHoles([{ line: line.map(loc), bottom: low.floor, top: high.floor, width, incline: f.tags.incline }], l.floor);
+        const holes = escalatorFloorHoles([{ line: line.map(loc), bottom: low.floor, top: high.floor, width, incline: f.tags.incline, ...withLocalOutline(stairsShape(f, indoor), loc) }], l.floor);
         for (const poly of holes) list.push({ polygon: [poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))], through, bare: true });
       }
       if (list.length) out.set(l.n, list);
@@ -15110,3 +15112,17 @@ if (autosave) void (async () => {
     console.warn('Не удалось восстановить правки:', err);
   }
 })();
+
+/** Ширина марша: width, у лестницы — 1 м, у эскалатора — 1,2 м. */
+function escalatorWidth(f: IndoorFeature): number {
+  return f.stairs ? Math.max(0.5, Math.min(10, parseLength(f.tags.width) ?? 1)) : Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2));
+}
+/** Поля модели лестницы: флаг, число ступеней и контур площади (если он ровно один для этой линии). */
+function stairsShape(f: IndoorFeature, all: IndoorFeature[]): { stairs?: true; steps?: number; outline?: LonLat[] } {
+  if (!f.stairs) return {};
+  const n = Number(f.tags.step_count);
+  return { stairs: true, ...(Number.isInteger(n) && n > 0 && n < 200 ? { steps: n } : {}), ...(() => { const o = stairsOutline(f, all); return o ? { outline: o } : {}; })() };
+}
+function withLocalOutline<T extends { outline?: LonLat[] }>(s: T, loc: (p: LonLat) => [number, number]) {
+  return { ...s, outline: s.outline?.map(loc) };
+}

@@ -418,9 +418,13 @@ export function validateEscalators(features: IndoorFeature[], floorOf: (n: numbe
     if (line.length >= 2 && lo && hi && hi.floor > lo.floor) {
       const p = projector(line[0]), pts = line.map(p);
       const run = pts.slice(1).reduce((s, b, i) => s + Math.hypot(b[0] - pts[i][0], b[1] - pts[i][1]), 0);
-      const ramp = run - 2 * escalatorLanding(run), rise = hi.floor - lo.floor;
+      const ramp = run - (f.stairs ? 0 : 2 * escalatorLanding(run)), rise = hi.floor - lo.floor;
       const angle = Math.atan2(rise, Math.max(ramp, 1e-3)) * 180 / Math.PI;
-      if (angle < ESCALATOR_ANGLE.min || angle > ESCALATOR_ANGLE.max)
+      if (f.stairs) {
+        if (angle < 20 || angle > 45) out.push({ key: f.key, level: 'warning', code: 'geometry',
+          text: tr('Наклон лестницы {angle}°: длина {run} м, перепад {rise} м; обычно 25–40°. Проверьте level и длину.',
+            { angle: Math.round(angle), run: run.toFixed(1), rise: rise.toFixed(1) }) });
+      } else if (angle < ESCALATOR_ANGLE.min || angle > ESCALATOR_ANGLE.max)
         out.push({ key: f.key, level: 'warning', code: 'geometry',
           text: tr('Наклон эскалатора {angle}°: наклонная часть {ramp} м (ось {run} м без площадок по концам), перепад {rise} м; обычно 27–35°. Проверьте level и длину.',
             { angle: Math.round(angle), ramp: ramp.toFixed(1), run: run.toFixed(1), rise: rise.toFixed(1) })

@@ -3,7 +3,21 @@ import polygonClipping, { type MultiPolygon } from 'polygon-clipping';
 import type { Pt } from './building-geometry';
 /** Горизонтальная площадка на каждом конце эскалатора длиной length по оси, м: модель, проёмы и проверка наклона. */
 export const escalatorLanding = (length: number) => Math.min(1, length * 0.12);
-export interface EscalatorCut { line: Pt[]; bottom: number; top: number; width: number; incline?: string }
+export interface EscalatorCut { line: Pt[]; bottom: number; top: number; width: number; incline?: string;
+  /** Лестница: без площадок, ступени по step_count (иначе ~0,17 м), тонкая плита под ними. */
+  stairs?: boolean; steps?: number; outline?: Pt[] }
+/** Число ступеней лестницы на подъём height. */
+export const stairsCount = (e: Pick<EscalatorCut, 'steps' | 'top' | 'bottom'>) => e.steps ?? Math.max(1, Math.round((e.top - e.bottom) / 0.17));
+/** Толщина плиты под лестницей (от линии внутренних углов ступеней). */
+export const STAIRS_SLAB = 0.2;
+const landingOf = (e: EscalatorCut, length: number) => e.stairs ? 0 : escalatorLanding(length);
+/** Полуширина: у лестницы с контуром — до дальней точки контура от линии. */
+export function halfWidthOf(e: EscalatorCut): number {
+  if (!e.stairs) return Math.max(.35, Math.min(2.5, e.width / 2));
+  if (!e.outline?.length) return Math.max(.25, Math.min(5, e.width / 2));
+  const a = e.line[0], b = e.line[e.line.length - 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+  return Math.max(...e.outline.map((p) => Math.abs((p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])) / L)) + .05;
+}
 /** Intersect vertical wall planes with the escalator body and 2 m of headroom. */
 export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: EscalatorCut[]): number[] {
   if (!escalators.length || !positions.length) return [];
@@ -12,7 +26,7 @@ export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: 
     bounds[k]=Math.min(bounds[k],positions[i+k]); bounds[k+3]=Math.max(bounds[k+3],positions[i+k]);
   }
   escalators=escalators.filter(e=>{
-    const pad=Math.max(.35,Math.min(2.5,e.width/2));
+    const pad=halfWidthOf(e);
     const xs=e.line.map(p=>p[0]),ys=e.line.map(p=>p[1]);
     return Math.min(...xs)-pad<=bounds[3] && Math.max(...xs)+pad>=bounds[0]
       && Math.min(...ys)-pad<=bounds[4] && Math.max(...ys)+pad>=bounds[1]
@@ -31,7 +45,7 @@ export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: 
     for(const e of escalators) {
       const lengths=[0];for(let j=1;j<e.line.length;j++)lengths.push(lengths[j-1]+Math.hypot(e.line[j][0]-e.line[j-1][0],e.line[j][1]-e.line[j-1][1]));
       const length=lengths.at(-1)??0;if(length<2||e.top<=e.bottom)continue;
-      const landing=escalatorLanding(length),ramp=length-2*landing,count=Math.max(1,Math.round(ramp/.42)),half=Math.max(.35,Math.min(2.5,e.width/2));
+      const landing=landingOf(e,length),ramp=length-2*landing,count=e.stairs?stairsCount(e):Math.max(1,Math.round(ramp/.42)),half=halfWidthOf(e);
       const distances=[0,landing,...Array.from({length:count-1},(_,i)=>landing+ramp*(i+1)/count),length-landing,length,...lengths].sort((a,b)=>a-b);
       const at=(s:number):Pt=>{let j=1;while(j<lengths.length-1&&lengths[j]<s)j++;const t=(s-lengths[j-1])/(lengths[j]-lengths[j-1]||1);return [e.line[j-1][0]+(e.line[j][0]-e.line[j-1][0])*t,e.line[j-1][1]+(e.line[j][1]-e.line[j-1][1])*t];};
       for(let j=0;j+1<distances.length;j++) {
@@ -52,7 +66,7 @@ export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: 
         const bodyBottom=(p:Pt)=>{
           const distance=lo+(p[0]-A[0])*dx+(p[1]-A[1])*dy;
           const rise=Math.max(0,Math.min(1,(distance-landing)/ramp));
-          return e.bottom+(e.top-e.bottom)*(e.incline==='down'?1-rise:rise)+.05-.7;
+          return e.bottom+(e.top-e.bottom)*(e.incline==='down'?1-rise:rise)+.05-(e.stairs?STAIRS_SLAB+.05:.7);
         };
         const zp=bodyBottom(p),zq=bodyBottom(q),z1=z+2;
         masks.push(p[0],p[1],zp,q[0],q[1],zq,q[0],q[1],z1,p[0],p[1],zp,q[0],q[1],z1,p[0],p[1],z1);
@@ -87,7 +101,11 @@ export function escalatorOpeningOutline(face: ArrayLike<number>, masks: ArrayLik
   }
   if(!tris.length)return [];
   const faceRing:MultiPolygon=[[[[0,z0],[L,z0],[L,z1b],[0,z1a],[0,z0]]]];
-  const open=polygonClipping.intersection(faceRing,polygonClipping.union(tris[0],...tris.slice(1)));
+  // Узкие маски ступеней лестницы ломают polygon-clipping на почти совпадающих вершинах: округляем, при сбое — без контура
+  const snap=(m:MultiPolygon)=>m.map(poly=>poly.map(ring=>ring.map(([x,y])=>[Math.round(x*1e4)/1e4,Math.round(y*1e4)/1e4] as [number,number])));
+  let open:MultiPolygon;
+  try{open=polygonClipping.intersection(faceRing,polygonClipping.union(tris[0],...tris.slice(1)));}
+  catch{try{const t=snap(tris);open=polygonClipping.intersection(faceRing,polygonClipping.union(t[0] as unknown as MultiPolygon,...(t.slice(1) as unknown as MultiPolygon[])));}catch{return [];}}
   const eps=1e-3,out:number[]=[];
   const onEdge=(p:[number,number],q:[number,number])=>
     (Math.abs(p[1]-z0)<eps&&Math.abs(q[1]-z0)<eps)||(Math.abs(p[0])<eps&&Math.abs(q[0])<eps)||
@@ -114,11 +132,14 @@ export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number):
     if (Math.abs(floorZ - e.bottom) < .1) continue;
     const lengths=[0];for(let j=1;j<e.line.length;j++)lengths.push(lengths[j-1]+Math.hypot(e.line[j][0]-e.line[j-1][0],e.line[j][1]-e.line[j-1][1]));
     const length=lengths.at(-1)??0;if(length<2)continue;
-    const landing=escalatorLanding(length),half=Math.max(.35,Math.min(2.5,e.width/2));
+    const landing=landingOf(e,length),half=e.stairs&&e.outline?50:halfWidthOf(e);
+    // Лестница: проём над маршем по высоте прохода (2 м), эскалатор — только где короб пересекает перекрытие
+    const depth=e.stairs?STAIRS_SLAB+.05:BODY_DEPTH;
     const zAt=(d:number)=>{const rise=Math.max(0,Math.min(1,(d-landing)/(length-2*landing)));return e.bottom+(e.top-e.bottom)*(e.incline==='down'?1-rise:rise)+.05;};
     // Короб от z−BODY_DEPTH до ступеней (с запасом на пол чуть выше уровня этажа)
     // Площадки у пола лежат на перекрытии (их короб — приямок под ним): режем только под наклонным участком
-    const crosses=(d:number)=>{if(d<landing||d>length-landing)return false;const z=zAt(d);return z-BODY_DEPTH<floorZ+.08&&z>floorZ-.02;};
+    const crosses=(d:number)=>{if(d<landing||d>length-landing)return false;const z=zAt(d);return z-depth<floorZ+.08&&(e.stairs?z+2.05>floorZ:z>floorZ-.02);};
+    const from=out.length;
     const at=(s:number)=>{let j=1;while(j<lengths.length-1&&lengths[j]<s)j++;const t=(s-lengths[j-1])/(lengths[j]-lengths[j-1]||1);
       const dx=(e.line[j][0]-e.line[j-1][0])/(lengths[j]-lengths[j-1]||1),dy=(e.line[j][1]-e.line[j-1][1])/(lengths[j]-lengths[j-1]||1);
       return {x:e.line[j-1][0]+(e.line[j][0]-e.line[j-1][0])*t,y:e.line[j-1][1]+(e.line[j][1]-e.line[j-1][1])*t,nx:-dy,ny:dx};};
@@ -128,6 +149,12 @@ export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number):
       // Отрезок внутри одного звена ломаной: нормаль — по его середине
       const m=at((a+b)/2),pa=at(a),pb=at(b);
       out.push([[pa.x+m.nx*half,pa.y+m.ny*half],[pb.x+m.nx*half,pb.y+m.ny*half],[pb.x-m.nx*half,pb.y-m.ny*half],[pa.x-m.nx*half,pa.y-m.ny*half]]);
+    }
+    // Лестница с контуром: проём — полосы, обрезанные контуром площади
+    if(e.stairs&&e.outline&&out.length>from){
+      const own=out.splice(from).map(r=>[[...r,r[0]]] as unknown as MultiPolygon);
+      const clipped=polygonClipping.intersection(polygonClipping.union(own[0],...own.slice(1)),[[[...e.outline,e.outline[0]]]] as unknown as MultiPolygon);
+      for(const poly of clipped)out.push(poly[0].slice(0,-1) as Pt[]);
     }
   }
   if(!out.length)return [];

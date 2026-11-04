@@ -149,10 +149,13 @@ export class DrawTool {
 
   get active() { return this.state !== 'off'; }
 
-  begin(shape: DrawShape, maxPoints?: number) {
+  /** Подпись двухточечной линии в подсказке (эскалатор, лестница). */
+  private lineLabel?: string;
+  begin(shape: DrawShape, maxPoints?: number, lineLabel?: string) {
     this.reset();
     this.shape = shape;
     this.maxPoints = maxPoints;
+    this.lineLabel = lineLabel;
     this.state = 'draw';
     this.opts.hidden = shape !== 'ngon';
     this.opts.querySelector('input')!.value = String(this.sides);
@@ -649,8 +652,8 @@ export class DrawTool {
     }
     if (this.shape === 'wall' && this.maxPoints === 2) {
       this.onState(this.pts.length
-        ? tr('Эскалатор: кликните верхний конец. Esc — отмена.')
-        : tr('Эскалатор: кликните нижний конец на плане этажа. Esc — выйти.'));
+        ? tr('{what}: кликните верхний конец. Esc — отмена.', { what: this.lineLabel ?? tr('Эскалатор') })
+        : tr('{what}: кликните нижний конец на плане этажа. Esc — выйти.', { what: this.lineLabel ?? tr('Эскалатор') }));
       return;
     }
     if (this.shape === 'wall') {

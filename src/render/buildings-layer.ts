@@ -2,7 +2,7 @@ import { wireframeEdges } from './wireframe-edges';
 import { openRoofOutline } from './open-roof';
 import { outlineRemainders } from './outline-remainder';
 import { closedWallCap } from './indoor-wall-cap';
-import { cutEscalatorOpenings, escalatorFloorHoles, escalatorLanding, escalatorOpeningMasks, escalatorOpeningOutline } from './escalator-openings';
+import { STAIRS_SLAB, stairsCount, cutEscalatorOpenings, escalatorFloorHoles, escalatorLanding, escalatorOpeningMasks, escalatorOpeningOutline } from './escalator-openings';
 import { partitionFloors } from './floor-overlap';
 import { occludedByTriangles } from './ray-occlusion';
 import { trimIndoorBuildingEdges } from './indoor-building-edges';
@@ -51,7 +51,8 @@ export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]
   /** Стены многоуровневой комнаты на верхнем этаже, без своего пола. */ noFloor?: boolean;
   /** Только вырез (этаж, где лифт проходит без остановки): ни пола, ни стен. */ cutOnly?: boolean;
   /** Бассейн: чаша этой глубины (м) под полом этажа, вода чуть ниже пола. */ pool?: number }
-export interface EscalatorItem { key: string; line: LonLat[]; bottom: number; top: number; width: number; incline?: string; pale?: boolean }
+export interface EscalatorItem { key: string; line: LonLat[]; bottom: number; top: number; width: number; incline?: string; pale?: boolean;
+  stairs?: boolean; steps?: number; outline?: LonLat[] }
 
 /** Заливка пола по виду indoor-объекта. */
 const INDOOR_COLOURS: Record<IndoorKind, number> = { level: 0xe7e5e4, area: 0xffffff, corridor: 0xffffff, room: 0xf6ead2, wall: 0xffffff, column: 0xffffff, poi: 0xffffff };
@@ -214,6 +215,10 @@ const ESCALATOR_PALE_STEP = new THREE.MeshLambertMaterial({ color: 0xced2d4, sid
 const ESCALATOR_PALE_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xdce9ed, side: THREE.DoubleSide,
   transparent: true, opacity: 0.4, depthWrite: false });
 const ESCALATOR_PALE_HANDRAIL = new LineMaterial({ color: 0xc4c0bb, linewidth: 5 });
+const STAIRS_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+const STAIRS_PALE = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x555555, side: THREE.DoubleSide });
+const STAIRS_RAIL = new LineMaterial({ color: 0x8a8f93, linewidth: 3 });
+const STAIRS_PALE_RAIL = new LineMaterial({ color: 0xc4c6c8, linewidth: 3 });
 
 export interface DoorItem { key: string; at: LonLat; z: number; tags?: Record<string, string> }
 
@@ -1538,7 +1543,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Входы на контуре — тоже: у частей выше среза они висели бы в воздухе
     for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL, ENTRANCE_MATERIAL, ENTRANCE_SELECTED_MATERIAL, ENTRANCE_LINE_MATERIAL]) m.clippingPlanes = planes;
     for (const m of [ESCALATOR_BELT, ESCALATOR_SIDE, ESCALATOR_STEP, ESCALATOR_BALUSTRADE, ESCALATOR_HANDRAIL,
-      ESCALATOR_PALE_BELT, ESCALATOR_PALE_SIDE, ESCALATOR_PALE_STEP, ESCALATOR_PALE_BALUSTRADE, ESCALATOR_PALE_HANDRAIL]) m.clippingPlanes = planes;
+      ESCALATOR_PALE_BELT, ESCALATOR_PALE_SIDE, ESCALATOR_PALE_STEP, ESCALATOR_PALE_BALUSTRADE, ESCALATOR_PALE_HANDRAIL,
+      STAIRS_MATERIAL, STAIRS_PALE, STAIRS_RAIL, STAIRS_PALE_RAIL]) m.clippingPlanes = planes;
     // Выделенный эскалатор — целиком, без среза потолком этажа
     for (const m of [ESCALATOR_SELECTED, ESCALATOR_SELECTED_HANDRAIL]) m.clippingPlanes = null;
     if (this.indoorObj) {
@@ -1548,7 +1554,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.indoorObj.traverse((o) => {
         if (o instanceof THREE.Mesh || o instanceof THREE.Line || o instanceof Line2) o.geometry.dispose();
         if (o.name === 'indoor-steps-outline' && o instanceof THREE.Line) (o.material as THREE.Material).dispose();
-        if (o instanceof LineSegments2 && o.material !== ESCALATOR_HANDRAIL && o.material !== ESCALATOR_PALE_HANDRAIL && o.material !== ESCALATOR_SELECTED_HANDRAIL) o.material.dispose();
+        if (o instanceof LineSegments2 && o.material !== ESCALATOR_HANDRAIL && o.material !== ESCALATOR_PALE_HANDRAIL && o.material !== ESCALATOR_SELECTED_HANDRAIL && o.material !== STAIRS_RAIL && o.material !== STAIRS_PALE_RAIL) o.material.dispose();
       });
       this.indoorObj = undefined;
     }
@@ -1668,7 +1674,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         [p.outer, ...p.inners].map((r) => { const rp = r.map(g.toLocal); return [...rp, rp[0]]; })));
       const pools: ClipMulti = this.level.items.filter(it => it.pool).flatMap(it => it.polygons.map(p =>
         [p.outer, ...p.inners].map(r => { const points = r.map(g.toLocal); return [...points, points[0]]; })));
-      const stairs = escalatorFloorHoles((this.level.cutEscalators ?? this.level.escalators ?? []).map(e => ({...e,line:e.line.map(g.toLocal)})), this.level.floor);
+      const stairs = escalatorFloorHoles((this.level.cutEscalators ?? this.level.escalators ?? []).map(e => ({...e,line:e.line.map(g.toLocal),outline:e.outline?.map(g.toLocal)})), this.level.floor);
       const mappedFloors: ClipMulti = this.level.items.filter(it => !it.line && !it.shaft && !it.noFloor && !it.cutOnly && !it.pool
         && ['level','area','corridor','room'].includes(it.kind)).flatMap(it => it.polygons.map(p =>
           [p.outer, ...p.inners].map(r => { const points = r.map(g.toLocal); return [...points, points[0]]; })));
@@ -1826,6 +1832,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       model.userData.key = item.key;
       root.add(model);
       this.escalatorObjects.set(item.key, model);
+      if (item.stairs) { this.drawStairs(model, item, pts, length, g); continue; }
       const landing = escalatorLanding(length);
       const halfWidth = Math.max(0.35, Math.min(2.5, item.width / 2));
       const at = (distance: number) => {
@@ -1975,6 +1982,96 @@ export class BuildingsLayer implements CustomLayerInterface {
       mesh(risers, item.pale ? ESCALATOR_PALE_STEP : ESCALATOR_STEP);
       mesh(body, item.pale ? ESCALATOR_PALE_SIDE : ESCALATOR_SIDE);
       mesh(balustrades, item.pale ? ESCALATOR_PALE_BALUSTRADE : ESCALATOR_BALUSTRADE);
+    }
+  }
+
+  /**
+   * Лестница по прямой линии: ступени-полосы поперёк линии (обрезанные контуром площади, если он есть) на тонкой
+   * наклонной плите, перила по обеим сторонам. Высота подступенька — подъём / число ступеней.
+   */
+  private drawStairs(model: THREE.Group, item: EscalatorItem, pts: [number, number][], length: number, g: MeshGroup) {
+    const H = item.top - item.bottom, count = stairsCount(item), run = length / count;
+    // Ось от нижнего конца к верхнему
+    let [a, b] = [pts[0], pts[pts.length - 1]];
+    if (item.incline === 'down') [a, b] = [b, a];
+    const ux = (b[0] - a[0]) / length, uy = (b[1] - a[1]) / length, nx = -uy, ny = ux;
+    const half = Math.max(0.25, Math.min(5, item.width / 2));
+    const outline = item.outline?.map(g.toLocal);
+    const P = (d: number, w: number): [number, number] => [a[0] + ux * d + nx * w, a[1] + uy * d + ny * w];
+    // Низ плиты: линия внутренних углов ступеней минус толщина (не ниже нижнего пола)
+    const under = (x: number, y: number) => {
+      const d = (x - a[0]) * ux + (y - a[1]) * uy;
+      return Math.max(item.bottom, item.bottom + H * d / length - STAIRS_SLAB);
+    };
+    const tris: number[] = [];
+    const rails: [number, number, number][][] = [[], []];
+    for (let i = 0; i < count; i++) {
+      const d0 = i * run, d1 = (i + 1) * run, z = item.bottom + H * (i + 1) / count;
+      let rings: [number, number][][];
+      if (outline) {
+        // Полоса d0…d1 по оси: контур, отсечённый двумя полуплоскостями (устойчиво, без polygon-clipping)
+        const along = (p: [number, number]) => (p[0] - a[0]) * ux + (p[1] - a[1]) * uy;
+        const clip = (ring: [number, number][], keep: (d: number) => number) => {
+          const out: [number, number][] = [];
+          for (let k = 0; k < ring.length; k++) {
+            const p = ring[k], q = ring[(k + 1) % ring.length], fp = keep(along(p)), fq = keep(along(q));
+            if (fp >= 0) out.push(p);
+            if (fp * fq < 0) { const t = fp / (fp - fq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); }
+          }
+          return out;
+        };
+        rings = [clip(clip(outline, (d) => d - d0), (d) => d1 - d)];
+      } else rings = [[P(d0, -half), P(d1, -half), P(d1, half), P(d0, half)]];
+      let lo = Infinity, hi = -Infinity;
+      for (const ring of rings) {
+        if (ring.length < 3) continue;
+        // Верх ступени
+        for (const t of THREE.ShapeUtils.triangulateShape(ring.map(([x, y]) => new THREE.Vector2(x, y)), []))
+          for (const k of t) tris.push(ring[k][0], ring[k][1], z);
+        // Боковые грани до низа плиты, и низ
+        for (let k = 0; k < ring.length; k++) {
+          const [px, py] = ring[k], [qx, qy] = ring[(k + 1) % ring.length];
+          const zp = under(px, py), zq = under(qx, qy);
+          tris.push(px, py, zp, qx, qy, zq, qx, qy, z, px, py, zp, qx, qy, z, px, py, z);
+          const w = (px - a[0]) * nx + (py - a[1]) * ny;
+          lo = Math.min(lo, w); hi = Math.max(hi, w);
+        }
+        for (const t of THREE.ShapeUtils.triangulateShape(ring.map(([x, y]) => new THREE.Vector2(x, y)), []))
+          for (const k of t) tris.push(ring[k][0], ring[k][1], under(ring[k][0], ring[k][1]));
+      }
+      if (lo > hi) continue;
+      // Перила: по краю полосы ступени, 0,9 м над ней
+      const dm = (d0 + d1) / 2;
+      for (const [side, w] of [[0, lo + 0.04], [1, hi - 0.04]] as const) {
+        const [x, y] = P(dm, w);
+        if (!rails[side].length) { const [x0, y0] = P(d0 + 0.05, w); rails[side].push([x0, y0, z], [x0, y0, z + 0.9]); }
+        rails[side].push([x, y, z + 0.9]);
+        if (i === count - 1) { const [x1, y1] = P(d1 - 0.05, w); rails[side].push([x1, y1, z + 0.9], [x1, y1, z]); }
+      }
+    }
+    if (tris.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(tris, 3));
+      geo.computeVertexNormals();
+      const material = item.pale ? STAIRS_PALE : STAIRS_MATERIAL;
+      const mesh = new THREE.Mesh(geo, material);
+      mesh.frustumCulled = false;
+      mesh.userData.escalatorMaterial = material;
+      model.add(mesh);
+    }
+    const canvas = this.map!.getCanvas(), dpr = canvas.width / Math.max(1, canvas.clientWidth);
+    const rail = item.pale ? STAIRS_PALE_RAIL : STAIRS_RAIL;
+    rail.linewidth = 3 * dpr; rail.resolution.set(canvas.width, canvas.height);
+    ESCALATOR_SELECTED_HANDRAIL.linewidth = 5 * dpr;
+    ESCALATOR_SELECTED_HANDRAIL.resolution.set(canvas.width, canvas.height);
+    for (const r of rails) {
+      if (r.length < 2) continue;
+      const geometry = new LineGeometry();
+      geometry.setPositions(r.flat());
+      const line = new Line2(geometry, rail);
+      line.frustumCulled = false;
+      line.userData.escalatorMaterial = rail;
+      model.add(line);
     }
   }
 
@@ -2166,7 +2263,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const poolHoles = pools.flatMap(it => it.polygons.map(p =>
       [p.outer, ...p.inners].map(r => { const l = r.map(g.toLocal); return [...l, l[0]]; }) as ClipMulti[number]));
     const voidFloorHoles = (floorVoids ?? []).map(poly => poly.map(r => {const points=r.map(g.toLocal);return [...points,points[0]];}));
-    const escalatorHoles = [...voidFloorHoles, ...escalatorFloorHoles(escalators.map(e => ({ ...e, line: e.line.map(g.toLocal) })), items[0]?.z ?? 0), ...shaftHoles, ...poolHoles];
+    const escalatorHoles = [...voidFloorHoles, ...escalatorFloorHoles(escalators.map(e => ({ ...e, line: e.line.map(g.toLocal), outline: e.outline?.map(g.toLocal) })), items[0]?.z ?? 0), ...shaftHoles, ...poolHoles];
     // Вырезы — только у кусков пола рядом с ними (кусков сотни, polygon-clipping платит за каждый)
     const holeBox = (r: Pt[]) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const [x, y] of r) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } return [x0, y0, x1, y1]; };
     const holeBoxes = escalatorHoles.map((h) => holeBox(h[0] as Pt[]));
@@ -2219,7 +2316,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       return WHITE_WALL;
     };
     // Рёбра стен (опция «рёбра»): низ и вертикали в концах и на изломах — по направлениям стен в каждой точке
-    const escalatorCuts = escalators.map(e => ({ ...e, line: e.line.map(g.toLocal) }));
+    const escalatorCuts = escalators.map(e => ({ ...e, line: e.line.map(g.toLocal), outline: e.outline?.map(g.toLocal) }));
     const openingMasks: number[] = [];
     /** Контур проёмов эскалаторов — добавляется после обрезки рёбер масками (иначе их срежет). */
     const openingEdges: number[] = [];
@@ -5222,7 +5319,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const [x, y] = g.toLocal(at); const door = knownDoors.find(d => Math.abs(d.z - l.z!) < 0.1 && Math.hypot(...g.toLocal(this.doorAt(d)).map((v, i) => v - [x, y][i])) < 0.01);
         return { x, y, z: l.z!, diameter: revolvingDoorDiameter(door?.tags), width:tagWidth(door?.tags??{}) };
       }).concat(l.cuts.map(c=>{const [x,y]=g.toLocal(c.at);return {x,y,z:l.z!,diameter:undefined,width:c.width};})));
-      const escalators = (this.level.escalators ?? []).map(e => ({ ...e, line: e.line.map(g.toLocal) }));
+      const escalators = (this.level.escalators ?? []).map(e => ({ ...e, line: e.line.map(g.toLocal), outline: e.outline?.map(g.toLocal) }));
       const escalatorSignature = JSON.stringify(escalators);
       for (const it of g.items) {
         if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || !it.wallVertices) continue;

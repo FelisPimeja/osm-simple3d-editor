@@ -9125,6 +9125,10 @@ function previewIndoorShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): 
 function applyIndoorGeometry(op: IndoorOperation, glue: boolean): boolean {
   try {
     let edits = indoorGeometryEdits(op, glue);
+    // Удалены все вершины объекта — удалить его обычным удалением (с проверкой отношений)
+    const gone = edits.filter((e) => e.delete).map((e) => buildingIndoorFor(e.key)).filter((f): f is IndoorFeature => !!f);
+    edits = edits.filter((e) => !e.delete);
+    if (gone.length && !edits.length) { overpassLayer.setOutline(undefined); void deleteIndoorSpaces(gone); return true; }
     for (const e of edits) {
       const f = buildingIndoorFor(e.key);
       if (f) trackIndoor(e.key, f); else entity(e.key);
@@ -9138,6 +9142,8 @@ function applyIndoorGeometry(op: IndoorOperation, glue: boolean): boolean {
     session.editMany(edits);
     for (const side of sides) selectRoomWall(side, true);
     shapeTool.refresh();
+    // Удаление — после правок соседей: оно сверяет состояние сессии
+    if (gone.length) void deleteIndoorSpaces(gone);
     return true;
   } catch (err) { setStatus(tr((err as Error).message), true); return false; }
 }

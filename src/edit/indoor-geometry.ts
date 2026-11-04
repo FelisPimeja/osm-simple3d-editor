@@ -76,6 +76,12 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
       if (at && !staysWithNeighbour) edits.push({key:f.key,polygons:[{outer:[at],outerIds:[id],inners:[],innerIds:[]}]});
       continue;
     }
+    // Удалены все вершины полигона-пути (кусок контура этажа, помещение): удаляется сам объект
+    if (op.type==='remove' && !f.line && selected.has(f.key) && f.key.startsWith('way/') && f.polygons.length===1 && !f.polygons[0].inners.length
+        && (f.polygons[0].outerIds?.length ?? 0) > 0 && f.polygons[0].outerIds!.every(id=>removed.has(id))) {
+      edits.push({key:f.key,delete:true});
+      continue;
+    }
     let changed=false;
     const output=rings(f).map(r=>{
       if (!r.ids) return {...r};

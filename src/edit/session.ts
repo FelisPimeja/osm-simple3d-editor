@@ -166,11 +166,16 @@ export class EditSession {
     return entity;
   }
 
+  /** Объект создан, удалён, изменён или есть в шагах истории (отменённых тоже). */
+  touched(key: string): boolean {
+    return this.created.has(key) || this.deleted.has(key) || (this.has(key) && this.isChanged(key)) ||
+      [...this.undoStack, ...this.redoStack].some((step) => !isView(step) && step.some((entry) => entry.key === key));
+  }
+
   /** Обновить исходное состояние объекта, если его ещё не затрагивали правки или история. */
   refresh(entity: Tagged): boolean {
     const key = entity.key;
-    if (this.created.has(key) || this.deleted.has(key) || (this.has(key) && this.isChanged(key)) ||
-      [...this.undoStack, ...this.redoStack].some((step) => !isView(step) && step.some((entry) => entry.key === key))) return false;
+    if (this.touched(key)) return false;
     this.features.delete(key);
     this.original.delete(key);
     this.originalMembers.delete(key);

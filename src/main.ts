@@ -2120,8 +2120,11 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     // Свежие версии запоминаем как отправленные: отстающий Overpass или старая запись IndexedDB не вернут прежнее здание
     overpass.noteUploaded(new Map([...changed, ...(groupChanged ? [freshGroup] : [])].map((f) => [f.key, f.version])));
     if (requestId !== focusRefreshId || focus?.key !== g.key) return;
-    if (session.hasDataHistory() || [...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.has(key) && session.isChanged(key))) {
-      if (cacheChanged) setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
+    // Only edits of this building block the refresh: history of other buildings must not pin stale copies (#47)
+    if ([...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.touched(key))) {
+      // Versions in the session (restored by autosave too) may lag behind the server even when the tile cache is fresh
+      const behind = features.some((f) => { const v = (session.tracked(f.key) as { version?: number } | undefined)?.version; return v !== undefined && v < f.version; });
+      if (cacheChanged || behind) setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
       return;
     }
     // A tile reload may already have updated the cache while the session still holds older copies.

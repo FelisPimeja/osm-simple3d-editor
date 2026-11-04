@@ -110,12 +110,15 @@ export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number):
   const out: Pt[][] = [];
   for (const e of escalators) {
     if (e.top <= e.bottom || floorZ < e.bottom - .1 || floorZ > e.top + .1) continue;
+    // Эскалатор начинается на этом этаже: короб нижней площадки — приямок под полом, перекрытие над ним не режем
+    if (Math.abs(floorZ - e.bottom) < .1) continue;
     const lengths=[0];for(let j=1;j<e.line.length;j++)lengths.push(lengths[j-1]+Math.hypot(e.line[j][0]-e.line[j-1][0],e.line[j][1]-e.line[j-1][1]));
     const length=lengths.at(-1)??0;if(length<2)continue;
     const landing=escalatorLanding(length),half=Math.max(.35,Math.min(2.5,e.width/2));
     const zAt=(d:number)=>{const rise=Math.max(0,Math.min(1,(d-landing)/(length-2*landing)));return e.bottom+(e.top-e.bottom)*(e.incline==='down'?1-rise:rise)+.05;};
     // Короб от z−BODY_DEPTH до ступеней (с запасом на пол чуть выше уровня этажа)
-    const crosses=(d:number)=>{const z=zAt(d);return z-BODY_DEPTH<floorZ+.08&&z>floorZ-.02;};
+    // Площадки у пола лежат на перекрытии (их короб — приямок под ним): режем только под наклонным участком
+    const crosses=(d:number)=>{if(d<landing||d>length-landing)return false;const z=zAt(d);return z-BODY_DEPTH<floorZ+.08&&z>floorZ-.02;};
     const at=(s:number)=>{let j=1;while(j<lengths.length-1&&lengths[j]<s)j++;const t=(s-lengths[j-1])/(lengths[j]-lengths[j-1]||1);
       const dx=(e.line[j][0]-e.line[j-1][0])/(lengths[j]-lengths[j-1]||1),dy=(e.line[j][1]-e.line[j-1][1])/(lengths[j]-lengths[j-1]||1);
       return {x:e.line[j-1][0]+(e.line[j][0]-e.line[j-1][0])*t,y:e.line[j-1][1]+(e.line[j][1]-e.line[j-1][1])*t,nx:-dy,ny:dx};};

@@ -5334,10 +5334,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     const out: number[] = [], floor = this.level!.floor;
     for (const it of g.items) {
       const h = computeHeights(it.tags);
-      if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || h.top <= floor + 0.05 || h.top >= top || this.planCovers(it)) continue;
+      // Часть выше среза (ступени у цоколя: верх 0,71 м при срезе 0,7) — её грани ниже среза тоже нужны
+      if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || h.top <= floor + 0.05 || h.min >= top || this.planCovers(it)) continue;
       const end = it.positions.length / 3 - it.floorVertices, p = it.positions;
       for (let i = it.wallVertices * 3; i + 8 < end * 3; i += 9) {
-        if (Math.abs(p[i + 2] - p[i + 5]) < 1e-4 && Math.abs(p[i + 5] - p[i + 8]) < 1e-4) out.push(...p.subarray(i, i + 9));
+        if (p[i + 2] > floor + FLOOR_OBJECT_HEIGHT && p[i + 2] < top + 0.05
+          && Math.abs(p[i + 2] - p[i + 5]) < 1e-4 && Math.abs(p[i + 5] - p[i + 8]) < 1e-4) out.push(...p.subarray(i, i + 9));
       }
     }
     if (!out.length) return;

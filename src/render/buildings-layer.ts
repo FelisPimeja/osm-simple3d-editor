@@ -2,7 +2,7 @@ import { wireframeEdges } from './wireframe-edges';
 import { openRoofOutline } from './open-roof';
 import { outlineRemainders } from './outline-remainder';
 import { closedWallCap } from './indoor-wall-cap';
-import { cutEscalatorOpenings, escalatorFloorHoles, escalatorOpeningMasks, escalatorOpeningOutline } from './escalator-openings';
+import { cutEscalatorOpenings, escalatorFloorHoles, escalatorLanding, escalatorOpeningMasks, escalatorOpeningOutline } from './escalator-openings';
 import { partitionFloors } from './floor-overlap';
 import { occludedByTriangles } from './ray-occlusion';
 import { trimIndoorBuildingEdges } from './indoor-building-edges';
@@ -1821,7 +1821,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       model.userData.key = item.key;
       root.add(model);
       this.escalatorObjects.set(item.key, model);
-      const landing = Math.min(1, length * 0.12);
+      const landing = escalatorLanding(length);
       const halfWidth = Math.max(0.35, Math.min(2.5, item.width / 2));
       const at = (distance: number) => {
         let i = 1;

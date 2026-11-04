@@ -1433,6 +1433,7 @@
   "У эскалатора level={value}: нужны этажи обоих концов, например 0;1.": "Escalator level={value}: the levels of both ends are needed, e.g. 0;1.",
   "incline у эскалатора: нужен up или down — иначе неясно, какой конец внизу.": "Escalator incline: up or down is needed, otherwise it is unclear which end is at the bottom.",
   "Эскалатор с изломами ({n} точек) — правится только эскалатор из двух точек.": "Escalator with bends ({n} points): only two-point escalators can be edited.",
-  "Наклон эскалатора {angle}° (длина {run} м, перепад {rise} м): обычно 27–35°. Проверьте level и длину.": "Escalator slope {angle}° (length {run} m, rise {rise} m): usually 27–35°. Check level and length.",
-  "Конец эскалатора на этаже {n} — вне помещений и контура этажа.": "Escalator end on level {n} is outside the rooms and the level outline."
+  "Конец эскалатора на этаже {n} — вне помещений и контура этажа.": "Escalator end on level {n} is outside the rooms and the level outline.",
+  "Наклон эскалатора {angle}°: наклонная часть {ramp} м (ось {run} м без площадок по концам), перепад {rise} м; обычно 27–35°. Проверьте level и длину.": "Escalator slope {angle}°: inclined part {ramp} m (axis {run} m minus the landings at the ends), rise {rise} m; usually 27–35°. Check level and length.",
+  "Высота этажей оценочная (не задана явно) — реальный наклон может быть другим.": "Level heights are estimated (not set explicitly), the real slope may differ."
 }

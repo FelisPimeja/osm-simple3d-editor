@@ -5,6 +5,7 @@ import { computeHeights, parseLength, roofShapeOf } from '../osm/heights';
 import { ROOF_SHAPES } from './tag-form';
 import { tr, trn } from '../i18n';
 import { floatingParts } from '../osm/floating';
+import { escalatorLanding } from '../render/escalator-openings';
 
 /**
  * Проверка здания по схеме Simple 3D: теги объёма (числа, противоречия высот и этажей), геометрия
@@ -390,14 +391,15 @@ export function validateStackedEscalators(features: IndoorFeature[]): Issue[] {
   return out;
 }
 
-/** Наклон эскалатора, °: обычный — 27–35, с площадками по концам по оси выходит положе. */
-const ESCALATOR_ANGLE = { min: 15, max: 40 };
+/** Наклон эскалатора, °: обычный — 27–35, с допуском. Считается по наклонной части модели — без площадок по концам. */
+const ESCALATOR_ANGLE = { min: 15, max: 38 };
 
 /**
  * Эскалаторы (путь highway=steps + conveying): этажи концов, наклон по длине и высоте этажей, концы внутри этажа.
- * floorOf — высота пола этажа, м; на этаже без контуров (нет помещений, коридоров, indoor=level) концы не проверяются.
+ * floorOf — высота пола этажа, м, и задана ли высота этажей явно; на этаже без контуров (нет помещений, коридоров,
+ * indoor=level) концы не проверяются.
  */
-export function validateEscalators(features: IndoorFeature[], floorOf: (n: number) => number | undefined): Issue[] {
+export function validateEscalators(features: IndoorFeature[], floorOf: (n: number) => { floor: number; explicit: boolean } | undefined): Issue[] {
   const out: Issue[] = [];
   for (const f of features) {
     if (!f.escalator) continue;
@@ -413,13 +415,16 @@ export function validateEscalators(features: IndoorFeature[], floorOf: (n: numbe
     if (line.length > 2)
       out.push({ key: f.key, level: 'warning', code: 'geometry', text: tr('Эскалатор с изломами ({n} точек) — правится только эскалатор из двух точек.', { n: line.length }) });
     const lo = floorOf(levels[0]), hi = floorOf(levels[levels.length - 1]);
-    if (line.length >= 2 && lo !== undefined && hi !== undefined && hi > lo) {
+    if (line.length >= 2 && lo && hi && hi.floor > lo.floor) {
       const p = projector(line[0]), pts = line.map(p);
       const run = pts.slice(1).reduce((s, b, i) => s + Math.hypot(b[0] - pts[i][0], b[1] - pts[i][1]), 0);
-      const angle = Math.atan2(hi - lo, run) * 180 / Math.PI;
+      const ramp = run - 2 * escalatorLanding(run), rise = hi.floor - lo.floor;
+      const angle = Math.atan2(rise, Math.max(ramp, 1e-3)) * 180 / Math.PI;
       if (angle < ESCALATOR_ANGLE.min || angle > ESCALATOR_ANGLE.max)
         out.push({ key: f.key, level: 'warning', code: 'geometry',
-          text: tr('Наклон эскалатора {angle}° (длина {run} м, перепад {rise} м): обычно 27–35°. Проверьте level и длину.', { angle: Math.round(angle), run: run.toFixed(1), rise: (hi - lo).toFixed(1) }) });
+          text: tr('Наклон эскалатора {angle}°: наклонная часть {ramp} м (ось {run} м без площадок по концам), перепад {rise} м; обычно 27–35°. Проверьте level и длину.',
+            { angle: Math.round(angle), ramp: ramp.toFixed(1), run: run.toFixed(1), rise: rise.toFixed(1) })
+            + (lo.explicit && hi.explicit ? '' : ' ' + tr('Высота этажей оценочная (не задана явно) — реальный наклон может быть другим.')) });
     }
     // Концы — внутри помещений, коридоров или контура своего этажа
     const ends: [LonLat | undefined, number][] = t.incline === 'down' ? [[line[0], levels[levels.length - 1]], [line[line.length - 1], levels[0]]]

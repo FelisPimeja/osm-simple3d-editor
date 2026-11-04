@@ -1,6 +1,8 @@
 import { trimCoplanarWalls } from './shell-trim';
 import polygonClipping, { type MultiPolygon } from 'polygon-clipping';
 import type { Pt } from './building-geometry';
+/** Горизонтальная площадка на каждом конце эскалатора длиной length по оси, м: модель, проёмы и проверка наклона. */
+export const escalatorLanding = (length: number) => Math.min(1, length * 0.12);
 export interface EscalatorCut { line: Pt[]; bottom: number; top: number; width: number; incline?: string }
 /** Intersect vertical wall planes with the escalator body and 2 m of headroom. */
 export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: EscalatorCut[]): number[] {
@@ -29,7 +31,7 @@ export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: 
     for(const e of escalators) {
       const lengths=[0];for(let j=1;j<e.line.length;j++)lengths.push(lengths[j-1]+Math.hypot(e.line[j][0]-e.line[j-1][0],e.line[j][1]-e.line[j-1][1]));
       const length=lengths.at(-1)??0;if(length<2||e.top<=e.bottom)continue;
-      const landing=Math.min(1,length*.12),ramp=length-2*landing,count=Math.max(1,Math.round(ramp/.42)),half=Math.max(.35,Math.min(2.5,e.width/2));
+      const landing=escalatorLanding(length),ramp=length-2*landing,count=Math.max(1,Math.round(ramp/.42)),half=Math.max(.35,Math.min(2.5,e.width/2));
       const distances=[0,landing,...Array.from({length:count-1},(_,i)=>landing+ramp*(i+1)/count),length-landing,length,...lengths].sort((a,b)=>a-b);
       const at=(s:number):Pt=>{let j=1;while(j<lengths.length-1&&lengths[j]<s)j++;const t=(s-lengths[j-1])/(lengths[j]-lengths[j-1]||1);return [e.line[j-1][0]+(e.line[j][0]-e.line[j-1][0])*t,e.line[j-1][1]+(e.line[j][1]-e.line[j-1][1])*t];};
       for(let j=0;j+1<distances.length;j++) {
@@ -110,7 +112,7 @@ export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number):
     if (e.top <= e.bottom || floorZ < e.bottom - .1 || floorZ > e.top + .1) continue;
     const lengths=[0];for(let j=1;j<e.line.length;j++)lengths.push(lengths[j-1]+Math.hypot(e.line[j][0]-e.line[j-1][0],e.line[j][1]-e.line[j-1][1]));
     const length=lengths.at(-1)??0;if(length<2)continue;
-    const landing=Math.min(1,length*.12),half=Math.max(.35,Math.min(2.5,e.width/2));
+    const landing=escalatorLanding(length),half=Math.max(.35,Math.min(2.5,e.width/2));
     const zAt=(d:number)=>{const rise=Math.max(0,Math.min(1,(d-landing)/(length-2*landing)));return e.bottom+(e.top-e.bottom)*(e.incline==='down'?1-rise:rise)+.05;};
     // Короб от z−BODY_DEPTH до ступеней (с запасом на пол чуть выше уровня этажа)
     const crosses=(d:number)=>{const z=zAt(d);return z-BODY_DEPTH<floorZ+.08&&z>floorZ-.02;};

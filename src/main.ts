@@ -11884,7 +11884,7 @@ function renderIssues() {
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding && plan ? buildingIndoor(focusedBuilding) : [];
   const outerDoor = focusedBuilding ? outerDoorTest(focusedBuilding, indoorAll) : undefined;
-  const indoorIssues = focusedBuilding && plan ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), outerDoor!(f))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll), ...validateEscalators(indoorAll, ((ls) => (n: number) => ls.find((l) => l.n === n)?.floor)(buildingLevels(focusedBuilding, indoorAll)))] : [];
+  const indoorIssues = focusedBuilding && plan ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), outerDoor!(f))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll), ...validateEscalators(indoorAll, ((ls) => (n: number) => { const l = ls.find((x) => x.n === n); return l && { floor: l.floor, explicit: !!l.explicit }; })(buildingLevels(focusedBuilding, indoorAll)))] : [];
   const duplicates = focusedBuilding && !plan ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
   focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
   // Слой зданий выключен — проверку карты не считаем (пересчитаем, когда включат)

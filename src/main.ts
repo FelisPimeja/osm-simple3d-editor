@@ -32,7 +32,7 @@ import { applyBasemapDate, dateSpan, decimalDate, existsIn, isoDay, parseDate, s
 import { buildingRefreshMembers, refreshBuildingFeatures } from './osm/building-refresh';
 import { BrokenRingsError, ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT, parseLength } from './osm/heights';
-import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, indoorCategory, type IndoorCategory } from './osm/indoor-categories';
+import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indoorCategory, roomValueOf, type IndoorCategory } from './osm/indoor-categories';
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
@@ -8618,10 +8618,12 @@ function renderIndoorSelection(add = false) {
   const t = f.tags;
   const kind = indoorTitle(f);
   const levels = f.levels.map((n) => levelLabel(n)).join(', ');
+  const src = indoorCategorySource(f);
   infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''} — `
     + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
     + `<p class="hint">${esc(levels)}</p>`
-    + indoorForm([f])
+    + indoorForm([f], src && roomValueOf(src.tags) ? { room: ROOM_LABELS[roomValueOf(src.tags)!] ?? roomValueOf(src.tags)! } : {})
+    + (src ? `<p class="hint">${tr('Назначение взято с точки внутри: {point}', { point: `<a href="#" data-select-indoor="${esc(src.key)}">${esc(src.tags.name ? `«${src.tags.name}»` : src.key)}</a>` })}</p>` : '')
     + renderOtherTags(key, t, indoorForm([f]), true);
   bindIndoorForm([f]);
 }
@@ -8747,15 +8749,25 @@ const isFloorKind = (f: IndoorFeature) => !f.line && (f.kind === 'room' || f.kin
 
 /** Назначение помещения: по его тегам и по точечным объектам (узлам) этажа внутри него. */
 function categoryOf(f: IndoorFeature, onLevel: IndoorFeature[]): IndoorCategory {
+  return indoorCategory(f, pointsInside(f, onLevel));
+}
+/** Точечные объекты этажа внутри помещения. */
+function pointsInside(f: IndoorFeature, onLevel: IndoorFeature[]): IndoorFeature[] {
   const pts = pointsOf(onLevel, levelPoints, (p) => !p.key.endsWith('#poi'));
-  if (!pts.length) return indoorCategory(f, []);
+  if (!pts.length) return [];
   // Габариты помещения — один раз, а не на каждую точку
   const boxes = f.polygons.map((q) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const [x, y] of q.outer) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
     return [x0, y0, x1, y1]; });
   const inside = pts.filter((p) => f.polygons.some((q, i) => { const [x0, y0, x1, y1] = boxes[i], pt = p.point!;
     return pt[0] >= x0 && pt[0] <= x1 && pt[1] >= y0 && pt[1] <= y1 && pointInRing(pt, q.outer) && !q.inners.some((h) => pointInRing(pt, h)); }));
-  return indoorCategory(f, inside);
+  return inside;
+}
+/** POI, с которого помещение без своих тегов назначения берёт категорию (точки его этажей в здании режима). */
+function indoorCategorySource(f: IndoorFeature): IndoorFeature | undefined {
+  if (!focus || !isFloorKind(f)) return;
+  const pts = buildingIndoor(focus).filter((p) => p.kind === 'poi' && p.levels.some((n) => f.levels.includes(n)));
+  return categorySource(f, pointsInside(f, pts));
 }
 
 /** Легенда раскраски: только категории, которые есть на этаже (закрытые и технические — одним пунктом). */
@@ -8849,7 +8861,7 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
     const label = `<span title="${esc(k)}">${esc(indoorFieldLabel(k, fs))}</span>`;
     if(k==='area')return `<label class="tag-row${changed ? ' changed' : ''}"><span title="area">area</span><select data-indoor-tag="area"${!value ? ' style="color:#888"' : ''}>${!value ? `<option value="" selected disabled hidden>${mixed ? tr('разные значения') : 'no'}</option>` : ''}<option value="yes"${value==='yes'?' selected':''}>yes</option><option value="no"${value==='no'?' selected':''}>no</option></select></label>`;
     if (options) return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
-      + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : k === 'entrance' ? tr('не вход') : '—',
+      + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : k === 'entrance' ? tr('не вход') : placeholders[k] ?? '—',
         k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : k === 'room' ? ROOM_LABELS : k === 'wall' ? WALL_LABELS : undefined, k) + '</label>';
     const unit = INDOOR_LENGTHS.has(k) ? lengthUnitOf(value) : undefined;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}`

@@ -66,19 +66,45 @@ function purpose(t: Record<string, string>): IndoorCategory | undefined {
   return t.room ? ROOM[t.room] : undefined;
 }
 
+/** Мелочь на площадке (банкомат, автомат) — не назначение всей площадки. */
+const SMALL = new Set(['atm', 'vending_machine', 'payment_terminal', 'bench', 'waste_basket', 'drinking_water', 'charging_station', 'parcel_locker', 'telephone', 'information']);
+
+/** POI внутри, от которого помещение без своих тегов назначения берёт категорию; undefined — нет такого. */
+export function categorySource(f: IndoorFeature, inside: IndoorFeature[] = []): IndoorFeature | undefined {
+  if (purpose(f.tags)) return undefined;
+  // Коридор — общее пространство: киоски, кафе и банкоматы в нём назначение не меняют
+  if (f.kind !== 'room' && f.kind !== 'area') return undefined;
+  for (const p of inside) {
+    if (p.tags.door || p.tags.indoor === 'door' || p.tags.entrance) continue;
+    if (f.kind === 'area' && (SMALL.has(p.tags.amenity ?? '') || p.tags.shop === 'kiosk' || p.tags.shop === 'vending')) continue;
+    const c = purpose(p.tags);
+    if (c && c !== 'private') return p;
+  }
+  return undefined;
+}
+
 /**
- * Категория помещения, коридора или площадки: по своим тегам; у помещения без них — по POI внутри (первая
- * понятная, двери и входы не в счёт), иначе «прочее». Коридор и площадка без своих тегов — белые.
+ * Категория помещения, коридора или площадки: по своим тегам (приоритет); без них — по POI внутри (первая
+ * понятная, двери и входы не в счёт), иначе помещение — «прочее», коридор и площадка — белые.
  */
 export function indoorCategory(f: IndoorFeature, inside: IndoorFeature[] = []): IndoorCategory {
   const own = purpose(f.tags);
   if (own) return own;
-  // Коридор и площадка — общее пространство: киоски, кафе и банкоматы в них назначение не меняют
-  if (f.kind !== 'room') return 'circulation';
-  for (const p of inside) {
-    if (p.tags.door || p.tags.indoor === 'door' || p.tags.entrance) continue;
-    const c = purpose(p.tags);
-    if (c && c !== 'private') return c;
-  }
-  return 'other';
+  const src = categorySource(f, inside);
+  if (src) return purpose(src.tags)!;
+  return f.kind === 'room' ? 'other' : 'circulation';
+}
+
+/** Значение room=*, соответствующее POI (для серой подсказки в поле «Назначение»). */
+export function roomValueOf(t: Record<string, string>): string | undefined {
+  const a = t.amenity;
+  if (a && FOOD.has(a)) return a === 'fast_food' || a === 'restaurant' ? 'restaurant' : a === 'bar' || a === 'pub' ? 'bar' : 'cafe';
+  if ((a && MEDICAL.has(a)) || t.healthcare) return a === 'pharmacy' ? 'pharmacy' : 'medical';
+  if (t.shop || t.craft || (a && SERVICES.has(a))) return 'shop';
+  if (t.office) return 'office';
+  if (a === 'toilets') return 'toilets';
+  if (a === 'library') return 'library';
+  if (a && OFFICE.has(a)) return 'class';
+  if (a === 'parking' || t.parking) return 'parking';
+  return undefined;
 }

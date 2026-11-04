@@ -11628,11 +11628,12 @@ function issueKind(i: Issue): { id: string; label: string } {
   const name = tag ?? i.code;
   return { id: `${i.level}|${i.code}|${tag ?? ''}`, label: `${name[0].toUpperCase()}${name.slice(1)}: ${i.level === 'error' ? tr('ошибки') : tr('предупреждения')}` };
 }
-/** Проблемы одного вида — подряд (на месте первой), чтобы Shift-диапазон шёл в порядке показа. */
+/** Проблемы одного вида — подряд, группы (от двух) наверху, под ними одиночные; Shift-диапазон идёт в порядке показа. */
 function bundleIssues(list: Issue[]): Issue[] {
   const byKind = new Map<string, Issue[]>();
   for (const i of list) { const id = issueKind(i).id; (byKind.get(id) ?? byKind.set(id, []).get(id)!).push(i); }
-  return [...byKind.values()].flat();
+  const kinds = [...byKind.values()];
+  return [...kinds.filter((k) => k.length > 1), ...kinds.filter((k) => k.length === 1)].flat();
 }
 /** Развёрнутые группы одного вида (по id вида): список пересобирается, раскрытое не схлопываем. */
 const openIssueBundles = new Set<string>();

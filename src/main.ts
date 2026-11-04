@@ -11100,6 +11100,20 @@ function applyRepeat(fs: IndoorFeature[], copies: Map<number, IndoorFeature>[], 
           made.push({ key, kind: f.kind, tags, polygons: [], point: q.p, levels: [n] });
           continue;
         }
+        if (f.line && f.polygons.length === 1) {
+          // Линия (ограждение, стена-линия): тот же путь из узлов целевого этажа; замкнутая остаётся замкнутой
+          const src = f.polygons[0];
+          const closed = !!src.outerIds && src.outerIds.length > 2 && src.outerIds[0] === src.outerIds.at(-1);
+          const ns = src.outer.map(nodeFor).filter((q, k, a) => k === 0 || q.id !== a[k - 1].id);
+          if (closed && ns.length > 1 && ns[0].id !== ns.at(-1)!.id) ns.push(ns[0]);
+          if (ns.length < 2) { skipped++; continue; }
+          const key = `way/${nextNewId--}`;
+          const line = { ids: ns.map((q) => q.id), coords: ns.map((q) => q.p) };
+          const polygons = [{ outer: line.coords, outerIds: line.ids, inners: [] }];
+          edits.push({ key, create: { key, version: 0, tags, line, polygons } });
+          made.push({ key, kind: f.kind, line: true, polygons, tags, levels: [n] });
+          continue;
+        }
         if (f.line || f.polygons.length !== 1) { skipped++; continue; }
         const m = indoorCreateEdits(f.polygons[0], tags, nodeFor, edits);
         if (m) made.push(m); else skipped++;

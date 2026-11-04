@@ -11589,7 +11589,8 @@ levelsEl.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   ctxLevel = Number(li.dataset.level);
   const has = levelOutlineFeatures(ctxLevel).length > 0;
-  ctxMenu.innerHTML = `<li><button type="button" data-ctx="level-outline"${has ? '' : ' disabled'}>${tr('Выбрать контур этажа')}</button></li>`;
+  ctxMenu.innerHTML = has ? `<li><button type="button" data-ctx="level-outline">${tr('Выбрать контур этажа')}</button></li>`
+    : `<li><button type="button" data-ctx="level-generate">${tr('Сгенерировать контур этажа')}</button></li>`;
   placeCtxMenu(e.clientX, e.clientY);
 });
 /** Выбрать контур этажа n (indoor=level): переключиться на этаж и выделить его контуры. */
@@ -12664,6 +12665,11 @@ ctxMenu.addEventListener('click', (e) => {
   }
   if (!action || !focus) return;
   closeCtxMenu();
+  if (action === 'level-generate') {
+    if (ctxLevel === undefined) return;
+    if (currentLevel !== ctxLevel) { currentLevel = ctxLevel; linkLevel = undefined; renderLevels(); }
+    levelFromOutline(ctxLevel); return;
+  }
   if (action === 'level-outline') { if (ctxLevel !== undefined) selectLevelOutline(ctxLevel); return; }
   if (action === 'indoor-hide') return hideSelectedIndoor();
   if (action === 'indoor-delete') return deleteIndoorSelection();

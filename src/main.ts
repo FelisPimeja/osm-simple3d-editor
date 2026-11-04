@@ -11578,6 +11578,8 @@ function renderLevelsImpl() {
   const plan = level && planOf(level);
   // Видимые сквозь второй свет эскалаторы нижних этажей тоже нужны в сцене.
   const voids = level ? levelVoids(focus, levels, visibleIndoor, level.n) : [];
+  // Пустоты здания (кешируются) — до эскалаторов: в них решается, режет ли лестница свой проём (stairsInVoid)
+  buildingVoids(focus, levels, visibleIndoor);
   const allEscalators = visibleIndoor.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2
       && (f.tags.incline === 'up' || f.tags.incline === 'down'))
     .map((f) => {
@@ -11632,7 +11634,7 @@ function renderLevelsImpl() {
     void overpassLayer.rebuildWhere((f) => members.has(f.key));
   }
   const through = [...new Set(voids.flatMap((v) => v.through))];
-  const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${escalators.map((e) => `${e.key}:${e.bottom}:${e.top}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}` : '';
+  const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${cutEscalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.noHole ? 1 : 0}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}` : '';
   if (sig === levelSignature) return;
   levelSignature = sig;
   overpassLayer.setLevel(plan && {
@@ -11706,9 +11708,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
         if (!low || !high) continue;
         // Проём — там, где короб проходит сквозь перекрытие (как у модели), а не по всей линии с площадками
         // Площадь лестницы на её этажах — лестничный проём: на верхних этажах вырезается целиком
-        const well = f.stairs ? stairsOutline(f, indoor) : undefined;
-        if (well) { list.push({ polygon: [[well]], through, bare: true }); continue; }
-        // Марш в основном уже в проёме этажа (атриум): свой проём не режет — иначе клин за краем проёма
+        // Марш в основном уже в проёме этажа (атриум): ни своего проёма, ни проёма площади — иначе клин за краем проёма
         if (f.stairs) {
           stairsInVoid.delete(f.key);
           const a = line[0], b = line[line.length - 1], n = 11;
@@ -11716,6 +11716,8 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
             .filter((p) => base.some((v) => v.polygon.some(([outer, ...holes]) => pointInRing(p, outer) && !holes.some((h) => pointInRing(p, h))))).length;
           if (inside >= n * 0.6) { stairsInVoid.add(f.key); continue; }
         }
+        const well = f.stairs ? stairsOutline(f, indoor) : undefined;
+        if (well) { list.push({ polygon: [[well]], through, bare: true }); continue; }
         const holes = escalatorFloorHoles([{ line: line.map(loc), bottom: low.floor, top: high.floor, width, incline: f.tags.incline, ...withLocalOutline(stairsShape(f, indoor), loc) }], l.floor);
         for (const poly of holes) list.push({ polygon: [poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))], through, bare: true });
       }

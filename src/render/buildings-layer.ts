@@ -2165,7 +2165,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.noFloor}:${+!!it.cutOnly}:${+!!it.areaLedge}:${+!!it.linearWall}:${+!!it.railing}:${it.railingHeight??1.1}:${+!!it.counter}:${+!!it.glass}`).join(','),
       doorList.map((d) => d.join(',')).join(';'), doorModels.join(';'),
       JSON.stringify([this.level?.doorCuts,...(this.level?.below??[]).map(b=>b.doorCuts),ownVoids,this.level?.items.map(it=>[it.key,it.noFloor]),g.items.filter(it=>this.openRoofInPlan(g,it)).map(it=>it.feature.key)]),
-      escalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.width}:${e.incline}:${objId(e.line)}`).join(',')].join('|');
+      escalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.width}:${e.incline}:${e.noHole ? 1 : 0}:${objId(e.line)}`).join(',')].join('|');
     let plan = this.palePlans.get(key);
     if (plan) {
       this.palePlans.delete(key);

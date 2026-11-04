@@ -1657,6 +1657,16 @@ map.on('dblclick', (e) => {
       return;
     }
     if (key) return;
+    // План этажа: мимо помещений — к зданию целиком, а не сразу на карту
+    if (currentLevel !== undefined) {
+      if (indoorAt([e.point.x, e.point.y])) return;
+      badgePlanBuilding = undefined;
+      currentLevel = undefined;
+      linkLevel = undefined;
+      renderLevels();
+      setStatus(tr('Режим здания. Двойной клик по пустому месту ещё раз — выйти на карту.'));
+      return;
+    }
     if (focusHidden.size) {
       changeFocusHidden(new Set());
       setStatus(tr('Показаны все части. Двойной клик по пустому месту ещё раз — выйти из режима здания.'));

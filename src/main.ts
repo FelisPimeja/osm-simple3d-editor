@@ -13689,6 +13689,18 @@ const ICON_GROUP = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" s
 const ICON_REVERT = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 14.5C15.5 9.5 12.5 7 8.5 7.5c-1.6.2-3 .9-4.2 2"/><path d="M3.5 5.5v4.5H8"/></svg>';
 
 let uploadIssueKeys = new Set<string>();
+/** Проблемы в списке правок — для «Zoom to» в контекстном меню. */
+let changeIssuesShown: Issue[] = [];
+changesEl.addEventListener('contextmenu', (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-change-issue]');
+  const issue = li && changeIssuesShown[Number(li.dataset.changeIssue)];
+  if (!issue) return;
+  e.preventDefault(); e.stopPropagation();
+  contextIssue = issue;
+  ctxMenu.innerHTML = '<li><button type="button" data-ctx="issue-zoom">Zoom to</button></li>';
+  placeCtxMenu(e.clientX, e.clientY);
+});
+
 function renderChanges() {
   renderAccount();
   if (josmPlugin()) return renderJosmChanges();
@@ -13723,8 +13735,9 @@ function renderChanges() {
       <div class="ch-diff">${diff}</div></li>`;
   }).join('');
   const issues = changes.length ? changeIssues(changes.filter((c) => !c.deleted).map((c) => c.key)) : [];
+  changeIssuesShown = issues;
   const issuesHtml = issues.length ? `<p class="warn">⚠ ${tr('Проблемы в изменённых объектах ({n}) — отправить можно, но лучше поправить:', { n: issues.length })}</p>
-    <ul class="issue-list">${issues.map((i) => `<li class="${i.level}" data-key="${esc(i.key)}">
+    <ul class="issue-list">${issues.map((i, n) => `<li class="${i.level}" data-key="${esc(i.key)}" data-change-issue="${n}">
       <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span><span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span></li>`).join('')}</ul>` : '';
   changesEl.innerHTML = `
     ${changes.length ? `<ul class="change-list">${list}</ul>` : `<p class="hint">${tr('Изменений нет — можно повторить отменённое.')}</p>`}

@@ -11977,7 +11977,26 @@ function flyToIssueBuilding(issue: Issue) {
 }
 
 let contextIssue: Issue | undefined;
+/** Выделение объектов следует за набором проблем. */
+function selectPickedIssueObjects() {
+  const wanted = new Set(pickedIssues().flatMap((i) => focus ? [i.key, i.other ?? ''] : [issueBuildingKey(i)]).filter((k) => k && !!entity(k)));
+  select(undefined);
+  for (const k of wanted) toggleSelection(k);
+  pinIssueList();
+}
+/** Проблемы группы одного вида под правым кликом — для пунктов меню. */
+let contextBundle: Issue[] = [];
 issuesEl.addEventListener('contextmenu', (e) => {
+  const bundle = (e.target as HTMLElement).closest('summary')?.parentElement as HTMLElement | undefined;
+  if (bundle?.dataset.bundle) {
+    e.preventDefault(); e.stopPropagation();
+    contextBundle = shownIssues.filter((i) => issueKind(i).id === bundle.dataset.bundle);
+    const fixable = contextBundle.filter((i) => i.fix).length;
+    ctxMenu.innerHTML = `<li><button type="button" data-ctx="issue-bundle-select">${tr('Выделить все ({n})', { n: contextBundle.length })}</button></li>
+      <li><button type="button" data-ctx="issue-bundle-fix"${fixable ? '' : ' disabled'}>${tr('Исправить все ({n})', { n: fixable })}</button></li>`;
+    placeCtxMenu(e.clientX, e.clientY);
+    return;
+  }
   const li=(e.target as HTMLElement).closest<HTMLElement>('li[data-i]');
   const issue=li && shownIssues[Number(li.dataset.i)];
   if(!issue)return;
@@ -12031,11 +12050,7 @@ issuesEl.addEventListener('click', (e) => {
       issueAnchor = id;
     }
     syncSelectedIssues();
-    // Выделение объектов следует за набором проблем
-    const wanted = new Set(pickedIssues().flatMap((i) => focus ? [i.key, i.other ?? ''] : [issueBuildingKey(i)]).filter((k) => k && !!entity(k)));
-    select(undefined);
-    for (const k of wanted) toggleSelection(k);
-    pinIssueList();
+    selectPickedIssueObjects();
     return;
   }
   selectedIssueIds.clear();
@@ -12381,6 +12396,18 @@ function openYandexPanorama(at: maplibregl.LngLat) {
 ctxMenu.addEventListener('click', (e) => {
   const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-ctx]:not(:disabled)');
   const action = button?.dataset.ctx;
+  if (action === 'issue-bundle-select' || action === 'issue-bundle-fix') {
+    const list = contextBundle;
+    closeCtxMenu();
+    contextBundle = [];
+    if (action === 'issue-bundle-fix') { applyFixes(list.filter((i) => i.fix)); return; }
+    selectedIssueIds.clear();
+    for (const i of list) selectedIssueIds.add(issueId(i));
+    issueAnchor = list.length ? issueId(list[0]) : undefined;
+    syncSelectedIssues();
+    selectPickedIssueObjects();
+    return;
+  }
   if(action==='issue-zoom') {const issue=contextIssue;closeCtxMenu();contextIssue=undefined;if(issue)zoomToIssue(issue);return;}
   if (action === 'yandex-pano') {
     closeCtxMenu();

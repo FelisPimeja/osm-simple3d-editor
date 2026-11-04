@@ -188,6 +188,9 @@ const VOID_FACE_DZ = 0.1;
 
 /** Перекрытие этажа со вторым светом (плита с дырами под полом) и край пустоты. */
 /** Стеклянная стена, а не низкая преграда: двери в ней — проёмы. */
+/** Верх стены на срезе top: ограждение и прилавок — их высота (1.1 м по умолчанию), стена с явной height — она. */
+const wallTopOf = (it: IndoorItem, top: number) => it.railing ? Math.min(top, it.z + (it.railingHeight ?? 1.1))
+  : it.kind === 'wall' && it.railingHeight !== undefined && Number.isFinite(it.railingHeight) ? Math.min(top, it.z + it.railingHeight) : top;
 const tallGlass = (it: IndoorItem) => !!it.glass && !it.counter && (it.railingHeight ?? 0) > DOOR_HEIGHT;
 const INDOOR_GLASS_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xbfe3e6, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
 const INDOOR_SLAB_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
@@ -1326,7 +1329,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   private addIndoorHighlight(root: THREE.Group, g: MeshGroup, it: IndoorItem) {
     // Стена и колонна — их вертикальные грани от пола до среза
     if (it.kind === 'wall' || it.kind === 'column') {
-      const top = it.railing ? Math.min(this.levelCut ?? this.level!.cut,it.z+(it.railingHeight??1.1)) : this.levelCut ?? this.level!.cut;
+      const top = wallTopOf(it, this.levelCut ?? this.level!.cut);
       const faces: number[] = [], edges: number[] = [];
       // Проёмы этого этажа: те же, что вырезаны в самой стене
       const openings = it.railing && !tallGlass(it) ? [] : [...(this.level!.doors ?? []).map((at) => {
@@ -2244,7 +2247,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     /** Кусок стены; верх — z1a в начале, z1b в конце (под скатом крыши — наклонный). */
     /** jambA/jambB — у конца откос проёма: вертикаль только до перемычки (выше стена сплошная, без шва). */
+    // Верх стены-линии с явной высотой (height ниже этажа): стена обычная, в цвет помещения, но ниже
+    let wallCap = Infinity;
     const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, ends = true, jambA = Infinity, jambB = Infinity) => {
+      if (z1a > wallCap || z1b > wallCap) { z1a = Math.min(z1a, wallCap); z1b = Math.min(z1b, wallCap); if (Math.max(z1a, z1b) <= z0) return; }
       if (edgeOcclusionOnly) {
         this.indoorEdgeOccluders.push(ax, ay, z0, bx, by, z0, bx, by, z1b, ax, ay, z0, bx, by, z1b, ax, ay, z1a);
         if (facadeOwnFloorEdge && !doorGap) {
@@ -2765,6 +2771,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         continue;
       }
       omitCutTop = continuesAbove(it);
+      wallCap = it.kind === 'wall' && it.railingHeight !== undefined && Number.isFinite(it.railingHeight) ? it.z + it.railingHeight : Infinity;
       for (const p of it.polygons) {
         const pts = p.outer.map(g.toLocal);
         // Замкнутая стена (короб, шахта, тонкая стена-контур) — с крышкой сечения, а не открытой коробкой.
@@ -2778,6 +2785,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         omitFloorSeam = false;
         if (capRing) cap(capRing, [], it.z, it.kind === 'wall' || it.kind === 'column');
       }
+      wallCap = Infinity;
     }
     // Solid faces own coincident room boundaries. A room doorway may suppress its
     // perimeter, but must not reserve the jamb and hide the solid face drawn later.
@@ -3798,7 +3806,7 @@ export class BuildingsLayer implements CustomLayerInterface {
             const t = ((ax - o.x) * nx + (ay - o.y) * ny) / den;
             const hx = o.x + d.x * t, hy = o.y + d.y * t, hz = o.z + d.z * t;
             const u = ((hx - ax) * ex + (hy - ay) * ey) / (len * len);
-            if (u < -0.02 || u > 1.02 || hz < it.z - 0.01 || hz > (it.railing?Math.min(top,it.z+(it.railingHeight??1.1)):top) + 0.01) continue;
+            if (u < -0.02 || u > 1.02 || hz < it.z - 0.01 || hz > wallTopOf(it, top) + 0.01) continue;
             if (it.kind === 'room' && Math.abs(t - wallT) > 0.02) continue;
             take(it.key, t, it.kind === 'room' ? { polygon, ring: ringIndex, edge: i } : undefined);
           }
@@ -3806,7 +3814,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         // Крышка сечения колонны и стены-полигона
         const capOuter = it.counter ? this.counterFootprint(g, it, p.outer.map(g.toLocal), lv.items) : it.line ? it.linearWall ? undefined : closedWallCap(p.outer.map(g.toLocal)) : p.outer.map(g.toLocal);
         if (it.kind !== 'room' && capOuter && Math.abs(d.z) > 1e-9) {
-          const t = ((it.counter ? Math.min(top, it.z + (it.railingHeight ?? 1.1)) : top) - o.z) / d.z;
+          const t = ((it.counter || !it.railing ? wallTopOf(it, top) : top) - o.z) / d.z;
           const q: Pt = [o.x + d.x * t, o.y + d.y * t];
           if (pointInLocalRing(q, capOuter) && (it.line || !p.inners.some((h) => pointInLocalRing(q, h.map(g.toLocal))))) take(it.key, t);
         }

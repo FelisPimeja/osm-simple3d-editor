@@ -10,6 +10,8 @@ export interface LevelPlan {
   mapped: MultiPolygon;
   /** Явные многоуровневые помещения без пола на этом этаже. */
   explicitVoids?: MultiPolygon;
+  /** Сплошной пол по контурам этажа (indoor=level, без внутренних колец). */
+  solid?: MultiPolygon;
 }
 
 export interface LevelVoid {
@@ -37,7 +39,9 @@ export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[]
     const through: number[] = [], area = multiArea([poly]);
     for (const k of lower) {
       through.push(k);
-      if (multiArea(safe(() => polygonClipping.intersection([poly], plans.get(k)!.mapped))) >= area * .999) break;
+      const lp = plans.get(k)!;
+      const cover = lp.solid?.length ? safe(() => polygonClipping.union(lp.mapped, lp.solid!)) : lp.mapped;
+      if (multiArea(safe(() => polygonClipping.intersection([poly], cover))) >= area * .999) break;
     }
     return {polygon:[poly], through};
   });
@@ -66,8 +70,13 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
       && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels)
       && !(f.floors ?? [Math.min(...f.levels)]).includes(l.n))
       .flatMap(f => f.polygons.map(p => p.map(open)));
+    // Внутренние кольца контура этажа (indoor=level) — проёмы в перекрытии, как многоуровневые помещения
+    const levelHoles = levelPolys.flatMap((p) => p.slice(1).map((r) => [r]));
+    let solidCache: MultiPolygon | undefined;
+    const solidOf = () => (solidCache ??= levelPolys.length ? unionOf(levelPolys) : []);
     if (!spaces.length) {
-      plans.set(l.n, { floor: [], get mapped() { return mappedOf(); }, explicitVoids: [] });
+      const holes = levelHoles.length ? unionOf(levelHoles) : [];
+      plans.set(l.n, { floor: holes.length ? solidOf() : [], get mapped() { return mappedOf(); }, explicitVoids: holes, get solid() { return solidOf(); } });
       continue;
     }
     const mapped = mappedOf();
@@ -93,8 +102,9 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
         .filter(f => !(f.kind === 'area' && contains(f.polygons.map(p => p.map(open)), space))).flatMap(f => f.polygons.map(p => p.map(open)));
       return safe(() => polygonClipping.intersection(floor, polygonClipping.difference([space] as never, unionOf(blockers))));
     }).filter(m => m.length);
-    const explicitVoids = open1.length ? safe(() => polygonClipping.union(open1[0], ...open1.slice(1))) : [];
-    plans.set(l.n, { floor, mapped, explicitVoids });
+    const all = [...open1, ...levelHoles.map((h) => [h] as MultiPolygon)];
+    const explicitVoids = all.length ? safe(() => polygonClipping.union(all[0], ...all.slice(1))) : [];
+    plans.set(l.n, { floor, mapped, explicitVoids, get solid() { return solidOf(); } });
   }
   return plans;
 }

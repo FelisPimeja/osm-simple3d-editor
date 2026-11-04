@@ -5355,8 +5355,9 @@ export class BuildingsLayer implements CustomLayerInterface {
   private openRoofInPlan(g: MeshGroup, it: Item): boolean {
     if (!this.level || g !== this.groups.get(FOCUS_GROUP) || g.hidden.has(it.feature.key) || strokeOnly(g, it)) return false;
     const h = computeHeights(it.tags);
+    // Только над планом: крыльцо и ступени снаружи (building:part=steps — их проступи и есть крыша) остаются
     return h.roofShape !== 'flat' && h.roofHeight > 0 && h.top > this.level.floor
-      && h.top < (this.cutZ() ?? this.level.cut);
+      && h.top < (this.cutZ() ?? this.level.cut) && this.planCovers(it);
   }
 
   private rebuildGeometry(g: MeshGroup) {

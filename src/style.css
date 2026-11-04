@@ -605,13 +605,17 @@ body.mobile #toasts { top: 72px; max-width: calc(100% - 112px); }
 .issue-list li.error .issue-text { color: #991b1b; }
 .issue-list li.issue-bundle { display: block; padding: 0; cursor: default; }
 .issue-list li.issue-bundle:hover { background: none; }
-.issue-bundle summary { display: flex; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; line-height: 1.35; }
+.issue-bundle summary { display: flex; gap: 6px; align-items: center; padding: 1px 4px 1px 0; border-radius: 4px; cursor: pointer; line-height: 1.35; list-style: none; }
+.issue-bundle summary::-webkit-details-marker { display: none; }
+/* Стрелка как у групп панели частей: вправо — свёрнуто, вниз — раскрыто */
+.issue-bundle .ol-toggle svg { transform: none; }
+.issue-bundle details[open] > summary .ol-toggle svg { transform: rotate(90deg); }
 .issue-bundle summary:hover { background: #f0f2f5; }
 .issue-bundle summary.issue-picked { box-shadow: inset 3px 0 #2563eb; }
 .issue-bundle summary .issue-text { font-weight: 600; }
 .issue-bundle.error > details > summary .issue-text { color: #991b1b; }
 .issue-bundle.warning > details > summary .issue-text { color: #92400e; }
-.issue-bundle .issue-list { margin: 0 0 2px 14px; }
+.issue-bundle .issue-list { margin: 0 0 2px 22px; }
 .issue-list li.warning .issue-text { color: #92400e; }
 .issue-list .ol-key { margin-left: 6px; color: #888; }
 .issue-icon { flex: none; }

@@ -11696,7 +11696,7 @@ function renderIssues() {
       const rows = list.slice(k, end).map((i, o) => row(i, start + k + o)).join('');
       const picked = list.slice(k, end).some((i) => selectedIssueIds.has(issueId(i)));
       html += `<li class="issue-bundle ${list[k].level}"><details data-bundle="${esc(kind.id)}"${openIssueBundles.has(kind.id) ? ' open' : ''}>
-        <summary${picked ? ' class="issue-picked"' : ''}><span class="issue-icon">${list[k].level === 'error' ? '✖' : '⚠'}</span><span class="issue-text">${esc(kind.label)} <span class="hint">(${end - k})</span></span></summary>
+        <summary${picked ? ' class="issue-picked"' : ''}><span class="ol-toggle">${ICON_CHEVRON}</span><span class="issue-text">${esc(kind.label)}<span class="ol-key">${end - k}</span></span></summary>
         <ul class="issue-list">${rows}</ul></details></li>`;
       k = end;
     }

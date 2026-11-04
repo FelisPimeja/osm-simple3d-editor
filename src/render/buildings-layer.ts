@@ -3290,6 +3290,11 @@ export class BuildingsLayer implements CustomLayerInterface {
           points.push({ key: item.key, kind: 'midpoint', p: a.clone().add(b).multiplyScalar(0.5) });
         }
       }
+      // Концы эскалаторов этажа — в плоскости плана, как ручки их вершин
+      for (const e of this.level?.escalators ?? []) for (const at of [e.line[0], e.line[e.line.length - 1]]) {
+        const [x, y] = g.toLocal(at);
+        points.push({ key: e.key, kind: 'vertex', p: new THREE.Vector3(x, y, this.level!.floor) });
+      }
       return { points, edges };
     })();
     const doorPoints: SnapPoint[] = this.level ? this.doors.flatMap(d => {

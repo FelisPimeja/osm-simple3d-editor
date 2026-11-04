@@ -290,8 +290,6 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
     t.indoor === 'wall' || t.indoor === 'column'
       ? tr('indoor={indoor} несовместим с room={room}: назначение помещения не задаётся стене или колонне. Проверьте тип объекта или удалите room=*.', { indoor: t.indoor, room: t.room })
       : tr('room=* описывает назначение помещения; проверьте indoor=room или indoor=area.'));
-  if (t['building:part'] !== undefined && space) add('warning', 'indoor-key',
-    tr('building:part=* описывает объём здания, а не помещение indoor=*.'));
   // Только по геометрии: indoor=door + entrance=yes на наружной стене — обычный вход в здание (Simple Indoor Tagging)
   if (t.entrance === 'yes' && interiorDoor) add('warning', 'indoor-door',
     tr('Внутренняя дверь: entrance=yes обозначает вход в здание; используйте indoor=door и door=*.'),

@@ -818,7 +818,6 @@
   "indoor={value} — тип объекта указывают отдельным тегом; для общего признака используют indoor=yes.": "indoor={value} — tag the feature type separately; use indoor=yes for a generic indoor feature.",
   "У indoor-объекта нет level=* — этаж обязателен для поэтажного плана.": "This indoor feature has no level=*; a floor is required for the floor plan.",
   "room=* описывает назначение помещения; проверьте indoor=room или indoor=area.": "room=* describes a room’s purpose; check whether indoor=room or indoor=area is needed.",
-  "building:part=* описывает объём здания, а не помещение indoor=*.": "building:part=* describes a building volume, not an indoor=* space.",
   "Для внутренней двери indoor=door укажите также door=* (door=no для открытого прохода).": "Add door=* to an indoor=door node (door=no for an open passage).",
   "Внутренняя дверь: entrance=yes обозначает вход в здание; используйте indoor=door и door=*.": "Interior door: entrance=yes marks a building entrance; use indoor=door and door=*.",
   "удалить entrance, добавить door=yes": "remove entrance, add door=yes",

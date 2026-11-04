@@ -10250,10 +10250,9 @@ function setEscalatorEnds(f: IndoorFeature, a: number, b: number) {
   const key = f.key, p = f.polygons[0];
   trackIndoor(key, f);
   const tags: Record<string, string> = { ...(session.get(key)?.tags ?? f.tags), level: levelSpan(a, b), incline: 'up' };
-  // Сейчас путь идёт по incline; нужен снизу вверх
-  const forward = f.tags.incline === 'down' ? a > b : a < b;
+  // a, b — этажи начала и конца пути: начало выше — развернуть, чтобы путь шёл снизу вверх
   const edit: ObjectEdit = { key, tags };
-  if (!forward && p.outerIds) {
+  if (a > b && p.outerIds) {
     const ids = [...p.outerIds].reverse(), coords = [...p.outer].reverse();
     edit.line = { ids, coords };
     edit.polygons = [{ outer: coords, outerIds: ids, inners: [] }];

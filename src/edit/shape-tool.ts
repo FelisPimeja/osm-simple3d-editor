@@ -340,7 +340,8 @@ export class ShapeTool {
       dir = undefined;
     } else if (this.snap) {
       offset.subVectors(this.snap.local, t.from).setZ(0);
-      if (dir) offset.copy(dir.v).multiplyScalar(offset.dot(dir.v));
+      // Скаляр — до copy: аргумент вычисляется после того, как copy уже затёр offset
+      if (dir) { const along = offset.dot(dir.v); offset.copy(dir.v).multiplyScalar(along); }
     } else if (this.nearGrab(point)) {
       // Курсор у точки захвата — вершина стоит (повторный клик на месте её не сдвигает)
     } else {

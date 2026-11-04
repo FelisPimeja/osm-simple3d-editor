@@ -9,7 +9,7 @@ import type { BuildingsLayer } from '../render/buildings-layer';
  * пола этажа; позиции пересчитываются на каждом кадре.
  */
 const MAKI = import.meta.glob('/node_modules/@mapbox/maki/icons/*.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-const TEMAKI = import.meta.glob('/node_modules/@rapideditor/temaki/icons/{atm,vending_machine,bench,ticket}.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+const TEMAKI = import.meta.glob('/node_modules/@rapideditor/temaki/icons/{atm,vending_machine,bench,ticket,clothes_hanger}.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 
 /** Лестница — своя (в Maki и Temaki нет). */
 const STAIRS = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg"><path d="M1 13h3.5v-3h3V7h3V4H14v2h-2v3H9v3H6v3H1z"/></svg>';
@@ -50,6 +50,7 @@ export function poiIcon(t: Record<string, string>): string | undefined {
   if (t.emergency === 'phone') return 'emergency-phone';
   if (t.amenity && AMENITY[t.amenity]) return AMENITY[t.amenity];
   if (t.room === 'toilet' || t.room === 'toilets') return 'toilet';
+  if (t.room === 'dressing' || t.amenity === 'dressing_room') return 'clothes_hanger';
   if (t.room === 'reception' || t.amenity === 'reception_desk' || t.tourism === 'information') return 'information';
   if (t.room === 'security') return 'police';
   if (t.tourism === 'museum' || t.tourism === 'gallery') return 'museum';

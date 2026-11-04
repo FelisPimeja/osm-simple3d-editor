@@ -590,7 +590,8 @@ body.mobile .dp-opt { display: none; }
 body.mobile #toasts { top: 72px; max-width: calc(100% - 112px); }
 
 /* Проверка здания: панель, значки в списке частей, список в «Правках» */
-#issues-panel { max-height: 25%; }
+/* Проверка занимает всё свободное место колонки, но уступает его первой: свойства и списки частей и этажей важнее */
+#right-col > #issues-panel:not(.collapsed) { flex-shrink: 5000; }
 #issues-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
 .issue-group + .issue-group { margin-top: 8px; padding-top: 7px; border-top: 1px solid #e5e7eb; }
 .issue-group h2 { margin: 0 4px 4px; font-size: 12px; font-weight: 600; color: #555; }

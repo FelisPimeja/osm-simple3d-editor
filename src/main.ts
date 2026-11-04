@@ -11636,7 +11636,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
     const poly = (p: Polygon) => [p.outer.map(loc), ...p.inners.map((r) => r.map(loc))];
     const parts = partFeats
       .map((f) => { const h = computeHeights(f.tags); return { polygons: f.polygons.map(poly), min: h.min, wallTop: h.wallTop }; });
-    const plans = buildPlans(levels, parts, indoor.filter((f) => f.kind !== 'poi').map((f) => ({ kind: f.kind, levels: f.levels, floors: floorLevels(f), line: f.line, polygons: f.polygons.map(poly) })));
+    const plans = buildPlans(levels, parts, indoor.filter((f) => f.kind !== 'poi' && !f.escalatorArea).map((f) => ({ kind: f.kind, levels: f.levels, floors: floorLevels(f), line: f.line, polygons: f.polygons.map(poly) })));
     for (const l of levels) {
       const list: NonNullable<ReturnType<LevelVoids['get']>> = findVoids(l.n, plans).map((v) => ({ polygon: v.polygon.map((p) => p.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))), through: v.through }));
       // Лифтовая шахта — сквозной проём до нижней остановки (через этажи без остановок тоже)
@@ -11644,19 +11644,11 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
         const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
         if (through.length) list.push({ polygon: f.polygons.map((p) => [p.outer, ...p.inners]), through });
       }
-      // Узкие проёмы эскалаторов не проходят порог площади для общего поиска второго света.
-      for (const f of indoor.filter((f) => f.escalatorArea && f.levels.includes(l.n) && l.n > Math.min(...f.levels))) {
-        const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
-        if (through.length) list.push({ polygon: f.polygons.map((p) => [p.outer, ...p.inners]), through });
-      }
+      // Площадь эскалатора — только контур (пунктир): проём в перекрытии режут сами эскалаторы по ширине
       for (const f of indoor.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down')
         && f.levels.includes(l.n) && l.n > Math.min(...f.levels))) {
         const line = f.polygons[0]?.outer;
-        if (!line || line.length < 2 || indoor.some((area) => area.escalatorArea && area.levels.includes(l.n)
-          && line.slice(1).some((p, i) => {
-            const a = line[i], mid: LonLat = [(a[0] + p[0]) / 2, (a[1] + p[1]) / 2];
-            return area.polygons.some((q) => pointInRing(mid, q.outer));
-          }))) continue;
+        if (!line || line.length < 2) continue;
         const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
         const width = Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2));
         for (let i = 1; i < line.length; i++) {

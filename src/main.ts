@@ -9878,6 +9878,15 @@ function sideInserts(fresh: Map<number, LonLat>) {
  */
 function cutPlan(pts: [number, number][]): string | undefined {
   if (!focus || !shownLevel) return tr('Рассекать план можно на этаже здания.');
+  // Петля (вернулись в начальную точку) — внутреннее кольцо в контуре этажа; контура нет — сгенерировать
+  if (pts.length >= 4 && Math.hypot(pts[0][0] - pts.at(-1)![0], pts[0][1] - pts.at(-1)![1]) < 0.05) {
+    if (!levelOutlineFeatures(shownLevel.n).length && !levelFromOutline(shownLevel.n)) return tr('Контура этажа (indoor=level) нет.');
+    const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)]);
+    const ns = pts.slice(0, -1).map((q) => nodeFor(overpassLayer.focusToLngLat(q[0], q[1])! as LonLat))
+      .filter((q, i, a) => i === 0 || q.id !== a[i - 1].id);
+    if (ns.length > 1 && ns[0].id === ns.at(-1)!.id) ns.pop();
+    return cutLevelHole({ ids: ns.map((q) => q.id), coords: ns.map((q) => q.p) });
+  }
   const level = shownLevel;
   const unit = (a: [number, number], b: [number, number]): [number, number] => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return [dx / l, dy / l]; };
   // Полуплоскость слева от продлённой ломаной: концы уходят далеко за здание, «левый» край замыкает её
@@ -11188,35 +11197,104 @@ function createIndoorDrawn(ring: [number, number][]): string | undefined {
 /**
  * Этаж из контура: indoor=level этажа n по сечению оболочки здания на отметке пола (под скатом — уже следа).
  * Вершины, совпадающие с узлами контура или частей, — эти же узлы (attached: двигаются вместе с фасадом),
- * остальные — новые. Сечение с дырами (двор-колодец) — мультиполигон пока не создаём: только внешние кольца.
+ * остальные — новые. Сечение с дырами (двор-колодец) — мультиполигон с внутренними кольцами.
  */
-function levelFromOutline(n: number, extra: Record<string, string> = {}) {
-  if (!focus) return;
+function levelFromOutline(n: number, extra: Record<string, string> = {}): boolean {
+  if (!focus) return false;
   const l = buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === n);
   // На полу пусто (низ части выше расчётного пола: подвал по этажности глубже самой части) — середина этажа
   const section = l && levelSection(l);
-  if (!l || !section?.length) { setStatus(tr('Контур этажа ещё не посчитан — повторите через пару секунд.'), true); return; }
+  if (!l || !section?.length) { setStatus(tr('Контур этажа ещё не посчитан — повторите через пару секунд.'), true); return false; }
   const { nodeFor, used } = sharedNodes(groupFeatures(focus));
   const edits: ObjectEdit[] = [];
-  let holes = 0;
   for (const poly of section) {
-    holes += poly.length - 1;
-    const ring = nodeRing(poly[0], nodeFor);
-    if (!ring) continue;
-    const key = `way/${nextNewId--}`;
-    const tags = { indoor: 'level', level: String(n), ...extra };
-    const polygons = [{ outer: ring.map((q) => q.p), outerIds: ring.map((q) => q.id), inners: [] }];
-    edits.push({ key, create: { key, version: 0, tags, polygons } });
-    indoorCreated.set(key, { key, kind: 'level', polygons, tags, levels: [n] });
-    indoorEdited.add(key);
+    // Дворы-колодцы — внутренние кольца: этаж с ними — мультиполигон
+    const m = indoorCreateEdits({ outer: poly[0], inners: poly.slice(1) }, { indoor: 'level', level: String(n), ...extra }, nodeFor, edits);
+    if (!m) continue;
+    indoorCreated.set(m.key, m);
+    indoorEdited.add(m.key);
   }
-  if (!edits.length) return;
+  if (!edits.length) return false;
   session.editMany(edits);
   // Новый этаж — выделен: контур подсвечен, дальше правится как любой indoor-объект
-  const made = edits.map((e) => buildingIndoorFor(e.key)).filter((f): f is IndoorFeature => !!f);
+  const made = edits.map((e) => buildingIndoorFor(e.key)).filter((f): f is IndoorFeature => !!f && f.kind === 'level');
   made.forEach((f, i) => selectIndoor(f, i > 0));
-  setStatus(tr('Создан indoor=level этажа {n}: общих узлов с контуром — {shared}.', { n, shared: used.size })
-    + (holes ? ' ' + tr('Дворы внутри контура ({k}) не вырезаны.', { k: holes }) : ''));
+  setStatus(tr('Создан indoor=level этажа {n}: общих узлов с контуром — {shared}.', { n, shared: used.size }));
+  return true;
+}
+
+/**
+ * Внутреннее кольцо в контуре этажа (indoor=level) текущего этажа: кольцо — узлы ids/coords (без замыкания).
+ * reuseWay — замкнутый путь на этих же узлах (выделенное помещение), становится inner-членом; иначе — новый путь без тегов.
+ * Этаж-путь превращается в мультиполигон (теги — на отношение, путь — outer), у отношения — ещё один inner.
+ */
+function cutLevelHole(ring: { ids: number[]; coords: LonLat[] }, reuseWay?: number): string | undefined {
+  if (!focus || !shownLevel) return tr('Нет этажа.');
+  if (ring.ids.length < 3) return tr('Кольцу нужно не меньше трёх вершин.');
+  const toL = (r: LonLat[]) => r.map((q) => overpassLayer.focusToLocal(q)!);
+  const loc = toL(ring.coords);
+  const levels = levelOutlineFeatures(shownLevel.n).filter((f) => f.polygons.length);
+  const lvl = levels.find((f) => f.polygons.length === 1 && loc.every((q) => pointInRing(q, toL(f.polygons[0].outer))));
+  if (!lvl) return levels.length ? tr('Кольцо должно лежать внутри контура этажа.') : tr('Контура этажа (indoor=level) нет.');
+  const poly = lvl.polygons[0];
+  if (!poly.outerIds) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
+  const n = loc.length;
+  for (let i = 0; i < n; i++) {
+    const a = loc[i], b = loc[(i + 1) % n];
+    for (const r of [toL(poly.outer), ...poly.inners.map(toL)]) for (let j = 0; j < r.length; j++)
+      if (segCross(a, b, r[j], r[(j + 1) % r.length])) return tr('Кольцо пересекает контур этажа или его внутренние кольца.');
+  }
+  if (poly.inners.some((h) => loc.some((q) => pointInRing(q, toL(h))) || toL(h).every((q) => pointInRing(q, loc))))
+    return tr('Кольцо пересекается с уже вырезанным кольцом.');
+  const key = indoorKey(lvl.key);
+  const edits: ObjectEdit[] = [];
+  const closedIds = [...ring.ids, ring.ids[0]], closedCoords = [...ring.coords, ring.coords[0]];
+  const innerWay = reuseWay ?? nextNewId--;
+  if (reuseWay === undefined) edits.push({ key: `way/${innerWay}`, create: { key: `way/${innerWay}`, version: 0, tags: {}, line: { ids: closedIds, coords: closedCoords } } });
+  const innerMember: OsmMember = { type: 'way', ref: innerWay, role: 'inner' };
+  const withHole: Polygon = { ...poly, inners: [...poly.inners, ring.coords], innerIds: [...(poly.innerIds ?? []), ring.ids] };
+  trackIndoor(key, lvl);
+  let made = key;
+  if (key.startsWith('relation/')) {
+    const members = session.get(key)?.relMembers ?? indoorRelationSources.get(lvl.key)?.ways?.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }));
+    if (!members) return tr('Не хватает данных путей indoor-мультиполигона. Перезагрузите здание.');
+    if (!session.get(key)?.relMembers) session.track({ key, version: indoorRelationSources.get(lvl.key)?.version ?? 0, tags: lvl.tags, relMembers: members });
+    edits.push({ key, polygons: [withHole], members: [...members, innerMember] });
+  } else {
+    const wayId = Number(key.split('/')[1]);
+    const outerNodes = [...poly.outerIds, poly.outerIds[0]];
+    const relId = nextNewId--;
+    made = `relation/${relId}`;
+    const ways: MemberWay[] = [{ id: wayId, role: 'outer', nodes: outerNodes }, { id: innerWay, role: 'inner', nodes: closedIds }];
+    const tags = { type: 'multipolygon', ...lvl.tags };
+    edits.push({ key: made, create: { key: made, type: 'relation', id: relId, version: 0, tags, polygons: [withHole], ways,
+      relMembers: ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } as unknown as Feature3D });
+    edits.push({ key, tags: {}, polygons: [], line: { ids: outerNodes, coords: [...poly.outer, poly.outer[0]] } });
+    indoorCreated.delete(key);
+    indoorCreated.set(made, { key: made, kind: 'level', polygons: [withHole], tags, levels: lvl.levels });
+  }
+  session.editMany(edits);
+  indoorEdited.add(made);
+  indoorEditRev++;
+  renderLevels();
+  const f = buildingIndoorFor(made);
+  if (f) selectIndoor(f);
+  setStatus(tr('Вырезано внутреннее кольцо в контуре этажа {key}.', { key: made }));
+  return;
+}
+
+/** Выделенный полигон (не сам этаж) — кольцо для «Вырезать из контура этажа»; way — его путь, если он сам годится в inner. */
+function holeSource(): { ring: { ids: number[]; coords: LonLat[] }; way?: number } | undefined {
+  if (!shownLevel || indoorSelection.length !== 1) return;
+  const f = indoorSelection[0];
+  if (f.point || f.line || f.kind === 'level' || f.polygons.length !== 1) return;
+  const p = f.polygons[0];
+  if (!p.outerIds || p.outerIds.length !== p.outer.length) return;
+  let ids = p.outerIds, coords = p.outer;
+  if (ids.length > 1 && ids[0] === ids.at(-1)) { ids = ids.slice(0, -1); coords = coords.slice(0, -1); }
+  if (ids.length < 3) return;
+  const key = indoorKey(f.key);
+  return { ring: { ids, coords }, way: key.startsWith('way/') && !p.inners.length ? Number(key.split('/')[1]) : undefined };
 }
 
 /** Заготовка indoor=level для формы этажа, у которого его ещё нет. */
@@ -12595,6 +12673,7 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
       + showAll
       + (indoorSelection.length > 1 && indoorSelection.every(isIndoorUnionPolygon)
         ? `<li><button type="button" data-ctx="indoor-merge">${tr('Объединить')}${n}<kbd>J</kbd></button></li>` : '')
+      + (holeSource() ? `<li><button type="button" data-ctx="indoor-level-hole">${tr('Вырезать из контура этажа')}</button></li>` : '')
       + (indoorSelection.length && shownLevel ? `<li><button type="button" data-ctx="indoor-repeat">${tr('Повторять на этажах…')}${n}</button></li>` : '')
       + `<li><button type="button" data-ctx="indoor-delete"${canDeleteIndoorSelection() && !uploading && !deletingIndoorWalls ? '' : ' disabled'}>${
         indoorSelection.length && !selectedRoomWalls.length && indoorSelection.every(isDeletableSpace) ? tr('Очистить (сделать пустым)') : tr('Удалить')}${n}<kbd>Del</kbd></button></li>`;
@@ -12675,6 +12754,14 @@ ctxMenu.addEventListener('click', (e) => {
   if (action === 'indoor-delete') return deleteIndoorSelection();
   if (action === 'indoor-merge') return mergeSelected();
   if (action === 'indoor-repeat') return openRepeatDialog();
+  if (action === 'indoor-level-hole') {
+    const src = holeSource();
+    if (!src || !shownLevel) return;
+    if (!levelOutlineFeatures(shownLevel.n).length && !levelFromOutline(shownLevel.n)) return;
+    const err = cutLevelHole(src.ring, src.way);
+    if (err) setStatus(err, true);
+    return;
+  }
   focusAction(action);
 });
 

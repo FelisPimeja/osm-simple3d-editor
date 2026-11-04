@@ -58,7 +58,7 @@ export const NGON_MIN = 3, NGON_MAX = 64;
  * построения прямоугольника. Esc — отмена. Что делать с готовым контуром — решает commit снаружи.
  */
 /** Формы с трассировкой. */
-const TRACED: DrawShape[] = ['polygon', 'wall'];
+const TRACED: DrawShape[] = ['polygon', 'wall', 'line'];
 const TRACE_KEY = 'simple3d:trace';
 function loadTracing(): boolean {
   try { return localStorage.getItem(TRACE_KEY) === '1'; } catch { return false; }
@@ -199,6 +199,17 @@ export class DrawTool {
     if (this.state !== 'draw') return false;
     const q = this.pointAt(point);
     if (!q) return true;
+    // Разрез, вернувшийся в начальную точку, — замкнутая петля (вырезать кольцо в контуре этажа)
+    if (this.shape === 'line' && this.pts.length >= 3) {
+      const first = this.layer.focusProject(new THREE.Vector3(this.pts[0][0], this.pts[0][1], this.z));
+      if (first && Math.hypot(first[0] - point[0], first[1] - point[1]) < CLOSE_PX) {
+        const ring = [...this.pts, ...this.traceTo(this.pts[0]), this.pts[0]];
+        const fail = this.commit(ring, this.z);
+        if (fail) { this.onState(fail, true); return true; }
+        this.reset(); this.hint();
+        return true;
+      }
+    }
     if (isOpen(this.shape) && this.pts.length >= 2) {
       const last = this.pts[this.pts.length - 1];
       const px = this.layer.focusProject(new THREE.Vector3(last[0], last[1], this.z));

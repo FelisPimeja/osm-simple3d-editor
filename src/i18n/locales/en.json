@@ -1,4 +1,11 @@
 {
+  "Вырезать из контура этажа": "Cut out of the level outline",
+  "Вырезано внутреннее кольцо в контуре этажа {key}.": "Cut an inner ring in the level outline {key}.",
+  "Кольцу нужно не меньше трёх вершин.": "A ring needs at least three vertices.",
+  "Кольцо должно лежать внутри контура этажа.": "The ring must lie inside the level outline.",
+  "Контура этажа (indoor=level) нет.": "There is no level outline (indoor=level).",
+  "Кольцо пересекает контур этажа или его внутренние кольца.": "The ring crosses the level outline or its inner rings.",
+  "Кольцо пересекается с уже вырезанным кольцом.": "The ring overlaps an inner ring that is already cut.",
   "Сгенерировать контур этажа": "Generate level outline",
   "Выделить все ({n})": "Select all ({n})",
   "Исправить все ({n})": "Fix all ({n})",

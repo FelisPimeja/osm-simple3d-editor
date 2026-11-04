@@ -8454,13 +8454,14 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
   const floorPoint = hit && overpassLayer.focusToLngLat(hit.x,hit.y);
   const stepsArea = floorPoint && shownIndoor.find(f => f.escalatorArea && f.polygons.some(p =>
     (pointInRing(floorPoint,p.outer) || nearRing(floorPoint,p.outer,0.08)) && !p.inners.some(r=>pointInRing(floorPoint,r))));
-  if (stepsArea) return stepsArea;
+  // Модель эскалатора важнее его площади под ним: площадь выбирается кликом мимо модели
   const escalator = overpassLayer.pickEscalator(point);
   const solid = overpassLayer.pickIndoorSolid(point);
   if (escalator && (!solid || escalator.t <= solid.t + 0.02)) {
     const axis = focus && buildingIndoor(focus).find((f) => f.escalator && f.key === escalator.key);
     if (axis) return axis;
   }
+  if (stepsArea) return stepsArea;
   if (solid && (!hit || solid.t <= hit.distanceTo(ray!.origin))) {
     const f = shownIndoor.find((x) => x.key === solid.key);
     if (f) return f;

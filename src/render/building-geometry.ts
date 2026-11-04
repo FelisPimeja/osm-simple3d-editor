@@ -91,13 +91,13 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   } else if (shape === 'apse_gabled') {
     addApse(roof, walls, single!.outer, h.wallTop, h.top, tags['roof:direction']);
   } else if (axis && AXIS_PLANE_SHAPES.has(shape)) {
-    addAxisPlanesRoof(roof, walls, single!.outer, axis, shape, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across', tags['roof:direction']);
+    addAxisPlanesRoof(roof, walls, single!.outer, axis, shape, h.wallTop, h.roofHeight, SLOPE_DIRECTION_SHAPES.has(shape) ? gabledAcross(axis, tags) : tags['roof:orientation'] === 'across', tags['roof:direction']);
   } else if (axis && shape === 'saltbox') {
     addSaltboxRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, saltboxAcross(axis, tags), tags['roof:direction']);
   } else if (axis && shape === 'half-hipped') {
-    addHalfHippedRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, tags['roof:orientation'] === 'across');
+    addHalfHippedRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, gabledAcross(axis, tags));
   } else if (axis) {
-    addAxisRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, shape === 'gabled' ? gabledAcross(axis, tags) : tags['roof:orientation'] === 'across', PROFILES[shape]);
+    addAxisRoof(roof, walls, single!.outer, axis, h.wallTop, h.roofHeight, gabledAcross(axis, tags), PROFILES[shape]);
   } else if (quadRoof) {
     addQuadRoof(roof, walls, single!.outer, h.wallTop, h.top, shape === 'hipped', tags['roof:orientation'] === 'across');
   } else {
@@ -447,6 +447,9 @@ function addHalfHippedRoof(roof: number[], walls: number[], ring: Pt[], ax: Rect
   ];
   addPlanesRoof(roof, walls, ring, planes, z0, top);
 }
+
+/** Axis-plane roofs with one main ridge whose roof:direction is the slope direction (as for gabled). */
+const SLOPE_DIRECTION_SHAPES = new Set(['hipped-and-gabled', 'butterfly']);
 
 /** Explicit slope direction selects the nearest footprint axis; the ridge is perpendicular to it. */
 function gabledAcross(ax: RectAxis, tags: Record<string, string>): boolean {

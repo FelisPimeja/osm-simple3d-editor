@@ -54,8 +54,13 @@ test('gabled: valid direction overrides orientation; missing or invalid directio
   }
 });
 
-test('other symmetric axis roofs keep their existing orientation behaviour', () => {
-  for (const shape of ['round', 'gambrel', 'half-hipped', 'bellcast_gable']) {
-    assert.deepEqual(build(rect, { 'roof:direction': '90' }, shape), build(rect, {}, shape));
+test('other single-ridge roofs: roof:direction chooses the slope axis like gabled', () => {
+  for (const shape of ['round', 'gambrel', 'half-hipped', 'bellcast_gable', 'hipped-and-gabled', 'butterfly']) {
+    const along = build(rect, { 'roof:orientation': 'along' }, shape);
+    const across = build(rect, { 'roof:orientation': 'across' }, shape);
+    assert.notDeepEqual(along.roof, across.roof, shape);
+    for (const direction of ['N', '180', '345']) assert.deepEqual(build(rect, { 'roof:direction': direction }, shape), along, `${shape} ${direction}`);
+    for (const direction of ['E', '270', '80']) assert.deepEqual(build(rect, { 'roof:direction': direction }, shape), across, `${shape} ${direction}`);
+    assert.deepEqual(build(rect, {}, shape), build(rect, { 'roof:orientation': 'along' }, shape), shape);
   }
 });

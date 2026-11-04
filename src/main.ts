@@ -9003,7 +9003,7 @@ function indoorRelationTopology(edits: ObjectEdit[], inserts: Insert[] = []): Ob
 /** Geometry-editable indoor objects; POIs, stairs and floor outlines have separate tools. */
 function editableIndoorGeometry(f: IndoorFeature): boolean {
   if (f.escalator) return editableEscalator(f);
-  return !f.point && ['room', 'area', 'corridor', 'wall', 'column'].includes(f.kind);
+  return !f.point && ['room', 'area', 'corridor', 'wall', 'column', 'level'].includes(f.kind);
 }
 function indoorShapeVertices(t: ShapeTarget): IndoorVertex[] {
   return [t, ...(t.also ?? [])].map(v => ({ key: v.key, poly: v.poly, ring: v.ring, i: v.i }));
@@ -9644,7 +9644,12 @@ const OUTLINE_NODE_SNAP = 1e-7;
 
 /** Контур здания на этаже: сечение оболочки на отметке пола; пусто (низ части выше расчётного пола) — в середине этажа. */
 function levelSection(l: Level): LonLat[][][] | undefined {
-  return [l.floor + 0.1, (l.floor + l.ceil) / 2].map((h) => overpassLayer.focusSection(h)).find((x) => !x || x.length);
+  const cut = [l.floor + 0.1, (l.floor + l.ceil) / 2].map((h) => overpassLayer.focusSection(h)).find((x) => !x || x.length);
+  if (cut?.length) return cut;
+  // Подземный этаж: оболочка части под землю не уходит — след части, по тегам которой этаж посчитан
+  const src = l.src ? entity(l.src) as Feature3D | undefined : undefined;
+  if (src?.polygons?.length) return src.polygons.map((p) => [p.outer, ...p.inners]);
+  return cut;
 }
 
 /**

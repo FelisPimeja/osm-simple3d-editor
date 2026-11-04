@@ -8722,6 +8722,7 @@ function bindIndoorForm(fs: IndoorFeature[]) {
   }
   const levelInput = infoEl.querySelector<HTMLInputElement>('[data-indoor-tag="level"]');
   if (levelInput) { bindLevelHint(levelInput); bindLevelPicker(levelInput, fs); }
+  for (const cb of infoEl.querySelectorAll<HTMLInputElement>('.handrail-sides input[data-mixed]')) cb.indeterminate = true;
 }
 
 function changeIndoorHidden(next: Set<string>) {
@@ -8834,7 +8835,7 @@ const ROOM_LABELS: Record<string, string> = {
 function indoorFieldLabel(k: string, fs: IndoorFeature[]): string {
   const level = fs.every((f) => f.kind === 'level');
   const own: Record<string, string> = {
-    height: level ? tr('Высота этажа') : tr('Высота'), 'level:ref': tr('Обозначение этажа'), name: tr('Название'), ref: tr('Номер'),
+    handrail: tr('Поручни'), step_count: tr('Число ступеней'), height: level ? tr('Высота этажа') : tr('Высота'), 'level:ref': tr('Обозначение этажа'), name: tr('Название'), ref: tr('Номер'),
     // У iD и indoor, и room — «Тип»: рядом не различить
     indoor: tr('Вид'), room: tr('Назначение'), width: tr('Ширина'), diameter: tr('Диаметр'),
     // У iD — «Тип»: рядом с типом двери не различить
@@ -8845,7 +8846,23 @@ function indoorFieldLabel(k: string, fs: IndoorFeature[]): string {
 
 /** Поля длины в форме indoor: голое число получает единицу поля. */
 const INDOOR_LENGTHS = new Set(['height', 'width', 'diameter', 'depth', 'max_depth']);
-const indoorInputValue = (input: HTMLInputElement) => withUnit(input.value, input.dataset.unit as LengthUnit | undefined);
+const indoorInputValue = (input: HTMLInputElement) => input.type === 'checkbox' ? (input.checked ? 'yes' : '') : withUnit(input.value, input.dataset.unit as LengthUnit | undefined);
+const HANDRAIL_SIDES = ['left', 'right', 'center'] as const;
+/** Поручни: yes/no и при yes — стороны галочками (handrail:left/right/center=yes). */
+function handrailRow(fs: IndoorFeature[], changed: boolean): string {
+  const vals = new Set(fs.map((f) => f.tags.handrail ?? (HANDRAIL_SIDES.some((s) => f.tags[`handrail:${s}`] === 'yes') ? 'yes' : '')));
+  const mixed = vals.size > 1, value = mixed ? '' : [...vals][0];
+  const opt = (v: string) => `<option value="${v}"${value === v ? ' selected' : ''}>${v}</option>`;
+  const select = `<select data-indoor-tag="handrail"${!value ? ' style="color:#888"' : ''}>`
+    + `<option value=""${!value ? ' selected' : ''}>${mixed ? tr('разные значения') : '— (yes)'}</option>${opt('yes')}${opt('no')}`
+    + (value && value !== 'yes' && value !== 'no' ? opt(value) : '') + '</select>';
+  const sides = value === 'yes' ? `<span class="handrail-sides">${HANDRAIL_SIDES.map((side) => {
+    const on = fs.filter((f) => f.tags[`handrail:${side}`] === 'yes').length;
+    return `<label title="handrail:${side}"><input type="checkbox" data-indoor-tag="handrail:${side}"${on === fs.length ? ' checked' : ''}${on && on < fs.length ? ' data-mixed' : ''}> ${side}</label>`;
+  }).join('')}</span>` : '';
+  return `<label class="tag-row${changed ? ' changed' : ''}"><span title="handrail">${esc(indoorFieldLabel('handrail', fs))}</span>${select}</label>`
+    + (sides ? `<div class="tag-row handrail-sides-row"><span></span>${sides}</div>` : '');
+}
 
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
   if (fs.length && fs.every((f) => f.escalator)) placeholders = { width: fs.every((f) => f.stairs) ? '1' : '1.2', ...placeholders };
@@ -8860,6 +8877,7 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
     // Тип входа — варианты и подписи из схемы iD (поле entrance пресета «Вход / выход»)
     const options = k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : k === 'wall' ? WALL_VALUES : k === 'entrance' ? idOptions('entrance') : undefined;
     const label = `<span title="${esc(k)}">${esc(indoorFieldLabel(k, fs))}</span>`;
+    if (k === 'handrail') return handrailRow(fs, fs.some((f) => HANDRAIL_SIDES.some((x) => session.isChanged(indoorKey(f.key), `handrail:${x}`))) || changed);
     if(k==='area')return `<label class="tag-row${changed ? ' changed' : ''}"><span title="area">area</span><select data-indoor-tag="area"${!value ? ' style="color:#888"' : ''}>${!value ? `<option value="" selected disabled hidden>${mixed ? tr('разные значения') : 'no'}</option>` : ''}<option value="yes"${value==='yes'?' selected':''}>yes</option><option value="no"${value==='no'?' selected':''}>no</option></select></label>`;
     if (options) return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : k === 'entrance' ? tr('не вход') : placeholders[k] ?? '—',
@@ -9574,6 +9592,9 @@ function setIndoorTags(edits: { key: string; tags: Record<string, string> }[], c
       if (tags.wall === 'counter') tags.height ??= writeLength(COUNTER_HEIGHT);
       else if (Math.abs((parseLength(tags.height) ?? 0) - COUNTER_HEIGHT) < 0.01) delete tags.height;
     }
+    // Поручней нет — и сторон нет; отмечена сторона — поручни есть
+    if (changedTag === 'handrail' && tags.handrail !== 'yes') for (const x of HANDRAIL_SIDES) delete tags[`handrail:${x}`];
+    if (changedTag?.startsWith('handrail:') && tags[changedTag]) tags.handrail = 'yes';
     if (changedTag === 'room') {
       const paired = ROOM_PAIRED_AMENITY[tags.room];
       if (tags.amenity && Object.values(ROOM_PAIRED_AMENITY).includes(tags.amenity) && tags.amenity !== paired) delete tags.amenity;
@@ -15130,8 +15151,8 @@ function stairsRails(t: Record<string, string>): StairsRails {
   const h = t.handrail;
   if (h === 'no') return { left: false, right: false, center: on(t['handrail:center']) };
   if (h === 'left' || h === 'right' || h === 'center') return { left: h === 'left', right: h === 'right', center: h === 'center' };
-  const sided = ['handrail:left', 'handrail:right', 'handrail:center'].some((k) => t[k]);
-  if (sided && !h) return { left: on(t['handrail:left']), right: on(t['handrail:right']), center: on(t['handrail:center']) };
+  const sided = ['handrail:left', 'handrail:right', 'handrail:center'].some((k) => on(t[k]));
+  if (sided && (!h || h === 'yes')) return { left: on(t['handrail:left']), right: on(t['handrail:right']), center: on(t['handrail:center']) };
   return { left: true, right: true, center: on(t['handrail:center']) };
 }
 function withLocalOutline<T extends { outline?: LonLat[] }>(s: T, loc: (p: LonLat) => [number, number]) {

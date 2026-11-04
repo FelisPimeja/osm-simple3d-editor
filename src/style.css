@@ -810,3 +810,6 @@ body.mobile #issues-panel { display: none !important; }
 .draw-opts.draw-trace { display: flex; align-items: center; gap: 6px; color: #444; cursor: pointer; user-select: none; }
 .draw-opts.draw-trace[hidden] { display: none; }
 .draw-opts.draw-trace input { width: auto; margin: 0; }
+
+.handrail-sides { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+.handrail-sides label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }

@@ -1448,5 +1448,7 @@
   "{what}: кликните верхний конец. Esc — отмена.": "{what}: click the upper end. Esc — cancel.",
   "{what}: кликните нижний конец на плане этажа. Esc — выйти.": "{what}: click the lower end on the floor plan. Esc — exit.",
   "Лестница {key}: этажи {level}. Концы и этажи — «Формой» (V).": "Stairs {key}: levels {level}. Ends and levels — with Shape (V).",
-  "Наклон лестницы {angle}°: длина {run} м, перепад {rise} м; обычно 25–40°. Проверьте level и длину.": "Stairs slope {angle}°: length {run} m, rise {rise} m; usually 25–40°. Check level and length."
+  "Наклон лестницы {angle}°: длина {run} м, перепад {rise} м; обычно 25–40°. Проверьте level и длину.": "Stairs slope {angle}°: length {run} m, rise {rise} m; usually 25–40°. Check level and length.",
+  "Поручни": "Handrails",
+  "Число ступеней": "Step count"
 }

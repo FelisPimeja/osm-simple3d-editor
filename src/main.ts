@@ -12053,6 +12053,15 @@ issuesEl.addEventListener('click', (e) => {
     selectPickedIssueObjects();
     return;
   }
+  // Повторный клик по единственной выбранной проблеме — снять выбор (и выделение её объектов)
+  if (selectedIssueIds.size === 1 && selectedIssueIds.has(id)) {
+    selectedIssueIds.clear();
+    issueAnchor = undefined;
+    syncSelectedIssues();
+    if (buildingIndoorFor(li.dataset.key!)) selectIndoor(undefined, false); else select(undefined);
+    pinIssueList();
+    return;
+  }
   selectedIssueIds.clear();
   selectedIssueIds.add(id);
   issueAnchor = id;

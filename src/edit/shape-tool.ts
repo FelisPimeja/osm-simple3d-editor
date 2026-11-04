@@ -286,6 +286,12 @@ export class ShapeTool {
       if (!this.isOpen?.(v.key) || v.i > 0) this.extraSnaps.push({ kind: 'midpoint', key: v.key, p: mid(at, prev), label });
       if (!this.isOpen?.(v.key) || v.i + 1 < n) this.extraSnaps.push({ kind: 'midpoint', key: v.key, p: mid(at, next), label });
       if (inserted) this.extraSnaps.push({ kind: 'midpoint', key: v.key, p: mid(prev, next), label });
+      // Пересечение продолжений соседних сторон (AB и ED для вершины C): угол встаёт в створ примыкающих стен
+      const open = this.isOpen?.(v.key);
+      if (!inserted && !t.also?.length && (!open || (v.i >= 2 && v.i + 2 < n))) {
+        const corner = sidesMeet(ring[(v.i - 2 + n) % n], prev, ring[(v.i + 2) % n], next);
+        if (corner) this.extraSnaps.push({ kind: 'extension', key: v.key, p: new THREE.Vector3(corner[0], corner[1], t.from.z), label: tr('Продолжение соседних сторон') });
+      }
     }
     const note = t.roof || t.eave ? this.levelLock?.(t) : undefined;
     this.step = note ? LEVEL_HEIGHT : undefined;
@@ -787,3 +793,22 @@ function closestOnLine(ray: THREE.Ray, from: THREE.Vector3, dir: THREE.Vector3):
   return (e - b * d) / denom;
 }
 
+
+/** Вершина дальше этого от угла по продолжениям соседних сторон — не привязка (почти параллельные стороны), м. */
+const SIDES_MEET_M = 50;
+
+/**
+ * Где сходятся продолжения сторон a→b и d→c (b и c — соседи двигаемой вершины): угол, у которого обе примыкающие
+ * стороны лежат на своих прямых. undefined — стороны параллельны, общая точка у концов или слишком далеко.
+ */
+export function sidesMeet(a: Pt, b: Pt, d: Pt, c: Pt): Pt | undefined {
+  const ux = b[0] - a[0], uy = b[1] - a[1], vx = c[0] - d[0], vy = c[1] - d[1];
+  const lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy), cross = ux * vy - uy * vx;
+  // Меньше ~3° между прямыми — пересечение неустойчиво
+  if (lu < 0.05 || lv < 0.05 || Math.abs(cross) < Math.sin(Math.PI / 60) * lu * lv) return;
+  const s = ((d[0] - a[0]) * vy - (d[1] - a[1]) * vx) / cross;
+  const p: Pt = [a[0] + ux * s, a[1] + uy * s];
+  const far = (q: Pt) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+  if (far(a) < 0.05 || far(d) < 0.05 || far(b) > SIDES_MEET_M || far(c) > SIDES_MEET_M) return;
+  return p;
+}

@@ -1050,6 +1050,7 @@
   "Фиолетовые ручки верха стен — только вверх или вниз: меняется высота стен, крыша едет целиком.": "Purple wall-top handles move only up or down: the wall height changes, the roof moves as a whole.",
   "Высота задана этажами ({levels}) — меняется только целыми этажами. Чтобы менять в метрах, задайте высоту в метрах ({metres}).": "The height is set in levels ({levels}), so it changes only by whole levels. To change it in metres, set the height in metres ({metres}).",
   "Середина исходной стороны": "Midpoint of original side",
+  "Продолжение соседних сторон": "Extension of adjacent sides",
   "Ведите курсор вверх или вниз: верх стен стоит, меняется высота крыши. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.": "Move the cursor up or down: the wall top stays, the roof height changes. Click — apply, number + Enter — offset {units}, Esc — cancel.",
   "Ведите курсор вверх или вниз: меняется высота стен, крыша едет целиком. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.": "Move the cursor up or down: the wall height changes, the roof moves as a whole. Click — apply, number + Enter — offset {units}, Esc — cancel.",
   "Рассечь: кликните по ребру верхней грани — начало разреза, внутри грани — замкнутое кольцо (двор, башня), по боковому ребру — разрез по высоте. Esc — выйти.": "Split: click an edge of the top face to start a cut, inside the face to draw a closed ring (courtyard, tower), or a side edge to cut by height. Esc to exit.",

@@ -32,6 +32,7 @@ import { applyBasemapDate, dateSpan, decimalDate, existsIn, isoDay, parseDate, s
 import { buildingRefreshMembers, refreshBuildingFeatures } from './osm/building-refresh';
 import { BrokenRingsError, ConflictError, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT, parseLength } from './osm/heights';
+import { escalatorFloorHoles } from './render/escalator-openings';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indoorCategory, roomValueOf, type IndoorCategory } from './osm/indoor-categories';
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
@@ -11651,14 +11652,11 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
         if (!line || line.length < 2) continue;
         const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
         const width = Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2));
-        for (let i = 1; i < line.length; i++) {
-          const a = loc(line[i - 1]), b = loc(line[i]);
-          const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-          if (len < 0.1) continue;
-          const nx = -(b[1] - a[1]) / len * width * 0.55, ny = (b[0] - a[0]) / len * width * 0.55;
-          const ring: [number, number][] = [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]];
-          list.push({ polygon: [[ring.map(geo)]], through, bare: true });
-        }
+        const low = levels.find((x) => x.n === Math.min(...f.levels)), high = levels.find((x) => x.n === Math.max(...f.levels));
+        if (!low || !high) continue;
+        // Проём — там, где короб проходит сквозь перекрытие (как у модели), а не по всей линии с площадками
+        const holes = escalatorFloorHoles([{ line: line.map(loc), bottom: low.floor, top: high.floor, width, incline: f.tags.incline }], l.floor);
+        for (const poly of holes) list.push({ polygon: [poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))], through, bare: true });
       }
       if (list.length) out.set(l.n, list);
     }

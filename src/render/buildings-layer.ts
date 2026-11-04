@@ -1859,7 +1859,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const ramp = length - 2 * landing;
       const count = Math.max(1, Math.round(ramp / 0.42));
       const distances = [0, landing, ...Array.from({ length: count - 1 }, (_, i) => landing + ramp * (i + 1) / count), length - landing, length];
-      const treads: number[] = [], risers: number[] = [], body: number[] = [], balustrades: number[] = [];
+      const treads: number[] = [], risers: number[] = [], body: number[] = [], balustrades: number[] = [], nosing: number[] = [];
       const boxDepth = 0.7;
       const edge = (p: ReturnType<typeof at>, sign: number, z = p.z): [number, number, number] =>
         [p.x + sign * halfWidth * p.nx, p.y + sign * halfWidth * p.ny, z];
@@ -1881,6 +1881,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (previousTreadZ !== undefined && Math.abs(z - previousTreadZ) > 1e-4) {
           const low = Math.min(z, previousTreadZ), high = Math.max(z, previousTreadZ);
           quad(risers, stepEdge(a, -1, low), stepEdge(a, -1, high), stepEdge(a, 1, high), stepEdge(a, 1, low));
+          // Ребро по краю ступени, как у лестницы
+          nosing.push(...stepEdge(a, -1, high + 0.003), ...stepEdge(a, 1, high + 0.003));
         }
         previousTreadZ = z;
       }
@@ -1987,6 +1989,13 @@ export class BuildingsLayer implements CustomLayerInterface {
         object.userData.escalatorMaterial = material;
         model.add(object);
       };
+      if (nosing.length) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(nosing, 3));
+        const lines = new THREE.LineSegments(geo, item.pale ? STAIRS_PALE_NOSING : STAIRS_NOSING);
+        lines.frustumCulled = false;
+        model.add(lines);
+      }
       mesh(treads, item.pale ? ESCALATOR_PALE_BELT : ESCALATOR_BELT);
       mesh(risers, item.pale ? ESCALATOR_PALE_STEP : ESCALATOR_STEP);
       mesh(body, item.pale ? ESCALATOR_PALE_SIDE : ESCALATOR_SIDE);

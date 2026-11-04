@@ -25,7 +25,8 @@ export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: 
   for (let i=0;i<positions.length;i+=3) for (let k=0;k<3;k++) {
     bounds[k]=Math.min(bounds[k],positions[i+k]); bounds[k+3]=Math.max(bounds[k+3],positions[i+k]);
   }
-  escalators=escalators.filter(e=>{
+  // Лестница стен не режет: боковые стены вдоль марша остаются целыми
+  escalators=escalators.filter(e=>!e.stairs).filter(e=>{
     const pad=halfWidthOf(e);
     const xs=e.line.map(p=>p[0]),ys=e.line.map(p=>p[1]);
     return Math.min(...xs)-pad<=bounds[3] && Math.max(...xs)+pad>=bounds[0]

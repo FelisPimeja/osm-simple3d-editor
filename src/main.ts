@@ -8723,6 +8723,30 @@ function bindIndoorForm(fs: IndoorFeature[]) {
   const levelInput = infoEl.querySelector<HTMLInputElement>('[data-indoor-tag="level"]');
   if (levelInput) { bindLevelHint(levelInput); bindLevelPicker(levelInput, fs); }
   for (const cb of infoEl.querySelectorAll<HTMLInputElement>('.handrail-sides input[data-mixed]')) cb.indeterminate = true;
+  const handrail = infoEl.querySelector<HTMLInputElement>('[data-handrail-input]');
+  if (handrail) bindHandrailPicker(handrail, fs);
+}
+
+/** Список значений handrail в стиле списка этажей: yes / no (стороны — галочками под полем). */
+function bindHandrailPicker(input: HTMLInputElement, fs: IndoorFeature[]) {
+  const wrap = input.parentElement!;
+  const box = document.createElement('div');
+  box.className = 'level-picker';
+  box.hidden = true;
+  const options: [string, string][] = [['yes', 'yes'], ['no', 'no'], ['', tr('не указано')]];
+  box.innerHTML = options.map(([v, label]) => `<label class="level-picker-row${input.value === v ? ' current' : ''}">`
+    + `<input type="radio" name="handrail-pick" value="${v}"${input.value === v ? ' checked' : ''}><span>${esc(label)}</span>`
+    + `<span class="level-picker-n">${v ? `handrail=${v}` : '—'}</span></label>`).join('');
+  wrap.append(box);
+  const outside = (e: Event) => { if (!wrap.contains(e.target as Node)) close(); };
+  const close = () => { box.hidden = true; document.removeEventListener('pointerdown', outside, true); };
+  input.addEventListener('click', () => { if (!box.hidden) { close(); return; } box.hidden = false; document.addEventListener('pointerdown', outside, true); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  box.addEventListener('change', (e) => {
+    const v = (e.target as HTMLInputElement).value;
+    close();
+    setIndoorTags(fs.map((f) => ({ key: indoorKey(f.key), tags: { ...f.tags, handrail: v } })), 'handrail');
+  });
 }
 
 function changeIndoorHidden(next: Set<string>) {
@@ -8852,16 +8876,16 @@ const HANDRAIL_SIDES = ['left', 'right', 'center'] as const;
 function handrailRow(fs: IndoorFeature[], changed: boolean): string {
   const vals = new Set(fs.map((f) => f.tags.handrail ?? (HANDRAIL_SIDES.some((s) => f.tags[`handrail:${s}`] === 'yes') ? 'yes' : '')));
   const mixed = vals.size > 1, value = mixed ? '' : [...vals][0];
-  const opt = (v: string) => `<option value="${v}"${value === v ? ' selected' : ''}>${v}</option>`;
-  const select = `<select data-indoor-tag="handrail"${!value ? ' style="color:#888"' : ''}>`
-    + `<option value=""${!value ? ' selected' : ''}>${mixed ? tr('разные значения') : '— (yes)'}</option>${opt('yes')}${opt('no')}`
-    + (value && value !== 'yes' && value !== 'no' ? opt(value) : '') + '</select>';
+  // Поле со своим списком (как у level): только чтение, значения — из списка
+  const select = `<span class="level-hint-wrap"><input type="text" readonly data-indoor-tag="handrail" data-handrail-input value="${esc(value)}"`
+    + ` placeholder="${mixed ? tr('разные значения') : '— (yes)'}" autocomplete="off" style="cursor:pointer"></span>`;
   const sides = value === 'yes' ? `<span class="handrail-sides">${HANDRAIL_SIDES.map((side) => {
     const on = fs.filter((f) => f.tags[`handrail:${side}`] === 'yes').length;
     return `<label title="handrail:${side}"><input type="checkbox" data-indoor-tag="handrail:${side}"${on === fs.length ? ' checked' : ''}${on && on < fs.length ? ' data-mixed' : ''}> ${side}</label>`;
   }).join('')}</span>` : '';
-  return `<label class="tag-row${changed ? ' changed' : ''}"><span title="handrail">${esc(indoorFieldLabel('handrail', fs))}</span>${select}</label>`
-    + (sides ? `<div class="tag-row handrail-sides-row"><span></span>${sides}</div>` : '');
+  // div, а не label: внутри — свой список с радиокнопками, вложенные label ломают клики
+  return `<div class="tag-row${changed ? ' changed' : ''}"><span title="handrail">${esc(indoorFieldLabel('handrail', fs))}</span>${select}</div>`
+    + (sides ? `<div class="handrail-sides-row">${sides}</div>` : '');
 }
 
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
@@ -11678,6 +11702,9 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
         const low = levels.find((x) => x.n === Math.min(...f.levels)), high = levels.find((x) => x.n === Math.max(...f.levels));
         if (!low || !high) continue;
         // Проём — там, где короб проходит сквозь перекрытие (как у модели), а не по всей линии с площадками
+        // Площадь лестницы на её этажах — лестничный проём: на верхних этажах вырезается целиком
+        const well = f.stairs ? stairsOutline(f, indoor) : undefined;
+        if (well) { list.push({ polygon: [[well]], through, bare: true }); continue; }
         const holes = escalatorFloorHoles([{ line: line.map(loc), bottom: low.floor, top: high.floor, width, incline: f.tags.incline, ...withLocalOutline(stairsShape(f, indoor), loc) }], l.floor);
         for (const poly of holes) list.push({ polygon: [poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))], through, bare: true });
       }

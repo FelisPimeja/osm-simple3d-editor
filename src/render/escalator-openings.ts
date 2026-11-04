@@ -134,12 +134,12 @@ export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number):
     const lengths=[0];for(let j=1;j<e.line.length;j++)lengths.push(lengths[j-1]+Math.hypot(e.line[j][0]-e.line[j-1][0],e.line[j][1]-e.line[j-1][1]));
     const length=lengths.at(-1)??0;if(length<2)continue;
     const landing=landingOf(e,length),half=e.stairs&&e.outline?50:halfWidthOf(e);
-    // Лестница: проём над маршем по высоте прохода (2 м), эскалатор — только где короб пересекает перекрытие
+    // Лестница: проём по всему следу марша под перекрытием, эскалатор — только где короб пересекает перекрытие
     const depth=e.stairs?STAIRS_SLAB+.05:BODY_DEPTH;
     const zAt=(d:number)=>{const rise=Math.max(0,Math.min(1,(d-landing)/(length-2*landing)));return e.bottom+(e.top-e.bottom)*(e.incline==='down'?1-rise:rise)+.05;};
     // Короб от z−BODY_DEPTH до ступеней (с запасом на пол чуть выше уровня этажа)
     // Площадки у пола лежат на перекрытии (их короб — приямок под ним): режем только под наклонным участком
-    const crosses=(d:number)=>{if(d<landing||d>length-landing)return false;const z=zAt(d);return z-depth<floorZ+.08&&(e.stairs?z+2.05>floorZ:z>floorZ-.02);};
+    const crosses=(d:number)=>{if(d<landing||d>length-landing)return false;const z=zAt(d);return z-depth<floorZ+.08&&(e.stairs||z>floorZ-.02);};
     const from=out.length;
     const at=(s:number)=>{let j=1;while(j<lengths.length-1&&lengths[j]<s)j++;const t=(s-lengths[j-1])/(lengths[j]-lengths[j-1]||1);
       const dx=(e.line[j][0]-e.line[j-1][0])/(lengths[j]-lengths[j-1]||1),dy=(e.line[j][1]-e.line[j-1][1])/(lengths[j]-lengths[j-1]||1);

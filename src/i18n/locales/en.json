@@ -1450,5 +1450,6 @@
   "Лестница {key}: этажи {level}. Концы и этажи — «Формой» (V).": "Stairs {key}: levels {level}. Ends and levels — with Shape (V).",
   "Наклон лестницы {angle}°: длина {run} м, перепад {rise} м; обычно 25–40°. Проверьте level и длину.": "Stairs slope {angle}°: length {run} m, rise {rise} m; usually 25–40°. Check level and length.",
   "Поручни": "Handrails",
-  "Число ступеней": "Step count"
+  "Число ступеней": "Step count",
+  "не указано": "not set"
 }

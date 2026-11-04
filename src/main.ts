@@ -8972,7 +8972,20 @@ function indoorRelationTopology(edits: ObjectEdit[], inserts: Insert[] = []): Ob
   const changed = edits.filter(e => e.key.startsWith('relation/') && e.polygons && !e.members && !e.create && !e.delete);
   if (!changed.length) return edits;
   const current = focus ? buildingIndoor(focus) : [];
-  const context = current.filter(f => !f.point && !f.line).map(f => ({ ...indoorRelationSources.get(f.key), ...f,
+  // Отношения, созданные в сессии (контур этажа с вырезанным кольцом), — пути из сессии
+  const sessionWays = (key: string): MemberWay[] | undefined => {
+    const members = session.get(key)?.relMembers;
+    const ways = members?.filter((m) => m.type === 'way').map((m) => {
+      const k = `way/${m.ref}`, w = session.get(k);
+      if (w?.line) return { id: m.ref, role: m.role, nodes: w.line.ids };
+      // Путь-помещение, ставший внутренним кольцом, — замкнутый полигон
+      const ids = (w?.polygons ?? buildingIndoorFor(k)?.polygons)?.[0]?.outerIds;
+      return ids?.length ? { id: m.ref, role: m.role, nodes: ids[0] === ids.at(-1) ? ids : [...ids, ids[0]] } : undefined;
+    });
+    return ways?.length && ways.every(Boolean) ? ways as MemberWay[] : undefined;
+  };
+  const context = current.filter(f => !f.point && !f.line).map(f => ({ ...indoorRelationSources.get(f.key),
+    ...(!indoorRelationSources.has(f.key) && f.key.startsWith('relation/') ? { ways: sessionWays(f.key) } : {}), ...f,
     type: f.key.startsWith('relation/') ? 'relation' as const : 'way' as const, id: Number(f.key.split('/')[1]), version: 0, kind: 'part' as const, hasParts: false }));
   const items = changed.map(e => {
     const f = context.find(f => f.key === e.key)!;

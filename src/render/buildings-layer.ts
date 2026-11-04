@@ -196,6 +196,8 @@ const wallTopOf = (it: IndoorItem, top: number) => it.railing ? Math.min(top, it
   : it.kind === 'wall' && it.railingHeight !== undefined && Number.isFinite(it.railingHeight) ? Math.min(top, it.z + it.railingHeight) : top;
 const tallGlass = (it: IndoorItem) => !!it.glass && !it.counter && (it.railingHeight ?? 0) > DOOR_HEIGHT;
 const INDOOR_GLASS_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xbfe3e6, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
+/** Крыши частей вне плана в пределах этажа (drawOpenRoofs): цвет вершин — цвет крыши части. */
+const OPEN_ROOF_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 const INDOOR_SLAB_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 const INDOOR_VOID_EDGE = new THREE.LineBasicMaterial({ color: 0x57534e });
 const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0xb0b6ba, side: THREE.DoubleSide });
@@ -5331,22 +5333,29 @@ export class BuildingsLayer implements CustomLayerInterface {
    * (навес, переход рядом со зданием), крыша нужна: она рисуется отдельно, мимо этого шейдера.
    */
   private drawOpenRoofs(root: THREE.Object3D, g: MeshGroup, top: number) {
-    const out: number[] = [], floor = this.level!.floor;
+    const out: number[] = [], colours: number[] = [], floor = this.level!.floor;
     for (const it of g.items) {
+      // Цвет — как у крыши части (ступени серые, а не белая плита)
+      const c = this.monochrome ? MONOCHROME : it.roof;
       const h = computeHeights(it.tags);
       // Часть выше среза (ступени у цоколя: верх 0,71 м при срезе 0,7) — её грани ниже среза тоже нужны
       if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || h.top <= floor + 0.05 || h.min >= top || this.planCovers(it)) continue;
       const end = it.positions.length / 3 - it.floorVertices, p = it.positions;
       for (let i = it.wallVertices * 3; i + 8 < end * 3; i += 9) {
         if (p[i + 2] > floor + FLOOR_OBJECT_HEIGHT && p[i + 2] < top + 0.05
-          && Math.abs(p[i + 2] - p[i + 5]) < 1e-4 && Math.abs(p[i + 5] - p[i + 8]) < 1e-4) out.push(...p.subarray(i, i + 9));
+          && Math.abs(p[i + 2] - p[i + 5]) < 1e-4 && Math.abs(p[i + 5] - p[i + 8]) < 1e-4) {
+          out.push(...p.subarray(i, i + 9));
+          for (let k = 0; k < 3; k++) colours.push(c.r, c.g, c.b);
+        }
       }
     }
     if (!out.length) return;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
     geometry.computeVertexNormals();
-    const mesh = new THREE.Mesh(geometry, INDOOR_SLAB_MATERIAL);
+    OPEN_ROOF_MATERIAL.clippingPlanes = INDOOR_SLAB_MATERIAL.clippingPlanes;
+    const mesh = new THREE.Mesh(geometry, OPEN_ROOF_MATERIAL);
     mesh.name = 'indoor-open-roofs';
     mesh.frustumCulled = false;
     root.add(mesh);

@@ -9722,11 +9722,21 @@ function levelSection(l: Level): LonLat[][][] | undefined {
   if (src?.polygons?.length) return src.polygons.map((p) => [p.outer, ...p.inners]);
   // Этаж начинается под землёй (потолок может быть и выше нуля — цоколь, пол первого этажа на подиуме)
   if (l.floor > -0.01 || !focus) return cut;
-  // Подземный этаж из indoor-данных: след здания у земли, без оболочки — объединение следов частей
-  const ground = overpassLayer.focusSection(0.1);
-  if (ground?.length) return ground;
+  // Подземный этаж из indoor-данных: след здания у земли, без оболочки — объединение следов частей.
+  // Наружные ступени (building:part=steps) — не подвал: из следа вычитаются
   const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
-  const feet = groupFeatures(focus).flatMap((f) => f?.polygons ?? []).map((p) => [close(p.outer), ...p.inners.map(close)]);
+  const steps = groupFeatures(focus).filter((f) => f?.tags?.['building:part'] === 'steps')
+    .flatMap((f) => f.polygons).map((p) => [close(p.outer), ...p.inners.map(close)]);
+  const withoutSteps = (rings: LonLat[][][]) => {
+    if (!steps.length) return rings;
+    try {
+      return polygonClipping.difference(rings.map((p) => p.map(close)) as [number, number][][][], ...(steps as [[[number, number][]]]))
+        .map((poly) => poly.map((r) => r.slice(0, -1) as LonLat[]));
+    } catch (err) { console.warn('[level-section]', err); return rings; }
+  };
+  const ground = overpassLayer.focusSection(0.1);
+  if (ground?.length) return withoutSteps(ground);
+  const feet = groupFeatures(focus).filter((f) => f?.tags?.['building:part'] !== 'steps').flatMap((f) => f?.polygons ?? []).map((p) => [close(p.outer), ...p.inners.map(close)]);
   if (!feet.length) return cut;
   try {
     return polygonClipping.union(...(feet as [[[number, number][]]])).map((poly) => poly.map((r) => r.slice(0, -1) as LonLat[]));

@@ -11016,13 +11016,13 @@ function renderLevels() {
 /** Режим, для которого уже выставлены панели: вручную развёрнутое остаётся, пока режим не сменится. */
 let panelsMode: 'building' | 'plan' | undefined;
 
-/** При входе в режим: на плане этажа свёрнуты части здания, в режиме здания — этажи. */
+/** При входе в режим: на плане этажа части здания скрыты, в режиме здания свёрнуты этажи. */
 function syncModePanels() {
   const mode = !focus ? undefined : currentLevel === undefined ? 'building' : 'plan';
+  outlinerPanel.hidden = mode !== 'building';
   if (mode === panelsMode) return;
   panelsMode = mode;
   if (!mode || mobile) return;
-  setCollapsed(outlinerPanel, mode === 'plan');
   setCollapsed(levelsPanel, mode === 'building');
 }
 
@@ -12107,7 +12107,7 @@ const ICON_DOOR = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" st
 function renderOutliner() {
   renderLevels();
   queueMicrotask(() => renderMobileCard()); // вход в режим здания и выход — карточка мобильного режима
-  outlinerPanel.hidden = !focus;
+  outlinerPanel.hidden = !focus || currentLevel !== undefined; // на плане этажа частей здания не видно
   renderIssues();
   if (!focus) { outlinerEl.innerHTML = ''; return; }
   const g = focus;

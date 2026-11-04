@@ -1415,5 +1415,7 @@
   "Путь от последней точки до курсора — по сторонам контуров, помещений и стен": "Path from the last point to the cursor follows the sides of outlines, rooms and walls",
   "Трассировка": "Tracing",
   "Трассировка включена: путь до курсора идёт по сторонам контуров, помещений и стен. T — выключить.": "Tracing on: the path to the cursor follows the sides of outlines, rooms and walls. T to turn off.",
-  "Трассировка выключена. T — включить.": "Tracing off. T to turn on."
+  "Трассировка выключена. T — включить.": "Tracing off. T to turn on.",
+  "ошибки": "errors",
+  "предупреждения": "warnings"
 }

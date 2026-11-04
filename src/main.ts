@@ -11622,6 +11622,23 @@ function issueMark(list: Issue[] | undefined): string {
   return `<span class="issue-mark ${error ? 'error' : 'warning'}" title="${esc(list.map((i) => i.text).join('\n'))}">${error ? '✖' : '⚠'}</span>`;
 }
 
+/** Вид проблемы для сворачивания в режиме здания: проверка и тег из начала текста («roof:colour=gray — …»). */
+function issueKind(i: Issue): { id: string; label: string } {
+  const tag = i.text.match(/^([\w:-]+)=/)?.[1];
+  const name = tag ?? i.code;
+  return { id: `${i.level}|${i.code}|${tag ?? ''}`, label: `${name[0].toUpperCase()}${name.slice(1)}: ${i.level === 'error' ? tr('ошибки') : tr('предупреждения')}` };
+}
+/** Проблемы одного вида — подряд (на месте первой), чтобы Shift-диапазон шёл в порядке показа. */
+function bundleIssues(list: Issue[]): Issue[] {
+  const byKind = new Map<string, Issue[]>();
+  for (const i of list) { const id = issueKind(i).id; (byKind.get(id) ?? byKind.set(id, []).get(id)!).push(i); }
+  return [...byKind.values()].flat();
+}
+/** Развёрнутые группы одного вида (по id вида): список пересобирается, раскрытое не схлопываем. */
+const openIssueBundles = new Set<string>();
+/** Строка, от которой Shift-клик выделяет диапазон. */
+let issueAnchor: string | undefined;
+
 /** Панель «Проверка»: проблемы здания режима здания, клик — выделить объект (Shift — оба пересекающихся). */
 function renderIssues() {
   const simpleIssues = focus ? [...buildingIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : strayPartsOf(focus))] : [];
@@ -11661,16 +11678,33 @@ function renderIssues() {
     const key = issueBuildingKey(issue);
     (mapGroups.get(key) ?? mapGroups.set(key, []).get(key)!).push(issue);
   }
-  shownIssues = focus ? [...sorted(simpleShown), ...sorted(indoorShown)] : [...mapGroups.values()].flatMap(sorted);
-  const group = (title: string, list: Issue[], start: number, buildingKey?: string) => list.length ? `<section class="issue-group${buildingKey ? ' issue-building' : ''}${buildingKey && selection.includes(buildingKey) ? ' selected' : ''}"${buildingKey ? ` data-building-key="${esc(buildingKey)}"` : ''}>
-    <h2>${esc(title)} <span class="hint">(${list.length})</span></h2>
-    <ul class="issue-list">${list.map((i, offset) => {
-      const n = start + offset;
+  shownIssues = focus ? [...bundleIssues(sorted(simpleShown)), ...bundleIssues(sorted(indoorShown))] : [...mapGroups.values()].flatMap(sorted);
+  const row = (i: Issue, n: number) => {
       return `<li class="${i.level}${selection.includes(i.key) || (i.other && selection.includes(i.other)) ? ' selected' : ''}${selectedIssueIds.has(issueId(i)) ? ' issue-picked' : ''}" data-i="${n}" data-key="${esc(i.key)}"${i.other ? ` data-other="${esc(i.other)}"` : ''}>
         <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span>
         <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span>
         ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</li>`;
-    }).join('')}</ul></section>` : '';
+  };
+  /** Строки списка; в режиме здания проблемы одного вида (от двух) — свёрнутой группой. */
+  const issueRows = (list: Issue[], start: number, bundle: boolean) => {
+    let html = '';
+    for (let k = 0; k < list.length;) {
+      const kind = issueKind(list[k]);
+      let end = k + 1;
+      while (end < list.length && issueKind(list[end]).id === kind.id) end++;
+      if (!bundle || end - k < 2) { for (; k < end; k++) html += row(list[k], start + k); continue; }
+      const rows = list.slice(k, end).map((i, o) => row(i, start + k + o)).join('');
+      const picked = list.slice(k, end).some((i) => selectedIssueIds.has(issueId(i)));
+      html += `<li class="issue-bundle ${list[k].level}"><details data-bundle="${esc(kind.id)}"${openIssueBundles.has(kind.id) ? ' open' : ''}>
+        <summary${picked ? ' class="issue-picked"' : ''}><span class="issue-icon">${list[k].level === 'error' ? '✖' : '⚠'}</span><span class="issue-text">${esc(kind.label)} <span class="hint">(${end - k})</span></span></summary>
+        <ul class="issue-list">${rows}</ul></details></li>`;
+      k = end;
+    }
+    return html;
+  };
+  const group = (title: string, list: Issue[], start: number, buildingKey?: string) => list.length ? `<section class="issue-group${buildingKey ? ' issue-building' : ''}${buildingKey && selection.includes(buildingKey) ? ' selected' : ''}"${buildingKey ? ` data-building-key="${esc(buildingKey)}"` : ''}>
+    <h2>${esc(title)} <span class="hint">(${list.length})</span></h2>
+    <ul class="issue-list">${issueRows(list, start, !buildingKey && !!focus)}</ul></section>` : '';
   const filterNote = currentIssues.length < allIssues.length
     ? `<div class="issue-filter">${tr('Проблемы выбранных объектов: {n} из {all}', { n: currentIssues.length, all: allIssues.length })} <button type="button" class="issue-show-all">${tr('Показать все')}</button></div>` : '';
   const scrolled = issuesEl.scrollTop;
@@ -11767,6 +11801,9 @@ function syncSelectedIssues() {
     const issue = shownIssues[Number(li.dataset.i)];
     li.classList.toggle('issue-picked', !!issue && selectedIssueIds.has(issueId(issue)));
     li.classList.toggle('selected', !!issue && (selection.includes(issue.key) || (!!issue.other && selection.includes(issue.other))));
+  }
+  for (const summary of issuesEl.querySelectorAll<HTMLElement>('.issue-bundle summary')) {
+    summary.classList.toggle('issue-picked', !!summary.parentElement!.querySelector('li.issue-picked'));
   }
   syncIssueFix();
   highlightIssues();
@@ -11957,6 +11994,9 @@ function zoomToIssue(issue: Issue) {
 }
 
 issuesEl.addEventListener('click', (e) => {
+  // Раскрытие группы одного вида запоминаем сразу: событие toggle приходит позже пересборки списка
+  const bundle = (e.target as HTMLElement).closest('summary')?.parentElement as HTMLDetailsElement | undefined;
+  if (bundle?.dataset.bundle) { if (bundle.open) openIssueBundles.delete(bundle.dataset.bundle); else openIssueBundles.add(bundle.dataset.bundle); return; }
   const fix = (e.target as HTMLElement).closest<HTMLElement>('.issue-fix');
   if (fix) { applyFixes([shownIssues[Number(fix.dataset.i)]]); return; }
   if ((e.target as HTMLElement).closest('.issue-show-all')) { pinIssueList(); return; }
@@ -11965,8 +12005,16 @@ issuesEl.addEventListener('click', (e) => {
   const issue = shownIssues[Number(li.dataset.i)];
   if (!issue) return;
   const id = issueId(issue);
-  if (e.shiftKey) {
-    if (selectedIssueIds.has(id)) selectedIssueIds.delete(id); else selectedIssueIds.add(id);
+  // Shift — диапазон от прошлой строки до этой (в порядке показа), Ctrl / Cmd — одна строка в набор или из него
+  const from = issueAnchor === undefined ? -1 : shownIssues.findIndex((i) => issueId(i) === issueAnchor);
+  if (e.shiftKey || e.ctrlKey || e.metaKey) {
+    if (e.shiftKey && from >= 0) {
+      const to = Number(li.dataset.i);
+      for (const i of shownIssues.slice(Math.min(from, to), Math.max(from, to) + 1)) selectedIssueIds.add(issueId(i));
+    } else {
+      if (selectedIssueIds.has(id)) selectedIssueIds.delete(id); else selectedIssueIds.add(id);
+      issueAnchor = id;
+    }
     syncSelectedIssues();
     // Выделение объектов следует за набором проблем
     const wanted = new Set(pickedIssues().flatMap((i) => focus ? [i.key, i.other ?? ''] : [issueBuildingKey(i)]).filter((k) => k && !!entity(k)));
@@ -11977,6 +12025,7 @@ issuesEl.addEventListener('click', (e) => {
   }
   selectedIssueIds.clear();
   selectedIssueIds.add(id);
+  issueAnchor = id;
   syncSelectedIssues();
   const indoor = buildingIndoorFor(li.dataset.key!);
   if (indoor) {

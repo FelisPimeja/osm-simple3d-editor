@@ -9728,10 +9728,10 @@ function levelSection(l: Level): LonLat[][][] | undefined {
   const steps = groupFeatures(focus).filter((f) => f?.tags?.['building:part'] === 'steps')
     .flatMap((f) => f.polygons).map((p) => [close(p.outer), ...p.inners.map(close)]);
   const withoutSteps = (rings: LonLat[][][]) => {
-    if (!steps.length) return rings;
+    if (!steps.length) return cleanSection(rings);
     try {
-      return polygonClipping.difference(rings.map((p) => p.map(close)) as [number, number][][][], ...(steps as [[[number, number][]]]))
-        .map((poly) => poly.map((r) => r.slice(0, -1) as LonLat[]));
+      return cleanSection(polygonClipping.difference(rings.map((p) => p.map(close)) as [number, number][][][], ...(steps as [[[number, number][]]]))
+        .map((poly) => poly.map((r) => r.slice(0, -1) as LonLat[])));
     } catch (err) { console.warn('[level-section]', err); return rings; }
   };
   const ground = overpassLayer.focusSection(0.1);
@@ -9739,7 +9739,7 @@ function levelSection(l: Level): LonLat[][][] | undefined {
   const feet = groupFeatures(focus).filter((f) => f?.tags?.['building:part'] !== 'steps').flatMap((f) => f?.polygons ?? []).map((p) => [close(p.outer), ...p.inners.map(close)]);
   if (!feet.length) return cut;
   try {
-    return polygonClipping.union(...(feet as [[[number, number][]]])).map((poly) => poly.map((r) => r.slice(0, -1) as LonLat[]));
+    return cleanSection(polygonClipping.union(...(feet as [[[number, number][]]])).map((poly) => poly.map((r) => r.slice(0, -1) as LonLat[])));
   } catch (err) { console.warn('[level-section]', err); return cut; }
 }
 
@@ -15220,4 +15220,41 @@ function stairsWidthHint(f: IndoorFeature): string {
   const dx = (b[0] - a[0]) * kx, dy = (b[1] - a[1]) * ky, L = Math.hypot(dx, dy) || 1;
   const w = outline.map((p) => ((p[0] - a[0]) * kx * -dy + (p[1] - a[1]) * ky * dx) / L);
   return String(Math.round((Math.max(...w) - Math.min(...w)) * 10) / 10);
+}
+
+/**
+ * Контур этажа без вырожденных кусков (остатки вычитания, щели вдоль общих сторон): вершины ближе 5 см и на одной
+ * прямой — убрать; кольца без площади, полигоны меньше 0,5 м² или уже ~0,3 м (площадь / периметр) — отбросить.
+ */
+function cleanSection(polys: LonLat[][][]): LonLat[][][] {
+  const o = polys[0]?.[0]?.[0];
+  if (!o) return polys;
+  const kx = Math.cos(o[1] * Math.PI / 180) * 111320, ky = 111320;
+  const m = (p: LonLat): [number, number] => [(p[0] - o[0]) * kx, (p[1] - o[1]) * ky];
+  const cleanRing = (ring: LonLat[]): LonLat[] => {
+    let r = ring.slice();
+    for (let changed = true; changed && r.length >= 3;) {
+      changed = false;
+      for (let i = 0; i < r.length && r.length >= 3; i++) {
+        const a = m(r[(i - 1 + r.length) % r.length]), b = m(r[i]), c = m(r[(i + 1) % r.length]);
+        const ab = Math.hypot(b[0] - a[0], b[1] - a[1]), ac = Math.hypot(c[0] - a[0], c[1] - a[1]);
+        // Точка совпадает с соседней или лежит на прямой между соседями (в том числе «шип» туда-обратно)
+        const off = ac > 1e-9 ? Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / ac : ab;
+        if (ab < 0.05 || off < 0.02) { r.splice(i, 1); changed = true; i--; }
+      }
+    }
+    return r.length >= 3 ? r : [];
+  };
+  const area = (r: LonLat[]) => Math.abs(r.reduce((s, p, i) => { const a = m(p), b = m(r[(i + 1) % r.length]); return s + a[0] * b[1] - b[0] * a[1]; }, 0)) / 2;
+  const perimeter = (r: LonLat[]) => r.reduce((s, p, i) => { const a = m(p), b = m(r[(i + 1) % r.length]); return s + Math.hypot(b[0] - a[0], b[1] - a[1]); }, 0);
+  const out: LonLat[][][] = [];
+  for (const poly of polys) {
+    const outer = cleanRing(poly[0] ?? []);
+    if (!outer.length) continue;
+    const a = area(outer);
+    if (a < 0.5 || a / perimeter(outer) < 0.15) continue;
+    const inners = poly.slice(1).map(cleanRing).filter((r) => r.length && area(r) >= 0.5 && area(r) / perimeter(r) >= 0.15);
+    out.push([outer, ...inners]);
+  }
+  return out;
 }

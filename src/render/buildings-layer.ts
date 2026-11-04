@@ -1716,11 +1716,13 @@ export class BuildingsLayer implements CustomLayerInterface {
       };
       // The mapped escalator footprint is an outline, not a solid slab fascia.
       for(const it of this.level.outlines ?? [])for(const p of it.polygons)for(const r of [p.outer,...p.inners])addWallRing(r.map(g.toLocal),true);
-      for (const it of this.level.items) if (!it.cutOnly && ['room','wall','column'].includes(it.kind))
+      // Стекло и ограждения торец перекрытия не закрывают: он виден сквозь стекло и под перилами
+      const opaque = (it: IndoorItem) => !it.glass && !it.railing;
+      for (const it of this.level.items) if (!it.cutOnly && opaque(it) && ['room','wall','column'].includes(it.kind))
         for (const p of it.polygons) for (const r of [p.outer, ...p.inners]) addWallRing(r.map(g.toLocal), !it.line);
       for(const poly of this.level.bareVoids ?? [])for(const r of poly)addWallRing(r.map(g.toLocal),true);
       for (const lower of this.level.below ?? []) if (lower.cut >= this.level.floor - 1e-3)
-        for (const it of lower.items) if (it.z < this.level.floor - 1e-3 && !it.cutOnly && ['room','wall','column'].includes(it.kind))
+        for (const it of lower.items) if (it.z < this.level.floor - 1e-3 && !it.cutOnly && opaque(it) && ['room','wall','column'].includes(it.kind))
           for (const p of it.polygons) for (const r of [p.outer, ...p.inners]) addWallRing(r.map(g.toLocal), !it.line);
       for (const it of g.items) {
         if (g.hidden.has(it.feature.key) || strokeOnly(g, it)) continue;

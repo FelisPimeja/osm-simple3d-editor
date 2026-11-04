@@ -88,13 +88,13 @@ test('entrances without level stay at ground level, even on walls of overhanging
   }
 });
 
-test('indoor=door with level other than 0 is drawn at that floor', () => {
+test('an entrance with level other than 0 is drawn at that floor', () => {
   const door = (level) => Object.fromEntries(ON_RAISED.map((id) => [id, { indoor: 'door', level }]));
   for (const [level, height] of [['1', 3], ['2', 6], ['0', 0]]) {
     const z = entranceZ(parts(door(level)));
     for (const id of ON_RAISED) assert.ok(Math.abs(z.get(id) - height) < 1e-6, `level=${level}: entrance ${id} at ${z.get(id)}`);
   }
-  // level without indoor=door is not a lift
-  const z = entranceZ(parts(Object.fromEntries(ON_RAISED.map((id) => [id, { level: '2' }]))));
-  for (const id of ON_RAISED) assert.equal(z.get(id), 0);
+  // An entrance with level and without indoor=door is drawn at that floor too
+  const z = entranceZ(parts(Object.fromEntries(ON_RAISED.map((id) => [id, { entrance: 'emergency', level: '1' }]))));
+  for (const id of ON_RAISED) assert.ok(Math.abs(z.get(id) - 3) < 1e-6);
 });

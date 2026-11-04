@@ -6986,11 +6986,11 @@ export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; wid
  * (на углу — средняя), наружу — туда, где нет самого объекта.
  */
 /**
- * Высота входа, м: у земли; дверь indoor=door с level≠0 — на отметке этого этажа. building:levels считают от земли,
+ * Высота входа, м: у земли; вход с level≠0 — на отметке этого этажа. building:levels считают от земли,
  * вместе с пропущенными building:min_level, — этажи объекта поровну по высоте его стен от земли; без этажности — по 3 м.
  */
 export function entranceZ(door: Record<string, string>, tags: Record<string, string>): number {
-  const level = door.indoor === 'door' ? parseFloat((door.level ?? '').split(';')[0]) : NaN;
+  const level = parseFloat((door.level ?? '').split(';')[0]);
   if (!Number.isFinite(level) || level === 0) return 0;
   const levels = Number(tags['building:levels']);
   return level * (levels > 0 ? computeHeights(tags).wallTop / levels : LEVEL_HEIGHT);

@@ -11031,7 +11031,9 @@ function syncModePanels() {
   const mode = !focus ? undefined : currentLevel === undefined ? 'building' : 'plan';
   outlinerPanel.hidden = mode !== 'building';
   if (mode === panelsMode) return;
+  const switched = !!panelsMode && !!mode;
   panelsMode = mode;
+  if (switched) renderIssues(); // проблемы частей или indoor — по режиму
   if (!mode || mobile) return;
   setCollapsed(levelsPanel, mode === 'building');
 }
@@ -11652,12 +11654,14 @@ let issueAnchor: string | undefined;
 
 /** Панель «Проверка»: проблемы здания режима здания, клик — выделить объект (Shift — оба пересекающихся). */
 function renderIssues() {
-  const simpleIssues = focus ? [...buildingIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : strayPartsOf(focus))] : [];
+  // План этажа — только проблемы indoor, всё здание — только проблемы частей
+  const plan = currentLevel !== undefined;
+  const simpleIssues = focus && !plan ? [...buildingIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : strayPartsOf(focus))] : [];
   const focusedBuilding = focus;
-  const indoorAll = focusedBuilding ? buildingIndoor(focusedBuilding) : [];
+  const indoorAll = focusedBuilding && plan ? buildingIndoor(focusedBuilding) : [];
   const outerDoor = focusedBuilding ? outerDoorTest(focusedBuilding, indoorAll) : undefined;
-  const indoorIssues = focusedBuilding ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), outerDoor!(f))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
-  const duplicates = focusedBuilding ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
+  const indoorIssues = focusedBuilding && plan ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), outerDoor!(f))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
+  const duplicates = focusedBuilding && !plan ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
   focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
   // Слой зданий выключен — проверку карты не считаем (пересчитаем, когда включат)
   if (!focus && !buildingsView.shown) mapIssues = [];

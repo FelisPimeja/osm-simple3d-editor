@@ -153,11 +153,14 @@ export class IndoorPois {
       represented.add(f.key);
     }
     const labelled = refs.filter((f) => (f.tags.ref || f.tags.name) && !f.line && f.polygons.length);
+    // Точки POI (кафе, магазин узлом) с названием — подпись под значком; у значка помещения подписывает помещение
+    const namedPoints = shown.filter((f) => !f.key.endsWith('#poi') && (f.tags.name || f.tags.ref)
+      && !f.tags.door && f.tags.indoor !== 'door' && !f.tags.entrance);
     const sig = `${z}|${shown.map((f) => {
       const p = positions.get(f.key);
       // Точка и значок — тоже: дверь сдвинули («Переместить») или сменили вид — значок за ней
       return `${f.key}:${f.point!.join(',')}:${poiIcon(f.tags)}:${p ? `${p.at.join(',')}:${p.z}` : ''}`;
-    }).join(',')}|${labelled.map((f) => `${f.key}:${f.tags.ref}:${f.tags.name}:${f.polygons[0].outer.length}:${f.polygons[0].outer[0]}`).join(',')}`;
+    }).join(',')}|${namedPoints.map((f) => `${f.key}:${f.tags.ref}:${f.tags.name}`).join(',')}|${labelled.map((f) => `${f.key}:${f.tags.ref}:${f.tags.name}:${f.polygons[0].outer.length}:${f.polygons[0].outer[0]}`).join(',')}`;
     if (sig === this.signature) return;
     this.signature = sig;
     this.root.innerHTML = '';
@@ -194,6 +197,21 @@ export class IndoorPois {
       this.byEl.set(el, f);
       // Подпись большого помещения важнее подписи маленького
       this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], z + 0.3), shift: under ? 'translate(-50%, 12px)' : 'translate(-50%, -50%)', below: !!under, prio: ringArea(f.polygons[0].outer) });
+    }
+    for (const f of namedPoints) {
+      const position = positions.get(f.key);
+      const local = this.layer.focusToLocal(position?.at ?? f.point!);
+      if (!local) continue;
+      const el = document.createElement('div');
+      el.className = 'indoor-poi indoor-ref';
+      if (f.tags.ref) el.append(Object.assign(document.createElement('b'), { textContent: f.tags.ref }));
+      if (f.tags.ref && f.tags.name) el.append(' ');
+      if (f.tags.name) el.append(f.tags.name);
+      el.title = [f.tags.name, f.tags.ref && `ref=${f.tags.ref}`, f.key].filter(Boolean).join(' · ');
+      this.root.appendChild(el);
+      this.byEl.set(el, f);
+      // Подпись точки — ниже подписей помещений, но выше пустых (площадь у точки нулевая)
+      this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], position?.z ?? z + 0.3), shift: 'translate(-50%, 12px)', below: true, prio: 1 });
     }
     this.items.sort((a, b) => b.prio - a.prio);
     this.setSelection([...this.selected]);

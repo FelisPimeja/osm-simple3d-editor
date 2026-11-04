@@ -11487,6 +11487,8 @@ function renderLevelsImpl() {
   loadFocusIndoor(focus);
   const indoor = buildingIndoor(focus);
   const levels = buildingLevels(focus, indoor);
+  // Входы с level — на отметке своего этажа (а не по 3 м на этаж из building:levels)
+  overpassLayer.setEntranceFloors(new Map(levels.map((l) => [l.n, l.floor])));
   const planned = plannedLevels(focus, levels, indoor);
   if (badgePlanBuilding !== undefined) {
     if (badgePlanBuilding === focus.key) {

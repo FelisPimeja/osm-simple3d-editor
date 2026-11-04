@@ -4971,6 +4971,15 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Входы группы: у вершин контуров с entrance=* (по текущей геометрии — вершина едет, вход за ней). */
+  /** Отметки пола этажей здания в фокусе (из indoor-данных и правок): по ним — высота входа с level. */
+  private entranceFloors = new Map<number, number>();
+  setEntranceFloors(floors: Map<number, number>) {
+    if (floors.size === this.entranceFloors.size && [...floors].every(([n, z]) => Math.abs((this.entranceFloors.get(n) ?? NaN) - z) < 1e-6)) return;
+    this.entranceFloors = floors;
+    const g = this.groups.get(FOCUS_GROUP);
+    if (g) { this.applyEntrances(g); this.map?.triggerRepaint(); }
+  }
+
   private applyEntrances(g: MeshGroup) {
     g.disposeEntrances();
     const tags = new Map<number, Record<string, string>>();
@@ -5009,7 +5018,9 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (!tags.has(id) || (best.get(id)?.rank ?? Infinity) <= rank) return;
           // Вход — у земли в своей точке: стена нависающей части над ней — не повод поднимать дверь. Выше — только
           // дверь indoor=door с level этажа (вход с галереи, наружной лестницы)
-          const place = entrancePlace(rings, r, i, entranceZ(tags.get(id)!, it.tags));
+          const door = tags.get(id)!, lv = parseFloat((door.level ?? '').split(';')[0]);
+          const floorZ = !onMap && Number.isFinite(lv) && lv !== 0 ? this.entranceFloors.get(lv) : undefined;
+          const place = entrancePlace(rings, r, i, floorZ ?? entranceZ(door, it.tags));
           if (place && (!offstage || onShownWall(place.p))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
         }));
       }

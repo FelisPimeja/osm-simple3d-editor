@@ -258,7 +258,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     if (!kind && w.tags?.highway === 'steps' && w.tags.conveying && w.tags.conveying !== 'no' && w.nodes[0] !== w.nodes[w.nodes.length - 1]) {
       const pts = w.nodes.map((id) => nodes.get(id)).filter((n): n is OsmNode => !!n).map((n): LonLat => [n.lon, n.lat]);
       if (pts.length >= 2) {
-        addIndoor(`way/${w.id}`, w.tags, 'area', [{ outer: pts, inners: [] }], true);
+        addIndoor(`way/${w.id}`, w.tags, 'area', [{ outer: pts, inners: [], ...(pts.length === w.nodes.length ? { outerIds: w.nodes.slice() } : {}) }], true);
         indoor[indoor.length - 1].escalator = true;
       }
     } else if (ik === 'wall') {

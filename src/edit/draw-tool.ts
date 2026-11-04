@@ -104,6 +104,8 @@ export class DrawTool {
 
   /** Способ построения сменили с клавиатуры (Tab) — обновить кнопку. */
   onModeChange?: () => void;
+  /** Открытая ломаная из стольких точек завершается сама, без трассировки (эскалатор — 2). */
+  maxPoints?: number;
   /** Плоскость рисования задана снаружи (пол этажа на плане): высота z; undefined — по первой точке. */
   plane?: () => number | undefined;
 
@@ -147,13 +149,14 @@ export class DrawTool {
 
   get active() { return this.state !== 'off'; }
 
-  begin(shape: DrawShape) {
+  begin(shape: DrawShape, maxPoints?: number) {
     this.reset();
     this.shape = shape;
+    this.maxPoints = maxPoints;
     this.state = 'draw';
     this.opts.hidden = shape !== 'ngon';
     this.opts.querySelector('input')!.value = String(this.sides);
-    this.traceOpt.hidden = !TRACED.includes(shape);
+    this.traceOpt.hidden = !TRACED.includes(shape) || !!maxPoints;
     this.hint();
   }
 
@@ -375,6 +378,7 @@ export class DrawTool {
       this.finish(circleRing(c.c, c.r, circleSegments(c.r)));
       return;
     }
+    if (isOpen(this.shape) && this.maxPoints && this.pts.length >= this.maxPoints) { this.finishLine(); return; }
     if (ROUND.includes(this.shape) && this.pts.length === 2) {
       const c = this.shape === 'circle' ? this.circleOf(this.pts) : undefined;
       this.finish((c ? circleRing(c.c, c.r, circleSegments(c.r)) : this.roundRing(this.pts[0], this.pts[1], true)) ?? []);
@@ -515,7 +519,7 @@ export class DrawTool {
 
   private finishLine() {
     const fail = this.commit(this.pts, this.z);
-    if (fail) { this.onState(fail, true); return; }
+    if (fail) { this.onState(fail, true); if (this.maxPoints) { this.pts.pop(); this.steps.pop(); this.preview(); } return; }
     this.reset();
     this.hint();
   }
@@ -532,7 +536,7 @@ export class DrawTool {
   /** Промежуточные точки трассировки от последней точки до q (пусто — трассировка выключена или пути нет). */
   private traceTo(q: Pt): Pt[] {
     const last = this.pts[this.pts.length - 1];
-    if (!this.tracing || !TRACED.includes(this.shape) || !last) return [];
+    if (!this.tracing || !TRACED.includes(this.shape) || !last || this.maxPoints) return [];
     const parts = this.layer.traceEdges();
     if (!this.traceSrc || parts.some((p, i) => p !== this.traceSrc!.parts[i])) this.traceSrc = { parts, all: parts.flat() };
     return tracePath(this.traceSrc.all, this.z, last, q) ?? [];
@@ -630,6 +634,12 @@ export class DrawTool {
       this.onState(this.pts.length
         ? tr('{what}: {target} (число + Enter — радиус). Esc — отмена.', { what, target: this.shape === 'circle' ? tr('точка на окружности') : tr('вершина') })
         : tr('{what}: кликните центр на земле или на плоской крыше. Esc — выйти.', { what }));
+      return;
+    }
+    if (this.shape === 'wall' && this.maxPoints === 2) {
+      this.onState(this.pts.length
+        ? tr('Эскалатор: кликните верхний конец. Esc — отмена.')
+        : tr('Эскалатор: кликните нижний конец на плане этажа. Esc — выйти.'));
       return;
     }
     if (this.shape === 'wall') {

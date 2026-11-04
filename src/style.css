@@ -762,6 +762,21 @@ body.mobile #issues-panel { display: none !important; }
 }
 .issue-point.warning { border-color: #ff8a00; }
 @keyframes issue-point-pulse { 50% { transform: scale(1.35); } }
+/* Выделенный эскалатор: ручки этажей концов и стрелка направления движения */
+.escalator-ui { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.escalator-level-handle {
+  position: absolute; transform: translate(-50%, -50%); pointer-events: auto; cursor: ns-resize; touch-action: none;
+  min-width: 18px; padding: 1px 5px; border-radius: 9px; background: #fff; border: 2px solid #2563eb;
+  color: #1d4ed8; font: 600 11px/14px system-ui, sans-serif; text-align: center; white-space: nowrap; user-select: none;
+}
+.escalator-level-handle.active { background: #2563eb; color: #fff; }
+.escalator-arrow {
+  position: absolute; pointer-events: auto; width: 26px; height: 26px; padding: 0; border-radius: 50%;
+  background: #2563eb; color: #fff; border: 2px solid #fff; font: 700 16px/20px system-ui, sans-serif; cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.escalator-arrow:hover { background: #1d4ed8; }
+.escalator-level-handle[hidden], .escalator-arrow[hidden] { display: none; }
 /* «Точка» на плане: значки и подписи не забирают щелчок — он ставит точку под ними */
 .indoor-pois.passthrough, .indoor-pois.passthrough * { pointer-events: none !important; }
 .repeat-levels { list-style: none; padding: 0 !important; margin: 6px 0 10px !important; }

@@ -21,7 +21,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
-import { ROOM_PAIRED_AMENITY, setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, selfIntersects, validateIndoor, validateSolidWallDoors, validateRepeatedRooms, validateStackedEscalators, validateTags, OUTLINE_GROW_SHARE, partGround, type Issue } from './edit/validate';
+import { ROOM_PAIRED_AMENITY, setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, selfIntersects, validateIndoor, validateSolidWallDoors, validateRepeatedRooms, validateStackedEscalators, validateEscalators, validateTags, OUTLINE_GROW_SHARE, partGround, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchElementRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -3101,6 +3101,7 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(), shapeSelected
     toolHint(hint, error);
   });
 shapeTool.multiObject = () => indoorSelection.some(editableIndoorGeometry);
+shapeTool.noInsert = key => !!buildingIndoorFor(key)?.escalator;
 shapeTool.isOpen = key => { const f = buildingIndoorFor(key), ids = f?.polygons[0]?.outerIds; return !!f?.line && (!ids || ids[0] !== ids[ids.length-1]); };
 overpassLayer.indoorEditPolygons = key => {
   const f = buildingIndoorFor(key);
@@ -6871,6 +6872,9 @@ function removalRewrites(ids: Set<number>): { f: Feature3D; rewrites: RingRewrit
 
 /** Удалить вершины t: «с соседями» (или узлы только наши) — отовсюду, «отдельно» — только из своих колец. */
 function removeShapeVertex(t: ShapeTarget, merged: boolean) {
+  // У эскалатора две точки: без одной его нет — удаляется целиком
+  const esc = buildingIndoorFor(t.key);
+  if (esc?.escalator) { void deleteIndoorSpaces([esc]); return; }
   if (buildingIndoorFor(t.key) && !selection.includes(t.key)) { applyIndoorGeometry({ type: 'remove', vertices: indoorShapeVertices(t) }, shapeTool.glue); return; }
   const f = entity(t.key) as Feature3D | undefined;
   const rings = f?.polygons && shapeRings(f, t);
@@ -8599,6 +8603,7 @@ function renderIndoorSelection(add = false) {
   selectedIndoor = indoorSelection[0];
   overpassLayer.setIndoorSelection(indoorSelection.map((x) => x.key));
   indoorPois.setSelection(indoorSelection.map((x) => x.key));
+  renderEscalatorUi();
   syncIssueFilter();
   if (!indoorSelection.length && selectedRoomWalls.length) return renderRoomWalls();
   if (!indoorSelection.length) { clearInfo(); updateTagsClip(); return; }
@@ -8995,7 +9000,8 @@ function indoorRelationTopology(edits: ObjectEdit[], inserts: Insert[] = []): Ob
 
 /** Geometry-editable indoor objects; POIs, stairs and floor outlines have separate tools. */
 function editableIndoorGeometry(f: IndoorFeature): boolean {
-  return !f.point && !f.escalator && ['room', 'area', 'corridor', 'wall', 'column'].includes(f.kind);
+  if (f.escalator) return editableEscalator(f);
+  return !f.point && ['room', 'area', 'corridor', 'wall', 'column'].includes(f.kind);
 }
 function indoorShapeVertices(t: ShapeTarget): IndoorVertex[] {
   return [t, ...(t.also ?? [])].map(v => ({ key: v.key, poly: v.poly, ring: v.ring, i: v.i }));
@@ -9110,7 +9116,7 @@ function canDeleteIndoorSelection(): boolean {
 /** Точечный POI, кроме дверей, лестниц и эскалаторов. */
 const isPlainPoi = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && !isDoor(f) && f.tags.stairs !== 'yes' && f.tags.highway !== 'steps';
 /** Помещение (вместе со своим значком POI), коридор, зона, колонна, контур этажа (indoor=level) или точечный POI — удаляется целиком. */
-const isDeletableSpace = (f: IndoorFeature) => !f.line && !f.escalator && !f.key.endsWith('#poi')
+const isDeletableSpace = (f: IndoorFeature) => f.escalator ? f.key.startsWith('way/') : !f.line && !f.key.endsWith('#poi')
   && (f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor' || f.kind === 'level' || f.kind === 'column' || isPlainPoi(f));
 
 /** Теги этажа у пути, который заодно часть или контур здания: при удалении этажа снимаются только они. */
@@ -9144,7 +9150,7 @@ async function deleteIndoorSpaces(fs: IndoorFeature[]) {
     session.editMany(edits);
     setStatus(fs.every((f) => f.kind === 'level')
       ? tr('Удалено контуров этажа: {n} ({keys}). Отменить — Ctrl+Z.', { n: fs.length, keys: fs.map((f) => indoorKey(f.key)).join(', ') })
-      : fs.some((f) => f.kind === 'column' || f.point) ? tr('Удалено объектов: {n}. Отменить — Ctrl+Z.', { n: fs.length })
+      : fs.some((f) => f.kind === 'column' || f.point || f.escalator) ? tr('Удалено объектов: {n}. Отменить — Ctrl+Z.', { n: fs.length })
       : stripped
         ? tr('Удалено помещений: {n}; у путей в составе отношений сняты только теги: {m}. Отменить — Ctrl+Z.', { n: fs.length, m: stripped })
         : tr('Удалено помещений: {n}. Отменить — Ctrl+Z.', { n: fs.length }));
@@ -10061,7 +10067,8 @@ const POINT_SIDE_PX = 8;
 
 // Инструмент «Стена»: линейная стена indoor=wall этажа по точкам ломаной
 const wallBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="wall"]')!;
-let linearPreset: 'wall'|'railing' = 'wall';
+let linearPreset: 'wall'|'railing'|'escalator' = 'wall';
+const LINEAR_TITLES = { wall: tr('Стена'), railing: tr('Ограждение'), escalator: tr('Эскалатор') };
 wallBtn.title=`${tr('Стена')} (F)`;
 wallBtn.insertAdjacentHTML('beforeend','<span class="flyout-arrow" data-linear-menu data-flyout></span>');
 wallBtn.addEventListener('click',e=>{
@@ -10069,11 +10076,11 @@ wallBtn.addEventListener('click',e=>{
   e.stopImmediatePropagation();
   if(rectFlyout){closeRectFlyout();return;}
   const menu=document.createElement('div');menu.className='tool-flyout';
-  menu.innerHTML=`<button type="button" data-linear="wall">${tr('Стена')}</button><button type="button" data-linear="railing">${tr('Ограждение')}</button>`;
+  menu.innerHTML=`<button type="button" data-linear="wall">${tr('Стена')}</button><button type="button" data-linear="railing">${tr('Ограждение')}</button><button type="button" data-linear="escalator">${tr('Эскалатор')}</button>`;
   menu.addEventListener('click',e=>{
     const choice=(e.target as HTMLElement).closest<HTMLElement>('[data-linear]');if(!choice)return;
     e.stopPropagation();linearPreset=choice.dataset.linear as typeof linearPreset;
-    wallBtn.title=`${linearPreset==='wall'?tr('Стена'):tr('Ограждение')} (F)`;
+    wallBtn.title=`${LINEAR_TITLES[linearPreset]} (F)`;
     closeRectFlyout();startWall();
   });
   wallBtn.after(menu);placeFlyout(menu,wallBtn);rectFlyout=menu;
@@ -10092,7 +10099,7 @@ function startWall() {
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop();
   measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
   select(undefined);
-  drawTool.begin('wall');
+  drawTool.begin('wall', linearPreset === 'escalator' ? 2 : undefined);
 }
 
 /** Ломаная (метры сцены) — путь indoor=wall этажа; вершины на узлах соседей — их узлы. */
@@ -10154,6 +10161,7 @@ function wallAsLine(f: IndoorFeature): IndoorFeature {
 
 function createIndoorWallLine(pts: [number, number][], own?: Record<string, string>): string | undefined {
   if (!focus || !shownLevel) return tr('Нет этажа.');
+  if (!own && linearPreset === 'escalator') return createEscalator(pts);
   const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)]);
   const nodes = pts.map((q) => nodeFor(overpassLayer.focusToLngLat(q[0], q[1])! as LonLat)).filter((q, i, a) => i === 0 || q.id !== a[i - 1].id);
   if (nodes.length < 2) return tr('Стене нужны хотя бы две разные точки.');
@@ -10178,6 +10186,222 @@ function createIndoorWallLine(pts: [number, number][], own?: Record<string, stri
     + (touched.size ? ' ' + tr('Узлы добавлены в соседей: {n}.', { n: touched.size }) : ''));
   return;
 }
+
+/** Эскалатор правится «Формой», если в нём ровно две точки с известными узлами; с изломами — только просмотр. */
+function editableEscalator(f: IndoorFeature): boolean {
+  const p = f.polygons[0];
+  return !!f.escalator && f.key.startsWith('way/') && f.polygons.length === 1 && p.outer.length === 2 && p.outerIds?.length === 2 && p.outerIds[0] !== p.outerIds[1];
+}
+
+/** Этажи здания в фокусе (с высотами пола). */
+const focusLevelList = () => focus ? buildingLevels(focus, buildingIndoor(focus)) : [];
+
+/** Этажи от a до b включительно через «;» (SIT: объект, проходящий через этажи). */
+function levelSpan(a: number, b: number): string {
+  const lo = Math.min(a, b), hi = Math.max(a, b);
+  const own = focusLevelList().map((l) => l.n).filter((n) => n >= lo && n <= hi);
+  const list = own.includes(lo) && own.includes(hi) ? own : Array.from({ length: Math.round(hi - lo) + 1 }, (_, i) => lo + i);
+  return [...new Set(list)].sort((x, y) => x - y).join(';');
+}
+
+/** Уровни концов эскалатора: [начала пути, конца пути]. */
+function escalatorEnds(f: IndoorFeature): [number, number] {
+  const lo = Math.min(...f.levels), hi = Math.max(...f.levels);
+  return f.tags.incline === 'down' ? [hi, lo] : [lo, hi];
+}
+
+/** Новый эскалатор по двум точкам: с текущего этажа на следующий (на верхнем — с предыдущего), путь снизу вверх. */
+function createEscalator(pts: [number, number][]): string | undefined {
+  if (!focus || !shownLevel) return tr('Нет этажа.');
+  if (pts.length !== 2) return tr('Эскалатору нужны две точки.');
+  const ns = focusLevelList().map((l) => l.n).sort((a, b) => a - b);
+  const here = shownLevel.n, up = ns.find((n) => n > here), down = [...ns].reverse().find((n) => n < here);
+  if (up === undefined && down === undefined) return tr('В здании один этаж — эскалатору некуда вести.');
+  const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)]);
+  let nodes = pts.map((q) => nodeFor(overpassLayer.focusToLngLat(q[0], q[1])! as LonLat));
+  if (nodes[0].id === nodes[1].id) return tr('Концы эскалатора совпадают.');
+  // Нарисован с верхнего этажа вниз (выше этажей нет) — путь всё равно снизу вверх
+  if (up === undefined) nodes = [nodes[1], nodes[0]];
+  const key = `way/${nextNewId--}`;
+  const tags: Record<string, string> = { highway: 'steps', conveying: 'yes', incline: 'up', level: levelSpan(here, up ?? down!) };
+  const line = { ids: nodes.map((q) => q.id), coords: nodes.map((q) => q.p) };
+  const polygons = [{ outer: line.coords, outerIds: line.ids, inners: [] }];
+  const edits: ObjectEdit[] = [{ key, create: { key, version: 0, tags, line, polygons } }];
+  const ins = indoorSideInsertEdits(nodes, new Set([key]));
+  if (typeof ins === 'string') return ins;
+  edits.push(...ins.edits);
+  session.editMany(edits);
+  indoorCreated.set(key, { key, kind: 'area', line: true, escalator: true, polygons, tags, levels: parseLevels(tags.level) });
+  indoorEdited.add(key);
+  indoorEditRev++;
+  renderLevels();
+  const made = buildingIndoorFor(key);
+  if (made) selectIndoor(made);
+  setStatus(tr('Эскалатор {key}: этажи {level}. Направление движения — стрелкой над ним, концы и этажи — «Формой» (V).', { key, level: tags.level }));
+}
+
+/**
+ * Сменить этажи концов эскалатора: a — начала пути, b — конца. Путь остаётся снизу вверх (incline=up):
+ * если начало оказалось выше конца, узлы разворачиваются.
+ */
+function setEscalatorEnds(f: IndoorFeature, a: number, b: number) {
+  if (a === b) { setStatus(tr('Концы на одном этаже — это траволатор, такой режим пока не поддерживается.'), true); return; }
+  const key = f.key, p = f.polygons[0];
+  trackIndoor(key, f);
+  const tags: Record<string, string> = { ...(session.get(key)?.tags ?? f.tags), level: levelSpan(a, b), incline: 'up' };
+  // Сейчас путь идёт по incline; нужен снизу вверх
+  const forward = f.tags.incline === 'down' ? a > b : a < b;
+  const edit: ObjectEdit = { key, tags };
+  if (!forward && p.outerIds) {
+    const ids = [...p.outerIds].reverse(), coords = [...p.outer].reverse();
+    edit.line = { ids, coords };
+    edit.polygons = [{ outer: coords, outerIds: ids, inners: [] }];
+    // Направление движения — по пути: после разворота меняется на обратное
+    if (tags.conveying === 'forward') tags.conveying = 'backward'; else if (tags.conveying === 'backward') tags.conveying = 'forward';
+  }
+  session.editMany([edit]);
+  indoorEditRev++;
+  renderLevels();
+  setStatus(tr('{key}: этажи {level}.', { key, level: tags.level }));
+}
+
+/** Направление движения по стрелке: forward → backward → reversible → forward. */
+const CONVEYING_NEXT: Record<string, string> = { forward: 'backward', backward: 'reversible', reversible: 'forward', yes: 'forward' };
+
+// Ручки этажей концов, стрелка направления и осевые линии выделенного эскалатора
+const escalatorUi = document.createElement('div');
+escalatorUi.className = 'escalator-ui';
+map.getContainer().appendChild(escalatorUi);
+/** Перетаскивание ручки этажа: какой конец (0 — начало пути) и этаж под курсором. */
+let escalatorDrag: { end: 0 | 1; level: number } | undefined;
+/** Ручка этажа выше ручки вершины, px. */
+const ESCALATOR_HANDLE_LIFT = 26;
+
+function selectedEscalator(): IndoorFeature | undefined {
+  if (indoorSelection.length !== 1 || !indoorSelection[0].escalator || !shownLevel) return;
+  return buildingIndoorFor(indoorSelection[0].key) ?? indoorSelection[0];
+}
+
+function renderEscalatorUi() {
+  const f = selectedEscalator();
+  const levels = focusLevelList();
+  const floorOf = (n: number) => levels.find((l) => l.n === n)?.floor;
+  escalatorUi.innerHTML = '';
+  if (!f || !shownLevel) { overpassLayer.setEscalatorGuides(undefined); return; }
+  const line = f.polygons[0].outer.map((c) => overpassLayer.focusToLocal(c)!);
+  const ends = escalatorEnds(f);
+  const z0 = floorOf(ends[0]) ?? shownLevel.floor, z1 = floorOf(ends[1]) ?? shownLevel.floor;
+  const plane = line.map(([x, y]) => new THREE.Vector3(x, y, shownLevel!.floor + 0.04));
+  // Пунктир сквозь этажи: от низа до верха по длине пути
+  const total = line.slice(1).reduce((s, b, i) => s + Math.hypot(b[0] - line[i][0], b[1] - line[i][1]), 0) || 1;
+  let run = 0;
+  const slope = line.map(([x, y], i) => {
+    if (i) run += Math.hypot(x - line[i - 1][0], y - line[i - 1][1]);
+    return new THREE.Vector3(x, y, z0 + (z1 - z0) * run / total + 0.04);
+  });
+  overpassLayer.setEscalatorGuides([{ pts: plane, dashed: false }, { pts: slope, dashed: true }]);
+  if (!editableEscalator(f)) return;
+  for (const end of [0, 1] as const) {
+    const el = document.createElement('div');
+    el.className = 'escalator-level-handle';
+    el.dataset.end = String(end);
+    el.title = tr('Этаж конца эскалатора: тяните вверх или вниз');
+    escalatorUi.appendChild(el);
+  }
+  const arrow = document.createElement('button');
+  arrow.type = 'button';
+  arrow.className = 'escalator-arrow';
+  arrow.title = tr('Направление движения (conveying={v}); щелчок — сменить', { v: f.tags.conveying ?? 'yes' });
+  arrow.textContent = f.tags.conveying === 'reversible' ? '⇅' : '↑';
+  escalatorUi.appendChild(arrow);
+  placeEscalatorUi();
+}
+
+function placeEscalatorUi() {
+  const f = selectedEscalator();
+  if (!f || !escalatorUi.children.length || !shownLevel) return;
+  const levels = focusLevelList();
+  const line = f.polygons[0].outer.map((c) => overpassLayer.focusToLocal(c)!);
+  const ends = escalatorEnds(f);
+  const pts = [line[0], line[line.length - 1]];
+  const floorOf = (n: number) => levels.find((l) => l.n === n)?.floor ?? shownLevel!.floor;
+  for (const el of escalatorUi.querySelectorAll<HTMLElement>('.escalator-level-handle')) {
+    const end = Number(el.dataset.end) as 0 | 1;
+    const n = escalatorDrag?.end === end ? escalatorDrag.level : ends[end];
+    const at = overpassLayer.focusProject(new THREE.Vector3(pts[end][0], pts[end][1], floorOf(n)));
+    el.hidden = !at;
+    if (!at) continue;
+    el.style.left = `${at[0]}px`;
+    el.style.top = `${at[1] - ESCALATOR_HANDLE_LIFT}px`;
+    el.textContent = levelLabel(n);
+    el.classList.toggle('active', escalatorDrag?.end === end);
+  }
+  const arrow = escalatorUi.querySelector<HTMLElement>('.escalator-arrow');
+  if (arrow) {
+    const za = floorOf(ends[0]), zb = floorOf(ends[1]);
+    const a = overpassLayer.focusProject(new THREE.Vector3(pts[0][0], pts[0][1], za));
+    const b = overpassLayer.focusProject(new THREE.Vector3(pts[1][0], pts[1][1], zb));
+    arrow.hidden = !a || !b;
+    if (a && b) {
+      // Движение по пути (forward, yes) — от начала к концу; backward — обратно
+      const back = f.tags.conveying === 'backward';
+      const ang = Math.atan2(back ? a[1] - b[1] : b[1] - a[1], back ? a[0] - b[0] : b[0] - a[0]) * 180 / Math.PI + 90;
+      arrow.style.left = `${(a[0] + b[0]) / 2}px`;
+      arrow.style.top = `${(a[1] + b[1]) / 2 - ESCALATOR_HANDLE_LIFT * 1.6}px`;
+      arrow.style.transform = `translate(-50%, -50%) rotate(${ang}deg)`;
+    }
+  }
+}
+map.on('render', placeEscalatorUi);
+
+escalatorUi.addEventListener('mousedown', (e) => e.stopPropagation());
+escalatorUi.addEventListener('dblclick', (e) => e.stopPropagation());
+escalatorUi.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const f = selectedEscalator();
+  if (!f || !(e.target as HTMLElement).closest('.escalator-arrow')) return;
+  trackIndoor(f.key, f);
+  const cur = session.get(f.key)?.tags ?? f.tags;
+  setIndoorTags([{ key: f.key, tags: { ...cur, conveying: CONVEYING_NEXT[cur.conveying ?? 'yes'] ?? 'forward' } }], 'conveying');
+});
+escalatorUi.addEventListener('pointerdown', (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>('.escalator-level-handle');
+  const f = selectedEscalator();
+  if (!el || !f) return;
+  e.preventDefault(); e.stopPropagation();
+  const end = Number(el.dataset.end) as 0 | 1;
+  const levels = focusLevelList();
+  const p = f.polygons[0].outer[end ? f.polygons[0].outer.length - 1 : 0];
+  const [x, y] = overpassLayer.focusToLocal(p)!;
+  escalatorDrag = { end, level: escalatorEnds(f)[end] };
+  el.setPointerCapture(e.pointerId);
+  const rect = map.getContainer().getBoundingClientRect();
+  const move = (ev: PointerEvent) => {
+    // Этаж, чья точка конца на экране ближе всего к курсору (с поправкой на подъём ручки)
+    const cy = ev.clientY - rect.top + ESCALATOR_HANDLE_LIFT;
+    let best: number | undefined, bd = Infinity;
+    for (const l of levels) {
+      const at = overpassLayer.focusProject(new THREE.Vector3(x, y, l.floor));
+      if (at && Math.abs(at[1] - cy) < bd) { bd = Math.abs(at[1] - cy); best = l.n; }
+    }
+    if (best !== undefined && best !== escalatorDrag!.level) { escalatorDrag!.level = best; placeEscalatorUi(); }
+  };
+  const up = () => {
+    el.removeEventListener('pointermove', move);
+    el.removeEventListener('pointerup', up);
+    el.removeEventListener('pointercancel', up);
+    const drag = escalatorDrag!;
+    escalatorDrag = undefined;
+    const ends = escalatorEnds(f);
+    if (drag.level === ends[end]) { placeEscalatorUi(); return; }
+    const next: [number, number] = [...ends];
+    next[end] = drag.level;
+    setEscalatorEnds(f, next[0], next[1]);
+  };
+  el.addEventListener('pointermove', move);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+});
 
 function startPoint() {
   if (!focus) return;
@@ -11021,7 +11245,7 @@ function undergroundOutline(g: BuildingGroup, levels: Level[]): { rings: LonLat[
 }
 
 function renderLevels() {
-  scheduleIndoorBadges(); timed('этажи: панель', renderLevelsImpl); syncModePanels(); }
+  scheduleIndoorBadges(); timed('этажи: панель', renderLevelsImpl); syncModePanels(); renderEscalatorUi(); }
 
 /** Режим, для которого уже выставлены панели: вручную развёрнутое остаётся, пока режим не сменится. */
 let panelsMode: 'building' | 'plan' | undefined;
@@ -11660,7 +11884,7 @@ function renderIssues() {
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding && plan ? buildingIndoor(focusedBuilding) : [];
   const outerDoor = focusedBuilding ? outerDoorTest(focusedBuilding, indoorAll) : undefined;
-  const indoorIssues = focusedBuilding && plan ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), outerDoor!(f))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll)] : [];
+  const indoorIssues = focusedBuilding && plan ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), outerDoor!(f))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll), ...validateEscalators(indoorAll, ((ls) => (n: number) => ls.find((l) => l.n === n)?.floor)(buildingLevels(focusedBuilding, indoorAll)))] : [];
   const duplicates = focusedBuilding && !plan ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
   focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
   // Слой зданий выключен — проверку карты не считаем (пересчитаем, когда включат)

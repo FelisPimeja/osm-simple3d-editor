@@ -390,6 +390,52 @@ export function validateStackedEscalators(features: IndoorFeature[]): Issue[] {
   return out;
 }
 
+/** Наклон эскалатора, °: обычный — 27–35, с площадками по концам по оси выходит положе. */
+const ESCALATOR_ANGLE = { min: 15, max: 40 };
+
+/**
+ * Эскалаторы (путь highway=steps + conveying): этажи концов, наклон по длине и высоте этажей, концы внутри этажа.
+ * floorOf — высота пола этажа, м; на этаже без контуров (нет помещений, коридоров, indoor=level) концы не проверяются.
+ */
+export function validateEscalators(features: IndoorFeature[], floorOf: (n: number) => number | undefined): Issue[] {
+  const out: Issue[] = [];
+  for (const f of features) {
+    if (!f.escalator) continue;
+    const t = f.tags, line = f.polygons[0]?.outer ?? [];
+    const levels = [...new Set(parseLevels(t.level))].sort((a, b) => a - b);
+    if (levels.length < 2) {
+      out.push({ key: f.key, level: 'warning', code: 'indoor-level',
+        text: tr('У эскалатора level={value}: нужны этажи обоих концов, например 0;1.', { value: t.level ?? '—' }) });
+      continue;
+    }
+    if (t.incline !== 'up' && t.incline !== 'down')
+      out.push({ key: f.key, level: 'warning', code: 'tag', text: tr('incline у эскалатора: нужен up или down — иначе неясно, какой конец внизу.') });
+    if (line.length > 2)
+      out.push({ key: f.key, level: 'warning', code: 'geometry', text: tr('Эскалатор с изломами ({n} точек) — правится только эскалатор из двух точек.', { n: line.length }) });
+    const lo = floorOf(levels[0]), hi = floorOf(levels[levels.length - 1]);
+    if (line.length >= 2 && lo !== undefined && hi !== undefined && hi > lo) {
+      const p = projector(line[0]), pts = line.map(p);
+      const run = pts.slice(1).reduce((s, b, i) => s + Math.hypot(b[0] - pts[i][0], b[1] - pts[i][1]), 0);
+      const angle = Math.atan2(hi - lo, run) * 180 / Math.PI;
+      if (angle < ESCALATOR_ANGLE.min || angle > ESCALATOR_ANGLE.max)
+        out.push({ key: f.key, level: 'warning', code: 'geometry',
+          text: tr('Наклон эскалатора {angle}° (длина {run} м, перепад {rise} м): обычно 27–35°. Проверьте level и длину.', { angle: Math.round(angle), run: run.toFixed(1), rise: (hi - lo).toFixed(1) }) });
+    }
+    // Концы — внутри помещений, коридоров или контура своего этажа
+    const ends: [LonLat | undefined, number][] = t.incline === 'down' ? [[line[0], levels[levels.length - 1]], [line[line.length - 1], levels[0]]]
+      : [[line[0], levels[0]], [line[line.length - 1], levels[levels.length - 1]]];
+    for (const [at, n] of ends) {
+      if (!at) continue;
+      const floor = features.filter((g) => !g.line && !g.point && !g.escalator && g.levels.includes(n) && ['room', 'area', 'corridor', 'level'].includes(g.kind));
+      if (!floor.length) continue;
+      const inside = floor.some((g) => g.polygons.some((q) => pointInRing(at, q.outer) && !q.inners.some((r) => pointInRing(at, r))));
+      if (!inside) out.push({ key: f.key, level: 'warning', code: 'geometry',
+        text: tr('Конец эскалатора на этаже {n} — вне помещений и контура этажа.', { n }) });
+    }
+  }
+  return out;
+}
+
 /** Локальная проекция в метры вокруг точки (для площадей и пересечений в пределах здания). */
 function projector(origin: LonLat): ((c: LonLat) => [number, number]) & { back: (c: number[]) => LonLat } {
   const kx = Math.cos((origin[1] * Math.PI) / 180) * 111320, ky = 110540;

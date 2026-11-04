@@ -1419,5 +1419,20 @@
   "Трассировка включена: путь до курсора идёт по сторонам контуров, помещений и стен. T — выключить.": "Tracing on: the path to the cursor follows the sides of outlines, rooms and walls. T to turn off.",
   "Трассировка выключена. T — включить.": "Tracing off. T to turn on.",
   "ошибки": "errors",
-  "предупреждения": "warnings"
+  "предупреждения": "warnings",
+  "Эскалатор: кликните верхний конец. Esc — отмена.": "Escalator: click the upper end. Esc — cancel.",
+  "Эскалатор: кликните нижний конец на плане этажа. Esc — выйти.": "Escalator: click the lower end on the floor plan. Esc — exit.",
+  "Эскалатору нужны две точки.": "An escalator needs two points.",
+  "В здании один этаж — эскалатору некуда вести.": "The building has one level — the escalator has nowhere to go.",
+  "Концы эскалатора совпадают.": "The escalator ends coincide.",
+  "Эскалатор {key}: этажи {level}. Направление движения — стрелкой над ним, концы и этажи — «Формой» (V).": "Escalator {key}: levels {level}. Direction — the arrow above it; ends and levels — Shape (V).",
+  "Концы на одном этаже — это траволатор, такой режим пока не поддерживается.": "Both ends on one level make a moving walkway, which is not supported yet.",
+  "{key}: этажи {level}.": "{key}: levels {level}.",
+  "Этаж конца эскалатора: тяните вверх или вниз": "Level of the escalator end: drag up or down",
+  "Направление движения (conveying={v}); щелчок — сменить": "Direction of travel (conveying={v}); click to change",
+  "У эскалатора level={value}: нужны этажи обоих концов, например 0;1.": "Escalator level={value}: the levels of both ends are needed, e.g. 0;1.",
+  "incline у эскалатора: нужен up или down — иначе неясно, какой конец внизу.": "Escalator incline: up or down is needed, otherwise it is unclear which end is at the bottom.",
+  "Эскалатор с изломами ({n} точек) — правится только эскалатор из двух точек.": "Escalator with bends ({n} points): only two-point escalators can be edited.",
+  "Наклон эскалатора {angle}° (длина {run} м, перепад {rise} м): обычно 27–35°. Проверьте level и длину.": "Escalator slope {angle}° (length {run} m, rise {rise} m): usually 27–35°. Check level and length.",
+  "Конец эскалатора на этаже {n} — вне помещений и контура этажа.": "Escalator end on level {n} is outside the rooms and the level outline."
 }

@@ -1535,7 +1535,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Входы на контуре — тоже: у частей выше среза они висели бы в воздухе
     for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL, ENTRANCE_MATERIAL, ENTRANCE_SELECTED_MATERIAL, ENTRANCE_LINE_MATERIAL]) m.clippingPlanes = planes;
     for (const m of [ESCALATOR_BELT, ESCALATOR_SIDE, ESCALATOR_STEP, ESCALATOR_BALUSTRADE, ESCALATOR_HANDRAIL,
-      ESCALATOR_PALE_BELT, ESCALATOR_PALE_SIDE, ESCALATOR_PALE_STEP, ESCALATOR_PALE_BALUSTRADE, ESCALATOR_PALE_HANDRAIL, ESCALATOR_SELECTED, ESCALATOR_SELECTED_HANDRAIL]) m.clippingPlanes = planes;
+      ESCALATOR_PALE_BELT, ESCALATOR_PALE_SIDE, ESCALATOR_PALE_STEP, ESCALATOR_PALE_BALUSTRADE, ESCALATOR_PALE_HANDRAIL]) m.clippingPlanes = planes;
+    // Выделенный эскалатор — целиком, без среза потолком этажа
+    for (const m of [ESCALATOR_SELECTED, ESCALATOR_SELECTED_HANDRAIL]) m.clippingPlanes = null;
     if (this.indoorObj) {
       this.indoorObj.parent?.remove(this.indoorObj);
       // Кешированные планы нижних этажей — не освобождать: понадобятся при следующем переключении
@@ -4367,6 +4369,33 @@ export class BuildingsLayer implements CustomLayerInterface {
         line.frustumCulled = false;
         g.scene.add(line);
         this.outline.push(line);
+      }
+    }
+    this.map?.triggerRepaint();
+  }
+
+  private escalatorGuides: Line2[] = [];
+  /** Осевые линии выделенного эскалатора: в плоскости этажа (сплошная) и от низа до верха (пунктир); undefined — убрать. */
+  setEscalatorGuides(lines?: { pts: THREE.Vector3[]; dashed: boolean }[]) {
+    for (const l of this.escalatorGuides) { l.parent?.remove(l); l.geometry.dispose(); l.material.dispose(); }
+    this.escalatorGuides = [];
+    const g = this.groups.get(FOCUS_GROUP);
+    if (g && this.map) {
+      const canvas = this.map.getCanvas();
+      const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+      for (const { pts, dashed } of lines ?? []) {
+        if (pts.length < 2) continue;
+        const geo = new LineGeometry();
+        geo.setPositions(pts.flatMap((p) => [p.x, p.y, p.z]));
+        const mat = new LineMaterial({ color: 0x2563eb, linewidth: 2 * dpr, depthTest: false, depthWrite: false, transparent: true,
+          dashed, dashSize: 0.4, gapSize: 0.25 });
+        mat.resolution.set(canvas.width, canvas.height);
+        const line = new Line2(geo, mat);
+        if (dashed) line.computeLineDistances();
+        line.renderOrder = 1004;
+        line.frustumCulled = false;
+        g.scene.add(line);
+        this.escalatorGuides.push(line);
       }
     }
     this.map?.triggerRepaint();

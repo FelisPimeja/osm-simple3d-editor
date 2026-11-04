@@ -94,6 +94,8 @@ export class ShapeTool {
   /** Выбор вершин сразу у нескольких объектов (план этажа); иначе — в пределах одной части. */
   multiObject?: () => boolean;
   levelLock?: (t: ShapeTarget) => string | undefined;
+  /** Объект без новых вершин на сторонах (эскалатор — всегда две точки). */
+  noInsert?: (key: string) => boolean;
   /** Какие теги и как изменит сдвиг ручки крыши или верха стен на dz — для панели во время сдвига. */
   tagChanges?: (t: ShapeTarget, dz: number) => string;
   private lastPoint?: [number, number];
@@ -616,7 +618,7 @@ export class ShapeTool {
     let best: { target: ShapeTarget; d: number } | undefined;
     for (const key of this.selected()) {
     const polys = this.layer.focusPolygons(key), w = this.walls(key);
-    if (!polys || !w) continue;
+    if (!polys || !w || this.noInsert?.(key)) continue;
     polys.forEach((p, poly) => [p.outer, ...p.inners].forEach((r, ring) => r.forEach(([ax, ay], i) => {
       if (this.isOpen?.(key) && i === r.length - 1) return;
       const [bx, by] = r[(i + 1) % r.length];

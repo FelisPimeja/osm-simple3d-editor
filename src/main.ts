@@ -11801,7 +11801,7 @@ function highlightIssuesImpl() {
     for (const key of [issue.key, issue.other]) if (key && levels.get(key) !== 'error') levels.set(key, issue.level);
   }
   const indoorKeys = focus ? [...levels.keys()].filter((key) => !!buildingIndoorFor(key)) : [];
-  overpassLayer.setIndoorIssueHighlight(indoorKeys);
+  overpassLayer.setIndoorIssueHighlight(new Map(indoorKeys.map((key) => [key, levels.get(key)!])));
   indoorPois.setIssueHighlight(indoorKeys);
   if (levels.size === highlightedIssueLevels.size && [...levels].every(([key, level]) => highlightedIssueLevels.get(key) === level)
     && active.filter((i) => i.area).every((i) => highlightedIssueAreas.has(i)) && highlightedIssueAreas.size === active.filter((i) => i.area).length) { setIssuePoints(active); return; }

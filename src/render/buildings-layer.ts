@@ -89,6 +89,10 @@ const INDOOR_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, ve
 const WALL_SIDE_PROBE = 0.05;
 /** Выделенное помещение: заливка цветом выделения частей и контур. */
 const INDOOR_SELECT_MATERIAL = new THREE.MeshBasicMaterial({ color: HIGHLIGHT, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
+/** Indoor-объект с проблемой («Подсветить все»): полупрозрачная заливка цветом проблемы. */
+const INDOOR_ISSUE_MATERIAL = Object.fromEntries((['error', 'warning'] as const).map((level) => [level, new THREE.MeshBasicMaterial({
+  color: level === 'error' ? 0xff1a1a : 0xff8a00, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false,
+  polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 })])) as Record<'error' | 'warning', THREE.MeshBasicMaterial>;
 /** Выделенное помещение в каркасе — как заливка выделенной части (SELECTED_FILL_MATERIAL). */
 const INDOOR_SELECT_WIRE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 /** Маркер двери на полу проёма: плоский кружок (вид сверху и сбоку) — на любом ракурсе виден. */
@@ -975,6 +979,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Выбранный indoor-объект этажа: пол залит цветом выделения, скрытые рёбра — пунктиром (как у частей). */
   private indoorSelected: string[] = [];
   private indoorIssueHighlighted: string[] = [];
+  /** Уровень проблемы подсвеченного indoor-объекта: цвет как у подсветки проблем частей. */
+  private indoorIssueLevels = new Map<string, 'error' | 'warning'>();
   private indoorSelObj?: THREE.Group;
   private roomWallSelection: IndoorItem[] = [];
   private indoorWallPositions: number[] = [];
@@ -1238,9 +1244,11 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
-  setIndoorIssueHighlight(keys: string[]) {
-    if (keys.length === this.indoorIssueHighlighted.length && keys.every((key) => this.indoorIssueHighlighted.includes(key))) return;
+  setIndoorIssueHighlight(levels: Map<string, 'error' | 'warning'>) {
+    const keys = [...levels.keys()];
+    if (keys.length === this.indoorIssueHighlighted.length && keys.every((key) => this.indoorIssueLevels.get(key) === levels.get(key))) return;
     this.indoorIssueHighlighted = keys;
+    this.indoorIssueLevels = levels;
     this.applyDoors();
     this.applyIndoorSelection();
     this.map?.triggerRepaint();
@@ -1273,7 +1281,17 @@ export class BuildingsLayer implements CustomLayerInterface {
     const root = new THREE.Group();
     this.indoorSelObj = root;
     g.scene.add(root);
-    for (const it of items) this.addIndoorHighlight(root, g, it);
+    for (const it of items) {
+      const from = root.children.length;
+      this.addIndoorHighlight(root, g, it);
+      // Только проблема (не выделение) — цветом проблем, а не выделения
+      const level = this.indoorSelected.includes(it.key) ? undefined : this.indoorIssueLevels.get(it.key);
+      if (level) for (const o of root.children.slice(from)) o.traverse((x) => {
+        if (x instanceof LineSegments2 || x instanceof Line2) (x.material as LineMaterial).color.setHex(ISSUE_COLOUR[level]);
+        else if (x instanceof THREE.Mesh) x.material = INDOOR_ISSUE_MATERIAL[level];
+        else if (x instanceof THREE.LineSegments) x.material = new THREE.LineBasicMaterial({ color: ISSUE_COLOUR[level] });
+      });
+    }
     for (const key of keys) {
       const raw = [...(this.doorOpeningEdges.get(key)?.values() ?? [])].flat();
       const verticals = new Map<string, number>();

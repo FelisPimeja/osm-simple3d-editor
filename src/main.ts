@@ -8889,7 +8889,7 @@ function handrailRow(fs: IndoorFeature[], changed: boolean): string {
 }
 
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
-  if (fs.length && fs.every((f) => f.escalator)) placeholders = { width: fs.every((f) => f.stairs) ? '1' : '1.2', ...placeholders };
+  if (fs.length && fs.every((f) => f.escalator)) placeholders = { width: fs.length === 1 && fs[0].stairs ? stairsWidthHint(fs[0]) : fs.every((f) => f.stairs) ? '1' : '1.2', ...placeholders };
   const closedWalls=fs.every(f=>f.kind==='wall' && !f.tags.barrier && f.key.startsWith('way/') && f.polygons.length===1 && !f.polygons[0].inners.length && !!f.polygons[0].outerIds && (f.line ? f.polygons[0].outerIds!.length>=4 && f.polygons[0].outerIds![0]===f.polygons[0].outerIds!.at(-1) : f.polygons[0].outerIds!.length>=3));
   const plainWalls = fs.every((f) => f.kind === 'wall' && !f.tags.barrier);
   const rows = [...new Set([...indoorFormTags(fs), ...(plainWalls ? ['wall', 'height', 'material'] : []), ...(closedWalls ? ['area'] : [])])].map((k) => {
@@ -15197,4 +15197,16 @@ function stairsRails(t: Record<string, string>): StairsRails {
 }
 function withLocalOutline<T extends { outline?: LonLat[] }>(s: T, loc: (p: LonLat) => [number, number]) {
   return { ...s, outline: s.outline?.map(loc) };
+}
+
+/** Ширина марша для подсказки: по площади лестницы (наибольшая поперёк линии), иначе 1 м. */
+function stairsWidthHint(f: IndoorFeature): string {
+  const outline = focus && stairsOutline(f, buildingIndoor(focus));
+  const line = f.polygons[0]?.outer;
+  if (!outline || !line || line.length < 2) return '1';
+  const a = line[0], b = line[line.length - 1];
+  const kx = Math.cos(a[1] * Math.PI / 180) * 111320, ky = 111320;
+  const dx = (b[0] - a[0]) * kx, dy = (b[1] - a[1]) * ky, L = Math.hypot(dx, dy) || 1;
+  const w = outline.map((p) => ((p[0] - a[0]) * kx * -dy + (p[1] - a[1]) * ky * dx) / L);
+  return String(Math.round((Math.max(...w) - Math.min(...w)) * 10) / 10);
 }

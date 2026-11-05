@@ -11835,6 +11835,10 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
         }
         const well = f.stairs ? stairsOutline(f, indoor) : undefined;
         if (well) { list.push({ polygon: [[well]], through, bare: true }); continue; }
+        // Вырез нарисован (внутреннее кольцо пола этажа вокруг середины эскалатора): автовырез не нужен
+        const mid: LonLat = [(line[0][0] + line[line.length - 1][0]) / 2, (line[0][1] + line[line.length - 1][1]) / 2];
+        if (!f.stairs && indoor.some((g) => !g.line && !g.point && g.levels.includes(l.n) && ['level', 'area', 'corridor', 'room'].includes(g.kind)
+          && g.polygons.some((p) => p.inners.some((h) => pointInRing(mid, h))))) continue;
         const holes = escalatorFloorHoles([{ line: line.map(loc), bottom: low.floor, top: high.floor, width, incline: f.tags.incline, ...withLocalOutline(stairsShape(f, indoor), loc) }], l.floor);
         for (const poly of holes) list.push({ polygon: [poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))], through, bare: true });
       }

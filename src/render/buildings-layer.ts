@@ -3532,18 +3532,21 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (this.edgeHover && now - this.edgeHover.since >= EXTENSION_ARM_MS) this.armedEdges.set(this.edgeHover.id, now + EXTENSION_TTL_MS);
     for (const [id, until] of this.armedEdges) if (until < now) this.armedEdges.delete(id);
     let hovered: { id: string; d: number } | undefined;
+    // Без точки инструмента — перпендикуляр из взведённой вершины откладывания (опорная точка основанием на ребре)
+    const anchor = !opts.from && this.trackingEnabled && !off.has('tracking') && this.tracking && !this.tracking.point ? this.tracking.anchor : undefined;
+    const perpFrom = opts.from ?? anchor;
     if (ray) for (const e of [...this.snaps.edges, ...this.indoorSnaps.edges]) {
       if (!filter(e.key) || opts.skip?.(e.a, e.key, 'edge') || opts.skip?.(e.b, e.key, 'edge') || Math.min(e.a.z, e.b.z) > planCut) continue;
-      if (opts.from && !off.has('perpendicular')) {
+      if (perpFrom && !off.has('perpendicular')) {
         ab.subVectors(e.b, e.a);
         const l2 = ab.lengthSq();
-        const t = l2 ? foot.subVectors(opts.from, e.a).dot(ab) / l2 : -1;
+        const t = l2 ? foot.subVectors(perpFrom, e.a).dot(ab) / l2 : -1;
         // Только внутри ребра и не в его концах (там — вершины); from не на самой прямой
         if (t > 0.01 && t < 0.99) {
           foot.copy(e.a).addScaledVector(ab, t);
-          const px = foot.distanceTo(opts.from) > 0.05 ? toPx(foot) : undefined;
+          const px = foot.distanceTo(perpFrom) > 0.05 ? toPx(foot) : undefined;
           const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
-          if (px && d <= radius) near.push({ s: { kind: 'perpendicular', key: e.key, p: foot.clone() }, d: d + SNAP_PRIORITY.perpendicular * 6 - bonus(e.key), px });
+          if (px && d <= radius) near.push({ s: { kind: 'perpendicular', key: e.key, p: foot.clone() }, d: d + SNAP_PRIORITY.perpendicular * 6 - bonus(e.key), px, ...(anchor ? { along: anchor.clone() } : {}) });
         }
       }
       if (opts.noEdge) continue;

@@ -1855,6 +1855,18 @@ export class BuildingsLayer implements CustomLayerInterface {
           under.push(x0, y0, b, x1, y1, b, x1, y1, f, x0, y0, b, x1, y1, f, x0, y0, f);
         }
       }
+      // Потолки помещений под проёмом или вне контура этажа — отдельные крышки: обводка по краю и торец плиты,
+      // стены нижнего помещения не в счёт (иначе крышка — сплошное белое пятно)
+      if (ceilings.length) {
+        let caps: ClipMulti = [];
+        try { caps = levelSection?.length ? polygonClipping.difference(polygonClipping.union(ceilings[0], ...ceilings.slice(1)), levelSection) : polygonClipping.union(ceilings[0], ...ceilings.slice(1)); } catch (err) { console.warn('[levels] край потолков не построен', err); }
+        const f = this.level.floor, b = f - SLAB_THICKNESS;
+        for (const poly of caps) for (const r of poly) for (let i = 0; i + 1 < r.length; i++) {
+          const [x0, y0] = r[i], [x1, y1] = r[i + 1];
+          edge.push(x0, y0, f, x1, y1, f, x0, y0, b, x1, y1, b);
+          under.push(x0, y0, b, x1, y1, b, x1, y1, f, x0, y0, b, x1, y1, f, x0, y0, f);
+        }
+      }
       if (under.length) {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(under, 3));

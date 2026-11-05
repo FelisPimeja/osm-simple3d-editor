@@ -27,7 +27,7 @@ import { dropPartSeams } from './part-seams';
 import { COUNTER_DEPTH, closedCounterSplit, counterRing, isClosedCounterRing } from './counter-ring';
 import { edgePass } from './edge-pass';
 import { silhouetteEdges, type SilhouetteEdges } from './silhouette-edges';
-import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
+import { bottomTriangles, buildTriangles, roofShell, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
 import { recordMs, timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
 import { setTreesMonochrome, setTreesSeasonal, type TreeGroup } from './trees';
@@ -7668,10 +7668,13 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // прозрачная кровля остаётся без дна. Явные height/min_height задают толщину.
   const roofOnly = !flat && isRoofPart(tags) && tri.roof.length > 0;
   if (roofOnly && tags.wall === 'no') tri.walls = [];
+  // building:part=roof — только скаты, выдавленные на толщину (min..wallTop): без фронтонов и стенок (issue #49)
+  const shell = roofOnly && tags['building:part'] === 'roof' && heights.roofShape !== 'flat' && !tri.pending;
+  if (shell) tri.walls = roofShell(tri.roof, Math.max(0.1, heights.wallTop - heights.min));
   // Дно — у объектов с объёмом над землёй (видно снизу); на земле его не видно — треугольники не тратим. Цвет — как у стен.
   // Участки, лежащие на плоских крышах других частей, вырезаем: совпадающие грани мерцают, а дно стеклянной части
   // просвечивает поверх крыши. Крышу оставляем — она и есть перекрытие между частями (видна сквозь стекло)
-  if (hasBottom(prep)) {
+  if (!shell && hasBottom(prep)) {
     timed('здание: дно', () => {
       const rest = g.contacts && subtractFaces(polys, contactFaces(g.contacts.tops, f.key, heights.min, box2));
       tri.walls.push(...bottomTriangles(rest ?? polys, heights.min));

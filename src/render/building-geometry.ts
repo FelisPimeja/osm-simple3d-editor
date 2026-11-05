@@ -884,3 +884,32 @@ export function shapeOf(ring: Pt[]): { c: Pt; label: string; r?: number } | unde
   if (n >= 8 && spread(radii, r) < SHAPE_CIRCLE) return { c, r, label: tr('Центр окружности (r {r} м)', { r: r.toFixed(2) }) };
   return;
 }
+
+/**
+ * Кровля без стен (building:part=roof, issue #49): скаты, выдавленные вниз на толщину, — копия скатов снизу
+ * и узкие торцы по границе скатов. Фронтонов и стенок под карнизом нет.
+ */
+export function roofShell(roof: number[], thickness: number): number[] {
+  const out: number[] = [];
+  const key = (i: number) => `${roof[i].toFixed(3)},${roof[i + 1].toFixed(3)},${roof[i + 2].toFixed(3)}`;
+  const edges = new Map<string, { a: number; b: number; n: number }>();
+  for (let t = 0; t + 8 < roof.length; t += 9) {
+    const v = [t, t + 3, t + 6];
+    // Низ — та же грань, опущенная и развёрнутая
+    for (const i of [v[0], v[2], v[1]]) out.push(roof[i], roof[i + 1], roof[i + 2] - thickness);
+    for (let k = 0; k < 3; k++) {
+      const a = v[k], b = v[(k + 1) % 3], ka = key(a), kb = key(b);
+      const id = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+      const e = edges.get(id);
+      if (e) e.n++; else edges.set(id, { a, b, n: 1 });
+    }
+  }
+  // Граница скатов — рёбра одного треугольника: по ним торец толщиной в кровлю
+  for (const { a, b, n } of edges.values()) {
+    if (n !== 1) continue;
+    const A = [roof[a], roof[a + 1], roof[a + 2]], B = [roof[b], roof[b + 1], roof[b + 2]];
+    const A2 = [A[0], A[1], A[2] - thickness], B2 = [B[0], B[1], B[2] - thickness];
+    out.push(...A, ...A2, ...B, ...B, ...A2, ...B2);
+  }
+  return out;
+}

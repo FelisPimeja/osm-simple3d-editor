@@ -246,8 +246,31 @@ export class EditSession {
   }
 
   /** Несколько правок тегов и геометрии одним шагом истории (перемещение группы объектов). */
+  /** Отношения вне сессии (indoor-мультиполигоны здания), в составе которых путь key: их ключи. */
+  extraParents?: (key: string) => string[];
+
+  /**
+   * Путь, который ещё нужен другому отношению, не удаляется: шаг, переписавший кольца одних отношений, иначе
+   * рвал кольцо соседнего (way/1312885597 в relation/17999997).
+   */
+  private keepSharedWays(edits: ObjectEdit[]): ObjectEdit[] {
+    const gone = new Set(edits.filter((e) => e.delete).map((e) => e.key));
+    const members = new Map<string, OsmMember[] | undefined>();
+    for (const e of edits) {
+      if (e.members) members.set(e.key, e.members);
+      else if (e.create?.relMembers) members.set(e.key, e.create.relMembers);
+    }
+    const keeps = (rel: string, way: string) => !gone.has(rel)
+      && (members.get(rel) ?? this.features.get(rel)?.relMembers)?.some((m) => `${m.type}/${m.ref}` === way) !== false;
+    return edits.filter((e) => {
+      if (!e.delete || !e.key.startsWith('way/')) return true;
+      const parents = [...this.parentsOf(e.key).map((p) => p.key), ...(this.extraParents?.(e.key) ?? [])];
+      return !parents.some((rel) => keeps(rel, e.key));
+    });
+  }
+
   editMany(edits: ObjectEdit[]) {
-    edits = this.propagateMoves(edits);
+    edits = this.keepSharedWays(this.propagateMoves(edits));
     const step: Entry[] = [];
     for (const e of edits) {
       if (e.create) {

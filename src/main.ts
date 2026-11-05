@@ -608,6 +608,7 @@ const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
  * при отрисовке тайлов отслеживаемые объекты подменяются этими копиями — правки переживают перезагрузку тайлов.
  */
 let session = new EditSession([], onSessionChange);
+session.extraParents = (key) => relationParentsOf(key);
 session.beforeStep = (keys) => autoRelation(keys);
 const overpassLayer = new BuildingsLayer('osm-overpass-buildings');
 overpassLayer.visible = buildingsView.shown;
@@ -9072,6 +9073,11 @@ function bindLevelHint(input: HTMLInputElement) {
 
 /** Original member ways are needed when Shape changes an indoor multipolygon ring. */
 const indoorRelationSources = new Map<string, Feature3D>();
+/** Отношения здания из данных, в составе которых путь key (для защиты путей-членов от удаления). */
+function relationParentsOf(key: string): string[] {
+  const id = Number(key.split('/')[1]);
+  return [...indoorRelationSources.entries()].filter(([, f]) => f.ways?.some((w) => w.id === id)).map(([k]) => k);
+}
 function rememberIndoorRelations(elements: OsmElement[], indoor: IndoorFeature[]) {
   const raw = new Map(elements.map(e => [`${e.type}/${e.id}`, e]));
   for (const f of indoor) {
@@ -15241,6 +15247,7 @@ function doClearEdits() {
 /** Пустая сессия: правки, созданные здания и помещения — забыты. */
 function resetSession() {
   session = new EditSession([], onSessionChange);
+  session.extraParents = (key) => relationParentsOf(key);
   sessionRevision++;
   session.beforeStep = autoRelation;
   sessionNodeTags.clear();

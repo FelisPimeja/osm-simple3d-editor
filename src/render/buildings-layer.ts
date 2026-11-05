@@ -5410,6 +5410,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   private rebuildGeometry(g: MeshGroup) {
+    // Сцена режима здания поменялась (вставка, пересборка крыш) — привязки собираются заново
+    if (g === this.groups.get(FOCUS_GROUP)) this.snaps = undefined;
     // Скрытый слой на карте не рисуется — не сливаем геометрию зря, соберём при показе
     if (!this.visible && !this.focused) { g.stale = true; return; }
     g.stale = false;

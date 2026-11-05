@@ -264,6 +264,8 @@ export interface IndoorLevel {
   voids?: LonLat[][][];
   /** Высоты, на которых пустота прорезает перекрытия (пол этажа и полы промежуточных этажей), — по пустотам. */
   voidCuts?: { polygon: LonLat[][][]; zs: number[] }[];
+  /** Подземные этажи (для земли надземного плана): контуры indoor=level и площади лестниц, выходящих наверх. */
+  underground?: { z: number; outlines: Polygon[][]; pits: Polygon[][] }[];
   below?: { cut: number; items: IndoorItem[]; /** Площади лестниц и эскалаторов этажа. */ outlines?: IndoorItem[]; doors?: LonLat[]; doorCuts?: { at: LonLat; width: number; polygon?: LonLat[] }[]; doorModels?: DoorItem[]; /** Собственные проёмы этого этажа. */ voids?: LonLat[][][] }[];
 }
 
@@ -1568,8 +1570,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     let earth: ClipMulti = square;
     // Выходы лестниц подвала на поверхность (площадь лестницы снаружи здания): отверстие в земле — виден спуск
     const close = (r: Pt[]) => [...r, r[0]] as [number, number][];
-    const pits: ClipMulti = (this.level?.below ?? []).flatMap((b) => (b.outlines ?? []).filter((o) => o.z < -0.05))
-      .flatMap((o) => o.polygons.map((p) => [close(p.outer.map(g.toLocal)), ...p.inners.map((r) => close(r.map(g.toLocal)))]));
+    const pits: ClipMulti = (this.level?.underground ?? []).flatMap((u) => u.pits.flat())
+      .map((p) => [close(p.outer.map(g.toLocal)), ...p.inners.map((r) => close(r.map(g.toLocal)))]);
     try {
       const cuts = [...(sec?.length ? [sec as unknown as ClipMulti] : []), ...(pits.length ? [pits] : [])];
       if (cuts.length) earth = polygonClipping.difference(square, ...cuts);
@@ -1596,8 +1598,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Контур подземного этажа (indoor=level) целиком — низ, верх у земли и вертикали: по куску снаружи не понять,
     // что это подвал всего здания
     const seg = (ax: number, ay: number, bx: number, by: number, z: number) => lines.push(ax, ay, z, bx, by, z);
-    for (const b of this.level?.below ?? []) for (const o of b.items) {
-      if (o.kind !== 'level' || o.z > -0.05) continue;
+    for (const u of this.level?.underground ?? []) for (const o of u.outlines.map((polygons) => ({ polygons, z: u.z }))) {
       for (const p of o.polygons) for (const r of [p.outer, ...p.inners]) {
         const pts = r.map(g.toLocal);
         pts.forEach(([ax, ay], k) => {

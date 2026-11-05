@@ -11734,6 +11734,12 @@ function renderLevelsImpl() {
     })),
     below: through.map((n) => levels.find((l) => l.n === n)).filter((l): l is Level => !!l)
       .map((l) => ({ ...planOf(l), voids: (allVoids.get(l.n) ?? []).flatMap((v) => v.polygon) })),
+    // Подземные этажи для земли надземного плана: их контур (indoor=level) пунктиром и выходы лестниц — отверстиями
+    underground: level!.floor > -0.01 ? levels.filter((l) => l.floor < -0.01).map((l) => ({
+      z: l.floor,
+      outlines: visibleIndoor.filter((f) => f.kind === 'level' && !f.line && f.levels.includes(l.n)).map((f) => f.polygons),
+      pits: visibleIndoor.filter((f) => f.escalatorArea && f.levels.includes(l.n)).map((f) => f.polygons),
+    })) : undefined,
   });
 }
 

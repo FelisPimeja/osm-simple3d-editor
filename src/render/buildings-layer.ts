@@ -262,7 +262,7 @@ export interface IndoorLevel {
   voids?: LonLat[][][];
   /** Высоты, на которых пустота прорезает перекрытия (пол этажа и полы промежуточных этажей), — по пустотам. */
   voidCuts?: { polygon: LonLat[][][]; zs: number[] }[];
-  below?: { cut: number; items: IndoorItem[]; doors?: LonLat[]; doorCuts?: { at: LonLat; width: number; polygon?: LonLat[] }[]; doorModels?: DoorItem[]; /** Собственные проёмы этого этажа. */ voids?: LonLat[][][] }[];
+  below?: { cut: number; items: IndoorItem[]; /** Площади лестниц и эскалаторов этажа. */ outlines?: IndoorItem[]; doors?: LonLat[]; doorCuts?: { at: LonLat; width: number; polygon?: LonLat[] }[]; doorModels?: DoorItem[]; /** Собственные проёмы этого этажа. */ voids?: LonLat[][][] }[];
 }
 
 export interface RenderedFeature { feature: Feature3D; roofApproximated: boolean }
@@ -1564,7 +1564,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     const square: ClipMulti = [[[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]]];
     const sec = this.sectionAt(g, 0.05);
     let earth: ClipMulti = square;
-    try { if (sec?.length) earth = polygonClipping.difference(square, sec as unknown as ClipMulti); } catch { /* без выреза — земли нет */ return; }
+    // Выходы лестниц подвала на поверхность (площадь лестницы снаружи здания): отверстие в земле — виден спуск
+    const close = (r: Pt[]) => [...r, r[0]] as [number, number][];
+    const pits: ClipMulti = (this.level?.below ?? []).flatMap((b) => (b.outlines ?? []).filter((o) => o.z < -0.05))
+      .flatMap((o) => o.polygons.map((p) => [close(p.outer.map(g.toLocal)), ...p.inners.map((r) => close(r.map(g.toLocal)))]));
+    try {
+      const cuts = [...(sec?.length ? [sec as unknown as ClipMulti] : []), ...(pits.length ? [pits] : [])];
+      if (cuts.length) earth = polygonClipping.difference(square, ...cuts);
+    } catch { /* без выреза — земли нет */ return; }
     const pos: number[] = [];
     for (const poly of earth) {
       const ring = (r: [number, number][]) => r.slice(0, -1).map(([x, y]) => new THREE.Vector2(x, y));

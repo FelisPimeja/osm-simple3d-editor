@@ -6601,8 +6601,6 @@ function buildShell(g: MeshGroup): Shell {
       const roof = new Map<number, { score: number; z: number }>();
       const cell = cellAt(x, y);
       for (const t of triGrid.get(cell) ?? []) {
-        // Скаты частей выше пола этажа не в счёт (ниже их тоже отсеет проверка части) — не считаем
-        if (parts[triPart[t]].min > z0 + SHELL_LEVEL_TOL) continue;
         const o = t * 9;
         const x0 = tris[o], y0 = tris[o + 1], z0t = tris[o + 2], x1 = tris[o + 3], y1 = tris[o + 4], z1t = tris[o + 5], x2 = tris[o + 6], y2 = tris[o + 7], z2t = tris[o + 8];
         const d = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
@@ -6613,11 +6611,19 @@ function buildShell(g: MeshGroup): Shell {
         if (!cur || score > cur.score + 1e-9 || (score >= cur.score - 1e-9 && z > cur.z)) roof.set(p, { score, z });
       }
       let best: number | undefined;
-      for (const i of partGrid.get(cell) ?? []) {
-        const p = parts[i];
-        if (p.min > z0 + SHELL_LEVEL_TOL || !inside(p, x, y)) continue;
-        const z = p.flat ? p.top : roof.get(i)?.z ?? p.top;
-        best = best === undefined ? z : Math.max(best, z);
+      const here = (partGrid.get(cell) ?? []).filter((i) => inside(parts[i], x, y));
+      const zOf = (i: number) => parts[i].flat ? parts[i].top : roof.get(i)?.z ?? parts[i].top;
+      for (const i of here) {
+        if (parts[i].min > z0 + SHELL_LEVEL_TOL) continue;
+        best = best === undefined ? zOf(i) : Math.max(best, zOf(i));
+      }
+      // Части, поставленные на накрывающую (крыша крыла на стенах-постаментах): оболочка — до их ската
+      for (let changed = best !== undefined; changed;) {
+        changed = false;
+        for (const i of here) {
+          const z = zOf(i);
+          if (parts[i].min > z0 + SHELL_LEVEL_TOL && Math.abs(parts[i].min - best!) < 0.05 && z > best! + 1e-6) { best = z; changed = true; }
+        }
       }
       return best;
     },

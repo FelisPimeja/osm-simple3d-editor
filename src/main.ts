@@ -2476,7 +2476,8 @@ function updateSnapMarker(point: [number, number] | undefined) {
   if (pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || scaleTool.active || copyPick || pointPick) {
     // Рассечение: подсвечиваем вершины и середины рёбер объектов (концы разреза)
     currentSnap = pushTool.active ? (pushTool.state === 'push' ? pushTool.snap : undefined)
-      : shapeTool.active ? (point ? shapeTool.snap : undefined)
+      // «Форма» до захвата: общие привязки — задержка на вершине взводит откладывание от неё
+      : shapeTool.active ? (point ? shapeTool.snap ?? (shapeTool.state === 'pick' ? overpassLayer.snapAt(point) : undefined) : undefined)
       : drawTool.active ? (point ? drawTool.snap : undefined)
       : measureTool.active ? (point ? measureTool.snap : undefined)
       : rotateTool.active ? (point ? rotateTool.snap : undefined)

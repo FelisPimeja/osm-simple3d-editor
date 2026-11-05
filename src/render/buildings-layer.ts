@@ -5080,8 +5080,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         let nrm: Pt = [near.t[1], -near.t[0]];
         const probe: Pt = [near.p[0] + nrm[0] * 0.2, near.p[1] + nrm[1] * 0.2];
         if (pointInLocalRing(probe, near.rings[0]) && !near.rings.slice(1).some((h) => pointInLocalRing(probe, h))) nrm = [-nrm[0], -nrm[1]];
+        // Дверь indoor-стены — всегда на полу своего этажа, и нулевого (пол на цоколе выше земли)
         const lv = parseFloat((e.tags.level ?? '').split(';')[0]);
-        const floorZ = !onMap && Number.isFinite(lv) && lv !== 0 ? this.entranceFloors.get(lv) : undefined;
+        const floorZ = !onMap && Number.isFinite(lv) ? this.entranceFloors.get(lv) : undefined;
         const place = { p: near.p, t: near.t, n: nrm, z: floorZ ?? entranceZ(e.tags, it.tags) };
         const h = computeHeights(it.tags), outside = !!partsHidden && floorZ !== undefined && (floorZ < min - 0.3 || floorZ >= min + h.top - h.min);
         if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, width: tagWidth(e.tags) }, rank });

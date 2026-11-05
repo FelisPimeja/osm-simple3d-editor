@@ -5025,6 +5025,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       : undefined;
     // Вход у земли и под нависающим объёмом: видимая стена над той же линией плана — его стена
     // …и по высоте: дверь этажа ниже изолированной части — не на её стене
+    const partsHidden = shown && g.items.some((it) => it.feature.kind === 'part' && g.hidden.has(it.feature.key));
     const onShownWall = (q: Pt, z: number) => shown!.some(({ ring, min, top }) => z >= min - 0.3 && z < top && ring.some((a, i) => distToSegment(q, a, ring[(i + 1) % ring.length]) <= ENTRANCE_ON_WALL));
     // Узел в нескольких объектах (контур и часть, соседние части) — на самой низкой видимой стене
     const best = new Map<number, { place: EntrancePlace; rank: number }>();
@@ -5054,7 +5055,10 @@ export class BuildingsLayer implements CustomLayerInterface {
           const door = tags.get(id)!, lv = parseFloat((door.level ?? '').split(';')[0]);
           const floorZ = !onMap && Number.isFinite(lv) && lv !== 0 ? this.entranceFloors.get(lv) : undefined;
           const place = entrancePlace(rings, r, i, floorZ ?? entranceZ(door, it.tags));
-          if (place && (!offstage || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
+          // Дверь этажа вне высоты своего видимого объекта (вход подвала на контуре части выше) при скрытых частях
+          // (изоляция) — тоже только на видимой стене на её высоте; без скрытых частей её этаж виден — дверь на месте
+          const h = computeHeights(it.tags), outside = !!partsHidden && floorZ !== undefined && (floorZ < min - 0.3 || floorZ >= min + h.top - h.min);
+          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
         }));
       }
     }

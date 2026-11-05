@@ -178,7 +178,8 @@ FLOOR_CONTACT_MATERIAL.onBeforeCompile = shader => {
   shader.vertexShader=shader.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n gl_Position.z -= 2e-6 * gl_Position.w;');
 };
 /** Этаж под вторым светом — бледнее: стены и крышки высветлены, полы смешаны с белым, линии светлее. */
-const INDOOR_PALE_WALL = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x777777, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+// Дальше оболочки здания (у неё 1/1): наружные стены нижнего этажа лежат в плоскости фасада (цоколь) — фасад поверх
+const INDOOR_PALE_WALL = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x777777, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });
 const INDOOR_PALE_LINE = new THREE.LineBasicMaterial({ color: 0xc4c0bb });
 withSideCull(INDOOR_PALE_LINE);
 const PALE_MIX = 0.5;

@@ -24,7 +24,8 @@ export interface Feature3D {
   entrances?: Entrance[];
 }
 
-export interface Entrance { id: number; tags: Record<string, string> }
+/** at — вход не узел контура объекта, а лежит на его стене (дверь indoor-стены на фасаде): там его и ставить. */
+export interface Entrance { id: number; tags: Record<string, string>; at?: LonLat }
 
 /** Путь-член мультиполигона: id, роль, узлы (как в OSM, у замкнутого первый = последний) и теги. */
 export interface MemberWay { id: number; role: string; nodes: number[]; tags?: Record<string, string> }
@@ -333,6 +334,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     const entrances = [...ids].flatMap((id) => { const t = nodes.get(id)?.tags; return t?.entrance ? [{ id, tags: t }] : []; });
     if (entrances.length) f.entrances = entrances;
   }
+  attachWallEntrances(features, nodes);
   markOutlinesWithParts(features, features, groups);
   return { features, groups, indoor, skipped };
 }
@@ -500,4 +502,36 @@ export function isStraight(pts: LonLat[]): boolean {
   if (len < 1e-6) return false;
   const tol = Math.min(0.3, len * 0.03);
   return pts.every((p) => Math.abs(((p[0] - a[0]) * k) * dy - ((p[1] - a[1]) * m) * dx) / len <= tol);
+}
+
+/** Вход на стене объекта не дальше этого, м. */
+const WALL_ENTRANCE_TOL = 0.1;
+/**
+ * Входы, не входящие в контур ни одного объекта (дверь на indoor-стене, вход с дорожкой), но лежащие на стене
+ * объекта: вход в здание — ставим на этот фасад (по точке, а не по вершине).
+ */
+function attachWallEntrances(features: Feature3D[], nodes: Map<number, OsmNode>) {
+  const used = new Set(features.flatMap((f) => (f.entrances ?? []).map((e) => e.id)));
+  const loose = [...nodes.values()].filter((n) => n.tags?.entrance && !used.has(n.id));
+  if (!loose.length) return;
+  const pad = 2e-6;
+  const boxes = features.map((f) => {
+    let w = Infinity, s = Infinity, e = -Infinity, nn = -Infinity;
+    for (const p of f.polygons) for (const [x, y] of p.outer) { if (x < w) w = x; if (x > e) e = x; if (y < s) s = y; if (y > nn) nn = y; }
+    return [w - pad, s - pad, e + pad, nn + pad];
+  });
+  for (const n of loose) {
+    const kx = Math.cos(n.lat * Math.PI / 180) * 111320, ky = 111320;
+    for (const [fi, f] of features.entries()) {
+      const bx = boxes[fi];
+      if (n.lon < bx[0] || n.lon > bx[2] || n.lat < bx[1] || n.lat > bx[3]) continue;
+      const on = f.polygons.some((p) => [p.outer, ...p.inners].some((r) => r.some((a, i) => {
+        const b = r[(i + 1) % r.length];
+        const ex = (b[0] - a[0]) * kx, ey = (b[1] - a[1]) * ky, px = (n.lon - a[0]) * kx, py = (n.lat - a[1]) * ky, l2 = ex * ex + ey * ey;
+        const t = l2 ? Math.max(0, Math.min(1, (px * ex + py * ey) / l2)) : 0;
+        return Math.hypot(px - ex * t, py - ey * t) <= WALL_ENTRANCE_TOL;
+      })));
+      if (on) (f.entrances ??= []).push({ id: n.id, tags: n.tags!, at: [n.lon, n.lat] });
+    }
+  }
 }

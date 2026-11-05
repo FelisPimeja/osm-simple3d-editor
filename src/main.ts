@@ -686,7 +686,11 @@ function syncSessionNodes(keys: string[]) {
 function withEntranceEdits(f: Feature3D): Feature3D {
   // Объект из данных без правок узлов — входы уже по данным
   if (!sessionNodeTags.size && !session.has(f.key)) return f;
-  return withEntranceTags(f, sessionNodeTags, dataEntrances, f.entrances ?? overpass.cachedFeature(f.key)?.entrances);
+  // Входы на стене (не узлы контура) знают только данные: у объекта из сессии их берём оттуда
+  const cached = overpass.cachedFeature(f.key)?.entrances;
+  const own = f.entrances ?? cached;
+  const wall = (cached ?? []).filter((e) => e.at && !own?.some((o) => o.id === e.id));
+  return withEntranceTags(f, sessionNodeTags, dataEntrances, wall.length ? [...own ?? [], ...wall] : own);
 }
 overpass.setExtras(createdShapes);
 let selectedKey: string | undefined;
@@ -8283,6 +8287,12 @@ function isInteriorDoor(f: IndoorFeature, g: BuildingGroup): boolean {
     && farFromEdge(p.outer) && p.inners.every(farFromEdge)));
 }
 
+/** Вход (entrance=*) на этаже, но не на его наружной оболочке. */
+function innerEntrance(f: IndoorFeature, outer: ReturnType<typeof outerDoorTest>): boolean {
+  // Без сечения этажа (оболочка ещё строится) — не судим: контур здания дал бы ложное «внутри»
+  return isDoor(f) && !!f.tags.entrance && f.levels.length > 0 && !outer(f) && !!outer.exact?.(f);
+}
+
 /** Допуск «узел на стене», м. */
 const DOOR_ON_WALL = 0.3;
 
@@ -8290,10 +8300,12 @@ const DOOR_ON_WALL = 0.3;
  * Наружные двери здания g: узел на сечении здания на своём этаже (у частей разной высоты — по этажу) или на
  * контуре этажа indoor=level. Сечение — только у здания режима; у другого — его контур. Сечения — раз на этаж.
  */
-function outerDoorTest(g: BuildingGroup, indoor: IndoorFeature[]): (f: IndoorFeature) => boolean {
+function outerDoorTest(g: BuildingGroup, indoor: IndoorFeature[]): ((f: IndoorFeature) => boolean) & { exact?: (f: IndoorFeature) => boolean } {
   // Этажи и контур — при первой двери: проверка зовёт тест у каждого объекта
   let levels: Level[] | undefined, outline: LonLat[][] | undefined;
   const byLevel = new Map<number, LonLat[][]>();
+  /** Этажи, где тест шёл по сечению оболочки (а не по контуру здания, пока оболочка не готова). */
+  const exactLevels = new Set<number>();
   const rings = (n: number) => {
     let r = byLevel.get(n);
     if (!r) {
@@ -8301,13 +8313,16 @@ function outerDoorTest(g: BuildingGroup, indoor: IndoorFeature[]): (f: IndoorFea
       outline ??= groupFeatures(g).filter((b) => b.kind === 'building').flatMap((b) => b.polygons.flatMap((p) => [p.outer, ...p.inners]));
       const l = levels.find((x) => x.n === n);
       const section = l ? levelSection(l)?.flat() : undefined;
+      // Точно — только по оболочке (не по следу части-источника этажа, пока оболочка не готова)
+      if (section?.length && l && (l.floor < -0.01 || overpassLayer.focusSection(l.floor + 0.1)?.length)) exactLevels.add(n);
       r = [...(section?.length ? section : outline),
         ...indoor.filter((x) => x.kind === 'level' && x.levels.includes(n)).flatMap((x) => x.polygons.flatMap((p) => [p.outer, ...p.inners]))];
       byLevel.set(n, r);
     }
     return r;
   };
-  return (f) => isDoor(f) && f.levels.some((n) => rings(n).some((ring) => nearRing(f.point!, ring, DOOR_ON_WALL)));
+  const test = (f: IndoorFeature) => isDoor(f) && f.levels.some((n) => rings(n).some((ring) => nearRing(f.point!, ring, DOOR_ON_WALL)));
+  return Object.assign(test, { exact: (f: IndoorFeature) => f.levels.every((n) => (rings(n), exactLevels.has(n))) });
 }
 
 /**
@@ -12140,7 +12155,7 @@ function renderIssues() {
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding && plan ? buildingIndoor(focusedBuilding) : [];
   const outerDoor = focusedBuilding ? outerDoorTest(focusedBuilding, indoorAll) : undefined;
-  const indoorIssues = focusedBuilding && plan ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), outerDoor!(f))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll), ...validateEscalators(indoorAll, ((ls) => (n: number) => { const l = ls.find((x) => x.n === n); return l && { floor: l.floor, explicit: !!l.explicit }; })(buildingLevels(focusedBuilding, indoorAll)))] : [];
+  const indoorIssues = focusedBuilding && plan ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), outerDoor!(f), innerEntrance(f, outerDoor!))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll), ...validateEscalators(indoorAll, ((ls) => (n: number) => { const l = ls.find((x) => x.n === n); return l && { floor: l.floor, explicit: !!l.explicit }; })(buildingLevels(focusedBuilding, indoorAll)))] : [];
   const duplicates = focusedBuilding && !plan ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
   focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
   // Слой зданий выключен — проверку карты не считаем (пересчитаем, когда включат)
@@ -12607,7 +12622,7 @@ function changeIssues(keys: string[]): Issue[] {
       if (f) {
         const indoor = buildingIndoorFor(k);
         if (indoor && focus) outerDoor ??= outerDoorTest(focus, buildingIndoor(focus));
-        out.push(...validateIndoor({ key: k, tags: f.tags }, !!indoor && !!focus && isInteriorDoor(indoor, focus), !!indoor && !!outerDoor?.(indoor)));
+        out.push(...validateIndoor({ key: k, tags: f.tags }, !!indoor && !!focus && isInteriorDoor(indoor, focus), !!indoor && !!outerDoor?.(indoor), !!indoor && !!outerDoor && innerEntrance({ ...indoor, tags: f.tags }, outerDoor)));
       }
       continue;
     }

@@ -5061,6 +5061,31 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
         }));
       }
+      // Вход на стене, но не узел контура (дверь indoor-стены на фасаде): на ближайшей стороне, по своей точке
+      for (const e of it.feature.entrances ?? []) {
+        if (!e.at || (best.get(e.id)?.rank ?? Infinity) <= rank) continue;
+        const q = g.toLocal(e.at);
+        let near: { p: Pt; t: Pt; rings: Pt[][]; d: number } | undefined;
+        for (const p of it.feature.polygons) {
+          const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));
+          for (const r of rings) r.forEach((a, i) => {
+            const b = r[(i + 1) % r.length], ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey;
+            if (l2 < 1e-8) return;
+            const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * ex + (q[1] - a[1]) * ey) / l2));
+            const d = Math.hypot(q[0] - a[0] - t * ex, q[1] - a[1] - t * ey);
+            if (!near || d < near.d) near = { p: [a[0] + t * ex, a[1] + t * ey], t: [ex / Math.sqrt(l2), ey / Math.sqrt(l2)], rings, d };
+          });
+        }
+        if (!near) continue;
+        let nrm: Pt = [near.t[1], -near.t[0]];
+        const probe: Pt = [near.p[0] + nrm[0] * 0.2, near.p[1] + nrm[1] * 0.2];
+        if (pointInLocalRing(probe, near.rings[0]) && !near.rings.slice(1).some((h) => pointInLocalRing(probe, h))) nrm = [-nrm[0], -nrm[1]];
+        const lv = parseFloat((e.tags.level ?? '').split(';')[0]);
+        const floorZ = !onMap && Number.isFinite(lv) && lv !== 0 ? this.entranceFloors.get(lv) : undefined;
+        const place = { p: near.p, t: near.t, n: nrm, z: floorZ ?? entranceZ(e.tags, it.tags) };
+        const h = computeHeights(it.tags), outside = !!partsHidden && floorZ !== undefined && (floorZ < min - 0.3 || floorZ >= min + h.top - h.min);
+        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, width: tagWidth(e.tags) }, rank });
+      }
     }
     const preview = this.entrancePreview;
     if (preview && g === this.groups.get(FOCUS_GROUP)) best.set(preview.id, { place: { id: preview.id, ...preview.place }, rank: -Infinity });

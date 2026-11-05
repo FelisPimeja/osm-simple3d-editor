@@ -276,7 +276,8 @@ export function validateTags(key: string, t: Record<string, string>, hasParts = 
  * Ошибки Simple Indoor Tagging и страниц его ключей. Проверяем только загруженные indoor-объекты.
  * interiorDoor и outerDoor — по геометрии: дверь далеко от наружных стен / на наружной стене на своём этаже.
  */
-export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorDoor = false, outerDoor = false): Issue[] {
+/** innerEntrance — вход (entrance=*) не на наружной оболочке своего этажа, а внутри здания. */
+export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorDoor = false, outerDoor = false, innerEntrance = false): Issue[] {
   if (f.key.endsWith('#poi')) return []; // значок уже представлен площадным объектом
   const { key, tags: t } = f;
   const out: Issue[] = [];
@@ -304,6 +305,9 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
     tr('Для внутренней двери indoor=door укажите также door=* (door=no для открытого прохода).'),
     { label: 'door=yes', tags: { door: 'yes' } });
   if (t.door === 'loadingdock') add('warning', 'indoor-door', tr('door=loadingdock — погрузочную платформу обозначают amenity=loading_dock.'));
+  // Вход не на контуре, но на наружной стене своего этажа — обычный вход; внутри оболочки — проверить
+  if (innerEntrance && t.entrance !== undefined && !(t.entrance === 'yes' && interiorDoor)) add('warning', 'indoor-door',
+    tr('Вход (entrance={value}) внутри здания, а не на наружной стене своего этажа: проверьте этаж и положение двери.', { value: t.entrance }));
   if (t.entrance === 'gate') add('warning', 'indoor-door', tr('entrance=gate — для ворот проверьте barrier=gate.'));
   if (t['addr:entrance'] === 'yes') add('warning', 'indoor-door', tr('addr:entrance=yes — вход обозначают тегом entrance=*.'));
 

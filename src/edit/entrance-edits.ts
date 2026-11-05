@@ -7,7 +7,10 @@ export function withEntranceTags(f:Feature3D, nodeTags:Map<number,Record<string,
   const tags=nodeTags.get(id)??data.get(id)??source.get(id);
   if(tags?.entrance)out.set(id,tags);
  }
+ // Входы на стене (не узлы контура) — по точке; теги — с правками
+ const wall=fallback.filter(e=>e.at&&!out.has(e.id)).flatMap(e=>{const tags=nodeTags.get(e.id)??data.get(e.id)??e.tags;return tags.entrance?[{...e,tags}]:[];});
  const was=f.entrances??[];
- if(was.length===out.size&&was.every(e=>out.get(e.id)===e.tags))return f;
- return {...f,entrances:out.size?[...out].map(([id,tags])=>({id,tags})):undefined};
+ if(was.length===out.size+wall.length&&was.every(e=>e.at?wall.some(w=>w.id===e.id&&w.tags===e.tags):out.get(e.id)===e.tags))return f;
+ const all=[...[...out].map(([id,tags])=>({id,tags})),...wall];
+ return {...f,entrances:all.length?all:undefined};
 }

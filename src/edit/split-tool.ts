@@ -371,7 +371,9 @@ export class SplitTool {
     const prev = own.at(-1);
     // С Shift линия идёт по зафиксированной оси — перпендикуляр из якоря опускается на неё
     const ax = this.shift && this.locked !== undefined && this.axes ? (this.locked ? this.axes.y : this.axes.x) : undefined;
-    const s = this.layer.snapAt(point, undefined, undefined, { from: prev && at(prev), extra, dir: ax && new THREE.Vector3(ax[0], ax[1], 0) });
+    // Рёбра самого разреза (кроме последнего, от которого ведём)
+    const extraEdges = own.slice(1, -1).map((p, i) => ({ a: at(own[i]), b: at(p), key }));
+    const s = this.layer.snapAt(point, undefined, undefined, { from: prev && at(prev), extra, extraEdges, dir: ax && new THREE.Vector3(ax[0], ax[1], 0) });
     const flat = s && s.kind !== 'center' && Math.abs(s.local.z - this.z) < 0.05 ? s : undefined;
     if (this.shift) {
       // Точка остаётся на оси, а привязка к точке (вершина, середина…) ставит её вровень с этой точкой:

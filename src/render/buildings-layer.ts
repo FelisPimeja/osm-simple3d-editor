@@ -3643,7 +3643,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Без точки инструмента — перпендикуляр из взведённой вершины откладывания (опорная точка основанием на ребре)
     const anchor = !opts.from && this.trackingEnabled && !off.has('tracking') && this.tracking && !this.tracking.point ? this.tracking.anchor : undefined;
     const perpFrom = opts.from ?? anchor;
-    if (ray) for (const e of [...this.snaps.edges, ...this.indoorSnaps.edges]) {
+    if (ray) for (const e of [...this.snaps.edges, ...this.indoorSnaps.edges, ...(opts.extraEdges ?? []) as SnapEdge[]]) {
       if (!filter(e.key) || opts.skip?.(e.a, e.key, 'edge') || opts.skip?.(e.b, e.key, 'edge') || Math.min(e.a.z, e.b.z) > planCut) continue;
       if (perpFrom && !off.has('perpendicular')) {
         ab.subVectors(e.b, e.a);
@@ -7029,6 +7029,8 @@ export interface SnapOpts {
   dir?: THREE.Vector3;
   skip?: (p: THREE.Vector3, key: string, kind: SnapKind) => boolean;
   extra?: { kind: SnapKind; key: string; p: THREE.Vector3; label?: string }[];
+  /** Свои рёбра инструмента (контур, который ведут): «на ребре», перпендикуляр, продолжения. */
+  extraEdges?: { a: THREE.Vector3; b: THREE.Vector3; key: string }[];
 }
 export interface SnapHit { kind: SnapKind; key: string; local: THREE.Vector3; lngLat: LngLat; altitude: number; point: [number, number]; along?: THREE.Vector3; label?: string; /** У оси откладывания — расстояние от якоря со знаком. */ dist?: number }
 const SNAP_RADIUS_PX = 12;

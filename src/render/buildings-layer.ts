@@ -2414,7 +2414,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const poolHoles = pools.flatMap(it => it.polygons.map(p =>
       [p.outer, ...p.inners].map(r => { const l = r.map(g.toLocal); return [...l, l[0]]; }) as ClipMulti[number]));
     const voidFloorHoles = (floorVoids ?? []).map(poly => poly.map(r => {const points=r.map(g.toLocal);return [...points,points[0]];}));
-    const escalatorHoles = [...voidFloorHoles, ...escalatorFloorHoles(escalators.map(e => ({ ...e, line: e.line.map(g.toLocal), outline: e.outline?.map(g.toLocal) })), items[0]?.z ?? 0), ...shaftHoles, ...poolHoles];
+    const ownEscalatorHoles = escalatorFloorHoles(escalators.map(e => ({ ...e, line: e.line.map(g.toLocal), outline: e.outline?.map(g.toLocal) })), items[0]?.z ?? 0);
+    const escalatorHoles = [...voidFloorHoles, ...ownEscalatorHoles, ...shaftHoles, ...poolHoles];
     // Вырезы — только у кусков пола рядом с ними (кусков сотни, polygon-clipping платит за каждый)
     const holeBox = (r: Pt[]) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const [x, y] of r) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } return [x0, y0, x1, y1]; };
     const holeBoxes = escalatorHoles.map((h) => holeBox(h[0] as Pt[]));
@@ -3330,6 +3331,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       root.add(stroke);
     }
     for (const v of paleCapEdges) lines.push(v);
+    // Рёбра по краю проёма в перекрытии под эскалатором
+    { const z = (items[0]?.z ?? 0) + 0.005;
+      for (const poly of ownEscalatorHoles) for (const r of poly) for (let i = 0; i + 1 < r.length; i++) lines.push(r[i][0], r[i][1], z, r[i + 1][0], r[i + 1][1], z); }
     const lineGeo = new THREE.BufferGeometry();
     lineGeo.setAttribute('position', new THREE.BufferAttribute(trimIndoorBuildingEdges(new Float32Array(lines), openingMasks), 3));
     const seg = new THREE.LineSegments(lineGeo, pale ? INDOOR_PALE_LINE : INDOOR_LINE_MATERIAL);

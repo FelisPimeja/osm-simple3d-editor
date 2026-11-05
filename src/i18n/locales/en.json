@@ -1412,6 +1412,7 @@
   "Столовая": "Dining room",
   "Архив": "Archive",
   "У room={room} нет тега {tag}.": "room={room} has no {tag} tag.",
+  "Колонна размечена как indoor={indoor} + room=column.": "Column tagged as indoor={indoor} + room=column.",
   "добавить {tag}": "add {tag}",
   "Раздевалка / примерочная": "Dressing / fitting room",
   "Углы выровнены. Отменить — Ctrl+Z.": "Corners squared. Undo with Ctrl+Z.",

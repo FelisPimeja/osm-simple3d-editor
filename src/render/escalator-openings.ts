@@ -24,8 +24,10 @@ export function halfWidthOf(e: EscalatorCut): number {
 }
 /** Запас над ступенями: перекрытие над эскалатором режется там, где оно ниже ступеней + HEADROOM. */
 const HEADROOM = 2.05;
+/** Наименьшая длина проёма в перекрытии над эскалатором вдоль оси, м. */
+const MIN_HOLE = 5;
 /** Оси параллельных эскалаторов с одними отметками ближе этого (м) — общий проём в стенах и перекрытии. */
-export const ESCALATOR_GROUP_GAP = 2;
+export const ESCALATOR_GROUP_GAP = 2.5;
 /**
  * Группы параллельных эскалаторов (одни отметки, подъём в одну сторону, оси не дальше ESCALATOR_GROUP_GAP,
  * перекрываются вдоль оси) заменяются одним прямым «эскалатором» на всю ширину группы — для проёмов.
@@ -190,7 +192,16 @@ export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number):
     // Короб от z−BODY_DEPTH до ступеней (с запасом на пол чуть выше уровня этажа)
     // Площадки у пола лежат на перекрытии (их короб — приямок под ним): режем только под наклонным участком.
     // Эскалатор под перекрытием (подходит к нему снизу) — проём и над ступенями, где до плиты меньше HEADROOM
-    const crosses=(d:number)=>{if(d<landing||d>length-landing)return false;const z=zAt(d);return z-depth<floorZ+.08&&(e.stairs||z+HEADROOM>floorZ);};
+    const crossesRaw=(d:number)=>{if(d<landing||d>length-landing)return false;const z=zAt(d);return z-depth<floorZ+.08&&(e.stairs||z+HEADROOM>floorZ);};
+    // Проём эскалатора — не короче MIN_HOLE: продлеваем вдоль наклонного участка от края у перекрытия
+    let lo=Infinity,hi=-Infinity;
+    for(let d=landing;d<=length-landing;d+=.05)if(crossesRaw(d)){lo=Math.min(lo,d);hi=Math.max(hi,d);}
+    if(!e.stairs&&hi>=lo&&hi-lo<MIN_HOLE){
+      const need=MIN_HOLE-(hi-lo);
+      // Расширяем вниз по уклону (от перекрытия в сторону, где ступени уходят под плиту)
+      if(Math.abs(zAt(hi)-floorZ)<Math.abs(zAt(lo)-floorZ))lo=Math.max(landing,lo-need);else hi=Math.min(length-landing,hi+need);
+    }
+    const crosses=(d:number)=>e.stairs?crossesRaw(d):d>=lo-1e-6&&d<=hi+1e-6&&d>=landing&&d<=length-landing;
     const from=out.length;
     const at=(s:number)=>{let j=1;while(j<lengths.length-1&&lengths[j]<s)j++;const t=(s-lengths[j-1])/(lengths[j]-lengths[j-1]||1);
       const dx=(e.line[j][0]-e.line[j-1][0])/(lengths[j]-lengths[j-1]||1),dy=(e.line[j][1]-e.line[j-1][1])/(lengths[j]-lengths[j-1]||1);

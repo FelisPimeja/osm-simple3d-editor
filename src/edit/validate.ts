@@ -824,6 +824,10 @@ export function validateDeprecated(key: string, t: Record<string, string>, list:
     out.push({ key, level: 'warning', code: 'deprecated', text: tr('{tag} — устаревший тег, сейчас пишут {replace}.', { tag: was, replace: now }),
       ...(clash ? {} : { fix: { label: tr('заменить на {replace}', { replace: now }), tags } }) });
   }
+  // Колонна, размеченная помещением/площадью: indoor=column
+  if ((t.indoor === 'room' || t.indoor === 'area') && t.room === 'column')
+    out.push({ key, level: 'warning', code: 'room-column', text: tr('Колонна размечена как indoor={indoor} + room=column.', { indoor: t.indoor }),
+      fix: { label: 'indoor=column', tags: { indoor: 'column', room: undefined } } });
   // room остаётся (им размечают в форме), рядом нужен тег из вики
   const paired = ROOM_PAIRED_AMENITY[t.room];
   if (paired && t.amenity === undefined) {

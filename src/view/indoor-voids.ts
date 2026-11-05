@@ -52,11 +52,9 @@ export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[]
   });
 }
 
-/** Потолки помещений этажа ниже в проёмах этажа n — там перекрытие этажа n остаётся. */
+/** Потолки помещений этажа ниже под этажом n (в проёмах и вне его контура) — там перекрытие этажа n есть. */
 export function voidCaps(n: number, plans: Map<number, LevelPlan>): MultiPolygon {
-  const plan = plans.get(n);
-  if (!plan?.explicitVoids?.length || !plan.caps?.length) return [];
-  return safe(() => polygonClipping.intersection(plan.explicitVoids!, plan.caps!)).filter((poly) => multiArea([poly]) > 1e-6);
+  return (plans.get(n)?.caps ?? []).filter((poly) => multiArea([poly]) > 1e-6);
 }
 
 /** Объект здания для контура этажа: полигоны (в метрах) и высоты низа и верха стен. */
@@ -73,8 +71,10 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
     const prev = Math.max(...levels.filter((x) => x.n < l.n).map((x) => x.n));
     const capPolys = Number.isFinite(prev) ? indoor.filter((f) => !f.line && f.kind === 'room' && f.levels.length && Math.max(...f.levels) === prev)
       .flatMap((f) => f.polygons.map((p) => p.map(open))) : [];
+    // …только под объёмом здания выше пола этажа (зал под навесом — тоже): у крыши низкого крыла потолок не нужен
+    const abovePolys = parts.filter((p) => p.wallTop > l.floor + 0.5).flatMap((p) => p.polygons.map((q) => q.map(open)));
     let capsCache: MultiPolygon | undefined;
-    const capsOf = () => (capsCache ??= unionOf(capPolys));
+    const capsOf = () => (capsCache ??= capPolys.length && abovePolys.length ? safe(() => polygonClipping.intersection(unionOf(capPolys), unionOf(abovePolys))) : []);
     const onLevel = indoor.filter((f) => !f.line && f.levels.includes(l.n));
     const levelPolys = onLevel.filter((f) => f.kind === 'level').flatMap((f) => f.polygons.map((p) => p.map(open)));
     const partPolys = parts.filter((p) => p.min <= l.floor + 0.5 && p.wallTop > l.floor + 0.01).flatMap((p) => p.polygons.map((q) => q.map(open)));

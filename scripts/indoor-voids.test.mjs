@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { before, after, test } from 'node:test';
 import { createServer } from 'vite';
-let vite, buildPlans, findVoids, multiArea;
+let vite, buildPlans, findVoids, voidCaps, multiArea;
 before(async()=>{
  globalThis.window={};
  vite=await createServer({configFile:false,server:{middlewareMode:true,ws:false,watch:null},appType:'custom'});
- ({buildPlans,findVoids,multiArea}=await vite.ssrLoadModule('/src/view/indoor-voids.ts'));
+ ({buildPlans,findVoids,voidCaps,multiArea}=await vite.ssrLoadModule('/src/view/indoor-voids.ts'));
 });
 after(async()=>{delete globalThis.window;await vite.close();});
 const square=(a,b,c,d)=>[[a,b],[c,b],[c,d],[a,d]];
@@ -238,4 +238,14 @@ test('escalator area is a dashed floor outline and suppresses the opening fascia
  const under=layer.indoorObj.getObjectByName('indoor-slab-underside').geometry.getAttribute('position');
  for(let i=0;i<under.count;i++)assert.ok(Math.abs(under.getZ(i)-2.7)<.001);
  assert.equal(layer.indoorObj.getObjectByName('indoor-area-underside'),undefined);
+});
+
+test('a one-level room under an atrium keeps its ceiling; a two-level room stays open',()=>{
+ const level1={kind:'level',polygons:[[outer,hole]],levels:[1]};
+ const shop={kind:'room',polygons:[[square(6,6,10,10)]],levels:[0]};
+ const hall={kind:'room',polygons:[[square(11,11,14,14)]],levels:[0,1]};
+ const plans=buildPlans(levels,[part],[level1,shop,hall]);
+ const voidArea=findVoids(1,plans).reduce((s,v)=>s+multiArea(v.polygon),0);
+ assert.ok(Math.abs(voidArea-(100-16))<1e-6);
+ assert.ok(Math.abs(multiArea(voidCaps(1,plans))-16)<1e-6);
 });

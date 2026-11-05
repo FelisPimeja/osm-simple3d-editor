@@ -12,6 +12,8 @@ export interface LevelPlan {
   explicitVoids?: MultiPolygon;
   /** Сплошной пол по контурам этажа (indoor=level, без внутренних колец). */
   solid?: MultiPolygon;
+  /** Потолки помещений этажа ниже (indoor=room, верхний этаж — ближний нижний): закрыты перекрытием этого этажа. */
+  caps?: MultiPolygon;
 }
 
 export interface LevelVoid {
@@ -35,7 +37,10 @@ export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[]
   if (!plan?.floor.length || !plan.explicitVoids?.length) return [];
   const lower = [...plans.keys()].filter(k => k < n).sort((a,b) => b-a);
   if (!lower.length) return [];
-  return plan.explicitVoids.filter(poly => multiArea([poly]) > 1e-6).map(poly => {
+  // Помещение этажа ниже под проёмом — с потолком (магазин в атриуме, community.openstreetmap.org/t/148767/116);
+  // открытое — многоуровневое (level=0;1), его проём уже в explicitVoids
+  const voids = plan.caps?.length ? safe(() => polygonClipping.difference(plan.explicitVoids!, plan.caps!)) : plan.explicitVoids;
+  return voids.filter(poly => multiArea([poly]) > 1e-6).map(poly => {
     const through: number[] = [], area = multiArea([poly]);
     for (const k of lower) {
       through.push(k);
@@ -45,6 +50,13 @@ export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[]
     }
     return {polygon:[poly], through};
   });
+}
+
+/** Потолки помещений этажа ниже в проёмах этажа n — там перекрытие этажа n остаётся. */
+export function voidCaps(n: number, plans: Map<number, LevelPlan>): MultiPolygon {
+  const plan = plans.get(n);
+  if (!plan?.explicitVoids?.length || !plan.caps?.length) return [];
+  return safe(() => polygonClipping.intersection(plan.explicitVoids!, plan.caps!)).filter((poly) => multiArea([poly]) > 1e-6);
 }
 
 /** Объект здания для контура этажа: полигоны (в метрах) и высоты низа и верха стен. */
@@ -58,6 +70,11 @@ const unionOf = (polys: Pt[][][]): MultiPolygon => (polys.length ? safe(() => po
 export function buildPlans(levels: { n: number; floor: number; ceil: number }[], parts: PlanPart[], indoor: PlanIndoor[]): Map<number, LevelPlan> {
   const plans = new Map<number, LevelPlan>();
   for (const l of levels) {
+    const prev = Math.max(...levels.filter((x) => x.n < l.n).map((x) => x.n));
+    const capPolys = Number.isFinite(prev) ? indoor.filter((f) => !f.line && f.kind === 'room' && f.levels.length && Math.max(...f.levels) === prev)
+      .flatMap((f) => f.polygons.map((p) => p.map(open))) : [];
+    let capsCache: MultiPolygon | undefined;
+    const capsOf = () => (capsCache ??= unionOf(capPolys));
     const onLevel = indoor.filter((f) => !f.line && f.levels.includes(l.n));
     const levelPolys = onLevel.filter((f) => f.kind === 'level').flatMap((f) => f.polygons.map((p) => p.map(open)));
     const partPolys = parts.filter((p) => p.min <= l.floor + 0.5 && p.wallTop > l.floor + 0.01).flatMap((p) => p.polygons.map((q) => q.map(open)));
@@ -76,7 +93,7 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
     const solidOf = () => (solidCache ??= levelPolys.length ? unionOf(levelPolys) : []);
     if (!spaces.length) {
       const holes = levelHoles.length ? unionOf(levelHoles) : [];
-      plans.set(l.n, { floor: holes.length ? solidOf() : [], get mapped() { return mappedOf(); }, explicitVoids: holes, get solid() { return solidOf(); } });
+      plans.set(l.n, { floor: holes.length ? solidOf() : [], get mapped() { return mappedOf(); }, explicitVoids: holes, get solid() { return solidOf(); }, get caps() { return capsOf(); } });
       continue;
     }
     const mapped = mappedOf();
@@ -104,7 +121,7 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
     }).filter(m => m.length);
     const all = [...open1, ...levelHoles.map((h) => [h] as MultiPolygon)];
     const explicitVoids = all.length ? safe(() => polygonClipping.union(all[0], ...all.slice(1))) : [];
-    plans.set(l.n, { floor, mapped, explicitVoids, get solid() { return solidOf(); } });
+    plans.set(l.n, { floor, mapped, explicitVoids, get solid() { return solidOf(); }, get caps() { return capsOf(); } });
   }
   return plans;
 }

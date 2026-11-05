@@ -266,6 +266,8 @@ export interface IndoorLevel {
   doorCuts?: { at: LonLat; width: number; polygon?: LonLat[] }[];
   /** Пустоты в перекрытии этажа: многоугольники lon/lat ([внешнее кольцо, ...дыры]). */
   voids?: LonLat[][][];
+  /** Потолки помещений этажа ниже в проёмах: перекрытие над ними остаётся. */
+  ceilings?: LonLat[][][];
   /** Высоты, на которых пустота прорезает перекрытия (пол этажа и полы промежуточных этажей), — по пустотам. */
   voidCuts?: { polygon: LonLat[][][]; zs: number[] }[];
   /** Подземные этажи (для земли надземного плана): контуры indoor=level и площади лестниц, выходящих наверх. */
@@ -1784,7 +1786,10 @@ export class BuildingsLayer implements CustomLayerInterface {
       let slab: ClipMulti = [];
       const mappedLevels: ClipMulti = this.level.items.filter(it => it.kind === 'level').flatMap(it => it.polygons.map(p =>
         [p.outer, ...p.inners].map(r => { const points = r.map(g.toLocal); return [...points, points[0]]; })));
-      const floorSection = mappedLevels.length ? polygonClipping.union(mappedLevels[0], ...mappedLevels.slice(1)) : this.sectionAt(g, this.level.floor + SLAB_PROBE);
+      const ceilings: ClipMulti = (this.level.ceilings ?? []).map((poly) => poly.map((r) => { const rp = r.map(g.toLocal); return [...rp, rp[0]]; }));
+      const levelSection = mappedLevels.length ? polygonClipping.union(mappedLevels[0], ...mappedLevels.slice(1)) : this.sectionAt(g, this.level.floor + SLAB_PROBE);
+      // Потолок помещения под проёмом — тоже перекрытие, хоть его и нет в контуре этажа
+      const floorSection = ceilings.length && levelSection ? polygonClipping.union(levelSection, ...ceilings) : levelSection;
       // Низ перекрытия (потолок нижнего этажа) — под всем сечением, кроме пустот: «додуманная» геометрия
       let underside: ClipMulti = [];
       // Под нижним этажом потолка нет: низ плиты торчал бы из-под фасада

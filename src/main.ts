@@ -23,7 +23,7 @@ import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
 import { ROOM_PAIRED_AMENITY, setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, selfIntersects, validateIndoor, validateSolidWallDoors, validateRepeatedRooms, validateStackedEscalators, validateEscalators, validateTags, OUTLINE_GROW_SHARE, partGround, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
-import { buildPlans, findVoids } from './view/indoor-voids';
+import { buildPlans, findVoids, voidCaps } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchElementRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { pointOnRemovedWall, materializeRoomWalls, roomTouchesWall, roomWallSpan, type RoomWall, type WallSpan } from './edit/indoor-walls';
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
@@ -11749,6 +11749,8 @@ function renderLevelsImpl() {
     ...plan, floor: level!.floor,
     escalators, cutEscalators,
     voids: voids.map((v) => v.polygon).flat(),
+    // Потолки одноэтажных помещений под проёмом — перекрытие этого этажа над ними
+    ceilings: voidsCache.get(focus.key)?.caps?.get(level!.n) ?? [],
     bareVoids: voids.filter((v) => v.bare).flatMap((v) => v.polygon),
     // Пустота прорезает пол этажа и полы промежуточных этажей (у самого нижнего — пол атриума)
     voidCuts: voids.map((v) => ({
@@ -11783,7 +11785,7 @@ function renderLevelsImpl() {
 let glassVoidsSig = '';
 type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[]; bare?: boolean }[]>;
 /** Пустоты (второй свет) всех этажей здания, lon/lat; кеш — по зданию и данным. */
-const voidsCache = new Map<string, { sig: string; map: LevelVoids }>();
+const voidsCache = new Map<string, { sig: string; map: LevelVoids; caps?: Map<number, LonLat[][][]> }>();
 /** Лестницы, лежащие в основном в проёме верхнего этажа: своих проёмов в перекрытии не режут. */
 const stairsInVoid = new Set<string>();
 function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
@@ -11804,6 +11806,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
     indoor.map((f) => [f.key, f.kind, f.tags, f.levels, f.line, f.escalator, f.escalatorArea, f.polygons])]);
   const hit = voidsCache.get(g.key);
   if (hit?.sig === sig) return hit.map;
+  const caps = new Map<number, LonLat[][][]>();
   const map: LevelVoids = timed('этажи: второй свет', () => {
     const out: LevelVoids = new Map();
     if (!Number.isFinite(w) || !indoor.length) return out;
@@ -11816,6 +11819,8 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
       .map((f) => { const h = computeHeights(f.tags); return { polygons: f.polygons.map(poly), min: h.min, wallTop: h.wallTop }; });
     const plans = buildPlans(levels, parts, indoor.filter((f) => f.kind !== 'poi' && !f.escalatorArea).map((f) => ({ kind: f.kind, levels: f.levels, floors: floorLevels(f), line: f.line, polygons: f.polygons.map(poly) })));
     for (const l of levels) {
+      const cap = voidCaps(l.n, plans);
+      if (cap.length) caps.set(l.n, cap.map((p) => p.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))));
       const list: NonNullable<ReturnType<LevelVoids['get']>> = findVoids(l.n, plans).map((v) => ({ polygon: v.polygon.map((p) => p.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))), through: v.through }));
       // Лифтовая шахта — сквозной проём до нижней остановки (через этажи без остановок тоже)
       for (const f of indoor.filter((f) => f.levels.length && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels) && isElevatorRoom(f, indoor))) {
@@ -11855,7 +11860,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
     }
     return out;
   }, (r) => `${[...r.values()].flat().length} пустот`);
-  voidsCache.set(g.key, { sig, map });
+  voidsCache.set(g.key, { sig, map, caps });
   while (voidsCache.size > 20) voidsCache.delete(voidsCache.keys().next().value!);
   return map;
 }

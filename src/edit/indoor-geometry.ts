@@ -68,12 +68,17 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
   // (стена level=0;1 в мультиполигоне стены 1 этажа), правка законна для обоих
   const spans=(id:number,levels:number[])=>active.some(a=>levels.every(l=>a.levels.includes(l))&&rings(a).some(r=>r.ids?.includes(id)));
   const protectedNodes = new Set(otherFloors.flatMap(f=>rings(f).flatMap(r=>(r.ids??[]).filter(id=>!spans(id,f.levels)))));
+  /** Узлы колец мультиполигонов (отношений) — у путей-членов не заменяются новыми. */
+  const relationNodes = new Set(all.filter(f=>f.key.startsWith('relation/')).flatMap(f=>rings(f).flatMap(r=>r.ids??[])));
   const detached = new Map<number,number>();
   const edits: ObjectEdit[]=[];
   // Дверь (узел с тегами) не заменить новым узлом: она едет с этим этажом, а объекты другого этажа получают
   // на её старом месте свой новый узел (авторасцепка)
   const movedDoors = new Set(active.filter(f=>f.point&&f.key.startsWith('node/')).map(f=>Number(f.key.split('/')[1]))
     .filter(id=>protectedNodes.has(id)&&moves.has(id)&&!same(moves.get(id)!,active.find(f=>f.key===`node/${id}`)!.point!)));
+  // Мультиполигон другого этажа так не расцепить: узел в его пути-члене, новый узел разорвал бы кольцо
+  if ([...movedDoors].some(id=>otherFloors.some(f=>f.key.startsWith('relation/')&&rings(f).some(r=>r.ids?.includes(id)))))
+    throw new Error('Общие узлы используются на другом этаже. Сначала разделите геометрию этажей.');
   if (movedDoors.size) for (const f of otherFloors) {
     if (f.point) continue;
     let changed=false;
@@ -118,7 +123,9 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
         if (removed.has(id)&&affect) {changed=true;return;}
         let at=affect?moves.get(id):undefined, nextId=id;
         if (at && !same(at,r.coords[i])) {
-          if (protectedNodes.has(id) || (!glue && active.some(g=>!selected.has(g.key)&&rings(g).some(q=>q.ids?.includes(id))))) {
+          // Путь — член мультиполигона: его узлы держат кольцо отношения, новый узел разорвал бы его (relation/18000359)
+          const holdsRelation = f.key.startsWith('way/') && relationNodes.has(id);
+          if (!holdsRelation && (protectedNodes.has(id) || (!glue && active.some(g=>!selected.has(g.key)&&rings(g).some(q=>q.ids?.includes(id)))))) {
             if (!detached.has(id)) detached.set(id,freshId());
             nextId=detached.get(id)!;
           }

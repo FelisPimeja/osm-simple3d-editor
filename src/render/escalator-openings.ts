@@ -7,7 +7,9 @@ export interface EscalatorCut { line: Pt[]; bottom: number; top: number; width: 
   /** Лестница: без площадок, ступени по step_count (иначе ~0,17 м), тонкая плита под ними. */
   stairs?: boolean; steps?: number; outline?: Pt[];
   /** Лестница в проёме этажа (атриум): своего проёма в перекрытии не режет. */
-  noHole?: boolean }
+  noHole?: boolean;
+  /** Общий проём группы параллельных эскалаторов: ширина без ограничения одиночного. */
+  group?: boolean }
 /** Число ступеней лестницы на подъём height. */
 export const stairsCount = (e: Pick<EscalatorCut, 'steps' | 'top' | 'bottom'>) => e.steps ?? Math.max(1, Math.round((e.top - e.bottom) / 0.17));
 /** Толщина плиты под лестницей (от линии внутренних углов ступеней). */
@@ -15,10 +17,56 @@ export const STAIRS_SLAB = 0.2;
 const landingOf = (e: EscalatorCut, length: number) => e.stairs ? 0 : escalatorLanding(length);
 /** Полуширина: у лестницы с контуром — до дальней точки контура от линии. */
 export function halfWidthOf(e: EscalatorCut): number {
-  if (!e.stairs) return Math.max(.35, Math.min(2.5, e.width / 2));
+  if (!e.stairs) return Math.max(.35, e.group ? e.width / 2 : Math.min(2.5, e.width / 2));
   if (!e.outline?.length) return Math.max(.25, Math.min(5, e.width / 2));
   const a = e.line[0], b = e.line[e.line.length - 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
   return Math.max(...e.outline.map((p) => Math.abs((p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])) / L)) + .05;
+}
+/** Запас над ступенями: перекрытие над эскалатором режется там, где оно ниже ступеней + HEADROOM. */
+const HEADROOM = 2.05;
+/** Оси параллельных эскалаторов с одними отметками ближе этого (м) — общий проём в стенах и перекрытии. */
+export const ESCALATOR_GROUP_GAP = 2;
+/**
+ * Группы параллельных эскалаторов (одни отметки, подъём в одну сторону, оси не дальше ESCALATOR_GROUP_GAP,
+ * перекрываются вдоль оси) заменяются одним прямым «эскалатором» на всю ширину группы — для проёмов.
+ */
+export function groupEscalators(list: EscalatorCut[]): EscalatorCut[] {
+  const solo = list.filter(e => e.stairs || e.line.length !== 2 || e.top <= e.bottom);
+  const rest = list.filter(e => !solo.includes(e));
+  // Направление подъёма: от нижнего конца к верхнему
+  const rising = (e: EscalatorCut): [Pt, Pt] => e.incline === 'down' ? [e.line[1], e.line[0]] : [e.line[0], e.line[1]];
+  const dir = (e: EscalatorCut) => { const [a, b] = rising(e), L = Math.hypot(b[0]-a[0], b[1]-a[1]) || 1; return [(b[0]-a[0])/L, (b[1]-a[1])/L] as Pt; };
+  const parent = rest.map((_, i) => i), find = (i: number): number => parent[i] === i ? i : (parent[i] = find(parent[i]));
+  for (let i = 0; i < rest.length; i++) for (let j = i + 1; j < rest.length; j++) {
+    const a = rest[i], b = rest[j];
+    if (Math.abs(a.bottom - b.bottom) > .1 || Math.abs(a.top - b.top) > .1) continue;
+    const da = dir(a), db = dir(b);
+    if (da[0]*db[0] + da[1]*db[1] < Math.cos(5 * Math.PI / 180)) continue;
+    const [a0, a1] = rising(a), [b0, b1] = rising(b);
+    const off = (p: Pt) => (p[0]-a0[0]) * -da[1] + (p[1]-a0[1]) * da[0], along = (p: Pt) => (p[0]-a0[0]) * da[0] + (p[1]-a0[1]) * da[1];
+    if (Math.abs((off(b0) + off(b1)) / 2) > ESCALATOR_GROUP_GAP) continue;
+    if (Math.min(along(a1), Math.max(along(b0), along(b1))) <= Math.max(0, Math.min(along(b0), along(b1)))) continue;
+    parent[find(i)] = find(j);
+  }
+  const groups = new Map<number, EscalatorCut[]>();
+  rest.forEach((e, i) => groups.set(find(i), [...(groups.get(find(i)) ?? []), e]));
+  const out = [...solo];
+  for (const g of groups.values()) {
+    if (g.length === 1) { out.push(g[0]); continue; }
+    const [o] = rising(g[0]), d = dir(g[0]), n: Pt = [-d[1], d[0]];
+    let s0 = Infinity, s1 = -Infinity, w0 = Infinity, w1 = -Infinity;
+    for (const e of g) {
+      const half = halfWidthOf(e);
+      for (const p of rising(e)) {
+        const s = (p[0]-o[0])*d[0] + (p[1]-o[1])*d[1], w = (p[0]-o[0])*n[0] + (p[1]-o[1])*n[1];
+        s0 = Math.min(s0, s); s1 = Math.max(s1, s); w0 = Math.min(w0, w - half); w1 = Math.max(w1, w + half);
+      }
+    }
+    const c = (w0 + w1) / 2, at = (s: number): Pt => [o[0] + d[0]*s + n[0]*c, o[1] + d[1]*s + n[1]*c];
+    out.push({ line: [at(s0), at(s1)], bottom: Math.min(...g.map(e => e.bottom)), top: Math.max(...g.map(e => e.top)),
+      width: w1 - w0, incline: 'up', noHole: g.every(e => e.noHole), group: true });
+  }
+  return out;
 }
 /** Intersect vertical wall planes with the escalator body and 2 m of headroom. */
 export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: EscalatorCut[]): number[] {
@@ -28,7 +76,7 @@ export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: 
     bounds[k]=Math.min(bounds[k],positions[i+k]); bounds[k+3]=Math.max(bounds[k+3],positions[i+k]);
   }
   // Лестница стен не режет: боковые стены вдоль марша остаются целыми
-  escalators=escalators.filter(e=>!e.stairs).filter(e=>{
+  escalators=groupEscalators(escalators.filter(e=>!e.stairs)).filter(e=>{
     const pad=halfWidthOf(e);
     const xs=e.line.map(p=>p[0]),ys=e.line.map(p=>p[1]);
     return Math.min(...xs)-pad<=bounds[3] && Math.max(...xs)+pad>=bounds[0]
@@ -129,7 +177,7 @@ const BODY_DEPTH = 0.7;
  */
 export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number): MultiPolygon {
   const out: Pt[][] = [];
-  for (const e of escalators) {
+  for (const e of groupEscalators(escalators)) {
     if (e.noHole || e.top <= e.bottom || floorZ < e.bottom - .1 || floorZ > e.top + .1) continue;
     // Эскалатор начинается на этом этаже: короб нижней площадки — приямок под полом, перекрытие над ним не режем
     if (Math.abs(floorZ - e.bottom) < .1) continue;
@@ -140,8 +188,9 @@ export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number):
     const depth=e.stairs?STAIRS_SLAB+.05:BODY_DEPTH;
     const zAt=(d:number)=>{const rise=Math.max(0,Math.min(1,(d-landing)/(length-2*landing)));return e.bottom+(e.top-e.bottom)*(e.incline==='down'?1-rise:rise)+.05;};
     // Короб от z−BODY_DEPTH до ступеней (с запасом на пол чуть выше уровня этажа)
-    // Площадки у пола лежат на перекрытии (их короб — приямок под ним): режем только под наклонным участком
-    const crosses=(d:number)=>{if(d<landing||d>length-landing)return false;const z=zAt(d);return z-depth<floorZ+.08&&(e.stairs||z>floorZ-.02);};
+    // Площадки у пола лежат на перекрытии (их короб — приямок под ним): режем только под наклонным участком.
+    // Эскалатор под перекрытием (подходит к нему снизу) — проём и над ступенями, где до плиты меньше HEADROOM
+    const crosses=(d:number)=>{if(d<landing||d>length-landing)return false;const z=zAt(d);return z-depth<floorZ+.08&&(e.stairs||z+HEADROOM>floorZ);};
     const from=out.length;
     const at=(s:number)=>{let j=1;while(j<lengths.length-1&&lengths[j]<s)j++;const t=(s-lengths[j-1])/(lengths[j]-lengths[j-1]||1);
       const dx=(e.line[j][0]-e.line[j-1][0])/(lengths[j]-lengths[j-1]||1),dy=(e.line[j][1]-e.line[j-1][1])/(lengths[j]-lengths[j-1]||1);

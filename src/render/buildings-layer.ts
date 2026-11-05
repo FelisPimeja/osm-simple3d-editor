@@ -5018,10 +5018,11 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Режим здания: вход со скрытого объекта (контур скрыт по умолчанию; глазик, изоляция) — только на стене
     // видимого, иначе при изоляции части висели бы входы чужих стен. На карте скрыт голый контур — его входы нужны
     const shown = g === this.groups.get(FOCUS_GROUP)
-      ? g.items.filter((it) => !g.hidden.has(it.feature.key)).flatMap((it) => it.feature.polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => ({ ring: r.map(g.toLocal), min: g.lift?.get(it.feature.key) ?? computeHeights(it.tags).min }))))
+      ? g.items.filter((it) => !g.hidden.has(it.feature.key)).flatMap((it) => it.feature.polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => ({ ring: r.map(g.toLocal), min: g.lift?.get(it.feature.key) ?? computeHeights(it.tags).min, top: computeHeights(it.tags).top + (g.lift?.get(it.feature.key) ?? computeHeights(it.tags).min) - computeHeights(it.tags).min }))))
       : undefined;
     // Вход у земли и под нависающим объёмом: видимая стена над той же линией плана — его стена
-    const onShownWall = (q: Pt) => shown!.some(({ ring }) => ring.some((a, i) => distToSegment(q, a, ring[(i + 1) % ring.length]) <= ENTRANCE_ON_WALL));
+    // …и по высоте: дверь этажа ниже изолированной части — не на её стене
+    const onShownWall = (q: Pt, z: number) => shown!.some(({ ring, min, top }) => z >= min - 0.3 && z < top && ring.some((a, i) => distToSegment(q, a, ring[(i + 1) % ring.length]) <= ENTRANCE_ON_WALL));
     // Узел в нескольких объектах (контур и часть, соседние части) — на самой низкой видимой стене
     const best = new Map<number, { place: EntrancePlace; rank: number }>();
     // На карте вход красится вместе с выделенным зданием; в режиме здания выбирают сам вход
@@ -5050,7 +5051,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           const door = tags.get(id)!, lv = parseFloat((door.level ?? '').split(';')[0]);
           const floorZ = !onMap && Number.isFinite(lv) && lv !== 0 ? this.entranceFloors.get(lv) : undefined;
           const place = entrancePlace(rings, r, i, floorZ ?? entranceZ(door, it.tags));
-          if (place && (!offstage || onShownWall(place.p))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
+          if (place && (!offstage || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
         }));
       }
     }

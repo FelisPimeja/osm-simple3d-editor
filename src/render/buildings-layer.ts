@@ -233,6 +233,9 @@ const STAIRS_PALE_NOSING = new THREE.LineBasicMaterial({ color: 0xd4d7d9, transp
 // Прозрачный список и свой renderOrder: земля пишет глубину после стен здания и до марша — закрывает только марш
 const STAIRS_EARTH = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, transparent: true, opacity: 1 });
 
+/** Земля на плане этажа: только глубина (см. addEarth). */
+const EARTH_MATERIAL = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
+
 export interface DoorItem { key: string; at: LonLat; z: number; tags?: Record<string, string> }
 
 /** План этажа для слоя. below — этажи под вторым светом (видны сквозь пустоты voids в перекрытии). */
@@ -1547,6 +1550,38 @@ export class BuildingsLayer implements CustomLayerInterface {
     return sec?.map((poly) => poly.map((r) => r.slice(0, -1).map(([x, y]) => g!.fromLocal([x, y]))));
   }
 
+  /**
+   * Земля на плане надземного этажа: плоскость z=0 вокруг здания (с вырезом по его сечению у земли) только пишет
+   * глубину — её не видно, но подземные части (стены подвала, приямки) под ней скрыты, как под плитой перекрытия.
+   */
+  private addEarth(root: THREE.Object3D, g: MeshGroup) {
+    const box = new THREE.Box3();
+    for (const it of g.items) if (!it.box.isEmpty()) box.union(it.box);
+    if (box.isEmpty()) return;
+    const pad = 50, [x0, y0, x1, y1] = [box.min.x - pad, box.min.y - pad, box.max.x + pad, box.max.y + pad];
+    const square: ClipMulti = [[[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]]];
+    const sec = this.sectionAt(g, 0.05);
+    let earth: ClipMulti = square;
+    try { if (sec?.length) earth = polygonClipping.difference(square, sec as unknown as ClipMulti); } catch { /* без выреза — земли нет */ return; }
+    const pos: number[] = [];
+    for (const poly of earth) {
+      const ring = (r: [number, number][]) => r.slice(0, -1).map(([x, y]) => new THREE.Vector2(x, y));
+      const outer = ring(poly[0] as [number, number][]), holes = poly.slice(1).map((r) => ring(r as [number, number][]));
+      const pts = [...outer, ...holes.flat()];
+      for (const tri of THREE.ShapeUtils.triangulateShape(outer, holes)) for (const i of tri) pos.push(pts[i].x, pts[i].y, 0);
+    }
+    if (!pos.length) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const mesh = new THREE.Mesh(geo, EARTH_MATERIAL);
+    mesh.name = 'level-earth';
+    // Раньше всего: глубина земли уже стоит, когда рисуются подземные части
+    mesh.renderOrder = -100;
+    mesh.frustumCulled = false;
+    mesh.raycast = () => {};
+    root.add(mesh);
+  }
+
   private applyLevel() {
     this.doorOpeningEdges.clear();
     this.indoorWallPositions = [];
@@ -1588,6 +1623,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       line.name='indoor-steps-outline';line.computeLineDistances();line.renderOrder=5;root.add(line);
     }
     g.scene.add(root);
+    if (this.level.floor > -0.01) this.addEarth(root, g);
     // Полы и крышки — двумя слитыми мешами (по мешу на полигон — сотни вызовов отрисовки на этаж)
     const capPos: number[] = [], floorPos: number[] = [], floorCol: number[] = [];
     const fill = (outer: Pt[], holes: Pt[][], z: number, colour?: number) => {

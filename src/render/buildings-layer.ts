@@ -2809,7 +2809,27 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (zs.every((z) => z >= top - 1e-3)) fill(outer, holes, top, colour);
       // Под скатом верх стены — её примыкание к крыше, а не сечение срезом: не чёрный (толстые стены церкви
       // под вальмой давали огромные чёрные клинья)
-      else if (zs.some((z) => z > z0 + 0.05)) fill(outer, holes, zOf, undefined);
+      else if (zs.some((z) => z > z0 + 0.05)) {
+        // Стена через стык частей с перепадом высот: по вершинам торец лёг бы клином через всю стену. Режем на
+        // ячейки ~0,25 м; ячейка на стыке (скачок высоты) — ступенью по высоте в её середине, остальные — по скату
+        const xs = outer.map((p) => p[0]), ys = outer.map((p) => p[1]);
+        const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+        const step = Math.max(0.25, Math.max(x1 - x0, y1 - y0) / 80);
+        const shape = [[[...outer, outer[0]], ...holes.map((h) => [...h, h[0]])]] as unknown as ClipMulti;
+        try {
+          for (let x = x0; x < x1; x += step) for (let y = y0; y < y1; y += step) {
+            const cell: ClipMulti = [[[[x, y], [x + step, y], [x + step, y + step], [x, y + step], [x, y]]]];
+            for (const piece of polygonClipping.intersection(shape, cell)) {
+              const o = piece[0].slice(0, -1) as Pt[], hs = piece.slice(1).map((r) => r.slice(0, -1) as Pt[]);
+              const pz = o.map(([px, py]) => zOf(px, py));
+              if (Math.max(...pz) - Math.min(...pz) > 0.3) {
+                const cx = o.reduce((s2, q) => s2 + q[0], 0) / o.length, cy = o.reduce((s2, q) => s2 + q[1], 0) / o.length;
+                fill(o, hs, zOf(cx, cy), undefined);
+              } else fill(o, hs, zOf, undefined);
+            }
+          }
+        } catch { fill(outer, holes, zOf, undefined); }
+      }
     };
     /** Стена на участках ребра, ещё не занятых другими стенами (совпадающие грани мерцали бы). */
     /** solid — грань толстой стены или колонны: её закрывает только совпадающая стена, а не стена с другой стороны толщины. */

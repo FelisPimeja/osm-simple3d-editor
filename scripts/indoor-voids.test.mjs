@@ -180,7 +180,12 @@ test('low sloping annex roof opens in floor plan and restores in full-building v
   return group.mesh.geometry.getAttribute('position').array.slice((it.start+it.wallVertices)*3,(it.start+it.positions.length/3-it.floorVertices)*3);
  };
  assert.ok(roofBuffer().some(v=>v!==0));
+ // Без плана под ней (крыльцо, ступени снаружи) крыша остаётся
  layer.setLevel({floor:0,cut:3.5,items:[],doors:[]});
+ assert.ok(roofBuffer().some(v=>v!==0));
+ // Над планом (помещение под пристройкой) — открывается
+ const room={key:'way/1',kind:'room',z:0,polygons:[{outer:square(0,0,4,2).map(ll),inners:[]}]};
+ layer.setLevel({floor:0,cut:3.5,items:[room],doors:[]});
  assert.ok(roofBuffer().length>0);assert.ok(roofBuffer().every(v=>v===0));
  assert.ok(layer.indoorObj.children.some(o=>o.isLineSegments2&&o.geometry.getAttribute('instanceStart')&&Array.from(o.geometry.getAttribute('instanceStart').data.array).some((v,i,a)=>i%6===2&&Math.abs(v-a[i+3])>.1)),'heavy outline retains sloping segments');
  layer.setLevel(undefined);assert.ok(roofBuffer().some(v=>v!==0));

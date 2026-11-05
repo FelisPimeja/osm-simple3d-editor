@@ -53,5 +53,8 @@ test('stacked escalators split into neighbouring level pairs; the axis gets new 
   assert.deepEqual(a.fix.splitLevels, ['0;1']);
   assert.equal(a.fix.splitNewNodes, undefined);
   assert.equal(validateStackedEscalators([{ ...axis, tags: { ...axis.tags, level: '0;1' } }]).length, 0);
-  assert.equal(validateStackedEscalators([{ ...axis, tags: { highway: 'steps', level: '0-3' } }]).length, 0);
+  // Лестница (без conveying) через 3+ этажа — то же предупреждение и разбиение, что у эскалатора
+  const [stairs] = validateStackedEscalators([{ ...axis, tags: { highway: 'steps', level: '0-3' } }]);
+  assert.deepEqual(stairs.fix.splitLevels, ['1;2', '2;3']);
+  assert.equal(validateStackedEscalators([{ ...axis, tags: { highway: 'steps', level: '0;1' } }]).length, 0);
 });

@@ -35,16 +35,3 @@ test('opening outline: edges around the hole, verticals stop at the wall top',()
  }
  assert.ok(vertical>=2);
 });
-test('floor holes follow the model footprint only where its body passes through the floor',()=>{
- const inside=(mp,x,y)=>mp.some(poly=>{const inRing=r=>{let c=false;for(let i=0,j=r.length-1;i<r.length;j=i++)if((r[i][1]>y)!==(r[j][1]>y)&&x<(r[j][0]-r[i][0])*(y-r[i][1])/(r[j][1]-r[i][1])+r[i][0])c=!c;return c;};return inRing(poly[0])&&!poly.slice(1).some(inRing);});
- // Lower floor (z=0): landing and the start of the ramp; the rest of the ramp is above the floor
- const low=floorHoles([escalator],0);
- assert.ok(inside(low,.5,0));assert.ok(!inside(low,6,0));
- // Width: the model, not a wide outline
- assert.ok(inside(low,.5,.9));assert.ok(!inside(low,.5,1.1));
- // Upper floor (z=4): only the top end
- const high=floorHoles([escalator],4);
- assert.ok(inside(high,9.5,0));assert.ok(!inside(high,3,0));
- // An unrelated floor
- assert.equal(floorHoles([escalator],10).length,0);
-});

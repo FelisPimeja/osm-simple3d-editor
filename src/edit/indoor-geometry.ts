@@ -30,7 +30,12 @@ function validateRing(coords: LonLat[], open: boolean) {
 /** Этаж-заглушка частей и контура здания при правке indoor: ни один indoor-объект его не охватывает — их узлы не двигаются. */
 export const SHELL_LEVEL = -1e6;
 
-export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, glue: boolean, freshId: ()=>number, relationTopology = false): ObjectEdit[] {
+/**
+ * memberWays — пути-члены indoor-мультиполигонов (ключ отношения → ключи путей), где известны: по ним путь — член
+ * кольца отношения; где неизвестны — по общему ребру.
+ */
+export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, glue: boolean, freshId: ()=>number, relationTopology = false,
+  memberWays?: (relation: string) => Set<string> | undefined): ObjectEdit[] {
   const vertices = op.type === 'insert' ? [op.vertex] : op.vertices;
   const selected = new Set(vertices.map(v=>v.key));
   const owners = all.filter(f=>selected.has(f.key));
@@ -77,7 +82,9 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
   /** Узлы колец мультиполигонов (отношений) — у путей-членов не заменяются новыми. */
   // Части здания (SHELL_LEVEL) — не indoor-мультиполигоны: путь этажа не их член, общий с ними узел отцепляется
   // Рёбра колец indoor-мультиполигонов: путь — их член, если его ребро у узла есть в кольце (а не просто общий узел)
-  const relationEdges = new Set(all.filter(f=>f.key.startsWith('relation/')&&!isShell(f)).flatMap(f=>rings(f).flatMap(r=>{
+  const indoorRelations = all.filter(f=>f.key.startsWith('relation/')&&!isShell(f));
+  const knownMembers = new Map(indoorRelations.map(f=>[f.key,memberWays?.(f.key)]).filter((e):e is [string,Set<string>]=>!!e[1]));
+  const relationEdges = new Set(indoorRelations.filter(f=>!knownMembers.has(f.key)).flatMap(f=>rings(f).flatMap(r=>{
     const ids=r.ids??[];return ids.flatMap((a,i)=>{const b=ids[(i+1)%ids.length];return [`${a}|${b}`,`${b}|${a}`];});
   })));
   const detached = new Map<number,number>();
@@ -135,7 +142,8 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
         if (at && !same(at,r.coords[i])) {
           // Путь — член мультиполигона: его узлы держат кольцо отношения, новый узел разорвал бы его (relation/18000359)
           const ids=r.ids!, prev=ids[(i-1+ids.length)%ids.length], next=ids[(i+1)%ids.length];
-          const holdsRelation = f.key.startsWith('way/') && (relationEdges.has(`${prev}|${id}`) || relationEdges.has(`${id}|${next}`));
+          const holdsRelation = f.key.startsWith('way/') && (relationEdges.has(`${prev}|${id}`) || relationEdges.has(`${id}|${next}`)
+            || indoorRelations.some(rel=>knownMembers.get(rel.key)?.has(f.key)&&rings(rel).some(q=>q.ids?.includes(id))));
           // Узел держит и indoor-мультиполигон, и часть здания: не отцепить, а сдвиг изменил бы Simple 3D
           if (holdsRelation && shellNodes.has(id)) throw new Error('Узел общий с частью здания и мультиполигоном этажа. Сначала разделите их геометрию.');
           if (!holdsRelation && (protectedNodes.has(id) || shellNodes.has(id) || (!glue && active.some(g=>!selected.has(g.key)&&rings(g).some(q=>q.ids?.includes(id)))))) {

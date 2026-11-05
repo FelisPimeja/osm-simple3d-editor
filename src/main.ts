@@ -9170,7 +9170,13 @@ function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false
   // Геометрию Simple 3D в режиме этажа не меняем: срез этажа не даёт увидеть части целиком
   const shell: IndoorFeature[] = building.filter(f => !all.some(i => i.key === f.key)).map(f => ({ key: f.key, tags: f.tags, polygons: f.polygons, kind: 'area', levels: [SHELL_LEVEL] }));
   let temporary = -1_000_000_000;
-  return editIndoorGeometry([...all, ...shell], op, glue, () => preview ? temporary-- : nextNewId--, true);
+  // Члены indoor-мультиполигонов — по данным отношения (загруженным или сессии), а не по общим узлам
+  const memberWays = (key: string) => {
+    const ways = indoorRelationSources.get(key)?.ways?.map((w) => `way/${w.id}`)
+      ?? session.get(key)?.relMembers?.filter((m) => m.type === 'way').map((m) => `way/${m.ref}`);
+    return ways ? new Set(ways) : undefined;
+  };
+  return editIndoorGeometry([...all, ...shell], op, glue, () => preview ? temporary-- : nextNewId--, true, memberWays);
 }
 function drawIndoorGeometryPreview(edits: ObjectEdit[]) {
   const lines: THREE.Vector3[][] = [];

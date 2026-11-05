@@ -75,3 +75,13 @@ test('moving a level outline vertex shared with a building part detaches it even
   assert.deepEqual(out.outer[1],[3,0]);assert.equal(out.outerIds[1],-7);
  }
 });
+test('a level outline sharing an edge with a hall multipolygon it is not a member of still detaches from a building part',()=>{
+ const ring={outer:[[0,0],[2,0],[2,2],[0,2]],outerIds:[1,2,3,4],inners:[],innerIds:[]};
+ const level={key:'way/1',kind:'level',levels:[-2],tags:{indoor:'level',level:'-2'},polygons:[ring]};
+ const hall={key:'relation/5',kind:'area',levels:[0],tags:{indoor:'area',level:'0'},polygons:[ring]};
+ const part={key:'relation/9',kind:'area',levels:[-1e6],tags:{'building:part':'yes'},polygons:[ring]};
+ const members=k=>k==='relation/5'?new Set(['way/7']):undefined;
+ const edits=editIndoorGeometry([level,hall,part],{type:'move',vertices:[1,2].map(i=>({key:level.key,poly:0,ring:0,i}))  ,delta:[1,0]},false,(()=>{let n=-7;return()=>n--;})(),true,members);
+ assert.ok(!edits.some(e=>e.key===part.key));
+ assert.ok(edits.find(e=>e.key===level.key).polygons[0].outerIds.slice(1,3).every(id=>id<0));
+});

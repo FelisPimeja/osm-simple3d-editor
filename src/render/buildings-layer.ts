@@ -87,7 +87,8 @@ const CUT_BELOW_CEIL = 0.1;
 const CEIL_SNAP = 0.5;
 /** Стены, перегородки и колонны — белые, как здание; в полную высоту этажа (до среза). */
 /** Стены помещений: каждая стена — две грани (по одной на сторону) с цветом помещения со своей стороны. */
-const INDOOR_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.FrontSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+// Дальше оболочки здания (у неё 1/1): наружные стены подвала в полосе цоколя лежат в плоскости фасада — фасад поверх
+const INDOOR_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.FrontSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });
 /** Насколько в сторону от стены смотреть, в каком она помещении, м. */
 const WALL_SIDE_PROBE = 0.05;
 /** Выделенное помещение: заливка цветом выделения частей и контур. */

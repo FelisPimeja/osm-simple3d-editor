@@ -3977,14 +3977,16 @@ function copySelected() {
   for (const k of keys) {
     const f = entity(k) as Feature3D | undefined;
     const role = focus.roles[focus.members.indexOf(k)];
-    if (!f?.polygons || !k.startsWith('way/') || role === 'outline' || f.polygons.length !== 1 || f.polygons[0].inners.length) { skipped++; continue; }
-    items.push({ tags: { ...f.tags }, polygons: f.polygons.map((p) => ({ outer: p.outer.map((c) => [...c] as LonLat), inners: [] })) });
+    if (!f?.polygons?.length || role === 'outline' || f.polygons.some((p) => p.inners.length)) { skipped++; continue; }
+    // Мультиполигон без дыр — каждое внешнее кольцо копией-путём (тег type не переносим)
+    const tags = Object.fromEntries(Object.entries(f.tags).filter(([t]) => t !== 'type'));
+    for (const p of f.polygons) items.push({ tags: { ...tags }, polygons: [{ outer: p.outer.map((c) => [...c] as LonLat), inners: [] }] });
   }
-  if (!items.length) return setStatus(keys.length ? tr('Копируются только части-пути (не контур здания и не мультиполигоны).') : tr('Выберите части здания, затем Ctrl+C.'), true);
+  if (!items.length) return setStatus(keys.length ? tr('Копируются части-пути и мультиполигоны без дыр (не контур здания).') : tr('Выберите части здания, затем Ctrl+C.'), true);
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   copyPick = { items };
   setStatus(skipped
-    ? tr('Копирование ({n}, пропущено {skipped} — контур или мультиполигон): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.', { n: items.length, skipped })
+    ? tr('Копирование ({n}, пропущено {skipped} — контур или мультиполигон с дырами): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.', { n: items.length, skipped })
     : tr('Копирование ({n}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.', { n: items.length }));
   if (lastPointer) updateSnap(lastPointer);
 }

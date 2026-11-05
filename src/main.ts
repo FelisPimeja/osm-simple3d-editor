@@ -9799,6 +9799,9 @@ const OUTLINE_NODE_SNAP = 1e-7;
 function levelSection(l: Level): LonLat[][][] | undefined {
   const cut = [l.floor + 0.1, (l.floor + l.ceil) / 2].map((h) => overpassLayer.focusSection(h)).find((x) => !x || x.length);
   if (cut?.length) return cut;
+  // Оболочки на этом уровне нет (подземный этаж): контур этажа — его indoor=level, если размечен
+  const outlines = levelFeatures(l).filter((f) => f.kind === 'level' && !f.line && f.polygons.length);
+  if (outlines.length) return outlines.flatMap((f) => f.polygons.map((p) => [p.outer, ...p.inners]));
   // Подземный этаж: оболочка части под землю не уходит — след части, по тегам которой этаж посчитан
   const src = l.src ? entity(l.src) as Feature3D | undefined : undefined;
   if (src?.polygons?.length) return src.polygons.map((p) => [p.outer, ...p.inners]);

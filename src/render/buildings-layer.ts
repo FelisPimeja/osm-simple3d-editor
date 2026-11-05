@@ -2843,6 +2843,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       .map((bi) => ({ key: bi.feature.key, polys: (g.renderFootprints?.get(bi.feature.key) ?? bi.feature.polygons).map((p) => ({ outer: p.outer.map(g.toLocal), inners: p.inners.map((h) => h.map(g.toLocal)) })) }));
     const enclosed = (key: string, x: number, y: number) => enclosing.some((e) => e.key !== key
       && e.polys.some((p) => pointInLocalRing([x, y], p.outer) && !p.inners.some((h) => pointInLocalRing([x, y], h))));
+    const enclosedBy = (key: string, x: number, y: number) => enclosing.some((e) => e.key === key
+      && e.polys.some((p) => pointInLocalRing([x, y], p.outer) && !p.inners.some((h) => pointInLocalRing([x, y], h))));
     for (const bi of g.items) {
       if (g.hidden.has(bi.feature.key) || strokeOnly(g, bi) || thinItem(bi) || (glassEnabled && bi.glassWalls)) continue;
       const [lo, hi] = span(bi);
@@ -2857,7 +2859,12 @@ export class BuildingsLayer implements CustomLayerInterface {
           const a = rp[i], b = rp[(i + 1) % rp.length];
           const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, nx = (b[1] - a[1]) / l * WALL_SIDE_PROBE, ny = -(b[0] - a[0]) / l * WALL_SIDE_PROBE;
           const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
-          if (enclosed(bi.feature.key, mx + nx, my + ny) && enclosed(bi.feature.key, mx - nx, my - ny)) continue;
+          // Внутри объёма (фонарь в зале) — не фасад. Так же и сторона на стыке с соседней частью на всю высоту этажа,
+          // когда узлы не общие (стороны не совпали по координатам — relation/21812725 и relation/21812726): с одной
+          // стороны своя часть, с другой — соседняя
+          const ownL = enclosedBy(bi.feature.key, mx + nx, my + ny), ownR = enclosedBy(bi.feature.key, mx - nx, my - ny);
+          const otherL = enclosed(bi.feature.key, mx + nx, my + ny), otherR = enclosed(bi.feature.key, mx - nx, my - ny);
+          if ((otherL && otherR) || (ownL && otherR) || (ownR && otherL)) continue;
           facadeDone.add(sig);
           // Facade openings also need a contour when the adjacent indoor space
           // is an area/corridor with no implicit walls of its own.

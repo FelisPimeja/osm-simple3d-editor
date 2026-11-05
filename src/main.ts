@@ -8516,7 +8516,7 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
   const doorF = door ? shownIndoor.find((x) => x.key === door) : undefined;
   if (doorF) return doorF;
   const floorPoint = hit && overpassLayer.focusToLngLat(hit.x,hit.y);
-  const stepsArea = floorPoint && shownIndoor.find(f => f.escalatorArea && f.polygons.some(p =>
+  const stepsArea = floorPoint && shownIndoor.find(f => (f.escalatorArea || stairsArea(f)) && f.polygons.some(p =>
     (pointInRing(floorPoint,p.outer) || nearRing(floorPoint,p.outer,0.08)) && !p.inners.some(r=>pointInRing(floorPoint,r))));
   // Модель эскалатора важнее его площади под ним: площадь выбирается кликом мимо модели
   const escalator = overpassLayer.pickEscalator(point);
@@ -11650,11 +11650,12 @@ function renderLevelsImpl() {
     });
     return {
       cut: l.ceil,
-      outlines: fs.filter(f=>f.escalatorArea).map((f):IndoorItem=>({key:f.key,kind:f.kind,polygons:f.polygons,z:l.floor})),
+      // Площади эскалаторов и лестниц (indoor=area с тегами лестницы) — пунктирным контуром, без заливки
+      outlines: fs.filter(f=>f.escalatorArea||stairsArea(f)).map((f):IndoorItem=>({key:f.key,kind:f.kind,polygons:f.polygons,z:l.floor})),
       get doorCuts() { return doorCutsOf(); },
       // Площадь эскалатора задаёт его след и проём, но не сплошной пол под ступенями.
       // Многоэтажные помещения имеют пол только внизу; стены и колонны есть на всех указанных уровнях.
-      items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea
+      items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea && !stairsArea(f)
         && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
         && (f.line || f.kind === 'wall' || f.kind === 'column' || f.kind === 'room' || floorLevels(f).includes(l.n)))
         .map(wallAsLine).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && (f.tags.area!=='yes'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), railing:(f.tags.barrier==='fence'&&f.tags.fence_type==='railing')||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
@@ -11780,6 +11781,8 @@ function renderLevelsImpl() {
   });
 }
 
+/** Площадь лестницы (indoor=area + room=stairs и т. п.): на плане — пунктирный контур, как у эскалатора. */
+const stairsArea = (f: IndoorFeature) => !f.line && !f.point && f.kind === 'area' && !f.escalatorArea && isStairsAreaTags(f.tags);
 /** Пустоты (второй свет) этажа n здания: lon/lat; кеш — по зданию, данным и этажу. */
 /** Чем последний раз пересобраны перекрытия стеклянных частей здания режима. */
 let glassVoidsSig = '';

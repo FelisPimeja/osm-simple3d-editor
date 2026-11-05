@@ -2370,8 +2370,8 @@ const SNAP_LABELS = { vertex: tr('Вершина'), midpoint: tr('Середин
 let currentSnap: SnapHit | undefined;
 
 function updateSnap(point: [number, number] | undefined) {
-  // Пока «Форма» тянет вершину, откладывание выключено: цифры — сдвигу вершины, а не оси якоря
-  const tracking = !!focus && toolActive() && shapeTool.state !== 'drag';
+  // И пока «Форма» тянет вершину: цифры уходят оси якоря, только когда курсор на ней, иначе — сдвигу вершины
+  const tracking = !!focus && toolActive();
   if (!tracking && (overpassLayer.tracking || trackTyped)) { overpassLayer.clearTracking(); trackTyped = ''; trackAxis = undefined; }
   overpassLayer.trackingEnabled = tracking;
   overpassLayer.trackVertical = splitTool.state === 'pick';

@@ -3546,7 +3546,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           foot.copy(e.a).addScaledVector(ab, t);
           const px = foot.distanceTo(perpFrom) > 0.05 ? toPx(foot) : undefined;
           const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
-          if (px && d <= radius) near.push({ s: { kind: 'perpendicular', key: e.key, p: foot.clone() }, d: d + SNAP_PRIORITY.perpendicular * 6 - bonus(e.key), px, ...(anchor ? { along: anchor.clone() } : {}) });
+          if (px && d <= radius) near.push({ s: { kind: 'perpendicular', key: e.key, p: foot.clone() }, d: d + SNAP_PRIORITY.perpendicular * 6 - (anchor ? SNAP_SELECTED_BONUS_PX + 1 : bonus(e.key)), px, ...(anchor ? { along: anchor.clone(), virtual: true } : {}) });
         }
       }
       if (opts.noEdge) continue;

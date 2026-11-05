@@ -11718,7 +11718,10 @@ function renderLevelsImpl() {
     // Стекло бывает унаследованным от контура — пересобираем все части здания (редко: только когда пустоты меняются)
     void overpassLayer.rebuildWhere((f) => members.has(f.key));
   }
-  const through = [...new Set(voids.flatMap((v) => v.through))];
+  // Подземные этажи — и на любом надземном плане: их выход наружу (приямок лестницы) виден сквозь отверстие в земле,
+  // остальное закрывают земля и здание
+  const through = [...new Set([...voids.flatMap((v) => v.through),
+    ...(level && level.floor > -0.01 ? levels.filter((l) => l.floor < -0.01).map((l) => l.n) : [])])];
   const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${cutEscalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.noHole ? 1 : 0}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}` : '';
   if (sig === levelSignature) return;
   levelSignature = sig;

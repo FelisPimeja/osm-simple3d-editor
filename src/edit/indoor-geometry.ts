@@ -70,11 +70,35 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
   const protectedNodes = new Set(otherFloors.flatMap(f=>rings(f).flatMap(r=>(r.ids??[]).filter(id=>!spans(id,f.levels)))));
   const detached = new Map<number,number>();
   const edits: ObjectEdit[]=[];
+  // Дверь (узел с тегами) не заменить новым узлом: она едет с этим этажом, а объекты другого этажа получают
+  // на её старом месте свой новый узел (авторасцепка)
+  const movedDoors = new Set(active.filter(f=>f.point&&f.key.startsWith('node/')).map(f=>Number(f.key.split('/')[1]))
+    .filter(id=>protectedNodes.has(id)&&moves.has(id)&&!same(moves.get(id)!,active.find(f=>f.key===`node/${id}`)!.point!)));
+  if (movedDoors.size) for (const f of otherFloors) {
+    if (f.point) continue;
+    let changed=false;
+    const output=rings(f).map(r=>{
+      if (!r.ids) return {...r};
+      const ids=r.ids.map(id=>{
+        if (!movedDoors.has(id)) return id;
+        changed=true;
+        if (!detached.has(id)) detached.set(id,freshId());
+        return detached.get(id)!;
+      });
+      return {...r,ids};
+    });
+    if (!changed) continue;
+    const polygons:Polygon[]=f.polygons.map((p,poly)=>{
+      const rr=output.filter(r=>r.poly===poly);
+      return {...p,outer:rr[0].coords,outerIds:rr[0].ids,inners:rr.slice(1).map(r=>r.coords),innerIds:rr.slice(1).map(r=>r.ids!)};
+    });
+    edits.push(f.line ? {key:f.key,line:{coords:polygons[0].outer,ids:polygons[0].outerIds!}} : {key:f.key,polygons});
+  }
+  for (const id of movedDoors) { protectedNodes.delete(id); detached.delete(id); }
   for (const f of active) {
     if (!glue&&!selected.has(f.key)&&!f.point) continue;
     if (f.point) {
       const id=Number(f.key.split('/')[1]), at=moves.get(id);
-      if (at && !same(at,f.point) && protectedNodes.has(id)) throw new Error('Общие узлы используются на другом этаже. Сначала разделите геометрию этажей.');
       const staysWithNeighbour = !glue && active.some(g=>!selected.has(g.key)&&!g.point&&rings(g).some(r=>r.ids?.includes(id)));
       if (at && !staysWithNeighbour) edits.push({key:f.key,polygons:[{outer:[at],outerIds:[id],inners:[],innerIds:[]}]});
       continue;

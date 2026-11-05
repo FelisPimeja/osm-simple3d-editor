@@ -1,4 +1,5 @@
 {
+  "Середина ребра": "Edge midpoint",
   "Скопировано: {n}. Базовая точка — угловая вершина. Ctrl+V — вставить.": "Copied: {n}. Base point: a corner vertex. Ctrl+V to paste.",
   "Вырезать из контура этажа": "Cut out of the level outline",
   "Вырезано внутреннее кольцо в контуре этажа {key}.": "Cut an inner ring in the level outline {key}.",

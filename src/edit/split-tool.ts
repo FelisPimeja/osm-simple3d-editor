@@ -539,6 +539,9 @@ export class SplitTool {
             const dm = q ? Math.hypot(q[0] - point[0], q[1] - point[1]) : Infinity;
             if (dm < near) { near = dm; z = m.z; label = `${m.label} · ${showLength(m.z)} ${unitLabel()}`; kind = 'tracked'; }
           }
+          // Середина бокового ребра
+          const mz = (range.lo + range.hi) / 2, q = px(v[0], v[1], mz);
+          if (q && Math.hypot(q[0] - point[0], q[1] - point[1]) < near) { z = mz; label = `${tr('Середина ребра')} · ${showLength(mz)} ${unitLabel()}`; kind = 'midpoint'; }
         } else { label = tr('Боковое ребро'); kind = 'vertex'; }
         const at = new THREE.Vector3(v[0], v[1], z);
         const screen = this.layer.focusProject(at), ll = this.layer.focusToLngLat(v[0], v[1]);

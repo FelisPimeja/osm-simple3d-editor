@@ -2876,10 +2876,20 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const [t0, t1, za, zb] of shellPieces(shell, ax, ay, bx, by, z0, top))
         wall(ax + (bx - ax) * t0, ay + (by - ay) * t0, ax + (bx - ax) * t1, ay + (by - ay) * t1, z0, za, zb);
     };
+    /** След здания у земли (для крышек нижнего этажа снаружи здания). */
+    const paleOutside = pale && top > -0.01 ? this.sectionAt(g, 0.05) : undefined;
     /** Крышка сечения (колонна, стена-полигон, короб): на срезе, а под скатом — по скату; целиком над крышей — нет крышки. */
     const cap = (outer: Pt[], holes: Pt[][], z0: number, black = false) => {
-      // Нижний этаж срезан по полу выбранного: крышка легла бы в плоскость этого пола и мерцала с ним
-      if (pale) return;
+      // Нижний этаж срезан по полу выбранного: крышка легла бы в плоскость этого пола и мерцала с ним. Снаружи
+      // здания (стены приямка лестницы подвала) пола над ними нет — там крышка нужна
+      if (pale) {
+        if (!paleOutside) return;
+        try {
+          const own: ClipMulti = [[[...outer, outer[0]], ...holes.map((h) => [...h, h[0]])]] as unknown as ClipMulti;
+          for (const piece of polygonClipping.difference(own, paleOutside)) fill(piece[0].slice(0, -1) as Pt[], piece.slice(1).map((r) => r.slice(0, -1) as Pt[]), top);
+        } catch { /* без крышки */ }
+        return;
+      }
       const colour = black && !pale ? 0x000000 : undefined;
       if (!shell) { fill(outer, holes, top, colour); return; }
       const zOf = (x: number, y: number) => Math.max(z0, Math.min(top, shell.at(x, y, z0) ?? top));

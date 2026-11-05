@@ -24,7 +24,7 @@ import { areaLedgeTriangles } from './area-ledge';
 import { floatingParts } from '../osm/floating';
 import { pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
 import { dropPartSeams } from './part-seams';
-import { COUNTER_DEPTH, counterRing } from './counter-ring';
+import { COUNTER_DEPTH, counterRing, isClosedCounterRing } from './counter-ring';
 import { edgePass } from './edge-pass';
 import { silhouetteEdges, type SilhouetteEdges } from './silhouette-edges';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
@@ -1372,7 +1372,12 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const p of it.polygons) for (const ring of it.line ? [p.outer] : [p.outer, ...p.inners]) {
         const footprint = it.counter ? this.counterFootprint(g, it, ring.map(g.toLocal), this.level!.items) : undefined;
         const rp = footprint ?? ring.map(g.toLocal);
-        if (footprint) for (const t of THREE.ShapeUtils.triangulateShape(footprint.map((q) => new THREE.Vector2(...q)), [])) for (const i of t) faces.push(...footprint[i], top);
+        if (footprint) {
+          // Замкнутый прилавок — кольцо с дырой
+          const k = isClosedCounterRing(footprint) ? footprint.length / 2 - 1 : footprint.length;
+          const outer = footprint.slice(0, k), hole = k < footprint.length ? footprint.slice(k + 1) : undefined, all = [...outer, ...(hole ?? [])];
+          for (const t of THREE.ShapeUtils.triangulateShape(outer.map((q) => new THREE.Vector2(...q)), hole ? [hole.map((q) => new THREE.Vector2(...q))] : [])) for (const i of t) faces.push(...all[i], top);
+        }
         const closed = !it.line || (rp.length > 2 && Math.hypot(rp[0][0] - rp.at(-1)![0], rp[0][1] - rp.at(-1)![1]) < 1e-3);
         if (closed && rp.length > 1 && Math.hypot(rp[0][0] - rp.at(-1)![0], rp[0][1] - rp.at(-1)![1]) < 1e-3) rp.pop();
         const n = closed ? rp.length : rp.length - 1;
@@ -2991,14 +2996,19 @@ export class BuildingsLayer implements CustomLayerInterface {
           // Явный объект на контуре заменяет подразумеваемую стену помещения: участок занят
           for(let i=1;i<line.length;i++)taken.push([line[i-1][0],line[i-1][1],line[i][0],line[i][1]]);
           const ring=it.counter?this.counterFootprint(g,it,line,items):undefined;
-          const points=ring?[...ring,ring[0]]:line;
+          // Замкнутый прилавок: внешнее и внутреннее кольца без торцов на стыке начала и конца
+          const keyhole=!!ring&&isClosedCounterRing(ring);
+          const kn=keyhole?ring!.length/2-1:0;
+          const outerRing=keyhole?ring!.slice(0,kn):ring,innerRing=keyhole?ring!.slice(kn+1):undefined;
+          const paths=keyhole?[[...outerRing!,outerRing![0]],[...innerRing!,innerRing![0]]]:[ring?[...ring,ring[0]]:line];
           if(ring){
             // Крышка — цвета помещения, в сторону которого отстроен прилавок
-            const n=ring.length,probe:Pt=[(ring[0][0]+ring[1][0]+ring[n-1][0]+ring[n-2][0])/4,(ring[0][1]+ring[1][1]+ring[n-1][1]+ring[n-2][1])/4];
+            const n=ring.length,probe:Pt=keyhole?[(outerRing![0][0]+outerRing![1][0]+innerRing![0][0]+innerRing!.at(-1)![0])/4,(outerRing![0][1]+outerRing![1][1]+innerRing![0][1]+innerRing!.at(-1)![1])/4]
+              :[(ring[0][0]+ring[1][0]+ring[n-1][0]+ring[n-2][0])/4,(ring[0][1]+ring[1][1]+ring[n-1][1]+ring[n-2][1])/4];
             const room=items.filter(f=>!f.line&&!f.cutOnly&&['room','area','corridor'].includes(f.kind)).flatMap(f=>f.polygons.map(q=>({f,q,outer:q.outer.map(g.toLocal)})))
               .filter(({q,outer})=>pointInLocalRing(probe,outer)&&!q.inners.some(h=>pointInLocalRing(probe,h.map(g.toLocal))))
               .sort((u,v)=>Math.abs(THREE.ShapeUtils.area(u.outer.map(c=>new THREE.Vector2(...c))))-Math.abs(THREE.ShapeUtils.area(v.outer.map(c=>new THREE.Vector2(...c)))))[0]?.f;
-            fill(ring,[],railingTop,room?room.colour??INDOOR_COLOURS[room.kind]:undefined);
+            fill(outerRing!,innerRing?[innerRing]:[],railingTop,room?room.colour??INDOOR_COLOURS[room.kind]:undefined);
             // Дверь в прилавке — без проёма: откидная секция, два разреза поперёк по краям
             for(let i=1;i<line.length;i++){
               const [a,b]=[line[i-1],line[i]],len=Math.hypot(b[0]-a[0],b[1]-a[1]);
@@ -3015,6 +3025,7 @@ export class BuildingsLayer implements CustomLayerInterface {
               }
             }
           }
+          for(const points of paths){
           const closed=points.length>2 && Math.hypot(points[0][0]-points.at(-1)![0],points[0][1]-points.at(-1)![1])<1e-6;
           for(let i=1;i<points.length;i++){
             const [a,b]=[points[i-1],points[i]];
@@ -3037,7 +3048,7 @@ export class BuildingsLayer implements CustomLayerInterface {
                 from=hi;
               }
               if(from<len)quad(at(from),b,it.z,railingTop);
-            }else if(!(ring&&(i===ring.length/2||i===ring.length)&&this.counterEndOnWall(a,b,g,it,items)))
+            }else if(!(ring&&!keyhole&&(i===ring.length/2||i===ring.length)&&this.counterEndOnWall(a,b,g,it,items)))
               quad(a,b,it.z,railingTop);
             positions.push(...a,railingTop,...b,railingTop);
           }
@@ -3049,6 +3060,7 @@ export class BuildingsLayer implements CustomLayerInterface {
             // Straight and gently curving runs have no vertical seams (30 degree threshold).
             if((!closed&&(i===0||i===count-1)) || (len>1e-12 && (ux*vx+uy*vy)/len<Math.cos(Math.PI/6)))
               verticals.push(...p,it.z,...p,railingTop);
+          }
           }
         }
         if(faces.length){

@@ -2812,8 +2812,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const zOf = (x: number, y: number) => Math.max(z0, Math.min(top, shell.at(x, y, z0) ?? top));
       const zs = [outer, ...holes].flat().map(([x, y]) => zOf(x, y));
       if (zs.every((z) => z >= top - 1e-3)) fill(outer, holes, top, colour);
-      // Под скатом верх стены — её примыкание к крыше, а не сечение срезом: не чёрный (толстые стены церкви
-      // под вальмой давали огромные чёрные клинья)
+      // Под скатом — тоже сечение (стену режет кровля): та же чёрная заливка
       else if (zs.some((z) => z > z0 + 0.05)) {
         // Стена через стык частей с перепадом высот: по вершинам торец лёг бы клином через всю стену. Режем на
         // ячейки ~0,25 м; ячейка на стыке (скачок высоты) — ступенью по высоте в её середине, остальные — по скату
@@ -2827,13 +2826,14 @@ export class BuildingsLayer implements CustomLayerInterface {
             for (const piece of polygonClipping.intersection(shape, cell)) {
               const o = piece[0].slice(0, -1) as Pt[], hs = piece.slice(1).map((r) => r.slice(0, -1) as Pt[]);
               const pz = o.map(([px, py]) => zOf(px, py));
-              if (Math.max(...pz) - Math.min(...pz) > 0.3) {
+              if (pz.every((z) => z >= top - 1e-3)) fill(o, hs, top, colour);
+              else if (Math.max(...pz) - Math.min(...pz) > 0.3) {
                 const cx = o.reduce((s2, q) => s2 + q[0], 0) / o.length, cy = o.reduce((s2, q) => s2 + q[1], 0) / o.length;
-                fill(o, hs, zOf(cx, cy), undefined);
-              } else fill(o, hs, zOf, undefined);
+                fill(o, hs, zOf(cx, cy), colour);
+              } else fill(o, hs, zOf, colour);
             }
           }
-        } catch { fill(outer, holes, zOf, undefined); }
+        } catch { fill(outer, holes, zOf, colour); }
       }
     };
     /** Стена на участках ребра, ещё не занятых другими стенами (совпадающие грани мерцали бы). */

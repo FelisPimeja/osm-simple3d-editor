@@ -60,7 +60,7 @@ export function voidCaps(n: number, plans: Map<number, LevelPlan>): MultiPolygon
 /** Объект здания для контура этажа: полигоны (в метрах) и высоты низа и верха стен. */
 export interface PlanPart { polygons: Pt[][][]; min: number; wallTop: number }
 /** Indoor-объект в метрах. */
-export interface PlanIndoor { kind: string; polygons: Pt[][][]; levels: number[]; line?: boolean; /** Этажи, где у объекта пол (floorLevels). */ floors?: number[] }
+export interface PlanIndoor { kind: string; polygons: Pt[][][]; levels: number[]; line?: boolean; /** Этажи, где у объекта пол (floorLevels). */ floors?: number[]; /** Своя высота помещения (height или его стены), м: потолок ниже этажа — своя крышка, не перекрытие. */ height?: number }
 
 const unionOf = (polys: Pt[][][]): MultiPolygon => (polys.length ? safe(() => polygonClipping.union(polys[0] as never, ...(polys.slice(1) as never[]))) : []);
 
@@ -69,7 +69,10 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
   const plans = new Map<number, LevelPlan>();
   for (const l of levels) {
     const prev = Math.max(...levels.filter((x) => x.n < l.n).map((x) => x.n));
-    const topped = (kinds: string[]) => Number.isFinite(prev) ? indoor.filter((f) => !f.line && kinds.includes(f.kind) && f.levels.length && Math.max(...f.levels) === prev)
+    const prevStep = Number.isFinite(prev) ? l.floor - levels.find((x) => x.n === prev)!.floor : Infinity;
+    // Помещение ниже этажа (стены 3 м при этаже 6,7 м) — своя крышка на своей высоте (lowLids), не перекрытие этажа
+    const topped = (kinds: string[]) => Number.isFinite(prev) ? indoor.filter((f) => !f.line && kinds.includes(f.kind) && f.levels.length && Math.max(...f.levels) === prev
+      && !(f.height !== undefined && f.height < prevStep - 0.05))
       .flatMap((f) => f.polygons.map((p) => p.map(open))) : [];
     // Комната закрыта и под проёмом; площадка и коридор — только вне явных проёмов (пол атриума под кольцом этажа выше
     // открыт), а где этажа выше просто нет в разметке — закрыты: неразмеченное — не второй свет

@@ -11763,6 +11763,7 @@ function renderLevelsImpl() {
     voids: voids.map((v) => v.polygon).flat(),
     // Потолки одноэтажных помещений под проёмом — перекрытие этого этажа над ними
     ceilings: voidsCache.get(focus.key)?.caps?.get(level!.n) ?? [],
+    lids: (voidsCache.get(focus.key)?.lids ?? []).filter((l) => l.level < level!.n).map(({ polygon, z }) => ({ polygon, z })),
     bareVoids: voids.filter((v) => v.bare).flatMap((v) => v.polygon),
     // Пустота прорезает пол этажа и полы промежуточных этажей (у самого нижнего — пол атриума)
     voidCuts: voids.map((v) => ({
@@ -11799,7 +11800,43 @@ const stairsArea = (f: IndoorFeature) => !f.line && !f.point && f.kind === 'area
 let glassVoidsSig = '';
 type LevelVoids = Map<number, { polygon: LonLat[][][]; through: number[]; bare?: boolean }[]>;
 /** Пустоты (второй свет) всех этажей здания, lon/lat; кеш — по зданию и данным. */
-const voidsCache = new Map<string, { sig: string; map: LevelVoids; caps?: Map<number, LonLat[][][]> }>();
+/** Крышка помещения со своей высотой: контур, высота, м, и этаж помещения. */
+type Lid = { polygon: LonLat[][][]; z: number; level: number };
+const voidsCache = new Map<string, { sig: string; map: LevelVoids; caps?: Map<number, LonLat[][][]>; lids?: Lid[] }>();
+/**
+ * Своя высота помещения: тег height, иначе — стены по его контуру, если у всех есть height (наибольшая).
+ * Нет — потолок на высоте этажа.
+ */
+function roomHeights(indoor: IndoorFeature[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const walls = indoor.filter((f) => f.kind === 'wall');
+  for (const f of indoor) {
+    if (f.kind !== 'room' || f.line || !f.polygons.length) continue;
+    const own = parseLength(f.tags.height);
+    if (own !== undefined) { out.set(f.key, own); continue; }
+    const ring = f.polygons[0].outer;
+    const kx = Math.cos(ring[0][1] * Math.PI / 180) * 111320, ky = 111320;
+    // Вершина помещения на стене этого этажа: на её ломаной (25 см)
+    const onWall = (p: LonLat, w: IndoorFeature) => w.levels.some((l) => f.levels.includes(l)) && w.polygons.some((q) => {
+      const r = q.outer, n = w.line ? r.length - 1 : r.length;
+      for (let i = 0; i < n; i++) {
+        const a = r[i], b = r[(i + 1) % r.length];
+        const ax = (a[0] - p[0]) * kx, ay = (a[1] - p[1]) * ky, bx = (b[0] - p[0]) * kx, by = (b[1] - p[1]) * ky;
+        const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy, t = len ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len)) : 0;
+        if (Math.hypot(ax + t * dx, ay + t * dy) < 0.25) return true;
+      }
+      return false;
+    });
+    let best: number | undefined, ok = true;
+    for (const p of ring) {
+      const hs = walls.filter((w) => onWall(p, w)).map((w) => parseLength(w.tags.height));
+      if (!hs.length || hs.some((h) => h === undefined)) { ok = false; break; }
+      best = Math.max(best ?? 0, ...(hs as number[]));
+    }
+    if (ok && best !== undefined) out.set(f.key, best);
+  }
+  return out;
+}
 /** Лестницы, лежащие в основном в проёме верхнего этажа: своих проёмов в перекрытии не режут. */
 const stairsInVoid = new Set<string>();
 function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
@@ -11821,6 +11858,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
   const hit = voidsCache.get(g.key);
   if (hit?.sig === sig) return hit.map;
   const caps = new Map<number, LonLat[][][]>();
+  const lids: Lid[] = [];
   const map: LevelVoids = timed('этажи: второй свет', () => {
     const out: LevelVoids = new Map();
     if (!Number.isFinite(w) || !indoor.length) return out;
@@ -11831,7 +11869,17 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
     const poly = (p: Polygon) => [p.outer.map(loc), ...p.inners.map((r) => r.map(loc))];
     const parts = partFeats
       .map((f) => { const h = computeHeights(f.tags); return { polygons: f.polygons.map(poly), min: h.min, wallTop: h.wallTop }; });
-    const plans = buildPlans(levels, parts, indoor.filter((f) => f.kind !== 'poi' && !f.escalatorArea).map((f) => ({ kind: f.kind, levels: f.levels, floors: floorLevels(f), line: f.line, polygons: f.polygons.map(poly) })));
+    const heightOf = roomHeights(indoor);
+    const plans = buildPlans(levels, parts, indoor.filter((f) => f.kind !== 'poi' && !f.escalatorArea).map((f) => ({ kind: f.kind, levels: f.levels, floors: floorLevels(f), line: f.line, polygons: f.polygons.map(poly), height: heightOf.get(f.key) })));
+    // Крышки помещений ниже своего этажа — на их высоте, видны с этажей выше
+    for (const f of indoor) {
+      const h = heightOf.get(f.key), top = f.levels.length ? Math.max(...f.levels) : undefined;
+      const base = levels.find((x) => x.n === top);
+      if (h === undefined || !base || f.line || f.kind !== 'room') continue;
+      const next = levels.filter((x) => x.n > base.n).sort((a, b) => a.n - b.n)[0];
+      if (!next || h >= next.floor - base.floor - 0.05) continue;
+      lids.push({ polygon: f.polygons.map((p) => [p.outer, ...p.inners]), z: base.floor + h, level: base.n });
+    }
     for (const l of levels) {
       const cap = voidCaps(l.n, plans);
       if (cap.length) caps.set(l.n, cap.map((p) => p.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))));
@@ -11874,7 +11922,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
     }
     return out;
   }, (r) => `${[...r.values()].flat().length} пустот`);
-  voidsCache.set(g.key, { sig, map, caps });
+  voidsCache.set(g.key, { sig, map, caps, lids });
   while (voidsCache.size > 20) voidsCache.delete(voidsCache.keys().next().value!);
   return map;
 }

@@ -268,6 +268,8 @@ export interface IndoorLevel {
   voids?: LonLat[][][];
   /** Потолки помещений этажа ниже в проёмах: перекрытие над ними остаётся. */
   ceilings?: LonLat[][][];
+  /** Крышки помещений ниже своего этажа (стены ниже потолка этажа): контур и высота, м. */
+  lids?: { polygon: LonLat[][][]; z: number }[];
   /** Высоты, на которых пустота прорезает перекрытия (пол этажа и полы промежуточных этажей), — по пустотам. */
   voidCuts?: { polygon: LonLat[][][]; zs: number[] }[];
   /** Подземные этажи (для земли надземного плана): контуры indoor=level и площади лестниц, выходящих наверх. */
@@ -1866,6 +1868,24 @@ export class BuildingsLayer implements CustomLayerInterface {
           edge.push(x0, y0, f, x1, y1, f, x0, y0, b, x1, y1, b);
           under.push(x0, y0, b, x1, y1, b, x1, y1, f, x0, y0, b, x1, y1, f, x0, y0, f);
         }
+      }
+      // Крышки помещений со своей высотой — на верху их стен, с обводкой
+      const lidPos: number[] = [];
+      for (const lid of this.level.lids ?? []) for (const poly of lid.polygon) {
+        const rings = poly.map((r) => r.map(g.toLocal));
+        const contour = rings[0].map(([x, y]) => new THREE.Vector2(x, y)), hs = rings.slice(1).map((r) => r.map(([x, y]) => new THREE.Vector2(x, y)));
+        const pts = [...contour, ...hs.flat()];
+        for (const tri of THREE.ShapeUtils.triangulateShape(contour, hs)) for (const i of tri) lidPos.push(pts[i].x, pts[i].y, lid.z);
+        for (const r of rings) for (let i = 0; i < r.length; i++) { const a = r[i], b = r[(i + 1) % r.length]; edge.push(a[0], a[1], lid.z, b[0], b[1], lid.z); }
+      }
+      if (lidPos.length) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(lidPos, 3));
+        geo.computeVertexNormals();
+        const mesh = new THREE.Mesh(geo, INDOOR_SLAB_MATERIAL);
+        mesh.name = 'indoor-room-lids';
+        mesh.frustumCulled = false;
+        root.add(mesh);
       }
       if (under.length) {
         const geo = new THREE.BufferGeometry();

@@ -414,15 +414,12 @@ export function pointOnSurface(p: Polygon): LonLat {
   return c;
 }
 
-/** Запас по высоте (м): часть, начинающаяся не ниже «верх контура − запас», стоит на контуре, а не внутри него. */
-const ON_TOP_TOLERANCE = 1;
-
 /**
  * Контур скрываем при покрытии не менее 90% частями.
  * В явном type=building учитываем все его части: состав здания задан отношением.
- * Для пространственно найденных частей требуем известную высоту и низ у основания.
+ * Для пространственно найденных частей требуем известную высоту; приподнятые тоже считаются в покрытии.
  * Небольшие пристройки и части без высоты не должны скрывать основной объём.
- * Приподнятые части не вычитаем из основания.
+ * Приподнятые части не вычитаем из основания (см. outline-remainder).
  */
 export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[] = features, groups: BuildingGroup[] = []) {
   const byKey = new Map(features.map((f) => [f.key, f]));
@@ -451,7 +448,6 @@ export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[
     // Контур с building:part — сам тоже часть: рисуется объёмом, хоть внутри и другие части
     if (isOutlinePart(b.tags)) { b.hasParts = false; continue; }
     const heights = computeHeights(b.tags);
-    const top = heights.top;
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
     for (const p of b.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
     const inside = (c: LonLat) => b.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
@@ -464,10 +460,8 @@ export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[
       for (let j = Math.floor(s / CELL); j <= Math.floor(n / CELL); j++) {
         for (const part of grid.get(`${i},${j}`) ?? []) {
           if (assignedParts.has(part.key)) continue;
-          // Вычитание 2D-контура проходит через всю высоту. Приподнятая часть
-          // (ярус, навес) не должна проделывать сквозную дыру в нижнем объёме.
-          const grounded = part.min <= heights.min + 0.5 && part.min < top - ON_TOP_TOLERANCE;
-          if (grounded && inside(part.c)) candidates.add(part.key);
+          // Покрытие считаем по всем частям внутри, и приподнятым (навес над колоннами АЗС — issue #48)
+          if (inside(part.c)) candidates.add(part.key);
         }
       }
     }

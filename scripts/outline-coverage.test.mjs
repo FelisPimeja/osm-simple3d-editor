@@ -40,10 +40,10 @@ test('17948502 explicit ground body and upper tier together replace the building
  markOutlinesWithParts(features,features,groups);
  assert.equal(features.find(f=>f.key==='relation/17948502').hasParts,true);
 });
-test('an explicit raised part replaces the outline while a spatially found one keeps the base',()=>{
+test('a raised part counts toward coverage, explicit or spatially found (issue #48)',()=>{
  const b=outline(),p=feature('way/2','part',0,0,.001,.001,{height:'20',min_height:'15'});
  const group={members:[b.key,p.key],roles:['outline','part']};
- markOutlinesWithParts([b,p],[b]);assert.equal(b.hasParts,false);
+ markOutlinesWithParts([b,p],[b]);assert.equal(b.hasParts,true);
  markOutlinesWithParts([b,p],[b],[group]);assert.equal(b.hasParts,true);
 });
 test('17747395: all explicit parts cover the outline, including parts without height and raised canopies',async()=>{

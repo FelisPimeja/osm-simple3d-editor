@@ -1771,7 +1771,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         [p.outer, ...p.inners].map((r) => { const rp = r.map(g.toLocal); return [...rp, rp[0]]; })));
       const pools: ClipMulti = this.level.items.filter(it => it.pool).flatMap(it => it.polygons.map(p =>
         [p.outer, ...p.inners].map(r => { const points = r.map(g.toLocal); return [...points, points[0]]; })));
-      const stairs = escalatorFloorHoles((this.level.cutEscalators ?? this.level.escalators ?? []).map(e => ({...e,line:e.line.map(g.toLocal),outline:e.outline?.map(g.toLocal)})), this.level.floor);
+      const drawn = drawnEscalatorOpenings(this.level.items, (this.level.cutEscalators ?? this.level.escalators ?? []).map(e => ({...e,line:e.line.map(g.toLocal),outline:e.outline?.map(g.toLocal)})), g.toLocal);
+      const stairs: ClipMulti = [...escalatorFloorHoles(drawn.auto, this.level.floor), ...drawn.rings.map(r => [[...r, r[0]]] as ClipMulti[number])];
       const mappedFloors: ClipMulti = this.level.items.filter(it => !it.line && !it.shaft && !it.noFloor && !it.cutOnly && !it.pool
         && ['level','area','corridor','room'].includes(it.kind)).flatMap(it => it.polygons.map(p =>
           [p.outer, ...p.inners].map(r => { const points = r.map(g.toLocal); return [...points, points[0]]; })));
@@ -2414,7 +2415,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const poolHoles = pools.flatMap(it => it.polygons.map(p =>
       [p.outer, ...p.inners].map(r => { const l = r.map(g.toLocal); return [...l, l[0]]; }) as ClipMulti[number]));
     const voidFloorHoles = (floorVoids ?? []).map(poly => poly.map(r => {const points=r.map(g.toLocal);return [...points,points[0]];}));
-    const ownEscalatorHoles = escalatorFloorHoles(escalators.map(e => ({ ...e, line: e.line.map(g.toLocal), outline: e.outline?.map(g.toLocal) })), items[0]?.z ?? 0);
+    const ownEscalatorHoles = escalatorFloorHoles(drawnEscalatorOpenings(items, escalators.map(e => ({ ...e, line: e.line.map(g.toLocal), outline: e.outline?.map(g.toLocal) })), g.toLocal).auto, items[0]?.z ?? 0);
     const escalatorHoles = [...voidFloorHoles, ...ownEscalatorHoles, ...shaftHoles, ...poolHoles];
     // Вырезы — только у кусков пола рядом с ними (кусков сотни, polygon-clipping платит за каждый)
     const holeBox = (r: Pt[]) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const [x, y] of r) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } return [x0, y0, x1, y1]; };
@@ -7015,6 +7016,22 @@ export type SnapKind = 'level' | 'vertex' | 'midpoint' | 'center' | 'shape' | 'g
 export const GRID_SNAP_KEY = '@grid';
 /** axis, dist — у оси откладывания: номер оси якоря и расстояние от него со знаком. */
 interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3; label?: string; axis?: number; dist?: number }
+/**
+ * Нарисованные вырезы под эскалаторы: внутренние кольца полов этажа, в которых лежит середина эскалатора.
+ * Такие эскалаторы автовырез не получают (он — запасной), а кольцо прорезает плиту.
+ */
+function drawnEscalatorOpenings<E extends { line: Pt[] }>(items: IndoorItem[], escalators: E[], toLocal: (p: LonLat) => Pt): { auto: E[]; rings: Pt[][] } {
+  const inners = items.filter(it => !it.line && ['level', 'area', 'corridor', 'room'].includes(it.kind))
+    .flatMap(it => it.polygons.flatMap(p => p.inners.map(r => r.map(toLocal))));
+  const rings = new Set<Pt[]>();
+  const auto = escalators.filter(e => {
+    const a = e.line[0], b = e.line[e.line.length - 1], m: Pt = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const r = inners.find(r => pointInLocalRing(m, r));
+    if (r) rings.add(r);
+    return !r;
+  });
+  return { auto, rings: [...rings] };
+}
 export interface SnapEdge { key: string; a: THREE.Vector3; b: THREE.Vector3 }
 /** Привязка под курсором: тип, объект, точка (в метрах сцены режима и географически) и положение на экране. */
 /** along — у продолжения ребра: конец ребра, от которого идёт продолжение (для пунктира). */

@@ -2807,7 +2807,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       const zOf = (x: number, y: number) => Math.max(z0, Math.min(top, shell.at(x, y, z0) ?? top));
       const zs = [outer, ...holes].flat().map(([x, y]) => zOf(x, y));
       if (zs.every((z) => z >= top - 1e-3)) fill(outer, holes, top, colour);
-      else if (zs.some((z) => z > z0 + 0.05)) fill(outer, holes, zOf, colour);
+      // Под скатом верх стены — её примыкание к крыше, а не сечение срезом: не чёрный (толстые стены церкви
+      // под вальмой давали огромные чёрные клинья)
+      else if (zs.some((z) => z > z0 + 0.05)) fill(outer, holes, zOf, undefined);
     };
     /** Стена на участках ребра, ещё не занятых другими стенами (совпадающие грани мерцали бы). */
     /** solid — грань толстой стены или колонны: её закрывает только совпадающая стена, а не стена с другой стороны толщины. */

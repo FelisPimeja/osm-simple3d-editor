@@ -1347,6 +1347,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Стена и колонна — их вертикальные грани от пола до среза
     if (it.kind === 'wall' || it.kind === 'column') {
       const top = wallTopOf(it, this.levelCut ?? this.level!.cut);
+      const shell = g === this.groups.get(FOCUS_GROUP) ? planShell(g) : undefined;
       const faces: number[] = [], edges: number[] = [];
       // Проёмы этого этажа: те же, что вырезаны в самой стене
       const openings = it.railing && !tallGlass(it) ? [] : [...(this.level!.doors ?? []).map((at) => {
@@ -1374,9 +1375,13 @@ export class BuildingsLayer implements CustomLayerInterface {
           }
           gaps.sort((p, q) => p[0] - q[0]);
           const x = (t: number) => ax + (bx - ax) * t, y = (t: number) => ay + (by - ay) * t;
+          // Верх — как у самой стены: по оболочке здания (скаты крыш), не выше среза
           const part = (lo: number, hi: number, z0: number, z1: number) => {
             if (hi - lo < 1e-6 || z1 - z0 < 1e-6) return;
-            faces.push(x(lo), y(lo), z0, x(hi), y(hi), z0, x(hi), y(hi), z1, x(lo), y(lo), z0, x(hi), y(hi), z1, x(lo), y(lo), z1);
+            for (const [t0, t1, za, zb] of shellPieces(shell, x(lo), y(lo), x(hi), y(hi), z0, z1)) {
+              const u0 = lo + (hi - lo) * t0, u1 = lo + (hi - lo) * t1;
+              faces.push(x(u0), y(u0), z0, x(u1), y(u1), z0, x(u1), y(u1), zb, x(u0), y(u0), z0, x(u1), y(u1), zb, x(u0), y(u0), za);
+            }
           };
           let from = 0;
           for (const [lo, hi] of gaps) {

@@ -6796,7 +6796,9 @@ function shellPiecesImpl(shell: Shell, ax: number, ay: number, bx: number, by: n
   for (let i = 0; i + 1 < ts.length; i++) {
     const t0 = ts[i], t1 = ts[i + 1];
     // Крыша над промежутком между изломами — линейна: берём её у концов изнутри (скачок на контуре части — снаружи)
-    const e = Math.min(1e-3 / len, (t1 - t0) / 4);
+    // Отступ — больше допуска контура части (SHELL_EDGE_TOL): иначе конец стены, упёртый в соседнюю высокую часть,
+    // брал её высоту, и верх стены шёл клином от неё до следующего излома
+    const e = Math.min(2 * SHELL_EDGE_TOL / len, (t1 - t0) / 4);
     const h0 = h(t0 + e), h1 = h(t1 - e);
     const k = (h1 - h0) / (t1 - t0 - 2 * e);
     const hA = h0 - k * e, hB = h1 + k * e;

@@ -11752,8 +11752,13 @@ function renderLevelsImpl() {
   }
   // Подземные этажи — и на любом надземном плане: их выход наружу (приямок лестницы) виден сквозь отверстие в земле,
   // остальное закрывают земля и здание
+  // Крышки помещений этажей ниже видны вне перекрытия (зал под навесом): эти этажи и все промежуточные — тоже,
+  // иначе крышки висят без стен
+  const lidLevels = level ? (voidsCache.get(focus.key)?.lids ?? []).filter((l) => l.level < level.n).map((l) => l.level) : [];
+  const lidLow = lidLevels.length ? Math.min(...lidLevels) : undefined;
   const through = [...new Set([...voids.flatMap((v) => v.through),
-    ...(level && level.floor > -0.01 ? levels.filter((l) => l.floor < -0.01).map((l) => l.n) : [])])];
+    ...(lidLow !== undefined ? levels.filter((l) => l.n >= lidLow && l.n < level!.n).map((l) => l.n) : []),
+    ...(level && level.floor > -0.01 ? levels.filter((l) => l.floor < -0.01).map((l) => l.n) : [])])].sort((a, b) => b - a);
   const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${cutEscalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.noHole ? 1 : 0}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}` : '';
   if (sig === levelSignature) return;
   levelSignature = sig;

@@ -12,7 +12,7 @@ export interface LevelPlan {
   explicitVoids?: MultiPolygon;
   /** Сплошной пол по контурам этажа (indoor=level, без внутренних колец). */
   solid?: MultiPolygon;
-  /** Потолки помещений этажа ниже (indoor=room, верхний этаж — ближний нижний): закрыты перекрытием этого этажа. */
+  /** Потолки одноэтажных пространств этажа ниже: комнаты всюду, площадки и коридоры — вне явных проёмов. */
   caps?: MultiPolygon;
 }
 
@@ -69,12 +69,20 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
   const plans = new Map<number, LevelPlan>();
   for (const l of levels) {
     const prev = Math.max(...levels.filter((x) => x.n < l.n).map((x) => x.n));
-    const capPolys = Number.isFinite(prev) ? indoor.filter((f) => !f.line && f.kind === 'room' && f.levels.length && Math.max(...f.levels) === prev)
+    const topped = (kinds: string[]) => Number.isFinite(prev) ? indoor.filter((f) => !f.line && kinds.includes(f.kind) && f.levels.length && Math.max(...f.levels) === prev)
       .flatMap((f) => f.polygons.map((p) => p.map(open))) : [];
+    // Комната закрыта и под проёмом; площадка и коридор — только вне явных проёмов (пол атриума под кольцом этажа выше
+    // открыт), а где этажа выше просто нет в разметке — закрыты: неразмеченное — не второй свет
+    const capPolys = topped(['room']), openPolys = topped(['area', 'corridor']);
     // …только под объёмом здания выше пола этажа (зал под навесом — тоже): у крыши низкого крыла потолок не нужен
     const abovePolys = parts.filter((p) => p.wallTop > l.floor + 0.5).flatMap((p) => p.polygons.map((q) => q.map(open)));
     let capsCache: MultiPolygon | undefined;
-    const capsOf = () => (capsCache ??= capPolys.length && abovePolys.length ? safe(() => polygonClipping.intersection(unionOf(capPolys), unionOf(abovePolys))) : []);
+    const capsOf = (voids: MultiPolygon) => (capsCache ??= (() => {
+      if (!abovePolys.length || !(capPolys.length || openPolys.length)) return [];
+      const areas = openPolys.length ? (voids.length ? safe(() => polygonClipping.difference(unionOf(openPolys), voids)) : unionOf(openPolys)) : [];
+      const all = capPolys.length ? (areas.length ? safe(() => polygonClipping.union(unionOf(capPolys), areas)) : unionOf(capPolys)) : areas;
+      return all.length ? safe(() => polygonClipping.intersection(all, unionOf(abovePolys))) : [];
+    })());
     const onLevel = indoor.filter((f) => !f.line && f.levels.includes(l.n));
     const levelPolys = onLevel.filter((f) => f.kind === 'level').flatMap((f) => f.polygons.map((p) => p.map(open)));
     const partPolys = parts.filter((p) => p.min <= l.floor + 0.5 && p.wallTop > l.floor + 0.01).flatMap((p) => p.polygons.map((q) => q.map(open)));
@@ -93,7 +101,7 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
     const solidOf = () => (solidCache ??= levelPolys.length ? unionOf(levelPolys) : []);
     if (!spaces.length) {
       const holes = levelHoles.length ? unionOf(levelHoles) : [];
-      plans.set(l.n, { floor: holes.length ? solidOf() : [], get mapped() { return mappedOf(); }, explicitVoids: holes, get solid() { return solidOf(); }, get caps() { return capsOf(); } });
+      plans.set(l.n, { floor: holes.length ? solidOf() : [], get mapped() { return mappedOf(); }, explicitVoids: holes, get solid() { return solidOf(); }, get caps() { return capsOf(holes); } });
       continue;
     }
     const mapped = mappedOf();
@@ -121,7 +129,7 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
     }).filter(m => m.length);
     const all = [...open1, ...levelHoles.map((h) => [h] as MultiPolygon)];
     const explicitVoids = all.length ? safe(() => polygonClipping.union(all[0], ...all.slice(1))) : [];
-    plans.set(l.n, { floor, mapped, explicitVoids, get solid() { return solidOf(); }, get caps() { return capsOf(); } });
+    plans.set(l.n, { floor, mapped, explicitVoids, get solid() { return solidOf(); }, get caps() { return capsOf(explicitVoids); } });
   }
   return plans;
 }

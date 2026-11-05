@@ -249,3 +249,12 @@ test('a one-level room under an atrium keeps its ceiling; a two-level room stays
  assert.ok(Math.abs(voidArea-(100-16))<1e-6);
  assert.ok(Math.abs(multiArea(voidCaps(1,plans))-16)<1e-6);
 });
+test('a one-level area stays open under a drawn opening and is closed where the upper level is not mapped',()=>{
+ const small=square(0,0,10,20), ring=square(2,2,8,8);
+ const level1={kind:'level',polygons:[[small,ring]],levels:[1]};
+ const atrium={kind:'area',polygons:[[square(3,3,7,7)]],levels:[0]};
+ const hall={kind:'area',polygons:[[square(12,2,18,8)]],levels:[0]};
+ const plans=buildPlans(levels,[part],[level1,atrium,hall]);
+ assert.ok(Math.abs(findVoids(1,plans).reduce((s,v)=>s+multiArea(v.polygon),0)-36)<1e-6);
+ assert.ok(Math.abs(multiArea(voidCaps(1,plans))-36)<1e-6);
+});

@@ -232,7 +232,8 @@ export class ShapeTool {
         this.refresh();
         return true;
       }
-      if (this.problem) { this.say(this.problem, true); return true; }
+      // Причина уже в панели ввода — не дублируем в строке состояния
+      if (this.problem) { this.updateVcb(); return true; }
       this.apply(this.offset);
       return true;
     }
@@ -418,7 +419,7 @@ export class ShapeTool {
       else return true;
       const offset = v.multiplyScalar(dist);
       const problem = this.preview(this.target, offset);
-      if (problem) { this.problem = problem; this.typed = ''; this.updateVcb(); this.say(problem, true); return true; }
+      if (problem) { this.problem = problem; this.typed = ''; this.updateVcb(); return true; }
       this.apply(offset);
       return true;
     }

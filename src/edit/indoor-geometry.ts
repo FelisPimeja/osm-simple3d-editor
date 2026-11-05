@@ -64,7 +64,10 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
     }
   }
   const otherFloors = all.filter(f=>!active.includes(f));
-  const protectedNodes = new Set(otherFloors.flatMap(f=>rings(f).flatMap(r=>r.ids??[])));
+  // Узел другого этажа — не трогаем; но если он стоит и в объекте этого этажа, который сам охватывает и тот этаж
+  // (стена level=0;1 в мультиполигоне стены 1 этажа), правка законна для обоих
+  const spans=(id:number,levels:number[])=>active.some(a=>levels.every(l=>a.levels.includes(l))&&rings(a).some(r=>r.ids?.includes(id)));
+  const protectedNodes = new Set(otherFloors.flatMap(f=>rings(f).flatMap(r=>(r.ids??[]).filter(id=>!spans(id,f.levels)))));
   const detached = new Map<number,number>();
   const edits: ObjectEdit[]=[];
   for (const f of active) {

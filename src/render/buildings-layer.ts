@@ -5387,7 +5387,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const c = this.monochrome ? MONOCHROME : it.roof;
       const h = computeHeights(it.tags);
       // Часть выше среза (ступени у цоколя: верх 0,71 м при срезе 0,7) — её грани ниже среза тоже нужны
-      if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || h.top <= floor + 0.05 || h.min >= top || this.planCovers(it)) continue;
+      if (g.hidden.has(it.feature.key) || strokeOnly(g, it) || h.top <= floor + 0.05 || h.min >= top || (this.planCovers(it) && !planDetail(g, it, h))) continue;
       const end = it.positions.length / 3 - it.floorVertices, p = it.positions;
       for (let i = it.wallVertices * 3; i + 8 < end * 3; i += 9) {
         if (p[i + 2] > floor + FLOOR_OBJECT_HEIGHT && p[i + 2] < top + 0.05
@@ -7256,6 +7256,13 @@ function ringSegments(g: MeshGroup, it: Item, z: number): Float32Array {
 }
 
 /** Площадь объекта в плане, м² (кеш по объекту): при наложении в одной плоскости первым выбирается меньший. */
+/**
+ * Мелкая тонкая часть (поясок, карниз колонны: тоньше метра, до 4 м²) — деталь, а не крышка над планом: её верх
+ * на плане этажа рисуется и над помещением.
+ */
+function planDetail(g: MeshGroup, it: Item, h: ReturnType<typeof computeHeights>): boolean {
+  return h.top - h.min < 1 && itemArea(g, it) < 4;
+}
 const areaCache = new WeakMap<Item, number>();
 function itemArea(g: MeshGroup, it: Item): number {
   let a = areaCache.get(it);

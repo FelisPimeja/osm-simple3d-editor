@@ -56,6 +56,8 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 .vcb-value { min-width: 60px; text-align: right; font: 600 14px ui-monospace, monospace; }
 .vcb-value.typed { color: #1d4ed8; }
 .vcb-units { display: inline-flex; margin-left: 4px; border: 1px solid #d1d5db; border-radius: 4px; overflow: hidden; align-self: center; }
+/* Подпись прямо перед переключателем (без значения) — по центру с ним, а не по базовой линии */
+.vcb-label:has(+ .vcb-units) { align-self: center; }
 .vcb-units button { border: 0; background: none; padding: 2px 8px; font-size: 12px; cursor: pointer; color: #444; }
 .vcb-units button + button { border-left: 1px solid #d1d5db; }
 .vcb-units button.active { background: #2f7cff; color: #fff; }

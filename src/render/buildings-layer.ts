@@ -3638,6 +3638,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (this.edgeHover && now - this.edgeHover.since >= EXTENSION_ARM_MS) this.armedEdges.set(this.edgeHover.id, now + EXTENSION_TTL_MS);
     for (const [id, until] of this.armedEdges) if (until < now) this.armedEdges.delete(id);
     let hovered: { id: string; d: number } | undefined;
+    /** Взведённые рёбра: пересечения их продолжений — привязка «продолжение соседних сторон». */
+    const armedList: { a: THREE.Vector3; b: THREE.Vector3; key: string }[] = [];
     // Без точки инструмента — перпендикуляр из взведённой вершины откладывания (опорная точка основанием на ребре)
     const anchor = !opts.from && this.trackingEnabled && !off.has('tracking') && this.tracking && !this.tracking.point ? this.tracking.anchor : undefined;
     const perpFrom = opts.from ?? anchor;
@@ -3661,6 +3663,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const len = ab.length();
       const id = edgeId(e);
       const armed = this.armedEdges.has(id);
+      if (armed && len > 0.05 && !off.has('corner')) armedList.push(e);
       if (armed && len > 0.05 && !off.has('extension')) {
         const k = EXTENSION_M / len;
         ext0.copy(e.a).addScaledVector(ab, -k);
@@ -3682,6 +3685,23 @@ export class BuildingsLayer implements CustomLayerInterface {
       const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
       if (px && d <= radius && !off.has('edge')) near.push({ s: { kind: 'edge', key: e.key, p: onSeg.clone() }, d: d + SNAP_PRIORITY.edge * 6 - bonus(e.key), px });
       if (px && d <= EXTENSION_HOVER_PX && (!hovered || d < hovered.d)) hovered = { id, d };
+    }
+    // Пересечение продолжений двух взведённых рёбер (в плоскости первого; z — по нему): точка вне хотя бы одного из них
+    for (let i = 0; i < armedList.length; i++) for (let j = i + 1; j < armedList.length; j++) {
+      const e = armedList[i], f = armedList[j];
+      if (Math.abs(e.a.z - f.a.z) > 0.05 || Math.abs(e.b.z - e.a.z) > 0.05 || Math.abs(f.b.z - f.a.z) > 0.05) continue;
+      const ux = e.b.x - e.a.x, uy = e.b.y - e.a.y, vx = f.b.x - f.a.x, vy = f.b.y - f.a.y;
+      const den = ux * vy - uy * vx;
+      if (Math.abs(den) < 1e-9 * Math.hypot(ux, uy) * Math.hypot(vx, vy) * 1e3) continue;
+      const t = ((f.a.x - e.a.x) * vy - (f.a.y - e.a.y) * vx) / den, u = ((f.a.x - e.a.x) * uy - (f.a.y - e.a.y) * ux) / den;
+      const inE = t > 0.02 && t < 0.98, inF = u > 0.02 && u < 0.98;
+      if (inE && inF) continue;
+      const p = new THREE.Vector3(e.a.x + ux * t, e.a.y + uy * t, e.a.z);
+      if (Math.min(Math.abs(t), Math.abs(t - 1)) * Math.hypot(ux, uy) > EXTENSION_M && !inE) continue;
+      if (Math.min(Math.abs(u), Math.abs(u - 1)) * Math.hypot(vx, vy) > EXTENSION_M && !inF) continue;
+      const px = toPx(p);
+      const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
+      if (px && d <= radius) near.push({ s: { kind: 'corner', key: e.key, p }, d: d + SNAP_PRIORITY.corner * 6 - bonus(e.key), px });
     }
     if (!hovered) this.edgeHover = undefined;
     else if (this.edgeHover?.id !== hovered.id) this.edgeHover = { id: hovered.id, since: now };

@@ -2878,6 +2878,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     /** След здания у земли (для крышек нижнего этажа снаружи здания). */
     const paleOutside = pale && top > -0.01 ? this.sectionAt(g, 0.05) : undefined;
+    const paleCapEdges: number[] = [];
     /** Крышка сечения (колонна, стена-полигон, короб): на срезе, а под скатом — по скату; целиком над крышей — нет крышки. */
     const cap = (outer: Pt[], holes: Pt[][], z0: number, black = false) => {
       // Нижний этаж срезан по полу выбранного: крышка легла бы в плоскость этого пола и мерцала с ним. Снаружи
@@ -2886,7 +2887,11 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (!paleOutside) return;
         try {
           const own: ClipMulti = [[[...outer, outer[0]], ...holes.map((h) => [...h, h[0]])]] as unknown as ClipMulti;
-          for (const piece of polygonClipping.difference(own, paleOutside)) fill(piece[0].slice(0, -1) as Pt[], piece.slice(1).map((r) => r.slice(0, -1) as Pt[]), top);
+          for (const piece of polygonClipping.difference(own, paleOutside)) {
+            fill(piece[0].slice(0, -1) as Pt[], piece.slice(1).map((r) => r.slice(0, -1) as Pt[]), top);
+            // Рёбра крышки: белая на белом иначе не читается
+            for (const r of piece) for (let k = 0; k + 1 < r.length; k++) paleCapEdges.push(r[k][0], r[k][1], top + 0.002, r[k + 1][0], r[k + 1][1], top + 0.002);
+          }
         } catch { /* без крышки */ }
         return;
       }
@@ -3310,6 +3315,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       stroke.frustumCulled = false;
       root.add(stroke);
     }
+    for (const v of paleCapEdges) lines.push(v);
     const lineGeo = new THREE.BufferGeometry();
     lineGeo.setAttribute('position', new THREE.BufferAttribute(trimIndoorBuildingEdges(new Float32Array(lines), openingMasks), 3));
     const seg = new THREE.LineSegments(lineGeo, pale ? INDOOR_PALE_LINE : INDOOR_LINE_MATERIAL);

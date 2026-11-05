@@ -6622,12 +6622,13 @@ function buildShell(g: MeshGroup): Shell {
         if (parts[i].min > z0 + SHELL_LEVEL_TOL) continue;
         best = best === undefined ? zOf(i) : Math.max(best, zOf(i));
       }
-      // Части, поставленные на накрывающую (крыша крыла на стенах-постаментах): оболочка — до их ската
+      // Оболочка — объединение объёмов: части, которые стоят на накрывающей или перекрывают её по высоте
+      // (крыша крыла на стенах-постаментах, большой объём вокруг низкой части), продолжают столб над точкой
       for (let changed = best !== undefined; changed;) {
         changed = false;
         for (const i of here) {
           const z = zOf(i);
-          if (parts[i].min > z0 + SHELL_LEVEL_TOL && Math.abs(parts[i].min - best!) < 0.05 && z > best! + 1e-6) { best = z; changed = true; }
+          if (parts[i].min <= best! + 0.05 && z > best! + 1e-6) { best = z; changed = true; }
         }
       }
       return best;

@@ -2684,6 +2684,23 @@ export class BuildingsLayer implements CustomLayerInterface {
           for (const k of doorGrid.get(doorCell(i, j)) ?? []) found.push(k);
       return found.sort((p, q) => p - q).map((k) => doors[k]);
     };
+    // Дверь в проёме между стенами: её точка не лежит ни на одной стене, помещении или колонне плана
+    const solidRings = items.filter((it) => !it.cutOnly && ['room', 'wall', 'column'].includes(it.kind))
+      .flatMap((it) => it.polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => ({ r: r.map(g.toLocal), open: !!it.line }))));
+    const gapCache = new Map<object, boolean>();
+    const inGap = (door: object, [px, py]: Pt) => {
+      let v = gapCache.get(door);
+      if (v === undefined) {
+        v = !solidRings.some(({ r, open }) => r.some((a, i) => {
+          if (open && i === r.length - 1) return false;
+          const b = r[(i + 1) % r.length], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+          const t = l2 ? Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / l2)) : 0;
+          return Math.hypot(px - a[0] - t * dx, py - a[1] - t * dy) < 0.03;
+        }));
+        gapCache.set(door, v);
+      }
+      return v;
+    };
     /** Стена с дверными проёмами (DOOR_WIDTH × DOOR_HEIGHT) там, где на ней стоит дверь. */
     // Дверь в прилавке или ограждении — без проёма: стена помещения на этом участке их заменена, рамку не рисуем
     const lowLines = items.filter((it) => it.railing && it.line).flatMap((it) => it.polygons.map((p) => p.outer.map(g.toLocal)));
@@ -2719,6 +2736,9 @@ export class BuildingsLayer implements CustomLayerInterface {
           const diameter = door.z !== undefined && Math.abs(door.z - z0) < 0.1 ? door.diameter : undefined;
           const halfWidth = doorOpeningHalfWidth(distance, diameter, door.width ?? DOOR_WIDTH, DOOR_SNAP);
           if (!halfWidth || t + halfWidth <= 0 || t - halfWidth >= len) continue;
+          // Дверь в проёме между стенами (центр за концом стены, на стенах её нет): проём уже есть, торец — откос.
+          // Иначе дверь шире проёма (1 м в проёме 0,9 м между колоннами) выгрызала бы по 5 см из граней
+          if ((t < -1e-6 || t > len + 1e-6) && inGap(door, door.at as Pt)) continue;
           const lo = Math.max(0, t - halfWidth) / len, hi = Math.min(len, t + halfWidth) / len;
           gaps.push([lo, hi]);
           if (door.outline) namedGaps.push({ key: door.key, lo, hi });

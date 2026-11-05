@@ -236,7 +236,9 @@ const STAIRS_EARTH = new THREE.MeshBasicMaterial({ colorWrite: false, side: THRE
 /** Земля на плане этажа: только глубина (см. addEarth). */
 const EARTH_MATERIAL = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
 /** Рёбра подземного снаружи здания — пунктиром сквозь землю. */
-const UNDERGROUND_EDGE_MATERIAL = new THREE.LineDashedMaterial({ color: 0x8a8f94, dashSize: 0.25, gapSize: 0.18, depthTest: false, transparent: true, opacity: 0.8 });
+// Рисуется первым (до земли и здания), без глубины и непрозрачным списком: конструкции этажа закрашивают его,
+// а подземное до него не доходит — земля уже стоит в глубине. Виден только «сквозь землю»
+const UNDERGROUND_EDGE_MATERIAL = new THREE.LineDashedMaterial({ color: 0x9a9fa4, dashSize: 0.25, gapSize: 0.18, depthTest: false, depthWrite: false });
 
 export interface DoorItem { key: string; at: LonLat; z: number; tags?: Record<string, string> }
 
@@ -1612,7 +1614,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const dashed = new THREE.LineSegments(lg, UNDERGROUND_EDGE_MATERIAL);
     dashed.computeLineDistances();
     dashed.name = 'level-underground-edges';
-    dashed.renderOrder = 5;
+    dashed.renderOrder = -200;
     dashed.frustumCulled = false;
     dashed.raycast = () => {};
     root.add(dashed);

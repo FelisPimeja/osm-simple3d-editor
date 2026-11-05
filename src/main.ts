@@ -11665,6 +11665,8 @@ function renderLevelsImpl() {
   const voids = level ? levelVoids(focus, levels, visibleIndoor, level.n) : [];
   // Пустоты здания (кешируются) — до эскалаторов: в них решается, режет ли лестница свой проём (stairsInVoid)
   buildingVoids(focus, levels, visibleIndoor);
+  // След здания у земли — по частям (контур под частями бывает шире: захватывает крыльцо и приямки)
+  const feet = groupFeatures(focus).filter((f) => f.kind === 'part' && computeHeights(f.tags).min < 0.05).flatMap((f) => f.polygons ?? []);
   const allEscalators = visibleIndoor.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2
       && (f.tags.incline === 'up' || f.tags.incline === 'down'))
     .map((f) => {
@@ -11677,9 +11679,12 @@ function renderLevelsImpl() {
         return [a, mid, b].some((p) => v.polygon.some(([outer, ...holes]) =>
           pointInRing(p, outer) && !holes.some((hole) => pointInRing(p, hole))));
       }));
+      // Марш подвала снаружи здания (в приямке) виден с любого надземного этажа — сквозь отверстие в земле
+      const pit = level.floor > -0.01 && low.floor < -0.01 && line.some((p) => !feet.some((pg) =>
+        (pointInRing(p, pg.outer) && !pg.inners.some((h) => pointInRing(p, h))) || nearRing(p, pg.outer, 0.05)));
       return { key: f.key, line, bottom: low.floor, top: high.floor,
         width: escalatorWidth(f), incline: f.tags.incline, ...stairsShape(f, visibleIndoor), ...(stairsInVoid.has(f.key) ? { noHole: true } : {}),
-        pale: !f.levels.includes(level.n), visible: f.levels.includes(level.n) || visibleBelow };
+        pale: !f.levels.includes(level.n), visible: f.levels.includes(level.n) || visibleBelow || pit };
     }).filter((f): f is NonNullable<typeof f> => !!f);
   // Все эскалаторы здания режут проёмы в планах нижних этажей (те не зависят от выбранного этажа и кешируются)
   const cutEscalators = allEscalators.map(({ visible: _, ...e }) => e);
@@ -11744,7 +11749,7 @@ function renderLevelsImpl() {
         // …и только то, что выходит за след здания у земли (приямок): под зданием и крыльцом подвал не виден, а его
         // стены и колонны с level=-1;0 спорили бы по глубине с цоколем
         // След — по контурам частей и здания (оболочка к этому моменту бывает ещё не готова), с допуском 5 см
-        const feet = pitOnly ? groupFeatures(focus!).flatMap((f) => f.polygons ?? []) : [];
+        const feet = pitOnly ? groupFeatures(focus!).filter((f) => f.kind === 'part' && computeHeights(f.tags).min < 0.05).flatMap((f) => f.polygons ?? []) : [];
         const outside = (q: LonLat) => !feet.some((pg) => (pointInRing(q, pg.outer) && !pg.inners.some((h) => pointInRing(q, h))) || nearRing(q, pg.outer, 0.05));
         const items = pitOnly ? p.items.filter((it) => it.polygons.some((pg) => pg.outer.some(outside))) : p.items;
         return { ...p, items, ...(pitOnly ? { cut: p.cut - 0.02 } : {}), voids: (allVoids.get(l.n) ?? []).flatMap((v) => v.polygon) };

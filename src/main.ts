@@ -3966,6 +3966,37 @@ let clipboard: { items: { tags: Record<string, string>; polygons: Feature3D['pol
 /** Ctrl+C: части скопированы, ждём клика по базовой точке. */
 let copyPick: { items: NonNullable<typeof clipboard>['items']; indoor?: boolean } | undefined;
 
+/**
+ * Базовая точка по умолчанию (если её не кликнули): вершина выпуклой оболочки всех контуров — на опоясывающем контуре,
+ * а из них самая острая (угловая). z — низ части (min_height) или пол показанного этажа.
+ */
+function defaultCopyBase(items: NonNullable<typeof clipboard>['items'], indoor?: boolean): NonNullable<typeof clipboard>['base'] | undefined {
+  const pts = items.flatMap((it, i) => it.polygons.flatMap((p) => p.outer.map((c) => ({ c, i }))));
+  if (!pts.length) return;
+  const kx = Math.cos(pts[0].c[1] * Math.PI / 180);
+  const xy = (q: { c: LonLat }) => [q.c[0] * kx, q.c[1]];
+  const sorted = [...pts].sort((a, b) => a.c[0] - b.c[0] || a.c[1] - b.c[1]);
+  const cross = (o: typeof pts[0], a: typeof pts[0], b: typeof pts[0]) => {
+    const [ox, oy] = xy(o), [ax, ay] = xy(a), [bx, by] = xy(b);
+    return (ax - ox) * (by - oy) - (ay - oy) * (bx - ox);
+  };
+  const half = (list: typeof pts) => {
+    const h: typeof pts = [];
+    for (const q of list) { while (h.length >= 2 && cross(h[h.length - 2], h[h.length - 1], q) <= 0) h.pop(); h.push(q); }
+    return h.slice(0, -1);
+  };
+  const hull = [...half(sorted), ...half([...sorted].reverse())];
+  let best = hull[0] ?? sorted[0], bestCos = -2;
+  if (hull.length >= 3) hull.forEach((q, k) => {
+    const [px, py] = xy(hull[(k + hull.length - 1) % hull.length]), [x, y] = xy(q), [nx, ny] = xy(hull[(k + 1) % hull.length]);
+    const ux = px - x, uy = py - y, vx = nx - x, vy = ny - y, d = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+    const cos = d ? (ux * vx + uy * vy) / d : -1; // больше косинус — острее угол
+    if (cos > bestCos) { bestCos = cos; best = q; }
+  });
+  const z = indoor ? (shownLevel?.floor ?? 0) : parseFloat(items[best.i].tags.min_height ?? '') || 0;
+  return { lngLat: [...best.c] as LonLat, z };
+}
+
 /** Ctrl+C в режиме здания: выделенные части (простые пути; контур здания — нет), затем клик — базовая точка. */
 function copySelected() {
   if (!focus) return;
@@ -3985,9 +4016,10 @@ function copySelected() {
   if (!items.length) return setStatus(keys.length ? tr('Копируются части-пути и мультиполигоны без дыр (не контур здания).') : tr('Выберите части здания, затем Ctrl+C.'), true);
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   copyPick = { items };
+  setDefaultClipboard(items);
   setStatus(skipped
-    ? tr('Копирование ({n}, пропущено {skipped} — контур или мультиполигон с дырами): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.', { n: items.length, skipped })
-    : tr('Копирование ({n}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.', { n: items.length }));
+    ? tr('Копирование ({n}, пропущено {skipped} — контур или мультиполигон с дырами): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.', { n: items.length, skipped })
+    : tr('Копирование ({n}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.', { n: items.length }));
   if (lastPointer) updateSnap(lastPointer);
 }
 
@@ -4024,7 +4056,8 @@ function copyIndoor() {
   if (!items.length) return setStatus(tr('Копируются помещения, площадки, стены и колонны (не точки и не эскалаторы).'), true);
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   copyPick = { items, indoor: true };
-  setStatus(tr('Копирование indoor ({n}{skipped}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Esc — отмена.',
+  setDefaultClipboard(items, true);
+  setStatus(tr('Копирование indoor ({n}{skipped}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.',
     { n: items.length, skipped: skipped ? ', ' + tr('пропущено {n}', { n: skipped }) : '' }));
   if (lastPointer) updateSnap(lastPointer);
 }
@@ -4050,11 +4083,20 @@ function pickCopyBase(point: [number, number]) {
     : tr('Скопировано частей: {n}. Ctrl+V — вставить (копия поедет за курсором).', { n: clipboard.items.length }));
 }
 
-function cancelCopyPick() {
+/** Буфер заполняется сразу при Ctrl+C с базовой точкой по умолчанию; клик лишь уточняет её. */
+function setDefaultClipboard(items: NonNullable<typeof clipboard>['items'], indoor?: boolean) {
+  const base = defaultCopyBase(items, indoor);
+  if (!base) return;
+  clipboard = { items, base, indoor };
+  doorClipboard = undefined;
+}
+
+/** Esc / вставка без клика: остаётся базовая точка по умолчанию (угловая вершина). */
+function cancelCopyPick(quiet = false) {
   if (!copyPick) return;
   copyPick = undefined;
   updateSnap(undefined);
-  setStatus(tr('Копирование отменено.'));
+  if (!quiet) setStatus(clipboard ? tr('Скопировано: {n}. Базовая точка — угловая вершина. Ctrl+V — вставить.', { n: clipboard.items.length }) : tr('Копирование отменено.'));
 }
 
 /**
@@ -4062,6 +4104,7 @@ function cancelCopyPick() {
  * сразу привязаны к курсору за базовую точку; клик — место базовой точки. Esc — вставка отменяется целиком.
  */
 function pasteClipboard() {
+  if (copyPick) cancelCopyPick(true);
   if (focus && doorClipboard) return pasteDoors();
   if (!focus || !clipboard) return setStatus(tr('Буфер пуст: выберите части, Ctrl+C и клик по базовой точке.'), true);
   if (clipboard.indoor) return pasteIndoor(clipboard);

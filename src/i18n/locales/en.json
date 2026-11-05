@@ -1338,6 +1338,7 @@
   "Не хватает данных узлов indoor-объекта. Перезагрузите здание.": "Missing indoor node data. Reload the building.",
   "Для мультиполигона доступно перемещение вершин с соседями; изменение состава узлов пока не поддерживается.": "Multipolygon node topology is unavailable. Reload the building.",
   "У открытой стены нет замыкающего ребра.": "An open wall has no closing edge.",
+  "Узел общий с частью здания и мультиполигоном этажа. Сначала разделите их геометрию.": "This node is shared by a building part and a level multipolygon. Separate their geometry first.",
   "Общие узлы используются на другом этаже. Сначала разделите геометрию этажей.": "These shared nodes are used on another level. Separate the level geometry first.",
   "После изменения останется слишком мало узлов.": "Too few nodes would remain after this edit.",
   "Не хватает данных путей indoor-мультиполигона. Перезагрузите здание.": "Missing indoor multipolygon member ways. Reload the building.",

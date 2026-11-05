@@ -16,9 +16,11 @@ export function counterRing(line: Pt[], depth = COUNTER_DEPTH, ends: Segment[] =
   let pts = line.filter((p, i) => !i || Math.hypot(p[0] - line[i - 1][0], p[1] - line[i - 1][1]) > 1e-6);
   if (pts.length < 2) return pts;
   // Замкнутый путь: кольцо со срезом по биссектрисе и на стыке начала и конца. Результат — «замочная скважина»:
-  // внешнее кольцо, перемычка p0→o0 и внутреннее кольцо (длина 2n+2; перемычки — на индексах n+1 и 2n+2, см. isClosedCounterRing)
+  // внешнее кольцо, перемычка p0→o0 и внутреннее кольцо (длина 2n+1, первая точка повторена на индексе n, см. isClosedCounterRing)
   if (pts.length > 3 && Math.hypot(pts[0][0] - pts.at(-1)![0], pts[0][1] - pts.at(-1)![1]) < 1e-6) {
-    pts = pts.slice(0, -1);
+    // Почти совпадающие соседние точки (в т.ч. у стыка) дают шумную нормаль и шип на срезе
+    pts = pts.slice(0, -1).filter((p, i, a) => { const q = a[(i + 1) % a.length]; return Math.hypot(p[0] - q[0], p[1] - q[1]) > 0.02; });
+    if (pts.length < 3) return pts;
     const n = pts.length;
     const right = (a: Pt, b: Pt): Pt => { const l = Math.hypot(b[0] - a[0], b[1] - a[1]); return [(b[1] - a[1]) / l, -(b[0] - a[0]) / l]; };
     const off = pts.map((p, i): Pt => {
@@ -60,6 +62,8 @@ export function counterRing(line: Pt[], depth = COUNTER_DEPTH, ends: Segment[] =
   return [...pts, ...offset.reverse()];
 }
 
-/** Замкнутый прилавок: след counterRing — кольцо с перемычкой (длина чётная, первая точка повторена в середине). */
-export const isClosedCounterRing = (ring: Pt[]) => ring.length >= 8 && ring.length % 2 === 0
-  && Math.hypot(ring[0][0] - ring[ring.length / 2 - 1][0], ring[0][1] - ring[ring.length / 2 - 1][1]) < 1e-9;
+/** Замкнутый прилавок: след counterRing — кольцо с перемычкой (длина нечётная, первая точка повторена в середине). */
+export const isClosedCounterRing = (ring: Pt[]) => ring.length >= 7 && ring.length % 2 === 1
+  && Math.hypot(ring[0][0] - ring[closedCounterSplit(ring)][0], ring[0][1] - ring[closedCounterSplit(ring)][1]) < 1e-9;
+/** Индекс повтора первой точки в следе замкнутого прилавка: до него — внешнее кольцо, после — внутреннее. */
+export const closedCounterSplit = (ring: Pt[]) => (ring.length - 1) / 2;

@@ -24,7 +24,7 @@ import { areaLedgeTriangles } from './area-ledge';
 import { floatingParts } from '../osm/floating';
 import { pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
 import { dropPartSeams } from './part-seams';
-import { COUNTER_DEPTH, counterRing, isClosedCounterRing } from './counter-ring';
+import { COUNTER_DEPTH, closedCounterSplit, counterRing, isClosedCounterRing } from './counter-ring';
 import { edgePass } from './edge-pass';
 import { silhouetteEdges, type SilhouetteEdges } from './silhouette-edges';
 import { bottomTriangles, buildTriangles, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
@@ -1374,7 +1374,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const rp = footprint ?? ring.map(g.toLocal);
         if (footprint) {
           // Замкнутый прилавок — кольцо с дырой
-          const k = isClosedCounterRing(footprint) ? footprint.length / 2 - 1 : footprint.length;
+          const k = isClosedCounterRing(footprint) ? closedCounterSplit(footprint) : footprint.length;
           const outer = footprint.slice(0, k), hole = k < footprint.length ? footprint.slice(k + 1) : undefined, all = [...outer, ...(hole ?? [])];
           for (const t of THREE.ShapeUtils.triangulateShape(outer.map((q) => new THREE.Vector2(...q)), hole ? [hole.map((q) => new THREE.Vector2(...q))] : [])) for (const i of t) faces.push(...all[i], top);
         }
@@ -2998,7 +2998,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           const ring=it.counter?this.counterFootprint(g,it,line,items):undefined;
           // Замкнутый прилавок: внешнее и внутреннее кольца без торцов на стыке начала и конца
           const keyhole=!!ring&&isClosedCounterRing(ring);
-          const kn=keyhole?ring!.length/2-1:0;
+          const kn=keyhole?closedCounterSplit(ring!):0;
           const outerRing=keyhole?ring!.slice(0,kn):ring,innerRing=keyhole?ring!.slice(kn+1):undefined;
           const paths=keyhole?[[...outerRing!,outerRing![0]],[...innerRing!,innerRing![0]]]:[ring?[...ring,ring[0]]:line];
           if(ring){

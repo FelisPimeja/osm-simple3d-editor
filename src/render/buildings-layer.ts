@@ -130,6 +130,8 @@ const DOOR_PICK_PX = 10;
 /** Полы помещений, коридоров и площадок — цвет вершин по виду. */
 /** Пол лежит на отметке этажа; сдвиг глубины — чтобы линии на полу (швы, низ стен) не тонули в нём. */
 const INDOOR_FLOOR_MATERIAL = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+/** Пол бледного нижнего этажа — дальше по глубине: на отметке верха крыльца (цоколя) он уступает ему, а не мерцает. */
+const INDOOR_PALE_FLOOR_MATERIAL = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 8 });
 /** Чёрная крышка среза стен-полигонов и колонн; в каркасе — полупрозрачная. */
 const INDOOR_CUT_CAP_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 const INDOOR_CUT_CAP_WIRE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
@@ -222,7 +224,9 @@ const ESCALATOR_PALE_BALUSTRADE = new THREE.MeshLambertMaterial({ color: 0xdce9e
   transparent: true, opacity: 0.4, depthWrite: false });
 const ESCALATOR_PALE_HANDRAIL = new LineMaterial({ color: 0xc4c0bb, linewidth: 5 });
 const STAIRS_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 1 });
-const STAIRS_PALE = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x555555, side: THREE.DoubleSide, transparent: true, opacity: 1 });
+// Бледный марш нижнего этажа — чуть дальше по глубине: верхняя проступь на отметке пола выше (верх крыльца) не мерцает с ним
+const STAIRS_PALE = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x555555, side: THREE.DoubleSide, transparent: true, opacity: 1,
+  polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });
 const STAIRS_ORDER = 51;
 const STAIRS_RAIL = new LineMaterial({ color: 0x8a8f93, linewidth: 3, transparent: true });
 const STAIRS_PALE_RAIL = new LineMaterial({ color: 0xc4c6c8, linewidth: 3, transparent: true });
@@ -2376,7 +2380,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
     };
     const finish = () => {
-      for (const [pos, col, mat] of [[capPos, undefined, pale ? INDOOR_PALE_WALL : INDOOR_CAP_MATERIAL], [floorPos, floorCol, INDOOR_FLOOR_MATERIAL]] as const) {
+      for (const [pos, col, mat] of [[capPos, undefined, pale ? INDOOR_PALE_WALL : INDOOR_CAP_MATERIAL], [floorPos, floorCol, pale ? INDOOR_PALE_FLOOR_MATERIAL : INDOOR_FLOOR_MATERIAL]] as const) {
         if (!pos.length) continue;
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));

@@ -11736,7 +11736,19 @@ function renderLevelsImpl() {
       zs: [level!.floor, ...v.through.slice(0, -1).map((n) => levels.find((l) => l.n === n)?.floor).filter((z): z is number => z !== undefined)],
     })),
     below: through.map((n) => levels.find((l) => l.n === n)).filter((l): l is Level => !!l)
-      .map((l) => ({ ...planOf(l), voids: (allVoids.get(l.n) ?? []).flatMap((v) => v.polygon) })),
+      .map((l) => {
+        const p = planOf(l);
+        // Подвал только ради приямка (не виден сквозь проём): срез чуть ниже его потолка — верх лестницы и стен не
+        // ложится в плоскость верха крыльца (цоколя) и не мерцает с ним
+        const pitOnly = l.floor < -0.01 && !voids.some((v) => v.through.includes(l.n));
+        // …и только то, что выходит за след здания у земли (приямок): под зданием и крыльцом подвал не виден, а его
+        // стены и колонны с level=-1;0 спорили бы по глубине с цоколем
+        // След — по контурам частей и здания (оболочка к этому моменту бывает ещё не готова), с допуском 5 см
+        const feet = pitOnly ? groupFeatures(focus!).flatMap((f) => f.polygons ?? []) : [];
+        const outside = (q: LonLat) => !feet.some((pg) => (pointInRing(q, pg.outer) && !pg.inners.some((h) => pointInRing(q, h))) || nearRing(q, pg.outer, 0.05));
+        const items = pitOnly ? p.items.filter((it) => it.polygons.some((pg) => pg.outer.some(outside))) : p.items;
+        return { ...p, items, ...(pitOnly ? { cut: p.cut - 0.02 } : {}), voids: (allVoids.get(l.n) ?? []).flatMap((v) => v.polygon) };
+      }),
     // Подземные этажи для земли надземного плана: их контур (indoor=level) пунктиром и выходы лестниц — отверстиями
     underground: level!.floor > -0.01 ? levels.filter((l) => l.floor < -0.01).map((l) => ({
       z: l.floor,

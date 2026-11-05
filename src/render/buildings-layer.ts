@@ -6933,7 +6933,7 @@ function collectSnaps(g: MeshGroup, floors: number[] = []): { points: SnapPoint[
     const key = it.feature.key;
     const z0 = it.box.min.z;
     const z1 = Math.max(z0, Math.min(computeHeights(it.tags).wallTop, it.box.max.z));
-    const levels = z1 - z0 > 0.2 ? [z0, z1] : [z0]; // у плоских следов — один уровень
+    const levels = z1 - z0 > 0.05 ? [z0, z1] : [z0]; // у плоских следов — один уровень
     for (const p of it.feature.polygons) {
       for (const ring of [p.outer, ...p.inners]) {
         const pts = ring.map(g.toLocal);

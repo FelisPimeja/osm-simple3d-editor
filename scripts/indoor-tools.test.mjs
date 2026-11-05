@@ -65,3 +65,13 @@ test('Move accepts an indoor surface anchor and commits only horizontal coordina
  tool.click([0,0]);tool.move([20,0]);tool.validate=()=> 'Invalid outline';tool.click([20,0]);
  assert.equal(writes.length,1);assert.equal(tool.state,'move');
 });
+test('moving a level outline vertex shared with a building part detaches it even with neighbours glued',()=>{
+ const level={key:'way/1',kind:'level',levels:[-2],tags:{indoor:'level',level:'-2'},polygons:[{outer:[[0,0],[2,0],[2,2],[0,2]],outerIds:[1,2,3,4],inners:[],innerIds:[]}]};
+ const part={key:'relation/9',kind:'area',levels:[-1e6],tags:{'building:part':'yes'},polygons:[{outer:[[0,0],[2,0],[2,2],[0,2]],outerIds:[1,2,3,4],inners:[],innerIds:[]}]};
+ for(const glue of [true,false]){
+  const edits=editIndoorGeometry([level,part],{type:'move',vertices:[{key:level.key,poly:0,ring:0,i:1}],delta:[1,0]},glue,()=>-7);
+  assert.ok(!edits.some(e=>e.key===part.key));
+  const out=edits.find(e=>e.key===level.key).polygons[0];
+  assert.deepEqual(out.outer[1],[3,0]);assert.equal(out.outerIds[1],-7);
+ }
+});

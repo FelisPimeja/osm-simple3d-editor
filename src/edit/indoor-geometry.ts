@@ -27,6 +27,9 @@ function validateRing(coords: LonLat[], open: boolean) {
   }
 }
 /** Geometric edits retain tags and levels; open walls are never closed into polygons. */
+/** Этаж-заглушка частей и контура здания при правке indoor: ни один indoor-объект его не охватывает — их узлы не двигаются. */
+export const SHELL_LEVEL = -1e6;
+
 export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, glue: boolean, freshId: ()=>number, relationTopology = false): ObjectEdit[] {
   const vertices = op.type === 'insert' ? [op.vertex] : op.vertices;
   const selected = new Set(vertices.map(v=>v.key));
@@ -67,9 +70,13 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
   // Узел другого этажа — не трогаем; но если он стоит и в объекте этого этажа, который сам охватывает и тот этаж
   // (стена level=0;1 в мультиполигоне стены 1 этажа), правка законна для обоих
   const spans=(id:number,levels:number[])=>active.some(a=>levels.every(l=>a.levels.includes(l))&&rings(a).some(r=>r.ids?.includes(id)));
-  const protectedNodes = new Set(otherFloors.flatMap(f=>rings(f).flatMap(r=>(r.ids??[]).filter(id=>!spans(id,f.levels)))));
+  const isShell=(f:IndoorFeature)=>f.levels.includes(SHELL_LEVEL);
+  const protectedNodes = new Set(otherFloors.filter(f=>!isShell(f)).flatMap(f=>rings(f).flatMap(r=>(r.ids??[]).filter(id=>!spans(id,f.levels)))));
+  // Узлы частей здания: вершина indoor отцепляется от них; дверь на фасаде (узел контура) едет как прежде
+  const shellNodes = new Set(otherFloors.filter(isShell).flatMap(f=>rings(f).flatMap(r=>r.ids??[])));
   /** Узлы колец мультиполигонов (отношений) — у путей-членов не заменяются новыми. */
-  const relationNodes = new Set(all.filter(f=>f.key.startsWith('relation/')).flatMap(f=>rings(f).flatMap(r=>r.ids??[])));
+  // Части здания (SHELL_LEVEL) — не indoor-мультиполигоны: путь этажа не их член, общий с ними узел отцепляется
+  const relationNodes = new Set(all.filter(f=>f.key.startsWith('relation/')&&!isShell(f)).flatMap(f=>rings(f).flatMap(r=>r.ids??[])));
   const detached = new Map<number,number>();
   const edits: ObjectEdit[]=[];
   // Дверь (узел с тегами) не заменить новым узлом: она едет с этим этажом, а объекты другого этажа получают
@@ -79,7 +86,7 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
   // Мультиполигон другого этажа так не расцепить: узел в его пути-члене, новый узел разорвал бы кольцо
   if ([...movedDoors].some(id=>otherFloors.some(f=>f.key.startsWith('relation/')&&rings(f).some(r=>r.ids?.includes(id)))))
     throw new Error('Общие узлы используются на другом этаже. Сначала разделите геометрию этажей.');
-  if (movedDoors.size) for (const f of otherFloors) {
+  if (movedDoors.size) for (const f of otherFloors.filter(f=>!isShell(f))) {
     if (f.point) continue;
     let changed=false;
     const output=rings(f).map(r=>{
@@ -125,7 +132,7 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
         if (at && !same(at,r.coords[i])) {
           // Путь — член мультиполигона: его узлы держат кольцо отношения, новый узел разорвал бы его (relation/18000359)
           const holdsRelation = f.key.startsWith('way/') && relationNodes.has(id);
-          if (!holdsRelation && (protectedNodes.has(id) || (!glue && active.some(g=>!selected.has(g.key)&&rings(g).some(q=>q.ids?.includes(id)))))) {
+          if (!holdsRelation && (protectedNodes.has(id) || shellNodes.has(id) || (!glue && active.some(g=>!selected.has(g.key)&&rings(g).some(q=>q.ids?.includes(id)))))) {
             if (!detached.has(id)) detached.set(id,freshId());
             nextId=detached.get(id)!;
           }

@@ -8,7 +8,7 @@ import { indoorAnchor } from './edit/indoor-anchor';
 import { levelDetachNodes } from './edit/level-detach';
 import { isIndoorCutPolygon, isIndoorUnionPolygon, indoorUnionSignature, indoorUnionGeometry, indoorUnionHoleEdits } from './edit/indoor-union';
 import { finiteCutPieces } from './edit/finite-cut';
-import { editIndoorGeometry, type IndoorOperation, type IndoorVertex } from './edit/indoor-geometry';
+import { SHELL_LEVEL, editIndoorGeometry, type IndoorOperation, type IndoorVertex } from './edit/indoor-geometry';
 import { renderOtherTags, renderMultiOtherTags, multiTagValues, bindOtherTags } from './edit/other-tags';
 import { escalatorAreaMatches, isStairsAreaTags, stairsOutline, stairsRoomClip, syncEscalatorLevels } from './edit/escalator-levels';
 import { fetchRelationRelations } from './osm/api';
@@ -6928,7 +6928,7 @@ function removeShapeVertex(t: ShapeTarget, merged: boolean) {
   // У эскалатора две точки: без одной его нет — удаляется целиком
   const esc = buildingIndoorFor(t.key);
   if (esc?.escalator) { void deleteIndoorSpaces([esc]); return; }
-  if (buildingIndoorFor(t.key) && !selection.includes(t.key)) { applyIndoorGeometry({ type: 'remove', vertices: indoorShapeVertices(t) }, shapeTool.glue); return; }
+  if (buildingIndoorFor(t.key)) { applyIndoorGeometry({ type: 'remove', vertices: indoorShapeVertices(t) }, shapeTool.glue); return; }
   const f = entity(t.key) as Feature3D | undefined;
   const rings = f?.polygons && shapeRings(f, t);
   if (!f || !rings || (f.type === 'relation' && !relWays(f))) {
@@ -6976,7 +6976,7 @@ function shapeHeightTags(f: Feature3D, t: ShapeTarget, dz: number): Record<strin
 }
 
 function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string | undefined {
-  if (buildingIndoorFor(t.key) && !selection.includes(t.key)) return previewIndoorShape(t, offset);
+  if (buildingIndoorFor(t.key)) return previewIndoorShape(t, offset);
   const live = new Map(liveFeatures().map((g) => [g.key, g] as const));
   const restore = (keep: Set<string>) => {
     for (const k of shapePreviewed) { const g = live.get(k); if (!keep.has(k) && g) previewFocus(g); }
@@ -7027,7 +7027,8 @@ function shapeGlued(rings: ShapeRings): boolean {
 }
 
 function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
-  if (buildingIndoorFor(t.key) && !selection.includes(t.key)) return applyIndoorGeometry(indoorShapeOperation(t, offset), shapeTool.glue);
+  // Indoor — всегда своим путём (и выделенный): общий путь частей двигал бы общие с частями узлы
+  if (buildingIndoorFor(t.key)) return applyIndoorGeometry(indoorShapeOperation(t, offset), shapeTool.glue);
   const fail = (msg: string) => { setStatus(msg, true); return false; };
   const f = entity(t.key) as Feature3D | undefined;
   if (!f?.polygons) return false;
@@ -9165,8 +9166,9 @@ function indoorMoveOperation(fs: IndoorFeature[], offset: THREE.Vector3): Indoor
 function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false): ObjectEdit[] {
   const all = focus ? buildingIndoor(focus).filter(f => !f.key.endsWith('#poi')) : [];
   const building = focus ? groupFeatures(focus) : [];
-  const level = shownLevel?.n ?? 0;
-  const shell: IndoorFeature[] = building.filter(f => !all.some(i => i.key === f.key)).map(f => ({ key: f.key, tags: f.tags, polygons: f.polygons, kind: 'area', levels: [level] }));
+  // Части и контур здания — «чужой этаж»: их узлы при правке indoor не двигаются, общий узел отцепляется новым.
+  // Геометрию Simple 3D в режиме этажа не меняем: срез этажа не даёт увидеть части целиком
+  const shell: IndoorFeature[] = building.filter(f => !all.some(i => i.key === f.key)).map(f => ({ key: f.key, tags: f.tags, polygons: f.polygons, kind: 'area', levels: [SHELL_LEVEL] }));
   let temporary = -1_000_000_000;
   return editIndoorGeometry([...all, ...shell], op, glue, () => preview ? temporary-- : nextNewId--, true);
 }

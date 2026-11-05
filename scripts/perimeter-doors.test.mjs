@@ -96,7 +96,12 @@ test('indoor wall opening follows the off-wall revolving door during preview',()
  layer.setLevel({floor:0,cut:3,items:[{key:'way/2',kind:'wall',line:true,z:0,polygons:[{outer:[ll(0,2),ll(6,2)],inners:[]}]}],doors:[door.at]});
  assert.ok(layer.doorOpeningEdges.has('node/1'));
  // Preview is normally scheduled by requestAnimationFrame; rebuild synchronously here.
+ // 1.1 m from the wall axis the 2 m drum still clips the near face of the thick wall line (0.2 m off the axis)
  layer.doorPreview={key:door.key,at:ll(3,3.1)};
+ layer.applyLevel();
+ assert.ok(layer.doorOpeningEdges.has('node/1'));
+ // Clear of the wall and of the facades: no opening
+ layer.doorPreview={key:door.key,at:ll(3,-1.5)};
  layer.applyLevel();
  assert.equal(layer.doorOpeningEdges.has('node/1'),false);
 });

@@ -82,9 +82,16 @@ export function heightSplitTags(tags: Record<string, string>, at: number, h: Hei
   if (Number.isFinite(levels) && Number.isFinite(minLevel) && levels > minLevel && h.wallTop > h.min) {
     const step = (h.wallTop - h.min) / (levels - minLevel), n = (at - h.min) / step;
     onLevel = Math.abs(n - Math.round(n)) * step < 0.05;
-    const k = fmt(minLevel + Math.max(0, Math.min(levels - minLevel, Math.round(n))));
-    lower['building:levels'] = k;
-    upper['building:min_level'] = k;
+    const m = Math.max(0, Math.min(levels - minLevel, Math.round(n))), k = fmt(minLevel + m);
+    // Размечено метрами, а разрез не делит этажи (внутри этажа или у его края: обе части с целыми этажами нужны) —
+    // этажность у производных частей снимаем: иначе building:levels=1 + building:min_level=1 у деталей одного этажа
+    const metres = tags.height !== undefined || tags.min_height !== undefined;
+    if (metres && !(onLevel && m > 0 && m < levels - minLevel)) {
+      for (const t of [lower, upper]) { delete t['building:levels']; delete t['building:min_level']; }
+    } else {
+      lower['building:levels'] = k;
+      upper['building:min_level'] = k;
+    }
   }
   if (tags.height !== undefined || tags.min_height !== undefined || !onLevel) {
     lower.height = writeLength(at, tags.height ?? tags.min_height);

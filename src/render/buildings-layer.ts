@@ -235,6 +235,8 @@ const STAIRS_EARTH = new THREE.MeshBasicMaterial({ colorWrite: false, side: THRE
 
 /** Земля на плане этажа: только глубина (см. addEarth). */
 const EARTH_MATERIAL = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
+/** Рёбра подземного снаружи здания — пунктиром сквозь землю. */
+const UNDERGROUND_EDGE_MATERIAL = new THREE.LineDashedMaterial({ color: 0x8a8f94, dashSize: 0.25, gapSize: 0.18, depthTest: false, transparent: true, opacity: 0.8 });
 
 export interface DoorItem { key: string; at: LonLat; z: number; tags?: Record<string, string> }
 
@@ -260,7 +262,7 @@ export interface IndoorLevel {
   voids?: LonLat[][][];
   /** Высоты, на которых пустота прорезает перекрытия (пол этажа и полы промежуточных этажей), — по пустотам. */
   voidCuts?: { polygon: LonLat[][][]; zs: number[] }[];
-  below?: { cut: number; items: IndoorItem[]; doors?: LonLat[]; doorCuts?: { at: LonLat; width: number; polygon?: LonLat[] }[]; doorModels?: DoorItem[]; /** Собственные проёмы этого этажа. */ voids?: LonLat[][][] }[];
+  below?: { cut: number; items: IndoorItem[]; /** Контуры этажа (indoor=level). */ outlines?: IndoorItem[]; doors?: LonLat[]; doorCuts?: { at: LonLat; width: number; polygon?: LonLat[] }[]; doorModels?: DoorItem[]; /** Собственные проёмы этого этажа. */ voids?: LonLat[][][] }[];
 }
 
 export interface RenderedFeature { feature: Feature3D; roofApproximated: boolean }
@@ -1580,6 +1582,44 @@ export class BuildingsLayer implements CustomLayerInterface {
     mesh.frustumCulled = false;
     mesh.raycast = () => {};
     root.add(mesh);
+    // Подземное снаружи здания (подвал шире стен, приямки) — пунктиром сквозь землю: видно, что оно есть, но под ней
+    const rings = (sec ?? []).flatMap((poly) => poly.map((r) => r.slice(0, -1) as Pt[]));
+    const inside = (q: Pt) => (sec ?? []).some((poly) => pointInLocalRing(q, poly[0].slice(0, -1) as Pt[])
+      && !poly.slice(1).some((h) => pointInLocalRing(q, h.slice(0, -1) as Pt[])));
+    const nearBorder = (q: Pt) => rings.some((r) => r.some((a, i) => distToSegment(q, a, r[(i + 1) % r.length]) < 0.1));
+    const lines: number[] = [];
+    // Контур подземных этажей (indoor=level / сечение подвала): низ, верх у земли и вертикали — кусками ~0,5 м,
+    // те, что вне следа здания у земли (под зданием подвал закрыт его плитой)
+    const keep = (x: number, y: number) => !inside([x, y]) || nearBorder([x, y]);
+    const seg = (ax: number, ay: number, bx: number, by: number, z: number) => {
+      const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.5));
+      for (let k = 0; k < n; k++) {
+        const x0 = ax + (bx - ax) * k / n, y0 = ay + (by - ay) * k / n, x1 = ax + (bx - ax) * (k + 1) / n, y1 = ay + (by - ay) * (k + 1) / n;
+        if (keep((x0 + x1) / 2, (y0 + y1) / 2)) lines.push(x0, y0, z, x1, y1, z);
+      }
+    };
+    for (const b of this.level?.below ?? []) for (const o of b.outlines ?? []) {
+      if (o.z > -0.05) continue;
+      for (const p of o.polygons) for (const r of [p.outer, ...p.inners]) {
+        const pts = r.map(g.toLocal);
+        pts.forEach(([ax, ay], k) => {
+          const [bx, by] = pts[(k + 1) % pts.length];
+          seg(ax, ay, bx, by, o.z);
+          seg(ax, ay, bx, by, 0);
+          if (keep(ax, ay) && !nearBorder([ax, ay])) lines.push(ax, ay, o.z, ax, ay, 0);
+        });
+      }
+    }
+    if (!lines.length) return;
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+    const dashed = new THREE.LineSegments(lg, UNDERGROUND_EDGE_MATERIAL);
+    dashed.computeLineDistances();
+    dashed.name = 'level-underground-edges';
+    dashed.renderOrder = 5;
+    dashed.frustumCulled = false;
+    dashed.raycast = () => {};
+    root.add(dashed);
   }
 
   private applyLevel() {

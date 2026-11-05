@@ -2520,6 +2520,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     const cutTopLines: number[] = [];
     const continuingRooms = new Set(!pale ? items.filter(it => it.kind === 'room' && this.level?.below?.some(b => b.items.some(other => other.key === it.key && other.kind === 'room'))).map(it => it.key) : []);
     let omitFloorSeam = false;
+    /** Внешние кольца помещений, проходящих сквозь пол этажа (с этажа ниже или без пола здесь), в локальных метрах. */
+    const throughRooms = items.filter((it) => it.kind === 'room' && !it.line && (it.noFloor || continuingRooms.has(it.key)))
+      .map((it) => it.polygons.map((p) => p.outer.map(g.toLocal)));
     let facadeFloorEdge = false;
     /** Ребро самого фасада: низ на полу рисуется всегда — и там, где у фасада нет помещения. */
     let facadeOwnFloorEdge = false;
@@ -2915,7 +2918,8 @@ export class BuildingsLayer implements CustomLayerInterface {
           edgeOcclusionOnly = true;
           const previousLinear: boolean = linearCutTop;
           linearCutTop = true;
-          facadeOwnFloorEdge = true;
+          // Внутри — помещение, проходящее сквозь пол (с этажа ниже или без пола здесь): пола у фасада нет, шва тоже
+          facadeOwnFloorEdge = !throughRooms.some((poly) => poly.some((q) => pointInLocalRing([mx + nx, my + ny], q) || pointInLocalRing([mx - nx, my - ny], q)));
           wall(...a, ...b, Math.max(z0, lo), Math.min(top, hi), Math.min(top, hi), true);
           facadeOwnFloorEdge = false;
           facadeFloor.push([...a, ...b]);

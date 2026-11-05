@@ -96,6 +96,8 @@ export class ShapeTool {
   levelLock?: (t: ShapeTarget) => string | undefined;
   /** Объект без новых вершин на сторонах (эскалатор — всегда две точки). */
   noInsert?: (key: string) => boolean;
+  /** Вершина вставлена в отложенную точку: откладывание сбрасывается. */
+  onTracked?: () => void;
   /** Какие теги и как изменит сдвиг ручки крыши или верха стен на dz — для панели во время сдвига. */
   tagChanges?: (t: ShapeTarget, dz: number) => string;
   private lastPoint?: [number, number];
@@ -248,7 +250,8 @@ export class ShapeTool {
       this.showHandles();
       return true;
     }
-    const hit = eave ?? v ?? roof ?? this.edgeAt(point);
+    const edge = eave || v || roof ? undefined : this.edgeAt(point);
+    const hit = eave ?? v ?? roof ?? edge;
     if (!hit) { this.picked.clear(); return false; }
     const t = hit.target;
     // Захват одной из выбранных — едут все выбранные; иначе выбор сбрасывается
@@ -257,6 +260,8 @@ export class ShapeTool {
     if (t.insert !== undefined) {
       // Новая вершина — сразу ровно на стороне; дальше её можно отвести, как обычную (Esc оставит на стороне)
       if (!this.commit(t, new THREE.Vector3())) return true;
+      // Отложенная от вершины точка — вершина встаёт ровно в неё, без перетаскивания
+      if (edge?.snap?.kind === 'tracked') { this.onTracked?.(); this.refresh(); return true; }
       this.beginDrag({ key: t.key, poly: t.poly, ring: t.ring, i: t.i + 1, from: t.from }, true);
       return true;
     }

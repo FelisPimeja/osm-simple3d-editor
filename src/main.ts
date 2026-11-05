@@ -11456,7 +11456,16 @@ function cutLevelHole(ring: { ids: number[]; coords: LonLat[] }, reuseWay?: numb
 }
 
 /** Выделенный полигон (не сам этаж) — кольцо для «Вырезать из контура этажа»; way — его путь, если он сам годится в inner. */
-function holeSource(): { ring: { ids: number[]; coords: LonLat[] }; way?: number } | undefined {
+function holeSource(build = false): { ring: { ids: number[]; coords: LonLat[] }; way?: number } | undefined {
+  // Неразмеченная площадь (без дыр): кольцо — по её контуру, вершины на соседях — их узлы
+  if (shownLevel && !indoorSelection.length && freeArea && freeArea.n === shownLevel.n && !freeArea.polygon.inners.length && focus) {
+    if (!build) return { ring: { ids: [0, 0, 0], coords: [] } };
+    let outer = freeArea.polygon.outer;
+    if (outer.length > 1 && outer[0][0] === outer.at(-1)![0] && outer[0][1] === outer.at(-1)![1]) outer = outer.slice(0, -1);
+    const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)]);
+    const r = nodeRing(outer, nodeFor);
+    return r ? { ring: { ids: r.map((q) => q.id), coords: r.map((q) => q.p) } } : undefined;
+  }
   if (!shownLevel || indoorSelection.length !== 1) return;
   const f = indoorSelection[0];
   if (f.point || f.line || f.kind === 'level' || f.polygons.length !== 1) return;
@@ -12859,6 +12868,8 @@ window.addEventListener('pointerup', (e) => {
       if (!indoorSelection.some((f) => indoorKey(f.key) === indoorKey(room.key))) selectIndoor(room);
       return openCtxMenu(e.clientX, e.clientY, 'indoor');
     }
+    const free = freeAreaAt(point);
+    if (free) { selectFreeArea(free); return openCtxMenu(e.clientX, e.clientY, 'indoor'); }
   }
   // Мимо здания — меню режима: показать всё и выход
   if (!key || !focus.members.includes(key)) return openCtxMenu(e.clientX, e.clientY, 'empty');
@@ -12968,7 +12979,7 @@ ctxMenu.addEventListener('click', (e) => {
   if (action === 'indoor-merge') return mergeSelected();
   if (action === 'indoor-repeat') return openRepeatDialog();
   if (action === 'indoor-level-hole') {
-    const src = holeSource();
+    const src = holeSource(true);
     if (!src || !shownLevel) return;
     if (!levelOutlineFeatures(shownLevel.n).length && !levelFromOutline(shownLevel.n)) return;
     const err = cutLevelHole(src.ring, src.way);

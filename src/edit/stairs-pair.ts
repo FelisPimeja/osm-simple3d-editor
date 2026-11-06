@@ -152,3 +152,9 @@ export function scaleAcross(area: LonLat[], axis: [LonLat, LonLat], factor: numb
     return m.back([u[0] * s - u[1] * t * factor, u[1] * s + u[0] * t * factor]);
   });
 }
+
+/** Точки, сдвинутые поперёк прямой оси (a→b) на d м: d > 0 — влево от направления оси. */
+export function shiftAcross(points: LonLat[], axis: [LonLat, LonLat], d: number): LonLat[] {
+  const m = metres(axis[0]), b = m.to(axis[1]), L = Math.hypot(b[0], b[1]) || 1, n = [-b[1] / L, b[0] / L];
+  return points.map((p) => { const q = m.to(p); return m.back([q[0] + n[0] * d, q[1] + n[1] * d]); });
+}

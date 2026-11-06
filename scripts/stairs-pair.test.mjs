@@ -66,3 +66,12 @@ test('width across the axis: measured from the polygon and scaled symmetrically'
   near(wide[0], 0, -0.5); near(wide[2], 4, 2.5);
   assert.ok(Math.abs(m.pairHalfWidth(wide, line) - 1.5) < 1e-6);
 });
+
+test('one side moves: scale across the axis, then shift both by half the change', () => {
+  const ring = area().polygons[0].outer, line = [ll(0, 1), ll(4, 1)];
+  // Ширина 2 → 3, сдвигается только левая сторона (y = 2 → 3): ось уходит на 0,5 влево
+  const moved = m.shiftAcross(m.scaleAcross(ring, line, 1.5), line, 0.5);
+  near(moved[0], 0, 0); near(moved[2], 4, 3);
+  const axis = m.shiftAcross(line, line, 0.5);
+  near(axis[0], 0, 1.5); near(axis[1], 4, 1.5);
+});

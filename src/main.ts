@@ -9,7 +9,7 @@ import { levelDetachNodes } from './edit/level-detach';
 import { isIndoorCutPolygon, isIndoorUnionPolygon, indoorUnionSignature, indoorUnionGeometry, indoorUnionHoleEdits } from './edit/indoor-union';
 import { finiteCutPieces } from './edit/finite-cut';
 import { SHELL_LEVEL, editIndoorGeometry, type IndoorOperation, type IndoorVertex } from './edit/indoor-geometry';
-import { pairHalfWidth, pairedArea, scaleAcross, stairsPartner, withStairsPartners } from './edit/stairs-pair';
+import { pairHalfWidth, pairedArea, scaleAcross, shiftAcross, stairsPartner, withStairsPartners } from './edit/stairs-pair';
 import { renderOtherTags, renderMultiOtherTags, multiTagValues, bindOtherTags } from './edit/other-tags';
 import { escalatorAreaMatches, isStairsAreaTags, stairsOutline, stairsRoomClip, syncEscalatorLevels } from './edit/escalator-levels';
 import { fetchRelationRelations } from './osm/api';
@@ -7000,14 +7000,20 @@ function shapeHeightTags(f: Feature3D, t: ShapeTarget, dz: number): Record<strin
 /** Ширина марша после сдвига ручки ширины t на offset. */
 function shapeWidth(t: ShapeTarget, offset: THREE.Vector3): number | undefined {
   const h = shapeTool.widthHandles?.(t.key);
-  return h && t.width ? h.width + 2 * offset.dot(h.dir) * t.width : undefined;
+  return h && t.width ? h.width + (t.oneSide ? 1 : 2) * offset.dot(h.dir) * t.width : undefined;
+}
+
+/** Сдвиг оси марша (м, влево от её направления) при сдвиге одной стороны (Alt) до ширины w: половина изменения. */
+function widthShift(t: ShapeTarget, w: number): number {
+  const h = shapeTool.widthHandles?.(t.key);
+  return h && t.width && t.oneSide ? t.width * (w - h.width) / 2 : 0;
 }
 
 function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string | undefined {
   if (t.width) {
     const f = buildingIndoorFor(t.key), w = offset && shapeWidth(t, offset);
     if (!f || !w) { overpassLayer.setOutline(undefined); return; }
-    try { drawIndoorGeometryPreview(pairWidthEdits(f, w, true)); } catch (err) { return tr((err as Error).message); }
+    try { drawIndoorGeometryPreview(pairWidthEdits(f, w, true, widthShift(t, w))); } catch (err) { return tr((err as Error).message); }
     return;
   }
   if (buildingIndoorFor(t.key)) return previewIndoorShape(t, offset);
@@ -7061,7 +7067,7 @@ function shapeGlued(rings: ShapeRings): boolean {
 }
 
 function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
-  if (t.width) { const f = buildingIndoorFor(t.key), w = shapeWidth(t, offset); return !!f && !!w && setFlightWidth(f, w); }
+  if (t.width) { const f = buildingIndoorFor(t.key), w = shapeWidth(t, offset); return !!f && !!w && setFlightWidth(f, w, widthShift(t, w)); }
   // Indoor — всегда своим путём (и выделенный): общий путь частей двигал бы общие с частями узлы
   if (buildingIndoorFor(t.key)) return applyIndoorGeometry(indoorShapeOperation(t, offset), shapeTool.glue);
   const fail = (msg: string) => { setStatus(msg, true); return false; };
@@ -15479,14 +15485,18 @@ function pairWidth(f: IndoorFeature, all: IndoorFeature[]): number | undefined {
  * Правки контура пары под ширину width (м): вершины поперёк оси симметрично, вдоль — на месте; общие узлы
  * отцепляются (detached), ось не трогаем. preview — для подсветки при перетаскивании ручки.
  */
-function pairWidthEdits(axis: IndoorFeature, width: number, preview = false): ObjectEdit[] {
+function pairWidthEdits(axis: IndoorFeature, width: number, preview = false, shift = 0): ObjectEdit[] {
   const all = focus ? buildingIndoor(focus) : [];
   const line = axis.polygons[0]?.outer, area = pairedArea(axis, all);
   if (!area || !line || line.length !== 2) return [];
   const ring = area.polygons[0].outer, half = pairHalfWidth(ring, [line[0], line[1]]);
   if (half < 0.05) return [];
-  const to = scaleAcross(ring, [line[0], line[1]], width / 2 / half);
-  let edits = indoorGeometryEdits({ type: 'move', vertices: ring.map((_, i) => ({ key: area.key, poly: 0, ring: 0, i })), delta: [0, 0], to }, false, preview, false);
+  const ax: [LonLat, LonLat] = [line[0], line[1]];
+  // Сдвиг одной стороны: полигон — симметрично и вбок на shift, ось — тоже вбок (общие узлы двигаются одинаково)
+  const to = shiftAcross(scaleAcross(ring, ax, width / 2 / half), ax, shift);
+  const vertices = ring.map((_, i) => ({ key: area.key, poly: 0, ring: 0, i }));
+  if (Math.abs(shift) > 1e-6) { vertices.push({ key: axis.key, poly: 0, ring: 0, i: 0 }, { key: axis.key, poly: 0, ring: 0, i: 1 }); to.push(...shiftAcross(line, ax, shift)); }
+  let edits = indoorGeometryEdits({ type: 'move', vertices, delta: [0, 0], to }, false, preview, false);
   if (preview) return edits;
   // Как applyIndoorGeometry: объекты — в сессию, топология мультиполигонов и проёмы — по новой геометрии
   for (const e of edits) { const g = buildingIndoorFor(e.key); if (g) trackIndoor(e.key, g); else entity(e.key); }
@@ -15497,9 +15507,9 @@ function pairWidthEdits(axis: IndoorFeature, width: number, preview = false): Ob
 }
 
 /** Записать ширину марша width (м): полигон пары и тег width, если он есть. false — не вышло (сообщение в строке). */
-function setFlightWidth(f: IndoorFeature, width: number): boolean {
+function setFlightWidth(f: IndoorFeature, width: number, shift = 0): boolean {
   try {
-    const edits = pairWidthEdits(f, width);
+    const edits = pairWidthEdits(f, width, false, shift);
     if (!edits.length) return false;
     const cur = session.get(f.key)?.tags ?? f.tags;
     if (cur.width) { trackIndoor(f.key, f); edits.push({ key: f.key, tags: { ...cur, width: writeLength(width) } }); }

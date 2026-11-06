@@ -26,9 +26,10 @@ const EDGE_END = 0.02;
  * eave — захвачена ручка верха стен (основание крыши): по вертикали, меняется высота стен, крыша едет целиком.
  * also — другие вершины, выбранные рамкой: едут (удаляются) вместе с захваченной.
  * width — захвачена ручка ширины марша (середина боковой стороны полигона лестницы): -1 / 1 — сторона от оси;
- * сдвиг только поперёк оси, обе стороны расходятся симметрично.
+ * сдвиг только поперёк оси, обе стороны расходятся симметрично. oneSide (Alt) — едет только эта сторона, ось марша
+ * смещается на половину сдвига (остаётся посередине).
  */
-export interface ShapeTarget { key: string; poly: number; ring: number; i: number; from: THREE.Vector3; insert?: number; roof?: boolean; eave?: boolean; width?: -1 | 1; also?: ShapeVert[] }
+export interface ShapeTarget { key: string; poly: number; ring: number; i: number; from: THREE.Vector3; insert?: number; roof?: boolean; eave?: boolean; width?: -1 | 1; oneSide?: boolean; also?: ShapeVert[] }
 
 /** Ручки ширины марша: середины боковых сторон (a — сторона -1, b — сторона 1), dir — единичный от a к b, ширина, м. */
 export interface WidthHandles { a: THREE.Vector3; b: THREE.Vector3; dir: THREE.Vector3; width: number; /** Сам марш и его полигон — не привязки. */ own: string[] }
@@ -387,6 +388,7 @@ export class ShapeTool {
     if (!this.active) return false;
     if (e.type === 'keyup') {
       if (e.key === 'Shift' && this.state === 'drag') { this.shiftLock = false; this.locked = undefined; this.refresh(); return true; }
+      if (e.key === 'Alt' && this.state === 'drag' && this.target?.width) { this.target.oneSide = false; if (this.lastPoint) this.move(this.lastPoint); return true; }
       return false;
     }
     if (e.key === 'Escape') {
@@ -411,6 +413,12 @@ export class ShapeTool {
       return true;
     }
     if (this.state !== 'drag') return false;
+    // Alt у ручки ширины — сдвиг одной стороны (ось марша смещается следом)
+    if (e.key === 'Alt' && this.target?.width) {
+      e.preventDefault();
+      if (!e.repeat) { this.target.oneSide = true; if (this.lastPoint) this.move(this.lastPoint); }
+      return true;
+    }
     if (e.key === 'Shift') {
       if (e.repeat) return true;
       this.shiftLock = true;
@@ -430,7 +438,7 @@ export class ShapeTool {
       if (this.target.width) {
         const h = this.widthHandles?.(this.target.key);
         if (!h || dist < MIN_FLIGHT_WIDTH) return true;
-        this.apply(h.dir.clone().multiplyScalar(this.target.width * (dist - h.width) / 2));
+        this.apply(h.dir.clone().multiplyScalar(this.target.width * (dist - h.width) / (this.target.oneSide ? 1 : 2)));
         return true;
       }
       // Направление — прилипшее (в сторону курсора) или текущее направление движения
@@ -512,7 +520,7 @@ export class ShapeTool {
     const own = new Set(h.own);
     this.snap = this.layer.snapAt(point, (k) => !own.has(k), undefined, { from: t.from });
     const raw = this.snap ? this.snap.local.clone().sub(t.from).setZ(0).dot(v) : closestOnLine(ray, t.from, v);
-    const d = Math.max((MIN_FLIGHT_WIDTH - h.width) / 2, raw);
+    const d = Math.max((MIN_FLIGHT_WIDTH - h.width) / (t.oneSide ? 1 : 2), raw);
     this.offset.copy(v).multiplyScalar(d);
     this.problem = this.preview(t, this.offset);
     this.showHandles();
@@ -522,7 +530,7 @@ export class ShapeTool {
 
   /** Ширина марша после сдвига ручки на offset (обе стороны симметрично). */
   private widthAfter(t: ShapeTarget, h: WidthHandles): number {
-    return h.width + 2 * this.offset.dot(h.dir) * t.width!;
+    return h.width + (t.oneSide ? 1 : 2) * this.offset.dot(h.dir) * t.width!;
   }
 
   /** Ручки ширины всех выделенных объектов — по порядку; захваченная пара — на новых местах. */
@@ -532,7 +540,9 @@ export class ShapeTool {
       if (!h) return [];
       const t = this.state === 'drag' && this.target?.width && this.target.key === key ? this.target : undefined;
       const ext = t ? this.offset.dot(h.dir) * t.width! : 0;
-      return [{ key, side: -1 as const, p: h.a.clone().addScaledVector(h.dir, -ext) }, { key, side: 1 as const, p: h.b.clone().addScaledVector(h.dir, ext) }];
+      // Одна сторона (Alt) — вторая ручка стоит
+      const ea = t?.oneSide && t.width !== -1 ? 0 : ext, eb = t?.oneSide && t.width !== 1 ? 0 : ext;
+      return [{ key, side: -1 as const, p: h.a.clone().addScaledVector(h.dir, -ea) }, { key, side: 1 as const, p: h.b.clone().addScaledVector(h.dir, eb) }];
     });
   }
 
@@ -827,7 +837,7 @@ export class ShapeTool {
       const h = this.widthHandles?.(this.target.key);
       const value = this.typed || (h ? showLength(this.widthAfter(this.target, h)) : '');
       this.vcb.innerHTML = `<span class="vcb-label">${tr('Ширина')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${unitLabel()}
-        <span class="vcb-axis">${this.snap ? tr('к точке · {along}', { along: tr('поперёк марша, симметрично') }) : tr('поперёк марша, симметрично')}</span>${this.problem ? `<span class="vcb-axis vcb-error">${this.problem}</span>` : ''}`;
+        <span class="vcb-axis">${(() => { const along = this.target.oneSide ? tr('одна сторона, ось следом') : tr('поперёк марша, симметрично (Alt — одна сторона)'); return this.snap ? tr('к точке · {along}', { along }) : along; })()}</span>${this.problem ? `<span class="vcb-axis vcb-error">${this.problem}</span>` : ''}`;
       return;
     }
     if (this.target?.roof || this.target?.eave) {

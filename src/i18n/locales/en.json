@@ -1461,5 +1461,6 @@
   "Кусков: {n} · {s} м² · {level}": "Pieces: {n} · {s} m² · {level}",
   "Ширина марша: {w} м.": "Flight width: {w} m.",
   "Ведите курсор поперёк марша: обе стороны полигона расходятся симметрично. Клик — применить, число + Enter — ширина в метрах, Esc — отмена.": "Move the cursor across the flight: both polygon sides move symmetrically. Click — apply, number + Enter — width in metres, Esc — cancel.",
-  "поперёк марша, симметрично": "across the flight, symmetric"
+  "одна сторона, ось следом": "one side, the axis follows",
+  "поперёк марша, симметрично (Alt — одна сторона)": "across the flight, symmetric (Alt — one side)"
 }

@@ -2977,10 +2977,10 @@ export class BuildingsLayer implements CustomLayerInterface {
         } catch { /* без крышки */ }
         return;
       }
-      // Стена-полигон с height ниже этажа: верх — обычная крышка в цвет стены на своей высоте с рёбрами, не сечение
+      // Стена-полигон с height ниже этажа: верх — белая крышка на своей высоте с рёбрами; чёрное — только сечение
       if (wallCap < top - 1e-3) {
         if (wallCap <= z0 + 1e-3) return;
-        fill(outer, holes, wallCap);
+        fill(outer, holes, wallCap, 0xffffff);
         for (const r of [outer, ...holes]) for (let k = 0; k < r.length; k++) { const q = r[(k + 1) % r.length]; lines.push(r[k][0], r[k][1], wallCap, q[0], q[1], wallCap); }
         return;
       }

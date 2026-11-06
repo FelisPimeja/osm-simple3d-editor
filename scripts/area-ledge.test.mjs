@@ -221,3 +221,11 @@ test('a polygon wall stops at its height, with a lid there instead of the black 
  assert.ok(full>5,`full ${full}`);
  assert.ok(low<4.51&&low>4.49,`low ${low}`);
 });
+
+test('the lid of a polygon wall below the cut is white, not the black section',()=>{
+ const {layer,poly}=fixture();
+ layer.setLevel({floor:3,cut:6,items:[{key:'way/9',kind:'wall',z:3,railingHeight:1.5,polygons:[poly(rectangle(2,2,4,2.3))]}]});
+ const tops=[];layer.indoorObj.traverse(o=>{if(!o.isMesh||o.isLineSegments2)return;const p=o.geometry.getAttribute('position'),c=o.geometry.getAttribute('color');if(!p)return;for(let i=0;i<p.count;i++)if(Math.abs(p.getZ(i)-1.5-(o.position?.z??0)-3)<0.01||Math.abs(p.getZ(i)-4.5)<0.01)tops.push(c?[c.getX(i),c.getY(i),c.getZ(i)]:o.material?.color?.toArray());});
+ assert.ok(tops.length,'lid drawn');
+ for(const t of tops)assert.ok(t&&t.every(v=>v>0.9),`colour ${t}`);
+});

@@ -9,6 +9,7 @@ import { levelDetachNodes } from './edit/level-detach';
 import { isIndoorCutPolygon, isIndoorUnionPolygon, indoorUnionSignature, indoorUnionGeometry, indoorUnionHoleEdits } from './edit/indoor-union';
 import { finiteCutPieces } from './edit/finite-cut';
 import { SHELL_LEVEL, editIndoorGeometry, type IndoorOperation, type IndoorVertex } from './edit/indoor-geometry';
+import { stairsPartner, withStairsPartners } from './edit/stairs-pair';
 import { renderOtherTags, renderMultiOtherTags, multiTagValues, bindOtherTags } from './edit/other-tags';
 import { escalatorAreaMatches, isStairsAreaTags, stairsOutline, stairsRoomClip, syncEscalatorLevels } from './edit/escalator-levels';
 import { fetchRelationRelations } from './osm/api';
@@ -8243,7 +8244,7 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   return visible.map((f) => {
     if (f.tags.indoor === 'area' && f.tags.room === 'steps' && !f.line) return { ...f, escalatorArea: true };
     if (f.line || !f.polygons.length || !isStairsAreaTags(f.tags)) return f;
-    const matched = axes.some((axis) => escalatorAreaMatches(axis, f));
+    const matched = axes.some((axis) => escalatorAreaMatches(axis, f, visible));
     return matched ? { ...f, escalatorArea: true } : f;
   });
 }
@@ -8677,7 +8678,10 @@ function indoorTitle(f: IndoorFeature): string {
 function renderIndoorSelection(add = false) {
   let f: IndoorFeature;
   selectedIndoor = indoorSelection[0];
-  overpassLayer.setIndoorSelection(indoorSelection.map((x) => x.key));
+  // Марш — пара «линия + полигон»: выбран один — подсвечены оба (правка вершин тоже синхронная, withStairsPartners)
+  const all = focus ? buildingIndoor(focus) : [];
+  const partners = indoorSelection.map((x) => stairsPartner(x, all)?.key).filter((k): k is string => !!k && !indoorSelection.some((x) => x.key === k));
+  overpassLayer.setIndoorSelection([...indoorSelection.map((x) => x.key), ...partners]);
   indoorPois.setSelection(indoorSelection.map((x) => x.key));
   renderEscalatorUi();
   syncIssueFilter();
@@ -9186,7 +9190,8 @@ function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false
       ?? session.get(key)?.relMembers?.filter((m) => m.type === 'way').map((m) => `way/${m.ref}`);
     return ways ? new Set(ways) : undefined;
   };
-  return editIndoorGeometry([...all, ...shell], op, glue, () => preview ? temporary-- : nextNewId--, true, memberWays);
+  // Марш — пара «линия + полигон»: двигается одна — вторая следует (docs/indoor-stairs.md)
+  return editIndoorGeometry([...all, ...shell], withStairsPartners(op, all), glue, () => preview ? temporary-- : nextNewId--, true, memberWays);
 }
 function drawIndoorGeometryPreview(edits: ObjectEdit[]) {
   const lines: THREE.Vector3[][] = [];

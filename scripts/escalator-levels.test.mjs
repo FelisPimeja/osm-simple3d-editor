@@ -12,7 +12,7 @@ after(async()=>await vite.close());
 const data=JSON.parse(readFileSync(new URL('./fixtures/escalator-levels.json',import.meta.url)));
 const axis=data.find(f=>f.escalator), area=data.find(f=>!f.escalator);
 test('real axis 1319556733 and contour 18104179 change together and undo atomically',()=>{
- assert.ok(escalatorAreaMatches(axis,area));
+ assert.ok(escalatorAreaMatches(axis,area,data));
  const edits=syncEscalatorLevels([{key:axis.key,tags:{...axis.tags,level:'2;3'}}],data);
  assert.equal(edits.length,2);
  assert.deepEqual(edits.find(e=>e.key===area.key).tags,{...area.tags,level:'2;3'});

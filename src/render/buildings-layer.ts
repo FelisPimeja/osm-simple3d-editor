@@ -2977,6 +2977,13 @@ export class BuildingsLayer implements CustomLayerInterface {
         } catch { /* без крышки */ }
         return;
       }
+      // Стена-полигон с height ниже этажа: верх — обычная крышка в цвет стены на своей высоте с рёбрами, не сечение
+      if (wallCap < top - 1e-3) {
+        if (wallCap <= z0 + 1e-3) return;
+        fill(outer, holes, wallCap);
+        for (const r of [outer, ...holes]) for (let k = 0; k < r.length; k++) { const q = r[(k + 1) % r.length]; lines.push(r[k][0], r[k][1], wallCap, q[0], q[1], wallCap); }
+        return;
+      }
       const colour = black && !pale ? 0x000000 : undefined;
       if (!shell) { fill(outer, holes, top, colour); return; }
       const zOf = (x: number, y: number) => Math.max(z0, Math.min(top, shell.at(x, y, z0) ?? top));
@@ -3165,6 +3172,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const solid = it.kind === 'wall' || it.kind === 'column';
       omitCutTop = continuesAbove(it);
       omitFloorSeam = !!it.noFloor || continuingRooms.has(it.key);
+      wallCap = it.kind === 'wall' && it.railingHeight !== undefined && Number.isFinite(it.railingHeight) ? it.z + it.railingHeight : Infinity;
       const z = floorZ(it);
       for (const p of it.polygons) {
         if (it.line || it.cutOnly) continue; // нарисованы выше; только вырез — без стен
@@ -3196,6 +3204,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     omitFloorSeam = false;
     omitCutTop = false;
+    wallCap = Infinity;
     // Дверь в просвете между двумя колоннами: перемычка — объёмом на всю толщину.
     // Стена помещения даёт её только с одной стороны — без низа, крышки и обратной грани проём сквозной
     {

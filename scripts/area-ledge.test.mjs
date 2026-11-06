@@ -208,3 +208,16 @@ test('railing edges mark endpoints and sharp corners, not collinear vertices',()
  assert.equal(verticals.material.linewidth,1);
  assert.equal(verticals.geometry.getAttribute('instanceStart').count,3); // Two endpoints + one corner.
 });
+
+// way/-383: indoor=wall area=yes height=1.5 drew up to the level cut like any polygon wall
+test('a polygon wall stops at its height, with a lid there instead of the black cut section',()=>{
+ const {layer,poly}=fixture();
+ const maxZ=()=>{let m=-Infinity;layer.indoorObj.updateMatrixWorld(true);layer.indoorObj.traverse(o=>{if(!o.isMesh||o.isLineSegments2||!o.geometry?.getAttribute('position'))return;o.geometry.computeBoundingBox();const b=o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld);m=Math.max(m,b.max.z);});return m;};
+ const wall={key:'way/9',kind:'wall',z:3,polygons:[poly(rectangle(2,2,4,2.3))]};
+ layer.setLevel({floor:3,cut:6,items:[wall]});
+ const full=maxZ();
+ layer.setLevel({floor:3,cut:6,items:[{...wall,railingHeight:1.5}]});
+ const low=maxZ();
+ assert.ok(full>5,`full ${full}`);
+ assert.ok(low<4.51&&low>4.49,`low ${low}`);
+});

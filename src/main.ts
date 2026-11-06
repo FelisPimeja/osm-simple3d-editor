@@ -13186,6 +13186,16 @@ window.addEventListener('pointerup', (e) => {
   ctxLngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
   if (!focus) return openCtxMenu(e.clientX, e.clientY, 'map');
   const key = overpassLayer.pickHit([e.clientX - rect.left, e.clientY - rect.top])?.key;
+  const at: [number, number] = [e.clientX - rect.left, e.clientY - rect.top];
+  // Под курсором уже выбранный объект (в том числе не верхний — выбранный Alt+кликом из стопки) — меню для текущего
+  // выбора, без перевыбора верхнего
+  if (shownLevel) {
+    const ll = ctxLngLat ? [ctxLngLat.lng, ctxLngLat.lat] as LonLat : undefined;
+    if (indoorSelection.length && indoorStackAt(at).some((f) => indoorSelection.some((s) => indoorKey(s.key) === indoorKey(f.key))))
+      return openCtxMenu(e.clientX, e.clientY, 'indoor');
+    if (freeArea && ll && pointInRing(ll, freeArea.polygon.outer)) return openCtxMenu(e.clientX, e.clientY, 'indoor');
+  }
+  if (selection.length && overpassLayer.pickAll(at).some((k) => selection.includes(k))) return openCtxMenu(e.clientX, e.clientY, 'scene');
   if (shownLevel) {
     const point: [number, number] = [e.clientX - rect.left, e.clientY - rect.top];
     const wall = roomWallAt(point);

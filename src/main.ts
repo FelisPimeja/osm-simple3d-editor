@@ -9951,6 +9951,9 @@ function levelOpenings(l: Level): IndoorFeature[] {
 /** Последнее разбиение пустой площади этажа (undefined — polygon-clipping не справился). */
 let freeAreaCache: { sig: string; pieces: [number, number][][][] | undefined } | undefined;
 
+/** Вне сечения этажа: полусторона квадрата вокруг клика, в котором ищется замкнутое стенами место, м. */
+const AROUND_CLICK_M = 15;
+
 function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | undefined {
   if (!shownLevel) return;
   const ray = overpassLayer.focusRay(point);
@@ -9959,16 +9962,20 @@ function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | 
   // Подземный этаж только из indoor-данных (подземной части в OSM нет): пустоты — в пределах следа здания на земле
   const section = ll && (levelSection(shownLevel) ?? (shownLevel.floor < 0 ? overpassLayer.focusSection(0.1) : undefined));
   if (!ll || !section?.length) return;
-  // Мимо этажа (клик по пустому месту вокруг здания, двойной клик — выход) — разбиение этажа не нужно вовсе:
-  // на большом этаже оно стоит секунды (ГУМ, relation/3330565)
-  if (!section.some((p) => pointInRing(ll, p[0]) && !p.slice(1).some((h) => pointInRing(ll, h)))) return;
   const local = (p: LonLat) => overpassLayer.focusToLocal(p)!;
+  // Мимо этажа (клик по пустому месту вокруг здания, двойной клик — выход) — разбиение всего этажа не нужно:
+  // на большом этаже оно стоит секунды (ГУМ, relation/3330565). Но вне сечения бывают замкнутые стенами места
+  // (короб под навесом у платформы, кольцо из стен-линий и стороны стены-полигона): режем квадрат вокруг клика,
+  // кусок засчитывается, только если он целиком внутри квадрата — то есть со всех сторон закрыт стенами
+  const outside = !section.some((p) => pointInRing(ll, p[0]) && !p.slice(1).some((h) => pointInRing(ll, h)));
+  if (outside && !groupFeatures(focus!).some((f) => f.polygons?.some((p) => pointInRing(ll, p.outer)))) return;
+  const [cx, cy] = local(ll), R = AROUND_CLICK_M;
   const close = (r: LonLat[]) => { const points = r.map(local); return [...points, points[0]]; };
   const indoor = shownIndoor.map(wallAsLine);
   const occupied = [...indoor.filter(f => (isFloorKind(f) && !f.escalatorArea) || solidWall(f) || f.kind === 'column'), ...levelOpenings(shownLevel)]
     .map(f => f.polygons.map(p => [close(p.outer), ...p.inners.map(close)]));
   const walls = indoor.filter(f => f.kind === 'wall' && f.line && !solidWall(f)).flatMap(f => f.polygons.map(p => p.outer.map(local)));
-  const sectionLocal = section.map(p => p.map(close)), doors = shownIndoor.filter(isDoor).map(d => ({at: local(d.point!), width: openingDoorWidth(d.tags)}));
+  const sectionLocal = outside ? [[[[cx - R, cy - R], [cx + R, cy - R], [cx + R, cy + R], [cx - R, cy + R], [cx - R, cy - R]] as [number, number][]]] : section.map(p => p.map(close)), doors = shownIndoor.filter(isDoor).map(d => ({at: local(d.point!), width: openingDoorWidth(d.tags)}));
   // Разбиение этажа — по содержимому: следующий клик по тому же этажу (и неудача polygon-clipping) — из кеша
   const sig = hashString(JSON.stringify([sectionLocal, occupied, walls, doors]));
   let pieces: [number, number][][][] | undefined;
@@ -9979,7 +9986,8 @@ function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | 
   }
   if (!pieces) return;
   const toLngLat = (r: [number,number][]) => r.slice(0,-1).map(p => overpassLayer.focusToLngLat(...p)! as LonLat);
-  const piece = pieces.map(p => ({ outer: toLngLat(p[0]), inners: p.slice(1).map(toLngLat) }))
+  const closedByWalls = (p: [number, number][][]) => !outside || p[0].every(([x, y]) => Math.abs(x - cx) < R - 0.05 && Math.abs(y - cy) < R - 0.05);
+  const piece = pieces.filter(closedByWalls).map(p => ({ outer: toLngLat(p[0]), inners: p.slice(1).map(toLngLat) }))
     .find(p => pointInRing(ll, p.outer) && !p.inners.some(r => pointInRing(ll, r)));
   return piece && { n: shownLevel.n, polygon: piece };
 }

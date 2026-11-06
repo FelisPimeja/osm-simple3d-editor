@@ -3120,6 +3120,17 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(), shapeSelected
   });
 shapeTool.multiObject = () => indoorSelection.some(editableIndoorGeometry);
 shapeTool.noInsert = key => !!buildingIndoorFor(key)?.escalator;
+// Ширина марша с полигоном пары: ручки на серединах боковых сторон (на полу этажа)
+shapeTool.widthHandles = (key) => {
+  const f = buildingIndoorFor(key);
+  const width = f?.escalator && shownLevel ? pairWidth(f, focus ? buildingIndoor(focus) : []) : undefined;
+  if (!f || width === undefined || !editableEscalator(f)) return;
+  const [a, b] = f.polygons[0].outer.map((c) => overpassLayer.focusToLocal(c)!);
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, dir = new THREE.Vector3(-(b[1] - a[1]) / L, (b[0] - a[0]) / L, 0);
+  const mid = new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, shownLevel!.floor);
+  const own = [f.key, pairedArea(f, focus ? buildingIndoor(focus) : [])?.key].filter((k): k is string => !!k);
+  return { a: mid.clone().addScaledVector(dir, -width / 2), b: mid.clone().addScaledVector(dir, width / 2), dir, width, own };
+};
 shapeTool.onTracked = () => { overpassLayer.clearTracking(); trackTyped = ''; trackAxis = undefined; updateSnap(lastPointer); };
 shapeTool.isOpen = key => { const f = buildingIndoorFor(key), ids = f?.polygons[0]?.outerIds; return !!f?.line && (!ids || ids[0] !== ids[ids.length-1]); };
 overpassLayer.indoorEditPolygons = key => {
@@ -6938,7 +6949,7 @@ function removalRewrites(ids: Set<number>): { f: Feature3D; rewrites: RingRewrit
 function removeShapeVertex(t: ShapeTarget, merged: boolean) {
   // У эскалатора две точки: без одной его нет — удаляется целиком
   const esc = buildingIndoorFor(t.key);
-  if (esc?.escalator) { void deleteIndoorSpaces([esc]); return; }
+  if (esc?.escalator) { void deleteIndoorSpaces(withPairs([esc])); return; }
   if (buildingIndoorFor(t.key)) { applyIndoorGeometry({ type: 'remove', vertices: indoorShapeVertices(t) }, shapeTool.glue); return; }
   const f = entity(t.key) as Feature3D | undefined;
   const rings = f?.polygons && shapeRings(f, t);
@@ -6986,7 +6997,19 @@ function shapeHeightTags(f: Feature3D, t: ShapeTarget, dz: number): Record<strin
   return t.roof ? roofHeightTags(f.tags, dz) : pushHeightTags(f.tags, 'top', dz, 'm', false, drawnHeights(f));
 }
 
+/** Ширина марша после сдвига ручки ширины t на offset. */
+function shapeWidth(t: ShapeTarget, offset: THREE.Vector3): number | undefined {
+  const h = shapeTool.widthHandles?.(t.key);
+  return h && t.width ? h.width + 2 * offset.dot(h.dir) * t.width : undefined;
+}
+
 function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string | undefined {
+  if (t.width) {
+    const f = buildingIndoorFor(t.key), w = offset && shapeWidth(t, offset);
+    if (!f || !w) { overpassLayer.setOutline(undefined); return; }
+    try { drawIndoorGeometryPreview(pairWidthEdits(f, w, true)); } catch (err) { return tr((err as Error).message); }
+    return;
+  }
   if (buildingIndoorFor(t.key)) return previewIndoorShape(t, offset);
   const live = new Map(liveFeatures().map((g) => [g.key, g] as const));
   const restore = (keep: Set<string>) => {
@@ -7038,6 +7061,7 @@ function shapeGlued(rings: ShapeRings): boolean {
 }
 
 function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
+  if (t.width) { const f = buildingIndoorFor(t.key), w = shapeWidth(t, offset); return !!f && !!w && setFlightWidth(f, w); }
   // Indoor — всегда своим путём (и выделенный): общий путь частей двигал бы общие с частями узлы
   if (buildingIndoorFor(t.key)) return applyIndoorGeometry(indoorShapeOperation(t, offset), shapeTool.glue);
   const fail = (msg: string) => { setStatus(msg, true); return false; };
@@ -9292,7 +9316,7 @@ const LEVEL_OWN_KEYS = ['indoor', 'level', 'level:ref', 'repeat_on'];
 function deleteIndoorSelection() {
   if (uploading || deletingIndoorWalls || !canDeleteIndoorSelection()) return;
   if (indoorSelection.length && indoorSelection.every(isDoor)) deleteDoors(indoorSelection);
-  else if (!selectedRoomWalls.length && indoorSelection.length && indoorSelection.every(isDeletableSpace)) void deleteIndoorSpaces(indoorSelection);
+  else if (!selectedRoomWalls.length && indoorSelection.length && indoorSelection.every(isDeletableSpace)) void deleteIndoorSpaces(withPairs(indoorSelection));
   else void deleteIndoorWalls();
 }
 
@@ -9300,6 +9324,13 @@ function deleteIndoorSelection() {
  * Удалить помещения одним шагом истории. Отношение удаляется (его пути без тегов при отправке — тоже, если больше
  * нигде не нужны). Путь, входящий в отношения (контур мультиполигона, здание), теряет только теги; иначе удаляется.
  */
+/** Марш — пара «линия + полигон»: удаляется целиком (второй объект пары — к удаляемым). */
+function withPairs(fs: IndoorFeature[]): IndoorFeature[] {
+  const all = focus ? buildingIndoor(focus) : [];
+  const extra = fs.map((f) => stairsPartner(f, all)).filter((p): p is IndoorFeature => !!p && isDeletableSpace(p) && !fs.some((f) => f.key === p.key));
+  return [...fs, ...extra.filter((p, i) => extra.findIndex((q) => q.key === p.key) === i)];
+}
+
 async function deleteIndoorSpaces(fs: IndoorFeature[]) {
   if (!focus) return;
   const api = server().api, group = focus.key, stamp = JSON.stringify(session.changes());
@@ -10557,14 +10588,6 @@ function renderEscalatorUi() {
     el.title = tr('Этаж конца эскалатора: тяните вверх или вниз');
     escalatorUi.appendChild(el);
   }
-  // Ширина марша с полигоном пары: ручки на серединах боковых сторон, тянутся поперёк оси
-  if (pairWidth(f, focus ? buildingIndoor(focus) : []) !== undefined) for (const side of [-1, 1]) {
-    const el = document.createElement('div');
-    el.className = 'escalator-width-handle';
-    el.dataset.side = String(side);
-    el.title = tr('Ширина марша: тяните поперёк — обе стороны полигона симметрично');
-    escalatorUi.appendChild(el);
-  }
   const arrow = document.createElement('button');
   arrow.type = 'button';
   arrow.className = 'escalator-arrow';
@@ -10593,20 +10616,6 @@ function placeEscalatorUi() {
     el.textContent = levelLabel(n);
     el.classList.toggle('active', escalatorDrag?.end === end);
   }
-  const handles = escalatorUi.querySelectorAll<HTMLElement>('.escalator-width-handle');
-  if (handles.length && line.length === 2) {
-    const half = widthDrag?.half ?? (pairWidth(f, focus ? buildingIndoor(focus) : []) ?? 0) / 2;
-    const [a, b] = line, L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, n = [-(b[1] - a[1]) / L, (b[0] - a[0]) / L];
-    for (const el of handles) {
-      const side = Number(el.dataset.side);
-      const at = overpassLayer.focusProject(new THREE.Vector3((a[0] + b[0]) / 2 + n[0] * half * side, (a[1] + b[1]) / 2 + n[1] * half * side, shownLevel.floor));
-      el.hidden = !at;
-      if (!at) continue;
-      el.style.left = `${at[0]}px`;
-      el.style.top = `${at[1]}px`;
-      el.classList.toggle('active', !!widthDrag);
-    }
-  }
   const arrow = escalatorUi.querySelector<HTMLElement>('.escalator-arrow');
   if (arrow) {
     const za = floorOf(ends[0]), zb = floorOf(ends[1]);
@@ -10634,51 +10643,6 @@ escalatorUi.addEventListener('click', (e) => {
   trackIndoor(f.key, f);
   const cur = session.get(f.key)?.tags ?? f.tags;
   setIndoorTags([{ key: f.key, tags: { ...cur, conveying: CONVEYING_NEXT[cur.conveying ?? 'yes'] ?? 'forward' } }], 'conveying');
-});
-/** Перетаскивание ручки ширины: текущая полуширина, м. */
-let widthDrag: { half: number } | undefined;
-escalatorUi.addEventListener('pointerdown', (e) => {
-  const el = (e.target as HTMLElement).closest<HTMLElement>('.escalator-width-handle');
-  const f = selectedEscalator();
-  if (!el || !f || !shownLevel) return;
-  e.preventDefault(); e.stopPropagation();
-  const [a, b] = f.polygons[0].outer.map((c) => overpassLayer.focusToLocal(c)!);
-  const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, n = [-(b[1] - a[1]) / L, (b[0] - a[0]) / L];
-  const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], floor = shownLevel.floor;
-  widthDrag = { half: (pairWidth(f, focus ? buildingIndoor(focus) : []) ?? 0) / 2 };
-  el.setPointerCapture(e.pointerId);
-  const rect = map.getContainer().getBoundingClientRect();
-  const move = (ev: PointerEvent) => {
-    // Курсор — на плоскость пола этажа; полуширина — его расстояние от оси (только поперёк неё)
-    const hit = overpassLayer.focusRay([ev.clientX - rect.left, ev.clientY - rect.top])
-      ?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -floor), new THREE.Vector3());
-    if (!hit) return;
-    widthDrag!.half = Math.max(0.2, Math.abs((hit.x - mid[0]) * n[0] + (hit.y - mid[1]) * n[1]));
-    try { drawIndoorGeometryPreview(pairWidthEdits(f, widthDrag!.half * 2, true)); } catch { /* превью без контура */ }
-    placeEscalatorUi();
-  };
-  const up = () => {
-    el.removeEventListener('pointermove', move);
-    el.removeEventListener('pointerup', up);
-    el.removeEventListener('pointercancel', up);
-    const width = widthDrag!.half * 2;
-    widthDrag = undefined;
-    drawIndoorGeometryPreview([]);
-    try {
-      const edits = pairWidthEdits(f, width);
-      if (!edits.length) { placeEscalatorUi(); return; }
-      // Тег width, если он есть, — вслед за контуром
-      const cur = session.get(f.key)?.tags ?? f.tags;
-      if (cur.width) { trackIndoor(f.key, f); edits.push({ key: f.key, tags: { ...cur, width: writeLength(width) } }); }
-      session.editMany(edits);
-      indoorEditRev++;
-      renderLevels();
-      setStatus(tr('Ширина марша: {w} м.', { w: width.toFixed(2) }));
-    } catch (err) { setStatus((err as Error).message, true); placeEscalatorUi(); }
-  };
-  el.addEventListener('pointermove', move);
-  el.addEventListener('pointerup', up);
-  el.addEventListener('pointercancel', up);
 });
 escalatorUi.addEventListener('pointerdown', (e) => {
   const el = (e.target as HTMLElement).closest<HTMLElement>('.escalator-level-handle');
@@ -15530,6 +15494,22 @@ function pairWidthEdits(axis: IndoorFeature, width: number, preview = false): Ob
   edits = indoorRelationTopology(edits);
   dropCollapsedHoles(edits);
   return normalizeSolidDoorEdits(edits);
+}
+
+/** Записать ширину марша width (м): полигон пары и тег width, если он есть. false — не вышло (сообщение в строке). */
+function setFlightWidth(f: IndoorFeature, width: number): boolean {
+  try {
+    const edits = pairWidthEdits(f, width);
+    if (!edits.length) return false;
+    const cur = session.get(f.key)?.tags ?? f.tags;
+    if (cur.width) { trackIndoor(f.key, f); edits.push({ key: f.key, tags: { ...cur, width: writeLength(width) } }); }
+    overpassLayer.setOutline(undefined);
+    session.editMany(edits);
+    indoorEditRev++;
+    renderLevels();
+    setStatus(tr('Ширина марша: {w} м.', { w: width.toFixed(2) }));
+    return true;
+  } catch (err) { setStatus(tr((err as Error).message), true); return false; }
 }
 
 function escalatorWidth(f: IndoorFeature): number {

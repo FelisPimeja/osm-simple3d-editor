@@ -441,11 +441,9 @@ export function pointOnSurface(p: Polygon): LonLat {
 }
 
 /**
- * Контур скрываем при покрытии не менее 90% частями.
- * В явном type=building учитываем все его части: состав здания задан отношением.
- * Для пространственно найденных частей требуем известную высоту; приподнятые тоже считаются в покрытии.
- * Небольшие пристройки и части без высоты не должны скрывать основной объём.
- * Приподнятые части не вычитаем из основания (см. outline-remainder).
+ * Контур здания не рисуется, если поверх него есть хоть одна building:part (схема Simple 3D Buildings): части
+ * описывают здание целиком. Части — члены его отношения type=building, а без отношения — части, чья точка
+ * поверхности лежит в контуре. Контур с building:part (не no) — сам часть: рисуется всегда.
  */
 export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[] = features, groups: BuildingGroup[] = []) {
   const byKey = new Map(features.map((f) => [f.key, f]));
@@ -473,40 +471,24 @@ export function markOutlinesWithParts(features: Feature3D[], targets: Feature3D[
     if (b.kind !== 'building') continue;
     // Контур с building:part — сам тоже часть: рисуется объёмом, хоть внутри и другие части
     if (isOutlinePart(b.tags)) { b.hasParts = false; continue; }
-    const heights = computeHeights(b.tags);
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
     for (const p of b.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
     const inside = (c: LonLat) => b.polygons.some((p) => pointInRing(c, p.outer) && !p.inners.some((h) => pointInRing(c, h)));
     const explicit = groupByOutline.get(b.key);
     const candidates = new Set<string>();
     const explicitParts = explicit && new Set(explicit.members.filter((_, i) => explicit.roles[i] === 'part'));
-    // Пересечение ниже обрежет части по outline, в том числе выступающие за него.
+    // Явный состав здания — его части, где бы они ни лежали
     if (explicitParts) for (const key of explicitParts) candidates.add(key);
     for (let i = Math.floor(w / CELL); !explicit && i <= Math.floor(e / CELL); i++) {
       for (let j = Math.floor(s / CELL); j <= Math.floor(n / CELL); j++) {
         for (const part of grid.get(`${i},${j}`) ?? []) {
           if (assignedParts.has(part.key)) continue;
-          // Покрытие считаем по всем частям внутри, и приподнятым (навес над колоннами АЗС — issue #48)
+          // Любая часть внутри, и приподнятая (навес над колоннами АЗС — issue #48)
           if (inside(part.c)) candidates.add(part.key);
         }
       }
     }
-    const parts = [...candidates].map((key) => byKey.get(key)).filter((f): f is Feature3D => !!f && f.kind === 'part'
-      && (!!explicit || heights.source === 'default' || computeHeights(f.tags).source !== 'default'));
-    const toClip = (polygons: Polygon[]): ClipMulti => polygons.map((p) => [p.outer, ...p.inners].map((ring) => [...ring, ring[0]]));
-    try {
-      const outline = toClip(b.polygons);
-      const partShapes = parts.flatMap((p) => toClip(p.polygons));
-      if (!partShapes.length) { b.hasParts = false; continue; }
-      const mergedParts = polygonClipping.union(partShapes[0], ...partShapes.slice(1));
-      const covered = polygonClipping.intersection(outline, mergedParts);
-      const coveredArea = covered.reduce((sum, [outer, ...holes]) => sum + area({ outer: outer.slice(0, -1), inners: holes.map((r) => r.slice(0, -1)) }), 0);
-      const outlineArea = b.polygons.reduce((sum, p) => sum + area(p), 0);
-      b.hasParts = outlineArea > 0 && coveredArea / outlineArea >= 0.9;
-    } catch {
-      // Некорректная геометрия: оставляем исходный контур видимым.
-      b.hasParts = false;
-    }
+    b.hasParts = [...candidates].some((key) => byKey.get(key)?.kind === 'part');
   }
 }
 

@@ -72,15 +72,8 @@ test('17973190 stairwell: the main building section excludes the lower sloping a
  });
  assert.ok(horizontalBand<.3,`phantom horizontal junction band: ${horizontalBand}m`);
 
- const pos=g.mesh.geometry.getAttribute('position'),a=new THREE.Vector3(),b=a.clone(),c=a.clone(),hit=a.clone();
- for(const z of [.5,1.5,3.2]){
-  const q=new THREE.Vector3((ring[5][0]+ring[6][0])/2,(ring[5][1]+ring[6][1])/2,z);
-  let distance=Infinity;
-  for(let i=main.start;i<main.start+main.wallVertices;i+=3){
-   a.fromBufferAttribute(pos,i);b.fromBufferAttribute(pos,i+1);c.fromBufferAttribute(pos,i+2);
-   new THREE.Triangle(a,b,c).closestPointToPoint(q,hit);distance=Math.min(distance,hit.distanceTo(q));
-  }
-  assert.ok(distance<1e-4,`back wall has a hole at height ${z}, distance=${distance}`);
- }
+ // Основной дом relation/17948426 — контур без building:part с частью внутри: по схеме S3D не рисуется
+ // (рисуются только части), так что фасад над пристройкой не проверяем
+ assert.equal(main.feature.hasParts,true);
 
 });

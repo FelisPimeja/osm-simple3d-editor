@@ -6,19 +6,18 @@ before(async()=>{vite=await createServer({configFile:false,server:{middlewareMod
 after(async()=>await vite.close());
 const feature=(key,kind,x1,y1,x2,y2,tags)=>({key,kind,tags,hasParts:false,polygons:[{outer:[[x1,y1],[x2,y1],[x2,y2],[x1,y2]],inners:[]}]});
 const outline=()=>feature('way/1','building',0,0,.001,.001,{'building:levels':'5'});
-test('small annex does not hide the main five-floor volume',()=>{
+// Схема Simple 3D Buildings: контур без building:part не рисуется, если поверх него есть хоть одна часть
+test('any part inside hides the outline: a small annex, a part without height',()=>{
  const b=outline(),p=feature('way/2','part',0,0,.0002,.0002,{'building:levels':'1'});
- markOutlinesWithParts([b,p]);assert.equal(b.hasParts,false);
-});
-test('parts with unknown heights do not hide an explicitly heighted outline',()=>{
- const b=outline(),p=feature('way/2','part',0,0,.001,.001,{'building:part':'yes'});
- markOutlinesWithParts([b,p]);assert.equal(b.hasParts,false);
-});
-test('almost complete explicit parts hide the outline; overlapping areas are not counted twice',()=>{
- const b=outline(),p=feature('way/2','part',0,0,.00095,.001,{'building:levels':'5'});
  markOutlinesWithParts([b,p]);assert.equal(b.hasParts,true);
- p.polygons[0].outer=[[0,0],[.0006,0],[.0006,.001],[0,.001]];
- markOutlinesWithParts([b,p,{...p,key:'way/3'}]);assert.equal(b.hasParts,false);
+ const q=feature('way/3','part',0,0,.001,.001,{'building:part':'yes'});
+ const c=outline();markOutlinesWithParts([c,q]);assert.equal(c.hasParts,true);
+});
+test('a part outside the outline does not hide it; an outline that is itself a part is always drawn',()=>{
+ const b=outline(),p=feature('way/2','part',.002,.002,.003,.003,{'building:levels':'2'});
+ markOutlinesWithParts([b,p]);assert.equal(b.hasParts,false);
+ const self={...outline(),tags:{'building:levels':'5','building:part':'yes'}},q=feature('way/3','part',0,0,.0005,.0005,{'building:levels':'1'});
+ markOutlinesWithParts([self,q]);assert.equal(self.hasParts,false);
 });
 test('render remainder subtracts only parts with their own height and retains source geometry',async()=>{
  const {outlineRemainders}=await vite.ssrLoadModule('/src/render/outline-remainder.ts');
@@ -54,10 +53,10 @@ test('17747395: all explicit parts cover the outline, including parts without he
  markOutlinesWithParts(features,features,groups);
  assert.equal(b.hasParts,true);
 });
-test('explicit parts intersecting the outline count even when their centre is outside',()=>{
+test('a type=building relation with parts hides its outline wherever the parts lie',()=>{
  const b=outline(),p=feature('way/2','part',-.002,0,.001,.001,{'building:part':'yes'});
  const group={members:[b.key,p.key],roles:['outline','part']};
  markOutlinesWithParts([b,p],[b],[group]);assert.equal(b.hasParts,true);
  p.polygons[0].outer=p.polygons[0].outer.map(([x,y])=>[x+.01,y]);
- markOutlinesWithParts([b,p],[b],[group]);assert.equal(b.hasParts,false);
+ markOutlinesWithParts([b,p],[b],[group]);assert.equal(b.hasParts,true);
 });

@@ -10285,7 +10285,14 @@ function cutPlan(pts: [number, number][]): string | undefined {
   const replaced: typeof targets = [];
   const skipped: string[] = [];
   timed('разрез: помещения', () => { for (const f of rooms) {
-    if (f.polygons.length !== 1) continue;
+    // Мультиполигон из нескольких полигонов (стена из двух колец, relation/21914239): режем каждый; разрезан хоть
+    // один — объект заменяется кусками, неразрезанные полигоны — тоже отдельными объектами с его тегами
+    if (f.polygons.length > 1) {
+      const parts = f.polygons.map((p) => ({ p, pieces: cut(p) }));
+      if (!parts.some((x) => x.pieces.length >= 2)) continue;
+      replaced.push({ f, pieces: parts.flatMap((x) => x.pieces.length >= 2 ? x.pieces : [[toLocal(x.p.outer), ...x.p.inners.map(toLocal)]]) });
+      continue;
+    }
     const pieces = cut(f.polygons[0]);
     if (pieces.length < 2) continue;
     if (indoorKey(f.key).startsWith('relation/') || pieces.some((p) => p.length > 1)) { replaced.push({ f, pieces }); continue; }

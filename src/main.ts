@@ -8331,7 +8331,7 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
     const p = indoorAnchor(f);
     if (!p) return false;
     // Путь и платформа вокзала — если хоть одна вершина в здании (рельсы начинаются снаружи), дальше обрезаем
-    if (f.transit && !f.tags.indoor) return f.polygons.some((q) => q.outer.some((v) => feats.some((b) => b.polygons.some((r) => pointInRing(v, r.outer)))));
+    if (f.transit) return f.polygons.some((q) => q.outer.some((v) => feats.some((b) => b.polygons.some((r) => pointInRing(v, r.outer)))));
     // Дверь на наружной стене лежит ровно на контуре — для такой точки pointInRing случаен
     return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || (!!f.point && nearRing(p, q.outer, 0.3)) || (f.kind === 'wall' && nearRing(p, q.outer, 0.03))));
   }).map((f) => f.transit && !f.tags.indoor ? clipTransit(f, feats, footprint) : f).filter((f): f is IndoorFeature => !!f);

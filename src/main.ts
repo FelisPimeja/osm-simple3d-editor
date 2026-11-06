@@ -1,5 +1,5 @@
 import { withEntranceTags } from './edit/entrance-edits';
-import { cleanPiece, freeAreaPieces } from './edit/free-area';
+import { cleanPiece, freeAreaPieces, joinedWalls } from './edit/free-area';
 import { joinedWallLine } from './edit/indoor-wall-union';
 import { pointWallRings, insertWallPoint } from './edit/point-wall-rings';
 import { roomDoorway, solidWall, wallLocalPolygons, cutSolidWall, findSolidDoorBinding, restoreSolidDoor, nearestSolidFace, type WallPolygon, normalizeSolidDoorEdits, projectedOpeningIndoor } from './edit/solid-wall-doors';
@@ -1549,6 +1549,10 @@ map.on('click', (e) => {
     const room = indoorAt([e.point.x, e.point.y]);
     // Выделена пустая площадь, Shift+клик по помещению — площадь остаётся в выделении вместе с ним
     if (room && indoorAdd && freeArea) { const a = [freeArea, ...freeExtra]; selectIndoor(room); freeExtra = a; showFreeExtra(); return; }
+    // Замкнутое кольцо стен внутри помещения или площадки (короб, шахта в зале — площадка без дыры под ним):
+    // клик внутри кольца — его пространство, чтобы сделать его стеной-полигоном или помещением
+    const loop = room && !indoorAdd ? wallLoopAt([e.point.x, e.point.y], room) : undefined;
+    if (loop) { selectFreeArea(loop); return; }
     if (room) { selectIndoor(room, indoorAdd); return; }
     // Shift+клик по пустой площади при выделенной пустой площади — несколько кусков сразу (теги — всем)
     if (indoorAdd && freeArea && !indoorSelection.length && !selectedRoomWalls.length) {
@@ -1562,7 +1566,7 @@ map.on('click', (e) => {
       if (free) toggleFreeExtra(free);
       return;
     }
-    const free = freeAreaAt([e.point.x, e.point.y]);
+    const free = freeAreaAt([e.point.x, e.point.y]) ?? wallLoopAt([e.point.x, e.point.y]);
     if (free) { selectFreeArea(free); return; }
   }
   // Alt+клик на этаже: перебор наложенных помещений от меньшего к большему, за последним — части здания
@@ -9942,6 +9946,30 @@ function toggleFreeArea(a: { n: number; polygon: Polygon }) {
   [freeArea, ...freeExtra] = next;
   overpassLayer.setFreeArea({ key: 'free-area', kind: 'area', polygons: next.map((b) => b.polygon), z: shownLevel?.floor ?? 0 });
   renderFreeArea(freeArea!);
+}
+
+/**
+ * Наименьшее замкнутое кольцо стен-линий этажа вокруг точки экрана. С room — лежащее внутри помещения и меньше
+ * половины его площади (кольцо, совпадающее со стенами самого помещения, — это помещение, а не пустота в нём);
+ * без room — любое: кольцо вне сечения этажа (под навесом, у платформы), где пустой площади этажа нет.
+ */
+function wallLoopAt(point: [number, number], room?: IndoorFeature): { n: number; polygon: Polygon } | undefined {
+  if (!shownLevel || (room && (room.line || room.point || !room.polygons.length))) return;
+  const ray = overpassLayer.focusRay(point);
+  const hit = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -shownLevel.floor), new THREE.Vector3());
+  const ll = hit && overpassLayer.focusToLngLat(hit.x, hit.y);
+  if (!ll) return;
+  const local = (p: LonLat) => overpassLayer.focusToLocal(p)!;
+  const lines = shownIndoor.map(wallAsLine).filter((f) => f.kind === 'wall' && f.line && !solidWall(f)).flatMap((f) => f.polygons.map((p) => p.outer.map(local)));
+  let best: { n: number; polygon: Polygon } | undefined, bestArea = room ? room.polygons.reduce((s, p) => s + polyArea(p), 0) / 2 : Infinity;
+  for (const c of joinedWalls(lines)) {
+    if (c.length < 4 || Math.hypot(c[0][0] - c.at(-1)![0], c[0][1] - c.at(-1)![1]) > 0.001) continue;
+    const outer = c.slice(0, -1).map((p) => overpassLayer.focusToLngLat(p[0], p[1])! as LonLat);
+    if (!pointInRing(ll, outer)) continue;
+    const polygon = { outer, inners: [] }, a = polyArea(polygon);
+    if (a < bestArea && (!room || room.polygons.some((p) => pointInRing(outer[0], p.outer) || nearRing(outer[0], p.outer, 0.05)))) { best = { n: shownLevel.n, polygon }; bestArea = a; }
+  }
+  return best;
 }
 
 function selectFreeArea(a: { n: number; polygon: Polygon }) {

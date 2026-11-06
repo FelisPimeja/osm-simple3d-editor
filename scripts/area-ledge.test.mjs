@@ -229,3 +229,28 @@ test('the lid of a polygon wall below the cut is white, not the black section',(
  assert.ok(tops.length,'lid drawn');
  for(const t of tops)assert.ok(t&&t.every(v=>v>0.9),`colour ${t}`);
 });
+
+// way/-778 (height=4) у way/-90: общая сторона на одной прямой со сторонами высокой стены — выше низкой стены
+// в узлах стыка вертикальных рёбер нет (грань высокой стены там сплошная)
+test('a low polygon wall against a collinear side of a tall one: junction verticals stop at the low wall top',()=>{
+ const {layer,poly}=fixture();
+ layer.graphics.edges=true;
+ const ll=(x,y)=>poly({outer:[[x,y]]}).outer[0];
+ const tall={key:'way/90',kind:'wall',z:3,polygons:[{outer:[[2,2],[4,2],[5,2],[8,2],[8,2.4],[2,2.4]].map(([x,y])=>ll(x,y)),inners:[]}]};
+ const low={key:'way/778',kind:'wall',z:3,railingHeight:1,polygons:[{outer:[[4,2],[4,1.6],[5,1.6],[5,2]].map(([x,y])=>ll(x,y)),inners:[]}]};
+ layer.setLevel({floor:3,cut:6,items:[tall,low]});
+ const g=layer.groups.get('@focus'), [ax,ay]=g.toLocal(ll(4,2)), [bx,by]=g.toLocal(ll(5,2));
+ let top=-Infinity,found=0;
+ layer.indoorObj.traverse(o=>{
+  if(!o.isLineSegments)return;
+  const p=o.geometry.getAttribute('position');
+  for(let i=0;i+1<p.count;i+=2){
+   const x=p.getX(i),y=p.getY(i);
+   if(Math.abs(x-p.getX(i+1))>1e-4||Math.abs(y-p.getY(i+1))>1e-4)continue;
+   if(!([[ax,ay],[bx,by]].some(([qx,qy])=>Math.hypot(x-qx,y-qy)<0.03)))continue;
+   found++;top=Math.max(top,p.getZ(i),p.getZ(i+1));
+  }
+ });
+ assert.ok(found>0,'junction verticals are drawn');
+ assert.ok(top<4.05,`vertical goes up to ${top}`);
+});

@@ -2533,13 +2533,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     let linearCutTop = true;
     const edgeSurfaces = new Map<string, number[][]>();
     let edgeOcclusionOnly = false;
-    const ends = new Map<string, { x: number; y: number; z0: number; z1: number; dirs: [number, number, number][] }>();
+    /** Конец стены в точке: направления сторон (dx, dy, длина, верх этой стороны) — у каждой своя высота. */
+    const ends = new Map<string, { x: number; y: number; z0: number; z1: number; dirs: [number, number, number, number][] }>();
     const end = (x: number, y: number, z0: number, z1: number, dx: number, dy: number, length: number) => {
       const k = `${Math.round(x * 1000)},${Math.round(y * 1000)}`;
       const e = ends.get(k) ?? { x, y, z0, z1, dirs: [] };
       e.z1 = Math.max(e.z1, z1);
       // Совпадающие стороны соседних полигонов дают одно направление, а не дополнительный излом.
-      if (!e.dirs.some(([ex, ey]) => ex * dx + ey * dy > Math.cos(INDOOR_EDGE_TURN))) e.dirs.push([dx, dy, length]);
+      const same = e.dirs.find(([ex, ey]) => ex * dx + ey * dy > Math.cos(INDOOR_EDGE_TURN));
+      if (same) same[3] = Math.max(same[3], z1); else e.dirs.push([dx, dy, length, z1]);
       ends.set(k, e);
     };
     /** Кусок стены; верх — z1a в начале, z1b в конце (под скатом крыши — наклонный). */
@@ -3286,7 +3288,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const edgeCos = Math.cos(INDOOR_EDGE_TURN);
     const sideEdges: number[] = [], sideDirs: number[] = [];
     /** Нормаль стены или фасада, в которые упирается конец (x, y) стены, уходящей в сторону dir, — к этой стене. */
-    const abutment = (x: number, y: number, dir: [number, number, number]): [number, number] | undefined => {
+    const abutment = (x: number, y: number, dir: readonly number[]): [number, number] | undefined => {
       for (const [ax, ay, bx, by] of taken.near(x, y, x, y)) {
         const len = Math.hypot(bx - ax, by - ay);
         if (len < 1e-6) continue;
@@ -3299,15 +3301,26 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
     };
     for (const e of ends.values()) {
-      const opposite = (a: [number, number, number], b: [number, number, number]) => {
+      const opposite = (a: [number, number, number, number], b: [number, number, number, number]) => {
         const dot = a[0] * b[0] + a[1] * b[1];
         // На коротких сегментах сантиметровая погрешность OSM даёт большой
         // угол. Сохраняем острые углы, но не рисуем шов при отклонении до 1 см.
         return dot < -edgeCos || (dot < -0.9 && Math.abs(a[0] * b[1] - a[1] * b[0]) * Math.min(a[2], b[2]) < 0.01);
       };
-      const straight = e.dirs.length === 2 && opposite(e.dirs[0], e.dirs[1]);
-      if (straight) continue;
-      let spans: [number, number][] = [[e.z0, e.z1]];
+      // Вертикаль — только на высотах, где стороны в точке не продолжают одна другую: у низкой примыкающей стены
+      // (её верх ниже) выше неё остаётся прямая — шва там нет (way/-778 у way/-90)
+      // Верх точки (e.z1) могут опустить снаружи (откос проёма под перемычкой) — выше него вертикали нет
+      const topOf = (d: [number, number, number, number]) => Math.min(d[3], e.z1);
+      const tops = [...new Set(e.dirs.map(topOf))].filter((z) => z > e.z0 + 1e-3).sort((a, b) => a - b);
+      let spans: [number, number][] = [];
+      let lo = e.z0;
+      for (const hi of tops) {
+        const active = e.dirs.filter((d) => topOf(d) >= hi - 1e-3);
+        const straight = active.length === 2 && opposite(active[0], active[1]);
+        if (!straight) { const last = spans.at(-1); if (last && Math.abs(last[1] - lo) < 1e-6) last[1] = hi; else spans.push([lo, hi]); }
+        lo = hi;
+      }
+      if (!spans.length) continue;
       if (e.dirs.length === 1) {
         for (let x = Math.floor((e.x - 0.02) / 4); x <= Math.floor((e.x + 0.02) / 4); x++)
           for (let y = Math.floor((e.y - 0.02) / 4); y <= Math.floor((e.y + 0.02) / 4); y++)

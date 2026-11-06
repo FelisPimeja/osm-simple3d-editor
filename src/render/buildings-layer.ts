@@ -41,7 +41,7 @@ const HIGHLIGHT = new THREE.Color('#97beff'); // #2f7cff, смешанный с 
 const MONOCHROME = new THREE.Color('#ffffff');
 
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
-export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Платформа вокзала: снаружи здания её пол вырезает землю вокруг. */ platform?: boolean; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
+export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Платформа вокзала: снаружи здания её пол вырезает землю вокруг. */ platform?: boolean; /** Путь: ширина колеи, м (рельсы — двумя линиями). */ gauge?: number; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
   /** A closed way without area=yes is a linear wall. */ linearWall?: boolean;
   railing?: boolean;
   /** material=glass у стены-линии или ограждения. */ glass?: boolean;
@@ -137,6 +137,8 @@ const INDOOR_CUT_CAP_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000, s
 const INDOOR_CUT_CAP_WIRE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 /** Крышка сечения замкнутых стен и колонн — освещается как верх здания. */
 const INDOOR_CAP_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+/** Единичная нормаль (влево) отрезка a→b. */
+const normal = (a: Pt, b: Pt): Pt => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return [-dy / l, dx / l]; };
 /** Железнодорожный путь на плане этажа. */
 const TRACK_MATERIAL = new THREE.LineBasicMaterial({ color: 0x4a4f55 });
 /** Стена помещения совпадает с уже нарисованной (периметр, indoor=wall, соседнее помещение): ближе этого, м. */
@@ -1682,12 +1684,23 @@ export class BuildingsLayer implements CustomLayerInterface {
       const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineDashedMaterial({color:0x666666,dashSize:.2,gapSize:.15,depthTest:false}));
       line.name='indoor-steps-outline';line.computeLineDistances();line.renderOrder=5;root.add(line);
     }
-    // Пути вокзала — сплошной тёмной линией по полу этажа
+    // Пути вокзала — два рельса по полу этажа: ось пути, сдвинутая на половину колеи в обе стороны (срез углов
+    // по биссектрисе)
     for (const it of this.level?.tracks ?? []) for (const p of it.polygons) {
-      const points = p.outer.map((q) => { const [x, y] = g.toLocal(q); return new THREE.Vector3(x, y, it.z + .015); });
-      if (points.length < 2) continue;
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), TRACK_MATERIAL);
-      line.name = 'indoor-track'; line.renderOrder = 4; root.add(line);
+      const pts = p.outer.map((q) => g.toLocal(q));
+      if (pts.length < 2) continue;
+      const half = (it.gauge ?? 1.435) / 2;
+      for (const side of [-1, 1]) {
+        const points = pts.map(([x, y], i) => {
+          const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+          const n1 = i > 0 ? normal(pts[i - 1], pts[i]) : normal(pts[i], b), n2 = i + 1 < pts.length ? normal(pts[i], pts[i + 1]) : normal(a, pts[i]);
+          const mx = n1[0] + n2[0], my = n1[1] + n2[1], l = Math.hypot(mx, my) || 1, cos = Math.max(0.3, (mx * n1[0] + my * n1[1]) / l);
+          const k = side * half / cos / l;
+          return new THREE.Vector3(x + mx * k, y + my * k, it.z + .015);
+        });
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), TRACK_MATERIAL);
+        line.name = 'indoor-track'; line.renderOrder = 4; root.add(line);
+      }
     }
     g.scene.add(root);
     if (this.level.floor > -0.01) this.addEarth(root, g);

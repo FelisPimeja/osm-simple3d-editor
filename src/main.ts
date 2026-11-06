@@ -8962,6 +8962,12 @@ function hideSelectedIndoor() {
   changeIndoorHidden(new Set([...indoorHidden, ...indoorSelection.map((f) => indoorKey(f.key))]));
 }
 
+/** Ширина колеи пути, м: gauge=* в мм (несколько значений — первое: 1520;1435); без тега — undefined. */
+function trackGauge(t: Record<string, string>): number | undefined {
+  const mm = Number(t.gauge?.split(';')[0].trim());
+  return Number.isFinite(mm) && mm > 300 && mm < 3000 ? mm / 1000 : undefined;
+}
+
 /** Платформа вокзала на плане — светло-серым: видно край платформы на фоне путей и пола зала. */
 const PLATFORM_COLOUR = 0xe4e6e9;
 
@@ -11906,7 +11912,7 @@ function renderLevelsImpl() {
       // Площади эскалаторов и лестниц (indoor=area с тегами лестницы) — пунктирным контуром, без заливки
       outlines: fs.filter(f=>f.escalatorArea||stairsArea(f)).map((f):IndoorItem=>({key:f.key,kind:f.kind,polygons:f.polygons,z:l.floor})),
       // Пути вокзала — линиями по полу (не стены)
-      tracks: fs.filter((f) => f.transit && f.line).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, z: l.floor })),
+      tracks: fs.filter((f) => f.transit && f.line).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, z: l.floor, ...(trackGauge(f.tags) ? { gauge: trackGauge(f.tags) } : {}) })),
       get doorCuts() { return doorCutsOf(); },
       // Площадь эскалатора задаёт его след и проём, но не сплошной пол под ступенями.
       // Многоэтажные помещения имеют пол только внизу; стены и колонны есть на всех указанных уровнях.

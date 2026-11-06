@@ -41,7 +41,7 @@ const HIGHLIGHT = new THREE.Color('#97beff'); // #2f7cff, смешанный с 
 const MONOCHROME = new THREE.Color('#ffffff');
 
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
-export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
+export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Платформа вокзала: снаружи здания её пол вырезает землю вокруг. */ platform?: boolean; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
   /** A closed way without area=yes is a linear wall. */ linearWall?: boolean;
   railing?: boolean;
   /** material=glass у стены-линии или ограждения. */ glass?: boolean;
@@ -1589,6 +1589,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     const close = (r: Pt[]) => [...r, r[0]] as [number, number][];
     const pits: ClipMulti = (this.level?.underground ?? []).flatMap((u) => u.pits.flat())
       .map((p) => [close(p.outer.map(g.toLocal)), ...p.inners.map((r) => close(r.map(g.toLocal)))]);
+    // Платформы этажа у земли — тоже вырез: снаружи здания их пол в плоскости земли, и земля его закрывала
+    // (заливка обрывалась у стены и снова появлялась за 50 м, где земля кончается)
+    for (const it of this.level?.items ?? []) if (it.platform && Math.abs(it.z) < 0.05)
+      for (const p of it.polygons) pits.push([close(p.outer.map(g.toLocal)), ...p.inners.map((r) => close(r.map(g.toLocal)))] as never);
     try {
       const cuts = [...(sec?.length ? [sec as unknown as ClipMulti] : []), ...(pits.length ? [pits] : [])];
       if (cuts.length) earth = polygonClipping.difference(square, ...cuts);

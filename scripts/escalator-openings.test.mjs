@@ -35,3 +35,12 @@ test('opening outline: edges around the hole, verticals stop at the wall top',()
  }
  assert.ok(vertical>=2);
 });
+
+// Лестница в стене поперёк марша (стена лестничной клетки у верхней площадки) — проём как у эскалатора
+test('stairs cut a wall across the flight but not a wall along it',()=>{
+ const flight={line:[[0,0],[10,0]],bottom:0,top:4,width:2,incline:'up',stairs:true};
+ const out=cut(wall,[flight]);
+ assert.equal(contains(out,0,2.5),false);assert.equal(contains(out,0,5.5),true);
+ const side=new Float32Array([2,1,0,8,1,0,8,1,8,2,1,0,8,1,8,2,1,8]);
+ assert.equal(masksOf(side,[flight]).length,0);
+});

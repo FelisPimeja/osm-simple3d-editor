@@ -57,7 +57,9 @@ export function stairsOutline(axis: IndoorFeature, all: IndoorFeature[]): LonLat
   for (const area of all) {
     if (area.line || area.point || area.polygons.length !== 1 || area.polygons[0].inners.length || !isStairsAreaTags(area.tags)) continue;
     if (!sameLevels(area.levels, axis.levels) || !crosses(line, area.polygons[0])) continue;
-    const others = all.filter((f) => f.stairs && f.key !== axis.key && f.polygons[0]?.outer.length >= 2
+    // Другой марш тех же этажей в той же площади — площадь не одного марша. Марш соседней пары этажей (-1;0 под 0;1)
+    // её не делит: он лишь проходит под ней
+    const others = all.filter((f) => f.stairs && f.key !== axis.key && sameLevels(f.levels, axis.levels) && f.polygons[0]?.outer.length >= 2
       && (() => { const o = f.polygons[0].outer, m: LonLat = [(o[0][0] + o[o.length - 1][0]) / 2, (o[0][1] + o[o.length - 1][1]) / 2]; return inside(m, area.polygons[0]); })());
     if (others.length) return;
     return area.polygons[0].outer;

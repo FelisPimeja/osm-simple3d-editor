@@ -70,6 +70,8 @@ export function groupEscalators(list: EscalatorCut[]): EscalatorCut[] {
   }
   return out;
 }
+/** Стена режется лестницей, если её нормаль ближе к оси марша, чем на 60° (стена поперёк, а не вдоль). */
+const STAIRS_CROSS_COS=.5;
 /** Intersect vertical wall planes with the escalator body and 2 m of headroom. */
 export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: EscalatorCut[]): number[] {
   if (!escalators.length || !positions.length) return [];
@@ -77,8 +79,9 @@ export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: 
   for (let i=0;i<positions.length;i+=3) for (let k=0;k<3;k++) {
     bounds[k]=Math.min(bounds[k],positions[i+k]); bounds[k+3]=Math.max(bounds[k+3],positions[i+k]);
   }
-  // Лестница стен не режет: боковые стены вдоль марша остаются целыми
-  escalators=groupEscalators(escalators.filter(e=>!e.stairs)).filter(e=>{
+  // Лестница режет только стены поперёк марша (лестничная клетка, стена у верхней площадки): боковые стены вдоль
+  // марша остаются целыми, даже если контур площади заходит в их толщу
+  escalators=groupEscalators(escalators).filter(e=>{
     const pad=halfWidthOf(e);
     const xs=e.line.map(p=>p[0]),ys=e.line.map(p=>p[1]);
     return Math.min(...xs)-pad<=bounds[3] && Math.max(...xs)+pad>=bounds[0]
@@ -96,6 +99,10 @@ export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: 
     const d=nx*a[0]+ny*a[1],key=[nx,ny,d].map(v=>v.toFixed(6)).join(',');
     if(seen.has(key))continue;seen.add(key);
     for(const e of escalators) {
+      if(e.stairs){
+        const a=e.line[0],b=e.line[e.line.length-1],L=Math.hypot(b[0]-a[0],b[1]-a[1])||1;
+        if(Math.abs(nx*(b[0]-a[0])+ny*(b[1]-a[1]))/L<STAIRS_CROSS_COS)continue;
+      }
       const lengths=[0];for(let j=1;j<e.line.length;j++)lengths.push(lengths[j-1]+Math.hypot(e.line[j][0]-e.line[j-1][0],e.line[j][1]-e.line[j-1][1]));
       const length=lengths.at(-1)??0;if(length<2||e.top<=e.bottom)continue;
       const landing=landingOf(e,length),ramp=length-2*landing,count=e.stairs?stairsCount(e):Math.max(1,Math.round(ramp/.42)),half=halfWidthOf(e);

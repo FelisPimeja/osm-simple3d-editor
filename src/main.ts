@@ -8331,10 +8331,10 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
     const p = indoorAnchor(f);
     if (!p) return false;
     // Путь и платформа вокзала — если хоть одна вершина в здании (рельсы начинаются снаружи), дальше обрезаем
-    if (f.transit) return f.polygons.some((q) => q.outer.some((v) => feats.some((b) => b.polygons.some((r) => pointInRing(v, r.outer)))));
+    if (f.transit && !f.tags.indoor) return f.polygons.some((q) => q.outer.some((v) => feats.some((b) => b.polygons.some((r) => pointInRing(v, r.outer)))));
     // Дверь на наружной стене лежит ровно на контуре — для такой точки pointInRing случаен
     return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || (!!f.point && nearRing(p, q.outer, 0.3)) || (f.kind === 'wall' && nearRing(p, q.outer, 0.03))));
-  }).map((f) => f.transit ? clipTransit(f, feats, footprint) : f).filter((f): f is IndoorFeature => !!f);
+  }).map((f) => f.transit && !f.tags.indoor ? clipTransit(f, feats, footprint) : f).filter((f): f is IndoorFeature => !!f);
   const visible = list.filter((f) => overpass.isVisible(f)).filter((f) => f.kind === 'poi' || !!f.transit || !indoorEdited.has(indoorKey(f.key)) || !!f.tags.indoor || (f.escalator && f.tags.highway === 'steps' && !!f.tags.conveying && f.tags.conveying !== 'no'));
   const axes = visible.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
   return visible.map((f) => {

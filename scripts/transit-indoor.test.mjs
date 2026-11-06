@@ -34,3 +34,11 @@ test('a platform or track without level gets a warning with a level=0 fix; with 
   assert.equal(validateIndoor({ key: 'way/11', tags: { railway: 'rail' } }).length, 1);
   assert.equal(validateIndoor({ key: 'way/11', tags: { railway: 'rail', level: '-1' } }).length, 0);
 });
+
+// relation/15063503: платформа, размеченная как indoor=area + room=platform + railway=platform
+test('an indoor area tagged as a platform is a transit platform too', () => {
+  const { indoor } = parseBuildings([...elements.slice(0, 6), { type: 'way', id: 20, nodes: [1, 2, 3, 4, 1], tags: { indoor: 'area', room: 'platform', railway: 'platform', level: '0' } }]);
+  const f = indoor.find((x) => x.key === 'way/20');
+  assert.equal(f?.kind, 'area'); assert.equal(f.transit, 'platform'); assert.equal(f.noLevel, undefined);
+  assert.ok(f.polygons[0].outerIds, 'own geometry stays editable');
+});

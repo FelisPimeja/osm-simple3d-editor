@@ -245,7 +245,10 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
   const addIndoor = (key: string, tags: Record<string, string>, kind: IndoorKind, polygons: Polygon[], line = false) => {
     const levels = parseLevels(tags.level);
     for (const l of parseLevels(tags.repeat_on)) if (!levels.includes(l)) levels.push(l);
-    indoor.push({ key, tags, kind, polygons, ...(line ? { line } : {}), levels: levels.length ? levels.sort((a, b) => a - b) : [0] });
+    // Платформа, размеченная и как indoor-площадка (relation/15063503: indoor=area + railway=platform) — тоже транспорт:
+    // красится как платформа, а не белым полом зала
+    const transit = kind !== 'poi' && !line ? transitOf(tags) : undefined;
+    indoor.push({ key, tags, kind, polygons, ...(line ? { line } : {}), ...(transit === 'platform' ? { transit } : {}), levels: levels.length ? levels.sort((a, b) => a - b) : [0] });
     // Помещение-магазин, кафе, туалет… — ещё и значок в его середине
     if (kind !== 'poi' && !line && polygons.length && isIndoorPoi(tags)) {
       const point = pointOnSurface(polygons[0]);

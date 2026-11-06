@@ -137,6 +137,8 @@ const INDOOR_CUT_CAP_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000, s
 const INDOOR_CUT_CAP_WIRE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 /** Крышка сечения замкнутых стен и колонн — освещается как верх здания. */
 const INDOOR_CAP_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+/** Железнодорожный путь на плане этажа. */
+const TRACK_MATERIAL = new THREE.LineBasicMaterial({ color: 0x4a4f55 });
 /** Стена помещения совпадает с уже нарисованной (периметр, indoor=wall, соседнее помещение): ближе этого, м. */
 const WALL_MERGE_DIST = 0.03;
 /** Сколько бледных планов нижних этажей держать готовыми (см. palePlans). */
@@ -254,6 +256,8 @@ export interface IndoorLevel {
   items: IndoorItem[];
   /** Unfilled floor-level outlines for stair/escalator areas. */
   outlines?: IndoorItem[];
+  /** Железнодорожные пути вокзала на полу этажа (railway=rail и т. п.): линии, без заливки. */
+  tracks?: IndoorItem[];
   /** Проёмы линейных эскалаторов: вырез в полу без торца перекрытия. */
   bareVoids?: LonLat[][][];
   /** Не рисуются, только подсветка выбора: помещения в несколько этажей выше своего пола (z — пол основания). */
@@ -1673,6 +1677,13 @@ export class BuildingsLayer implements CustomLayerInterface {
       points.push(points[0].clone());
       const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineDashedMaterial({color:0x666666,dashSize:.2,gapSize:.15,depthTest:false}));
       line.name='indoor-steps-outline';line.computeLineDistances();line.renderOrder=5;root.add(line);
+    }
+    // Пути вокзала — сплошной тёмной линией по полу этажа
+    for (const it of this.level?.tracks ?? []) for (const p of it.polygons) {
+      const points = p.outer.map((q) => { const [x, y] = g.toLocal(q); return new THREE.Vector3(x, y, it.z + .015); });
+      if (points.length < 2) continue;
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), TRACK_MATERIAL);
+      line.name = 'indoor-track'; line.renderOrder = 4; root.add(line);
     }
     g.scene.add(root);
     if (this.level.floor > -0.01) this.addEarth(root, g);

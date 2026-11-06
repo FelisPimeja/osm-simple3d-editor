@@ -9,16 +9,23 @@ import type { BuildingsLayer } from '../render/buildings-layer';
  * пола этажа; позиции пересчитываются на каждом кадре.
  */
 const MAKI = import.meta.glob('/node_modules/@mapbox/maki/icons/*.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-const TEMAKI = import.meta.glob('/node_modules/@rapideditor/temaki/icons/{atm,vending_machine,bench,ticket,clothes_hanger}.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+const TEMAKI = import.meta.glob('/node_modules/@rapideditor/temaki/icons/{atm,vending_machine,bench,ticket,clothes_hanger,fire_hydrant}.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 
 /** Лестница — своя (в Maki и Temaki нет). */
 const STAIRS = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg"><path d="M1 13h3.5v-3h3V7h3V4H14v2h-2v3H9v3H6v3H1z"/></svg>';
 /** Вращающаяся дверь (в Maki и Temaki нет): круг с крестом створок. */
 const REVOLVING = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg" style="fill:none;stroke:currentColor;stroke-width:1.4"><circle cx="7.5" cy="7.5" r="6"/><path d="M7.5 1.5v12M1.5 7.5h12" transform="rotate(30 7.5 7.5)"/></svg>';
 
+/** Огнетушитель (в Maki и Temaki нет): баллон с вентилем и раструбом. */
+const EXTINGUISHER = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg"><path d="M6 1h3v1.2h2.5l1.5 1.3-1 .8L10.8 3.5H9V4.6c1.2.5 2 1.6 2 2.9V14H4V7.5c0-1.3.8-2.4 2-2.9V3.5H4.5V2.2H6z"/></svg>';
+/** Пожарный кран с рукавом (в Maki и Temaki нет): катушка рукава и ствол. */
+const FIRE_HOSE = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg" style="fill:none;stroke:currentColor;stroke-width:1.4"><circle cx="6" cy="8" r="4.5"/><circle cx="6" cy="8" r="1.6"/><path d="M10.5 8H14v-3"/></svg>';
+
 function icon(name: string): string | undefined {
   if (name === 'stairs') return STAIRS;
   if (name === 'revolving-door') return REVOLVING;
+  if (name === 'fire-extinguisher') return EXTINGUISHER;
+  if (name === 'fire-hose') return FIRE_HOSE;
   return MAKI[`/node_modules/@mapbox/maki/icons/${name}.svg`] ?? TEMAKI[`/node_modules/@rapideditor/temaki/icons/${name}.svg`];
 }
 
@@ -48,6 +55,11 @@ export function poiIcon(t: Record<string, string>): string | undefined {
   if (t.room === 'stairs' || t.stairs === 'yes' || t.highway === 'steps' || t.indoor === 'stairs') return 'stairs';
   if (t.emergency === 'defibrillator') return 'defibrillator';
   if (t.emergency === 'phone') return 'emergency-phone';
+  if (t.emergency === 'fire_extinguisher') return 'fire-extinguisher';
+  if (t.emergency === 'fire_hose' || t.emergency === 'fire_hose_reel') return 'fire-hose';
+  if (t.emergency === 'fire_alarm_box' || t.emergency === 'fire_alarm') return 'fire-station';
+  if (t.emergency === 'first_aid_kit') return 'hospital';
+  if (t.emergency === 'fire_hydrant') return 'fire_hydrant';
   if (t.amenity && AMENITY[t.amenity]) return AMENITY[t.amenity];
   if (t.room === 'toilet' || t.room === 'toilets') return 'toilet';
   if (t.room === 'dressing' || t.amenity === 'dressing_room') return 'clothes_hanger';

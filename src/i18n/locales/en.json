@@ -1462,5 +1462,7 @@
   "Ведите курсор поперёк марша: обе стороны полигона расходятся симметрично. Клик — применить, число + Enter — ширина в метрах, Esc — отмена.": "Move the cursor across the flight: both polygon sides move symmetrically. Click — apply, number + Enter — width in metres, Esc — cancel.",
   "одна сторона, ось следом": "one side, the axis follows",
   "поперёк марша, симметрично (Alt — одна сторона)": "across the flight, symmetric (Alt — one side)",
-  "Геометрия {key} изменилась или недоступна. Перезагрузите данные.": "Geometry of {key} has changed or is unavailable. Reload the data."
+  "Геометрия {key} изменилась или недоступна. Перезагрузите данные.": "Geometry of {key} has changed or is unavailable. Reload the data.",
+  "Платформа в здании без level=*: на плане показана на этаже 0. Укажите этаж платформы.": "Platform inside the building without level=*: shown on level 0 on the plan. Set the platform level.",
+  "Путь в здании без level=*: на плане показан на этаже 0. Укажите этаж пути.": "Track inside the building without level=*: shown on level 0 on the plan. Set the track level."
 }

@@ -8259,8 +8259,64 @@ function buildingIndoor(g: BuildingGroup): IndoorFeature[] {
   return list;
 }
 
+/**
+ * Путь или платформа вокзала в пределах здания: путь — куски внутри контуров здания (с точками пересечения), платформа
+ * — пересечение со следом здания. Обрезанная геометрия без узлов — только для показа (теги правятся, вершины — нет).
+ * Уровень — по тегам (без level — этаж 0, noLevel).
+ */
+function clipTransit(f: IndoorFeature, feats: Feature3D[], footprint: () => unknown): IndoorFeature | undefined {
+  const noLevel = f.tags.level === undefined && f.tags.repeat_on === undefined;
+  const rings = feats.flatMap((b) => b.polygons.map((q) => q.outer));
+  const inside = (p: LonLat) => rings.some((r) => pointInRing(p, r));
+  const whole = (q: Polygon) => (f.line ? q.outer : q.outer).every(inside);
+  if (f.polygons.every(whole)) return { ...f, noLevel };
+  if (f.line) {
+    const runs: LonLat[][] = [];
+    const line = f.polygons[0].outer;
+    let run: LonLat[] = [];
+    for (let i = 0; i + 1 < line.length; i++) {
+      const a = line[i], b = line[i + 1];
+      // Точки пересечения отрезка со сторонами контуров, по порядку вдоль него
+      const ts = [0, 1];
+      for (const r of rings) for (let k = 0; k < r.length; k++) {
+        const c = r[k], d = r[(k + 1) % r.length];
+        const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
+        if (Math.abs(den) < 1e-18) continue;
+        const t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / den;
+        const u = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / den;
+        if (t > 0 && t < 1 && u >= 0 && u <= 1) ts.push(t);
+      }
+      ts.sort((x, y) => x - y);
+      const at = (t: number): LonLat => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      for (let j = 0; j + 1 < ts.length; j++) {
+        if (ts[j + 1] - ts[j] < 1e-9) continue;
+        if (inside(at((ts[j] + ts[j + 1]) / 2))) {
+          if (!run.length) run.push(at(ts[j]));
+          run.push(at(ts[j + 1]));
+        } else if (run.length) { if (run.length > 1) runs.push(run); run = []; }
+      }
+    }
+    if (run.length > 1) runs.push(run);
+    return runs.length ? { ...f, noLevel, polygons: runs.map((outer) => ({ outer, inners: [] })) } : undefined;
+  }
+  try {
+    const close = (r: LonLat[]) => [...r, r[0]];
+    const own = f.polygons.map((q) => [close(q.outer), ...q.inners.map(close)]);
+    const cut = polygonClipping.intersection(own as never, footprint() as never);
+    const polygons = cut.map((q) => ({ outer: (q[0] as LonLat[]).slice(0, -1), inners: q.slice(1).map((r) => (r as LonLat[]).slice(0, -1)) }));
+    return polygons.length ? { ...f, noLevel, polygons } : undefined;
+  } catch { return { ...f, noLevel }; }
+}
+
 function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   const feats = groupFeatures(g);
+  // След здания (объединение контуров) — один раз и только если есть что им обрезать (платформа вокзала)
+  let foot: unknown;
+  const footprint = () => {
+    if (foot) return foot;
+    const rings = feats.flatMap((b) => b.polygons.map((q) => [[...q.outer, q.outer[0]]]));
+    return foot = polygonClipping.union(rings[0] as never, ...(rings.slice(1) as never[]));
+  };
   let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
   for (const f of feats) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
   if (!Number.isFinite(w)) return [];
@@ -8274,10 +8330,12 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
     if(overpass.wasUploadedDeleted(f.key))return false;
     const p = indoorAnchor(f);
     if (!p) return false;
+    // Путь и платформа вокзала — если хоть одна вершина в здании (рельсы начинаются снаружи), дальше обрезаем
+    if (f.transit) return f.polygons.some((q) => q.outer.some((v) => feats.some((b) => b.polygons.some((r) => pointInRing(v, r.outer)))));
     // Дверь на наружной стене лежит ровно на контуре — для такой точки pointInRing случаен
     return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || (!!f.point && nearRing(p, q.outer, 0.3)) || (f.kind === 'wall' && nearRing(p, q.outer, 0.03))));
-  });
-  const visible = list.filter((f) => overpass.isVisible(f)).filter((f) => f.kind === 'poi' || !indoorEdited.has(indoorKey(f.key)) || !!f.tags.indoor || (f.escalator && f.tags.highway === 'steps' && !!f.tags.conveying && f.tags.conveying !== 'no'));
+  }).map((f) => f.transit ? clipTransit(f, feats, footprint) : f).filter((f): f is IndoorFeature => !!f);
+  const visible = list.filter((f) => overpass.isVisible(f)).filter((f) => f.kind === 'poi' || !!f.transit || !indoorEdited.has(indoorKey(f.key)) || !!f.tags.indoor || (f.escalator && f.tags.highway === 'steps' && !!f.tags.conveying && f.tags.conveying !== 'no'));
   const axes = visible.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
   return visible.map((f) => {
     if (f.tags.indoor === 'area' && f.tags.room === 'steps' && !f.line) return { ...f, escalatorArea: true };
@@ -8903,6 +8961,9 @@ function hideSelectedIndoor() {
   if (!indoorSelection.length) return;
   changeIndoorHidden(new Set([...indoorHidden, ...indoorSelection.map((f) => indoorKey(f.key))]));
 }
+
+/** Платформа вокзала на плане — светло-серым: видно край платформы на фоне путей и пола зала. */
+const PLATFORM_COLOUR = 0xe4e6e9;
 
 /** Помещение, коридор или площадка — пол, который красим по назначению. */
 const isFloorKind = (f: IndoorFeature) => !f.line && (f.kind === 'room' || f.kind === 'corridor' || f.kind === 'area');
@@ -11844,14 +11905,16 @@ function renderLevelsImpl() {
       cut: l.ceil,
       // Площади эскалаторов и лестниц (indoor=area с тегами лестницы) — пунктирным контуром, без заливки
       outlines: fs.filter(f=>f.escalatorArea||stairsArea(f)).map((f):IndoorItem=>({key:f.key,kind:f.kind,polygons:f.polygons,z:l.floor})),
+      // Пути вокзала — линиями по полу (не стены)
+      tracks: fs.filter((f) => f.transit && f.line).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, z: l.floor })),
       get doorCuts() { return doorCutsOf(); },
       // Площадь эскалатора задаёт его след и проём, но не сплошной пол под ступенями.
       // Многоэтажные помещения имеют пол только внизу; стены и колонны есть на всех указанных уровнях.
-      items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea && !stairsArea(f)
+      items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea && !stairsArea(f) && !(f.transit && f.line)
         && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
         && (f.line || f.kind === 'wall' || f.kind === 'column' || f.kind === 'room' || floorLevels(f).includes(l.n)))
         .map(wallAsLine).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && (f.tags.area!=='yes'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), railing:(f.tags.barrier==='fence'&&f.tags.fence_type==='railing')||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
-          ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
+          ...(f.transit === 'platform' ? { colour: PLATFORM_COLOUR } : isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
           ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
           ...(isPool(f) ? { pool: poolDepth(f) } : {}),
           ...(shaft(f) ? { shaft: true } : {}) })).concat(passing),

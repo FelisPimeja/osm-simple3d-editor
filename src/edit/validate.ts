@@ -1,6 +1,6 @@
 import { solidWall, wallLocalPolygons, nearestSolidFace, cutSolidWall, findSolidDoorBinding, doorIndex } from './solid-wall-doors';
 import polygonClipping, { type MultiPolygon } from 'polygon-clipping';
-import { parseLevels, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type Polygon } from '../osm/model';
+import { parseLevels, pointInRing, transitOf, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type Polygon } from '../osm/model';
 import { computeHeights, parseLength, roofShapeOf } from '../osm/heights';
 import { ROOF_SHAPES } from './tag-form';
 import { tr, trn } from '../i18n';
@@ -288,6 +288,12 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
   if (t.indoor === 'highway' || t.indoor === 'stairs') add('warning', 'indoor-key',
     tr('indoor={value} — тип объекта указывают отдельным тегом; для общего признака используют indoor=yes.', { value: t.indoor }));
   if (space && t.level === undefined) add('error', 'indoor-level', tr('У indoor-объекта нет level=* — этаж обязателен для поэтажного плана.'));
+  // Платформа и путь в здании вокзала: на плане показаны на этаже 0, пока этаж не указан
+  if (transitOf(t) && t.level === undefined && t.repeat_on === undefined) add('warning', 'indoor-level',
+    transitOf(t) === 'platform'
+      ? tr('Платформа в здании без level=*: на плане показана на этаже 0. Укажите этаж платформы.')
+      : tr('Путь в здании без level=*: на плане показан на этаже 0. Укажите этаж пути.'),
+    { label: 'level=0', tags: { level: '0' } });
   if (t.room !== undefined && t.indoor !== 'room' && t.indoor !== 'area' && t.indoor !== 'corridor') add('warning', 'indoor-room',
     t.indoor === 'wall' || t.indoor === 'column'
       ? tr('indoor={indoor} несовместим с room={room}: назначение помещения не задаётся стене или колонне. Проверьте тип объекта или удалите room=*.', { indoor: t.indoor, room: t.room })

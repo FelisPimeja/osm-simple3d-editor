@@ -80,6 +80,13 @@ export interface IndoorFeature {
   line?: boolean;
   /** Ось эскалатора (highway=steps + conveying=*), либо площадь вокруг такой оси. */
   escalator?: boolean;
+  /**
+   * Транспорт внутри здания (вокзал): platform — платформа (railway=platform, public_transport=platform), rail — путь
+   * (railway=rail и т. п.). Берутся и без level — тогда этаж 0 и noLevel (валидатор предложит указать этаж).
+   */
+  transit?: 'platform' | 'rail';
+  /** Уровень не размечен (нет level и repeat_on): этаж выбран по умолчанию. */
+  noLevel?: boolean;
   /** Лестница (highway=steps без conveying) — модель и правка как у эскалатора, escalator тоже true. */
   stairs?: boolean;
   escalatorArea?: boolean;
@@ -127,6 +134,14 @@ export function withIndoorTags(f: IndoorFeature, tags: Record<string, string>): 
   for (const l of parseLevels(tags.repeat_on)) if (!levels.includes(l)) levels.push(l);
   const kind = f.kind === 'poi' ? 'poi' : indoorKind(tags) ?? f.kind;
   return { ...f, tags, kind, levels: levels.length ? levels.sort((a, b) => a - b) : [0] };
+}
+
+/** Платформа или железнодорожный путь (для вокзалов: показываются на плане этажа и без indoor). */
+const RAIL_TRACKS = new Set(['rail', 'subway', 'light_rail', 'tram', 'narrow_gauge', 'monorail']);
+export function transitOf(t?: Record<string, string>): 'platform' | 'rail' | undefined {
+  if (!t) return;
+  if (t.railway === 'platform' || t.public_transport === 'platform') return 'platform';
+  if (t.railway && RAIL_TRACKS.has(t.railway)) return 'rail';
 }
 
 /** Ключи линейных объектов: с ними indoor=yes — признак «внутри», а не площадь (кроме area=yes). */
@@ -270,6 +285,14 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
         addIndoor(`way/${w.id}`, w.tags!, 'area', [{ outer: pts, inners: [], ...(pts.length === w.nodes.length ? { outerIds: w.nodes.slice() } : {}) }], true);
         Object.assign(indoor[indoor.length - 1], { escalator: true, stairs: true });
       }
+    } else if (!kind && !ik && transitOf(w.tags)) {
+      // Платформа и путь вокзала — и без indoor, и без level: в здание попадут, если его задевают (отбор — по зданию)
+      const t = transitOf(w.tags)!, closed = w.nodes[0] === w.nodes[w.nodes.length - 1];
+      const pts = w.nodes.map((id) => nodes.get(id)).filter((n): n is OsmNode => !!n).map((n): LonLat => [n.lon, n.lat]);
+      if (t === 'platform' && closed && pts.length >= 4) addIndoor(`way/${w.id}`, w.tags!, 'area', [{ outer: pts.slice(0, -1), inners: [], ...(pts.length === w.nodes.length ? { outerIds: w.nodes.slice(0, -1), innerIds: [] } : {}) }]);
+      else if (pts.length >= 2) addIndoor(`way/${w.id}`, w.tags!, 'area', [{ outer: pts, inners: [], ...(pts.length === w.nodes.length ? { outerIds: w.nodes.slice() } : {}) }], true);
+      else continue;
+      Object.assign(indoor[indoor.length - 1], { transit: t, ...(w.tags!.level === undefined && w.tags!.repeat_on === undefined ? { noLevel: true } : {}) });
     } else if (ik === 'wall') {
       // Стена — ломаная (у замкнутой последняя точка повторяет первую — оставляем, чтобы стена замкнулась)
       const pts = w.nodes.map((id) => nodes.get(id)).filter((n): n is OsmNode => !!n).map((n): LonLat => [n.lon, n.lat]);

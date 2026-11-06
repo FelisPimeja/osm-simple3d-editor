@@ -58,3 +58,11 @@ test('moving line vertices adds the polygon vertices to the operation, and back'
   const alone = { type: 'move', vertices: [{ key: 'way/1', poly: 0, ring: 0, i: 1 }], delta };
   assert.equal(m.withStairsPartners(alone, [a]), alone, 'no pair — the operation is unchanged');
 });
+
+test('width across the axis: measured from the polygon and scaled symmetrically', () => {
+  const ring = area().polygons[0].outer, line = [ll(0, 1), ll(4, 1)];
+  assert.ok(Math.abs(m.pairHalfWidth(ring, line) - 1) < 1e-6);
+  const wide = m.scaleAcross(ring, line, 1.5);
+  near(wide[0], 0, -0.5); near(wide[2], 4, 2.5);
+  assert.ok(Math.abs(m.pairHalfWidth(wide, line) - 1.5) < 1e-6);
+});

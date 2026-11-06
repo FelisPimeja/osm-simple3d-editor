@@ -1458,5 +1458,7 @@
   "Число ступеней": "Step count",
   "не указано": "not set",
   "level={value} у лестницы — похоже на несколько маршей друг над другом; каждый соединяет два соседних этажа.": "level={value} on stairs — looks like several flights stacked; each one connects two adjacent levels.",
-  "Кусков: {n} · {s} м² · {level}": "Pieces: {n} · {s} m² · {level}"
+  "Кусков: {n} · {s} м² · {level}": "Pieces: {n} · {s} m² · {level}",
+  "Ширина марша: тяните поперёк — обе стороны полигона симметрично": "Flight width: drag across — both polygon sides move symmetrically",
+  "Ширина марша: {w} м.": "Flight width: {w} m."
 }

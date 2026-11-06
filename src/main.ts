@@ -9,7 +9,7 @@ import { levelDetachNodes } from './edit/level-detach';
 import { isIndoorCutPolygon, isIndoorUnionPolygon, indoorUnionSignature, indoorUnionGeometry, indoorUnionHoleEdits } from './edit/indoor-union';
 import { finiteCutPieces } from './edit/finite-cut';
 import { SHELL_LEVEL, editIndoorGeometry, type IndoorOperation, type IndoorVertex } from './edit/indoor-geometry';
-import { stairsPartner, withStairsPartners } from './edit/stairs-pair';
+import { pairHalfWidth, pairedArea, scaleAcross, stairsPartner, withStairsPartners } from './edit/stairs-pair';
 import { renderOtherTags, renderMultiOtherTags, multiTagValues, bindOtherTags } from './edit/other-tags';
 import { escalatorAreaMatches, isStairsAreaTags, stairsOutline, stairsRoomClip, syncEscalatorLevels } from './edit/escalator-levels';
 import { fetchRelationRelations } from './osm/api';
@@ -9177,7 +9177,7 @@ function indoorMoveOperation(fs: IndoorFeature[], offset: THREE.Vector3): Indoor
   })));
   return { type: 'move', vertices, delta: indoorDelta(offset) };
 }
-function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false): ObjectEdit[] {
+function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false, pairs = true): ObjectEdit[] {
   const all = focus ? buildingIndoor(focus).filter(f => !f.key.endsWith('#poi')) : [];
   const building = focus ? groupFeatures(focus) : [];
   // Части и контур здания — «чужой этаж»: их узлы при правке indoor не двигаются, общий узел отцепляется новым.
@@ -9191,7 +9191,7 @@ function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false
     return ways ? new Set(ways) : undefined;
   };
   // Марш — пара «линия + полигон»: двигается одна — вторая следует (docs/indoor-stairs.md)
-  return editIndoorGeometry([...all, ...shell], withStairsPartners(op, all), glue, () => preview ? temporary-- : nextNewId--, true, memberWays);
+  return editIndoorGeometry([...all, ...shell], pairs ? withStairsPartners(op, all) : op, glue, () => preview ? temporary-- : nextNewId--, true, memberWays);
 }
 function drawIndoorGeometryPreview(edits: ObjectEdit[]) {
   const lines: THREE.Vector3[][] = [];
@@ -9729,6 +9729,11 @@ function setIndoorTags(edits: { key: string; tags: Record<string, string> }[], c
     if (changedTag === 'width' || changedTag === 'diameter' || changedTag === 'door') {
       const targets=out.map(e=>all.find(f=>f.key===e.key&&isDoor(f))).filter((f):f is IndoorFeature=>!!f);
       extra=batchSolidDoorEdits(targets,door=>({at:door.point,tags:out.find(e=>e.key===door.key)!.tags}));
+    }
+    // Ширина марша с полигоном пары — меняет и полигон (симметрично относительно оси)
+    if (changedTag === 'width') for (const e of out) {
+      const axis = all.find((f) => f.key === e.key && f.escalator), w = parseLength(e.tags.width);
+      if (axis && w && w > 0.1) changes.push(...pairWidthEdits(axis, w));
     }
     if(extra.length)commitSolidDoorEdits([...changes,...extra]);
     else session.editMany(changes);
@@ -10552,6 +10557,14 @@ function renderEscalatorUi() {
     el.title = tr('Этаж конца эскалатора: тяните вверх или вниз');
     escalatorUi.appendChild(el);
   }
+  // Ширина марша с полигоном пары: ручки на серединах боковых сторон, тянутся поперёк оси
+  if (pairWidth(f, focus ? buildingIndoor(focus) : []) !== undefined) for (const side of [-1, 1]) {
+    const el = document.createElement('div');
+    el.className = 'escalator-width-handle';
+    el.dataset.side = String(side);
+    el.title = tr('Ширина марша: тяните поперёк — обе стороны полигона симметрично');
+    escalatorUi.appendChild(el);
+  }
   const arrow = document.createElement('button');
   arrow.type = 'button';
   arrow.className = 'escalator-arrow';
@@ -10580,6 +10593,20 @@ function placeEscalatorUi() {
     el.textContent = levelLabel(n);
     el.classList.toggle('active', escalatorDrag?.end === end);
   }
+  const handles = escalatorUi.querySelectorAll<HTMLElement>('.escalator-width-handle');
+  if (handles.length && line.length === 2) {
+    const half = widthDrag?.half ?? (pairWidth(f, focus ? buildingIndoor(focus) : []) ?? 0) / 2;
+    const [a, b] = line, L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, n = [-(b[1] - a[1]) / L, (b[0] - a[0]) / L];
+    for (const el of handles) {
+      const side = Number(el.dataset.side);
+      const at = overpassLayer.focusProject(new THREE.Vector3((a[0] + b[0]) / 2 + n[0] * half * side, (a[1] + b[1]) / 2 + n[1] * half * side, shownLevel.floor));
+      el.hidden = !at;
+      if (!at) continue;
+      el.style.left = `${at[0]}px`;
+      el.style.top = `${at[1]}px`;
+      el.classList.toggle('active', !!widthDrag);
+    }
+  }
   const arrow = escalatorUi.querySelector<HTMLElement>('.escalator-arrow');
   if (arrow) {
     const za = floorOf(ends[0]), zb = floorOf(ends[1]);
@@ -10607,6 +10634,51 @@ escalatorUi.addEventListener('click', (e) => {
   trackIndoor(f.key, f);
   const cur = session.get(f.key)?.tags ?? f.tags;
   setIndoorTags([{ key: f.key, tags: { ...cur, conveying: CONVEYING_NEXT[cur.conveying ?? 'yes'] ?? 'forward' } }], 'conveying');
+});
+/** Перетаскивание ручки ширины: текущая полуширина, м. */
+let widthDrag: { half: number } | undefined;
+escalatorUi.addEventListener('pointerdown', (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>('.escalator-width-handle');
+  const f = selectedEscalator();
+  if (!el || !f || !shownLevel) return;
+  e.preventDefault(); e.stopPropagation();
+  const [a, b] = f.polygons[0].outer.map((c) => overpassLayer.focusToLocal(c)!);
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, n = [-(b[1] - a[1]) / L, (b[0] - a[0]) / L];
+  const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], floor = shownLevel.floor;
+  widthDrag = { half: (pairWidth(f, focus ? buildingIndoor(focus) : []) ?? 0) / 2 };
+  el.setPointerCapture(e.pointerId);
+  const rect = map.getContainer().getBoundingClientRect();
+  const move = (ev: PointerEvent) => {
+    // Курсор — на плоскость пола этажа; полуширина — его расстояние от оси (только поперёк неё)
+    const hit = overpassLayer.focusRay([ev.clientX - rect.left, ev.clientY - rect.top])
+      ?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -floor), new THREE.Vector3());
+    if (!hit) return;
+    widthDrag!.half = Math.max(0.2, Math.abs((hit.x - mid[0]) * n[0] + (hit.y - mid[1]) * n[1]));
+    try { drawIndoorGeometryPreview(pairWidthEdits(f, widthDrag!.half * 2, true)); } catch { /* превью без контура */ }
+    placeEscalatorUi();
+  };
+  const up = () => {
+    el.removeEventListener('pointermove', move);
+    el.removeEventListener('pointerup', up);
+    el.removeEventListener('pointercancel', up);
+    const width = widthDrag!.half * 2;
+    widthDrag = undefined;
+    drawIndoorGeometryPreview([]);
+    try {
+      const edits = pairWidthEdits(f, width);
+      if (!edits.length) { placeEscalatorUi(); return; }
+      // Тег width, если он есть, — вслед за контуром
+      const cur = session.get(f.key)?.tags ?? f.tags;
+      if (cur.width) { trackIndoor(f.key, f); edits.push({ key: f.key, tags: { ...cur, width: writeLength(width) } }); }
+      session.editMany(edits);
+      indoorEditRev++;
+      renderLevels();
+      setStatus(tr('Ширина марша: {w} м.', { w: width.toFixed(2) }));
+    } catch (err) { setStatus((err as Error).message, true); placeEscalatorUi(); }
+  };
+  el.addEventListener('pointermove', move);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
 });
 escalatorUi.addEventListener('pointerdown', (e) => {
   const el = (e.target as HTMLElement).closest<HTMLElement>('.escalator-level-handle');
@@ -11761,7 +11833,7 @@ function renderLevelsImpl() {
       const pit = level.floor > -0.01 && low.floor < -0.01 && line.some((p) => !feet.some((pg) =>
         (pointInRing(p, pg.outer) && !pg.inners.some((h) => pointInRing(p, h))) || nearRing(p, pg.outer, 0.05)));
       return { key: f.key, line, bottom: low.floor, top: high.floor,
-        width: escalatorWidth(f), incline: f.tags.incline, ...stairsShape(f, visibleIndoor), ...(stairsInVoid.has(f.key) ? { noHole: true } : {}),
+        width: pairWidth(f, visibleIndoor) ?? escalatorWidth(f), incline: f.tags.incline, ...stairsShape(f, visibleIndoor), ...(stairsInVoid.has(f.key) ? { noHole: true } : {}),
         pale: !f.levels.includes(level.n), visible: f.levels.includes(level.n) || visibleBelow || pit };
     }).filter((f): f is NonNullable<typeof f> => !!f);
   // Все эскалаторы здания режут проёмы в планах нижних этажей (те не зависят от выбранного этажа и кешируются)
@@ -15431,6 +15503,35 @@ if (autosave) void (async () => {
 })();
 
 /** Ширина марша: width, у лестницы — 1 м, у эскалатора — 1,2 м. */
+/** Ширина марша по полигону пары (прямая ось), м; без пары — undefined. */
+function pairWidth(f: IndoorFeature, all: IndoorFeature[]): number | undefined {
+  const line = f.polygons[0]?.outer, area = pairedArea(f, all);
+  if (!area || !line || line.length !== 2) return;
+  const w = 2 * pairHalfWidth(area.polygons[0].outer, [line[0], line[1]]);
+  return w > 0.1 ? w : undefined;
+}
+
+/**
+ * Правки контура пары под ширину width (м): вершины поперёк оси симметрично, вдоль — на месте; общие узлы
+ * отцепляются (detached), ось не трогаем. preview — для подсветки при перетаскивании ручки.
+ */
+function pairWidthEdits(axis: IndoorFeature, width: number, preview = false): ObjectEdit[] {
+  const all = focus ? buildingIndoor(focus) : [];
+  const line = axis.polygons[0]?.outer, area = pairedArea(axis, all);
+  if (!area || !line || line.length !== 2) return [];
+  const ring = area.polygons[0].outer, half = pairHalfWidth(ring, [line[0], line[1]]);
+  if (half < 0.05) return [];
+  const to = scaleAcross(ring, [line[0], line[1]], width / 2 / half);
+  let edits = indoorGeometryEdits({ type: 'move', vertices: ring.map((_, i) => ({ key: area.key, poly: 0, ring: 0, i })), delta: [0, 0], to }, false, preview, false);
+  if (preview) return edits;
+  // Как applyIndoorGeometry: объекты — в сессию, топология мультиполигонов и проёмы — по новой геометрии
+  for (const e of edits) { const g = buildingIndoorFor(e.key); if (g) trackIndoor(e.key, g); else entity(e.key); }
+  edits = updateSolidDoorGeometry(edits);
+  edits = indoorRelationTopology(edits);
+  dropCollapsedHoles(edits);
+  return normalizeSolidDoorEdits(edits);
+}
+
 function escalatorWidth(f: IndoorFeature): number {
   return f.stairs ? Math.max(0.5, Math.min(10, parseLength(f.tags.width) ?? 1)) : Math.max(0.7, Math.min(5, parseLength(f.tags.width) ?? 1.2));
 }

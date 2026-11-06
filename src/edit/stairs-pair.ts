@@ -134,3 +134,21 @@ export function withStairsPartners(op: IndoorOperation, all: IndoorFeature[]): I
   }
   return added ? { type: 'move', vertices, delta: op.delta, to } : op;
 }
+
+/** Полуширина полигона пары поперёк прямой оси (a→b), м: дальняя от оси вершина. */
+export function pairHalfWidth(area: LonLat[], axis: [LonLat, LonLat]): number {
+  const m = metres(axis[0]), b = m.to(axis[1]), L = Math.hypot(b[0], b[1]) || 1;
+  return Math.max(0, ...area.map((p) => { const q = m.to(p); return Math.abs(-q[0] * b[1] / L + q[1] * b[0] / L); }));
+}
+
+/**
+ * Ширина полигона пары симметрично относительно оси: расстояние каждой вершины поперёк оси умножается на factor,
+ * положение вдоль оси сохраняется.
+ */
+export function scaleAcross(area: LonLat[], axis: [LonLat, LonLat], factor: number): LonLat[] {
+  const m = metres(axis[0]), b = m.to(axis[1]), L = Math.hypot(b[0], b[1]) || 1, u = [b[0] / L, b[1] / L];
+  return area.map((p) => {
+    const q = m.to(p), s = q[0] * u[0] + q[1] * u[1], t = -q[0] * u[1] + q[1] * u[0];
+    return m.back([u[0] * s - u[1] * t * factor, u[1] * s + u[0] * t * factor]);
+  });
+}

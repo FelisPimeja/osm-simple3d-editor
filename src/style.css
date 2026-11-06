@@ -778,7 +778,13 @@ body.mobile #issues-panel { display: none !important; }
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 .escalator-arrow:hover { background: #1d4ed8; }
-.escalator-level-handle[hidden], .escalator-arrow[hidden] { display: none; }
+/* Ручка ширины марша — цветом ручек высоты кровли, не вершиной геометрии */
+.escalator-width-handle {
+  position: absolute; width: 12px; height: 12px; transform: translate(-50%, -50%); pointer-events: auto; cursor: ew-resize;
+  touch-action: none; border-radius: 50%; background: #0d9488; border: 2px solid #fff; box-shadow: 0 0 0 1px #0d9488;
+}
+.escalator-width-handle.active { background: #0f766e; }
+.escalator-level-handle[hidden], .escalator-arrow[hidden], .escalator-width-handle[hidden] { display: none; }
 /* «Точка» на плане: значки и подписи не забирают щелчок — он ставит точку под ними */
 .indoor-pois.passthrough, .indoor-pois.passthrough * { pointer-events: none !important; }
 .repeat-levels { list-style: none; padding: 0 !important; margin: 6px 0 10px !important; }

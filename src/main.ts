@@ -1504,7 +1504,8 @@ map.on('click', (e) => {
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
     if (overpassLayer.pickEntrancePoint([e.point.x, e.point.y])) { startEntranceDrag(); return; }
     const id = overpassLayer.pickEntrance([e.point.x, e.point.y]);
-    if (id !== undefined) { if (id !== selectedEntrance) selectEntrance(id); return; }
+    // Повторный одиночный клик по выбранному входу — снять выбор
+    if (id !== undefined) { if (id !== selectedEntrance) selectEntrance(id); else if (e.originalEvent.detail < 2) select(undefined); return; }
   }
   if (moveTool.state === 'select') {
     const doorKey = overpassLayer.pickDoor([e.point.x, e.point.y]);
@@ -1546,9 +1547,11 @@ map.on('click', (e) => {
   // План этажа: клик по полу помещения — его теги в свойствах
   // Shift+клик при выбранном indoor-объекте — добавить к выбранным или убрать (иначе Shift — части здания)
   const indoorAdd = e.originalEvent.shiftKey && (indoorSelection.length > 0 || selectedRoomWalls.length > 0 || !!freeArea);
+  // Повторный одиночный клик по выбранному — снять выбор (второй клик двойного — нет: он для входа и изоляции)
+  const reclick = !e.originalEvent.shiftKey && !e.originalEvent.altKey && e.originalEvent.detail < 2;
   if (focus && shownLevel && !addingTo && (!e.originalEvent.shiftKey || indoorAdd) && !e.originalEvent.altKey) {
     const wall = roomWallAt([e.point.x, e.point.y]);
-    if (wall) { selectRoomWall(wall, e.originalEvent.shiftKey); return; }
+    if (wall) { selectRoomWall(wall, e.originalEvent.shiftKey, reclick); return; }
     // На этаже приоритет у помещений: части здания — Shift/Alt-кликом или при «Всё здание»
     const room = indoorAt([e.point.x, e.point.y]);
     // Shift+клик внутри кольца стен в помещении — его пространство к выделенным кускам, а не само помещение
@@ -1559,10 +1562,11 @@ map.on('click', (e) => {
     // Замкнутое кольцо стен внутри помещения или площадки (короб, шахта в зале — площадка без дыры под ним):
     // клик внутри кольца — его пространство, чтобы сделать его стеной-полигоном или помещением
     const loop = room && !indoorAdd ? wallLoopAt([e.point.x, e.point.y], room) : undefined;
-    if (loop) { selectFreeArea(loop); return; }
+    if (loop) { if (reclick && isOnlyFreeArea(loop)) { selectIndoor(undefined); clearInfo(); } else selectFreeArea(loop); return; }
+    if (room && reclick && indoorSelection.length === 1 && !freeExtra.length && indoorKey(indoorSelection[0].key) === indoorKey(room.key)) { selectIndoor(undefined); clearInfo(); return; }
     if (room) { selectIndoor(room, indoorAdd); return; }
     if (indoorAdd) { freeAreaClick([e.point.x, e.point.y], true); return; }
-    if (freeAreaClick([e.point.x, e.point.y], false)) return;
+    if (freeAreaClick([e.point.x, e.point.y], false, reclick)) return;
   }
   // Alt+клик на этаже: перебор наложенных помещений от меньшего к большему, за последним — части здания
   if (focus && shownLevel && !addingTo && e.originalEvent.altKey && !e.originalEvent.shiftKey) {
@@ -1588,7 +1592,9 @@ map.on('click', (e) => {
   // Подложка (только Alt+кликом): Shift — добавить к выделению или убрать, вместе с частями здания
   const underlayId = underlayOf(key);
   if (underlayId) {
-    if (e.originalEvent.shiftKey) toggleUnderlay(underlayId); else selectUnderlay(underlayId);
+    if (e.originalEvent.shiftKey) toggleUnderlay(underlayId);
+    else if (reclick && !selection.length && underlaySelection.length === 1 && underlaySelection[0] === underlayId) { select(undefined); renderSelected(); }
+    else selectUnderlay(underlayId);
     return;
   }
   // Подложка под курсором — если нет геометрии (у неё приоритет)
@@ -1605,17 +1611,25 @@ map.on('click', (e) => {
     const screen = map.project({ lng: point.p[0], lat: point.p[1] });
     return { point, distance: Math.hypot(screen.x - e.point.x, screen.y - e.point.y) };
   }).filter((hit) => hit.distance <= 14).sort((a, b) => a.distance - b.distance)[0]?.point : undefined;
-  if (tree) { selectTree(tree); return; }
+  if (tree) { if (reclick && tree.key === selectedTreeKey) { select(undefined); infoEl.innerHTML = ''; } else selectTree(tree); return; }
   // Мост или тоннель под курсором ближе здания — его теги (только просмотр)
   const road = addingTo ? undefined : roadsLayer.pick(e.point.x, e.point.y);
   if (road) {
     const hit = key ? overpassLayer.pickHit(e.point) : undefined;
-    if (!hit || road.depth < roadsLayer.depthOf(hit.lngLat, hit.altitude)) { selectRoad(road.way, e.originalEvent.shiftKey); return; }
+    if (!hit || road.depth < roadsLayer.depthOf(hit.lngLat, hit.altitude)) {
+      if (reclick && roadSelection.length === 1 && roadSelection[0].id === road.way.id) { select(undefined); infoEl.innerHTML = ''; return; }
+      selectRoad(road.way, e.originalEvent.shiftKey); return;
+    }
   }
   // Shift-клик мимо объектов сохраняет выделение и текущую группу.
   if (e.originalEvent.shiftKey) return;
   const resolved = resolveClick(key);
-  if (!resolved && underlayHit) { selectUnderlay(underlayHit); return; }
+  if (!resolved && underlayHit) {
+    if (reclick && !selection.length && underlaySelection.length === 1 && underlaySelection[0] === underlayHit) { select(undefined); renderSelected(); return; }
+    selectUnderlay(underlayHit); return;
+  }
+  // Повторный клик по единственному выбранному зданию или части — снять выбор
+  if (resolved && reclick && selection.length === 1 && selection[0] === resolved) { select(undefined); return; }
   if (select(resolved)) return;
   const f = queryTileLayers(e.point)[0];
   infoEl.innerHTML = f ? describeTile(f) : '';
@@ -8599,10 +8613,13 @@ function roomWallAt(point: [number, number]): RoomWall | undefined {
   return { key: solid.key, ...solid.side };
 }
 
-function selectRoomWall(wall: RoomWall, add = false) {
+function selectRoomWall(wall: RoomWall, add = false, toggle = false) {
   const f = shownIndoor.find((f) => f.key === wall.key);
   if (!f || !shownLevel) return;
   const old = selectedRoomWalls;
+  const spanOf = (w: RoomWall) => `${w.key}:${JSON.stringify(roomWallSpan(shownIndoor.find((f) => f.key === w.key)!.polygons, w))}`;
+  // Повторный клик по единственной выбранной стороне — снять выбор
+  if (toggle && !add && old.length === 1 && !indoorSelection.length && spanOf(old[0]) === spanOf(wall)) { selectIndoor(undefined); clearInfo(); return; }
   // Shift копит выбор: помещения и стены остаются вместе
   if (!add) selectIndoor(undefined);
   if (selection.length) select(undefined);
@@ -9794,7 +9811,9 @@ function setIndoorTags(edits: { key: string; tags: Record<string, string> }[], c
 /** Мост, тоннель или подход к ним: теги пути в панели свойств (только просмотр). */
 /** Выделенные мосты, тоннели и подходы (Shift+клик добавляет и убирает). */
 let roadSelection: RoadWay[] = [];
-function clearTreeSelection() { overpassLayer.setTreeSelection(undefined); }
+/** Выбранное отдельное дерево (ключ узла) — для снятия выбора повторным кликом. */
+let selectedTreeKey: string | undefined;
+function clearTreeSelection() { selectedTreeKey = undefined; overpassLayer.setTreeSelection(undefined); }
 
 /** Отдельное дерево: теги доступны для просмотра, синее кольцо отмечает выбранный узел. */
 function selectTree(tree: TreePoint) {
@@ -9802,6 +9821,7 @@ function selectTree(tree: TreePoint) {
   select(undefined);
   clearTileHighlight();
   overpassLayer.setTreeSelection(tree.key);
+  selectedTreeKey = tree.key;
   infoEl.innerHTML = `<h2>${tr('Дерево')} — <a href="${server().web}/${tree.key}" target="_blank" rel="noopener">${esc(tree.key)}</a></h2>`
     + `<p class="hint">${tr('только просмотр')}</p><details class="all-tags" open><summary>${tr('Все теги')}</summary>${tagTable(tree.tags ?? {})}</details>`;
 }
@@ -10011,7 +10031,14 @@ function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | 
  * Клик по пустой площади этажа: add (Shift) — к выделенным кускам или помещениям добавить / убрать, мимо — выбор
  * не сбрасываем (true); иначе — выбрать кусок (или кольцо стен вне сечения этажа). false — пустой площади нет.
  */
-function freeAreaClick(p: [number, number], add: boolean): boolean {
+/** Выбран только этот кусок пустой площади (без других кусков и помещений). */
+function isOnlyFreeArea(a: { polygon: Polygon }): boolean {
+  const b = freeArea;
+  return !!b && !freeExtra.length && !indoorSelection.length && b.polygon.outer.length === a.polygon.outer.length
+    && b.polygon.outer.every((p, i) => p[0] === a.polygon.outer[i][0] && p[1] === a.polygon.outer[i][1]);
+}
+
+function freeAreaClick(p: [number, number], add: boolean, toggle = false): boolean {
   if (add) {
     if (freeArea && !indoorSelection.length && !selectedRoomWalls.length) { const free = freeAreaAt(p) ?? wallLoopAt(p); if (free) toggleFreeArea(free); return true; }
     const free = indoorSelection.length ? freeAreaAt(p) ?? wallLoopAt(p) : undefined;
@@ -10019,6 +10046,8 @@ function freeAreaClick(p: [number, number], add: boolean): boolean {
     return true;
   }
   const free = freeAreaAt(p) ?? wallLoopAt(p);
+  // Повторный клик по выбранному куску — снять выбор
+  if (free && toggle && isOnlyFreeArea(free)) { selectIndoor(undefined); clearInfo(); return true; }
   if (free) selectFreeArea(free);
   return !!free;
 }

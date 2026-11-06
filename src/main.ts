@@ -9634,19 +9634,24 @@ async function deleteIndoorWalls() {
     const edits: ObjectEdit[] = [];
     const nodeKeys = new Map<string, number>();
     const coordKey = (p: LonLat) => `${p[0].toFixed(9)},${p[1].toFixed(9)}`;
+    // Правки сессии — не расхождение с сервером: сдвинутый узел сверяем по его исходному месту, у пути с другим
+    // составом узлов (вставка, отцепление) — узлы берём из сессии
+    const changes = session.changes();
+    const movedFrom = new Map<number, LonLat>();
+    for (const c of changes) for (const m of c.nodeMoves ?? []) movedFrom.set(m.id, m.from);
+    const renoded = new Set(changes.filter((c) => c.wayNodes || c.members).map((c) => c.key));
+    const stale = (key: string) => new Error(tr('Геометрия {key} изменилась или недоступна. Перезагрузите данные.', { key }));
     for (const f of [...rooms, ...walls]) {
       const element = elements.get(f.key);
       const existing = Number(f.key.split('/')[1]) > 0;
-      if (existing && (!element || element.type !== f.key.split('/')[0])) throw new Error(tr('Геометрия помещения изменилась или недоступна. Перезагрузите данные.'));
+      if (existing && (!element || element.type !== f.key.split('/')[0])) throw stale(f.key);
       for (const p of f.polygons) for (const [index, ring] of [p.outer, ...p.inners].entries()) {
-        const ids = element?.type === 'way' ? f.line ? element.nodes : element.nodes.slice(0, -1)
-          : index === 0 ? p.outerIds : p.innerIds?.[index - 1];
-        if (!ids || ids.length !== ring.length) throw new Error(tr('Геометрия помещения изменилась или недоступна. Перезагрузите данные.'));
+        const own = index === 0 ? p.outerIds : p.innerIds?.[index - 1];
+        const ids = element?.type === 'way' && !renoded.has(f.key) ? f.line ? element.nodes : element.nodes.slice(0, -1) : own;
+        if (!ids || ids.length !== ring.length) throw stale(f.key);
         ids.forEach((id, i) => {
-          const node = nodes.get(id);
-          if (existing && id > 0 && (!node || Math.abs(node.lon - ring[i][0]) > 1e-8 || Math.abs(node.lat - ring[i][1]) > 1e-8)) {
-            throw new Error(tr('Геометрия помещения изменилась или недоступна. Перезагрузите данные.'));
-          }
+          const node = nodes.get(id), at = movedFrom.get(id) ?? ring[i];
+          if (existing && id > 0 && (!node || Math.abs(node.lon - at[0]) > 1e-8 || Math.abs(node.lat - at[1]) > 1e-8)) throw stale(f.key);
           nodeKeys.set(coordKey(ring[i]), id);
         });
       }

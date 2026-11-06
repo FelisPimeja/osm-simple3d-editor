@@ -864,7 +864,6 @@
   "Проверка стен и отношений…": "Checking walls and relations…",
   "Выбор или данные изменились. Повторите удаление стен.": "The selection or data changed. Try deleting the walls again.",
   "Для преобразования требуется помещение-way с одним внешним контуром.": "Conversion requires a room way with one outer ring.",
-  "Геометрия помещения изменилась или недоступна. Перезагрузите данные.": "The room geometry has changed or is unavailable. Reload the data.",
   "Стена больше не доступна на сервере. Перезагрузите данные.": "The wall is no longer available on the server. Reload the data.",
   "Стены удалены. Отменить — Ctrl+Z.": "Walls deleted. Undo with Ctrl+Z.",
   "Не удалось удалить стены: {error}": "Could not delete walls: {error}",
@@ -1462,5 +1461,6 @@
   "Ширина марша: {w} м.": "Flight width: {w} m.",
   "Ведите курсор поперёк марша: обе стороны полигона расходятся симметрично. Клик — применить, число + Enter — ширина в метрах, Esc — отмена.": "Move the cursor across the flight: both polygon sides move symmetrically. Click — apply, number + Enter — width in metres, Esc — cancel.",
   "одна сторона, ось следом": "one side, the axis follows",
-  "поперёк марша, симметрично (Alt — одна сторона)": "across the flight, symmetric (Alt — one side)"
+  "поперёк марша, симметрично (Alt — одна сторона)": "across the flight, symmetric (Alt — one side)",
+  "Геометрия {key} изменилась или недоступна. Перезагрузите данные.": "Geometry of {key} has changed or is unavailable. Reload the data."
 }

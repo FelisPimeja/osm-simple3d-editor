@@ -14796,6 +14796,15 @@ function commentHint(): string {
   return suggestedComment ? tr('Tab в поле — вставить предложенный') : tr('нужен комментарий');
 }
 
+// Enter в комментарии — отправить (как кнопка «Сохранить»), Shift+Enter — новая строка. Набор через IME не трогаем
+changesEl.addEventListener('keydown', (e) => {
+  const t = e.target as HTMLTextAreaElement;
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing || !t.matches('[data-comment]')) return;
+  e.preventDefault();
+  const btn = changesEl.querySelector<HTMLButtonElement>('[data-upload]');
+  if (btn && !btn.disabled) btn.click();
+});
+
 // Tab в пустом поле — вставить предложенный комментарий (дальше его можно править)
 changesEl.addEventListener('keydown', (e) => {
   const t = e.target as HTMLTextAreaElement;

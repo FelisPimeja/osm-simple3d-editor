@@ -1989,7 +1989,7 @@ function implicitWarning(g: BuildingGroup): string {
 function groupSources(g: BuildingGroup): Feature3D[] {
   return g.members.map((k) => session.isDeleted(k) ? undefined
     : (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature ?? overpass.findFeature(k))
-    .filter((f): f is Feature3D => !!f);
+    .filter((f): f is Feature3D => !!f && Array.isArray(f.polygons));
 }
 
 function groupFeatures(g: BuildingGroup): Feature3D[] {
@@ -2003,6 +2003,8 @@ function groupFeatures(g: BuildingGroup): Feature3D[] {
       const [type, id] = k.split('/');
       f = { ...f, kind: 'part', type: type as Feature3D['type'], id: Number(id), hasParts: false };
     }
+    // Объект сессии без геометрии объёма (вставленные правки: незамкнутый путь, отношение без контуров) — не в сцену
+    if (f && !Array.isArray(f.polygons)) return undefined;
     return f && focusFeature(g, withEntranceEdits(f), g.roles[i]);
   }).filter((f): f is Feature3D => !!f);
 }

@@ -1477,6 +1477,9 @@ map.on('click', (e) => {
     if (!shapeTool.click(p, e.originalEvent.shiftKey)) {
       const indoor = indoorAt(p);
       if (indoor && editableIndoorGeometry(indoor)) { selectIndoor(indoor, e.originalEvent.shiftKey); shapeTool.refresh(); updateSnap(p); return; }
+      // Пустая площадь этажа — как без инструмента (Shift — несколько кусков)
+      const freeAdd = e.originalEvent.shiftKey && (indoorSelection.length > 0 || !!freeArea);
+      if (shownLevel && !indoor && (!e.originalEvent.shiftKey || freeAdd) && freeAreaClick(p, freeAdd)) { shapeTool.refresh(); updateSnap(p); return; }
       const key = resolveClick(e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point));
       const member = key && focus?.members.includes(key) ? key : undefined;
       if (e.originalEvent.shiftKey) { if (member) toggleSelection(member); }
@@ -1555,20 +1558,8 @@ map.on('click', (e) => {
     const loop = room && !indoorAdd ? wallLoopAt([e.point.x, e.point.y], room) : undefined;
     if (loop) { selectFreeArea(loop); return; }
     if (room) { selectIndoor(room, indoorAdd); return; }
-    // Shift+клик по пустой площади при выделенной пустой площади — несколько кусков сразу (теги — всем)
-    if (indoorAdd && freeArea && !indoorSelection.length && !selectedRoomWalls.length) {
-      const free = freeAreaAt([e.point.x, e.point.y]);
-      if (free) toggleFreeArea(free);
-      return;
-    }
-    if (indoorAdd) {
-      // Shift+клик по пустой площади при выделенных помещениях — добавить её к выделению; мимо — выбор не сбрасываем
-      const free = indoorSelection.length ? freeAreaAt([e.point.x, e.point.y]) : undefined;
-      if (free) toggleFreeExtra(free);
-      return;
-    }
-    const free = freeAreaAt([e.point.x, e.point.y]) ?? wallLoopAt([e.point.x, e.point.y]);
-    if (free) { selectFreeArea(free); return; }
+    if (indoorAdd) { freeAreaClick([e.point.x, e.point.y], true); return; }
+    if (freeAreaClick([e.point.x, e.point.y], false)) return;
   }
   // Alt+клик на этаже: перебор наложенных помещений от меньшего к большему, за последним — части здания
   if (focus && shownLevel && !addingTo && e.originalEvent.altKey && !e.originalEvent.shiftKey) {
@@ -9983,6 +9974,22 @@ function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | 
   const piece = pieces.map(p => ({ outer: toLngLat(p[0]), inners: p.slice(1).map(toLngLat) }))
     .find(p => pointInRing(ll, p.outer) && !p.inners.some(r => pointInRing(ll, r)));
   return piece && { n: shownLevel.n, polygon: piece };
+}
+
+/**
+ * Клик по пустой площади этажа: add (Shift) — к выделенным кускам или помещениям добавить / убрать, мимо — выбор
+ * не сбрасываем (true); иначе — выбрать кусок (или кольцо стен вне сечения этажа). false — пустой площади нет.
+ */
+function freeAreaClick(p: [number, number], add: boolean): boolean {
+  if (add) {
+    if (freeArea && !indoorSelection.length && !selectedRoomWalls.length) { const free = freeAreaAt(p); if (free) toggleFreeArea(free); return true; }
+    const free = indoorSelection.length ? freeAreaAt(p) : undefined;
+    if (free) toggleFreeExtra(free);
+    return true;
+  }
+  const free = freeAreaAt(p) ?? wallLoopAt(p);
+  if (free) selectFreeArea(free);
+  return !!free;
 }
 
 /** Shift+клик по пустой площади при выделенной пустой площади: добавить кусок или убрать; последний не снимается. */

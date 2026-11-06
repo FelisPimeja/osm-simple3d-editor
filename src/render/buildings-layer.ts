@@ -2962,6 +2962,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     /** След здания у земли (для крышек нижнего этажа снаружи здания). */
     const paleOutside = pale && top > -0.01 ? this.sectionAt(g, 0.05) : undefined;
+    const paleOutsideSegs = (paleOutside ?? []).flatMap((p) => p.flatMap((r) => (r as Pt[]).slice(0, -1).map((q, i): [number, number, number, number] => [q[0], q[1], r[i + 1][0], r[i + 1][1]])));
     const paleCapEdges: number[] = [];
     /** Крышка сечения (колонна, стена-полигон, короб): на срезе, а под скатом — по скату; целиком над крышей — нет крышки. */
     const cap = (outer: Pt[], holes: Pt[][], z0: number, black = false) => {
@@ -2969,6 +2970,11 @@ export class BuildingsLayer implements CustomLayerInterface {
       // здания (стены приямка лестницы подвала) пола над ними нет — там крышка нужна
       if (pale) {
         if (!paleOutside) return;
+        // Крышка целиком внутри сечения здания (вершины внутри, граница сечения через её рамку не идёт) — разность
+        // пуста, polygon-clipping не нужен: так почти у всех стен нижних этажей
+        const [ox0, oy0, ox1, oy1] = holeBox(outer);
+        const crossed = paleOutsideSegs.some(([ax, ay, bx, by]) => Math.max(ax, bx) >= ox0 && Math.min(ax, bx) <= ox1 && Math.max(ay, by) >= oy0 && Math.min(ay, by) <= oy1);
+        if (!crossed && outer.every(([x, y]) => paleOutside.some((p) => pointInLocalRing([x, y], p[0] as Pt[]) && !p.slice(1).some((h) => pointInLocalRing([x, y], h as Pt[]))))) return;
         try {
           const own: ClipMulti = [[[...outer, outer[0]], ...holes.map((h) => [...h, h[0]])]] as unknown as ClipMulti;
           for (const piece of polygonClipping.difference(own, paleOutside)) {
@@ -2988,7 +2994,14 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
       const colour = black && !pale ? 0x000000 : undefined;
       if (!shell) { fill(outer, holes, top, colour); return; }
-      const zOf = (x: number, y: number) => Math.max(z0, Math.min(top, shell.at(x, y, z0) ?? top));
+      // Высота кровли в точке — с запоминанием: соседние ячейки ниже делят углы (shell.at — самое дорогое в крышке)
+      const zMemo = new Map<string, number>();
+      const zOf = (x: number, y: number) => {
+        const k = `${Math.round(x * 1e4)},${Math.round(y * 1e4)}`;
+        let z = zMemo.get(k);
+        if (z === undefined) zMemo.set(k, z = Math.max(z0, Math.min(top, shell.at(x, y, z0) ?? top)));
+        return z;
+      };
       const zs = [outer, ...holes].flat().map(([x, y]) => zOf(x, y));
       if (zs.every((z) => z >= top - 1e-3)) fill(outer, holes, top, colour);
       // Под скатом — тоже сечение (стену режет кровля): та же чёрная заливка
@@ -2999,10 +3012,25 @@ export class BuildingsLayer implements CustomLayerInterface {
         const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
         const step = Math.max(0.25, Math.max(x1 - x0, y1 - y0) / 80);
         const shape = [[[...outer, outer[0]], ...holes.map((h) => [...h, h[0]])]] as unknown as ClipMulti;
+        // Ячейка целиком внутри стены — без polygon-clipping (сама ячейка), целиком снаружи — мимо; режем только
+        // ячейки на границе: у большой стены-полигона (way/-90, ~3600 ячеек) clipping каждой занимал ~1,6 с на этаж
+        const rings = [outer, ...holes];
+        const segs = rings.flatMap((r) => r.map((p, i): [number, number, number, number] => { const q = r[(i + 1) % r.length]; return [p[0], p[1], q[0], q[1]]; }));
+        const inShape = (px: number, py: number) => pointInLocalRing([px, py], outer) && !holes.some((h) => pointInLocalRing([px, py], h));
         try {
           for (let x = x0; x < x1; x += step) for (let y = y0; y < y1; y += step) {
             const cell: ClipMulti = [[[[x, y], [x + step, y], [x + step, y + step], [x, y + step], [x, y]]]];
-            for (const piece of polygonClipping.intersection(shape, cell)) {
+            // Отрезок задевает ячейку: рамки пересекаются и углы ячейки не все по одну сторону его прямой (рамка
+            // косого отрезка сама по себе задевает сотни ячеек — 5 из 18 тысяч резались зря)
+            const crossed = segs.some(([ax, ay, bx, by]) => {
+              if (Math.max(ax, bx) < x || Math.min(ax, bx) > x + step || Math.max(ay, by) < y || Math.min(ay, by) > y + step) return false;
+              const dx = bx - ax, dy = by - ay, side = (px: number, py: number) => Math.sign(dx * (py - ay) - dy * (px - ax));
+              const a = side(x, y), b = side(x + step, y), c = side(x + step, y + step), d = side(x, y + step);
+              return !(a === b && b === c && c === d && a !== 0);
+            });
+            const pieces = crossed ? polygonClipping.intersection(shape, cell)
+              : inShape(x + step / 2, y + step / 2) ? cell : [];
+            for (const piece of pieces) {
               const o = piece[0].slice(0, -1) as Pt[], hs = piece.slice(1).map((r) => r.slice(0, -1) as Pt[]);
               const pz = o.map(([px, py]) => zOf(px, py));
               if (pz.every((z) => z >= top - 1e-3)) fill(o, hs, top, colour);

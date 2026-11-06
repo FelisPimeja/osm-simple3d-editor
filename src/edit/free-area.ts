@@ -19,12 +19,19 @@ export function joinedWalls(lines:Pt[][]):Pt[][]{
  /** Склейка a и b, как в переборе пар; не сходятся — undefined. */
  const join=(a:Pt[],b:Pt[]):Pt[]|undefined=>{
   if(same(a[0],a.at(-1)!)||same(b[0],b.at(-1)!))return;
-  if(same(a[0],b[0]))a=[...a].reverse();
-  else if(same(a[0],b.at(-1)!)){[a,b]=[b,a];}
-  else if(same(a.at(-1)!,b.at(-1)!))b=[...b].reverse();
-  if(!same(a.at(-1)!,b[0]))return;
-  return [...a,...b.slice(1)];
+  // Те же варианты в том же порядке, что и раньше, но стык в развилке пропускаем и пробуем следующий
+  const ra=[...a].reverse(),rb=[...b].reverse();
+  for(const [x,y] of [[ra,b],[b,a],[a,rb],[a,b]] as [Pt[],Pt[]][])
+   if(same(x.at(-1)!,y[0])&&!fork(y[0]))return [...x,...y.slice(1)];
+  return;
  };
+ // Развилка — точка, где сходятся 3+ концов стен (Т-образный стык, кольцо с отходящей стеной): через неё цепочки
+ // не склеиваем. Иначе жадная склейка могла продолжить кольцо в отходящую стену — кольцо оставалось незамкнутым,
+ // и пустота внутри него сливалась с соседней (way/1454788269 + way/274827885 у узла 13341539967)
+ const degree=new Map<string,number>();
+ const pkey=(p:Pt)=>{const [x,y]=cell(p);return `${x},${y}`;};
+ for(const c of chains)for(const p of ends(c!))degree.set(pkey(p),(degree.get(pkey(p))??0)+1);
+ const fork=(p:Pt)=>{const [x,y]=cell(p);let n=0;for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)n+=degree.get(`${x+dx},${y+dy}`)??0;return n>2;};
  chains.forEach((_,i)=>add(i));
  // Склейка не даёт партнёра цепочке с меньшим номером, которой его не было (её партнёр j был бы и раньше),
  // поэтому достаточно идти по i и доклеивать к i, пока есть с кем

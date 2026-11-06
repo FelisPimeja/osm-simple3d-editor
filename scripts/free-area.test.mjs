@@ -72,3 +72,13 @@ test('cleanPiece turns an inner ring touching the outer into a notch and splits 
  assert.equal(out.length,2,JSON.stringify(out));
  assert.ok(out.every(p=>p.length===1));
 });
+
+// way/1454788362 + way/1454788386 + way/1454788269: кольцо из трёх путей, в узле 13341539967 отходит way/274827885.
+// Жадная склейка продолжала кольцо в отходящую стену — пустота внутри кольца сливалась с соседней
+test('a wall ring of several ways with a wall leaving one of its nodes still separates its interior',()=>{
+ const spur=[[0,0],[2,2]], a=[[2,2],[8,2],[8,8]], b=[[8,8],[2,8],[2,2]];
+ for(const walls of [[spur,a,b],[a,spur,b],[b,a,spur]]){
+  const pieces=freeAreaPieces(box,[],walls);
+  assert.ok(pieces.some(p=>{const xs=p[0].map(q=>q[0]),ys=p[0].map(q=>q[1]);return Math.min(...xs)>1.99&&Math.max(...xs)<8.01&&Math.min(...ys)>1.99&&Math.max(...ys)<8.01;}),JSON.stringify(walls));
+ }
+});

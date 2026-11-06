@@ -46,6 +46,19 @@ export function joinedWalls(lines:Pt[][]):Pt[][]{
    remove(i);remove(jj);chains[i]=merged;chains[jj]=null;add(i);
   }
  }
+ // Две цепочки с общими обоими концами — кольцо, даже если концы — развилки (кольцо из стен, к узлам которого
+ // подходят другие стены): склеиваем в замкнутое, иначе ни одна из двух половин сама пространство не отсекает
+ for(let i=0;i<chains.length;i++){
+  const a=chains[i];
+  if(!a||same(a[0],a.at(-1)!))continue;
+  for(let j=i+1;j<chains.length;j++){
+   const b=chains[j];
+   if(!b||same(b[0],b.at(-1)!))continue;
+   const direct=same(a.at(-1)!,b[0])&&same(b.at(-1)!,a[0]), back=same(a.at(-1)!,b.at(-1)!)&&same(b[0],a[0]);
+   if(!direct&&!back)continue;
+   chains[i]=[...a,...(direct?b:[...b].reverse()).slice(1)];chains[j]=null;break;
+  }
+ }
  return chains.filter((c):c is Pt[]=>!!c);
 }
 /**

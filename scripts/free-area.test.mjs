@@ -82,3 +82,13 @@ test('a wall ring of several ways with a wall leaving one of its nodes still sep
   assert.ok(pieces.some(p=>{const xs=p[0].map(q=>q[0]),ys=p[0].map(q=>q[1]);return Math.min(...xs)>1.99&&Math.max(...xs)<8.01&&Math.min(...ys)>1.99&&Math.max(...ys)<8.01;}),JSON.stringify(walls));
  }
 });
+
+// way/1454539435 + way/1455525444 + way/-686: кольцо, у которого оба стыка — развилки (к ним подходят другие стены):
+// склейка через развилки не идёт, две половины кольца по отдельности пространство не отсекают
+test('a ring closed at two forks still separates its interior',()=>{
+ const half1=[[2,2],[8,2],[8,8]], half2=[[8,8],[2,8],[2,2]], spurA=[[0,0],[2,2]], spurB=[[8,8],[10,10]];
+ for(const walls of [[spurA,half1,spurB,half2],[half2,spurB,half1,spurA]]){
+  const pieces=freeAreaPieces(box,[],walls);
+  assert.ok(pieces.some(p=>{const xs=p[0].map(q=>q[0]),ys=p[0].map(q=>q[1]);return Math.min(...xs)>1.99&&Math.max(...xs)<8.01&&Math.min(...ys)>1.99&&Math.max(...ys)<8.01;}),JSON.stringify(walls));
+ }
+});

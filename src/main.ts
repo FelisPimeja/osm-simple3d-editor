@@ -1548,8 +1548,14 @@ map.on('click', (e) => {
     // На этаже приоритет у помещений: части здания — Shift/Alt-кликом или при «Всё здание»
     const room = indoorAt([e.point.x, e.point.y]);
     // Выделена пустая площадь, Shift+клик по помещению — площадь остаётся в выделении вместе с ним
-    if (room && indoorAdd && freeArea) { const a = freeArea; selectIndoor(room); freeExtra = [a]; showFreeExtra(); return; }
+    if (room && indoorAdd && freeArea) { const a = [freeArea, ...freeExtra]; selectIndoor(room); freeExtra = a; showFreeExtra(); return; }
     if (room) { selectIndoor(room, indoorAdd); return; }
+    // Shift+клик по пустой площади при выделенной пустой площади — несколько кусков сразу (теги — всем)
+    if (indoorAdd && freeArea && !indoorSelection.length && !selectedRoomWalls.length) {
+      const free = freeAreaAt([e.point.x, e.point.y]);
+      if (free) toggleFreeArea(free);
+      return;
+    }
     if (indoorAdd) {
       // Shift+клик по пустой площади при выделенных помещениях — добавить её к выделению; мимо — выбор не сбрасываем
       const free = indoorSelection.length ? freeAreaAt([e.point.x, e.point.y]) : undefined;
@@ -9928,6 +9934,16 @@ function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | 
   return piece && { n: shownLevel.n, polygon: piece };
 }
 
+/** Shift+клик по пустой площади при выделенной пустой площади: добавить кусок или убрать; последний не снимается. */
+function toggleFreeArea(a: { n: number; polygon: Polygon }) {
+  const same = (b: { polygon: Polygon }) => b.polygon.outer.length === a.polygon.outer.length && b.polygon.outer.every((p, i) => p[0] === a.polygon.outer[i][0] && p[1] === a.polygon.outer[i][1]);
+  const all = [freeArea!, ...freeExtra];
+  const next = all.some(same) ? (all.length > 1 ? all.filter((b) => !same(b)) : all) : [...all, a];
+  [freeArea, ...freeExtra] = next;
+  overpassLayer.setFreeArea({ key: 'free-area', kind: 'area', polygons: next.map((b) => b.polygon), z: shownLevel?.floor ?? 0 });
+  renderFreeArea(freeArea!);
+}
+
 function selectFreeArea(a: { n: number; polygon: Polygon }) {
   select(undefined);
   selectIndoor(undefined);
@@ -9937,9 +9953,11 @@ function selectFreeArea(a: { n: number; polygon: Polygon }) {
 }
 
 function renderFreeArea(a: { n: number; polygon: Polygon }) {
+  const all = [a, ...freeExtra.filter((b) => b.n === a.n)];
   const stub: IndoorFeature = { key: 'free-area/0', kind: 'area', tags: { level: String(a.n) }, polygons: [a.polygon], levels: [a.n] };
+  const s = Math.round(all.reduce((t, b) => t + polyArea(b.polygon), 0));
   infoEl.innerHTML = `<h2>${tr('Неразмеченная площадь')}</h2>`
-    + `<p class="hint">${tr('{s} м² · {level}', { s: Math.round(polyArea(a.polygon)), level: levelLabel(a.n) })}</p>`
+    + `<p class="hint">${all.length > 1 ? tr('Кусков: {n} · {s} м² · {level}', { n: all.length, s, level: levelLabel(a.n) }) : tr('{s} м² · {level}', { s, level: levelLabel(a.n) })}</p>`
     + indoorForm([stub], { indoor: 'area' })
     + `<p class="hint">${tr('В OSM пустота ничем не размечена: правка любого поля создаст объект (по умолчанию indoor=area) с этими тегами.')}</p>`;
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-indoor-tag]')) {
@@ -9954,18 +9972,18 @@ function renderFreeArea(a: { n: number; polygon: Polygon }) {
 function createFromFreeArea(extra: Record<string, string>) {
   const a = freeArea;
   if (!a || !focus) return;
+  // Несколько кусков (Shift+клик) — объект в каждом, одной правкой; общие вершины соседних кусков — общие узлы
+  const all = [a, ...freeExtra.filter((b) => b.n === a.n)];
   const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)]);
   const edits: ObjectEdit[] = [];
-  const made = indoorCreateEdits(a.polygon, { indoor: 'area', level: String(a.n), ...extra }, nodeFor, edits);
-  if (!made) return;
+  const made = all.map((b) => indoorCreateEdits(b.polygon, { indoor: 'area', level: String(b.n), ...extra }, nodeFor, edits)).filter((m): m is IndoorFeature => !!m);
+  if (!made.length) return;
   session.editMany(edits);
-  indoorCreated.set(made.key, made);
-  indoorEdited.add(made.key);
+  for (const m of made) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
   // indoorCreated заполняется после editMany: перерисовать план с новым объектом
   indoorEditRev++;
   renderLevels();
-  const f = buildingIndoorFor(made.key);
-  if (f) selectIndoor(f);
+  made.map((m) => buildingIndoorFor(m.key)).filter((f): f is IndoorFeature => !!f).forEach((f, i) => selectIndoor(f, i > 0));
 }
 
 /**

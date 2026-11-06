@@ -10376,9 +10376,10 @@ function cutPlan(pts: [number, number][]): string | undefined {
     edits.push({ key, polygons: [p] });
     touched++;
   } });
-  timed('разрез: запись', () => session.editMany(edits));
+  // Новые куски — до записи: обработчик правки уже поднимает indoorEditRev и пересчитывает indoor здания
+  // (второй подъём после записи — второй пересчёт, ~130 мс на Казанском вокзале)
   for (const m of created) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
-  indoorEditRev++;
+  timed('разрез: запись', () => session.editMany(edits));
   renderLevels();
   const pieces = [...targets, ...replaced].reduce((n, t) => n + t.pieces.length, 0) + free.length;
   setStatus(tr('Рассечено: кусков {n}, новых объектов {created}, узлы добавлены в соседей: {touched}.', { n: pieces, created: created.length, touched })

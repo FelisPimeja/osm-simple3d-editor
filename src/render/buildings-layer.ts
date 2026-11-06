@@ -3008,6 +3008,14 @@ export class BuildingsLayer implements CustomLayerInterface {
       else if (zs.some((z) => z > z0 + 0.05)) {
         // Стена через стык частей с перепадом высот: по вершинам торец лёг бы клином через всю стену. Режем на
         // ячейки ~0,25 м; ячейка на стыке (скачок высоты) — ступенью по высоте в её середине, остальные — по скату
+        // Разрез на ячейки — один раз на стену и оболочку: при следующей перестройке этажа (правка соседней стены)
+        // куски берутся готовые, остаётся только залить их
+        const memo = capCellsCache.get(shell) ?? capCellsCache.set(shell, new Map()).get(shell)!;
+        const memoKey = `${z0},${top},${JSON.stringify(outer)},${JSON.stringify(holes)}`;
+        const cached = memo.get(memoKey);
+        if (cached) { for (const c of cached) fill(c.o, c.hs, c.z ?? zOf, colour); return; }
+        const record: CapPiece[] = [];
+        const fillRecord = (o: Pt[], hs: Pt[][], z: number | ((x: number, y: number) => number)) => { record.push({ o, hs, z: typeof z === 'number' ? z : undefined }); fill(o, hs, z, colour); };
         const xs = outer.map((p) => p[0]), ys = outer.map((p) => p[1]);
         const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
         const step = Math.max(0.25, Math.max(x1 - x0, y1 - y0) / 80);
@@ -3033,13 +3041,15 @@ export class BuildingsLayer implements CustomLayerInterface {
             for (const piece of pieces) {
               const o = piece[0].slice(0, -1) as Pt[], hs = piece.slice(1).map((r) => r.slice(0, -1) as Pt[]);
               const pz = o.map(([px, py]) => zOf(px, py));
-              if (pz.every((z) => z >= top - 1e-3)) fill(o, hs, top, colour);
+              if (pz.every((z) => z >= top - 1e-3)) fillRecord(o, hs, top);
               else if (Math.max(...pz) - Math.min(...pz) > 0.3) {
                 const cx = o.reduce((s2, q) => s2 + q[0], 0) / o.length, cy = o.reduce((s2, q) => s2 + q[1], 0) / o.length;
-                fill(o, hs, zOf(cx, cy), colour);
-              } else fill(o, hs, zOf, colour);
+                fillRecord(o, hs, zOf(cx, cy));
+              } else fillRecord(o, hs, zOf);
             }
           }
+          if (memo.size > 20000) memo.clear();
+          memo.set(memoKey, record);
         } catch { fill(outer, holes, zOf, colour); }
       }
     };
@@ -7083,6 +7093,11 @@ function planShell(g: MeshGroup): Shell {
   g.planShell = { bases, sig, shell };
   return shell;
 }
+
+/** Кусок крышки под скатом: кольца и высота (undefined — по скату в каждой вершине). */
+type CapPiece = { o: Pt[]; hs: Pt[][]; z?: number };
+/** Крышки стен под скатом, разрезанные на ячейки: по оболочке и стене — при перестройке этажа не режем заново. */
+const capCellsCache = new WeakMap<Shell, Map<string, CapPiece[]>>();
 
 /** Куски стен под оболочкой: те же стены считаются и для каждого видимого сквозь второй свет этажа, и при каждом переключении. */
 const shellPiecesCache = new WeakMap<Shell, Map<string, [number, number, number, number][]>>();

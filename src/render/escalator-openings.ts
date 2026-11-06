@@ -128,7 +128,8 @@ export function escalatorOpeningMasks(positions: ArrayLike<number>, escalators: 
           const rise=Math.max(0,Math.min(1,(distance-landing)/ramp));
           return e.bottom+(e.top-e.bottom)*(e.incline==='down'?1-rise:rise)+.05-(e.stairs?STAIRS_SLAB+.05:.7);
         };
-        const zp=bodyBottom(p),zq=bodyBottom(q),z1=z+2;
+        // Над маршем стена срезана до верха грани (потолка этажа): перемычка над лестницей/эскалатором не нужна
+        const zp=bodyBottom(p),zq=bodyBottom(q),z1=Math.max(z+2,bounds[5]+1);
         masks.push(p[0],p[1],zp,q[0],q[1],zq,q[0],q[1],z1,p[0],p[1],zp,q[0],q[1],z1,p[0],p[1],z1);
       }
     }

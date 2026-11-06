@@ -8,10 +8,10 @@ after(async()=>await vite?.close());
 const wall=new Float32Array([5,-3,0,5,3,0,5,3,8,5,-3,0,5,3,8,5,-3,8]);
 const escalator={line:[[0,0],[10,0]],bottom:0,top:4,width:2,incline:'up'};
 function contains(pos,y,z){const ray=new THREE.Ray(new THREE.Vector3(4,y,z),new THREE.Vector3(1,0,0));const p=new THREE.Vector3();for(let i=0;i<pos.length;i+=9)if(ray.intersectTriangle(new THREE.Vector3().fromArray(pos,i),new THREE.Vector3().fromArray(pos,i+3),new THREE.Vector3().fromArray(pos,i+6),false,p))return true;return false;}
-test('crossing wall clears body and 2m above the treads, preserving wall around it',()=>{
+test('crossing wall clears body and everything above the treads up to the wall top, keeping the wall below and beside it',()=>{
  const before=wall.slice(),out=cut(wall,[escalator]);assert.deepEqual(wall,before);
  assert.equal(contains(out,0,2),false);assert.equal(contains(out,0,3.9),false);
- assert.equal(contains(out,0,5),true);assert.equal(contains(out,2,2),true);assert.equal(contains(out,0,.5),true);
+ assert.equal(contains(out,0,5),false);assert.equal(contains(out,0,7.9),false);assert.equal(contains(out,2,2),true);assert.equal(contains(out,0,.5),true);
 });
 test('downward, bent and oblique escalators produce finite openings',()=>{
  for(const e of [{...escalator,incline:'down'},{...escalator,line:[[0,-1],[5,0],[10,2]]}]){
@@ -40,7 +40,7 @@ test('opening outline: edges around the hole, verticals stop at the wall top',()
 test('stairs cut a wall across the flight but not a wall along it',()=>{
  const flight={line:[[0,0],[10,0]],bottom:0,top:4,width:2,incline:'up',stairs:true};
  const out=cut(wall,[flight]);
- assert.equal(contains(out,0,2.5),false);assert.equal(contains(out,0,5.5),true);
+ assert.equal(contains(out,0,2.5),false);assert.equal(contains(out,0,5.5),false);assert.equal(contains(out,2,2.5),true);
  const side=new Float32Array([2,1,0,8,1,0,8,1,8,2,1,0,8,1,8,2,1,8]);
  assert.equal(masksOf(side,[flight]).length,0);
 });

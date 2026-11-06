@@ -10253,8 +10253,15 @@ function cutPlan(pts: [number, number][]): string | undefined {
     const first = at.indexOf(0), last = at.lastIndexOf(0);
     return first > 0 && last < at.length - 1 && at.slice(0, first).includes(-1) && at.slice(last + 1).includes(-1);
   };
+  // Рамка разреза (с продолжениями по стенам) и запасом: помещение вне неё разрез не задевает — без проверки
+  // каждой точки линии против всех его сторон (на большом этаже — сотни помещений)
+  const reach = [...pts, ...startRuns.flat(), ...endRuns.flat()];
+  const pad = CUT_REACH + 0.5;
+  const cutBox = [Math.min(...reach.map((q) => q[0])) - pad, Math.min(...reach.map((q) => q[1])) - pad, Math.max(...reach.map((q) => q[0])) + pad, Math.max(...reach.map((q) => q[1])) + pad];
   const cut = (p: Polygon): [number, number][][][] => {
     const local = [toLocal(p.outer), ...p.inners.map(toLocal)];
+    const xs = local[0].map((q) => q[0]), ys = local[0].map((q) => q[1]);
+    if (Math.max(...xs) < cutBox[0] || Math.min(...xs) > cutBox[2] || Math.max(...ys) < cutBox[1] || Math.min(...ys) > cutBox[3]) return [];
     if (!entered(local)) return [];
     const onBoundary = (q: [number, number]) => local.some((r) => r.slice(0, -1).some((a, i) => segDist2(q, a, r[i + 1]) <= CUT_ON_SIDE));
     // Конец на линейной стене: годится продолжение, которое доходит до стороны этого помещения; ближнее — первым
@@ -10277,18 +10284,18 @@ function cutPlan(pts: [number, number][]): string | undefined {
   /** Мультиполигоны (помещение с дырами): заменяются кусками — новыми объектами с их тегами. */
   const replaced: typeof targets = [];
   const skipped: string[] = [];
-  for (const f of rooms) {
+  timed('разрез: помещения', () => { for (const f of rooms) {
     if (f.polygons.length !== 1) continue;
     const pieces = cut(f.polygons[0]);
     if (pieces.length < 2) continue;
     if (indoorKey(f.key).startsWith('relation/') || pieces.some((p) => p.length > 1)) { replaced.push({ f, pieces }); continue; }
     if (!f.key.startsWith('way/') || !f.polygons[0].outerIds) { skipped.push(indoorKey(f.key)); continue; }
     targets.push({ f, pieces });
-  }
+  } }, () => `${rooms.length} помещений`);
   // Пустая площадь: срез этажа минус помещения
   const free: [number, number][][][] = [];
   const section = levelSection(level);
-  if (section?.length) {
+  if (section?.length) timed('разрез: пустая площадь', () => {
     const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
     try {
       // Проёмы лестниц и залов в два света — не пустая площадь
@@ -10298,7 +10305,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
         if (pieces.length >= 2) free.push(...pieces);
       }
     } catch (err) { console.warn('[cut-plan]', err); }
-  }
+  });
   if (!targets.length && !replaced.length && !free.length) {
     return skipped.length
       ? tr('Мультиполигон {keys} пока рассекать нельзя.', { keys: skipped.join(', ') })
@@ -10341,7 +10348,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
   for (const e of edits) for (const p of e.polygons ?? (e.create as Feature3D | undefined)?.polygons ?? []) {
     [p.outer, ...p.inners].forEach((r, i) => r.forEach((q, j) => { const id = (i ? p.innerIds?.[i - 1] : p.outerIds)?.[j]; if (id !== undefined && id < 0) fresh.set(id, q); }));
   }
-  const { patch, line: patchLine } = sideInserts(fresh);
+  const { patch, line: patchLine } = timed('разрез: узлы на сторонах', () => sideInserts(fresh));
   // Собственные куски: узел разреза соседнего помещения мог лечь на их сторону
   for (const e of edits) {
     if (e.polygons) e.polygons = e.polygons.map((p) => patch(p) ?? p);
@@ -10352,7 +10359,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
   for (const m of created) if (m.key.startsWith('way/')) m.polygons = (edits.find((e) => e.key === m.key)?.create as Feature3D).polygons!;
   let touched = 0;
   // Соседние indoor-пути (помещения, этаж) — их кольца с новыми узлами
-  for (const f of shownIndoor) {
+  timed('разрез: соседи', () => { for (const f of shownIndoor) {
     const key = indoorKey(f.key);
     if (f.point || rebuilt.has(key) || replaced.some((t) => indoorKey(t.f.key) === key) || !key.startsWith('way/') || f.polygons.length !== 1) continue;
     if (f.line) {
@@ -10368,8 +10375,8 @@ function cutPlan(pts: [number, number][]): string | undefined {
     trackIndoor(key, f);
     edits.push({ key, polygons: [p] });
     touched++;
-  }
-  session.editMany(edits);
+  } });
+  timed('разрез: запись', () => session.editMany(edits));
   for (const m of created) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
   indoorEditRev++;
   renderLevels();
@@ -11664,7 +11671,10 @@ function undergroundOutline(g: BuildingGroup, levels: Level[], indoor: IndoorFea
   return [{ rings: (src.length ? src : feats).flatMap(ringsOf), depth }];
 }
 
+/** Сколько раз перестраивалась панель этажей: отложенная перестройка после правки пропускается, если её уже сделали. */
+let levelsRenders = 0;
 function renderLevels() {
+  levelsRenders++;
   scheduleIndoorBadges(); timed('этажи: панель', renderLevelsImpl); syncModePanels(); renderEscalatorUi(); }
 
 /** Режим, для которого уже выставлены панели: вручную развёрнутое остаётся, пока режим не сменится. */
@@ -12885,8 +12895,19 @@ function changeIssues(keys: string[]): Issue[] {
 const DOORS_GROUP = '\u0000doors';
 const ICON_DOOR = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3.5 14.5V2.5h9v12M1.5 14.5h13"/><circle cx="10" cy="8.5" r="0.6" fill="currentColor"/></svg>';
 
+/**
+ * Перестроить панель этажей в конце задачи, если до тех пор её не перестроят явно: renderOutliner зовут из правки
+ * (onSessionChange), а код правки сразу после editMany сам вызывает renderLevels — полный план этажа (~1,3 с на
+ * Казанском вокзале) строился дважды.
+ */
+function scheduleLevels() {
+  const stamp = levelsRenders;
+  // Ручки «Формы» берут высоты стен из плана — после перестройки обновить и их
+  queueMicrotask(() => { if (levelsRenders === stamp) { renderLevels(); if (shapeTool.active) shapeTool.refresh(); } });
+}
+
 function renderOutliner() {
-  renderLevels();
+  scheduleLevels();
   queueMicrotask(() => renderMobileCard()); // вход в режим здания и выход — карточка мобильного режима
   outlinerPanel.hidden = !focus || currentLevel !== undefined; // на плане этажа частей здания не видно
   renderIssues();
@@ -14097,11 +14118,17 @@ function onSessionChange(keys: string[]) {
   if (keys.some((k) => indoorEdited.has(k))) {
     if (selectedRoomWalls.length) { selectIndoor(undefined); clearInfo(); }
     indoorEditRev++;
-    const sel = indoorSelection.map((f) => indoorKey(f.key));
-    renderLevels();
-    const again = sel.map((k) => buildingIndoorFor(k)).filter((f): f is IndoorFeature => !!f);
-    indoorSelection = [];
-    for (const f of again) selectIndoor(f, again.length > 1);
+    // План — после правки, в конце задачи: код правки (разрез, ширина марша, новые объекты) обычно сам вызывает
+    // renderLevels сразу после editMany — тогда второй полной перестройки этажа (~1,3 с) не будет
+    const stamp = levelsRenders;
+    queueMicrotask(() => {
+      const sel = indoorSelection.map((f) => indoorKey(f.key));
+      if (levelsRenders === stamp) renderLevels();
+      // Выбор — по новым объектам плана (одним разом: по одному — квадратично)
+      const again = sel.map((k) => buildingIndoorFor(k)).filter((f): f is IndoorFeature => !!f);
+      indoorSelection = [];
+      if (again.length) selectIndoorMany(again, again.length > 1);
+    });
     renderChanges();
     if (keys.every((k) => indoorEdited.has(k))) { if (shapeTool.active) shapeTool.refresh(); renderIssues(); return; }
   }

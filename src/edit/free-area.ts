@@ -51,6 +51,10 @@ function safeCut(face:Pt[][],cut:(f:Pt[][])=>Pt[][][]):Pt[][][]{
  const r=(v:number)=>Math.round(v*1000)/1000;
  try{return cut(face.map(ring=>ring.map(([x,y])=>[r(x),r(y)] as Pt)));}catch{return [face];}
 }
+type Box=[number,number,number,number];
+const bbox=(r:Pt[]):Box=>{let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;for(const [x,y] of r){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}return [x0,y0,x1,y1];};
+/** Рамки не пересекаются (с запасом 1 см): стена не может разрезать кусок. */
+const apart=(a:Box,b:Box)=>a[2]<b[0]-.01||b[2]<a[0]-.01||a[3]<b[1]-.01||b[3]<a[1]-.01;
 /** Partition empty floor space by real walls, including walls made from several ways. Metres, closed rings. */
 export function freeAreaPieces(section:MultiPolygon,occupied:MultiPolygon[],walls:Pt[][], doors:{at:Pt;width:number}[]=[]):MultiPolygon{
  const chains=joinedWalls(walls);
@@ -71,14 +75,18 @@ export function freeAreaPieces(section:MultiPolygon,occupied:MultiPolygon[],wall
  let pieces=pc.difference(section,...occupied);
  for(const path of joinedWalls([...chains,...bridges])){
   if(same(path[0],path.at(-1)!)){
-   pieces=pieces.flatMap(face=>safeCut(face,f=>[...pc.intersection(f,[path]),...pc.difference(f,[path])]));continue;
+   const pb=bbox(path);
+   pieces=pieces.flatMap(face=>apart(bbox(face[0]),pb)?[face]:safeCut(face,f=>[...pc.intersection(f,[path]),...pc.difference(f,[path])]));continue;
   }
   const unit=(a:Pt,b:Pt):Pt=>{const x=b[0]-a[0],y=b[1]-a[1],l=Math.hypot(x,y)||1;return[x/l,y/l];};
   const d0=unit(path[1],path[0]),d1=unit(path.at(-2)!,path.at(-1)!);
   const first:Pt=[path[0][0]+d0[0]*1e5,path[0][1]+d0[1]*1e5],last:Pt=[path.at(-1)![0]+d1[0]*1e5,path.at(-1)![1]+d1[1]*1e5];
   const d=unit(first,last),n:Pt=[-d[1]*1e5,d[0]*1e5];
   const side:Pt[][]=[[first,...path,last,[last[0]+n[0],last[1]+n[1]],[first[0]+n[0],first[1]+n[1]],first]];
-  pieces=pieces.flatMap(face=>safeCut(face,f=>finiteCutPieces([...pc.intersection(f,side),...pc.difference(f,side)],path,f,false)));
+  // Стена режет только кусок, в рамку которого заходит: остальные кладём как есть (разрез каждого куска каждой
+  // стеной — секунды на большом этаже, Казанский вокзал: ~300 цепочек стен × ~100 кусков)
+  const pb=bbox(path);
+  pieces=pieces.flatMap(face=>apart(bbox(face[0]),pb)?[face]:safeCut(face,f=>finiteCutPieces([...pc.intersection(f,side),...pc.difference(f,side)],path,f,false)));
  }
  return pieces.flatMap(poly=>cleanPiece(poly as Pt[][],0));
 }

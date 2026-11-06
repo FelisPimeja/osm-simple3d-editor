@@ -3447,7 +3447,7 @@ function createLevelWallBand(t: OffsetTarget, shape: [number, number][][][]): st
   for (const m of made) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
   indoorEditRev++;
   renderLevels();
-  made.map((m) => buildingIndoorFor(m.key)).filter((f): f is IndoorFeature => !!f).forEach((f, i) => selectIndoor(f, i > 0));
+  selectIndoorMany(made.map((m) => buildingIndoorFor(m.key)).filter((f): f is IndoorFeature => !!f));
   setStatus(tr('Создано: {keys} (indoor=wall, этаж {n}).', { keys: made.map((m) => m.key).join(', '), n: levelLabel(shownLevel.n) }));
   return;
 }
@@ -4194,7 +4194,7 @@ function pasteIndoor(cb: NonNullable<typeof clipboard>) {
   indoorEditRev++;
   renderLevels();
   const fs = made.map((m) => buildingIndoorFor(m.key)).filter((f): f is IndoorFeature => !!f);
-  fs.forEach((f, i) => selectIndoor(f, i > 0));
+  selectIndoorMany(fs);
   const b = overpassLayer.focusToLocal(cb.base.lngLat);
   if (!b) return;
   pushTool.stop(); shapeTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
@@ -8664,6 +8664,21 @@ function renderRoomWallCard(walls: RoomWall[]) {
  * Выбрать indoor-объект: его теги в панели свойств, контур подсвечен. undefined — снять. add — Shift: добавить
  * к выбранным или убрать из них (несколько — общая форма: одинаковые значения, у разных — «разные значения»).
  */
+/**
+ * Выбрать сразу несколько indoor-объектов (пусто — снять выбор): подсветка и форма — один раз, а не на каждый
+ * (по одному selectIndoor с Shift — квадратично: на 28 стенах подсветка пересчитывалась 28 раз, ~2 с).
+ */
+function selectIndoorMany(fs: IndoorFeature[], keepExtras = false) {
+  if (fs.length <= 1 && !keepExtras) { selectIndoor(fs[0]); return; }
+  // keepExtras — как Shift: выбранные стороны помещений и куски пустой площади остаются
+  if (keepExtras) { if (freeArea) { freeArea = undefined; overpassLayer.setFreeArea(undefined); } } else selectIndoor(undefined);
+  clearTreeSelection();
+  const seen = new Set<string>();
+  indoorSelection = fs.map((f) => f.key.endsWith('#poi') ? shownIndoor.find((x) => x.key === f.key.replace('#poi', '')) ?? f : f)
+    .filter((f) => { const k = indoorKey(f.key); if (seen.has(k)) return false; seen.add(k); return true; });
+  renderIndoorSelection(true);
+}
+
 function selectIndoor(f: IndoorFeature | undefined, add = false) {
   if (freeArea) { freeArea = undefined; overpassLayer.setFreeArea(undefined); }
   // Пустая площадь в выделении — пока к нему добавляют (Shift), иначе снимается
@@ -10081,7 +10096,7 @@ function createFromFreeArea(extra: Record<string, string>) {
   // indoorCreated заполняется после editMany: перерисовать план с новым объектом
   indoorEditRev++;
   renderLevels();
-  made.map((m) => buildingIndoorFor(m.key)).filter((f): f is IndoorFeature => !!f).forEach((f, i) => selectIndoor(f, i > 0));
+  selectIndoorMany(made.map((m) => buildingIndoorFor(m.key)).filter((f): f is IndoorFeature => !!f));
 }
 
 /**
@@ -10362,7 +10377,7 @@ function cutPlan(pts: [number, number][]): string | undefined {
   setStatus(tr('Рассечено: кусков {n}, новых объектов {created}, узлы добавлены в соседей: {touched}.', { n: pieces, created: created.length, touched })
     + (skipped.length ? ' ' + tr('Мультиполигон {keys} пока рассекать нельзя.', { keys: skipped.join(', ') }) : ''));
   const sel = [...[...rebuilt.keys()].map((k) => buildingIndoorFor(k)), ...created.map((m) => buildingIndoorFor(m.key))].filter((f): f is IndoorFeature => !!f);
-  sel.forEach((f, i) => selectIndoor(f, i > 0));
+  selectIndoorMany(sel);
   return;
 }
 
@@ -11458,7 +11473,7 @@ function applyRepeat(fs: IndoorFeature[], copies: Map<number, IndoorFeature>[], 
   indoorEditRev++;
   renderLevels();
   // Выделение — прежнее
-  fs.map((f) => buildingIndoorFor(indoorKey(f.key))).filter((f): f is IndoorFeature => !!f).forEach((f, i) => selectIndoor(f, i > 0));
+  selectIndoorMany(fs.map((f) => buildingIndoorFor(indoorKey(f.key))).filter((f): f is IndoorFeature => !!f));
   setStatus(tr('Этажи: копий создано {made}, убрано {removed}.', { made: made.length, removed: removed.size })
     + (skipped ? ' ' + tr('Пропущено: {n}.', { n: skipped }) : ''));
   return;
@@ -11488,7 +11503,7 @@ function createIndoorDrawn(ring: [number, number][]): string | undefined {
   for (const m of made) { indoorCreated.set(m.key, m); indoorEdited.add(m.key); }
   indoorEditRev++;
   renderLevels();
-  made.map((m) => buildingIndoorFor(m.key)).filter((f): f is IndoorFeature => !!f).forEach((f, i) => selectIndoor(f, i > 0));
+  selectIndoorMany(made.map((m) => buildingIndoorFor(m.key)).filter((f): f is IndoorFeature => !!f));
   setStatus(tr('Создано: {keys} (indoor=area, этаж {n}).', { keys: made.map((m) => m.key).join(', '), n: levelLabel(shownLevel.n) }));
   return;
 }
@@ -11517,7 +11532,7 @@ function levelFromOutline(n: number, extra: Record<string, string> = {}): boolea
   session.editMany(edits);
   // Новый этаж — выделен: контур подсвечен, дальше правится как любой indoor-объект
   const made = edits.map((e) => buildingIndoorFor(e.key)).filter((f): f is IndoorFeature => !!f && f.kind === 'level');
-  made.forEach((f, i) => selectIndoor(f, i > 0));
+  selectIndoorMany(made);
   setStatus(tr('Создан indoor=level этажа {n}: общих узлов с контуром — {shared}.', { n, shared: used.size }));
   return true;
 }
@@ -11837,8 +11852,7 @@ function renderLevelsImpl() {
   if (indoorSelection.some((s) => !selectable.has(s.key))) {
     const keep = indoorSelection.filter((s) => selectable.has(s.key));
     indoorSelection = [];
-    if (!keep.length) selectIndoor(undefined);
-    for (const f of keep) selectIndoor(f, keep.length > 1);
+    if (!keep.length) selectIndoor(undefined); else selectIndoorMany(keep, keep.length > 1);
   }
   const escalatorIconPositions = new Map<string, { at: LonLat; z: number }>();
   for (const area of onLevel.filter((f) => f.escalatorArea)) {
@@ -12085,7 +12099,7 @@ levelsEl.addEventListener('contextmenu', (e) => {
 function selectLevelOutline(n: number) {
   if (currentLevel !== n) { currentLevel = n; linkLevel = undefined; renderLevels(); }
   const fs = levelOutlineFeatures(n);
-  if (fs.length) { select(undefined); fs.forEach((f, i) => selectIndoor(f, i > 0)); }
+  if (fs.length) { select(undefined); selectIndoorMany(fs); }
 }
 infoEl.addEventListener('click', (e) => {
   const ilink = (e.target as HTMLElement).closest<HTMLElement>('[data-select-indoor]');
@@ -15327,7 +15341,7 @@ if (josmMode) watchJosmSelection((keys) => {
   const shown = keys.filter((k) => entity(k));
   const rooms = shown.length ? [] : keys.map((k) => buildingIndoorFor(k)).filter((f): f is IndoorFeature => !!f);
   if (rooms.length) {
-    rooms.forEach((f, i) => selectIndoor(f, i > 0));
+    selectIndoorMany(rooms);
   } else if (shown.length) {
     select(shown[0]);
     if (shown.length > 1) addToSelection(shown.slice(1));

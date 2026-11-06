@@ -92,3 +92,14 @@ test('a ring closed at two forks still separates its interior',()=>{
   assert.ok(pieces.some(p=>{const xs=p[0].map(q=>q[0]),ys=p[0].map(q=>q[1]);return Math.min(...xs)>1.99&&Math.max(...xs)<8.01&&Math.min(...ys)>1.99&&Math.max(...ys)<8.01;}),JSON.stringify(walls));
  }
 });
+
+// way/1455469261 и др.: кольцо из трёх цепочек между тремя развилками (к узлам подходят другие стены) — ни одна
+// цепочка сама кусок не отсекает, только вместе с уже прорезанными соседними
+test('a ring split into three chains by three forks still separates its interior, in any order',()=>{
+ const a=[[2,2],[8,2]], b=[[8,2],[8,8]], c=[[8,8],[2,8],[2,2]];
+ const spurs=[[[0,0],[2,2]],[[8,2],[10,0]],[[8,8],[10,10]]];
+ const inside=p=>{const xs=p[0].map(q=>q[0]),ys=p[0].map(q=>q[1]);return Math.min(...xs)>1.99&&Math.max(...xs)<8.01&&Math.min(...ys)>1.99&&Math.max(...ys)<8.01;};
+ for(const walls of [[a,b,c,...spurs],[c,...spurs,b,a],[...spurs,b,c,a]]){
+  assert.ok(freeAreaPieces(box,[],walls).some(inside),JSON.stringify(walls));
+ }
+});

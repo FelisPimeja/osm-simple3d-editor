@@ -93,11 +93,81 @@ export function freeAreaPieces(section:MultiPolygon,occupied:MultiPolygon[],wall
   if(best)bridges.push([best.a,best.b]);
  }
  let pieces=pc.difference(section,...occupied);
- for(const path of joinedWalls([...chains,...bridges])){
-  if(same(path[0],path.at(-1)!)){
-   const pb=bbox(path);
-   pieces=pieces.flatMap(face=>apart(bbox(face[0]),pb)?[face]:safeCut(face,f=>[...pc.intersection(f,[path]),...pc.difference(f,[path])]));continue;
+ const all=joinedWalls([...chains,...bridges]);
+ // Кольца из нескольких цепочек между развилками — грани графа стен: замкнутые контуры для разреза
+ const closed=[...all.filter(p=>same(p[0],p.at(-1)!)),...wallFaces(all.filter(p=>!same(p[0],p.at(-1)!)))];
+ for(const path of closed){
+  const pb=bbox(path);
+  pieces=pieces.flatMap(face=>apart(bbox(face[0]),pb)?[face]:safeCut(face,f=>[...pc.intersection(f,[path]),...pc.difference(f,[path])]));
+ }
+ // Незамкнутые цепочки — проходами, пока режется: цепочка между развилками отсекает кусок, только когда соседние
+ // цепочки кольца уже прорезали его границу (кольцо из трёх цепочек между тремя развилками, way/1455469261 и др.)
+ let open=all.filter(p=>!same(p[0],p.at(-1)!));
+ for(let pass=0;pass<4&&open.length;pass++){
+  const rest:Pt[][]=[];
+  for(const path of open){
+   const before=pieces.length;
+   pieces=openCut(pieces,path);
+   if(pieces.length===before)rest.push(path);
   }
+  if(rest.length===open.length)break;
+  open=rest;
+ }
+ return pieces.flatMap(poly=>cleanPiece(poly as Pt[][],0));
+}
+/** Грани больше этого числа цепочек — не помещение (обход вокруг целого квартала стен), не режем ими. */
+const MAX_FACE_CHAINS=24;
+/**
+ * Ограниченные грани планарного графа незамкнутых цепочек стен (узлы — концы цепочек): кольцо, распавшееся на
+ * несколько цепочек между развилками, где ни одна цепочка сама не касается границы куска. Висячие цепочки (отростки)
+ * в обход не идут. Кольца замкнуты (последняя точка = первая).
+ */
+export function wallFaces(open:Pt[][]):Pt[][]{
+ const key=(p:Pt)=>`${Math.round(p[0]/.001)},${Math.round(p[1]/.001)}`;
+ const edges=open.filter(c=>c.length>1).map(c=>({c,a:key(c[0]),b:key(c.at(-1)!)})).filter(e=>e.a!==e.b);
+ // Отростки прочь: узел, к которому подходит одна цепочка, не на кольце
+ let alive=edges.map(()=>true);
+ for(let changed=true;changed;){
+  changed=false;
+  const deg=new Map<string,number>();
+  edges.forEach((e,i)=>{if(alive[i]){deg.set(e.a,(deg.get(e.a)??0)+1);deg.set(e.b,(deg.get(e.b)??0)+1);}});
+  edges.forEach((e,i)=>{if(alive[i]&&((deg.get(e.a)??0)<2||(deg.get(e.b)??0)<2)){alive[i]=false;changed=true;}});
+ }
+ type Half={pts:Pt[];from:string;to:string;id:number};
+ const halves:Half[]=[];
+ edges.forEach((e,i)=>{if(!alive[i])return;halves.push({pts:e.c,from:e.a,to:e.b,id:halves.length},{pts:[...e.c].reverse(),from:e.b,to:e.a,id:halves.length+1});});
+ const out=new Map<string,Half[]>();
+ for(const h of halves)(out.get(h.from)??out.set(h.from,[]).get(h.from)!).push(h);
+ const ang=(a:Pt,b:Pt)=>Math.atan2(b[1]-a[1],b[0]-a[0]);
+ const used=new Set<number>(),faces:Pt[][]=[];
+ for(const start of halves){
+  if(used.has(start.id))continue;
+  const ring:Pt[]=[];let h:Half|undefined=start,steps=0,ok=false;
+  while(h&&steps++<=MAX_FACE_CHAINS){
+   used.add(h.id);ring.push(...h.pts.slice(0,-1));
+   const end=h.pts.at(-1)!,back=ang(end,h.pts.at(-2)!);
+   // Следующая — ближайшая против часовой стрелки от направления назад (обход грани слева)
+   let best:Half|undefined,bd=Infinity;
+   for(const n of out.get(h.to)??[]){
+    if(n.id===(h.id^1))continue;
+    let d=ang(n.pts[0],n.pts[1])-back;while(d<=1e-9)d+=2*Math.PI;
+    if(d<bd){bd=d;best=n;}
+   }
+   h=best;
+   if(h?.id===start.id){ok=true;break;}
+   if(h&&used.has(h.id))break;
+  }
+  if(!ok||ring.length<3)continue;
+  ring.push(ring[0]);
+  let a=0;for(let i=0;i<ring.length-1;i++)a+=ring[i][0]*ring[i+1][1]-ring[i+1][0]*ring[i][1];
+  // Ограниченная грань при таком обходе идёт по часовой стрелке; внешняя — против
+  if(a<0)faces.push(ring);
+ }
+ return faces;
+}
+/** Незамкнутая цепочка стен режет куски, в рамку которых заходит: только конечный разрез (finiteCutPieces). */
+function openCut(pieces:MultiPolygon,path:Pt[]):MultiPolygon{
+  {
   const unit=(a:Pt,b:Pt):Pt=>{const x=b[0]-a[0],y=b[1]-a[1],l=Math.hypot(x,y)||1;return[x/l,y/l];};
   const d0=unit(path[1],path[0]),d1=unit(path.at(-2)!,path.at(-1)!);
   const first:Pt=[path[0][0]+d0[0]*1e5,path[0][1]+d0[1]*1e5],last:Pt=[path.at(-1)![0]+d1[0]*1e5,path.at(-1)![1]+d1[1]*1e5];
@@ -106,9 +176,8 @@ export function freeAreaPieces(section:MultiPolygon,occupied:MultiPolygon[],wall
   // Стена режет только кусок, в рамку которого заходит: остальные кладём как есть (разрез каждого куска каждой
   // стеной — секунды на большом этаже, Казанский вокзал: ~300 цепочек стен × ~100 кусков)
   const pb=bbox(path);
-  pieces=pieces.flatMap(face=>apart(bbox(face[0]),pb)?[face]:safeCut(face,f=>finiteCutPieces([...pc.intersection(f,side),...pc.difference(f,side)],path,f,false)));
+  return pieces.flatMap(face=>apart(bbox(face[0]),pb)?[face]:safeCut(face,f=>finiteCutPieces([...pc.intersection(f,side),...pc.difference(f,side)],path,f,false)));
  }
- return pieces.flatMap(poly=>cleanPiece(poly as Pt[][],0));
 }
 /** Клин уже этого, м, при остром угле — шип: узкий зазор между почти совпадающими сторонами (контур этажа и грань колонны). */
 const SPIKE_WIDTH=.15;

@@ -2032,7 +2032,7 @@ function focusFeature(g: BuildingGroup, f: Feature3D, role = g.roles[g.members.i
     const parts = g.members.flatMap((key, i) => {
       if (g.roles[i] !== 'part' || session.isDeleted(key)) return [];
       const p = (session.get(key) as Feature3D | undefined) ?? overpass.get(key)?.feature ?? overpass.findFeature(key);
-      return p ? [{ ...p, kind: 'part' as const }] : [];
+      return p && Array.isArray(p.polygons) ? [{ ...p, kind: 'part' as const }] : [];
     });
     // Объединение частей (polygon-clipping) дорогое — у сотен частей секунды (relation/3224486), а зовут на каждую
     // перерисовку (выделение, догрузка из API — та приносит новые объекты с теми же координатами): кеш по содержимому

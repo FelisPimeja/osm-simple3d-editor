@@ -39,6 +39,8 @@ export const CATEGORY_ORDER: IndoorCategory[] = ['circulation', 'shop', 'food', 
 const ROOM: Partial<Record<string, IndoorCategory>> = {
   corridor: 'circulation', hall: 'circulation', lobby: 'circulation', foyer: 'circulation', stairs: 'circulation', elevator: 'circulation',
   escalator: 'circulation', entrance: 'circulation', waiting: 'circulation', steps: 'circulation',
+  // Платформа — общая зона прохода: магазин или кафе на ней её не перекрашивают (relation/19896350)
+  platform: 'circulation',
   technical: 'technical', warehouse: 'technical', storage: 'technical', utility: 'technical', kitchen: 'technical', server: 'technical', electrical: 'technical',
   shop: 'shop', restaurant: 'food', cafe: 'food', food_court: 'food', foodcourt: 'food', dining: 'food',
   office: 'office', class: 'office', classroom: 'office', auditorium: 'office', amphitheatre: 'office', conference: 'office',

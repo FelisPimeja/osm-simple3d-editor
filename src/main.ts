@@ -1997,7 +1997,12 @@ function groupFeatures(g: BuildingGroup): Feature3D[] {
   return g.members.map((k, i) => {
     // Удалённый в сессии — нет (иначе подставился бы загруженный исходник: виден, но не выделяется)
     if (session.isDeleted(k)) return undefined;
-    const f = (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature ?? overpass.findFeature(k);
+    let f = (session.get(k) as Feature3D | undefined) ?? overpass.get(k)?.feature ?? overpass.findFeature(k);
+    // Indoor-объект в сессии, получивший building:part, — без полей объёма: достраиваем их
+    if (f && !f.kind && f.polygons?.length && isOutlinePart(f.tags)) {
+      const [type, id] = k.split('/');
+      f = { ...f, kind: 'part', type: type as Feature3D['type'], id: Number(id), hasParts: false };
+    }
     return f && focusFeature(g, withEntranceEdits(f), g.roles[i]);
   }).filter((f): f is Feature3D => !!f);
 }
@@ -12401,7 +12406,11 @@ function strayPartsOf(g: BuildingGroup): Issue[] {
  * состав отношения меняют группы сессии, предложение добавить часть остаётся за проверкой.
  */
 function withStrayParts(g: BuildingGroup): BuildingGroup {
-  const strays = strayPartsOf(g).map((i) => i.key).filter((k) => !g.members.includes(k));
+  // Indoor-объект, ставший частью здания в сессии (indoor=column + building:part=column, relation/19896294):
+  // в данных карты он ещё не объём — берём из indoor здания
+  const indoorParts = isSolo(g) ? [] : buildingIndoor(g).filter((f) => !f.line && !f.point && f.polygons.length && isOutlinePart(f.tags))
+    .map((f) => indoorKey(f.key));
+  const strays = [...new Set([...strayPartsOf(g).map((i) => i.key), ...indoorParts])].filter((k) => !g.members.includes(k));
   return strays.length ? { ...g, members: [...g.members, ...strays], roles: [...g.roles, ...strays.map(() => 'part')] } : g;
 }
 
@@ -14237,6 +14246,8 @@ function onSessionChange(keys: string[]) {
   if (keys.some((k) => indoorEdited.has(k))) {
     if (selectedRoomWalls.length) { selectIndoor(undefined); clearInfo(); }
     indoorEditRev++;
+    // Indoor-объект мог получить building:part (колонна стала частью здания) — в сцену здания
+    syncStrayParts();
     // План — после правки, в конце задачи: код правки (разрез, ширина марша, новые объекты) обычно сам вызывает
     // renderLevels сразу после editMany — тогда второй полной перестройки этажа (~1,3 с) не будет
     const stamp = levelsRenders;

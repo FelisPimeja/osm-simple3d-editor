@@ -158,3 +158,16 @@ export function shiftAcross(points: LonLat[], axis: [LonLat, LonLat], d: number)
   const m = metres(axis[0]), b = m.to(axis[1]), L = Math.hypot(b[0], b[1]) || 1, n = [-b[1] / L, b[0] / L];
   return points.map((p) => { const q = m.to(p); return m.back([q[0] + n[0] * d, q[1] + n[1] * d]); });
 }
+
+/**
+ * Новые места вершин пары под ширину width (м): полигон — симметрично поперёк оси, затем вбок на shift (м, влево от
+ * направления оси; сдвиг одной стороны — половина изменения ширины). Ось — вбок на shift (без сдвига — на месте).
+ * undefined — ось не прямая или полигон без ширины.
+ */
+export function flightWidthTargets(ring: LonLat[], line: LonLat[], width: number, shift = 0): { ring: LonLat[]; line?: LonLat[] } | undefined {
+  if (line.length !== 2) return;
+  const axis: [LonLat, LonLat] = [line[0], line[1]], half = pairHalfWidth(ring, axis);
+  if (half < 0.05 || width <= 0) return;
+  const next = shiftAcross(scaleAcross(ring, axis, width / 2 / half), axis, shift);
+  return Math.abs(shift) > 1e-6 ? { ring: next, line: shiftAcross(line, axis, shift) } : { ring: next };
+}

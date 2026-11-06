@@ -9,7 +9,7 @@ import { levelDetachNodes } from './edit/level-detach';
 import { isIndoorCutPolygon, isIndoorUnionPolygon, indoorUnionSignature, indoorUnionGeometry, indoorUnionHoleEdits } from './edit/indoor-union';
 import { finiteCutPieces } from './edit/finite-cut';
 import { SHELL_LEVEL, editIndoorGeometry, type IndoorOperation, type IndoorVertex } from './edit/indoor-geometry';
-import { pairHalfWidth, pairedArea, scaleAcross, shiftAcross, stairsPartner, withStairsPartners } from './edit/stairs-pair';
+import { flightWidthTargets, pairHalfWidth, pairedArea, stairsPartner, withStairsPartners } from './edit/stairs-pair';
 import { renderOtherTags, renderMultiOtherTags, multiTagValues, bindOtherTags } from './edit/other-tags';
 import { escalatorAreaMatches, isStairsAreaTags, stairsOutline, stairsRoomClip, syncEscalatorLevels } from './edit/escalator-levels';
 import { fetchRelationRelations } from './osm/api';
@@ -15499,13 +15499,12 @@ function pairWidthEdits(axis: IndoorFeature, width: number, preview = false, shi
   const all = focus ? buildingIndoor(focus) : [];
   const line = axis.polygons[0]?.outer, area = pairedArea(axis, all);
   if (!area || !line || line.length !== 2) return [];
-  const ring = area.polygons[0].outer, half = pairHalfWidth(ring, [line[0], line[1]]);
-  if (half < 0.05) return [];
-  const ax: [LonLat, LonLat] = [line[0], line[1]];
+  const ring = area.polygons[0].outer, next = flightWidthTargets(ring, line, width, shift);
+  if (!next) return [];
   // Сдвиг одной стороны: полигон — симметрично и вбок на shift, ось — тоже вбок (общие узлы двигаются одинаково)
-  const to = shiftAcross(scaleAcross(ring, ax, width / 2 / half), ax, shift);
+  const to = [...next.ring];
   const vertices = ring.map((_, i) => ({ key: area.key, poly: 0, ring: 0, i }));
-  if (Math.abs(shift) > 1e-6) { vertices.push({ key: axis.key, poly: 0, ring: 0, i: 0 }, { key: axis.key, poly: 0, ring: 0, i: 1 }); to.push(...shiftAcross(line, ax, shift)); }
+  if (next.line) { vertices.push({ key: axis.key, poly: 0, ring: 0, i: 0 }, { key: axis.key, poly: 0, ring: 0, i: 1 }); to.push(...next.line); }
   let edits = indoorGeometryEdits({ type: 'move', vertices, delta: [0, 0], to }, false, preview, false);
   if (preview) return edits;
   // Как applyIndoorGeometry: объекты — в сессию, топология мультиполигонов и проёмы — по новой геометрии

@@ -75,3 +75,16 @@ test('one side moves: scale across the axis, then shift both by half the change'
   const axis = m.shiftAcross(line, line, 0.5);
   near(axis[0], 0, 1.5); near(axis[1], 4, 1.5);
 });
+
+test('flight width targets: symmetric width change keeps the axis, a one-side change moves it by half', () => {
+  const ring = area().polygons[0].outer, line = [ll(0, 1), ll(4, 1)];
+  const same = m.flightWidthTargets(ring, line, 3);
+  assert.equal(same.line, undefined);
+  near(same.ring[0], 0, -0.5); near(same.ring[2], 4, 2.5);
+  // Левая сторона (y = 2) уходит на 1 м, правая (y = 0) стоит: ось — на 0,5 м
+  const one = m.flightWidthTargets(ring, line, 3, 0.5);
+  near(one.ring[0], 0, 0); near(one.ring[1], 4, 0); near(one.ring[2], 4, 3); near(one.ring[3], 0, 3);
+  near(one.line[0], 0, 1.5); near(one.line[1], 4, 1.5);
+  assert.equal(m.flightWidthTargets(ring, [ll(0, 1), ll(2, 1), ll(4, 1)], 3), undefined, 'bent axis');
+  assert.equal(m.flightWidthTargets([ll(0, 1), ll(4, 1), ll(2, 1)], line, 3), undefined, 'no width');
+});

@@ -38,3 +38,17 @@ test('editing width does not overwrite a contour level, and unrelated areas stay
  const edits=syncEscalatorLevels([{key:axis.key,tags:{...axis.tags,level:'1;2'}}],[...data,unrelated]);
  assert.ok(!edits.some(e=>e.key===unrelated.key));
 });
+
+// Единое правило пары (docs/indoor-stairs.md): уровни контура следуют за осью, только если ось проходит через контур
+// от стороны до стороны; контур, в котором ось только начинается или кончается, — не пара
+test('levels follow the axis only into a contour the axis crosses from side to side',()=>{
+ const kx=Math.cos(55*Math.PI/180)*111320,ll=(x,y)=>[37+x/kx,55+y/111320];
+ const ax={key:'way/10',kind:'area',line:true,escalator:true,tags:{highway:'steps',conveying:'yes',incline:'up',level:'0;1'},levels:[0,1],polygons:[{outer:[ll(0,1),ll(4,1)],inners:[]}]};
+ const rect=(key,x0,x1)=>({key,kind:'area',tags:{indoor:'area',conveying:'yes',level:'0;1'},levels:[0,1],polygons:[{outer:[ll(x0,0),ll(x1,0),ll(x1,2),ll(x0,2)],inners:[]}]});
+ const pair=rect('way/11',0,4), loose=rect('way/12',1,9);
+ assert.ok(escalatorAreaMatches(ax,pair,[ax,pair]));
+ assert.ok(!escalatorAreaMatches(ax,loose,[ax,loose]));
+ const edits=syncEscalatorLevels([{key:ax.key,tags:{...ax.tags,level:'1;2'}}],[ax,pair,loose]);
+ assert.equal(edits.find(e=>e.key==='way/11')?.tags.level,'1;2');
+ assert.ok(!edits.some(e=>e.key==='way/12'));
+});

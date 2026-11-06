@@ -8926,7 +8926,10 @@ function pointsInside(f: IndoorFeature, onLevel: IndoorFeature[]): IndoorFeature
 /** POI, с которого помещение без своих тегов назначения берёт категорию (точки его этажей в здании режима). */
 function indoorCategorySource(f: IndoorFeature): IndoorFeature | undefined {
   if (!focus || !isFloorKind(f)) return;
-  const pts = buildingIndoor(focus).filter((p) => p.kind === 'poi' && p.levels.some((n) => f.levels.includes(n)));
+  // Точки только этажей, где у объекта пол (так же красится план): площадка 0;1;2 не берёт назначение с точки
+  // 2-го этажа над ней (node/5209036323 над relation/19896350)
+  const floors = floorLevels(f);
+  const pts = buildingIndoor(focus).filter((p) => p.kind === 'poi' && p.levels.some((n) => floors.includes(n)));
   return categorySource(f, pointsInside(f, pts));
 }
 

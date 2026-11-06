@@ -1551,6 +1551,9 @@ map.on('click', (e) => {
     if (wall) { selectRoomWall(wall, e.originalEvent.shiftKey); return; }
     // На этаже приоритет у помещений: части здания — Shift/Alt-кликом или при «Всё здание»
     const room = indoorAt([e.point.x, e.point.y]);
+    // Shift+клик внутри кольца стен в помещении — его пространство к выделенным кускам, а не само помещение
+    const loopAdd = room && indoorAdd && (freeArea || indoorSelection.length) && !selectedRoomWalls.length ? wallLoopAt([e.point.x, e.point.y], room) : undefined;
+    if (loopAdd) { if (freeArea && !indoorSelection.length) toggleFreeArea(loopAdd); else toggleFreeExtra(loopAdd); return; }
     // Выделена пустая площадь, Shift+клик по помещению — площадь остаётся в выделении вместе с ним
     if (room && indoorAdd && freeArea) { const a = [freeArea, ...freeExtra]; selectIndoor(room); freeExtra = a; showFreeExtra(); return; }
     // Замкнутое кольцо стен внутри помещения или площадки (короб, шахта в зале — площадка без дыры под ним):
@@ -9982,8 +9985,8 @@ function freeAreaAt(point: [number, number]): { n: number; polygon: Polygon } | 
  */
 function freeAreaClick(p: [number, number], add: boolean): boolean {
   if (add) {
-    if (freeArea && !indoorSelection.length && !selectedRoomWalls.length) { const free = freeAreaAt(p); if (free) toggleFreeArea(free); return true; }
-    const free = indoorSelection.length ? freeAreaAt(p) : undefined;
+    if (freeArea && !indoorSelection.length && !selectedRoomWalls.length) { const free = freeAreaAt(p) ?? wallLoopAt(p); if (free) toggleFreeArea(free); return true; }
+    const free = indoorSelection.length ? freeAreaAt(p) ?? wallLoopAt(p) : undefined;
     if (free) toggleFreeExtra(free);
     return true;
   }

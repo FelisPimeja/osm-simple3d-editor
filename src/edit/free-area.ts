@@ -41,6 +41,16 @@ export function joinedWalls(lines:Pt[][]):Pt[][]{
  }
  return chains.filter((c):c is Pt[]=>!!c);
 }
+/**
+ * Разрез куска стеной: polygon-clipping иногда не может собрать кольцо («Unable to complete output ring») на почти
+ * совпадающих сторонах — тогда повтор по куску, округлённому до 1 мм, а не вышло и так — кусок остаётся целым.
+ * Иначе одна неудачная стена отменяла разбиение всего этажа: пустые площади не выбирались (Казанский вокзал, этаж 0).
+ */
+function safeCut(face:Pt[][],cut:(f:Pt[][])=>Pt[][][]):Pt[][][]{
+ try{return cut(face);}catch{}
+ const r=(v:number)=>Math.round(v*1000)/1000;
+ try{return cut(face.map(ring=>ring.map(([x,y])=>[r(x),r(y)] as Pt)));}catch{return [face];}
+}
 /** Partition empty floor space by real walls, including walls made from several ways. Metres, closed rings. */
 export function freeAreaPieces(section:MultiPolygon,occupied:MultiPolygon[],walls:Pt[][], doors:{at:Pt;width:number}[]=[]):MultiPolygon{
  const chains=joinedWalls(walls);
@@ -61,14 +71,14 @@ export function freeAreaPieces(section:MultiPolygon,occupied:MultiPolygon[],wall
  let pieces=pc.difference(section,...occupied);
  for(const path of joinedWalls([...chains,...bridges])){
   if(same(path[0],path.at(-1)!)){
-   pieces=pieces.flatMap(face=>[...pc.intersection(face,[path]),...pc.difference(face,[path])]);continue;
+   pieces=pieces.flatMap(face=>safeCut(face,f=>[...pc.intersection(f,[path]),...pc.difference(f,[path])]));continue;
   }
   const unit=(a:Pt,b:Pt):Pt=>{const x=b[0]-a[0],y=b[1]-a[1],l=Math.hypot(x,y)||1;return[x/l,y/l];};
   const d0=unit(path[1],path[0]),d1=unit(path.at(-2)!,path.at(-1)!);
   const first:Pt=[path[0][0]+d0[0]*1e5,path[0][1]+d0[1]*1e5],last:Pt=[path.at(-1)![0]+d1[0]*1e5,path.at(-1)![1]+d1[1]*1e5];
   const d=unit(first,last),n:Pt=[-d[1]*1e5,d[0]*1e5];
   const side:Pt[][]=[[first,...path,last,[last[0]+n[0],last[1]+n[1]],[first[0]+n[0],first[1]+n[1]],first]];
-  pieces=pieces.flatMap(face=>finiteCutPieces([...pc.intersection(face,side),...pc.difference(face,side)],path,face,false));
+  pieces=pieces.flatMap(face=>safeCut(face,f=>finiteCutPieces([...pc.intersection(f,side),...pc.difference(f,side)],path,f,false)));
  }
  return pieces.flatMap(poly=>cleanPiece(poly as Pt[][],0));
 }

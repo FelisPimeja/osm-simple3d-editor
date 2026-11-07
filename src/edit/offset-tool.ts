@@ -26,6 +26,8 @@ export class OffsetTool {
   private target?: OffsetTarget;
   private d = 0;
   private typed = '';
+  /** Режим «внутреннее кольцо»: отступ только внутрь, контур — дырой в исходном объекте (иначе — новый объект). */
+  ring = false;
   /** Shift зажат — при выборе грани берётся низ. */
   private back = false;
   private lastPoint?: [number, number];
@@ -36,20 +38,65 @@ export class OffsetTool {
     container: HTMLElement,
     /** Грань под курсором (back — Shift: низ); строка — почему нельзя. */
     private readonly pick: (point: [number, number], back: boolean) => OffsetTarget | string | undefined,
-    private readonly commit: (t: OffsetTarget, shape: OffsetShape) => string | undefined,
+    private readonly commit: (t: OffsetTarget, shape: OffsetShape, ring: boolean) => string | undefined,
     private readonly onState: (hint: string, error?: boolean) => void,
   ) {
     this.vcb = document.createElement('div');
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
     container.appendChild(this.vcb);
+    // Клики по панели — не карте
+    for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
+    this.vcb.addEventListener('click', (e) => {
+      const m = (e.target as HTMLElement).closest<HTMLElement>('[data-offset-mode]')?.dataset.offsetMode;
+      if (m) this.setRing(m === 'ring');
+    });
+  }
+
+  /** Режим доступен: не буфер стен на плане этажа. */
+  private get modes() { return !this.levelHint && !this.target?.inward; }
+
+  setRing(on: boolean) {
+    if (!this.modes) return;
+    this.ring = on;
+    if (this.state === 'offset') {
+      if (on) this.d = Math.min(this.d, 0);
+      this.preview();
+    } else this.pickBar();
+    this.onState(this.hint());
+  }
+
+  private hint(): string {
+    if (this.state === 'pick') return this.levelHint ?? (this.ring
+      ? tr('Отступ — внутреннее кольцо: клик по плоской грани или по её ребру (Shift+клик по объекту — низ). I — новый объект, Esc — выйти.')
+      : tr('Отступ: клик по плоской грани или по её ребру (Shift+клик по объекту — низ). Esc — выйти.'));
+    const t = this.target;
+    if (t?.inward) return tr('Буфер стен — от контура внутрь: ведите курсор внутрь. Клик или толщина + Enter — полигональная стена, Esc — отмена.');
+    return this.ring
+      ? tr('Внутреннее кольцо — от внешнего контура грани внутрь: ведите курсор внутрь. Клик или число + Enter — кольцо в метрах, I — новый объект, Esc — отмена.')
+      : tr('Отступ — от внешнего контура грани: ведите курсор наружу или внутрь. Клик — новый контур, число + Enter — отступ в метрах (минус — внутрь), Esc — отмена.');
+  }
+
+  /** Переключатель «новый объект / внутреннее кольцо» для панели ввода. */
+  private modeSwitch(): string {
+    if (!this.modes) return '';
+    return `<span class="vcb-units" title="${tr('Что строит отступ: новый объект или внутреннее кольцо исходного объекта (I)')}">${[false, true]
+      .map((v) => `<button type="button" data-offset-mode="${v ? 'ring' : 'new'}"${v === this.ring ? ' class="active"' : ''}>${v ? tr('внутреннее кольцо') : tr('новый объект')}</button>`).join('')}</span>`;
+  }
+
+  /** Панель при выборе грани: только переключатель режима. */
+  private pickBar() {
+    if (!this.modes) { this.vcb.hidden = true; return; }
+    this.vcb.hidden = false;
+    this.vcb.innerHTML = `<span class="vcb-label">${tr('Отступ')}</span>${this.modeSwitch()}`;
   }
 
   get active() { return this.state !== 'off'; }
 
   start() {
     this.state = 'pick';
-    this.onState(this.levelHint ?? tr('Отступ: клик по плоской грани или по её ребру (Shift+клик по объекту — низ). Esc — выйти.'));
+    this.pickBar();
+    this.onState(this.hint());
   }
 
   /** Подсказка выбора на плане этажа (undefined — обычный режим). */
@@ -58,6 +105,8 @@ export class OffsetTool {
   stop() {
     this.cancel();
     this.state = 'off';
+    // Каждый новый запуск — с режима нового объекта
+    this.ring = false;
     this.onState('');
   }
 
@@ -71,9 +120,7 @@ export class OffsetTool {
       this.d = 0;
       this.typed = '';
       this.state = 'offset';
-      this.onState(t.inward
-        ? tr('Буфер стен — от контура внутрь: ведите курсор внутрь. Клик или толщина + Enter — полигональная стена, Esc — отмена.')
-        : tr('Отступ — от внешнего контура грани: ведите курсор наружу или внутрь. Клик — новый контур, число + Enter — отступ в метрах (минус — внутрь), Esc — отмена.'));
+      this.onState(this.hint());
       // Начинаем с самого контура: точка клика (внутри грани) не задаёт отступ
       this.preview();
       return;
@@ -89,7 +136,7 @@ export class OffsetTool {
     const q = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -this.target.z), new THREE.Vector3());
     if (!q) return;
     this.d = signedDistance(this.target.ring, [q.x, q.y]);
-    if (this.target.inward) this.d = Math.min(this.d, 0);
+    if (this.inwardOnly) this.d = Math.min(this.d, 0);
     this.preview();
   }
 
@@ -100,8 +147,15 @@ export class OffsetTool {
     this.layer.setOutline([t.ring, ...t.inners].map((ring) => ring.map((p) => new THREE.Vector3(p[0], p[1], t.z))));
   }
 
+  /** Отступ только внутрь: буфер стен или внутреннее кольцо. */
+  private get inwardOnly() { return !!this.target?.inward || this.ring; }
+
+  /** Грань для отступа: во «внутреннем кольце» — только внешний контур (дворы не участвуют). */
+  private source(t: OffsetTarget) { return this.ring ? { ring: t.ring, inners: [] } : t; }
+
   key(e: KeyboardEvent): boolean {
     if (!this.active) return false;
+    if (e.type === 'keydown' && e.code === 'KeyI' && !e.ctrlKey && !e.metaKey && !e.altKey && this.modes) { this.setRing(!this.ring); return true; }
     if (e.key === 'Shift') {
       this.back = e.type === 'keydown';
       if (this.state === 'pick' && this.lastPoint) this.hover(this.lastPoint);
@@ -119,7 +173,7 @@ export class OffsetTool {
       const v = fromInputUnit(Number(this.typed));
       if (!this.typed || !Number.isFinite(v)) return true;
       // Без знака — в ту сторону, куда ведут курсор
-      this.apply(this.typed.startsWith('-') || this.target?.inward ? -Math.abs(v) : v * (this.d < 0 ? -1 : 1));
+      this.apply(this.typed.startsWith('-') || this.inwardOnly ? -Math.abs(v) : v * (this.d < 0 ? -1 : 1));
       return true;
     }
     return false;
@@ -129,27 +183,29 @@ export class OffsetTool {
     const t = this.target;
     if (!t) return;
     if (Math.abs(d) < MIN_OFFSET) { this.onState(tr('Отведите курсор от контура.'), true); return; }
-    const r = offsetPolygon(t, d);
+    const r = offsetPolygon(this.source(t), d);
     if (typeof r === 'string') { this.onState(tr('Такой отступ не получится: {reason}', { reason: r }), true); return; }
-    const fail = this.commit(t, r);
+    const fail = this.commit(t, r, this.ring);
     if (fail) { this.onState(fail, true); return; }
     this.cancel();
     this.state = 'pick';
+    this.pickBar();
   }
 
   private preview() {
     const t = this.target;
     if (!t) return;
     const typed = fromInputUnit(Number(this.typed));
-    const d = this.typed && Number.isFinite(typed) ? (this.typed.startsWith('-') || t.inward ? -Math.abs(typed) : typed * (this.d < 0 ? -1 : 1)) : this.d;
-    const r: OffsetShape | string = Math.abs(d) >= MIN_OFFSET ? offsetPolygon(t, d) : [[t.ring, ...t.inners]];
+    const d = this.typed && Number.isFinite(typed) ? (this.typed.startsWith('-') || this.inwardOnly ? -Math.abs(typed) : typed * (this.d < 0 ? -1 : 1)) : this.d;
+    const src = this.source(t);
+    const r: OffsetShape | string = Math.abs(d) >= MIN_OFFSET ? offsetPolygon(src, d) : [[src.ring, ...src.inners]];
     // Все кольца всех частей; не получилось — исходный контур
-    const rings = typeof r === 'string' ? [t.ring, ...t.inners] : r.flat();
+    const rings = typeof r === 'string' ? [src.ring, ...src.inners] : r.flat();
     this.layer.setOutline(rings.map((ring) => ring.map((p) => new THREE.Vector3(p[0], p[1], t.z))), 2);
     this.vcb.hidden = false;
     const holes = typeof r === 'string' ? '' : `${r.length > 1 ? ` · ${tr('частей: {n}', { n: r.length })}` : ''}${t.inners.length || r.some((p) => p.length > 1) ? ` · ${tr('дворов: {n}', { n: r.reduce((n, p) => n + p.length - 1, 0) })}` : ''}`;
     this.vcb.innerHTML = `<span class="vcb-label">${t.inward ? tr('Толщина') : tr('Отступ')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${this.typed || showLength(Math.abs(d))}</span> ${unitLabel()}
-      <span class="vcb-axis">${d < 0 || t.inward ? tr('внутрь') : tr('наружу')}${typeof r === 'string' ? ` · ${r}` : holes}</span>`;
+      <span class="vcb-axis">${d < 0 || this.inwardOnly ? tr('внутрь') : tr('наружу')}${typeof r === 'string' ? ` · ${r}` : holes}</span>${this.modeSwitch()}`;
   }
 
   private cancel() {

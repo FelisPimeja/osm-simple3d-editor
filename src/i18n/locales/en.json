@@ -1464,5 +1464,11 @@
   "поперёк марша, симметрично (Alt — одна сторона)": "across the flight, symmetric (Alt — one side)",
   "Геометрия {key} изменилась или недоступна. Перезагрузите данные.": "Geometry of {key} has changed or is unavailable. Reload the data.",
   "Платформа в здании без level=*: на плане показана на этаже 0. Укажите этаж платформы.": "Platform inside the building without level=*: shown on level 0 on the plan. Set the platform level.",
-  "Путь в здании без level=*: на плане показан на этаже 0. Укажите этаж пути.": "Track inside the building without level=*: shown on level 0 on the plan. Set the track level."
+  "Путь в здании без level=*: на плане показан на этаже 0. Укажите этаж пути.": "Track inside the building without level=*: shown on level 0 on the plan. Set the track level.",
+  "Добавлено внутреннее кольцо: {key}.": "Inner ring added: {key}.",
+  "Отступ — внутреннее кольцо: клик по плоской грани или по её ребру (Shift+клик по объекту — низ). I — новый объект, Esc — выйти.": "Offset, inner ring: click a flat face or its edge (Shift+click an object for the bottom). I for a new object, Esc to exit.",
+  "Внутреннее кольцо — от внешнего контура грани внутрь: ведите курсор внутрь. Клик или число + Enter — кольцо в метрах, I — новый объект, Esc — отмена.": "Inner ring from the face’s outer outline: move the cursor inward. Click, or number + Enter in meters, to add the ring; I for a new object, Esc to cancel.",
+  "Что строит отступ: новый объект или внутреннее кольцо исходного объекта (I)": "What the offset creates: a new object or an inner ring of the source object (I)",
+  "внутреннее кольцо": "inner ring",
+  "новый объект": "new object"
 }

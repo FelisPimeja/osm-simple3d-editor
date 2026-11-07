@@ -8851,8 +8851,10 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
     const axis = focus && buildingIndoor(focus).find((f) => f.escalator && f.key === escalator.key);
     if (axis) return axis;
   }
-  if (stepsArea) return stepsArea;
-  if (solid && (!hit || solid.t <= hit.distanceTo(ray!.origin))) {
+  // Стена или колонна перед полом лестницы (луч упирается в неё раньше пола) — важнее площади за ней
+  const solidFirst = !!solid && (!hit || solid.t <= hit.distanceTo(ray!.origin));
+  if (stepsArea && !solidFirst) return stepsArea;
+  if (solidFirst) {
     const f = shownIndoor.find((x) => x.key === solid.key);
     if (f) return f;
   }

@@ -426,7 +426,7 @@ export function validateEscalators(features: IndoorFeature[], floorOf: (n: numbe
       continue;
     }
     if (t.incline !== 'up' && t.incline !== 'down')
-      out.push({ key: f.key, level: 'warning', code: 'tag', text: tr('incline у эскалатора: нужен up или down — иначе неясно, какой конец внизу.') });
+      out.push({ key: f.key, level: 'warning', code: 'tag', text: tr('incline у марша: нужен up или down — иначе неясно, какой конец внизу.') });
     if (line.length > 2)
       out.push({ key: f.key, level: 'warning', code: 'geometry', text: tr('Эскалатор с изломами ({n} точек) — правится только эскалатор из двух точек.', { n: line.length }) });
     const lo = floorOf(levels[0]), hi = floorOf(levels[levels.length - 1]);

@@ -73,6 +73,11 @@ const tagWidth = (tags?: Record<string, string>) => {
   const w = looseLength(tags?.width);
   return w >= 0.5 && w <= 4 ? w : undefined;
 };
+/** Высота проёма двери из height (1,5–6 м), иначе DOOR_HEIGHT. */
+const doorHeight = (tags?: Record<string, string>) => {
+  const h = looseLength(tags?.height);
+  return h >= 1.5 && h <= 6 ? h : DOOR_HEIGHT;
+};
 /** Перемычка во всю толщину — только в просвете размером с дверь (до двустворчатой) в стене толщиной до 0,5 м:
  * шире или глубже — это проход или узкое место коридора, над ним ничего нет. */
 const LINTEL_MAX_GAP = DOOR_WIDTH * 2 + 0.2;
@@ -1228,7 +1233,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         root.add(ring);
         const axisGeometry = new THREE.BufferGeometry().setFromPoints([
           new THREE.Vector3(x, y, d.z + 0.08),
-          new THREE.Vector3(x, y, Math.min(cut, d.z + DOOR_HEIGHT)),
+          new THREE.Vector3(x, y, Math.min(cut, d.z + doorHeight(d.tags))),
         ]);
         const axis = new THREE.LineSegments(axisGeometry, DOOR_AXIS_MATERIAL);
         axis.userData.doorKey = d.key;
@@ -2505,6 +2510,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const floorPieces = new Map(floorPolygons.map((entry,i) => [entry.p, visibleFloors[i]]));
     const lines: number[] = [];
     const walls: number[] = [];
+    /** Стеклянные полотна дверей (material=glass). */
+    const glassPanels: number[] = [];
     /** Цвета вершин стен: каждая сторона — цветом помещения, в которое смотрит. */
     const wallCols: number[] = [];
     /** Стены indoor на фасадных рёбрах оболочки (рисуются поверх фасада) и их цвета. */
@@ -2682,7 +2689,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       end(bx, by, z0, Math.min(z1b, jambB), (ax - bx) / l, (ay - by) / l, l);
     };
     // Resolve metadata and local coordinates once, rather than scanning every door for each wall/door pair.
-    const metadata = [...this.doors, ...(this.level?.below ?? []).flatMap(b => b.doorModels ?? [])].map(d => ({ key: d.key, at: g.toLocal(this.doorAt(d)), z: d.z, diameter: revolvingDoorDiameter(d.tags), width: tagWidth(d.tags) }));
+    const metadata = [...this.doors, ...(this.level?.below ?? []).flatMap(b => b.doorModels ?? [])].map(d => ({ key: d.key, at: g.toLocal(this.doorAt(d)), z: d.z, diameter: revolvingDoorDiameter(d.tags), width: tagWidth(d.tags), height: doorHeight(d.tags), glass: d.tags?.material === 'glass' }));
     /** Ширина двери: тег width, иначе самая узкая из помещений, на стене которых она стоит, иначе DOOR_WIDTH. */
     const narrowRings = items.filter(it => it.doorWidth).flatMap(it => it.polygons.flatMap(p => [p.outer, ...p.inners].map(r => ({ ring: r.map(g.toLocal), width: it.doorWidth! }))));
     const roomDoorWidth = (p: Pt) => {
@@ -2699,12 +2706,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     const doors = doorList.map(at => {
       const p = g.toLocal(at);
       const door = metadata.find(d => Math.abs(d.z - items[0].z) < 0.1 && Math.hypot(d.at[0] - p[0], d.at[1] - p[1]) < 0.01);
-      return { at: p, outline: true, key: pale ? undefined : door?.key, z: door?.z, diameter: door?.diameter, width: door?.width ?? roomDoorWidth(p) };
+      return { at: p, outline: true, key: pale ? undefined : door?.key, z: door?.z, diameter: door?.diameter, width: door?.width ?? roomDoorWidth(p), height: door?.height ?? DOOR_HEIGHT, glass: !!door?.glass };
     });
     // A room boundary behind a thick wall must not close the rear of its doorway.
     const backCuts = [{z:this.level?.floor,cuts:this.level?.doorCuts},...(this.level?.below??[]).map(b=>({z:b.items[0]?.z,cuts:b.doorCuts}))]
       .filter(b=>b.z!==undefined&&Math.abs(b.z-items[0].z)<0.01).flatMap(b=>b.cuts??[]);
-    for(const cut of backCuts) doors.push({at:g.toLocal(cut.at),outline:false,key:undefined,z:items[0].z,diameter:undefined,width:cut.width});
+    for(const cut of backCuts) doors.push({at:g.toLocal(cut.at),outline:false,key:undefined,z:items[0].z,diameter:undefined,width:cut.width,height:DOOR_HEIGHT,glass:false});
     const doorwayFootprints = backCuts.flatMap(c => c.polygon?.length ? [c.polygon.map(g.toLocal)] : []);
     const footprintGrid = new Map<string, Pt[][]>();
     for(const polygon of doorwayFootprints){
@@ -2768,8 +2775,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     const wall = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, footprintProcessed = false) => {
       const len = Math.hypot(bx - ax, by - ay);
-      const gaps: [number, number][] = [];
-      const namedGaps: { key?: string; lo: number; hi: number }[] = [];
+      /** Проём: доли стены, верх (высота двери) и стеклянное ли полотно. */
+      const gaps: [number, number, number, boolean][] = [];
+      const namedGaps: { key?: string; lo: number; hi: number; lintel: number }[] = [];
       if (len > 1e-6) {
         const dx = (bx - ax) / len, dy = (by - ay) / len;
         for (const door of doorsNear(ax, ay, bx, by)) {
@@ -2784,8 +2792,9 @@ export class BuildingsLayer implements CustomLayerInterface {
           // Иначе дверь шире проёма (1 м в проёме 0,9 м между колоннами) выгрызала бы по 5 см из граней
           if ((t < -1e-6 || t > len + 1e-6) && inGap(door, door.at as Pt)) continue;
           const lo = Math.max(0, t - halfWidth) / len, hi = Math.min(len, t + halfWidth) / len;
-          gaps.push([lo, hi]);
-          if (door.outline) namedGaps.push({ key: door.key, lo, hi });
+          const dz = 'height' in door && door.height ? door.height : DOOR_HEIGHT;
+          gaps.push([lo, hi, z0 + dz, 'glass' in door && !!door.glass]);
+          if (door.outline) namedGaps.push({ key: door.key, lo, hi, lintel: z0 + dz });
         }
       }
       // The notch is open through the entire cut height. Only its front connector
@@ -2802,11 +2811,18 @@ export class BuildingsLayer implements CustomLayerInterface {
       gaps.sort((p, q) => p[0] - q[0]);
       const at = (t: number): [number, number] => [ax + (bx - ax) * t, ay + (by - ay) * t];
       const z1 = (t: number) => z1a + (z1b - z1a) * t;
-      const lintel = z0 + DOOR_HEIGHT;
+      /** Верх проёма, к которому примыкает доля t (откос у его края). */
+      const lintelAt = (t: number) => gaps.find(([lo, hi]) => Math.abs(lo - t) < 1e-6 || Math.abs(hi - t) < 1e-6)?.[2] ?? z0 + DOOR_HEIGHT;
+      // Стеклянное полотно двери — панель в плоскости стены на высоту проёма
+      for (const [lo, hi, top, glass] of gaps) {
+        if (!glass || pale) continue;
+        const [px, py] = at(lo), [qx, qy] = at(hi), zt = Math.min(top, z1(lo), z1(hi));
+        if (zt > z0) glassPanels.push(px, py, z0, qx, qy, z0, qx, qy, zt, px, py, z0, qx, qy, zt, px, py, zt);
+      }
       if (this.graphics.edges) {
         const previous = edgeOcclusionOnly;
         edgeOcclusionOnly = true;
-        for (const [lo, hi] of gaps) {
+        for (const [lo, hi, lintel] of gaps) {
         // Внутри проёма не должно быть рёбер исходных частей здания.
         // Отступ только от настоящих откосов, а не от стыков ways внутри двери.
         const a = lo + (lo > 1e-6 ? 0.005 / len : 0);
@@ -2817,7 +2833,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
         edgeOcclusionOnly = previous;
       }
-      for (const { key, lo, hi } of namedGaps) {
+      for (const { key, lo, hi, lintel } of namedGaps) {
         if (!key) continue;
         const [lx, ly] = at(lo), [hx, hy] = at(hi);
         const zl = Math.min(lintel, z1(lo)), zh = Math.min(lintel, z1(hi));
@@ -2839,11 +2855,11 @@ export class BuildingsLayer implements CustomLayerInterface {
         from = Math.max(from, hi);
       }
       if (from < 1) pieces.push([from, 1]);
-      for (const [t0, t1] of pieces) slab(...at(t0), ...at(t1), z0, z1(t0), z1(t1), true, t0 > 0 ? lintel : Infinity, t1 < 1 ? lintel : Infinity);
-      // Перемычки над проёмами (где проём выше стены под скатом — перемычки нет)
-      let lo = gaps[0][0], hi = gaps[0][1];
-      for (const [g0, g1] of [...gaps.slice(1), [2, 2] as [number, number]]) {
-        if (g0 <= hi) { hi = Math.max(hi, g1); continue; }
+      for (const [t0, t1] of pieces) slab(...at(t0), ...at(t1), z0, z1(t0), z1(t1), true, t0 > 0 ? lintelAt(t0) : Infinity, t1 < 1 ? lintelAt(t1) : Infinity);
+      // Перемычки над проёмами (где проём выше стены под скатом — перемычки нет); слитые проёмы — по высшему
+      let lo = gaps[0][0], hi = gaps[0][1], lintel = gaps[0][2];
+      for (const [g0, g1, gl] of [...gaps.slice(1), [2, 2, 0, false] as [number, number, number, boolean]]) {
+        if (g0 <= hi) { hi = Math.max(hi, g1); lintel = Math.max(lintel, gl); continue; }
         if (Math.max(z1(lo), z1(hi)) - lintel > 0.01) slab(...at(lo), ...at(hi), lintel, Math.max(lintel, z1(lo)), Math.max(lintel, z1(hi)), false);
         {
           const a=at(lo),b=at(hi),za=Math.min(lintel,z1(lo)),zb=Math.min(lintel,z1(hi));
@@ -2853,7 +2869,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           if(linearCutTop&&hi<1-1e-6&&zb>z0&&namedGaps.some(g=>Math.abs(g.hi-hi)<1e-6))cutTopLines.push(...b,z0,...b,zb);
           if(z1(lo)>lintel+0.01&&z1(hi)>lintel+0.01)cutTopLines.push(...a,lintel,...b,lintel);
         }
-        [lo, hi] = [g0, g1];
+        [lo, hi, lintel] = [g0, g1, gl];
       }
     };
     // Уже стоящие стены: периметр объектов здания и стены-линии; стены помещений, совпадающие с ними, — пропускаем
@@ -3196,15 +3212,19 @@ export class BuildingsLayer implements CustomLayerInterface {
             const quad=(p:Pt,q:Pt,z0:number,z1:number)=>faces.push(...p,z0,...q,z0,...q,z1,...p,z0,...q,z1,...p,z1);
             if(tallGlass(it)){
               // Стеклянная стена: дверь — проём с рамкой, над ней стекло
-              const len=Math.hypot(b[0]-a[0],b[1]-a[1]),ux=(b[0]-a[0])/len,uy=(b[1]-a[1])/len,lintel=Math.min(railingTop,it.z+DOOR_HEIGHT);
+              const len=Math.hypot(b[0]-a[0],b[1]-a[1]),ux=(b[0]-a[0])/len,uy=(b[1]-a[1])/len;
               const at=(t:number):Pt=>[a[0]+ux*t,a[1]+uy*t];
+              // Дверь: ширина и высота — по тегам width/height, стеклянное полотно — material=glass
               const gaps=doorList.map(c=>g.toLocal(c)).filter(([x,y])=>Math.abs((x-a[0])*uy-(y-a[1])*ux)<0.05)
-                .map(([x,y])=>(x-a[0])*ux+(y-a[1])*uy).filter(t=>t>=0&&t<=len).sort((m,n)=>m-n);
+                .map(([x,y])=>({t:(x-a[0])*ux+(y-a[1])*uy,meta:metadata.find(d=>Math.abs(d.z-it.z)<0.1&&Math.hypot(d.at[0]-x,d.at[1]-y)<0.01)}))
+                .filter(({t})=>t>=0&&t<=len).sort((m,n)=>m.t-n.t);
               let from=0;
-              for(const t of gaps){
-                const lo=Math.max(from,t-DOOR_WIDTH/2),hi=Math.min(len,t+DOOR_WIDTH/2);
+              for(const {t,meta} of gaps){
+                const w=meta?.width??DOOR_WIDTH,lintel=Math.min(railingTop,it.z+(meta?.height??DOOR_HEIGHT));
+                const lo=Math.max(from,t-w/2),hi=Math.min(len,t+w/2);
                 if(lo>from)quad(at(from),at(lo),it.z,railingTop);
                 quad(at(lo),at(hi),lintel,railingTop);
+                if(meta?.glass)quad(at(lo),at(hi),it.z,lintel);
                 positions.push(...at(lo),lintel,...at(hi),lintel);
                 // Откос — только внутри стороны: дверь в вершине (стык сторон или путей) режет обе, откос на самой вершине был бы лишним ребром посреди проёма
                 for(const e of [lo,hi])if(e>1e-6&&e<len-1e-6)positions.push(...at(e),it.z,...at(e),lintel);
@@ -3366,6 +3386,16 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (e) e.z1 = Math.min(e.z1, lintel);
         }
       }
+    }
+    if (glassPanels.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(glassPanels, 3));
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, INDOOR_GLASS_MATERIAL);
+      mesh.name = 'indoor-glass-door';
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 2;
+      root.add(mesh);
     }
     if (facadeWalls.length) {
       const geo = new THREE.BufferGeometry();

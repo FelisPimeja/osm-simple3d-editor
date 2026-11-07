@@ -2940,7 +2940,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Рёбра стен indoor этого этажа (по узлам — с оболочкой они общие): фасад на них уступает стене indoor
     const indoorEdgeSigs = new Set<string>();
     for (const it of items) {
-      if (it.cutOnly || it.railing || it.counter || !(it.kind === 'room' || it.kind === 'wall')) continue;
+      if (it.cutOnly || (it.railing && !tallGlass(it)) || it.counter || !(it.kind === 'room' || it.kind === 'wall')) continue;
       for (const p of it.polygons) for (const r of it.line ? [p.outer] : [p.outer, ...p.inners])
         for (let i = 0; i < (it.line ? r.length - 1 : r.length); i++) indoorEdgeSigs.add(edgeSig(r[i], r[(i + 1) % r.length]));
     }
@@ -5829,13 +5829,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     // План нарисован до оболочки (крыши ещё считались) — периметр и плита по следам; теперь — по сечению
     if (this.level && g === this.groups.get(FOCUS_GROUP) && this.indoorObj && !this.planBySection && g.shellOf) { this.applyLevel(); return; }
     if (this.level && g === this.groups.get(FOCUS_GROUP)) {
-      const levels = [{ items: this.level.items, doors: this.previewDoors(this.level.doors ?? []), cuts:this.level.doorCuts??[], z: this.level.floor },
-        ...(this.level.below ?? []).map(b => ({ items: b.items, doors: b.doors ?? [], cuts:b.doorCuts??[], z: b.items[0]?.z ?? b.doorModels?.[0]?.z }))];
+      const levels = [{ items: this.level.items, doors: this.previewDoors(this.level.doors ?? []), cuts:this.level.doorCuts??[], z: this.level.floor, cut: this.level.cut },
+        ...(this.level.below ?? []).map(b => ({ items: b.items, doors: b.doors ?? [], cuts:b.doorCuts??[], z: b.items[0]?.z ?? b.doorModels?.[0]?.z, cut: b.cut }))];
       const knownDoors = [...this.doors, ...(this.level.below ?? []).flatMap(b => b.doorModels ?? [])];
       const doors = levels.flatMap(l => l.z === undefined ? [] : l.doors.map(at => {
         const [x, y] = g.toLocal(at); const door = knownDoors.find(d => Math.abs(d.z - l.z!) < 0.1 && Math.hypot(...g.toLocal(this.doorAt(d)).map((v, i) => v - [x, y][i])) < 0.01);
-        return { x, y, z: l.z!, diameter: revolvingDoorDiameter(door?.tags), width:tagWidth(door?.tags??{}) };
-      }).concat(l.cuts.map(c=>{const [x,y]=g.toLocal(c.at);return {x,y,z:l.z!,diameter:undefined,width:c.width};})));
+        return { x, y, z: l.z!, diameter: revolvingDoorDiameter(door?.tags), width:tagWidth(door?.tags??{}), height: doorHeight(door?.tags) };
+      }).concat(l.cuts.map(c=>{const [x,y]=g.toLocal(c.at);return {x,y,z:l.z!,diameter:undefined,width:c.width,height:DOOR_HEIGHT};}))
+        // Стеклянная стена во всю высоту у фасада — сквозь неё видно: стена оболочки за ней вырезается на высоту этажа
+        .concat(l.z === undefined ? [] : l.items.filter(tallGlass).flatMap(it => it.polygons.flatMap(p => {
+          const r = p.outer.map(g.toLocal);
+          return r.slice(1).map((b, i) => { const a = r[i]; return { x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, z: l.z!, diameter: undefined, width: Math.hypot(b[0] - a[0], b[1] - a[1]), height: Math.max(LEVEL_HEIGHT, l.cut - l.z!) + 0.2 }; });
+        }))));
       const escalators = (this.level.escalators ?? []).map(e => ({ ...e, line: e.line.map(g.toLocal), outline: e.outline?.map(g.toLocal) }));
       const escalatorSignature = JSON.stringify(escalators);
       for (const it of g.items) {
@@ -5846,10 +5851,10 @@ export class BuildingsLayer implements CustomLayerInterface {
           const pad = (d.diameter ?? d.width ?? DOOR_WIDTH) / 2 + DOOR_SNAP;
           return d.x + pad >= it.box.min.x && d.x - pad <= it.box.max.x
             && d.y + pad >= it.box.min.y && d.y - pad <= it.box.max.y
-            && d.z < it.box.max.z && d.z + DOOR_HEIGHT > it.box.min.z;
+            && d.z < it.box.max.z && d.z + (d.height ?? DOOR_HEIGHT) > it.box.min.z;
         });
         if (!nearbyDoors.length && !escalators.length) continue;
-        const doorSignature = nearbyDoors.map(d => [d.x, d.y, d.z, d.diameter ?? '', d.width ?? ''].join(',')).join(';') + escalatorSignature;
+        const doorSignature = nearbyDoors.map(d => [d.x, d.y, d.z, d.diameter ?? '', d.width ?? '', d.height ?? ''].join(',')).join(';') + escalatorSignature;
         const source = { positions: it.positions, wallVertices: it.wallVertices };
         let cache = this.doorCuts.get(it);
         if (!cache || cache.source !== source.positions || cache.wallVertices !== source.wallVertices) {

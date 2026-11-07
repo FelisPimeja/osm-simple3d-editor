@@ -10,7 +10,7 @@ export function doorOpeningHalfWidth(distance: number, diameter: number | undefi
 }
 
 /** Вырезать проёмы из вертикальных треугольников оболочки, сохранив скаты и перекрытия. */
-export function cutDoorOpenings(positions: Float32Array, doors: { x: number; y: number; z: number; width?: number; diameter?: number }[], width = 1, height = 2.2, snap = 0.15): Float32Array {
+export function cutDoorOpenings(positions: Float32Array, doors: { x: number; y: number; z: number; width?: number; diameter?: number; height?: number }[], width = 1, height = 2.2, snap = 0.15): Float32Array {
   if (!doors.length) return positions;
   const holes: number[] = [];
   for (let i = 0; i + 8 < positions.length; i += 9) {
@@ -25,10 +25,11 @@ export function cutDoorOpenings(positions: Float32Array, doors: { x: number; y: 
     for (const d of doors) {
       const distance = ((d.x-a[0])*nx+(d.y-a[1])*ny)/n;
       const halfWidth = doorOpeningHalfWidth(distance, d.diameter, d.width ?? width, snap);
-      if (!halfWidth || d.z >= Math.max(...vs.map(p=>p[2])) || d.z+height <= Math.min(...vs.map(p=>p[2]))) continue;
+      const h = d.height ?? height;
+      if (!halfWidth || d.z >= Math.max(...vs.map(p=>p[2])) || d.z+h <= Math.min(...vs.map(p=>p[2]))) continue;
       const t = (d.x-a[0])*dx+(d.y-a[1])*dy;
       if (t+halfWidth <= Math.min(...ts) || t-halfWidth >= Math.max(...ts)) continue;
-      const x = a[0]+dx*(t-halfWidth), y = a[1]+dy*(t-halfWidth), X=x+dx*halfWidth*2, Y=y+dy*halfWidth*2, z=d.z, Z=z+height;
+      const x = a[0]+dx*(t-halfWidth), y = a[1]+dy*(t-halfWidth), X=x+dx*halfWidth*2, Y=y+dy*halfWidth*2, z=d.z, Z=z+h;
       holes.push(x,y,z,X,Y,z,X,Y,Z,x,y,z,X,Y,Z,x,y,Z);
     }
   }

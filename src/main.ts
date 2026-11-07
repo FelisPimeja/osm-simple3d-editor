@@ -1465,6 +1465,7 @@ map.on('click', (e) => {
     paintTool.click([e.point.x, e.point.y], false);
     return;
   }
+  if (wallSplitKey) { clickWallSplit([e.point.x, e.point.y]); return; }
   if (splitTool.active) {
     const p: [number, number] = [e.point.x, e.point.y];
     if (!splitTool.click(p) && splitTool.state === 'pick') { splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); select(undefined); }
@@ -2498,6 +2499,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
   if (point && pushTool.state === 'push') pushTool.move(point);
   if (pushTool.state === 'pick') pushTool.hover(point, shiftHeld);
   if (point && splitTool.state === 'cut') splitTool.move(point);
+  if (wallSplitKey) { hoverWallSplit(point); return; }
   if (point && drawTool.active) drawTool.move(point);
   if (point && measureTool.active) measureTool.move(point);
   if (point && rotateTool.active) rotateTool.move(point);
@@ -3208,7 +3210,7 @@ const splitTool = new SplitTool(overpassLayer, () => selectedKey, () => focus?.m
   syncCursor();
   toolHint(hint, error);
 });
-splitBtn.addEventListener('click', () => (splitTool.active ? splitTool.stop() : drawTool.active && drawTool.shape === 'line' ? drawTool.stop() : startSplit()));
+splitBtn.addEventListener('click', () => (wallSplitKey ? stopWallSplit() : splitTool.active ? splitTool.stop() : drawTool.active && drawTool.shape === 'line' ? drawTool.stop() : startSplit()));
 
 function startSplit() {
   if (!focus) return;
@@ -3216,6 +3218,18 @@ function startSplit() {
   if (shownLevel) {
     moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop();
     measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
+    // Выделена одна линейная стена — рассечь её в точке
+    const wall = indoorSelection.length === 1 && !selectedRoomWalls.length ? indoorSelection[0] : undefined;
+    const roomWall = !indoorSelection.length && selectedRoomWalls.length === 1 ? selectedRoomWalls[0] : undefined;
+    if ((wall && splittableWall(wall)) || roomWall) {
+      drawTool.stop();
+      wallSplitKey = wall?.key ?? roomWall!.key;
+      wallSplitRoom = roomWall;
+      splitBtn.classList.add('active');
+      syncCursor();
+      toolHint(tr('Рассечь стену: кликните по точке на ней. Esc — выход.'));
+      return;
+    }
     select(undefined);
     drawTool.begin('line');
     return;
@@ -3227,6 +3241,110 @@ function startSplit() {
   paintTool.stop();
   offsetTool.stop();
   splitTool.begin();
+}
+
+/** «Рассечь» на плане этажа: выделенная линейная стена рассекается в точке на два пути. */
+let wallSplitKey: string | undefined;
+/** Рассекается сторона помещения (стена из контура indoor=room): две линейные стены с её свойствами. */
+let wallSplitRoom: RoomWall | undefined;
+const splittableWall = (f: IndoorFeature) => !!f.line && f.kind === 'wall' && f.key.startsWith('way/')
+  && (f.polygons[0]?.outer.length ?? 0) >= 2 && !!f.polygons[0].outerIds && f.polygons[0].outerIds[0] !== f.polygons[0].outerIds.at(-1);
+function stopWallSplit() {
+  if (!wallSplitKey) return;
+  wallSplitKey = undefined;
+  wallSplitRoom = undefined;
+  splitBtn.classList.remove('active');
+  snapEl.hidden = true;
+  syncCursor();
+  toolHint('');
+}
+/** Точка рассечения под курсором: ближайшая точка стены (в вершине — сама вершина), не дальше 12 px. */
+function wallSplitTarget(point: [number, number]): { f: IndoorFeature; edge: number; vertex?: number; at: LonLat; screen: [number, number]; source: LonLat[] } | undefined {
+  const f = wallSplitKey ? wallSplitRoom ? shownIndoor.find((x) => x.key === wallSplitKey) : buildingIndoorFor(wallSplitKey) : undefined;
+  if (!f || !shownLevel || (!wallSplitRoom && !splittableWall(f))) return;
+  const source = wallSplitRoom ? roomWallSpan(f.polygons, wallSplitRoom) : f.polygons[0].outer;
+  const hit = overpassLayer.focusRay(point)?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -shownLevel.floor), new THREE.Vector3());
+  const project = overpassLayer.focusProjector();
+  if (!hit || !project) return;
+  const line = source.map((c) => overpassLayer.focusToLocal(c)!);
+  let best: { edge: number; t: number; d: number; q: Pt } | undefined;
+  for (let i = 0; i + 1 < line.length; i++) {
+    const a = line[i], b = line[i + 1], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+    if (!l2) continue;
+    const t = Math.max(0, Math.min(1, ((hit.x - a[0]) * dx + (hit.y - a[1]) * dy) / l2)), q: Pt = [a[0] + dx * t, a[1] + dy * t];
+    const d = Math.hypot(q[0] - hit.x, q[1] - hit.y);
+    if (!best || d < best.d) best = { edge: i, t, d, q };
+  }
+  if (!best) return;
+  // Вершина в пределах 5 см — рассекаем в ней
+  const len = Math.hypot(line[best.edge + 1][0] - line[best.edge][0], line[best.edge + 1][1] - line[best.edge][1]);
+  const vertex = best.t * len < 0.05 ? best.edge : (1 - best.t) * len < 0.05 ? best.edge + 1 : undefined;
+  const q = vertex !== undefined ? line[vertex] : best.q;
+  const screen = project(new THREE.Vector3(q[0], q[1], shownLevel.floor));
+  if (!screen || Math.hypot(screen[0] - point[0], screen[1] - point[1]) > 12) return;
+  return { f, edge: best.edge, vertex, at: vertex !== undefined ? source[vertex] : overpassLayer.focusToLngLat(q[0], q[1])!, screen: [screen[0], screen[1]], source };
+}
+function hoverWallSplit(point: [number, number] | undefined) {
+  const t = point && wallSplitTarget(point);
+  snapEl.hidden = !t;
+  if (!t) return;
+  snapEl.className = `snap-marker ${t.vertex !== undefined ? 'vertex' : 'edge'}`;
+  snapEl.dataset.label = SNAP_LABELS[t.vertex !== undefined ? 'vertex' : 'edge'];
+  snapEl.style.left = `${t.screen[0]}px`;
+  snapEl.style.top = `${t.screen[1]}px`;
+}
+function clickWallSplit(point: [number, number]) {
+  const t = wallSplitTarget(point);
+  if (!t) { stopWallSplit(); return; }
+  if (wallSplitRoom) return splitRoomWall(t.f, t.source, t.vertex, t.at);
+  const { f } = t, ids = f.polygons[0].outerIds!, coords = f.polygons[0].outer;
+  const end = ids.length - 1;
+  if (t.vertex === 0 || t.vertex === end) return setStatus(tr('Это конец стены — кликните по точке внутри неё.'), true);
+  let headIds: number[], headCoords: LonLat[], tailIds: number[], tailCoords: LonLat[];
+  if (t.vertex !== undefined) {
+    headIds = ids.slice(0, t.vertex + 1); headCoords = coords.slice(0, t.vertex + 1);
+    tailIds = ids.slice(t.vertex); tailCoords = coords.slice(t.vertex);
+  } else {
+    const n = nextNewId--;
+    headIds = [...ids.slice(0, t.edge + 1), n]; headCoords = [...coords.slice(0, t.edge + 1), t.at];
+    tailIds = [n, ...ids.slice(t.edge + 1)]; tailCoords = [t.at, ...coords.slice(t.edge + 1)];
+  }
+  trackIndoor(indoorKey(f.key), f);
+  const key = `way/${nextNewId--}`, line = { ids: tailIds, coords: tailCoords }, polygons = [{ outer: tailCoords, outerIds: tailIds, inners: [] }];
+  const made: IndoorFeature = { key, kind: f.kind, line: true, tags: { ...f.tags }, polygons, levels: f.levels };
+  indoorCreated.set(key, made); indoorEdited.add(key); indoorEdited.add(f.key);
+  session.editMany([
+    { key: f.key, line: { ids: headIds, coords: headCoords }, polygons: [{ outer: headCoords, outerIds: headIds, inners: [] }] },
+    { key, create: { key, version: 0, tags: { ...f.tags }, line, polygons, splitFrom: Number(f.key.split('/')[1]) } },
+  ]);
+  stopWallSplit();
+  setStatus(tr('Стена {key} рассечена: новая часть {part}.', { key: f.key, part: key }));
+}
+
+/** Сторона помещения [a, b] рассекается в точке at: на её месте две линейные стены с её свойствами (одним шагом). */
+function splitRoomWall(room: IndoorFeature, span: LonLat[], vertex: number | undefined, at: LonLat) {
+  if (!focus || !shownLevel) return;
+  if (vertex !== undefined) return setStatus(tr('Это конец стены — кликните по точке внутри неё.'), true);
+  const tags: Record<string, string> = { indoor: 'wall', level: room.tags.level ?? String(shownLevel.n), ...(room.tags.repeat_on ? { repeat_on: room.tags.repeat_on } : {}) };
+  const { nodeFor } = sharedNodes([...groupFeatures(focus), ...shownIndoor.filter((f) => !f.point)]);
+  const [a, m, b] = [span[0], at, span[span.length - 1]].map((c) => nodeFor(c));
+  const edits: ObjectEdit[] = [], made: IndoorFeature[] = [];
+  for (const nodes of [[a, m], [m, b]]) {
+    const key = `way/${nextNewId--}`, line = { ids: nodes.map((q) => q.id), coords: nodes.map((q) => q.p) };
+    const polygons = [{ outer: line.coords, outerIds: line.ids, inners: [] }];
+    edits.push({ key, create: { key, version: 0, tags: { ...tags }, line, polygons } });
+    made.push({ key, kind: 'wall', line: true, polygons, tags: { ...tags }, levels: [...new Set([...parseLevels(tags.level), ...parseLevels(tags.repeat_on)])] });
+  }
+  // Точка рассечения — новый узел на стороне помещения (и соседей с той же стороной)
+  const ins = indoorSideInsertEdits([a, m, b], new Set(made.map((f) => f.key)));
+  if (typeof ins === 'string') return setStatus(ins, true);
+  edits.push(...ins.edits);
+  stopWallSplit();
+  session.editMany(edits);
+  for (const f of made) { indoorCreated.set(f.key, f); indoorEdited.add(f.key); }
+  indoorEditRev++;
+  renderLevels();
+  setStatus(tr('Стена помещения рассечена: {keys}.', { keys: made.map((f) => f.key).join(', ') }));
 }
 
 // Инструмент «Рулетка» (T): расстояние между двумя точками
@@ -3624,7 +3742,7 @@ function toolActive(): boolean {
 }
 
 function toolActiveExceptPoint(): boolean {
-  return moveTool.active || pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || scaleTool.active || paintTool.active || offsetTool.active || !!copyPick || !!entranceDrag;
+  return !!wallSplitKey || moveTool.active || pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || scaleTool.active || paintTool.active || offsetTool.active || !!copyPick || !!entranceDrag;
 }
 
 // Инструменты «Прямоугольник» (R) и «Полигон» (L): новая часть здания — плоский контур нулевой толщины
@@ -7625,6 +7743,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === 'Escape' && entranceDrag) { e.preventDefault(); e.stopImmediatePropagation(); cancelEntranceDrag(); setStatus(tr('Перенос входа отменён.')); return; }
+  if (e.key === 'Escape' && wallSplitKey) { e.preventDefault(); e.stopImmediatePropagation(); stopWallSplit(); return; }
   if (e.key === 'Escape' && pointPick) { e.preventDefault(); e.stopImmediatePropagation(); stopPoint(); return; }
   if (e.key === 'Escape' && copyPick) { e.preventDefault(); e.stopImmediatePropagation(); cancelCopyPick(); return; }
   if (moveTool.state !== 'move' && trackKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
@@ -8840,6 +8959,7 @@ function selectIndoorMany(fs: IndoorFeature[], keepExtras = false) {
 }
 
 function selectIndoor(f: IndoorFeature | undefined, add = false) {
+  if (wallSplitKey && f?.key !== wallSplitKey) stopWallSplit();
   if (freeArea) { freeArea = undefined; overpassLayer.setFreeArea(undefined); }
   // Пустая площадь в выделении — пока к нему добавляют (Shift), иначе снимается
   if (!add && freeExtra.length) { freeExtra = []; overpassLayer.setFreeArea(undefined); }

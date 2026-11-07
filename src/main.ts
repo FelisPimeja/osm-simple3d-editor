@@ -1500,9 +1500,8 @@ map.on('click', (e) => {
     const picId = p.layer.pick(e.point);
     if (picId) { void photoViewer.open(p.layer, picId); return; }
   }
-  // Вход на фасаде: клик — выбрать, клик по точке выбранного (узел у основания) — перенести
+  // Вход на фасаде: клик — выбрать (перенос — только инструментом «Переместить»)
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
-    if (overpassLayer.pickEntrancePoint([e.point.x, e.point.y])) { startEntranceDrag(); return; }
     const id = overpassLayer.pickEntrance([e.point.x, e.point.y]);
     // Повторный одиночный клик по выбранному входу — снять выбор
     if (id !== undefined) { if (id !== selectedEntrance) selectEntrance(id); else if (e.originalEvent.detail < 2) select(undefined); return; }
@@ -6836,8 +6835,13 @@ function entranceTargetAt(point: [number, number]): EntranceTarget | undefined {
     if (!hit) return;
     at = [hit.x, hit.y];
   }
+  return entranceTargetNear(at, wall ? [wall.key] : members, !wall);
+}
+
+/** Сторона контура объектов keys, ближайшая к точке at (локальные метры), и точка на ней; near — не дальше 3 м. */
+function entranceTargetNear(at: [number, number], keys = focus?.members.filter((k) => !focusHidden.has(k)) ?? [], near = true, clamp = true): EntranceTarget | undefined {
   let best: { key: string; poly: number; ring: number; edge: number; s: number; d: number; rings: [number, number][][]; f: Feature3D } | undefined;
-  for (const key of wall ? [wall.key] : members) {
+  for (const key of keys) {
     const f = entity(key) as Feature3D | undefined;
     const polys = overpassLayer.focusPolygons(key);
     if (!f?.polygons || !polys) continue;
@@ -6849,12 +6853,12 @@ function entranceTargetAt(point: [number, number]): EntranceTarget | undefined {
       if (!best || d < best.d) best = { key, poly, ring, edge, s, d, rings: [p.outer, ...p.inners] as [number, number][][], f };
     })));
   }
-  if (!best || (!wall && best.d > 3)) return;
+  if (!best || (near && best.d > 3)) return;
   const { rings, ring, edge, f } = best;
   const a = rings[ring][edge], b = rings[ring][(edge + 1) % rings[ring].length];
   // Вход целиком на стене: середина не ближе полуширины к углам
   const len = Math.hypot(b[0] - a[0], b[1] - a[1]), m = len > 1 ? 0.5 / len : 0.5;
-  const s = Math.max(m, Math.min(1 - m, best.s));
+  const s = clamp ? Math.max(m, Math.min(1 - m, best.s)) : best.s;
   const p: [number, number] = [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s];
   const withP = rings.map((r, k) => (k === ring ? [...r.slice(0, edge + 1), p, ...r.slice(edge + 1)] : r));
   const place = entrancePlace(withP, ring, edge + 1, 0);
@@ -6875,8 +6879,16 @@ function commitEntrance(point: [number, number]) {
   if (!d.target) return setStatus(tr('Наведите курсор на стену здания.'), true);
   const edits = entranceMoveEdits(d.id, d.target);
   if (typeof edits === 'string') return setStatus(edits, true);
+  // Вход — дверь плана этажа: она едет туда же (с проёмом в сплошной стене)
+  const door = buildingIndoorFor(`node/${d.id}`);
+  let doorEdits: ObjectEdit[] = [];
+  if (door && isDoor(door)) {
+    try { doorEdits = normalizeSolidDoorEdits(syncDoorwayRooms(batchSolidDoorEdits([door], () => ({ at: d.target!.at })))); }
+    catch (err) { return setStatus((err as Error).message, true); }
+    for (const e of doorEdits) indoorEdited.add(e.key);
+  }
   cancelEntranceDrag();
-  session.editMany(edits);
+  session.editMany([...doorEdits.filter((e) => !edits.some((x) => x.key === e.key)), ...edits]);
   setStatus(tr('Вход node/{id} перенесён. Отменить — Ctrl+Z.', { id: d.id }));
 }
 
@@ -7324,7 +7336,29 @@ function commitMove(keys: string[], offset: THREE.Vector3, glue: boolean) {
     try {
       const edits = doors.length ? batchSolidDoorEdits(doors,f=>({at:shift(f.point!)})) : [];
       for (const f of pois) { trackIndoor(f.key, f); edits.push({key:f.key,polygons:[{outer:[shift(f.point!)],outerIds:[Number(f.key.split('/')[1])],inners:[]}]}); }
-      commitSolidDoorEdits(edits);
+      // Дверь — узел контура здания (вход): в контуре она переставляется на свою новую сторону, иначе узел оставался
+      // на прежнем месте в кольце и вход на фасаде разворачивался поперёк стены
+      const outline: ObjectEdit[] = [];
+      for (const f of doors) {
+        const id = Number(f.key.split('/')[1]);
+        if (!focus || !groupFeatures(focus).some((g) => g.polygons?.some((p) => [p.outerIds, ...(p.innerIds ?? [])].some((r) => r?.includes(id))))) continue;
+        const moved = edits.find((e) => e.key === f.key && e.polygons)?.polygons?.[0]?.outer[0] ?? shift(f.point!);
+        // Без отступа от углов: вход встаёт ровно туда, где дверь плана
+        const t = entranceTargetNear(overpassLayer.focusToLocal(moved)!, undefined, true, false);
+        const r = t && entranceMoveEdits(id, t);
+        if (typeof r === 'string') return setStatus(r, true);
+        if (!r) continue;
+        outline.push(...r);
+        // Узел один — и в контуре, и на плане: точка на стороне контура
+        const same = (q: LonLat) => Math.abs(q[0] - moved[0]) < 1e-12 && Math.abs(q[1] - moved[1]) < 1e-12;
+        for (const e of edits) {
+          if (e.line) e.line = { ...e.line, coords: e.line.coords.map((q, i) => e.line!.ids[i] === id ? t!.at : q) };
+          if (e.polygons) e.polygons = e.polygons.map((p) => ({ ...p, outer: p.outer.map((q, i) => (p.outerIds?.[i] === id || (e.key === f.key && same(q))) ? t!.at : q) }));
+        }
+      }
+      const indoorPart = normalizeSolidDoorEdits(syncDoorwayRooms(edits));
+      for (const e of indoorPart) indoorEdited.add(e.key);
+      session.editMany([...indoorPart.filter((e) => !outline.some((x) => x.key === e.key)), ...outline]);
       if (!doors.length) setStatus(tr('Перемещено объектов: {n} на {d} м.', { n: pois.length, d: offset.length().toFixed(2) }));
     } catch(err) { setStatus((err as Error).message,true); }
     return;

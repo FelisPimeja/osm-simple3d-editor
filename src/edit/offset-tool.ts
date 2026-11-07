@@ -148,7 +148,7 @@ export class OffsetTool {
   }
 
   /** Внутреннее кольцо — любой площади (осколки отбрасываются только у нового объекта). */
-  private get minArea() { return this.ring ? 1e-6 : MIN_PIECE_AREA; }
+  private get minArea() { return this.ring ? 1e-6 : undefined; }
 
   /** Отступ только внутрь: буфер стен или внутреннее кольцо. */
   private get inwardOnly() { return !!this.target?.inward || this.ring; }
@@ -233,7 +233,9 @@ const MITER_LIMIT = 4;
  * внутрь: грань \ полосы. Сблизившиеся части сливаются, дворы — сужаются, сливаются или пропадают, грань
  * может распасться на несколько частей.
  */
-export function offsetPolygon(t: { ring: Pt[]; inners: Pt[][] }, d: number, minArea = MIN_PIECE_AREA): OffsetShape | string {
+export function offsetPolygon(t: { ring: Pt[]; inners: Pt[][] }, d: number,
+  // Осколки: не больше 1% площади грани — у маленькой грани (колонна 0,8×0,8 м) отступ сам по себе меньше 0,5 м²
+  minArea = Math.min(MIN_PIECE_AREA, Math.abs(area2(t.ring)) / 2 * 0.01)): OffsetShape | string {
   const a = Math.abs(d);
   const pieces: Pt[][][] = [];
   for (const [ring, hole] of [[t.ring, false], ...t.inners.map((r) => [r, true] as const)] as const) {

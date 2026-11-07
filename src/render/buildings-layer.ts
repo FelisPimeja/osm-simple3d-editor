@@ -99,7 +99,9 @@ const INDOOR_FACADE_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xfff
 /** Насколько в сторону от стены смотреть, в каком она помещении, м. */
 const WALL_SIDE_PROBE = 0.05;
 /** Выделенное помещение: заливка цветом выделения частей и контур. */
-const INDOOR_SELECT_MATERIAL = new THREE.MeshBasicMaterial({ color: HIGHLIGHT, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
+// Прозрачный список (при opacity 1): марши лестниц — тоже в нём; в непрозрачном заливка рисовалась раньше них и, не
+// записав глубину, закрывалась маршем за стеной
+const INDOOR_SELECT_MATERIAL = new THREE.MeshBasicMaterial({ color: HIGHLIGHT, side: THREE.DoubleSide, depthWrite: false, transparent: true, opacity: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 /** Indoor-объект с проблемой («Подсветить все»): полупрозрачная заливка цветом проблемы. */
 const INDOOR_ISSUE_MATERIAL = Object.fromEntries((['error', 'warning'] as const).map((level) => [level, new THREE.MeshBasicMaterial({
   color: level === 'error' ? 0xff1a1a : 0xff8a00, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false,
@@ -1500,7 +1502,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const hidden of [true, false]) {
       const geo = new LineSegmentsGeometry();
       geo.setPositions(positions);
-      const material = new LineMaterial({ color: 0x2563eb, linewidth: widthPx * dpr,
+      // transparent — в одном списке с заливкой выделения (она прозрачная): renderOrder ставит контур после неё
+      const material = new LineMaterial({ color: 0x2563eb, linewidth: widthPx * dpr, transparent: true,
         depthTest: !hidden, depthWrite: false,
         dashed: hidden, dashSize: 0.25, gapSize: 0.15 });
       // Сначала сквозной пунктир, затем сплошная линия с проверкой глубины.

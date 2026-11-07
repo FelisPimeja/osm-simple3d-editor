@@ -3206,7 +3206,8 @@ export class BuildingsLayer implements CustomLayerInterface {
                 if(lo>from)quad(at(from),at(lo),it.z,railingTop);
                 quad(at(lo),at(hi),lintel,railingTop);
                 positions.push(...at(lo),lintel,...at(hi),lintel);
-                for(const e of [lo,hi])positions.push(...at(e),it.z,...at(e),lintel);
+                // Откос — только внутри стороны: дверь в вершине (стык сторон или путей) режет обе, откос на самой вершине был бы лишним ребром посреди проёма
+                for(const e of [lo,hi])if(e>1e-6&&e<len-1e-6)positions.push(...at(e),it.z,...at(e),lintel);
                 from=hi;
               }
               if(from<len)quad(at(from),b,it.z,railingTop);
@@ -3221,6 +3222,8 @@ export class BuildingsLayer implements CustomLayerInterface {
             const len=Math.hypot(ux,uy)*Math.hypot(vx,vy);
             // Straight and gently curving runs have no vertical seams (30 degree threshold).
             if(closed&&(wallEnds.has(i===0?count:i)||wallEnds.has(i+1)))continue;
+            // Вершина-дверь стеклянной стены — посреди проёма: вертикали там нет
+            if(tallGlass(it)&&doorList.some(c=>{const q=g.toLocal(c);return Math.hypot(q[0]-p[0],q[1]-p[1])<0.05;}))continue;
             if((!closed&&(i===0||i===count-1)) || (len>1e-12 && (ux*vx+uy*vy)/len<Math.cos(Math.PI/6)))
               verticals.push(...p,it.z,...p,railingTop);
           }

@@ -147,6 +147,9 @@ export class OffsetTool {
     this.layer.setOutline([t.ring, ...t.inners].map((ring) => ring.map((p) => new THREE.Vector3(p[0], p[1], t.z))));
   }
 
+  /** Внутреннее кольцо — любой площади (осколки отбрасываются только у нового объекта). */
+  private get minArea() { return this.ring ? 1e-6 : MIN_PIECE_AREA; }
+
   /** Отступ только внутрь: буфер стен или внутреннее кольцо. */
   private get inwardOnly() { return !!this.target?.inward || this.ring; }
 
@@ -183,7 +186,7 @@ export class OffsetTool {
     const t = this.target;
     if (!t) return;
     if (Math.abs(d) < MIN_OFFSET) { this.onState(tr('Отведите курсор от контура.'), true); return; }
-    const r = offsetPolygon(this.source(t), d);
+    const r = offsetPolygon(this.source(t), d, this.minArea);
     if (typeof r === 'string') { this.onState(tr('Такой отступ не получится: {reason}', { reason: r }), true); return; }
     const fail = this.commit(t, r, this.ring);
     if (fail) { this.onState(fail, true); return; }
@@ -198,7 +201,7 @@ export class OffsetTool {
     const typed = fromInputUnit(Number(this.typed));
     const d = this.typed && Number.isFinite(typed) ? (this.typed.startsWith('-') || this.inwardOnly ? -Math.abs(typed) : typed * (this.d < 0 ? -1 : 1)) : this.d;
     const src = this.source(t);
-    const r: OffsetShape | string = Math.abs(d) >= MIN_OFFSET ? offsetPolygon(src, d) : [[src.ring, ...src.inners]];
+    const r: OffsetShape | string = Math.abs(d) >= MIN_OFFSET ? offsetPolygon(src, d, this.minArea) : [[src.ring, ...src.inners]];
     // Все кольца всех частей; не получилось — исходный контур
     const rings = typeof r === 'string' ? [src.ring, ...src.inners] : r.flat();
     this.layer.setOutline(rings.map((ring) => ring.map((p) => new THREE.Vector3(p[0], p[1], t.z))), 2);
@@ -230,7 +233,7 @@ const MITER_LIMIT = 4;
  * внутрь: грань \ полосы. Сблизившиеся части сливаются, дворы — сужаются, сливаются или пропадают, грань
  * может распасться на несколько частей.
  */
-export function offsetPolygon(t: { ring: Pt[]; inners: Pt[][] }, d: number): OffsetShape | string {
+export function offsetPolygon(t: { ring: Pt[]; inners: Pt[][] }, d: number, minArea = MIN_PIECE_AREA): OffsetShape | string {
   const a = Math.abs(d);
   const pieces: Pt[][][] = [];
   for (const [ring, hole] of [[t.ring, false], ...t.inners.map((r) => [r, true] as const)] as const) {
@@ -268,7 +271,7 @@ export function offsetPolygon(t: { ring: Pt[]; inners: Pt[][] }, d: number): Off
   }
   // Кольца без повтора первой точки и без узлов на прямых; мелкие осколки — прочь
   const out: Pt[][][] = [];
-  const big = (r: Pt[]) => r.length >= 3 && Math.abs(area2(r)) / 2 >= MIN_PIECE_AREA;
+  const big = (r: Pt[]) => r.length >= 3 && Math.abs(area2(r)) / 2 >= minArea;
   for (const poly of res) {
     const outer = simplify(poly[0].slice(0, -1));
     if (!big(outer)) continue;

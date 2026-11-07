@@ -1472,5 +1472,7 @@
   "внутреннее кольцо": "inner ring",
   "новый объект": "new object",
   "Проверяем отношения удаляемых путей…": "Checking relations of the ways to delete…",
-  "Точка стоит в вершине контура — её нельзя переместить отдельно.": "The point is a vertex of an outline — it cannot be moved on its own."
+  "Точка стоит в вершине контура — её нельзя переместить отдельно.": "The point is a vertex of an outline — it cannot be moved on its own.",
+  "вверх по направлению линии": "up along the line",
+  "вниз по направлению линии": "down along the line"
 }

@@ -9259,6 +9259,8 @@ const indoorKey = (k: string) => k.replace('#poi', '');
 const INDOOR_EDIT_TAGS = ['indoor', 'level', 'room', 'ref', 'name'] as const;
 const INDOOR_VALUES = ['room', 'corridor', 'area', 'level', 'wall', 'column', 'door', 'yes'];
 // https://wiki.openstreetmap.org/wiki/Key:door — свободный ввод сохраняется.
+const INCLINE_VALUES = ['up', 'down'];
+const INCLINE_LABELS: Record<string, string> = { up: tr('вверх по направлению линии'), down: tr('вниз по направлению линии') };
 const DOOR_VALUES = ['yes', 'hinged', 'sliding', 'revolving', 'folding', 'trapdoor', 'overhead', 'no'];
 /** Подписи значений поверх схемы iD (src/osm/presets.ts): у iD их нет или они длиннее. */
 const DOOR_LABELS: Record<string, string> = {
@@ -9333,13 +9335,13 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
     const changed = fs.some((f) => session.isChanged(indoorKey(f.key), k));
     // Свой список, а не datalist: тот показывает только варианты, совпадающие с уже введённым значением
     // Тип входа — варианты и подписи из схемы iD (поле entrance пресета «Вход / выход»)
-    const options = k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : k === 'wall' ? WALL_VALUES : k === 'entrance' ? idOptions('entrance') : undefined;
+    const options = k === 'incline' ? INCLINE_VALUES : k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : k === 'wall' ? WALL_VALUES : k === 'entrance' ? idOptions('entrance') : undefined;
     const label = `<span title="${esc(k)}">${esc(indoorFieldLabel(k, fs))}</span>`;
     if (k === 'handrail') return handrailRow(fs, fs.some((f) => HANDRAIL_SIDES.some((x) => session.isChanged(indoorKey(f.key), `handrail:${x}`))) || changed);
     if(k==='area')return `<label class="tag-row${changed ? ' changed' : ''}"><span title="area">area</span><select data-indoor-tag="area"${!value ? ' style="color:#888"' : ''}>${!value ? `<option value="" selected disabled hidden>${mixed ? tr('разные значения') : 'no'}</option>` : ''}<option value="yes"${value==='yes'?' selected':''}>yes</option><option value="no"${value==='no'?' selected':''}>no</option></select></label>`;
     if (options) return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : k === 'entrance' ? tr('не вход') : placeholders[k] ?? '—',
-        k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : k === 'room' ? ROOM_LABELS : k === 'wall' ? WALL_LABELS : undefined, k) + '</label>';
+        k === 'incline' ? INCLINE_LABELS : k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : k === 'room' ? ROOM_LABELS : k === 'wall' ? WALL_LABELS : undefined, k) + '</label>';
     const unit = INDOOR_LENGTHS.has(k) ? lengthUnitOf(value) : undefined;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + (unit ? '<span class="length-field">' : '')

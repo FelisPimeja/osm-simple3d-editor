@@ -7825,7 +7825,9 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // building:part=roof — только скаты, выдавленные на толщину (min..wallTop): без фронтонов и стенок (issue #49)
   // wall=yes возвращает стены и фронтоны (Tag:building:part=roof)
   const shell = roofOnly && tags['building:part'] === 'roof' && tags.wall !== 'yes' && heights.roofShape !== 'flat' && !tri.pending;
-  if (shell) tri.walls = roofShell(tri.roof, Math.max(0.1, heights.wallTop - heights.min));
+  // Без зазора под скатами (min = низ ската) — только скаты: торец минимальной толщины виден полоской фасада
+  const thickness = heights.wallTop - heights.min;
+  if (shell) tri.walls = thickness > 0.01 ? roofShell(tri.roof, thickness) : [];
   // Дно — у объектов с объёмом над землёй (видно снизу); на земле его не видно — треугольники не тратим. Цвет — как у стен.
   // Участки, лежащие на плоских крышах других частей, вырезаем: совпадающие грани мерцают, а дно стеклянной части
   // просвечивает поверх крыши. Крышу оставляем — она и есть перекрытие между частями (видна сквозь стекло)

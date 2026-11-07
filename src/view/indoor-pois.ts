@@ -93,6 +93,8 @@ export class IndoorPois {
   private issueHighlighted = new Set<string>();
   private signature = '';
   private byEl = new Map<HTMLElement, IndoorFeature>();
+  /** Предпросмотр «Переместить»: значки этих точек сдвинуты на offset (локальные метры). */
+  private moving?: { keys: Set<string>; offset: THREE.Vector3 };
 
   constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, onPick: (f: IndoorFeature, add: boolean, point: [number,number]) => void) {
     this.root = document.createElement('div');
@@ -234,6 +236,11 @@ export class IndoorPois {
    * Позиции на кадре и вытеснение: по убыванию важности (выделенные — первыми) каждый занимает свой прямоугольник
    * на экране; кто налезает на уже поставленный, прячется (crowded) — при приближении место найдётся.
    */
+  setMoveOffset(keys: string[], offset: THREE.Vector3 | undefined) {
+    this.moving = offset && keys.length ? { keys: new Set(keys), offset: offset.clone().setZ(0) } : undefined;
+    this.map.triggerRepaint();
+  }
+
   private place() {
     if (!this.items.length) return;
     const w = this.map.getCanvas().clientWidth, h = this.map.getCanvas().clientHeight;
@@ -250,7 +257,8 @@ export class IndoorPois {
     const order = this.selected.size || this.issueHighlighted.size
       ? [...this.items.filter((it) => this.isMarked(it.key)), ...this.items.filter((it) => !this.isMarked(it.key))] : this.items;
     for (const it of order) {
-      const { el, local, shift } = it;
+      const { el, shift } = it;
+      const local = this.moving?.keys.has(it.key) ? it.local.clone().add(this.moving.offset) : it.local;
       const p = project?.(local);
       const visible = !!p && p[0] > -20 && p[1] > -20 && p[0] < w + 20 && p[1] < h + 20;
       el.hidden = !visible;

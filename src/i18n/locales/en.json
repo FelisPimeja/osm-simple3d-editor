@@ -1471,5 +1471,6 @@
   "Что строит отступ: новый объект или внутреннее кольцо исходного объекта (I)": "What the offset creates: a new object or an inner ring of the source object (I)",
   "внутреннее кольцо": "inner ring",
   "новый объект": "new object",
-  "Проверяем отношения удаляемых путей…": "Checking relations of the ways to delete…"
+  "Проверяем отношения удаляемых путей…": "Checking relations of the ways to delete…",
+  "Точка стоит в вершине контура — её нельзя переместить отдельно.": "The point is a vertex of an outline — it cannot be moved on its own."
 }

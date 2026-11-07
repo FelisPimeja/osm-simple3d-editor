@@ -618,10 +618,10 @@ overpassLayer.setWireframe(buildingsView.wireframe);
 const tileBorders = new TileBorders(map);
 const roadsLayer = new RoadsLayer('osm-roads-3d');
 const indoorPois = new IndoorPois(map, overpassLayer, (f, add, point) => {
-  if (moveTool.active && isDoor(f)) {
-    if (moveTool.state === 'select') { selectIndoor(f); startMove(); }
+  if (moveTool.active && (isDoor(f) || isMovablePoi(f))) {
+    if (moveTool.state === 'select' || (moveTool.state === 'pick' && !moveTool.keys.has(f.key))) { selectIndoor(f); startMove(); }
     if (moveTool.state === 'pick' && moveTool.keys.has(f.key)) {
-      const anchor=overpassLayer.doorAnchor(f.key);
+      const anchor=isDoor(f)?overpassLayer.doorAnchor(f.key):poiAnchor(f);
       if(anchor)moveTool.beginAt(anchor);
     } else if (moveTool.state === 'move') moveTool.click(point);
     updateSnap(point);
@@ -3154,6 +3154,7 @@ overpassLayer.indoorEditPolygons = key => {
 };
 overpassLayer.indoorMovePreview = (keys, offset) => {
   const fs = keys.map(k => buildingIndoorFor(k)).filter((f): f is IndoorFeature => !!f && editableIndoorGeometry(f));
+  indoorPois.setMoveOffset(keys.filter(k => { const f = buildingIndoorFor(k); return !!f && isMovablePoi(f); }), offset);
   if (!fs.length) { previewSolidDoorMove(keys,offset); return false; }
   if (!offset) overpassLayer.setOutline(undefined);
   else try { drawIndoorGeometryPreview(indoorGeometryEdits(indoorMoveOperation(fs, offset), moveTool.glue, true)); } catch { /* invalid placement is rejected on commit */ }
@@ -7296,7 +7297,7 @@ function startMove() {
   const indoor = indoorSelection.filter(editableIndoorGeometry);
   for (const w of selectedRoomWalls) { const f = buildingIndoorFor(w.key); if (f && !indoor.some(g => g.key === f.key)) indoor.push(f); }
   for (const f of indoor) trackIndoor(indoorKey(f.key), f);
-  const doors = indoorSelection.filter(isDoor);
+  const doors = [...indoorSelection.filter(isDoor), ...indoorSelection.filter(isMovablePoi)];
   for (const door of doors) trackIndoor(indoorKey(door.key), door);
   const keys = indoor.length ? indoor.map(f => f.key) : doors.length ? doors.map(d => d.key) : selection.filter((k) => focus!.members.includes(k));
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
@@ -7315,13 +7316,16 @@ function commitMove(keys: string[], offset: THREE.Vector3, glue: boolean) {
   const indoor = keys.map(k => buildingIndoorFor(k)).filter((f): f is IndoorFeature => !!f && editableIndoorGeometry(f));
   if (indoor.length) { applyIndoorGeometry(indoorMoveOperation(indoor, offset), glue); return; }
   const doors = keys.map(key => buildingIndoorFor(key)).filter((f): f is IndoorFeature => !!f && isDoor(f));
-  if (doors.length) {
+  const pois = keys.map(key => buildingIndoorFor(key)).filter((f): f is IndoorFeature => !!f && isMovablePoi(f));
+  if (doors.length || pois.length) {
+    const shift = (at: LonLat) => { const [x,y]=overpassLayer.focusFromLngLat(at)!; return overpassLayer.focusToLngLat(x+offset.x,y+offset.y)! as LonLat; };
+    // Узел POI в контуре стены или помещения — его сдвиг сдвинул бы и вершину контура
+    if (pois.some(f => isVertex(f.point!))) return setStatus(tr('Точка стоит в вершине контура — её нельзя переместить отдельно.'), true);
     try {
-      const edits = batchSolidDoorEdits(doors,f=>{
-        const [x,y]=overpassLayer.focusFromLngLat(f.point!)!;
-        return {at:overpassLayer.focusToLngLat(x+offset.x,y+offset.y)!};
-      });
+      const edits = doors.length ? batchSolidDoorEdits(doors,f=>({at:shift(f.point!)})) : [];
+      for (const f of pois) { trackIndoor(f.key, f); edits.push({key:f.key,polygons:[{outer:[shift(f.point!)],outerIds:[Number(f.key.split('/')[1])],inners:[]}]}); }
       commitSolidDoorEdits(edits);
+      if (!doors.length) setStatus(tr('Перемещено объектов: {n} на {d} м.', { n: pois.length, d: offset.length().toFixed(2) }));
     } catch(err) { setStatus((err as Error).message,true); }
     return;
   }
@@ -8945,6 +8949,12 @@ function poolDepth(f: IndoorFeature): number {
 function isToiletRoom(f: IndoorFeature): boolean {
   const t = f.tags;
   return ['toilets', 'toilet', 'toilet_cubicle', 'shower'].includes(t.room ?? '') || t.amenity === 'toilets' || t.toilets === 'yes';
+}
+/** Точечный POI плана этажа (узел, не дверь): emergency, amenity, shop… — «Переместить» двигает его узел. */
+const isMovablePoi = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && f.key.startsWith('node/') && !isDoor(f);
+function poiAnchor(f: IndoorFeature): THREE.Vector3 | undefined {
+  const p = f.point && overpassLayer.focusToLocal(f.point);
+  return p ? new THREE.Vector3(p[0], p[1], shownLevel?.floor ?? 0) : undefined;
 }
 const isDoor = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && !f.key.endsWith('#poi')
   && !!(f.tags.door || f.tags.indoor === 'door' || f.tags.entrance);

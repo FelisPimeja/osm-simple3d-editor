@@ -1459,7 +1459,8 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   /** Торец прилавка лежит на стороне соседней стены. */
   private counterEndOnWall(a: Pt, b: Pt, g: MeshGroup, it: IndoorItem, items: IndoorItem[]): boolean {
-    const near = (p: Pt) => this.counterEnds(g, it, items).some(([c, d]) => {
+    // Площадь (indoor=area) стен не рисует: торец у её стороны — свой, залитый
+    const near = (p: Pt) => this.counterEnds(g, it, items.filter((o) => o.kind !== 'area')).some(([c, d]) => {
       const ex = d[0] - c[0], ey = d[1] - c[1], len = Math.hypot(ex, ey), t = ((p[0] - c[0]) * ex + (p[1] - c[1]) * ey) / (len * len || 1);
       return len > 1e-6 && t > -0.02 && t < 1.02 && Math.abs((p[0] - c[0]) * ey - (p[1] - c[1]) * ex) / len < 0.05;
     });
@@ -3163,6 +3164,9 @@ export class BuildingsLayer implements CustomLayerInterface {
           }
           for(const points of paths){
           const closed=points.length>2 && Math.hypot(points[0][0]-points.at(-1)![0],points[0][1]-points.at(-1)![1])<1e-6;
+          // Торец в плоскости стены: ни грани, ни рёбер — иначе они видны сквозь стену с другой стороны
+          const endOnWall=(i:number)=>!!ring&&!keyhole&&!tallGlass(it)&&(i===ring.length/2||i===ring.length)&&i<points.length&&this.counterEndOnWall(points[i-1],points[i],g,it,items);
+          const wallEnds=new Set([ring?ring.length/2:-1,ring?ring.length:-1].filter(i=>i>0&&endOnWall(i)));
           for(let i=1;i<points.length;i++){
             const [a,b]=[points[i-1],points[i]];
             if(Math.hypot(b[0]-a[0],b[1]-a[1])<1e-6)continue;
@@ -3184,9 +3188,9 @@ export class BuildingsLayer implements CustomLayerInterface {
                 from=hi;
               }
               if(from<len)quad(at(from),b,it.z,railingTop);
-            }else if(!(ring&&!keyhole&&(i===ring.length/2||i===ring.length)&&this.counterEndOnWall(a,b,g,it,items)))
+            }else if(!wallEnds.has(i))
               quad(a,b,it.z,railingTop);
-            positions.push(...a,railingTop,...b,railingTop);
+            if(!wallEnds.has(i))positions.push(...a,railingTop,...b,railingTop);
           }
           const count=closed?points.length-1:points.length;
           for(let i=0;i<count;i++){
@@ -3194,6 +3198,7 @@ export class BuildingsLayer implements CustomLayerInterface {
             const ux=p[0]-prev[0],uy=p[1]-prev[1],vx=next[0]-p[0],vy=next[1]-p[1];
             const len=Math.hypot(ux,uy)*Math.hypot(vx,vy);
             // Straight and gently curving runs have no vertical seams (30 degree threshold).
+            if(closed&&(wallEnds.has(i===0?count:i)||wallEnds.has(i+1)))continue;
             if((!closed&&(i===0||i===count-1)) || (len>1e-12 && (ux*vx+uy*vy)/len<Math.cos(Math.PI/6)))
               verticals.push(...p,it.z,...p,railingTop);
           }

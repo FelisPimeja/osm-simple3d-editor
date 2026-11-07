@@ -217,6 +217,27 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
       payload.push({ element: { type: 'node', id: n.id, version: 0, lon: n.at[0], lat: n.at[1] }, tags: {}, created: true });
     }
   }
+  // Удалённый у нас серверный путь, который ещё нужен чужому отношению (его нет в данных редактора: пешеходная зона
+  // вокруг здания, relation/4167975), не удаляем, а записываем с узлами из сессии (кусок, оставшийся после разрезания):
+  // иначе кольцо того отношения разомкнётся. Чужое — не среди наших правок или наша правка оставляет путь в составе
+  const editMembers = new Map(edits.filter((e) => e.members && !e.deleted).map((e) => [e.key, e.members!] as const));
+  const deletedServerWays = edits.filter((e) => e.deleted && /^way\/\d+$/.test(e.key) && fresh.get(e.key)?.type === 'way');
+  if (deletedServerWays.length) onStatus(tr('Проверяем отношения удаляемых путей…'));
+  const parentsOfDeleted = await Promise.all(deletedServerWays.map((e) => fetchWayRelations(Number(e.key.split('/')[1]), api())));
+  deletedServerWays.forEach((e, i) => {
+    const id = Number(e.key.split('/')[1]);
+    const needed = parentsOfDeleted[i].some((r) => {
+      const mine = editMembers.get(`relation/${r.id}`);
+      if (edits.some((x) => x.deleted && x.key === `relation/${r.id}`)) return false;
+      return !mine || mine.some((m) => m.type === 'way' && m.ref === id);
+    });
+    if (!needed) return;
+    const w = fresh.get(e.key) as OsmWay;
+    e.deleted = false;
+    e.after = { ...(w.tags ?? {}) };
+    e.before = { ...(w.tags ?? {}) };
+    e.wayNodes ??= { before: w.nodes, after: w.nodes };
+  });
   // Узлы удаляемых путей: без тегов и не нужные нашим же новым и изменённым путям
   const deletedWays = edits.filter((e) => e.deleted && e.key.startsWith('way/')).map((e) => fresh.get(e.key)).filter((w): w is OsmWay => w?.type === 'way');
   // Удаляемый мультиполигон — вместе с его путями без тегов (занятые в других отношениях сервер оставит: if-unused).

@@ -503,7 +503,9 @@ export class EditSession {
     for (const [key, f] of this.features) {
       if (this.deleted.has(key)) {
         const before = this.original.get(key)!;
-        out.push({ key, feature: f, created: false, deleted: true, before, after: {},
+        // Узлы пути — на случай, если удалять его нельзя (он нужен отношению, которого нет в данных редактора):
+        // тогда отправка запишет его с этим списком узлов
+        out.push({ key, feature: f, created: false, deleted: true, before, after: {}, wayNodes: f.line ? this.wayNodes(key) : undefined,
           diff: [{ tag: tr('(объект)'), from: tr('есть'), to: tr('удалён') }] });
         continue;
       }

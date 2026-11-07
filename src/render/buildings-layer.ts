@@ -89,6 +89,8 @@ const CEIL_SNAP = 0.5;
 /** Стены помещений: каждая стена — две грани (по одной на сторону) с цветом помещения со своей стороны. */
 // Дальше оболочки здания (у неё 1/1): наружные стены подвала в полосе цоколя лежат в плоскости фасада — фасад поверх
 const INDOOR_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.FrontSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });
+/** Стена indoor на фасадном ребре оболочки: у неё приоритет — ближе к камере, чем фасад в той же плоскости. */
+const INDOOR_FACADE_WALL_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.FrontSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
 /** Насколько в сторону от стены смотреть, в каком она помещении, м. */
 const WALL_SIDE_PROBE = 0.05;
 /** Выделенное помещение: заливка цветом выделения частей и контур. */
@@ -2505,6 +2507,16 @@ export class BuildingsLayer implements CustomLayerInterface {
     const walls: number[] = [];
     /** Цвета вершин стен: каждая сторона — цветом помещения, в которое смотрит. */
     const wallCols: number[] = [];
+    /** Стены indoor на фасадных рёбрах оболочки (рисуются поверх фасада) и их цвета. */
+    const facadeWalls: number[] = [], facadeWallCols: number[] = [];
+    /** Фасадные рёбра оболочки, на которых стоит стена indoor (indoor=wall или сторона помещения): фасад ей уступает. */
+    const indoorFacade: [number, number, number, number][] = [];
+    const onIndoorFacade = (ax: number, ay: number, bx: number, by: number) => indoorFacade.some(([px, py, qx, qy]) => {
+      const dx = qx - px, dy = qy - py, l = Math.hypot(dx, dy);
+      if (l < 1e-6) return false;
+      const off = (x: number, y: number) => Math.abs((x - px) * dy - (y - py) * dx) / l, at = (x: number, y: number) => ((x - px) * dx + (y - py) * dy) / l;
+      return off(ax, ay) < 0.01 && off(bx, by) < 0.01 && Math.min(at(ax, ay), at(bx, by)) > -0.01 && Math.max(at(ax, ay), at(bx, by)) < l + 0.01;
+    });
     /** Цветные грани помещений на фасаде (FACADE_TINT_MATERIAL). */
     const tintWalls: number[] = [], tintCols: number[] = [];
     // Полы с цветом назначения (локальные кольца, габарит; помещения раньше коридоров и площадок — меньшие сверху)
@@ -2639,11 +2651,12 @@ export class BuildingsLayer implements CustomLayerInterface {
           [px, py, z0, qx, qy, z0, qx, qy, zb, px, py, z0, qx, qy, zb, px, py, za],
           [px, py, z0, qx, qy, zb, qx, qy, z0, px, py, z0, px, py, za, qx, qy, zb],
         ];
+        const front = !pale && indoorFacade.length > 0 && onIndoorFacade(px, py, qx, qy);
         for (let side = 0; side < 2; side++) {
           const face = masks.length ? trimCoplanarWalls(part[side], masks) : part[side];
-          for (const value of face) walls.push(value);
+          for (const value of face) (front ? facadeWalls : walls).push(value);
           const c = colours[side];
-          for (let k = 0; k < face.length / 3; k++) wallCols.push(c.r, c.g, c.b);
+          for (let k = 0; k < face.length / 3; k++) (front ? facadeWallCols : wallCols).push(c.r, c.g, c.b);
         }
       }
       // Use the same 2 px cut outline for linear walls and solid polygon faces.
@@ -2908,6 +2921,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     /** Полосы стыков на фасадных рёбрах: стена по ребру только на эту высоту (после объявления wall/slab). */
     const junctionPatches: [number, number, number, number, number, number][] = [];
+    // Рёбра стен indoor этого этажа (по узлам — с оболочкой они общие): фасад на них уступает стене indoor
+    const indoorEdgeSigs = new Set<string>();
+    for (const it of items) {
+      if (it.cutOnly || it.railing || it.counter || !(it.kind === 'room' || it.kind === 'wall')) continue;
+      for (const p of it.polygons) for (const r of it.line ? [p.outer] : [p.outer, ...p.inners])
+        for (let i = 0; i < (it.line ? r.length - 1 : r.length); i++) indoorEdgeSigs.add(edgeSig(r[i], r[(i + 1) % r.length]));
+    }
     const facadeDone = new Set<string>();
     // These faces already come from the sloping building shell. A room or
     // indoor=wall on the same boundary must not erect another vertical wall
@@ -2963,6 +2983,8 @@ export class BuildingsLayer implements CustomLayerInterface {
           const ownL = enclosedBy(bi.feature.key, mx + nx, my + ny), ownR = enclosedBy(bi.feature.key, mx - nx, my - ny);
           const otherL = enclosed(bi.feature.key, mx + nx, my + ny), otherR = enclosed(bi.feature.key, mx - nx, my - ny);
           if ((otherL && otherR) || (ownL && otherR) || (ownR && otherL)) continue;
+          // Стена indoor на этом ребре: рисуется она (своими свойствами), фасад её не подменяет
+          if (indoorEdgeSigs.has(sig)) { indoorFacade.push([a[0], a[1], b[0], b[1]]); continue; }
           facadeDone.add(sig);
           // Facade openings also need a contour when the adjacent indoor space
           // is an area/corridor with no implicit walls of its own.
@@ -3333,9 +3355,18 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
       }
     }
-    if (!pale) this.indoorWallPositions = walls;
-    if (this.graphics.edges) for (const value of walls) this.indoorEdgeOccluders.push(value);
-    this.indoorGlassBlockers = this.indoorGlassBlockers.concat(walls);
+    if (facadeWalls.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(facadeWalls, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(facadeWallCols, 3));
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, INDOOR_FACADE_WALL_MATERIAL);
+      mesh.frustumCulled = false;
+      root.add(mesh);
+    }
+    if (!pale) this.indoorWallPositions = facadeWalls.length ? walls.concat(facadeWalls) : walls;
+    if (this.graphics.edges) for (const value of [...walls, ...facadeWalls]) this.indoorEdgeOccluders.push(value);
+    this.indoorGlassBlockers = this.indoorGlassBlockers.concat(walls, facadeWalls);
     if (walls.length) {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(walls, 3));

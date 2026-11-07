@@ -1584,7 +1584,9 @@ map.on('click', (e) => {
     setStatus(tr('Подземная часть здания: до {d} м под землёй.', { d: (-depth).toFixed(1) }));
     return;
   }
-  const key = e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point);
+  const picked = e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point);
+  // План этажа: оболочка (части Simple 3D) — только опора для привязок, кликом не выделяется (части — «Всё здание» и дерево)
+  const key = focus && shownLevel && !addingTo && picked && focus.members.includes(picked) ? undefined : picked;
   if (addingTo) {
     if (e.originalEvent.shiftKey) { if (key) toggleAddPending(key); return; }
     stopAdding(); // обычный клик — выходим из режима добавления

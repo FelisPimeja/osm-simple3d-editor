@@ -125,7 +125,7 @@ for (const pale of [false, true]) test(`real wall chain around way/1306264218 ha
   }
 });
 
-test('floor mode hides building seams even when the facade replaces the indoor wall mesh', () => {
+test('floor mode hides building seams under an indoor wall drawn over the facade', () => {
   const ll = ([x,y]) => [37+x/(111320*Math.cos(55*Math.PI/180)),55+y/111320];
   const layer = new BuildingsLayer('test');
   layer.graphics.edges = true;
@@ -144,7 +144,7 @@ test('floor mode hides building seams even when the facade replaces the indoor w
   assert.ok(initial.length > 0);
   layer.setLevel({ floor: 0, cut: 3, items: [{ key: 'indoor', kind: 'wall', line: true, z: 0,
     polygons: [{ outer: [[0,0],[2,0],[4,0]].map(ll), inners: [] }] }] });
-  assert.equal(layer.indoorWallPositions.length, 0, 'facade replaces indoor wall geometry');
+  assert.ok(layer.indoorWallPositions.length > 0, 'the indoor wall on the facade is drawn, not replaced by the shell');
   assert.ok(atSeam().every(([lo]) => lo >= 2.9 - 1e-5), 'building seam below the floor cut must disappear');
   layer.setLevel(undefined);
   assert.deepEqual(atSeam(), initial);

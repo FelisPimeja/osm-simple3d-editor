@@ -31,10 +31,11 @@ for (const floor of [-3, -2, -1, 0, 1, 2, 3]) test(`elevator walls and door open
   assert.ok(baseline.length > 0);
   assert.deepEqual(render(floor * 3, { 'building:part': 'roof', min_height: '12.5', height: '20', 'roof:height': '7.5', 'roof:shape': 'skillion' }), baseline);
 });
-test('only a facade spanning the floor-to-cut height suppresses room walls', () => {
+test('room walls on a facade spanning the floor-to-cut height take priority over it; other parts do not touch them', () => {
   const facade = { 'building:part': 'yes', height: '10' };
-  assert.equal(render(0, facade).length, 0);
   const baseline = render(0);
+  // Стена indoor на фасадном ребре рисуется сама (поверх фасада), а не подменяется оболочкой
+  assert.equal(render(0, facade).length, baseline.length);
   assert.deepEqual(render(0, { ...facade, min_height: '1' }), baseline);
   assert.deepEqual(render(0, { ...facade, height: '1' }), baseline);
   assert.deepEqual(render(0, facade, { flat: true }), baseline);

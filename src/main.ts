@@ -8421,7 +8421,7 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
     return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || (!!f.point && nearRing(p, q.outer, 0.3)) || (f.kind === 'wall' && nearRing(p, q.outer, 0.03))));
   }).map((f) => f.transit && !f.tags.indoor ? clipTransit(f, feats, footprint) : f).filter((f): f is IndoorFeature => !!f);
   const visible = list.filter((f) => overpass.isVisible(f)).filter((f) => f.kind === 'poi' || !!f.transit || !indoorEdited.has(indoorKey(f.key)) || !!f.tags.indoor || (f.escalator && f.tags.highway === 'steps' && !!f.tags.conveying && f.tags.conveying !== 'no'));
-  const axes = visible.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down') && f.polygons[0]?.outer.length >= 2);
+  const axes = visible.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2);
   return visible.map((f) => {
     if (f.tags.indoor === 'area' && f.tags.room === 'steps' && !f.line) return { ...f, escalatorArea: true };
     if (f.line || !f.polygons.length || !isStairsAreaTags(f.tags)) return f;
@@ -8979,6 +8979,9 @@ function poolDepth(f: IndoorFeature): number {
   }
   return POOL_DEPTH;
 }
+
+/** Направление эскалатора для отрисовки: без incline (или с непонятным) — up, как у новой линии; валидатор об этом предупреждает. */
+const escalatorIncline = (f: IndoorFeature): 'up' | 'down' => f.tags.incline === 'down' ? 'down' : 'up';
 
 function isToiletRoom(f: IndoorFeature): boolean {
   const t = f.tags;
@@ -12036,7 +12039,7 @@ function renderLevelsImpl() {
   // След здания у земли — по частям (контур под частями бывает шире: захватывает крыльцо и приямки)
   const feet = groupFeatures(focus).filter((f) => f.kind === 'part' && computeHeights(f.tags).min < 0.05).flatMap((f) => f.polygons ?? []);
   const allEscalators = visibleIndoor.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2
-      && (f.tags.incline === 'up' || f.tags.incline === 'down'))
+     )
     .map((f) => {
       const low = levels.find((l) => l.n === Math.min(...f.levels));
       const high = levels.find((l) => l.n === Math.max(...f.levels));
@@ -12051,7 +12054,7 @@ function renderLevelsImpl() {
       const pit = level.floor > -0.01 && low.floor < -0.01 && line.some((p) => !feet.some((pg) =>
         (pointInRing(p, pg.outer) && !pg.inners.some((h) => pointInRing(p, h))) || nearRing(p, pg.outer, 0.05)));
       return { key: f.key, line, bottom: low.floor, top: high.floor,
-        width: pairWidth(f, visibleIndoor) ?? escalatorWidth(f), incline: f.tags.incline, ...stairsShape(f, visibleIndoor), ...(stairsInVoid.has(f.key) ? { noHole: true } : {}),
+        width: pairWidth(f, visibleIndoor) ?? escalatorWidth(f), incline: escalatorIncline(f), ...stairsShape(f, visibleIndoor), ...(stairsInVoid.has(f.key) ? { noHole: true } : {}),
         pale: !f.levels.includes(level.n), visible: f.levels.includes(level.n) || visibleBelow || pit };
     }).filter((f): f is NonNullable<typeof f> => !!f);
   // Все эскалаторы здания режут проёмы в планах нижних этажей (те не зависят от выбранного этажа и кешируются)
@@ -12236,7 +12239,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
       }
       // Площадь эскалатора — только контур (пунктир): проём в перекрытии режут сами эскалаторы по ширине
       const base = list.slice();
-      for (const f of indoor.filter((f) => f.escalator && (f.tags.incline === 'up' || f.tags.incline === 'down')
+      for (const f of indoor.filter((f) => f.escalator
         && f.levels.includes(l.n) && l.n > Math.min(...f.levels))) {
         const line = f.polygons[0]?.outer;
         if (!line || line.length < 2) continue;
@@ -12260,7 +12263,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
         const mid: LonLat = [(line[0][0] + line[line.length - 1][0]) / 2, (line[0][1] + line[line.length - 1][1]) / 2];
         if (!f.stairs && indoor.some((g) => !g.line && !g.point && g.levels.includes(l.n) && ['level', 'area', 'corridor', 'room'].includes(g.kind)
           && g.polygons.some((p) => p.inners.some((h) => pointInRing(mid, h))))) continue;
-        const holes = escalatorFloorHoles([{ line: line.map(loc), bottom: low.floor, top: high.floor, width, incline: f.tags.incline, ...withLocalOutline(stairsShape(f, indoor), loc) }], l.floor);
+        const holes = escalatorFloorHoles([{ line: line.map(loc), bottom: low.floor, top: high.floor, width, incline: escalatorIncline(f), ...withLocalOutline(stairsShape(f, indoor), loc) }], l.floor);
         for (const poly of holes) list.push({ polygon: [poly.map((r) => r.slice(0, -1).map((q) => geo(q as [number, number])))], through, bare: true });
       }
       if (list.length) out.set(l.n, list);

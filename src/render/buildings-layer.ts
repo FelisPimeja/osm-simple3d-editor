@@ -3224,6 +3224,15 @@ export class BuildingsLayer implements CustomLayerInterface {
             if(closed&&(wallEnds.has(i===0?count:i)||wallEnds.has(i+1)))continue;
             // Вершина-дверь стеклянной стены — посреди проёма: вертикали там нет
             if(tallGlass(it)&&doorList.some(c=>{const q=g.toLocal(c);return Math.hypot(q[0]-p[0],q[1]-p[1])<0.05;}))continue;
+            // Конец пути на стыке с другой стеклянной стеной, продолжающей его по прямой (угол меньше 30°), — не угол
+            if(!closed&&(i===0||i===count-1)&&tallGlass(it)){
+              const q=i===0?points[1]:points[count-2],ox=q[0]-p[0],oy=q[1]-p[1],ol=Math.hypot(ox,oy)||1;
+              const straight=items.some(o=>o!==it&&tallGlass(o)&&o.polygons.some(pg=>{const r=pg.outer.map(g.toLocal);return r.some((v,k)=>{
+                if(Math.hypot(v[0]-p[0],v[1]-p[1])>0.01)return false;
+                return [r[k-1],r[k+1]].some(w=>{if(!w)return false;const wx=w[0]-p[0],wy=w[1]-p[1],wl=Math.hypot(wx,wy)||1;return (ox*wx+oy*wy)/(ol*wl)<-Math.cos(Math.PI/6);});
+              });}));
+              if(straight)continue;
+            }
             if((!closed&&(i===0||i===count-1)) || (len>1e-12 && (ux*vx+uy*vy)/len<Math.cos(Math.PI/6)))
               verticals.push(...p,it.z,...p,railingTop);
           }

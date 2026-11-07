@@ -3259,7 +3259,7 @@ function stopWallSplit() {
   toolHint('');
 }
 /** Точка рассечения под курсором: ближайшая точка стены (в вершине — сама вершина), не дальше 12 px. */
-function wallSplitTarget(point: [number, number]): { f: IndoorFeature; edge: number; vertex?: number; at: LonLat; screen: [number, number]; source: LonLat[] } | undefined {
+function wallSplitTarget(point: [number, number]): { kind: SnapKind; f: IndoorFeature; edge: number; vertex?: number; at: LonLat; screen: [number, number]; source: LonLat[] } | undefined {
   const f = wallSplitKey ? wallSplitRoom ? shownIndoor.find((x) => x.key === wallSplitKey) : buildingIndoorFor(wallSplitKey) : undefined;
   if (!f || !shownLevel || (!wallSplitRoom && !splittableWall(f))) return;
   const source = wallSplitRoom ? roomWallSpan(f.polygons, wallSplitRoom) : f.polygons[0].outer;
@@ -3267,29 +3267,41 @@ function wallSplitTarget(point: [number, number]): { f: IndoorFeature; edge: num
   const project = overpassLayer.focusProjector();
   if (!hit || !project) return;
   const line = source.map((c) => overpassLayer.focusToLocal(c)!);
-  let best: { edge: number; t: number; d: number; q: Pt } | undefined;
-  for (let i = 0; i + 1 < line.length; i++) {
-    const a = line[i], b = line[i + 1], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
-    if (!l2) continue;
-    const t = Math.max(0, Math.min(1, ((hit.x - a[0]) * dx + (hit.y - a[1]) * dy) / l2)), q: Pt = [a[0] + dx * t, a[1] + dy * t];
-    const d = Math.hypot(q[0] - hit.x, q[1] - hit.y);
-    if (!best || d < best.d) best = { edge: i, t, d, q };
-  }
+  const nearest = (x: number, y: number) => {
+    let best: { edge: number; t: number; d: number; q: Pt } | undefined;
+    for (let i = 0; i + 1 < line.length; i++) {
+      const a = line[i], b = line[i + 1], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+      if (!l2) continue;
+      const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)), q: Pt = [a[0] + dx * t, a[1] + dy * t];
+      const d = Math.hypot(q[0] - x, q[1] - y);
+      if (!best || d < best.d) best = { edge: i, t, d, q };
+    }
+    return best;
+  };
+  let best = nearest(hit.x, hit.y);
   if (!best) return;
+  let kind: SnapKind = 'edge';
+  // Привязки: середина своего ребра, затем вершины, середины и рёбра других объектов, лежащие на стене
+  const screenOf = (q: Pt) => project(new THREE.Vector3(q[0], q[1], shownLevel!.floor));
+  const a0 = line[best.edge], b0 = line[best.edge + 1], mid: Pt = [(a0[0] + b0[0]) / 2, (a0[1] + b0[1]) / 2], ms = screenOf(mid);
+  const snap = overpassLayer.snapAt(point, (k) => k !== f.key);
+  const onWall = snap && snap.kind !== 'center' && snap.kind !== 'grid' ? nearest(snap.local.x, snap.local.y) : undefined;
+  if (ms && Math.hypot(ms[0] - point[0], ms[1] - point[1]) < 10) { best = { ...best, t: 0.5, q: mid }; kind = 'midpoint'; }
+  else if (onWall && onWall.d < 0.03) { best = onWall; kind = snap!.kind; }
   // Вершина в пределах 5 см — рассекаем в ней
   const len = Math.hypot(line[best.edge + 1][0] - line[best.edge][0], line[best.edge + 1][1] - line[best.edge][1]);
   const vertex = best.t * len < 0.05 ? best.edge : (1 - best.t) * len < 0.05 ? best.edge + 1 : undefined;
   const q = vertex !== undefined ? line[vertex] : best.q;
   const screen = project(new THREE.Vector3(q[0], q[1], shownLevel.floor));
   if (!screen || Math.hypot(screen[0] - point[0], screen[1] - point[1]) > 12) return;
-  return { f, edge: best.edge, vertex, at: vertex !== undefined ? source[vertex] : overpassLayer.focusToLngLat(q[0], q[1])!, screen: [screen[0], screen[1]], source };
+  return { kind: vertex !== undefined ? 'vertex' : kind, f, edge: best.edge, vertex, at: vertex !== undefined ? source[vertex] : overpassLayer.focusToLngLat(q[0], q[1])!, screen: [screen[0], screen[1]], source };
 }
 function hoverWallSplit(point: [number, number] | undefined) {
   const t = point && wallSplitTarget(point);
   snapEl.hidden = !t;
   if (!t) return;
-  snapEl.className = `snap-marker ${t.vertex !== undefined ? 'vertex' : 'edge'}`;
-  snapEl.dataset.label = SNAP_LABELS[t.vertex !== undefined ? 'vertex' : 'edge'];
+  snapEl.className = `snap-marker ${t.kind}`;
+  snapEl.dataset.label = SNAP_LABELS[t.kind];
   snapEl.style.left = `${t.screen[0]}px`;
   snapEl.style.top = `${t.screen[1]}px`;
 }

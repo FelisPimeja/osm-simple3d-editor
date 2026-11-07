@@ -160,7 +160,7 @@ export class CursorOrbit {
       const altitude = target.altitude + oz * f;
       if (altitude < minAlt) return;
       const camLngLat = new MercatorCoordinate(p.x + ox * f * s, p.y - oy * f * s, 0).toLngLat();
-      const opts = this.map.calculateCameraOptionsFromCameraLngLatAltRotation(camLngLat, altitude, this.map.getBearing(), this.map.getPitch());
+      const opts = this.cameraOptions(camLngLat, altitude, this.map.getBearing(), this.map.getPitch());
       // Дальше предела зума MapLibre камера встала бы не туда (зум обрезается)
       return opts.zoom !== undefined && opts.zoom > this.map.getMaxZoom() ? undefined : opts;
     };
@@ -251,6 +251,22 @@ export class CursorOrbit {
       this.jump(map.calculateCameraOptionsFromTo(camLngLat, altitude, to, Math.max(0, tz)));
       return;
     }
-    this.jump(map.calculateCameraOptionsFromCameraLngLatAltRotation(camLngLat, altitude, bearing + dBearing, newPitch));
+    this.jump(this.cameraOptions(camLngLat, altitude, bearing + dBearing, newPitch));
+  }
+
+  /**
+   * Камера по положению и углам. В режиме здания центр не прижат к земле (взгляд снизу), и MapLibre ставит его на
+   * луче взгляда где придётся — в том числе на километры под землю (centerElevation −4500 м): камера отлетала, а
+   * плоскости отсечения резали здание. Пока взгляд направлен на землю, центр — точка, где луч её пересекает.
+   */
+  private cameraOptions(camLngLat: LngLat, altitude: number, bearing: number, pitch: number) {
+    const map = this.map;
+    // Взгляд почти вертикально вниз: точка пересечения — под самой камерой, азимут из неё не восстановить
+    if (!this.underground || pitch > 80 || pitch < 1) return map.calculateCameraOptionsFromCameraLngLatAltRotation(camLngLat, altitude, bearing, pitch);
+    const cam = MercatorCoordinate.fromLngLat(camLngLat, 0);
+    const s = cam.meterInMercatorCoordinateUnits();
+    const b = (bearing * Math.PI) / 180, d = altitude * Math.tan((pitch * Math.PI) / 180);
+    const to = new MercatorCoordinate(cam.x + Math.sin(b) * d * s, cam.y - Math.cos(b) * d * s, 0).toLngLat();
+    return map.calculateCameraOptionsFromTo(camLngLat, altitude, to, 0);
   }
 }

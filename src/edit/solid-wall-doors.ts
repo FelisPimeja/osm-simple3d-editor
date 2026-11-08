@@ -204,7 +204,7 @@ export function projectedOpeningIndoor(all:IndoorFeature[],edits:ObjectEdit[]):I
 }
 
 /** Задняя сторона помещения в стольких метрах от тыла проёма — та же линия (узлы OSM округлены, стороны изломаны). */
-const ROOM_BACK_SNAP=0.01;
+const ROOM_BACK_SNAP=0.005;
 /** Extend only the room behind the opening; its front edge shares the actual door node. */
 export function roomDoorway(polys:WallPolygon[],gap:Pt[],door:Pt):WallPolygon[]|undefined {
  const back:Pt=[(gap[2][0]+gap[3][0])/2,(gap[2][1]+gap[3][1])/2];

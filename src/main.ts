@@ -9538,7 +9538,7 @@ function bindLevelPicker(input: HTMLInputElement, fs: IndoorFeature[], create?: 
 }
 
 function bindLevelHint(input: HTMLInputElement) {
-  if (lang !== 'ru') return;
+  if (lang !== 'ru' || floorNumbering !== 'first') return;
   const wrap = levelWrap(input);
   const ghost = document.createElement('span');
   ghost.className = 'level-hint';
@@ -10266,9 +10266,20 @@ function selectRoad(w: RoadWay, add = false) {
 }
 
 /** Номер надземного этажа для людей: в русской традиции первый этаж — level=0, в английской — этажи с нуля. */
-const humanFloor = (n: number) => (lang === 'ru' ? n + 1 : n);
+// Нумерация этажей: с нуля (Ground floor, 1, 2… — Британия, Европа, level=* в OSM) или с единицы (1-й наземный — Россия, США, Канада).
+// Впервые — по языку и локали браузера, дальше — выбор пользователя (localStorage и профиль)
+type FloorNumbering = 'ground' | 'first';
+const FLOORS_KEY = 'osm3d.floor-numbering';
+const defaultFloorNumbering = (): FloorNumbering => (lang === 'ru' || /^en-(US|CA)\b/i.test(navigator.language ?? '') ? 'first' : 'ground');
+let floorNumbering: FloorNumbering = defaultFloorNumbering();
+try { const v = localStorage.getItem(FLOORS_KEY); if (v === 'ground' || v === 'first') floorNumbering = v; } catch { /* нет хранилища */ }
+function setFloorNumbering(v: FloorNumbering) {
+  floorNumbering = v;
+  try { localStorage.setItem(FLOORS_KEY, v); } catch { /* только до перезагрузки */ }
+}
+const humanFloor = (n: number) => (floorNumbering === 'first' ? n + 1 : n);
 /** Название этажа: у подземных сохраняем номер level, надземные нумеруем по локали. */
-const LEVEL_NAME = (n: number) => (n === 0 && lang !== 'ru' ? tr('Наземный этаж') : tr('{n} этаж', { n: n < 0 ? n : humanFloor(n) }));
+const LEVEL_NAME = (n: number) => (n === 0 && floorNumbering === 'ground' ? tr('Наземный этаж') : tr('{n} этаж', { n: n < 0 ? n : humanFloor(n) }));
 /** Подпись этажа: по level:ref, если он есть у indoor=level этажа здания режима («Этаж E0»), иначе по номеру. */
 const levelLabel = (n: number) => (panelLevelRefs.has(n) ? tr('Этаж {ref}', { ref: panelLevelRefs.get(n)! }) : LEVEL_NAME(n));
 
@@ -15337,6 +15348,23 @@ registerSetting({
     return 'live';
   },
 });
+const floorsSelect = document.getElementById('floors-select') as HTMLSelectElement;
+registerSetting({
+  key: 'floor-numbering',
+  local: () => { try { return localStorage.getItem(FLOORS_KEY) ?? undefined; } catch { return undefined; } },
+  apply: (v) => {
+    if (v !== 'ground' && v !== 'first') return 'same';
+    if (v === floorNumbering) { setFloorNumbering(v); return 'same'; }
+    setFloorNumbering(v);
+    renderLevels(); renderSelected();
+    return 'live';
+  },
+});
+floorsSelect.addEventListener('change', () => {
+  setFloorNumbering(floorsSelect.value as FloorNumbering);
+  void saveSetting('floor-numbering');
+  renderLevels(); renderSelected();
+});
 unitsSelect.addEventListener('change', () => {
   setUnitSystem(unitsSelect.value as UnitSystem);
   void saveSetting('units');
@@ -15366,6 +15394,7 @@ document.getElementById('settings-open')!.addEventListener('click', () => {
   langSelect.value = lang;
   keepGfxToggle.checked = keepGraphics();
   unitsSelect.value = unitSystem();
+  floorsSelect.value = floorNumbering;
   renderSettingsSync();
   settingsDialog.showModal();
 });

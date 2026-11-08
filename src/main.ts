@@ -12951,6 +12951,8 @@ function autoNotchWalls(edits:ObjectEdit[]){
   if(!keys.size||!focus)return;
   queueMicrotask(()=>{
     if(!focus)return;
+    // Список объектов здания кешируется по счётчику правок: не все пути правки его сдвигают
+    indoorEditRev++;
     const base=buildingIndoor(focus).filter(f=>!f.key.endsWith('#poi'));
     if(!base.some(f=>keys.has(f.key)&&solidWall(f)))return;
     const notches=validateSolidWallDoors(base).filter(i=>i.fix?.solidDoorWall&&keys.has(i.fix.solidDoorWall));

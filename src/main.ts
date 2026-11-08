@@ -10268,7 +10268,7 @@ function selectRoad(w: RoadWay, add = false) {
 /** Номер надземного этажа для людей: в русской традиции первый этаж — level=0, в английской — этажи с нуля. */
 const humanFloor = (n: number) => (lang === 'ru' ? n + 1 : n);
 /** Название этажа: у подземных сохраняем номер level, надземные нумеруем по локали. */
-const LEVEL_NAME = (n: number) => tr('{n} этаж', { n: n < 0 ? n : humanFloor(n) });
+const LEVEL_NAME = (n: number) => (n === 0 && lang !== 'ru' ? tr('Наземный этаж') : tr('{n} этаж', { n: n < 0 ? n : humanFloor(n) }));
 /** Подпись этажа: по level:ref, если он есть у indoor=level этажа здания режима («Этаж E0»), иначе по номеру. */
 const levelLabel = (n: number) => (panelLevelRefs.has(n) ? tr('Этаж {ref}', { ref: panelLevelRefs.get(n)! }) : LEVEL_NAME(n));
 

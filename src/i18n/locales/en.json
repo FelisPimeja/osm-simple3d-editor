@@ -283,6 +283,7 @@
   "Объект": "Object",
   "«{name}»": "“{name}”",
   "{n} этаж": "Floor {n}",
+  "Наземный этаж": "Ground floor",
   "Всё здание": "Whole building",
   "есть поэтажный план": "floor plan available",
   "высота этажа {h} м — вне {min}–{max} м": "level height {h} m is outside {min}–{max} m",

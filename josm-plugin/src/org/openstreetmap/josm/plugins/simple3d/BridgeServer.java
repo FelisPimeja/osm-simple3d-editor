@@ -103,6 +103,10 @@ class BridgeServer {
         this.port = port;
     }
 
+    int port() {
+        return port;
+    }
+
     void start() throws IOException {
         http = new MiniHttp(port, this::handle);
         MainApplication.getLayerManager().addAndFireActiveLayerChangeListener(layerListener);

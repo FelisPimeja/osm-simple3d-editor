@@ -45,6 +45,10 @@ The page is served by the plugin itself at `http://127.0.0.1:8112/editor/` (a co
 works in every browser, Safari included. The plugin listens on `127.0.0.1` only and answers only the editor's
 pages, so other websites cannot read or change your JOSM data.
 
+If port 8112 is taken (on Windows, Hyper-V, WSL or Docker may reserve it), the plugin tries the next ports up to
+8121. If none is free, the menu item opens the editor website without a link to JOSM and says so; set another port
+in Preferences → Advanced (`simple3d.port`) and restart JOSM.
+
 Without the plugin the editor can still read the JOSM layer through Remote Control, but read-only: edits do not
 return to JOSM, and there is no shared undo or selection.
 

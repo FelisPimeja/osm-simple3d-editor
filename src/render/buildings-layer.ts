@@ -1606,8 +1606,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     // (заливка обрывалась у стены и снова появлялась за 50 м, где земля кончается)
     for (const it of this.level?.items ?? []) if (it.platform && Math.abs(it.z) < 0.05)
       for (const p of it.polygons) pits.push([close(p.outer.map(g.toLocal)), ...p.inners.map((r) => close(r.map(g.toLocal)))] as never);
+    // Следы объектов здания у земли: сечение оболочки идёт по частям, а контур с частями (way/231434903) сам объёма
+    // не имеет — там, где частей нет, земля ложилась в плоскость пола помещений и спорила с ним глубиной
+    const footprints: ClipMulti = g.items.filter((it) => !g.hidden.has(it.feature.key) && !it.box.isEmpty() && it.box.min.z <= 0.05)
+      .flatMap((it) => (g.renderFootprints.get(it.feature.key) ?? it.feature.polygons)
+        .map((p) => [close(p.outer.map(g.toLocal)), ...p.inners.map((r) => close(r.map(g.toLocal)))] as never));
     try {
-      const cuts = [...(sec?.length ? [sec as unknown as ClipMulti] : []), ...(pits.length ? [pits] : [])];
+      // Следы — отдельными операндами: перекрытые (часть внутри контура) в одном мультиполигоне вычитались бы по чётности
+      const cuts = [...(sec?.length ? [sec as unknown as ClipMulti] : []), ...(pits.length ? [pits] : []), ...footprints.map((f) => [f] as ClipMulti)];
       if (cuts.length) earth = polygonClipping.difference(square, ...cuts);
     } catch { /* без выреза — земли нет */ return; }
     const pos: number[] = [];

@@ -8631,7 +8631,7 @@ const DOOR_ON_WALL = 0.3;
  * Наружные двери здания g: узел на сечении здания на своём этаже (у частей разной высоты — по этажу) или на
  * контуре этажа indoor=level. Сечение — только у здания режима; у другого — его контур. Сечения — раз на этаж.
  */
-function outerDoorTest(g: BuildingGroup, indoor: IndoorFeature[]): ((f: IndoorFeature) => boolean) & { exact?: (f: IndoorFeature) => boolean } {
+function outerDoorTest(g: BuildingGroup, indoor: IndoorFeature[]): ((f: IndoorFeature) => boolean) & { exact?: (f: IndoorFeature) => boolean; through?: (f: IndoorFeature) => LonLat | undefined } {
   // Этажи и контур — при первой двери: проверка зовёт тест у каждого объекта
   let levels: Level[] | undefined, outline: LonLat[][] | undefined;
   const byLevel = new Map<number, LonLat[][]>();
@@ -8672,7 +8672,48 @@ function outerDoorTest(g: BuildingGroup, indoor: IndoorFeature[]): ((f: IndoorFe
   };
   const test = (f: IndoorFeature) => isDoor(f) && f.levels.some((n) => rings(n).some((ring) => nearRing(f.point!, ring, DOOR_ON_WALL)))
     || isDoor(f) && !!f.point && ((b) => !!b && f.levels.some((n) => rings(n).some((ring) => nearRing(b, ring, DOOR_ON_WALL))))(through(f));
-  return Object.assign(test, { exact: (f: IndoorFeature) => f.levels.every((n) => (rings(n), exactLevels.has(n))) });
+  return Object.assign(test, { exact: (f: IndoorFeature) => f.levels.every((n) => (rings(n), exactLevels.has(n))), through });
+}
+
+/** Входы на контуре здания (узлы entrance=*): id, теги с правками сессии и точка. */
+function outlineEntrances(g: BuildingGroup): { key: string; tags: Record<string, string>; at: LonLat }[] {
+  const out = new Map<string, { key: string; tags: Record<string, string>; at: LonLat }>();
+  for (const b of groupFeatures(g).map(withEntranceEdits)) {
+    const at = new Map<number, LonLat>();
+    for (const p of b.polygons) [[p.outer, p.outerIds], ...p.inners.map((r, i) => [r, p.innerIds?.[i]] as const)]
+      .forEach(([ring, ids]) => (ring as LonLat[]).forEach((q, i) => { const id = (ids as number[] | undefined)?.[i]; if (id !== undefined) at.set(id, q); }));
+    for (const e of b.entrances ?? []) {
+      const q = e.at ?? at.get(e.id);
+      if (q) out.set(`node/${e.id}`, { key: `node/${e.id}`, tags: e.tags, at: q });
+    }
+  }
+  return [...out.values()];
+}
+
+/** Вход на фасаде ближе этого к выходу проёма внутренней двери, м, — та же дверь с другой стороны стены. */
+const PAIRED_DOOR_REACH = 1;
+
+/**
+ * Дверь на внутренней грани толстой стены и вход на фасаде против неё — один проём, размеченный дважды.
+ * Предупреждение на внутренней двери; исправление переносит её теги во вход, а её саму убирает.
+ */
+function pairedWallDoors(g: BuildingGroup, indoor: IndoorFeature[], outer: ReturnType<typeof outerDoorTest>): Issue[] {
+  const entrances = outlineEntrances(g);
+  if (!entrances.length || !outer.through) return [];
+  const out: Issue[] = [];
+  for (const f of indoor) {
+    if (!isDoor(f) || f.tags.entrance || !f.point) continue;
+    const back = outer.through(f);
+    if (!back) continue;
+    const m = 111320, mx = m * Math.cos(back[1] * Math.PI / 180);
+    const near = entrances.map((e) => ({ e, d: Math.hypot((e.at[0] - back[0]) * mx, (e.at[1] - back[1]) * m) }))
+      .filter((x) => x.d <= Math.max(PAIRED_DOOR_REACH, (parseLength(f.tags.width) ?? 0) / 2) && x.e.key !== f.key).sort((a, b) => a.d - b.d)[0];
+    if (!near) continue;
+    out.push({ key: f.key, other: near.e.key, level: 'warning', code: 'indoor-door', points: [f.point, near.e.at],
+      text: tr('Дверь и вход {entrance} по разные стороны одной стены — это один проём: объедините их во вход на фасаде.', { entrance: near.e.key }),
+      fix: { label: tr('Объединить во вход на фасаде'), tags: {}, mergeIntoEntrance: near.e.key } });
+  }
+  return out;
 }
 
 /**
@@ -12780,7 +12821,11 @@ function renderIssues() {
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding && plan ? buildingIndoor(focusedBuilding) : [];
   const outerDoor = focusedBuilding ? outerDoorTest(focusedBuilding, indoorAll) : undefined;
-  const indoorIssues = focusedBuilding && plan ? [...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), outerDoor!(f), innerEntrance(f, outerDoor!))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll), ...validateEscalators(indoorAll, ((ls) => (n: number) => { const l = ls.find((x) => x.n === n); return l && { floor: l.floor, explicit: !!l.explicit }; })(buildingLevels(focusedBuilding, indoorAll)))] : [];
+  const paired = focusedBuilding && plan ? pairedWallDoors(focusedBuilding, indoorAll, outerDoor!) : [];
+  const pairedKeys = new Set(paired.map((i) => i.key));
+  const indoorIssues = focusedBuilding && plan ? [...paired,
+    // Дверь с парным входом — не «вход без entrance»: исправление одно, объединить
+    ...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), !pairedKeys.has(f.key) && outerDoor!(f), innerEntrance(f, outerDoor!))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll), ...validateEscalators(indoorAll, ((ls) => (n: number) => { const l = ls.find((x) => x.n === n); return l && { floor: l.floor, explicit: !!l.explicit }; })(buildingLevels(focusedBuilding, indoorAll)))] : [];
   const duplicates = focusedBuilding && !plan ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
   focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
   // Слой зданий выключен — проверку карты не считаем (пересчитаем, когда включат)
@@ -12999,6 +13044,35 @@ function applyFixes(list: Issue[]) {
       if(edits.length){commitSolidDoorEdits(edits);indoorEditRev++;renderLevels();renderIssues();}
     }catch(err){setStatus((err as Error).message,true);}
     list=list.filter(i=>!i.fix?.solidDoorWall);
+  }
+  const merges=list.filter(i=>i.fix?.mergeIntoEntrance);
+  if(merges.length){
+    if(!focus)setStatus(tr('Откройте здание, чтобы объединить дверь со входом.'),true);
+    else try{
+      const all=buildingIndoor(focus).filter(f=>!f.key.endsWith('#poi'));
+      const doors=merges.map(i=>all.find(f=>f.key===i.key)).filter((f):f is IndoorFeature=>!!f?.point);
+      // Внутренняя дверь уходит (с выемкой в стене, если была), её теги — во вход на фасаде; выемку под вход
+      // достроит autoNotchWalls по восстановленной стене
+      const edits=batchSolidDoorEdits(doors,()=>({}));
+      for(const issue of merges){
+        const door=doors.find(f=>f.key===issue.key),key=issue.fix!.mergeIntoEntrance!;
+        if(!door)continue;
+        const id=Number(key.slice(5)),own=session.get(key)?.tags??sessionNodeTags.get(id)??dataEntrances.get(id)??entranceTags(id)??{};
+        if(!session.has(key))session.track({key,version:0,tags:{...own}});
+        edits.push({key,tags:{...door.tags,...session.get(key)!.tags}});
+      }
+      if(edits.length){
+        commitSolidDoorEdits(edits);
+        // Вход теперь дверь полигональной стены: сквозной проём под ним — в тот же шаг истории
+        indoorEditRev++;
+        const base=buildingIndoor(focus).filter(f=>!f.key.endsWith('#poi')),entrances=new Set(merges.map(i=>i.fix!.mergeIntoEntrance!));
+        const notches=validateSolidWallDoors(base).filter(i=>entrances.has(i.key)&&i.fix?.solidDoorWall);
+        const cut=notches.length?notchEdits(notches,base,true):[];
+        if(cut.length)commitSolidDoorEdits(cut,true);
+        indoorEditRev++;renderLevels();renderIssues();
+      }
+    }catch(err){setStatus((err as Error).message,true);}
+    list=list.filter(i=>!i.fix?.mergeIntoEntrance);
   }
   const splits = list.filter((i) => i.fix?.splitLevels);
   if (splits.length) void splitRoomsByLevel(splits);

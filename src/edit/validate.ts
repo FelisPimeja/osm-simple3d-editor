@@ -33,6 +33,8 @@ export interface Issue {
 
 export interface Fix {
   solidDoorWall?: string;
+  /** Объединить дверь key со входом на фасаде (узел): теги двери — во вход, сама дверь убирается. */
+  mergeIntoEntrance?: string;
   /** Что сделает кнопка — для подсказки. */
   label: string;
   tags: Record<string, string | undefined>;

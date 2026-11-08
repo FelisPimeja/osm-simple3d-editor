@@ -44,3 +44,11 @@ test('stairs cut a wall across the flight but not a wall along it',()=>{
  const side=new Float32Array([2,1,0,8,1,0,8,1,8,2,1,0,8,1,8,2,1,8]);
  assert.equal(masksOf(side,[flight]).length,0);
 });
+test('floor hole over an escalator spans its whole incline under the slab, like over stairs',()=>{
+ // Эскалатор 0→4 м на 10 м: площадки по 1 м, наклон 1–9 м; перекрытие верхнего этажа на 4 м
+ const holes=floorHoles([escalator],4);
+ const xs=holes.flatMap(poly=>poly[0].map(p=>p[0]));
+ assert.ok(Math.abs(Math.min(...xs)-1)<.06,'from the bottom of the incline: '+Math.min(...xs));
+ assert.ok(Math.abs(Math.max(...xs)-9)<.06,'to the top of the incline: '+Math.max(...xs));
+ assert.deepEqual(floorHoles([escalator],0),[],'no hole in the floor it starts on');
+});

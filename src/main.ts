@@ -2,7 +2,7 @@ import { withEntranceTags } from './edit/entrance-edits';
 import { cleanPiece, freeAreaPieces, joinedWalls } from './edit/free-area';
 import { joinedWallLine } from './edit/indoor-wall-union';
 import { pointWallRings, insertWallPoint } from './edit/point-wall-rings';
-import { roomDoorway, solidWall, wallLocalPolygons, cutSolidWall, findSolidDoorBinding, restoreSolidDoor, nearestSolidFace, type WallPolygon, normalizeSolidDoorEdits, projectedOpeningIndoor } from './edit/solid-wall-doors';
+import { roomDoorway, DOOR_ON_FACE, solidWall, wallLocalPolygons, cutSolidWall, findSolidDoorBinding, restoreSolidDoor, nearestSolidFace, type WallPolygon, normalizeSolidDoorEdits, projectedOpeningIndoor } from './edit/solid-wall-doors';
 import { addFacadeDoors } from './edit/facade-doors';
 import { indoorAnchor } from './edit/indoor-anchor';
 import { levelDetachNodes } from './edit/level-detach';
@@ -8662,7 +8662,7 @@ function outerDoorTest(g: BuildingGroup, indoor: IndoorFeature[]): ((f: IndoorFe
       if (!back) {
         const at = local(f.point);
         const hit = solids.filter((w) => solidWall(w) && w.levels.some((l) => f.levels.includes(l)))
-          .map((w) => ({ w, face: nearestSolidFace(wallLocalPolygons(w, local), at, 0.03) })).filter((x) => x.face)
+          .map((w) => ({ w, face: nearestSolidFace(wallLocalPolygons(w, local), at, DOOR_ON_FACE) })).filter((x) => x.face)
           .sort((a, b) => a.face!.distance - b.face!.distance)[0];
         if (hit) back = cutSolidWall(wallLocalPolygons(hit.w, local), hit.face!.at, hit.face!.face, 0.2).gap.slice(2, 4);
       }

@@ -159,3 +159,11 @@ test('a face node a couple of centimetres off the straight face leaves no sliver
  const area=poly=>{let a=0;const q=poly[0];for(let i=0;i+1<q.length;i++)a+=q[i][0]*q[i+1][1]-q[i+1][0]*q[i][1];return Math.abs(a/2);};
  assert.ok(r.pieces.every(p=>area(p)>1));
 });
+test('a facade bent by about one degree at the door is one face: the notch fits and goes through',()=>{
+ // Фасад 30 м с изломом ~1° у двери и вершинами старого проёма в 4–5 см от прямой
+ const ring=[[0,0],[14.09,0.05],[15.91,0.045],[30,0],[30,0.4],[0,0.4],[0,0]];
+ const face=nearestSolidFace([[ring]],[15,0.055],0.07);
+ assert.ok(face);
+ const r=cutSolidWall([[ring]],face.at,face.face,1.82);
+ assert.equal(r.pieces.length,2);
+});

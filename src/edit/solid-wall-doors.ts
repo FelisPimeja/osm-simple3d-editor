@@ -23,7 +23,12 @@ const insideRing=(p:Pt,r:Pt[])=>{
 };
 const inside=(p:Pt,polys:WallPolygon[])=>polys.some(poly=>insideRing(p,poly[0])&&!poly.slice(1).some(r=>insideRing(p,r)));
 /** Насколько вырез выходит наружу за лицевую грань, м: неровности грани (узлы фасада в стороне на мм–см). */
-const SLIVER_REACH=0.05;
+const SLIVER_REACH=0.08;
+/** Излом лицевой грани в пределах проёма, который ещё считается прямой гранью, м. */
+const FACE_BEND=0.06;
+/** Почти прямой угол грани (синус поворота): такая вершина не делит грань — фасад длиной в десятки метров
+ * с узлом в паре сантиметров от прямой (до 2°). */
+const FACE_STRAIGHT=0.035;
 /** Куски стены меньше этого после выреза — обрезки неровной грани, м². */
 const MIN_PIECE_AREA=0.02;
 const ringArea=(r:Pt[])=>{let a=0;for(let i=0;i+1<r.length;i++)a+=cross(r[i],r[i+1]);return Math.abs(a/2);};
@@ -37,9 +42,12 @@ export function cutSolidWall(polys:WallPolygon[],at:Pt,face:[Pt,Pt],width:number
  if(t<width/2+0.005||t>length-width/2-0.005) throw new Error(tr('Для проёма не хватает места на выбранной грани стены.'));
  // Match the centimetre-tolerant straight face recovered from rounded OSM nodes.
  // The cut and its connector must use exactly the same front boundary.
+ // Within the opening the face may bend a few centimetres (a facade node off the straight line, the back corners
+ // of a removed opening): those vertices go onto the face line, otherwise they split the face or leave slivers.
  polys=polys.map(poly=>poly.map(r=>r.map(p=>{
   const along=dot(sub(p,face[0]),tangent),distance=Math.abs(cross(sub(p,face[0]),tangent));
-  return along>=-1e-6&&along<=length+1e-6&&distance<0.01?plus(face[0],tangent,along):p;
+  const inOpening=Math.abs(along-t)<=width/2+0.1;
+  return along>=-1e-6&&along<=length+1e-6&&distance<(inOpening?FACE_BEND:0.01)?plus(face[0],tangent,along):p;
  })));
  const center=plus(face[0],tangent,t),a=plus(center,tangent,-width/2),b=plus(center,tangent,width/2);
  let normal:Pt=[-tangent[1],tangent[0]];
@@ -126,13 +134,18 @@ export function restoreSolidDoor(binding:SolidDoorBinding,local:(p:LonLat)=>Pt):
  return pc.union(polys,[binding.gap]);
 }
 
+/** Дверь ближе этого к грани полигональной стены, м, — на грани (с запасом на изломы фасада, см. FACE_BEND). */
+export const DOOR_ON_FACE=0.07;
 export function nearestSolidFace(polys:WallPolygon[],at:Pt,maxDistance=0.4):{face:[Pt,Pt];at:Pt;distance:number}|undefined {
  let best:{face:[Pt,Pt];at:Pt;distance:number}|undefined;
  for(const poly of polys) for(const raw of poly){
   let ring=raw.slice(0,-1);
   for(let again=true;again&&ring.length>3;){again=false;for(let i=0;i<ring.length;i++){
    const a=ring[(i+ring.length-1)%ring.length],b=ring[i],c=ring[(i+1)%ring.length],d=sub(c,a),l=Math.hypot(...d);
-   if(l>1e-8&&Math.abs(cross(sub(b,a),d))/l<0.01){ring=ring.filter((_,j)=>j!==i);again=true;break;}
+   const u=sub(b,a),w=sub(c,b),lu=Math.hypot(...u),lw=Math.hypot(...w);
+   const straight=lu>1e-8&&lw>1e-8&&Math.abs(cross(u,w))/(lu*lw)<FACE_STRAIGHT&&dot(u,w)>0;
+   const off=l>1e-8?Math.abs(cross(sub(b,a),d))/l:Infinity;
+   if(off<0.01||straight&&off<FACE_BEND){ring=ring.filter((_,j)=>j!==i);again=true;break;}
   }}
   for(let i=0;i<ring.length;i++){
    const a=ring[i],b=ring[(i+1)%ring.length],d=sub(b,a),l2=dot(d,d);

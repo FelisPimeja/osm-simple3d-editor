@@ -39,7 +39,8 @@ interface FotoshiPhoto {
 }
 
 async function fetchArea([w, s, e, n]: [number, number, number, number]): Promise<GeoJSON.FeatureCollection> {
-  const q = new URLSearchParams({ bbox: [w, s, e, n].map((v) => v.toFixed(6)).join(','), limit: '100', photo_size: 'none' });
+  // Ключ интеграции пускает только «ограниченные» запросы: bbox и limit, без photo_size (иначе 403)
+  const q = new URLSearchParams({ bbox: [w, s, e, n].map((v) => v.toFixed(6)).join(','), limit: '100' });
   const res = await get(`${API}/photos?${q}`);
   const data = (await res.json()) as { features: FotoshiPhoto[] };
   return {
@@ -52,7 +53,7 @@ async function fetchArea([w, s, e, n]: [number, number, number, number]): Promis
 }
 
 async function fetchPicture(id: string): Promise<Picture> {
-  const res = await get(`${API}/photos/${encodeURIComponent(id)}?photo_size=1280`);
+  const res = await get(`${API}/photos/${encodeURIComponent(id)}`);
   const f = (await res.json()) as FotoshiPhoto, p = f.properties;
   const lic = f.links?.find((l) => l.rel === 'license');
   return {

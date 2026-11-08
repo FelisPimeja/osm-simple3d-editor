@@ -11365,7 +11365,9 @@ function rewriteSolidWalls(walls: IndoorFeature[], pieces: WallPolygon[], edits:
   // Узлы — только объектов на этажах самих стен: к этажу ниже привязка даёт точку, а не общий узел
   const wallLevels = new Set(walls.flatMap(w=>w.levels));
   const all = (focus ? buildingIndoor(focus) : shownIndoor).filter(f=>f.levels.some(l=>wallLevels.has(l)));
-  const {nodeFor} = sharedNodes([...all.filter(f=>!f.point),...walls,...anchors]);
+  // Узлы, созданные этой же правкой (стена с выемкой — для помещения за проёмом), — тоже общие, а не дубли
+  const pool = queued.length ? projectedOpeningIndoor(all,queued).filter(f=>f.levels.some(l=>wallLevels.has(l))) : all;
+  const {nodeFor} = sharedNodes([...pool.filter(f=>!f.point),...walls,...anchors]);
   const rings = pieces.map(poly=>poly.map(r=>{
     const ring=nodeRing(r.slice(0,-1).map(p=>overpassLayer.focusToLngLat(...p)! as LonLat),nodeFor);
     if(!ring) throw new Error(tr('Не удалось объединить контуры.'));

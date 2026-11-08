@@ -96,6 +96,8 @@ export function cutSolidWall(polys:WallPolygon[],at:Pt,face:[Pt,Pt],width:number
 export interface SolidDoorBinding { connector:IndoorFeature; walls:IndoorFeature[]; gap:Pt[]; face:[Pt,Pt]; jambLines:IndoorFeature[] }
 /** Unglued wall ends count as jambs when they touch the connector's end and stand this close to the door, m. */
 const JAMB_SNAP=0.1,JAMB_REACH=1;
+/** Боковина проёма почти поперёк перемычки (косинус угла): задний угол, прилипший к узлу помещения в паре см, клонит её на ~1–2°. */
+const JAMB_SQUARE=0.05;
 /** Recover the connection using shared OSM nodes, without private tags or session-only metadata. */
 /** Индексы объектов этажа (один раз на массив): дверей сотни, объектов тысячи — без них перебор на каждую дверь. */
 const doorIndexes=new WeakMap<IndoorFeature[],{byNode:Map<number,IndoorFeature[]>;solid:IndoorFeature[]}>();
@@ -130,13 +132,13 @@ export function findSolidDoorBinding(all:IndoorFeature[],door:IndoorFeature,loca
     if(rids[i]!==node&&(Math.hypot(...sub(front,at))>JAMB_SNAP||Math.hypot(...sub(front,doorAt))>JAMB_REACH)) continue;
     for(const j of [(i+count-1)%count,(i+1)%count]){
      const back=local(ring[j]),d=sub(back,front),length=Math.hypot(...d);
-     if(length>0.005&&Math.abs(dot(d,tangent))/length<0.02) out.push({f,front,back,direction:[d[0]/length,d[1]/length],length});
+     if(length>0.005&&Math.abs(dot(d,tangent))/length<JAMB_SQUARE) out.push({f,front,back,direction:[d[0]/length,d[1]/length],length});
     }
    }
    return out;
   })));
   for(const sa of sides(ids[0],a).sort((x,y)=>x.length-y.length)){
-   const sb=sides(ids.at(-1)!,b).find(s=>dot(s.direction,sa.direction)>0.999);
+   const sb=sides(ids.at(-1)!,b).find(s=>dot(s.direction,sa.direction)>0.995);
    if(!sb) continue;
    // Separate ways redrawing a jamb would be left standing when the jamb moves or the opening closes.
    const onJamb=(f:IndoorFeature,s:{front:Pt;back:Pt})=>{
@@ -201,6 +203,8 @@ export function projectedOpeningIndoor(all:IndoorFeature[],edits:ObjectEdit[]):I
   return [...state.values()];
 }
 
+/** Задняя сторона помещения в стольких метрах от тыла проёма — та же линия (узлы OSM округлены, стороны изломаны). */
+const ROOM_BACK_SNAP=0.01;
 /** Extend only the room behind the opening; its front edge shares the actual door node. */
 export function roomDoorway(polys:WallPolygon[],gap:Pt[],door:Pt):WallPolygon[]|undefined {
  const back:Pt=[(gap[2][0]+gap[3][0])/2,(gap[2][1]+gap[3][1])/2];
@@ -213,7 +217,7 @@ export function roomDoorway(polys:WallPolygon[],gap:Pt[],door:Pt):WallPolygon[]|
  if(l<1e-6)return;
  const aligned=polys.map(poly=>poly.map(r=>r.map(p=>{
   const distance=cross(v,sub(p,a))/l;
-  if(Math.abs(distance)>0.002)return p;
+  if(Math.abs(distance)>ROOM_BACK_SNAP)return p;
   return plus(a,v,dot(sub(p,a),v)/l2);
  })));
  const merged=pc.union(aligned,[gap]);
@@ -221,7 +225,7 @@ export function roomDoorway(polys:WallPolygon[],gap:Pt[],door:Pt):WallPolygon[]|
  // polygon-clipping removes collinear vertices. Reinsert the door into the front edge.
  for(const poly of merged)for(const ring of poly)for(let i=0;i+1<ring.length;i++){
   const a=ring[i],b=ring[i+1],v=sub(b,a),l2=dot(v,v),t=l2?dot(sub(door,a),v)/l2:-1;
-  if(t>1e-6&&t<1-1e-6&&Math.abs(cross(sub(door,a),v))/Math.sqrt(l2)<1e-6){ring.splice(i+1,0,door);break;}
+  if(t>1e-6&&t<1-1e-6&&Math.abs(cross(sub(door,a),v))/Math.sqrt(l2)<FACE_BEND){ring.splice(i+1,0,door);break;}
  }
  return merged;
 }

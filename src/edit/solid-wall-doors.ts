@@ -33,7 +33,12 @@ const FACE_STRAIGHT=0.035;
 const MIN_PIECE_AREA=0.02;
 const ringArea=(r:Pt[])=>{let a=0;for(let i=0;i+1<r.length;i++)a+=cross(r[i],r[i+1]);return Math.abs(a/2);};
 /** The jambs follow the normal of the clicked face, including tapered walls. */
-export function cutSolidWall(polys:WallPolygon[],at:Pt,face:[Pt,Pt],width:number) {
+/**
+ * Notch for a door on a solid wall face. door — the door's own point when it is not exactly on the face (a facade
+ * node a few centimetres off a slightly bent face): the opening is centred on it and the door does not move.
+ * The front corners are the wall's own corners at the jambs, so the connector shares them.
+ */
+export function cutSolidWall(polys:WallPolygon[],at:Pt,face:[Pt,Pt],width:number,door?:Pt) {
  if(!Number.isFinite(width)||width<=0) throw new Error(tr('Ширина двери должна быть положительным числом.'));
  const v=sub(face[1],face[0]),length=Math.hypot(...v);
  if(length<1e-6) throw new Error(tr('Грань стены имеет нулевую длину.'));
@@ -41,37 +46,51 @@ export function cutSolidWall(polys:WallPolygon[],at:Pt,face:[Pt,Pt],width:number
  const t=dot(sub(at,face[0]),tangent);
  if(t<width/2+0.005||t>length-width/2-0.005) throw new Error(tr('Для проёма не хватает места на выбранной грани стены.'));
  // Match the centimetre-tolerant straight face recovered from rounded OSM nodes.
- // The cut and its connector must use exactly the same front boundary.
- // Within the opening the face may bend a few centimetres (a facade node off the straight line, the back corners
- // of a removed opening): those vertices go onto the face line, otherwise they split the face or leave slivers.
  polys=polys.map(poly=>poly.map(r=>r.map(p=>{
   const along=dot(sub(p,face[0]),tangent),distance=Math.abs(cross(sub(p,face[0]),tangent));
-  const inOpening=Math.abs(along-t)<=width/2+0.1;
-  return along>=-1e-6&&along<=length+1e-6&&distance<(inOpening?FACE_BEND:0.01)?plus(face[0],tangent,along):p;
+  return along>=-1e-6&&along<=length+1e-6&&distance<0.01?plus(face[0],tangent,along):p;
  })));
- const center=plus(face[0],tangent,t),a=plus(center,tangent,-width/2),b=plus(center,tangent,width/2);
+ const onFace=plus(face[0],tangent,t);
+ const center=door&&Math.hypot(...sub(door,onFace))<=FACE_BEND?door:onFace;
+ const a=plus(center,tangent,-width/2),b=plus(center,tangent,width/2);
  let normal:Pt=[-tangent[1],tangent[0]];
- if(!inside(plus(center,normal,0.005),polys)) normal=[-normal[0],-normal[1]];
- if(!inside(plus(center,normal,0.005),polys)) throw new Error(tr('Дверь не находится на грани полигональной стены.'));
+ const probe=(n:Pt)=>[0.005,0.03,FACE_BEND+0.02].some(d=>inside(plus(onFace,n,d),polys));
+ if(!probe(normal)) normal=[-normal[0],-normal[1]];
+ if(!probe(normal)) throw new Error(tr('Дверь не находится на грани полигональной стены.'));
+ /** Through the wall along the normal from just outside the front: where the ray leaves the wall, from p. */
  const reach=(p:Pt)=>{
-  let best=Infinity;
+  const from=plus(p,normal,-SLIVER_REACH),hits:number[]=[];
   for(const poly of polys) for(const r of poly) for(let i=0;i+1<r.length;i++){
    const d=sub(r[i+1],r[i]),den=cross(normal,d);
    if(Math.abs(den)<1e-9) continue;
-   const t=cross(sub(r[i],p),d)/den,u=cross(sub(r[i],p),normal)/den;
-   if(t>0.001&&u>=-1e-7&&u<=1+1e-7) best=Math.min(best,t);
+   const t=cross(sub(r[i],from),d)/den,u=cross(sub(r[i],from),normal)/den;
+   if(t>1e-4&&u>=-1e-7&&u<=1+1e-7) hits.push(t);
   }
-  if(!Number.isFinite(best)) throw new Error(tr('Не удалось найти противоположную грань стены.'));
-  return best;
+  // A ray through a vertex crosses both of its edges: one crossing
+  hits.sort((x,y)=>x-y);
+  const uniq=hits.filter((h,i)=>i===0||h-hits[i-1]>1e-6);
+  const exit=inside(from,polys)?uniq[0]:uniq[1];
+  if(exit===undefined||exit-SLIVER_REACH<=0.001) throw new Error(tr('Не удалось найти противоположную грань стены.'));
+  return exit-SLIVER_REACH;
  };
  const da=reach(a),db=reach(b),backA=plus(a,normal,da),backB=plus(b,normal,db);
- const gap=[a,b,backB,backA,a];
  // Extend through the boundary to avoid slivers: a millimetre at the back, a few centimetres at the front, where
  // the face is often not quite straight (a facade node a few millimetres off the wall face left a triangle behind).
  const cutter=[[plus(a,normal,-SLIVER_REACH),plus(b,normal,-SLIVER_REACH),plus(b,normal,db+0.001),plus(a,normal,da+0.001),plus(a,normal,-SLIVER_REACH)]];
  const pieces=pc.difference(polys,cutter).filter(poly=>ringArea(poly[0])>=MIN_PIECE_AREA);
  if(!pieces.length) throw new Error(tr('Проём удаляет стену целиком — уменьшите ширину двери.'));
- return {pieces,gap,front:[a,center,b] as [Pt,Pt,Pt],normal};
+ // Front corners: the wall corner on each jamb line next to the front (the face may run a few cm off the line)
+ const corner=(p:Pt):Pt=>{
+  let best:Pt|undefined,bd=Infinity;
+  for(const poly of pieces) for(const r of poly) for(const q of r as Pt[]){
+   const off=sub(q,p),across=Math.abs(dot(off,tangent)),depth=dot(off,normal);
+   if(across<0.002&&depth>=-SLIVER_REACH-0.001&&depth<=FACE_BEND+0.02&&Math.abs(depth)<bd){bd=Math.abs(depth);best=q;}
+  }
+  return best??p;
+ };
+ const fa=corner(a),fb=corner(b);
+ const gap=[fa,fb,backB,backA,fa];
+ return {pieces,gap,front:[fa,center,fb] as [Pt,Pt,Pt],normal};
 }
 
 export interface SolidDoorBinding { connector:IndoorFeature; walls:IndoorFeature[]; gap:Pt[]; face:[Pt,Pt]; jambLines:IndoorFeature[] }

@@ -11525,9 +11525,9 @@ function solidDoorEditsImpl(door:IndoorFeature,at:LonLat|undefined,tags=door.tag
     const target=all.filter(f=>solidWall(f)&&f.levels.some(l=>door.levels.includes(l)))
       .map(wall=>({wall,face:nearestSolidFace(wallLocalPolygons(wall,local),local(at))})).filter(x=>x.face).sort((a,b)=>a.face!.distance-b.face!.distance)[0];
     if(!target)return;
-    const edits:ObjectEdit[]=[],cut=cutSolidWall(wallLocalPolygons(target.wall,local),target.face!.at,target.face!.face,openingDoorWidth(tags));
+    const edits:ObjectEdit[]=[],cut=cutSolidWall(wallLocalPolygons(target.wall,local),target.face!.at,target.face!.face,openingDoorWidth(tags),local(at!));
     const result=rewriteSolidWalls([target.wall],cut.pieces,edits,door.levels,queued),{nodeFor}=sharedNodes([result]);
-    const coords=cut.front.map(p=>overpassLayer.focusToLngLat(...p)! as LonLat),ids=[nodeFor(coords[0]).id,Number(door.key.split('/')[1]),nodeFor(coords[2]).id];
+    const coords=cut.front.map((p,i)=>i===1?at!:overpassLayer.focusToLngLat(...p)! as LonLat),ids=[nodeFor(coords[0]).id,Number(door.key.split('/')[1]),nodeFor(coords[2]).id];
     const key=`way/${nextNewId--}`,wallTags={indoor:'wall',level:tags.level??door.levels.join(';')},polygons=[{outer:coords,outerIds:ids,inners:[]}],line={ids,coords};
     edits.push({key,create:{key,version:0,tags:wallTags,line,polygons}},{key:door.key,tags,polygons:[{outer:[coords[1]],outerIds:[ids[1]],inners:[]}]});
     indoorCreated.set(key,{key,kind:'wall',line:true,tags:wallTags,polygons,levels:door.levels});indoorEdited.add(key);
@@ -11538,9 +11538,9 @@ function solidDoorEditsImpl(door:IndoorFeature,at:LonLat|undefined,tags=door.tag
   trackIndoor(binding.connector.key,binding.connector);
   const face=at?nearestSolidFace(restored,local(at)):undefined;
   if(face){
-    const cut=cutSolidWall(restored,face.at,face.face,openingDoorWidth(tags));
+    const cut=cutSolidWall(restored,face.at,face.face,openingDoorWidth(tags),local(at!));
     const result=rewriteSolidWalls(binding.walls,cut.pieces,edits,door.levels,queued);
-    const coords=cut.front.map(p=>overpassLayer.focusToLngLat(...p)! as LonLat);
+    const coords=cut.front.map((p,i)=>i===1?at!:overpassLayer.focusToLngLat(...p)! as LonLat);
     const {nodeFor}=sharedNodes([result]);
     const ids=[nodeFor(coords[0]).id,Number(door.key.split('/')[1]),nodeFor(coords[2]).id];
     const line={ids,coords},polygons=[{outer:coords,outerIds:ids,inners:[]}];
@@ -11553,9 +11553,9 @@ function solidDoorEditsImpl(door:IndoorFeature,at:LonLat|undefined,tags=door.tag
       const target=all.filter(f=>solidWall(f)&&!binding.walls.some(w=>w.key===f.key)&&f.levels.some(l=>door.levels.includes(l)))
         .map(wall=>({wall,face:nearestSolidFace(wallLocalPolygons(wall,local),local(at))})).filter(x=>x.face).sort((a,b)=>a.face!.distance-b.face!.distance)[0];
       if(target){
-        const cut=cutSolidWall(wallLocalPolygons(target.wall,local),target.face!.at,target.face!.face,openingDoorWidth(tags));
+        const cut=cutSolidWall(wallLocalPolygons(target.wall,local),target.face!.at,target.face!.face,openingDoorWidth(tags),local(at!));
         const result=rewriteSolidWalls([target.wall],cut.pieces,edits,door.levels,queued),{nodeFor}=sharedNodes([result]);
-        const coords=cut.front.map(p=>overpassLayer.focusToLngLat(...p)! as LonLat),ids=[nodeFor(coords[0]).id,Number(door.key.split('/')[1]),nodeFor(coords[2]).id];
+        const coords=cut.front.map((p,i)=>i===1?at!:overpassLayer.focusToLngLat(...p)! as LonLat),ids=[nodeFor(coords[0]).id,Number(door.key.split('/')[1]),nodeFor(coords[2]).id];
         const key=`way/${nextNewId--}`,wallTags={indoor:'wall',level:tags.level??door.levels.join(';')},polygons=[{outer:coords,outerIds:ids,inners:[]}],line={ids,coords};
         edits.push({key,create:{key,version:0,tags:wallTags,line,polygons}});
         indoorCreated.set(key,{key,kind:'wall',line:true,tags:wallTags,polygons,levels:door.levels});indoorEdited.add(key);

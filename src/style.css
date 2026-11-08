@@ -816,3 +816,7 @@ body.mobile #issues-panel { display: none !important; }
 .handrail-sides-row { padding: 0 0 2px 12px; }
 .handrail-sides { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: #555; }
 .handrail-sides label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+
+/* Клавиши в справке — как на GitHub (issue #38) */
+#help kbd { padding: .24rem; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; vertical-align: middle; background-color: #f6f8fa;
+  border: solid 1px #d1d9e0b3; box-shadow: inset 0 -1px 0 #d1d9e0b3; border-radius: 6px; line-height: 10px; display: inline-block; color: #1f2328; }

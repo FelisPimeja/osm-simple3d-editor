@@ -13726,6 +13726,11 @@ const HELP: Record<string, HelpTopic> = {
     tr('Ctrl/Cmd/Alt+клик — взять новый образец. Esc — выключить.'),
   ] },
 };
+/** Клавиши в тексте справки — в <kbd> (issue #38): Esc, Shift+H, Ctrl/Cmd/Alt+клик, «M —», «(P)», стрелки. */
+const HELP_KEY = /(?<![\p{L}\d:._-])(?:Shift|Ctrl|Cmd|Alt|Esc|Enter|Tab|Delete|Del|Backspace|Space|Пробел|[→←↑↓]|[A-Z](?=\s*(?:—|–|,|\/|\)|\+)|$)|(?<=[+(/]\s?)[A-Z])(?![\p{L}\d])/gu;
+function kbdify(text: string): string {
+  return esc(text).replace(HELP_KEY, (k) => `<kbd>${k}</kbd>`);
+}
 let helpShown = false;
 try { helpShown = localStorage.getItem('help-panel') === 'on'; } catch { /* по умолчанию скрыта */ }
 let helpTopic = '';
@@ -13740,7 +13745,7 @@ function renderHelp() {
   helpTopic = key;
   const t = HELP[key];
   helpTool.textContent = `— ${t.title}`;
-  helpEl.innerHTML = `<p>${t.desc}</p><ul>${t.items.map((i) => `<li>${i}</li>`).join('')}</ul>`;
+  helpEl.innerHTML = `<p>${kbdify(t.desc)}</p><ul>${t.items.map((i) => `<li>${kbdify(i)}</li>`).join('')}</ul>`;
 }
 for (const b of helpBtns) b.addEventListener('click', () => {
   helpShown = !helpShown;

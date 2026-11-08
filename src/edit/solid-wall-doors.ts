@@ -203,6 +203,20 @@ export function projectedOpeningIndoor(all:IndoorFeature[],edits:ObjectEdit[]):I
   return [...state.values()];
 }
 
+/**
+ * Убрать «шипы»: вершины, где контур разворачивается назад вдоль той же линии (нулевая ширина) — остаются после
+ * объединения помещения с проёмом, когда стороны совпадают с точностью до миллиметров.
+ */
+export function dropSpikes(polys:WallPolygon[]):WallPolygon[]{
+ return polys.map(poly=>poly.map(raw=>{
+  let r=raw.slice(0,-1);
+  for(let again=true;again&&r.length>3;){again=false;for(let i=0;i<r.length;i++){
+   const a=r[(i+r.length-1)%r.length],b=r[i],c=r[(i+1)%r.length],u=sub(b,a),w=sub(c,b),lu=Math.hypot(...u),lw=Math.hypot(...w);
+   if(lu<1e-6||lw<1e-6||dot(u,w)<0&&Math.abs(cross(u,w))/(lu*lw)<0.02){r=r.filter((_,j)=>j!==i);again=true;break;}
+  }}
+  return [...r,r[0]];
+ }));
+}
 /** Задняя сторона помещения в стольких метрах от тыла проёма — та же линия (узлы OSM округлены, стороны изломаны). */
 const ROOM_BACK_SNAP=0.005;
 /** Extend only the room behind the opening; its front edge shares the actual door node. */
@@ -220,7 +234,7 @@ export function roomDoorway(polys:WallPolygon[],gap:Pt[],door:Pt):WallPolygon[]|
   if(Math.abs(distance)>ROOM_BACK_SNAP)return p;
   return plus(a,v,dot(sub(p,a),v)/l2);
  })));
- const merged=pc.union(aligned,[gap]);
+ const merged=dropSpikes(pc.union(aligned,[gap]) as WallPolygon[]);
  if(merged.length!==polys.length||!pc.difference(merged,aligned).length)return;
  // polygon-clipping removes collinear vertices. Reinsert the door into the front edge.
  for(const poly of merged)for(const ring of poly)for(let i=0;i+1<ring.length;i++){

@@ -2,7 +2,7 @@ import { withEntranceTags } from './edit/entrance-edits';
 import { cleanPiece, freeAreaPieces, joinedWalls } from './edit/free-area';
 import { joinedWallLine } from './edit/indoor-wall-union';
 import { pointWallRings, insertWallPoint } from './edit/point-wall-rings';
-import { roomDoorway, DOOR_ON_FACE, solidWall, wallLocalPolygons, cutSolidWall, findSolidDoorBinding, restoreSolidDoor, nearestSolidFace, type WallPolygon, normalizeSolidDoorEdits, projectedOpeningIndoor } from './edit/solid-wall-doors';
+import { roomDoorway, dropSpikes, DOOR_ON_FACE, solidWall, wallLocalPolygons, cutSolidWall, findSolidDoorBinding, restoreSolidDoor, nearestSolidFace, type WallPolygon, normalizeSolidDoorEdits, projectedOpeningIndoor } from './edit/solid-wall-doors';
 import { addFacadeDoors } from './edit/facade-doors';
 import { indoorAnchor } from './edit/indoor-anchor';
 import { levelDetachNodes } from './edit/level-detach';
@@ -11531,7 +11531,9 @@ function syncDoorwayRoomsImpl(edits:ObjectEdit[]):ObjectEdit[]{
       let polys=wallLocalPolygons(room,local),changed=false;
       // The shared door node makes an existing recess recoverable after reload.
       const linked=source.polygons.some(p=>[p.outerIds,...(p.innerIds??[])].some(ids=>ids?.includes(Number(door.key.split('/')[1]))));
-      if(old&&linked){polys=polygonClipping.difference(polys,[old.gap]);changed=true;}
+      // Прежний проём вычитается, только если помещение в него заходило: иначе вычитание лишь вставляло углы проёма
+      // в сторону помещения (по ним потом шли «шипы»)
+      if(old&&linked&&polygonClipping.intersection(polys,[old.gap]).some(p=>Math.abs(ringAreaLocal(p[0] as [number,number][]))>ROOM_SLIVER_AREA)){polys=dropSpikes(polygonClipping.difference(polys,[old.gap]) as WallPolygon[]);changed=true;}
       if(next&&nextDoor){const expanded=roomDoorway(polys,next.gap,local(nextDoor.point!));if(expanded){polys=expanded;changed=true;}}
       // Обрезки (миллиметровые несовпадения сторон помещения и проёма) — не куски помещения: иначе путь помещения
       // становился мультиполигоном с треугольником
@@ -13129,6 +13131,13 @@ function applyFixes(list: Issue[]) {
         const notches=validateSolidWallDoors(base).filter(i=>keys.has(i.key)&&i.fix?.solidDoorWall);
         const cut=notches.length?notchEdits(notches,base,true):[];
         if(cut.length)commitSolidDoorEdits(cut,true);
+        // Прежний узел двери, который остался вершиной помещения, могло убрать из контура расширение помещения в
+        // проём: без путей и тегов он не нужен
+        indoorEditRev++;
+        const now=buildingIndoor(focus),outline=groupFeatures(focus);
+        const orphans=doors.map(d=>d.key).filter(k=>!made.includes(k)&&session.has(k)&&!session.isDeleted(k)&&!Object.keys(session.get(k)!.tags).length)
+          .filter(k=>{const id=Number(k.split('/')[1]);return ![...now.filter(f=>!f.point),...outline].some(f=>f.polygons?.some(p=>[p.outerIds,...(p.innerIds??[])].some(r=>r?.includes(id))));});
+        if(orphans.length)session.editMany(orphans.map(key=>({key,delete:true})),true);
         indoorEditRev++;renderLevels();renderIssues();
       }
     }catch(err){setStatus((err as Error).message,true);}

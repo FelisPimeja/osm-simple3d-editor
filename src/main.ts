@@ -12483,6 +12483,17 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
     const poly = (p: Polygon) => [p.outer.map(loc), ...p.inners.map((r) => r.map(loc))];
     const parts = partFeats
       .map((f) => { const h = computeHeights(f.tags); return { polygons: f.polygons.map(poly), min: h.min, wallTop: h.wallTop }; });
+    // Контур с частями, где частей нет (way/231434903: магазины 1-го этажа без building:part над ними), — объём по его
+    // высоте: иначе там «нет здания выше» и у помещений нижнего этажа нет потолка
+    const partClip = parts.flatMap((p) => p.polygons.map((q) => q.map((r) => [...r, r[0]])));
+    if (hasParts) for (const o of outlines) {
+      if (!o.hasParts) continue;
+      const h = computeHeights(o.tags);
+      try {
+        const rest = polygonClipping.difference(o.polygons.map(poly).map((q) => q.map((r) => [...r, r[0]])) as never, ...(partClip.map((q) => [q]) as never[]));
+        if (rest.length) parts.push({ polygons: rest.map((q) => q.map((r) => r.slice(0, -1) as [number, number][])), min: h.min, wallTop: h.wallTop });
+      } catch { /* без остатка контура */ }
+    }
     const heightOf = roomHeights(indoor);
     const plans = buildPlans(levels, parts, indoor.filter((f) => f.kind !== 'poi' && !f.escalatorArea).map((f) => ({ kind: f.kind, levels: f.levels, floors: floorLevels(f), line: f.line, polygons: f.polygons.map(poly), height: heightOf.get(f.key) })));
     // Крышки помещений ниже своего этажа — на их высоте, видны с этажей выше

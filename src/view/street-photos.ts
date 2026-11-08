@@ -68,6 +68,8 @@ export interface PhotoService {
   /** Свойства маршрута, нужные слою (копируем при обрезке в режиме здания). */
   seqProps: string[];
   overview?: { sourceLayer: string; spec(f: PhotoFilter): OverviewSpec };
+  /** Сервис без векторных тайлов: снимки области [з, ю, в, с] — точки GeoJSON (свойства как у снимков тайлов). */
+  fetchArea?(bbox: PhotoBounds): Promise<GeoJSON.FeatureCollection>;
   fetchPicture(id: string): Promise<Picture>;
   /** Страница снимка на сайте сервиса и подпись ссылки. */
   pageUrl(pic: Picture): string;
@@ -189,6 +191,9 @@ export class PhotoLayer {
   private clipBounds?: PhotoBounds;
   private appliedKey?: string;
   private seqClipListener?: (e: MapSourceDataEvent) => void;
+  /** Подгрузка снимков по видимой области (сервис с fetchArea): обработчик moveend и уже загруженная область. */
+  private areaListener?: () => void;
+  private areaLoaded?: PhotoBounds;
 
   constructor(private readonly map: MlMap, readonly service: PhotoService) {
     const p = service.id;
@@ -246,7 +251,7 @@ export class PhotoLayer {
     const { map, service: s } = this;
     if (!map.getLayer(this.PIC)) return;
     for (const id of [this.PIC, this.PIC_GHOST]) map.setFilter(id, this.clip(filterExpr(s, f, s.picDate)));
-    for (const id of [this.SEQ, this.SEQ_GHOST]) map.setFilter(id, filterExpr(s, f, s.seqDate));
+    for (const id of [this.SEQ, this.SEQ_GHOST]) if (map.getLayer(id)) map.setFilter(id, filterExpr(s, f, s.seqDate));
     if (s.overview) {
       const o = s.overview.spec(f);
       map.setFilter(this.OVERVIEW, o.filter);
@@ -269,11 +274,13 @@ export class PhotoLayer {
     for (const id of [this.VIEW, this.PIC, this.PIC_GHOST, this.SEQ, this.SEQ_GHOST, this.SEQ_RAW, this.OVERVIEW]) if (map.getLayer(id)) map.removeLayer(id);
     for (const id of [this.SOURCE, this.SEQ_CLIP]) if (map.getSource(id)) map.removeSource(id);
     if (this.seqClipListener) { map.off('sourcedata', this.seqClipListener); this.seqClipListener = undefined; }
+    if (this.areaListener) { map.off('moveend', this.areaListener); this.areaListener = undefined; this.areaLoaded = undefined; }
     if (!on) return;
     if (!map.hasImage(this.ARROW)) map.addImage(this.ARROW, pointImage(true), { pixelRatio: 2 });
     if (!map.hasImage(this.DOT)) map.addImage(this.DOT, pointImage(false), { pixelRatio: 2 });
     if (!map.hasImage(this.CONE)) map.addImage(this.CONE, coneImage(70), { pixelRatio: 2 });
-    map.addSource(this.SOURCE, {
+    if (s.fetchArea) this.addAreaSource(s.fetchArea, bounds);
+    else map.addSource(this.SOURCE, {
       type: 'vector', tiles: [s.tiles], minzoom: 0, maxzoom: s.maxzoom, attribution: s.attribution,
       ...(bounds && { bounds }),
     });
@@ -283,7 +290,7 @@ export class PhotoLayer {
         id: this.OVERVIEW, source: this.SOURCE, 'source-layer': s.overview.sourceLayer, maxzoom: s.seqMinzoom, ...o,
       } as LayerSpecification, before);
     }
-    if (bounds) {
+    if (bounds && !s.fetchArea) {
       // Режим здания: маршруты — обрезанной копией из загруженных тайлов, обновляется по мере их загрузки
       map.addSource(this.SEQ_CLIP, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       let timer = 0;
@@ -300,7 +307,7 @@ export class PhotoLayer {
     // Маршруты и снимки — дважды: под зданиями (здания их закрывают) и бледной копией поверх (видно сквозь здания)
     for (const [ghost, at] of [[false, under ?? before], [true, before]] as const) {
       const op = ghost ? GHOST_OPACITY : 1;
-      map.addLayer({
+      if (!s.fetchArea) map.addLayer({
         id: ghost ? this.SEQ_GHOST : this.SEQ, type: 'line', minzoom: s.seqMinzoom,
         ...(bounds ? { source: this.SEQ_CLIP } : { source: this.SOURCE, 'source-layer': s.seqLayer }),
         filter: filterExpr(s, filter, s.seqDate),
@@ -311,7 +318,7 @@ export class PhotoLayer {
         layout: { 'line-cap': 'round' },
       }, at);
       map.addLayer({
-        id: ghost ? this.PIC_GHOST : this.PIC, type: 'symbol', source: this.SOURCE, 'source-layer': s.picLayer, minzoom: s.picMinzoom,
+        id: ghost ? this.PIC_GHOST : this.PIC, type: 'symbol', source: this.SOURCE, ...(s.fetchArea ? {} : { 'source-layer': s.picLayer }), minzoom: s.picMinzoom,
         filter: this.clip(filterExpr(s, filter, s.picDate)),
         layout: {
           'icon-image': ['case', s.isPano, this.DOT, this.ARROW],
@@ -333,6 +340,36 @@ export class PhotoLayer {
         'icon-pitch-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true,
       },
     }, before);
+  }
+
+  /**
+   * Источник из запросов по области (у сервиса нет тайлов): снимки копятся по id, новая область грузится, когда
+   * вид выходит за загруженную, — с запасом в полэкрана, чтобы панорамирование не тратило запросы (у API лимиты).
+   */
+  private addAreaSource(fetchArea: NonNullable<PhotoService['fetchArea']>, bounds?: PhotoBounds) {
+    const { map, service: s } = this;
+    map.addSource(this.SOURCE, { type: 'geojson', data: { type: 'FeatureCollection', features: [] }, attribution: s.attribution });
+    const shown = new Map<string, GeoJSON.Feature>();
+    const listener = () => {
+      if (this.areaListener !== listener || map.getZoom() < s.picMinzoom) return;
+      const v = map.getBounds();
+      let [w, so, e, n] = [v.getWest(), v.getSouth(), v.getEast(), v.getNorth()];
+      if (bounds) [w, so, e, n] = [Math.max(w, bounds[0]), Math.max(so, bounds[1]), Math.min(e, bounds[2]), Math.min(n, bounds[3])];
+      if (w >= e || so >= n) return;
+      const l = this.areaLoaded;
+      if (l && w >= l[0] && so >= l[1] && e <= l[2] && n <= l[3]) return;
+      const dx = (e - w) / 2, dy = (n - so) / 2;
+      const area: PhotoBounds = bounds ? [w, so, e, n] : [w - dx, so - dy, e + dx, n + dy];
+      this.areaLoaded = area;
+      fetchArea(area).then((fc) => {
+        if (this.areaListener !== listener) return;
+        for (const f of fc.features) shown.set(String(f.properties?.[s.idProp]), f);
+        (map.getSource(this.SOURCE) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: [...shown.values()] });
+      }).catch((err) => { console.warn(err); if (this.areaLoaded === area) this.areaLoaded = undefined; });
+    };
+    this.areaListener = listener;
+    map.on('moveend', listener);
+    listener();
   }
 
   /** Снимок под точкой экрана (id). */

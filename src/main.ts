@@ -43,6 +43,7 @@ import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback'
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
 import { mapillary } from './view/mapillary';
+import { fotoshi } from './view/fotoshi';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { ScaleTool } from './edit/scale-tool';
@@ -293,6 +294,8 @@ const photoLayers = [
     title: tr('Открытые уличные фото и панорамы 360°, разрешённые для OSM. Клик по стрелке — открыть снимок') },
   ...(mapillary ? [{ service: mapillary, label: 'Mapillary',
     title: tr('Уличные фото и панорамы 360° Mapillary, разрешённые для OSM. Клик по стрелке — открыть снимок') }] : []),
+  ...(fotoshi ? [{ service: fotoshi, label: 'Fotoshi',
+    title: tr('Фото мест Fotoshi (CC BY 4.0), пробно: только на dev-сервере. Клик по стрелке — открыть снимок') }] : []),
 ].map(({ service, label, title }) => ({
   service, label, title, layer: new PhotoLayer(map, service), on: server().imagery ? storedOn(service) : false,
 }));

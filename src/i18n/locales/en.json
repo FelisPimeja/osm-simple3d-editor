@@ -1475,5 +1475,7 @@
   "Проверяем отношения удаляемых путей…": "Checking relations of the ways to delete…",
   "Точка стоит в вершине контура — её нельзя переместить отдельно.": "The point is a vertex of an outline — it cannot be moved on its own.",
   "вверх по направлению линии": "up along the line",
-  "вниз по направлению линии": "down along the line"
+  "вниз по направлению линии": "down along the line",
+  "Открыть на Fotoshi": "Open on Fotoshi",
+  "Фото мест Fotoshi (CC BY 4.0), пробно: только на dev-сервере. Клик по стрелке — открыть снимок": "Fotoshi place photos (CC BY 4.0), trial: dev server only. Click an arrow to open the photo"
 }

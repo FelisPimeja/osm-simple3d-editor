@@ -15629,7 +15629,14 @@ function levelsAboveOutline(f: Feature3D): string | false {
 function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: string): string {
   // Отрисованный объект в режиме здания отстаёт от правок: теги — из сессии, иначе новый тег не виден в списке
   const f = { ...feature, tags: session.get(feature.key)?.tags ?? feature.tags };
-  const h = computeHeights(f.tags);
+  let h = computeHeights(f.tags);
+  // Контур с частями без своей высоты: по Simple 3D Buildings его не рисуют, высота здания — по частям (issue #48)
+  if (h.source === 'default' && f.kind !== 'part' && f.hasParts) {
+    const g = groupOf(f.key) ?? (focus?.members.includes(f.key) ? focus : undefined);
+    const parts = (g?.members ?? []).filter((k) => k !== f.key).map((k) => session.get(k)?.tags ?? entity(k)?.tags)
+      .filter((t): t is Record<string, string> => !!t && t['building:part'] !== undefined).map(computeHeights).filter((p) => p.source !== 'default');
+    if (parts.length) h = { ...h, min: Math.min(...parts.map((p) => p.min)), wallTop: Math.max(...parts.map((p) => p.top)), top: Math.max(...parts.map((p) => p.top)), roofHeight: 0, source: tr('по частям') as typeof h.source };
+  }
   const warn = [
     roofApproximated && tr('Форма крыши «{shape}» пока не поддерживается для этой геометрии — показаны стены до верха и плоская крыша.', { shape: h.roofShape }),
     h.source === 'default' && tr('Нет height и building:levels — высота взята по умолчанию.'),

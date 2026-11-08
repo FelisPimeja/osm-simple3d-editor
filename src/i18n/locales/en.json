@@ -461,6 +461,7 @@
   "building:levels ({levels}) больше, чем у контура здания ({outline}):": "building:levels ({levels}) is greater than on the building outline ({outline}):",
   "на контуре принято указывать максимальную этажность — поправьте контур или часть.": "by convention the outline carries the maximum number of levels. Fix the outline or the part.",
   "Форма крыши «{shape}» пока не поддерживается для этой геометрии — показаны стены до верха и плоская крыша.": "Roof shape “{shape}” is not supported for this geometry yet; walls up to the top and a flat roof are shown.",
+  "по частям": "from parts",
   "Нет height и building:levels — высота взята по умолчанию.": "No height or building:levels; the default height is used.",
   "высота: {min} → {wall} → {top} м ({source})": "height: {min} → {wall} → {top} m ({source})",
   "крыша: {shape}, {height} м": "roof: {shape}, {height} m",

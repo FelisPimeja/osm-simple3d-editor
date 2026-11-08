@@ -35,6 +35,8 @@ export interface Fix {
   solidDoorWall?: string;
   /** Объединить дверь key со входом на фасаде (узел): теги двери — во вход, сама дверь убирается. */
   mergeIntoEntrance?: string;
+  /** Перенести дверь key с внутренней грани наружной стены на фасад: вход новым узлом контура. */
+  moveToFacade?: boolean;
   /** Что сделает кнопка — для подсказки. */
   label: string;
   tags: Record<string, string | undefined>;

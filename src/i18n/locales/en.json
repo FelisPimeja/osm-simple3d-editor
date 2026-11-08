@@ -1480,5 +1480,8 @@
   "Фото мест Fotoshi (CC BY 4.0), пробно: только на dev-сервере. Клик по стрелке — открыть снимок": "Fotoshi place photos (CC BY 4.0), trial: dev server only. Click an arrow to open the photo",
   "Дверь и вход {entrance} по разные стороны одной стены — это один проём: объедините их во вход на фасаде.": "The door and entrance {entrance} are on opposite sides of the same wall, so they are one opening: merge them into the entrance on the facade.",
   "Объединить во вход на фасаде": "Merge into the facade entrance",
-  "Откройте здание, чтобы объединить дверь со входом.": "Open the building to merge the door into the entrance."
+  "Откройте здание, чтобы объединить дверь со входом.": "Open the building to merge the door into the entrance.",
+  "Дверь на внутренней грани наружной стены: вход в здание размечают на фасаде (entrance=*).": "Door on the inner face of an exterior wall: building entrances are mapped on the facade (entrance=*).",
+  "Перенести на фасад как вход (entrance=yes)": "Move to the facade as an entrance (entrance=yes)",
+  "Откройте здание, чтобы перенести дверь на фасад.": "Open the building to move the door to the facade."
 }

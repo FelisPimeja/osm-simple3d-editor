@@ -8690,6 +8690,49 @@ function outlineEntrances(g: BuildingGroup): { key: string; tags: Record<string,
   return [...out.values()];
 }
 
+/**
+ * Дверь на внутренней грани толстой стены, проём которой выходит на фасад (без входа там): вход в здание
+ * размечают на фасаде. Исправление переносит её туда новым узлом контура, помещение — в проём.
+ */
+function throughWallDoors(indoor: IndoorFeature[], outer: ReturnType<typeof outerDoorTest>, skip: Set<string>): Issue[] {
+  if (!outer.through) return [];
+  const out: Issue[] = [];
+  for (const f of indoor) {
+    if (!isDoor(f) || f.tags.entrance || !f.point || skip.has(f.key) || !outer(f)) continue;
+    const back = outer.through(f);
+    if (!back || !facadeSideAt(back)) continue;
+    out.push({ key: f.key, level: 'warning', code: 'indoor-door', points: [f.point, back],
+      text: tr('Дверь на внутренней грани наружной стены: вход в здание размечают на фасаде (entrance=*).'),
+      fix: { label: tr('Перенести на фасад как вход (entrance=yes)'), tags: {}, moveToFacade: true } });
+  }
+  return out;
+}
+
+/** Сторона контура здания режима у точки (в 10 см): узлы концов и точка на ней. */
+function facadeSideAt(at: LonLat): { u: number; v: number; cu: LonLat; cv: LonLat; p: LonLat } | undefined {
+  if (!focus) return;
+  const q = overpassLayer.focusToLocal(at);
+  if (!q) return;
+  let best: { u: number; v: number; cu: LonLat; cv: LonLat; p: LonLat; d: number } | undefined;
+  for (const b of groupFeatures(focus).map(withEntranceEdits)) {
+    if (b.kind !== 'building') continue;
+    for (const poly of b.polygons) [[poly.outer, poly.outerIds], ...poly.inners.map((r, i) => [r, poly.innerIds?.[i]] as const)].forEach(([ring, ids]) => {
+      const r = ring as LonLat[], rid = ids as number[] | undefined;
+      if (!rid) return;
+      for (let i = 0; i < r.length; i++) {
+        const j = (i + 1) % r.length, a = overpassLayer.focusToLocal(r[i])!, c = overpassLayer.focusToLocal(r[j])!;
+        const dx = c[0] - a[0], dy = c[1] - a[1], l2 = dx * dx + dy * dy;
+        if (!l2) continue;
+        const t = ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2;
+        if (t <= 0.02 || t >= 0.98) continue;
+        const d = Math.hypot(a[0] + dx * t - q[0], a[1] + dy * t - q[1]);
+        if (d <= 0.1 && (!best || d < best.d)) best = { u: rid[i], v: rid[j], cu: r[i], cv: r[j], p: overpassLayer.focusToLngLat(a[0] + dx * t, a[1] + dy * t)! as LonLat, d };
+      }
+    });
+  }
+  return best;
+}
+
 /** Вход на фасаде ближе этого к выходу проёма внутренней двери, м, — та же дверь с другой стороны стены. */
 const PAIRED_DOOR_REACH = 1;
 
@@ -11468,6 +11511,9 @@ function placeSolidWallDoor(wall:IndoorFeature,at:LonLat,tags:Record<string,stri
 }
 
 /** Persist doorway recesses in the adjacent room, not just the render mesh. */
+/** Кусок помещения меньше этого после выреза или расширения в проём — обрезок, м². */
+const ROOM_SLIVER_AREA=0.05;
+const ringAreaLocal=(r:[number,number][])=>{let a=0;for(let i=0;i+1<r.length;i++)a+=r[i][0]*r[i+1][1]-r[i+1][0]*r[i][1];return a/2;};
 function syncDoorwayRooms(edits:ObjectEdit[]):ObjectEdit[] {
   return timed('дверь: перестройка помещений', () => syncDoorwayRoomsImpl(edits));
 }
@@ -11487,6 +11533,9 @@ function syncDoorwayRoomsImpl(edits:ObjectEdit[]):ObjectEdit[]{
       const linked=source.polygons.some(p=>[p.outerIds,...(p.innerIds??[])].some(ids=>ids?.includes(Number(door.key.split('/')[1]))));
       if(old&&linked){polys=polygonClipping.difference(polys,[old.gap]);changed=true;}
       if(next&&nextDoor){const expanded=roomDoorway(polys,next.gap,local(nextDoor.point!));if(expanded){polys=expanded;changed=true;}}
+      // Обрезки (миллиметровые несовпадения сторон помещения и проёма) — не куски помещения: иначе путь помещения
+      // становился мультиполигоном с треугольником
+      polys=polys.filter(poly=>Math.abs(ringAreaLocal(poly[0]))>=ROOM_SLIVER_AREA);
       if(!changed||!polys.length)continue;
       const anchor=nextDoor?.point?{...nextDoor,polygons:[{outer:[nextDoor.point],outerIds:[Number(door.key.split('/')[1])],inners:[]}]}:undefined;
       rewriteSolidWalls([room],polys,result,door.levels,normalizeSolidDoorEdits(result),anchor?[anchor]:[]);
@@ -12823,7 +12872,8 @@ function renderIssues() {
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding && plan ? buildingIndoor(focusedBuilding) : [];
   const outerDoor = focusedBuilding ? outerDoorTest(focusedBuilding, indoorAll) : undefined;
-  const paired = focusedBuilding && plan ? pairedWallDoors(focusedBuilding, indoorAll, outerDoor!) : [];
+  const paired = focusedBuilding && plan ? [...pairedWallDoors(focusedBuilding, indoorAll, outerDoor!)] : [];
+  if (focusedBuilding && plan) paired.push(...throughWallDoors(indoorAll, outerDoor!, new Set(paired.map((i) => i.key))));
   const pairedKeys = new Set(paired.map((i) => i.key));
   const indoorIssues = focusedBuilding && plan ? [...paired,
     // Дверь с парным входом — не «вход без entrance»: исправление одно, объединить
@@ -13046,6 +13096,43 @@ function applyFixes(list: Issue[]) {
       if(edits.length){commitSolidDoorEdits(edits);indoorEditRev++;renderLevels();renderIssues();}
     }catch(err){setStatus((err as Error).message,true);}
     list=list.filter(i=>!i.fix?.solidDoorWall);
+  }
+  const moves=list.filter(i=>i.fix?.moveToFacade);
+  if(moves.length){
+    if(!focus)setStatus(tr('Откройте здание, чтобы перенести дверь на фасад.'),true);
+    else try{
+      const all=buildingIndoor(focus).filter(f=>!f.key.endsWith('#poi'));
+      const outer=outerDoorTest(focus,all);
+      const doors=moves.map(i=>all.find(f=>f.key===i.key)).filter((f):f is IndoorFeature=>!!f?.point);
+      // Прежняя дверь уходит (её узел остаётся вершиной помещения, выемка — стене); вход — новый узел на контуре
+      const edits=batchSolidDoorEdits(doors,()=>({}));
+      const made:string[]=[];
+      for(const door of doors){
+        const back=outer.through?.(door),side=back&&facadeSideAt(back);
+        if(!side)continue;
+        const tags:Record<string,string>={...door.tags,entrance:door.tags.entrance??'yes'};
+        // Узел двери ни в чём больше не стоит — он сам переезжает на фасад (та же история в OSM), иначе — новый узел
+        const gone=edits.findIndex(e=>e.key===door.key&&e.delete);
+        const id=gone>=0?Number(door.key.split('/')[1]):nextNewId--,key=`node/${id}`;
+        if(gone>=0)edits.splice(gone,1,{key,tags,polygons:[{outer:[side.p],outerIds:[id],inners:[]}]});
+        else edits.push({key,create:{key,version:0,tags,polygons:[{outer:[side.p],outerIds:[id],inners:[]}]}});
+        const out=insertIntoNeighbours(key,[{id,p:overpassLayer.focusToLocal(side.p)!,u:side.u,v:side.v}],new Map([[id,side.p],[side.u,side.cu],[side.v,side.cv]]));
+        if(typeof out==='string')throw new Error(out);
+        edits.push(...out);
+        if(gone<0)indoorCreated.set(key,{key,kind:'poi',tags,polygons:[],point:side.p,levels:door.levels});
+        made.push(key);
+      }
+      if(made.length){
+        commitSolidDoorEdits(edits);
+        indoorEditRev++;
+        const base=buildingIndoor(focus).filter(f=>!f.key.endsWith('#poi')),keys=new Set(made);
+        const notches=validateSolidWallDoors(base).filter(i=>keys.has(i.key)&&i.fix?.solidDoorWall);
+        const cut=notches.length?notchEdits(notches,base,true):[];
+        if(cut.length)commitSolidDoorEdits(cut,true);
+        indoorEditRev++;renderLevels();renderIssues();
+      }
+    }catch(err){setStatus((err as Error).message,true);}
+    list=list.filter(i=>!i.fix?.moveToFacade);
   }
   const merges=list.filter(i=>i.fix?.mergeIntoEntrance);
   if(merges.length){

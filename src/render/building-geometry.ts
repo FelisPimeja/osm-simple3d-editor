@@ -44,8 +44,11 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
   // Saltbox скелет рисует симметричной двускатной (roof:direction теряется) — для неё тоже допускаем
   // контуры кривее: way/267152388 с вырезом сбоку заполняет описанный прямоугольник на ~75%
   const across = tags['roof:orientation'] === 'across' || shape === 'saltbox';
+  // Направление конька задано явно (roof:direction / roof:orientation) — один прямой конёк на любом контуре,
+  // без перехода к скелету: так моделируют двускатные крыши на непрямоугольных основаниях (issue #50)
+  const explicitRidge = !!(tags['roof:direction']?.trim() || tags['roof:orientation']?.trim());
   const axis = single && AXIS_SHAPES.has(shape)
-    ? rectAxis(single.outer, across ? RECT_FILL_ACROSS : shape === 'crosspitched' ? RECT_FILL_CROSSPITCHED : RECT_FILL)
+    ? rectAxis(single.outer, explicitRidge ? 0 : across ? RECT_FILL_ACROSS : shape === 'crosspitched' ? RECT_FILL_CROSSPITCHED : RECT_FILL)
     : undefined;
   // Скатные крыши на остальных контурах (в т.ч. с дырами и из нескольких полигонов) — по straight skeleton;
   // вальмовые варианты (side_hipped, hipped-and-gabled…) там — упрощённо вальмовой. crosspitched, sawtooth

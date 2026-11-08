@@ -85,6 +85,8 @@ export const fotoshi: PhotoService | undefined = TOKEN ? {
   seqDate: ['get', 'date'],
   picDate: ['get', 'date'],
   seqProps: [],
+  // Отдельные редкие снимки, не маршруты: значки вдвое крупнее, иначе их не разглядеть
+  iconScale: 2,
   // Покрытие: места, где есть снимки (плотность — полосами), до зума снимков
   overview: {
     sourceLayer: 'overview',

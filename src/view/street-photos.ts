@@ -75,6 +75,8 @@ export interface PhotoService {
   /** Страница снимка на сайте сервиса и подпись ссылки. */
   pageUrl(pic: Picture): string;
   openLabel: string;
+  /** Масштаб значков снимков (редкие отдельные фото мест крупнее точек маршрутов). */
+  iconScale?: number;
 }
 
 /** Включённость слоя и фильтр — в localStorage. */
@@ -329,7 +331,7 @@ export class PhotoLayer {
         filter: this.clip(filterExpr(s, filter, s.picDate)),
         layout: {
           'icon-image': ['case', s.isPano, this.DOT, this.ARROW],
-          'icon-size': ['interpolate', ['linear'], ['zoom'], 17, 0.6, 20, 1],
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 17, 0.6 * (s.iconScale ?? 1), 20, 1 * (s.iconScale ?? 1)],
           'icon-rotate': ['case', s.isPano, 0, ['coalesce', s.heading, 0]],
           'icon-rotation-alignment': 'map',
           'icon-pitch-alignment': 'map',

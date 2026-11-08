@@ -22,6 +22,11 @@ const insideRing=(p:Pt,r:Pt[])=>{
  }return yes;
 };
 const inside=(p:Pt,polys:WallPolygon[])=>polys.some(poly=>insideRing(p,poly[0])&&!poly.slice(1).some(r=>insideRing(p,r)));
+/** Насколько вырез выходит наружу за лицевую грань, м: неровности грани (узлы фасада в стороне на мм–см). */
+const SLIVER_REACH=0.05;
+/** Куски стены меньше этого после выреза — обрезки неровной грани, м². */
+const MIN_PIECE_AREA=0.02;
+const ringArea=(r:Pt[])=>{let a=0;for(let i=0;i+1<r.length;i++)a+=cross(r[i],r[i+1]);return Math.abs(a/2);};
 /** The jambs follow the normal of the clicked face, including tapered walls. */
 export function cutSolidWall(polys:WallPolygon[],at:Pt,face:[Pt,Pt],width:number) {
  if(!Number.isFinite(width)||width<=0) throw new Error(tr('Ширина двери должна быть положительным числом.'));
@@ -53,9 +58,10 @@ export function cutSolidWall(polys:WallPolygon[],at:Pt,face:[Pt,Pt],width:number
  };
  const da=reach(a),db=reach(b),backA=plus(a,normal,da),backB=plus(b,normal,db);
  const gap=[a,b,backB,backA,a];
- // Extend a millimetre through the boundary to avoid numeric slivers in clipping.
- const cutter=[[plus(a,normal,-0.001),plus(b,normal,-0.001),plus(b,normal,db+0.001),plus(a,normal,da+0.001),plus(a,normal,-0.001)]];
- const pieces=pc.difference(polys,cutter);
+ // Extend through the boundary to avoid slivers: a millimetre at the back, a few centimetres at the front, where
+ // the face is often not quite straight (a facade node a few millimetres off the wall face left a triangle behind).
+ const cutter=[[plus(a,normal,-SLIVER_REACH),plus(b,normal,-SLIVER_REACH),plus(b,normal,db+0.001),plus(a,normal,da+0.001),plus(a,normal,-SLIVER_REACH)]];
+ const pieces=pc.difference(polys,cutter).filter(poly=>ringArea(poly[0])>=MIN_PIECE_AREA);
  if(!pieces.length) throw new Error(tr('Проём удаляет стену целиком — уменьшите ширину двери.'));
  return {pieces,gap,front:[a,center,b] as [Pt,Pt,Pt],normal};
 }

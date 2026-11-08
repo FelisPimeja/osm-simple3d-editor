@@ -151,3 +151,11 @@ test('door binding finds unglued wall ends near the door and collects ways redra
  const far={...connector,polygons:ring([[-1.9,0],[0,0],[1.9,0]],[20,9,21])};
  assert.equal(findSolidDoorBinding([left,right,far,door],door,identity),undefined);
 });
+test('a face node a couple of centimetres off the straight face leaves no sliver piece behind the cut',()=>{
+ // Фасадный узел входа в 2 см от прямой грани стены: вырез не оставляет треугольника у лицевой грани
+ const bent=[[[[0,0],[5,-0.02],[10,0],[10,0.5],[0,0.5],[0,0]]]];
+ const r=cutSolidWall(bent,[5,0],[[0,0],[10,0]],1.8);
+ assert.equal(r.pieces.length,2);
+ const area=poly=>{let a=0;const q=poly[0];for(let i=0;i+1<q.length;i++)a+=q[i][0]*q[i+1][1]-q[i+1][0]*q[i][1];return Math.abs(a/2);};
+ assert.ok(r.pieces.every(p=>area(p)>1));
+});

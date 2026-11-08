@@ -14076,10 +14076,32 @@ function mergeIntoBuilding() {
     const outlineKey = `relation/${outlineId}`;
     const ways: MemberWay[] = [];
     const polygons: Polygon[] = [];
+    // Контур идёт по узлам частей (иначе в OSM — дубли узлов): вершины — их узлы, а узлы частей на сторонах контура
+    // вставляются в эти стороны
+    const { nodeFor } = sharedNodes(features);
+    const partNodes = features.flatMap((f) => f.polygons.flatMap((poly) => [poly.outer, ...poly.inners].flatMap((ring, r) => {
+      const ids = r === 0 ? poly.outerIds : poly.innerIds?.[r - 1];
+      return ring.flatMap((p, i) => (ids?.[i] !== undefined ? [{ p, id: ids[i] }] : []));
+    })));
+    const onSide = (a: LonLat, b: LonLat) => {
+      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+      if (!l2) return [];
+      const hits = new Map<number, { p: LonLat; id: number; t: number }>();
+      for (const q of partNodes) {
+        const t = ((q.p[0] - a[0]) * dx + (q.p[1] - a[1]) * dy) / l2;
+        if (t <= 1e-6 || t >= 1 - 1e-6) continue;
+        const ex = a[0] + dx * t - q.p[0], ey = a[1] + dy * t - q.p[1];
+        if (Math.max(Math.abs(ex), Math.abs(ey)) <= OUTLINE_NODE_SNAP) hits.set(q.id, { ...q, t });
+      }
+      return [...hits.values()].sort((u, v) => u.t - v.t);
+    };
     for (const [outer, ...inners] of union) {
       const rings = [outer, ...inners].map((ring) => {
-        const coords = ring.slice(0, -1) as LonLat[];
-        const ids = coords.map(() => nextNewId--);
+        const corners = (ring.slice(0, -1) as LonLat[]).map(nodeFor);
+        const nodes = corners.flatMap((c, i) => [c, ...onSide(c.p, corners[(i + 1) % corners.length].p)])
+          .filter((q, i, a) => i === 0 || q.id !== a[i - 1].id);
+        if (nodes.length > 1 && nodes[0].id === nodes.at(-1)!.id) nodes.pop();
+        const coords = nodes.map((q) => q.p), ids = nodes.map((q) => q.id);
         const id = nextNewId--;
         const role = ring === outer ? 'outer' : 'inner';
         edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line: { ids: [...ids, ids[0]], coords: [...coords, coords[0]] } } });

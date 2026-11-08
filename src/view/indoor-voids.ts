@@ -81,10 +81,12 @@ export function buildPlans(levels: { n: number; floor: number; ceil: number }[],
     const abovePolys = parts.filter((p) => p.wallTop > l.floor + 0.5).flatMap((p) => p.polygons.map((q) => q.map(open)));
     let capsCache: MultiPolygon | undefined;
     const capsOf = (voids: MultiPolygon) => (capsCache ??= (() => {
-      if (!abovePolys.length || !(capPolys.length || openPolys.length)) return [];
+      // Перекрытие под землёй (пол этажа не выше земли): сверху грунт — потолок везде, и вне следа здания
+      const underground = l.floor <= 0.01;
+      if ((!underground && !abovePolys.length) || !(capPolys.length || openPolys.length)) return [];
       const areas = openPolys.length ? (voids.length ? safe(() => polygonClipping.difference(unionOf(openPolys), voids)) : unionOf(openPolys)) : [];
       const all = capPolys.length ? (areas.length ? safe(() => polygonClipping.union(unionOf(capPolys), areas)) : unionOf(capPolys)) : areas;
-      return all.length ? safe(() => polygonClipping.intersection(all, unionOf(abovePolys))) : [];
+      return all.length ? (underground ? all : safe(() => polygonClipping.intersection(all, unionOf(abovePolys)))) : [];
     })());
     const onLevel = indoor.filter((f) => !f.line && f.levels.includes(l.n));
     const levelPolys = onLevel.filter((f) => f.kind === 'level').flatMap((f) => f.polygons.map((p) => p.map(open)));

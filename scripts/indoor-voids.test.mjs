@@ -263,3 +263,13 @@ test('a one-level area stays open under a drawn opening and is closed where the 
  assert.ok(Math.abs(findVoids(1,plans).reduce((s,v)=>s+multiArea(v.polygon),0)-36)<1e-6);
  assert.ok(Math.abs(multiArea(voidCaps(1,plans))-36)<1e-6);
 });
+
+test('underground slab: rooms below are capped outside the building footprint too',async()=>{
+ const {buildPlans,voidCaps}=await vite.ssrLoadModule('/src/view/indoor-voids.ts');
+ const sq=(x1,y1,x2,y2)=>[[[x1,y1],[x2,y1],[x2,y2],[x1,y2],[x1,y1]]];
+ const levels=[{n:-2,floor:-6,ceil:-3},{n:-1,floor:-3,ceil:0},{n:0,floor:0,ceil:3}];
+ const parts=[{polygons:[sq(0,0,10,10)],min:-6,wallTop:3}];
+ const room={kind:'room',levels:[-2],polygons:[sq(20,0,30,10)]};
+ const plans=buildPlans(levels,parts,[room]);
+ assert.ok(voidCaps(-1,plans).length,'room of -2 outside the footprint is capped by the -1 slab');
+});

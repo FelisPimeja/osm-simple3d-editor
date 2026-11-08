@@ -12928,9 +12928,9 @@ issuesAll.addEventListener('change', () => {
 });
 
 /** Выемки для дверей на гранях полигональных стен (исправление indoor-door-notch). */
-function notchEdits(notches:Issue[],base:IndoorFeature[]):ObjectEdit[]{
+function notchEdits(notches:Issue[],base:IndoorFeature[],skipFailed=false):ObjectEdit[]{
   let all=base;const edits:ObjectEdit[]=[];
-  for(const issue of notches){
+  for(const issue of notches)try{
     const door=all.find(f=>f.key===issue.key);if(!door?.point)continue;
     trackIndoor(door.key,door);
     const targetExists=all.some(f=>f.key===issue.fix!.solidDoorWall&&solidWall(f));
@@ -12938,6 +12938,9 @@ function notchEdits(notches:Issue[],base:IndoorFeature[]):ObjectEdit[]{
     const planned=solidDoorEdits(door,door.point,door.tags,relevant,normalizeSolidDoorEdits(edits));
     if(planned)edits.push(...planned);
     all=projectedOpeningIndoor(base,edits);
+  }catch(err){
+    // Автоматически: дверь, которой выемка не помещается, остаётся с предупреждением, остальные режутся
+    if(!skipFailed)throw err;
   }
   return edits;
 }
@@ -12958,7 +12961,7 @@ function autoNotchWalls(edits:ObjectEdit[]){
     const notches=validateSolidWallDoors(base).filter(i=>i.fix?.solidDoorWall&&keys.has(i.fix.solidDoorWall));
     if(!notches.length)return;
     try{
-      const edits=notchEdits(notches,base);
+      const edits=notchEdits(notches,base,true);
       if(edits.length){commitSolidDoorEdits(edits,true);indoorEditRev++;renderLevels();renderIssues();}
     }catch{/* выемка не помещается — остаётся предупреждение с исправлением */}
   });

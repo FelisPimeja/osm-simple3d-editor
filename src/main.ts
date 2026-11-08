@@ -609,6 +609,7 @@ const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
  * при отрисовке тайлов отслеживаемые объекты подменяются этими копиями — правки переживают перезагрузку тайлов.
  */
 let session = new EditSession([], onSessionChange);
+session.afterEdit = autoNotchWalls;
 session.extraParents = (key) => relationParentsOf(key);
 session.beforeStep = (keys) => autoRelation(keys);
 const overpassLayer = new BuildingsLayer('osm-overpass-buildings');
@@ -11429,11 +11430,11 @@ function syncDoorwayRoomsImpl(edits:ObjectEdit[]):ObjectEdit[]{
   return result;
 }
 
-function commitSolidDoorEdits(edits:ObjectEdit[]){
+function commitSolidDoorEdits(edits:ObjectEdit[],merge=false){
   edits=syncDoorwayRooms(edits);
   const normalized=normalizeSolidDoorEdits(edits);
   for(const e of normalized) indoorEdited.add(e.key);
-  session.editMany(normalized);
+  session.editMany(normalized,merge);
 }
 function batchSolidDoorEdits(doors:IndoorFeature[],target:(door:IndoorFeature)=>{at?:LonLat;tags?:Record<string,string>}):ObjectEdit[]{
   const base=focus?buildingIndoor(focus).filter(f=>!f.key.endsWith('#poi')):shownIndoor;
@@ -12926,22 +12927,48 @@ issuesAll.addEventListener('change', () => {
   highlightIssues();
 });
 
+/** Выемки для дверей на гранях полигональных стен (исправление indoor-door-notch). */
+function notchEdits(notches:Issue[],base:IndoorFeature[]):ObjectEdit[]{
+  let all=base;const edits:ObjectEdit[]=[];
+  for(const issue of notches){
+    const door=all.find(f=>f.key===issue.key);if(!door?.point)continue;
+    trackIndoor(door.key,door);
+    const targetExists=all.some(f=>f.key===issue.fix!.solidDoorWall&&solidWall(f));
+    const relevant=targetExists?all.filter(f=>!solidWall(f)||f.key===issue.fix!.solidDoorWall):all;
+    const planned=solidDoorEdits(door,door.point,door.tags,relevant,normalizeSolidDoorEdits(edits));
+    if(planned)edits.push(...planned);
+    all=projectedOpeningIndoor(base,edits);
+  }
+  return edits;
+}
+
+/**
+ * Созданная или изменённая полигональная стена: двери на её гранях сразу получают сквозной проём (выемку),
+ * в том же шаге истории. Вызывается после правки — созданные объекты попадают в план уже после editMany.
+ */
+function autoNotchWalls(edits:ObjectEdit[]){
+  const keys=new Set(edits.filter(e=>!e.delete&&(e.create?.tags?.indoor==='wall'||e.tags||e.polygons||e.line)).map(e=>e.key));
+  if(!keys.size||!focus)return;
+  queueMicrotask(()=>{
+    if(!focus)return;
+    const base=buildingIndoor(focus).filter(f=>!f.key.endsWith('#poi'));
+    if(!base.some(f=>keys.has(f.key)&&solidWall(f)))return;
+    const notches=validateSolidWallDoors(base).filter(i=>i.fix?.solidDoorWall&&keys.has(i.fix.solidDoorWall));
+    if(!notches.length)return;
+    try{
+      const edits=notchEdits(notches,base);
+      if(edits.length){commitSolidDoorEdits(edits,true);indoorEditRev++;renderLevels();renderIssues();}
+    }catch{/* выемка не помещается — остаётся предупреждение с исправлением */}
+  });
+}
+
 /** Применить исправления одним шагом истории; исправления одного объекта накладываются по очереди. */
 function applyFixes(list: Issue[]) {
   const notches=list.filter(i=>i.fix?.solidDoorWall);
   if(notches.length){
     if(!focus)setStatus(tr('Откройте здание для исправления выемки двери.'),true);
     else try{
-      const base=buildingIndoor(focus).filter(f=>!f.key.endsWith('#poi'));let all=base;const edits:ObjectEdit[]=[];
-      for(const issue of notches){
-        const door=all.find(f=>f.key===issue.key);if(!door?.point)continue;
-        trackIndoor(door.key,door);
-        const targetExists=all.some(f=>f.key===issue.fix!.solidDoorWall&&solidWall(f));
-        const relevant=targetExists?all.filter(f=>!solidWall(f)||f.key===issue.fix!.solidDoorWall):all;
-        const planned=solidDoorEdits(door,door.point,door.tags,relevant,normalizeSolidDoorEdits(edits));
-        if(planned)edits.push(...planned);
-        all=projectedOpeningIndoor(base,edits);
-      }
+      const edits=notchEdits(notches,buildingIndoor(focus).filter(f=>!f.key.endsWith('#poi')));
       if(edits.length){commitSolidDoorEdits(edits);indoorEditRev++;renderLevels();renderIssues();}
     }catch(err){setStatus((err as Error).message,true);}
     list=list.filter(i=>!i.fix?.solidDoorWall);
@@ -15857,6 +15884,7 @@ function doClearEdits() {
 /** Пустая сессия: правки, созданные здания и помещения — забыты. */
 function resetSession() {
   session = new EditSession([], onSessionChange);
+  session.afterEdit = autoNotchWalls;
   session.extraParents = (key) => relationParentsOf(key);
   sessionRevision++;
   session.beforeStep = autoRelation;

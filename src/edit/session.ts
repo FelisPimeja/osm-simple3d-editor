@@ -269,7 +269,10 @@ export class EditSession {
     });
   }
 
-  editMany(edits: ObjectEdit[]) {
+  /** merge — дописать в последний шаг истории (следствие только что сделанной правки, отменяется вместе с ней). */
+  /** После каждой правки (не дописанной в шаг): следствия, которые редактор достраивает сам. */
+  afterEdit?: (edits: ObjectEdit[]) => void;
+  editMany(edits: ObjectEdit[], merge = false) {
     edits = this.keepSharedWays(this.propagateMoves(edits));
     const step: Entry[] = [];
     for (const e of edits) {
@@ -294,7 +297,17 @@ export class EditSession {
         ...(e.line !== undefined ? { lBefore: f.line ?? null, lAfter: e.line } : {}),
         ...(e.members ? { mBefore: f.relMembers, mAfter: e.members } : {}) });
     }
-    if (step.length) this.push(step);
+    if (!step.length) return;
+    const last = this.undoStack.at(-1);
+    if (merge && last && !isView(last)) {
+      for (const e of step) this.apply(e.key, e.after, e.mAfter, e.gAfter, e.lAfter);
+      last.push(...step);
+      this.redoStack = [];
+      this.notify(step);
+    } else {
+      this.push(step);
+      this.afterEdit?.(edits);
+    }
   }
 
   private membersChanged(key: string): boolean {

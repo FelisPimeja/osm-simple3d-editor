@@ -1477,7 +1477,7 @@
   "вверх по направлению линии": "up along the line",
   "вниз по направлению линии": "down along the line",
   "Открыть на Fotoshi": "Open on Fotoshi",
-  "Фото мест Fotoshi (CC BY 4.0), пробно: только на dev-сервере. Клик по стрелке — открыть снимок": "Fotoshi place photos (CC BY 4.0), trial: dev server only. Click an arrow to open the photo",
+  "Фото мест Fotoshi (CC BY 4.0). Клик по стрелке — открыть снимок": "Fotoshi place photos (CC BY 4.0). Click an arrow to open the photo",
   "Дверь и вход {entrance} по разные стороны одной стены — это один проём: объедините их во вход на фасаде.": "The door and entrance {entrance} are on opposite sides of the same wall, so they are one opening: merge them into the entrance on the facade.",
   "Объединить во вход на фасаде": "Merge into the facade entrance",
   "Откройте здание, чтобы объединить дверь со входом.": "Open the building to merge the door into the entrance.",

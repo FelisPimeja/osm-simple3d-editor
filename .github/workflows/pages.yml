@@ -37,6 +37,7 @@ jobs:
           VITE_OHM_CLIENT_ID: ${{ vars.VITE_OHM_CLIENT_ID }}
           VITE_MAPBOX_TOKEN: ${{ vars.VITE_MAPBOX_TOKEN }}
           VITE_MAPILLARY_TOKEN: ${{ vars.VITE_MAPILLARY_TOKEN }}
+          VITE_FOTOSHI_TOKEN: ${{ vars.VITE_FOTOSHI_TOKEN }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

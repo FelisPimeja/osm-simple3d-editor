@@ -43,7 +43,7 @@ import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback'
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
 import { mapillary } from './view/mapillary';
-import { fotoshi } from './view/fotoshi';
+import { fotoshi, fotoshiRequest } from './view/fotoshi';
 import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { ScaleTool } from './edit/scale-tool';
@@ -202,9 +202,9 @@ const map = new maplibregl.Map({
   // MSAA задаётся только при создании контекста — переключение требует перезагрузки
   canvasContextAttributes: { antialias: gfx.antialias },
   style: server().style, // подложка — своя у каждого сервера; смена сервера с другой подложкой перезагружает страницу
-  transformRequest: (url) => new URL(url, location.href).host === server().noReferrerHost
+  transformRequest: (url) => fotoshiRequest(url) ?? (new URL(url, location.href).host === server().noReferrerHost
     ? { url, referrerPolicy: 'no-referrer' }
-    : { url },
+    : { url }),
   // Shift+клик — множественное выделение; зум рамкой с Shift перехватывал бы клик
   boxZoom: false,
   center: savedCamera?.center ?? [0, 0],
@@ -295,7 +295,7 @@ const photoLayers = [
   ...(mapillary ? [{ service: mapillary, label: 'Mapillary',
     title: tr('Уличные фото и панорамы 360° Mapillary, разрешённые для OSM. Клик по стрелке — открыть снимок') }] : []),
   ...(fotoshi ? [{ service: fotoshi, label: 'Fotoshi',
-    title: tr('Фото мест Fotoshi (CC BY 4.0), пробно: только на dev-сервере. Клик по стрелке — открыть снимок') }] : []),
+    title: tr('Фото мест Fotoshi (CC BY 4.0). Клик по стрелке — открыть снимок') }] : []),
 ].map(({ service, label, title }) => ({
   service, label, title, layer: new PhotoLayer(map, service), on: server().imagery ? storedOn(service) : false,
 }));

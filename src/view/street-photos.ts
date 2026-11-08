@@ -67,7 +67,8 @@ export interface PhotoService {
   dateMs?: boolean;
   /** Свойства маршрута, нужные слою (копируем при обрезке в режиме здания). */
   seqProps: string[];
-  overview?: { sourceLayer: string; spec(f: PhotoFilter): OverviewSpec };
+  /** Обзор на мелких зумах; tiles — свой источник векторных тайлов (у сервиса с fetchArea основной источник — GeoJSON). */
+  overview?: { sourceLayer: string; tiles?: string; maxzoom?: number; spec(f: PhotoFilter): OverviewSpec };
   /** Сервис без векторных тайлов: снимки области [з, ю, в, с] — точки GeoJSON (свойства как у снимков тайлов). */
   fetchArea?(bbox: PhotoBounds): Promise<GeoJSON.FeatureCollection>;
   fetchPicture(id: string): Promise<Picture>;
@@ -177,6 +178,7 @@ export class PhotoLayer {
   private readonly SEQ: string;
   private readonly PIC: string;
   private readonly OVERVIEW: string;
+  private readonly OVERVIEW_SRC: string;
   /** Конус открытого снимка (источник и слой одного имени). */
   readonly VIEW: string;
   readonly CONE: string;
@@ -197,7 +199,7 @@ export class PhotoLayer {
 
   constructor(private readonly map: MlMap, readonly service: PhotoService) {
     const p = service.id;
-    this.SOURCE = p; this.SEQ = `${p}-sequences`; this.PIC = `${p}-pictures`; this.OVERVIEW = `${p}-overview`;
+    this.SOURCE = p; this.SEQ = `${p}-sequences`; this.PIC = `${p}-pictures`; this.OVERVIEW = `${p}-overview`; this.OVERVIEW_SRC = `${p}-overview-src`;
     this.VIEW = `${p}-view`; this.CONE = `${p}-cone`; this.ARROW = `${p}-arrow`; this.DOT = `${p}-dot`;
     this.SEQ_CLIP = `${p}-seq-clip`; this.SEQ_RAW = `${p}-seq-raw`;
     this.SEQ_GHOST = `${p}-sequences-ghost`; this.PIC_GHOST = `${p}-pictures-ghost`;
@@ -272,7 +274,7 @@ export class PhotoLayer {
     this.appliedKey = key;
     this.clipBounds = bounds;
     for (const id of [this.VIEW, this.PIC, this.PIC_GHOST, this.SEQ, this.SEQ_GHOST, this.SEQ_RAW, this.OVERVIEW]) if (map.getLayer(id)) map.removeLayer(id);
-    for (const id of [this.SOURCE, this.SEQ_CLIP]) if (map.getSource(id)) map.removeSource(id);
+    for (const id of [this.SOURCE, this.SEQ_CLIP, this.OVERVIEW_SRC]) if (map.getSource(id)) map.removeSource(id);
     if (this.seqClipListener) { map.off('sourcedata', this.seqClipListener); this.seqClipListener = undefined; }
     if (this.areaListener) { map.off('moveend', this.areaListener); this.areaListener = undefined; this.areaLoaded = undefined; }
     if (!on) return;
@@ -286,8 +288,13 @@ export class PhotoLayer {
     });
     if (s.overview) {
       const o = s.overview.spec(filter);
+      if (s.overview.tiles) map.addSource(this.OVERVIEW_SRC, {
+        type: 'vector', tiles: [s.overview.tiles], minzoom: 0, maxzoom: s.overview.maxzoom ?? s.maxzoom, attribution: s.attribution,
+        ...(bounds && { bounds }),
+      });
       map.addLayer({
-        id: this.OVERVIEW, source: this.SOURCE, 'source-layer': s.overview.sourceLayer, maxzoom: s.seqMinzoom, ...o,
+        id: this.OVERVIEW, source: s.overview.tiles ? this.OVERVIEW_SRC : this.SOURCE, 'source-layer': s.overview.sourceLayer,
+        maxzoom: Math.min(s.seqMinzoom, s.picMinzoom), ...o,
       } as LayerSpecification, before);
     }
     if (bounds && !s.fetchArea) {

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import basicSsl from '@vitejs/plugin-basic-ssl';
-import { defineConfig, loadEnv, type Plugin } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 
 /**
  * MapLibre 6 создаёт воркер по адресу `./maplibre-gl-worker.mjs` рядом со своим модулем (import.meta.url),
@@ -29,22 +29,10 @@ function maplibreWorker(): Plugin {
 // HTTPS=1 (npm run dev:https) — dev-сервер по https с самоподписанным сертификатом: OpenGeofiction
 // принимает только https-адреса возврата OAuth (https://localhost:5173/oauth.html). Кеш зависимостей у него
 // свой: конфиги различаются, и общий кеш пересобирался при каждом запуске другого сервера (504 Outdated Optimize Dep).
-// /fotoshi-api — прокси к API Fotoshi (developer preview) с ключом FOTOSHI_TOKEN из .env.local: ключ остаётся
-// на dev-сервере, в браузер не попадает. Только для разработки: в сборке слоя Fotoshi нет (src/view/fotoshi.ts).
-export default defineConfig(({ mode }) => ({
-  server: {
-    proxy: {
-      '/fotoshi-api': {
-        target: 'https://api.fotoshi.com/v1/data',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/fotoshi-api/, ''),
-        headers: { Authorization: `Bearer ${loadEnv(mode, process.cwd(), '').FOTOSHI_TOKEN ?? ''}` },
-      },
-    },
-  },
+export default defineConfig({
   base: './',
   cacheDir: process.env.HTTPS ? 'node_modules/.vite-https' : 'node_modules/.vite',
   optimizeDeps: { exclude: ['maplibre-gl'] },
   build: { rollupOptions: { input: { main: 'index.html', oauth: 'oauth.html' } } },
   plugins: [maplibreWorker(), ...(process.env.HTTPS ? [basicSsl()] : [])],
-}));
+});

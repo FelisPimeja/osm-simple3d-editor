@@ -9,4 +9,5 @@ interface ImportMetaEnv {
   readonly VITE_MAPBOX_TOKEN?: string;
   /** Клиентский токен Mapillary (MLY|…) — слой уличных фото Mapillary; без него его нет в списке. */
   readonly VITE_MAPILLARY_TOKEN?: string;
+  readonly VITE_FOTOSHI_TOKEN?: string;
 }

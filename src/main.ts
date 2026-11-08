@@ -8649,7 +8649,26 @@ function outerDoorTest(g: BuildingGroup, indoor: IndoorFeature[]): ((f: IndoorFe
     }
     return r;
   };
-  const test = (f: IndoorFeature) => isDoor(f) && f.levels.some((n) => rings(n).some((ring) => nearRing(f.point!, ring, DOOR_ON_WALL)));
+  // Дверь на внутренней грани толстой полигональной стены: наружу ведёт её проём — смотрим задний край проёма
+  const solids = indoor.filter((x) => !x.point);
+  const through = (f: IndoorFeature): LonLat | undefined => {
+    if (focus !== g || !f.point) return;
+    const local = (q: LonLat) => overpassLayer.focusToLocal(q)!;
+    try {
+      let back: [number, number][] | undefined = findSolidDoorBinding(indoor, f, local)?.gap.slice(2, 4);
+      if (!back) {
+        const at = local(f.point);
+        const hit = solids.filter((w) => solidWall(w) && w.levels.some((l) => f.levels.includes(l)))
+          .map((w) => ({ w, face: nearestSolidFace(wallLocalPolygons(w, local), at, 0.03) })).filter((x) => x.face)
+          .sort((a, b) => a.face!.distance - b.face!.distance)[0];
+        if (hit) back = cutSolidWall(wallLocalPolygons(hit.w, local), hit.face!.at, hit.face!.face, 0.2).gap.slice(2, 4);
+      }
+      if (!back) return;
+      return overpassLayer.focusToLngLat((back[0][0] + back[1][0]) / 2, (back[0][1] + back[1][1]) / 2) as LonLat | undefined;
+    } catch { return; }
+  };
+  const test = (f: IndoorFeature) => isDoor(f) && f.levels.some((n) => rings(n).some((ring) => nearRing(f.point!, ring, DOOR_ON_WALL)))
+    || isDoor(f) && !!f.point && ((b) => !!b && f.levels.some((n) => rings(n).some((ring) => nearRing(b, ring, DOOR_ON_WALL))))(through(f));
   return Object.assign(test, { exact: (f: IndoorFeature) => f.levels.every((n) => (rings(n), exactLevels.has(n))) });
 }
 

@@ -81,7 +81,7 @@ export const fotoshi: PhotoService | undefined = TOKEN ? {
   picMinzoom: 16,
   idProp: 'id',
   heading: ['get', 'heading'],
-  isPano: ['==', 1, 0] as Expr,
+  isPano: ['to-boolean', 0] as Expr,
   seqDate: ['get', 'date'],
   picDate: ['get', 'date'],
   seqProps: [],

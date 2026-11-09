@@ -998,7 +998,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   setContextIndoor(plans: ContextPlan[]) {
     // Те же планы (из кеша) — ничего не пересобирать
     if (plans.length === this.contextIndoor.length && plans.every((p, i) => p === this.contextIndoor[i])) return;
-    const changed = new Set([...this.contextIndoor, ...plans].filter((p) => !plans.includes(p) || !this.contextIndoor.includes(p)).flatMap((p) => p.members));
+    const changedPlans = [...this.contextIndoor, ...plans].filter((p) => !plans.includes(p) || !this.contextIndoor.includes(p));
+    const changed = new Set(changedPlans.flatMap((p) => p.members));
     this.contextIndoor = plans;
     if (this.contextBase) {
       const prev = this.context;
@@ -1006,14 +1007,20 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const [k, g] of this.groups) if (k !== FOCUS_GROUP) this.syncContextHidden(g, prev);
       this.mapSnaps = new WeakMap();
     }
-    for (const [k, g] of this.groups) if (k !== FOCUS_GROUP && [...changed].some((m) => g.byKey.has(m))) this.dropGhost(g);
+    for (const [k, g] of this.groups) if (k !== FOCUS_GROUP && ([...changed].some((m) => g.byKey.has(m)) || changedPlans.some((p) => this.ownsPlan(g, p.members)))) this.dropGhost(g);
     this.map?.triggerRepaint();
   }
 
   /** План соседа рисует первая группа карты, где есть его объект (здание бывает на стыке тайлов). */
   private ownsPlan(g: MeshGroup, members: string[]): boolean {
-    for (const [k, x] of this.groups) if (k !== FOCUS_GROUP && members.some((m) => x.byKey.has(m))) return x === g;
-    return false;
+    let first: MeshGroup | undefined;
+    for (const [k, x] of this.groups) {
+      if (k === FOCUS_GROUP) continue;
+      first ??= x;
+      if (members.some((m) => x.byKey.has(m))) return x === g;
+    }
+    // План без здания (indoor вне зданий карты) — у первой группы карты
+    return first === g;
   }
 
   /** Идёт план соседа: без связей с планом здания режима (его двери, проёмы, сечение у земли). */

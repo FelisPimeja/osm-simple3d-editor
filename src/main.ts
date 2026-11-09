@@ -8851,17 +8851,43 @@ function hiddenUnderground(): Feature3D[] {
 }
 
 let undergroundSig = '';
-/** Пунктирные контуры подземных зданий на карте. */
-function updateUndergroundOutlines(feats: Feature3D[]) {
+/** Пунктирные контуры подземных зданий на карте; orphans — контуры indoor без здания (вестибюли, переходы). */
+function updateUndergroundOutlines(feats: Feature3D[], orphans: { key: string; rings: LonLat[][] }[] = []) {
   const src = map.getSource('underground-outlines') as maplibregl.GeoJSONSource | undefined;
   if (!src) return;
-  const sig = feats.map((f) => f.key).join(',');
+  const sig = [...feats.map((f) => f.key), '|', ...orphans.map((o) => o.key)].join(',');
   if (sig === undergroundSig) return;
   undergroundSig = sig;
-  src.setData({ type: 'FeatureCollection', features: feats.flatMap((f) => f.polygons.map((p) => ({
+  src.setData({ type: 'FeatureCollection', features: [...feats.flatMap((f) => f.polygons.map((p) => ({
     type: 'Feature' as const, properties: { key: f.key },
     geometry: { type: 'MultiLineString' as const, coordinates: [p.outer, ...p.inners].map((r) => [...r, r[0]]) },
-  }))) });
+  }))), ...orphans.map((o) => ({
+    type: 'Feature' as const, properties: { key: o.key, orphan: true },
+    geometry: { type: 'MultiLineString' as const, coordinates: o.rings.map((r) => [...r, r[0]]) },
+  }))] });
+}
+
+/**
+ * Контуры indoor без здания для карты: indoor=level как есть, остальные помещения (вне таких этажей) — объединением,
+ * одним пунктиром на комплекс.
+ */
+let orphanOutlineCache: { sig: string; out: { key: string; rings: LonLat[][] }[] } | undefined;
+function orphanOutlines(bbox: Bbox): { key: string; rings: LonLat[][] }[] {
+  const orphans = orphanIndoor(bbox).filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length);
+  const sig = orphans.map((f) => f.key).sort().join(',');
+  if (orphanOutlineCache?.sig === sig) return orphanOutlineCache.out;
+  const levels = orphans.filter((f) => f.kind === 'level');
+  const inLevel = (f: IndoorFeature) => { const p = pointOnSurface(f.polygons[0]); return levels.some((l) => l.polygons.some((q) => pointInRing(p, q.outer))); };
+  const out = levels.flatMap((f) => f.polygons.map((p, i) => ({ key: `${f.key}#${i}`, rings: [p.outer, ...p.inners] })));
+  const rest = orphans.filter((f) => f.kind !== 'level' && !inLevel(f)).flatMap((f) => f.polygons.map((p) => [[...p.outer, p.outer[0]], ...p.inners.map((r) => [...r, r[0]])]));
+  if (rest.length) {
+    try {
+      const union = polygonClipping.union(rest[0] as never, ...(rest.slice(1) as never[])) as unknown as LonLat[][][];
+      union.forEach((poly, i) => out.push({ key: `orphan#${i}:${sig.length}`, rings: poly.map((r) => r.slice(0, -1)) }));
+    } catch (err) { console.warn('[indoor] контур без здания не построен', err); }
+  }
+  orphanOutlineCache = { sig, out };
+  return out;
 }
 
 /** Запрос с иконки карты: выбрать план после входа и догрузки indoor. Первый этаж — level=0. */
@@ -8881,10 +8907,11 @@ function scheduleIndoorBadges() {
 /** Здания в видимой области, у которых есть indoor-полигоны (помещения, коридоры…), — значок над верхом. */
 function updateIndoorBadges() {
   const underground = hiddenUnderground();
-  updateUndergroundOutlines(underground);
-  if (focus || !buildingsView.shown || map.getZoom() < BADGE_MIN_ZOOM) return indoorBadges.set([]);
   const b = map.getBounds();
   const bbox: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+  // Indoor без здания — пунктиром, как подземные здания (вне режима здания: там карта убрана)
+  updateUndergroundOutlines(underground, !focus && map.getZoom() >= 15 ? timed('контуры indoor без здания', () => orphanOutlines(bbox)) : []);
+  if (focus || !buildingsView.shown || map.getZoom() < BADGE_MIN_ZOOM) return indoorBadges.set([]);
   // С правками: нарисованные и рассечённые помещения — тоже, удалённые — нет
   const indoor = withSessionIndoor(new Map(overpass.indoorIn(bbox).map((f) => [f.key, f])), bbox)
     .filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length);
@@ -14600,7 +14627,39 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
     contextPlanCache.set(ng.key, { sig: csig, plan });
     if (plan) plans.push(plan);
   }
+  // Indoor без здания (вестибюли метро, подземные переходы): этажи — по indoor=level, иначе по 3 м от земли
+  const osig = `${g.key}|${level.floor}|${overpass.revision}|${indoorEditRev}|${rendered.length}`;
+  const cached = contextPlanCache.get(ORPHAN_INDOOR);
+  if (cached?.sig === osig) { if (cached.plan) plans.push(cached.plan); }
+  else {
+    const orphans = timed('окружение: indoor без здания', () => orphanIndoor([w - r, s - r, e + r, n + r], rendered.map((x) => x.feature)));
+    const plan = orphans.length ? contextPlanOf({ key: ORPHAN_INDOOR, members: [], roles: [], tags: {} } as unknown as BuildingGroup, at, own, orphans) : undefined;
+    contextPlanCache.set(ORPHAN_INDOOR, { sig: osig, plan });
+    if (plan) plans.push(plan);
+  }
   return plans;
+}
+
+/** Ключ плана из indoor без здания (в окружении и кеше планов). */
+const ORPHAN_INDOOR = 'indoor-without-building';
+
+/** Indoor-объекты в рамке, не лежащие ни в одном здании карты (и подземном): вестибюли, переходы. */
+function orphanIndoor(bbox: Bbox, buildings: Feature3D[] = overpass.renderedFeatures().map((r) => r.feature)): IndoorFeature[] {
+  const CELL = 0.0005;
+  const grid = new Map<string, Feature3D[]>();
+  for (const f of [...buildings, ...hiddenUnderground()]) {
+    if (!f.polygons?.length) continue;
+    const [x0, y0, x1, y1] = featureBox(f);
+    if (x1 < bbox[0] || x0 > bbox[2] || y1 < bbox[1] || y0 > bbox[3]) continue;
+    for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++) for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) {
+      const k = `${i},${j}`; const a = grid.get(k); if (a) a.push(f); else grid.set(k, [f]);
+    }
+  }
+  return overpass.indoorIn(bbox).filter((f) => {
+    const p = indoorAnchor(f);
+    if (!p || !overpass.isVisible(f)) return false;
+    return !(grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || nearRing(p, q.outer, 0.3)));
+  });
 }
 
 /** Габариты внешнего кольца объекта (по объекту: тайлы с соседями приходят часто, зданий — тысячи). */
@@ -14617,10 +14676,10 @@ function featureBox(f: Feature3D): [number, number, number, number] {
 /** Планы соседей по зданиям: indoor здания и его этажи считаются дорого. */
 const contextPlanCache = new Map<string, { sig: string; plan?: ContextPlan }>();
 
-function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>): ContextPlan | undefined {
+function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: IndoorFeature[]): ContextPlan | undefined {
   {
     // Здание режима внутри соседа или вплотную: его indoor сосед тоже «видит» — рисовался бы дважды и мерцал
-    const list = timed('окружение: indoor соседа', () => buildingIndoorImpl(ng)).filter((f) => !own.has(f.key));
+    const list = (data ?? timed('окружение: indoor соседа', () => buildingIndoorImpl(ng))).filter((f) => !own.has(f.key));
     const levels = timed('окружение: этажи соседа', () => buildingLevels(ng, list));
     const l = levels.find((x) => x.floor <= at && x.ceil > at);
     if (!l) return;

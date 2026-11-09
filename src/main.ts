@@ -9031,13 +9031,23 @@ function orphanComplexes(bbox: Bbox): { key: string; features: IndoorFeature[]; 
       if (j === undefined) byNode.set(id, i); else join(i, j);
     }
   });
-  const levels = fs.map((f, i) => ({ f, i })).filter(({ f }) => f.kind === 'level' && f.polygons.length);
+  // Объект внутри помещения, площадки или этажа комплекса на общем уровне (колонна в дыре платформы без общих
+  // узлов, way/1456057465) — тоже его часть; по сетке рамок, чтобы не перебирать все пары
+  const CELL = 0.0005, grid = new Map<string, number[]>();
+  const areas = fs.map((f, i) => ({ f, i })).filter(({ f }) => !f.line && !f.point && f.polygons.length && (f.kind === 'level' || f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor'));
+  for (const { f, i } of areas) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of f.polygons) for (const [x, y] of p.outer) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    for (let a = Math.floor(x0 / CELL); a <= Math.floor(x1 / CELL); a++) for (let b = Math.floor(y0 / CELL); b <= Math.floor(y1 / CELL); b++) {
+      const k = `${a},${b}`; const l = grid.get(k); if (l) l.push(i); else grid.set(k, [i]);
+    }
+  }
   fs.forEach((f, i) => {
-    if (f.kind === 'level') return;
     const p = indoorAnchor(f);
     if (!p) return;
-    const l = levels.find(({ f: lf }) => lf.levels.some((n) => f.levels.includes(n)) && lf.polygons.some((q) => pointInRing(p, q.outer)));
-    if (l) join(i, l.i);
+    const j = (grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).find((j) => j !== i
+      && fs[j].levels.some((n) => f.levels.includes(n)) && fs[j].polygons.some((q) => pointInRing(p, q.outer)));
+    if (j !== undefined) join(i, j);
   });
   const groups = new Map<number, IndoorFeature[]>();
   fs.forEach((f, i) => { const r = find(i); (groups.get(r) ?? groups.set(r, []).get(r)!).push(f); });

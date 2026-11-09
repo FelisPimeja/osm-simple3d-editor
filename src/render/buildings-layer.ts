@@ -1172,6 +1172,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     const c = this.ghostCache.get(g);
     if (!c) return;
     this.ghostCache.delete(g);
+    // Пересобрать сейчас, пока камера стоит: иначе сборка (рёбра, планы соседей, загрузка в GPU) ляжет на первый
+    // кадр следующего жеста — подвисание перед паном или зумом
+    this.map?.triggerRepaint();
     if (c.section) { c.section.parent?.remove(c.section); c.section.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose(); }); }
     for (const o of [c.edges, c.hidden]) if (o) { o.parent?.remove(o); o.geometry.dispose(); for (const ch of o.children) { (ch as THREE.LineSegments).geometry.dispose(); ((ch as THREE.LineSegments).material as THREE.Material).dispose(); } }
   }
@@ -1257,7 +1260,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     let changed = false;
     for (const k of prev ?? []) if (!this.context?.has(k) && g.byKey.has(k) && !this.viewHidden.has(k) && g.hidden.delete(k)) changed = true;
     for (const k of this.context ?? []) if (g.byKey.has(k) && !g.hidden.has(k)) { g.hidden.add(k); changed = true; }
-    if (changed) this.rebuildGeometry(g);
+    if (changed) { this.rebuildGeometry(g); this.map?.triggerRepaint(); }
   }
 
   /**
@@ -6138,6 +6141,8 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   private rebuildGeometry(g: MeshGroup) {
     this.dropGhost(g);
+    // Новая геометрия грузится в GPU первым кадром — пусть он будет сейчас, а не в начале следующего жеста
+    this.map?.triggerRepaint();
     // Сцена режима здания поменялась (вставка, пересборка крыш) — привязки собираются заново
     if (g === this.groups.get(FOCUS_GROUP)) this.snaps = undefined;
     // Скрытый слой на карте не рисуется — не сливаем геометрию зря, соберём при показе

@@ -297,7 +297,9 @@ export interface IndoorLevel {
 export interface RenderedFeature { feature: Feature3D; roofApproximated: boolean }
 
 /** Этаж соседа в окружении: его объекты, двери, лестницы и эскалаторы, высота среза. */
-export interface ContextPlan { members: string[]; items: IndoorItem[]; doors: LonLat[]; escalators: EscalatorItem[]; cut: number }
+export interface ContextPlan { members: string[]; items: IndoorItem[]; doors: LonLat[]; escalators: EscalatorItem[]; cut: number;
+  /** Этажи соседа под его пустотами (второй свет): объекты, двери, срез и пустоты каждого. */
+  below?: { items: IndoorItem[]; doors: LonLat[]; cut: number; voids: LonLat[][][] }[] }
 
 export interface GraphicsOptions {
   /** Полусферический свет: небо сверху, земля снизу. */
@@ -1025,6 +1027,8 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   /** Идёт план соседа: без связей с планом здания режима (его двери, проёмы, сечение у земли). */
   private contextPlanning = false;
+  /** Рисуется нижний этаж соседа (сквозь его второй свет): как бледные этажи здания — без крышек и обводки среза. */
+  private contextLower = false;
 
   /** Толстый серый контур сечения соседа на срезе — как чёрный периметр этажа здания. */
   private drawContextPerimeter(root: THREE.Group, g: MeshGroup, floor: number, top: number) {
@@ -1067,6 +1071,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     const top = Math.min(plan.cut, (this.levelCut ?? Infinity) - 0.005);
     try {
       this.drawPlanBody(root, g, plan.items, plan.doors, top, true, undefined, plan.escalators);
+      // Нижние этажи соседа, видные сквозь его второй свет
+      this.contextLower = true;
+      try { for (const b of plan.below ?? []) this.drawPlanBody(root, g, b.items, b.doors, Math.min(b.cut, top), true, undefined, plan.escalators, b.voids); }
+      finally { this.contextLower = false; }
       this.drawEscalators(root, g, plan.escalators, false);
       this.drawContextPerimeter(root, g, plan.items[0]?.z ?? 0, top);
     }
@@ -3037,7 +3045,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
       // Use the same 2 px cut outline for linear walls and solid polygon faces.
       // У нижнего этажа верх среза — в плоскости пола выбранного: обводка просвечивала бы сквозь него
-      if (!omitCutTop && (!pale || this.contextPlanning)) cutTopLines.push(ax, ay, z1a, bx, by, z1b);
+      if (!omitCutTop && (!pale || (this.contextPlanning && !this.contextLower))) cutTopLines.push(ax, ay, z1a, bx, by, z1b);
       if (!this.graphics.edges) return;
       if (masks.length) for (const value of escalatorOpeningOutline(faces[0], masks)) openingEdges.push(value);
       // Реальные грани после вырезания дверей: конец соседней стены внутри
@@ -3405,7 +3413,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Нижний этаж срезан по полу выбранного: крышка легла бы в плоскость этого пола и мерцала с ним. Снаружи
       // здания (стены приямка лестницы подвала) пола над ними нет — там крышка нужна
       // План соседа: крышки сечения нужны везде (пола выбранного этажа над ним нет) — серым, бледнее чёрных
-      if (pale && !this.contextPlanning) {
+      if (pale && (!this.contextPlanning || this.contextLower)) {
         if (!paleOutside) return;
         // Крышка целиком внутри сечения здания (вершины внутри, граница сечения через её рамку не идёт) — разность
         // пуста, polygon-clipping не нужен: так почти у всех стен нижних этажей
@@ -3429,7 +3437,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         for (const r of [outer, ...holes]) for (let k = 0; k < r.length; k++) { const q = r[(k + 1) % r.length]; lines.push(r[k][0], r[k][1], wallCap, q[0], q[1], wallCap); }
         return;
       }
-      const colour = black && (!pale || this.contextPlanning) ? 0x000000 : undefined;
+      const colour = black && (!pale || (this.contextPlanning && !this.contextLower)) ? 0x000000 : undefined;
       if (!shell) { fill(outer, holes, top, colour); return; }
       // Высота кровли в точке — с запоминанием: соседние ячейки ниже делят углы (shell.at — самое дорогое в крышке)
       const zMemo = new Map<string, number>();

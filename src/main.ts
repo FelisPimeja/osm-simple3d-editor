@@ -14800,13 +14800,23 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
     const levels = timed('окружение: этажи соседа', () => buildingLevels(ng, list));
     const l = levels.find((x) => x.floor <= at && x.ceil > at);
     if (!l) return;
-    const fs = list.filter((f) => f.levels.includes(l.n));
-    const items = fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea && !stairsArea(f) && !(f.transit && f.line)
-      && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
-      && (f.line || f.kind === 'wall' || f.kind === 'column' || f.kind === 'room' || floorLevels(f).includes(l.n)))
-      .map(wallAsLine).map((f) => planItem(f, fs, l));
+    const itemsOf = (lv: Level) => {
+      const fs = list.filter((f) => f.levels.includes(lv.n));
+      return fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea && !stairsArea(f) && !(f.transit && f.line)
+        && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
+        && (f.line || f.kind === 'wall' || f.kind === 'column' || f.kind === 'room' || floorLevels(f).includes(lv.n)))
+        .map(wallAsLine).map((f) => planItem(f, fs, lv));
+    };
+    const doorsOf = (lv: Level) => list.filter((f) => f.levels.includes(lv.n) && f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!);
+    const items = itemsOf(l);
     if (!items.length) return;
-    const doors = fs.filter((f) => f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!);
+    const doors = doorsOf(l);
+    // Второй свет соседа: этажи под его пустотами — бледно, как нижние этажи здания (пустота — вырез в их полу ниже)
+    const voids = timed('окружение: второй свет соседа', () => levelVoids(ng, levels, list, l.n));
+    const below = [...new Set(voids.flatMap((v) => v.through))].sort((a, b) => b - a)
+      .map((n) => levels.find((x) => x.n === n)).filter((x): x is Level => !!x)
+      .map((bl) => ({ items: itemsOf(bl), doors: doorsOf(bl), cut: bl.ceil, voids: levelVoids(ng, levels, list, bl.n).flatMap((v) => v.polygon) }))
+      .filter((b) => b.items.length);
     // Лестницы и эскалаторы этажа: между своими этажами соседа
     const escalators = list.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2 && f.levels.includes(l.n)).flatMap((f): EscalatorItem[] => {
       const low = levels.find((x) => x.n === Math.min(...f.levels)), high = levels.find((x) => x.n === Math.max(...f.levels));
@@ -14814,7 +14824,14 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
       return [{ key: f.key, line: f.polygons[0].outer, bottom: low.floor, top: high.floor, width: pairWidth(f, list) ?? escalatorWidth(f),
         incline: escalatorIncline(f), ...stairsShape(f, list), pale: true }];
     });
-    return { members: [...ng.members, ng.key], items, doors, escalators, cut: l.ceil };
+    // Эскалаторы нижних этажей, видные сквозь пустоты, — тоже (между этажами под этим)
+    const lowerEscalators = list.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2 && !f.levels.includes(l.n)
+      && below.length && f.levels.every((n) => n < l.n)).flatMap((f): EscalatorItem[] => {
+      const low = levels.find((x) => x.n === Math.min(...f.levels)), high = levels.find((x) => x.n === Math.max(...f.levels));
+      return low && high ? [{ key: f.key, line: f.polygons[0].outer, bottom: low.floor, top: high.floor, width: pairWidth(f, list) ?? escalatorWidth(f),
+        incline: escalatorIncline(f), ...stairsShape(f, list), pale: true }] : [];
+    });
+    return { members: [...ng.members, ng.key], items, doors, escalators: [...escalators, ...lowerEscalators], cut: l.ceil, below };
   }
 }
 

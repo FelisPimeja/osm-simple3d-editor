@@ -1251,8 +1251,9 @@ export class BuildingsLayer implements CustomLayerInterface {
           const key = it.feature.key;
           if ((g.hidden.has(key) && !planned.has(key)) || strokeOnly(g, it) || it.box.isEmpty()) continue;
           if (q.x < it.box.min.x || q.x > it.box.max.x || q.y < it.box.min.y || q.y > it.box.max.y) continue;
+          // У соседа с планом на этом этаже — без проверки высоты: подземный этаж под частями от земли (вокзал на -2)
           const h = computeHeights(it.tags), base = g.lift?.get(key) ?? h.min;
-          if (base > z || h.top < z) continue;
+          if (!planned.has(key) && (base > z || h.top < z)) continue;
           if (!it.feature.polygons.some((p) => pointInLocalRing([q.x, q.y], p.outer.map(g.toLocal)) && !p.inners.some((r) => pointInLocalRing([q.x, q.y], r.map(g.toLocal))))) continue;
           const depth = q.clone().applyMatrix4(m).z;
           if (!near || depth < near.depth) near = { key, depth };

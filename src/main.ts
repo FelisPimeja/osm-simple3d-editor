@@ -1733,7 +1733,7 @@ map.on('dblclick', (e) => {
     if (key) return;
     // Двойной клик по соседу в окружении — перейти в его режим здания
     const near = overpassLayer.contextShown ? overpassLayer.pickContext(e.point) : undefined;
-    const ng = near ? groupOf(near) ?? soloGroup(near) : undefined;
+    const ng = near ? groupOf(near) ?? soloGroup(near) ?? complexGroup(near) : undefined;
     if (ng) {
       // Из плана этажа — сразу в план соседа на той же высоте (этаж — как из ссылки: дождётся indoor соседа)
       const at = shownLevel ? shownLevel.floor + 0.3 : undefined;
@@ -2189,6 +2189,7 @@ let focusRefreshId = 0;
 async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manual = false) {
   // В слое JOSM есть неопубликованные правки: API сервера не может его обновлять.
   if (josmMode) return;
+  if (isComplex(g)) return; // комплекс без здания — не объект OSM, проверять на сервере нечего
   const api = server().api;
   try {
     const root = isSolo(g) ? g.members[0] : g.key;
@@ -8909,9 +8910,8 @@ const indoorBadges = new IndoorBadges(map, overpassLayer, ICON_PLAN, (key) => {
   // Комплекс без здания — открыть как здание без объёмов, сразу на этаже с планом
   const complex = complexFocus.get(key);
   if (complex) {
-    const name = complex.features.find((f) => f.kind === 'level' && f.tags.name)?.tags.name ?? complex.features.find((f) => f.tags.name && f.kind !== 'poi')?.tags.name;
     badgePlanBuilding = key;
-    enterFocus({ key, members: [], roles: [], tags: name ? { name } : {} } as unknown as BuildingGroup);
+    enterFocus(complexGroup(key)!);
     renderLevels();
     return;
   }
@@ -14682,6 +14682,9 @@ function syncContextIndoor(level: Level | undefined) {
 function contextIndoorPlans(g: BuildingGroup, level: Level) {
   let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
   for (const f of groupFeatures(g)) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
+  // Комплекс без здания: частей нет — рамка по нему
+  const cb = complexFocus.get(g.key)?.box;
+  if (cb) { w = Math.min(w, cb[0]); s = Math.min(s, cb[1]); e = Math.max(e, cb[2]); n = Math.max(n, cb[3]); }
   if (!Number.isFinite(w)) return [];
   const r = CONTEXT_INDOOR_REACH;
   const own = new Set(buildingIndoor(g).map((f) => f.key)), members = new Set(g.members);
@@ -14718,16 +14721,29 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
     if (plan) plans.push(plan);
   }
   // Indoor без здания (вестибюли метро, подземные переходы): этажи — по indoor=level, иначе по 3 м от земли
+  // Каждый комплекс — свой план со своим ключом: выбирается кликом, открывается двойным
   const osig = `${g.key}|${level.floor}|${overpass.revision}|${indoorEditRev}|${rendered.length}`;
-  const cached = contextPlanCache.get(ORPHAN_INDOOR);
-  if (cached?.sig === osig) { if (cached.plan) plans.push(cached.plan); }
-  else {
-    const orphans = timed('окружение: indoor без здания', () => orphanIndoor([w - r, s - r, e + r, n + r], rendered.map((x) => x.feature)));
-    const plan = orphans.length ? contextPlanOf({ key: ORPHAN_INDOOR, members: [], roles: [], tags: {} } as unknown as BuildingGroup, at, own, orphans) : undefined;
-    contextPlanCache.set(ORPHAN_INDOOR, { sig: osig, plan });
-    if (plan) plans.push(plan);
+  if (orphanPlansCache?.sig !== osig) {
+    const list: ContextPlan[] = [];
+    for (const c of timed('окружение: indoor без здания', () => orphanComplexes([w - r, s - r, e + r, n + r]))) {
+      const features = c.features.filter((f) => !own.has(f.key));
+      if (!features.length || c.key === g.key) continue;
+      complexFocus.set(c.key, { features: c.features, box: c.box });
+      const plan = contextPlanOf({ key: c.key, members: [], roles: [], tags: {} } as unknown as BuildingGroup, at, own, features);
+      if (plan) list.push({ ...plan, members: [c.key] });
+    }
+    orphanPlansCache = { sig: osig, list };
   }
+  plans.push(...orphanPlansCache.list);
   return plans;
+}
+
+/** Комплекс без здания как группа режима здания (без частей), если он известен. */
+function complexGroup(key: string): BuildingGroup | undefined {
+  const c = complexFocus.get(key);
+  if (!c) return;
+  const name = c.features.find((f) => f.kind === 'level' && f.tags.name)?.tags.name ?? c.features.find((f) => f.tags.name && f.kind !== 'poi')?.tags.name;
+  return { key, members: [], roles: [], tags: name ? { name } : {} } as unknown as BuildingGroup;
 }
 
 /** Сцена режима здания; у комплекса без здания объёмов нет — сцена по его рамке. */
@@ -14739,8 +14755,8 @@ function setFocusScene(g: BuildingGroup) {
 const complexFocus = new Map<string, { features: IndoorFeature[]; box: Bbox }>();
 const isComplex = (g: BuildingGroup | undefined) => !!g && complexFocus.has(g.key);
 
-/** Ключ плана из indoor без здания (в окружении и кеше планов). */
-const ORPHAN_INDOOR = 'indoor-without-building';
+/** Планы комплексов без здания в окружении (по подписи этажа и данных). */
+let orphanPlansCache: { sig: string; list: ContextPlan[] } | undefined;
 
 /** Indoor-объекты в рамке, не лежащие ни в одном здании карты (и подземном): вестибюли, переходы. */
 function orphanIndoor(bbox: Bbox, buildings: Feature3D[] = overpass.renderedFeatures().map((r) => r.feature)): IndoorFeature[] {
@@ -14946,7 +14962,9 @@ function renderSelectedImpl() {
     const cg = groupOf(ctxKey);
     const ctx = cg ? undefined : overpass.get(ctxKey);
     const t = cg ? outlineTags(cg) : undefined;
-    const body = cg ? `${buildingHeader(cg.tags.name ?? t?.name, t ?? cg.tags)}<h2>building — <a href="${server().web}/${cg.key}" target="_blank" rel="noopener">${cg.key}</a></h2>
+    const cx = complexFocus.get(ctxKey);
+    const cname = cx && (cx.features.find((f) => f.kind === 'level' && f.tags.name)?.tags.name ?? cx.features.find((f) => f.tags.name && f.kind !== 'poi')?.tags.name);
+    const body = cx ? `${cname ? `<h2 class="group-name">${esc(cname)}</h2>` : ''}<p class="hint">${tr('План без здания: {n} объектов indoor.', { n: cx.features.length })}</p>` : cg ? `${buildingHeader(cg.tags.name ?? t?.name, t ?? cg.tags)}<h2>building — <a href="${server().web}/${cg.key}" target="_blank" rel="noopener">${cg.key}</a></h2>
       <p class="hint">${tr('частей: {n}', { n: cg.members.length })}</p>${tagTable({ ...cg.tags, ...(t ?? {}) })}`
       : ctx ? buildingHeader(ctx.feature.tags.name, ctx.feature.tags) + describeOsm(ctx) : '';
     if (body) { infoEl.innerHTML = hint + body + focusExitButton('Esc'); return; }

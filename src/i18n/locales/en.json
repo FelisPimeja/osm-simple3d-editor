@@ -434,6 +434,7 @@
   "отношения {key}": "the relation {key}",
   "{link}, членов: {n}.": "{link}, members: {n}.",
   "Выйти из режима здания": "Exit building mode",
+  "План без здания: {n} объектов indoor.": "Plan without a building: {n} indoor objects.",
   "Показать окружение": "Show surroundings",
   "Скрыть окружение": "Hide surroundings",
   "Окружение показано: соседние здания — рёбрами, к ним работают привязки. Shift+N — скрыть.": "Surroundings shown: neighbouring buildings as edges, and they can be snapped to. Shift+N hides them.",

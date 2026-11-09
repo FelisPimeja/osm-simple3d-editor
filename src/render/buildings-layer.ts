@@ -1251,6 +1251,15 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
       }
       if (near) return near.key;
+      // План без здания (комплекс): объёмов нет — по его помещениям и площадкам на этом полу
+      const g = groups[0];
+      const m = g.camera.projectionMatrix, inv = m.clone().invert();
+      const n0 = new THREE.Vector3(x, y, -1).applyMatrix4(inv), f0 = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+      const q = new THREE.Ray(n0, f0.sub(n0).normalize()).intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+      if (q) for (const p of this.contextIndoor) {
+        if ([...this.groups.values()].some((x) => p.members.some((k) => x.byKey.has(k)))) continue;
+        if (p.items.some((it) => !it.line && it.polygons.some((pg) => pointInLocalRing([q.x, q.y], pg.outer.map(g.toLocal))))) return p.members[0];
+      }
     }
     for (const g of groups) {
       const m = g.camera.projectionMatrix, inv = m.clone().invert();

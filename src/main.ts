@@ -14558,10 +14558,10 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
   const at = level.floor + 0.3;
   const plans: ContextPlan[] = [];
   for (const ng of buildings.values()) {
-    const csig = `${level.floor}|${overpass.revision}|${indoorEditRev}|${ng.members.join(',')}`;
+    const csig = `${g.key}|${level.floor}|${overpass.revision}|${indoorEditRev}|${ng.members.join(',')}`;
     const cached = contextPlanCache.get(ng.key);
     if (cached?.sig === csig) { if (cached.plan) plans.push(cached.plan); continue; }
-    const plan = timed('окружение: план соседа', () => contextPlanOf(ng, at), () => ng.key);
+    const plan = timed('окружение: план соседа', () => contextPlanOf(ng, at, own), () => ng.key);
     contextPlanCache.set(ng.key, { sig: csig, plan });
     if (plan) plans.push(plan);
   }
@@ -14571,9 +14571,10 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
 /** Планы соседей по зданиям: indoor здания и его этажи считаются дорого. */
 const contextPlanCache = new Map<string, { sig: string; plan?: ContextPlan }>();
 
-function contextPlanOf(ng: BuildingGroup, at: number): ContextPlan | undefined {
+function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>): ContextPlan | undefined {
   {
-    const list = timed('окружение: indoor соседа', () => buildingIndoorImpl(ng));
+    // Здание режима внутри соседа или вплотную: его indoor сосед тоже «видит» — рисовался бы дважды и мерцал
+    const list = timed('окружение: indoor соседа', () => buildingIndoorImpl(ng)).filter((f) => !own.has(f.key));
     const levels = timed('окружение: этажи соседа', () => buildingLevels(ng, list));
     const l = levels.find((x) => x.floor <= at && x.ceil > at);
     if (!l) return;

@@ -31,7 +31,7 @@ export class IndoorBadges {
   }
 
   set(badges: IndoorBadge[]) {
-    const sig = badges.map((b) => `${b.key}@${b.top.toFixed(1)}`).join(',');
+    const sig = badges.map((b) => `${b.key}@${b.at[0].toFixed(6)},${b.at[1].toFixed(6)},${b.top.toFixed(1)}`).join(',');
     if (sig === this.signature) return;
     this.signature = sig;
     this.root.innerHTML = '';

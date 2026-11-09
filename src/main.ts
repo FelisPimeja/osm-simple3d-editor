@@ -1734,7 +1734,16 @@ map.on('dblclick', (e) => {
     // Двойной клик по соседу в окружении — перейти в его режим здания
     const near = overpassLayer.contextShown ? overpassLayer.pickContext(e.point) : undefined;
     const ng = near ? groupOf(near) ?? soloGroup(near) : undefined;
-    if (ng) { leaveDrill(); enterFocus(ng); return; }
+    if (ng) {
+      // Из плана этажа — сразу в план соседа на той же высоте (этаж — как из ссылки: дождётся indoor соседа)
+      const at = shownLevel ? shownLevel.floor + 0.3 : undefined;
+      const n = at === undefined ? undefined : buildingLevels(ng, buildingIndoorImpl(ng)).find((l) => l.floor <= at && l.ceil > at)?.n;
+      leaveDrill();
+      enterFocus(ng);
+      // После входа: панель этажей уже знает это здание и этаж из «ссылки» не сбросит
+      if (n !== undefined) { levelsFocusKey = undefined; linkLevel = n; renderLevels(); }
+      return;
+    }
     // План этажа: мимо помещений — к зданию целиком, а не сразу на карту
     if (currentLevel !== undefined) {
       if (indoorAt([e.point.x, e.point.y])) return;
@@ -8893,6 +8902,9 @@ function orphanOutlines(bbox: Bbox): { key: string; rings: LonLat[][] }[] {
 /** Запрос с иконки карты: выбрать план после входа и догрузки indoor. Первый этаж — level=0. */
 let badgePlanBuilding: string | undefined;
 const indoorBadges = new IndoorBadges(map, overpassLayer, ICON_PLAN, (key) => {
+  // Комплекс без здания: своего режима пока нет — показать его целиком
+  const box = complexBoxes.get(key);
+  if (box) { map.fitBounds([[box[0], box[1]], [box[2], box[3]]], { padding: 80, maxZoom: 19 }); return; }
   const g = groupOf(key) ?? soloGroup(key);
   if (g) { badgePlanBuilding = g.key; enterFocus(g); renderLevels(); }
 });
@@ -8968,7 +8980,59 @@ function updateIndoorBadges() {
       : trn(n, 'есть поэтажный план ({n} помещение). Клик — открыть здание|есть поэтажный план ({n} помещения). Клик — открыть здание|есть поэтажный план ({n} помещений). Клик — открыть здание');
     badges.push({ key, at: [(w + e) / 2, (s + nn) / 2], top, title });
   }
+  // Комплексы indoor без здания (вестибюль, переход, станция) — свой значок на земле
+  for (const c of timed('комплексы indoor без здания', () => orphanComplexes(bbox))) {
+    const n = c.features.filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length).length;
+    if (n < BADGE_MIN_POLYGONS) continue;
+    const name = c.features.find((f) => f.kind === 'level' && f.tags.name)?.tags.name ?? c.features.find((f) => f.tags.name && f.kind !== 'poi')?.tags.name;
+    // Комплекс тянется далеко (линия метро): значок — у его помещения ближе всего к центру кадра
+    const cx = (bbox[0] + bbox[2]) / 2, cy = (bbox[1] + bbox[3]) / 2;
+    const at = c.features.filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length).map((f) => pointOnSurface(f.polygons[0]))
+      .reduce<LonLat | undefined>((best, p) => !best || Math.hypot(p[0] - cx, p[1] - cy) < Math.hypot(best[0] - cx, best[1] - cy) ? p : best, undefined)!;
+    badges.push({ key: c.key, at, top: 0, title: name
+      ? trn(n, '{name} — план без здания ({n} помещение). Клик — показать|{name} — план без здания ({n} помещения). Клик — показать|{name} — план без здания ({n} помещений). Клик — показать', { name })
+      : trn(n, 'План без здания ({n} помещение). Клик — показать|План без здания ({n} помещения). Клик — показать|План без здания ({n} помещений). Клик — показать') });
+    complexBoxes.set(c.key, c.box);
+  }
   indoorBadges.set(badges);
+}
+
+/** Рамки комплексов indoor без здания по ключу значка — для клика. */
+const complexBoxes = new Map<string, Bbox>();
+const COMPLEX_PREFIX = 'indoor-complex:';
+
+/**
+ * Indoor без здания, разбитый на комплексы: связаны объекты с общими узлами (стены, двери, смежные помещения,
+ * лестницы и эскалаторы между уровнями) и помещения внутри своего indoor=level. Несвязанные вестибюли рядом —
+ * разные комплексы; переход и станция под ним — один, если их соединяет лестница или эскалатор.
+ */
+function orphanComplexes(bbox: Bbox): { key: string; features: IndoorFeature[]; box: Bbox }[] {
+  const fs = orphanIndoor(bbox);
+  const parent = fs.map((_, i) => i);
+  const find = (i: number): number => { while (parent[i] !== i) i = parent[i] = parent[parent[i]]; return i; };
+  const join = (a: number, b: number) => { const x = find(a), y = find(b); if (x !== y) parent[x] = y; };
+  const byNode = new Map<number, number>();
+  fs.forEach((f, i) => {
+    for (const p of f.polygons) for (const id of [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]) {
+      const j = byNode.get(id);
+      if (j === undefined) byNode.set(id, i); else join(i, j);
+    }
+  });
+  const levels = fs.map((f, i) => ({ f, i })).filter(({ f }) => f.kind === 'level' && f.polygons.length);
+  fs.forEach((f, i) => {
+    if (f.kind === 'level') return;
+    const p = indoorAnchor(f);
+    if (!p) return;
+    const l = levels.find(({ f: lf }) => lf.levels.some((n) => f.levels.includes(n)) && lf.polygons.some((q) => pointInRing(p, q.outer)));
+    if (l) join(i, l.i);
+  });
+  const groups = new Map<number, IndoorFeature[]>();
+  fs.forEach((f, i) => { const r = find(i); (groups.get(r) ?? groups.set(r, []).get(r)!).push(f); });
+  return [...groups.values()].map((features) => {
+    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+    for (const f of features) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
+    return { key: COMPLEX_PREFIX + features.map((f) => f.key).sort()[0], features, box: [w, s, e, n] as Bbox };
+  }).filter((c) => Number.isFinite(c.box[0]));
 }
 
 /** Доля площади этажа, покрытая indoor-полигонами, начиная с которой у этажа есть план. */
@@ -14656,6 +14720,8 @@ function orphanIndoor(bbox: Bbox, buildings: Feature3D[] = overpass.renderedFeat
     }
   }
   return overpass.indoorIn(bbox).filter((f) => {
+    // Пути и платформы железной дороги вне вокзала — не план (и склеили бы всё вдоль линии в один комплекс)
+    if (f.transit && !f.tags.indoor) return false;
     const p = indoorAnchor(f);
     if (!p || !overpass.isVisible(f)) return false;
     return !(grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || nearRing(p, q.outer, 0.3)));

@@ -1229,13 +1229,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     const x = (px / canvas.clientWidth) * 2 - 1, y = 1 - (py / canvas.clientHeight) * 2;
     const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), hit = new THREE.Vector3();
     let best: { key: string; depth: number } | undefined;
+    const planned = new Set(this.contextIndoor.flatMap((p) => p.members));
     for (const g of groups) {
       const m = g.camera.projectionMatrix, inv = m.clone().invert();
       const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
       const ray = new THREE.Ray(near, far.sub(near).normalize());
       if (!ray.intersectsBox(groupBox(g))) continue;
       for (const it of g.items) {
-        if (g.hidden.has(it.feature.key) || !ray.intersectsBox(it.box)) continue;
+        // Сосед с планом: его оболочка скрыта, но клик по плану — тоже он
+        if ((g.hidden.has(it.feature.key) && !planned.has(it.feature.key)) || !ray.intersectsBox(it.box)) continue;
         const pos = it.positions;
         for (let i = 0; i < pos.length; i += 9) {
           a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);

@@ -10,6 +10,7 @@ import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth, wallDoorwaySpan } from './door-openings';
 import * as THREE from 'three';
 import polygonClipping, { type MultiPolygon as ClipMulti } from 'polygon-clipping';
+import { offsetPolygon } from '../edit/offset-tool';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -436,6 +437,12 @@ const HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
 });
 /** Цвет берётся из вершин (стены/крыша, подсветка, затемнение) — один материал на всё. */
 // polygonOffset отодвигает грани от камеры: рёбра на плоскостях (основание части на крыше другой) не тонут в них
+/** Окружение в плане этажа (сплошной стиль) — как нижние этажи: бледные стены, срез стен и пол. */
+const GHOST_PLAN_WALL = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x777777, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+const GHOST_PLAN_CAP = new THREE.MeshBasicMaterial({ color: 0xc4c0bb, side: THREE.DoubleSide });
+const GHOST_PLAN_FLOOR = new THREE.MeshBasicMaterial({ color: 0xf4f2ef, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 8 });
+/** Условная толщина стен окружения в плане, м: у соседей нет своих стен. */
+const GHOST_WALL = 0.5;
 /** Линии среза окружения в плане этажа: серые (у здания — чёрные толстые). */
 const GHOST_SECTION_MATERIAL = new THREE.LineBasicMaterial({ color: 0x8a8a8a });
 /** Окружение в режиме контуров — вдвое бледнее здания. */
@@ -980,11 +987,11 @@ export class BuildingsLayer implements CustomLayerInterface {
   get contextShown() { return !!this.context; }
 
   /** Рёбра окружения, если у группы карты своих нет (контуры выключены), и скрытые рёбра в режиме контуров. */
-  private ghostCache = new WeakMap<MeshGroup, { mesh?: THREE.Mesh; base?: THREE.Object3D; wire: boolean; cut?: number; edges?: THREE.LineSegments; hidden?: THREE.LineSegments; section?: THREE.LineSegments }>();
+  private ghostCache = new WeakMap<MeshGroup, { mesh?: THREE.Mesh; base?: THREE.Object3D; wire: boolean; cut?: number; floor?: number; edges?: THREE.LineSegments; hidden?: THREE.LineSegments; section?: THREE.Object3D; plan?: boolean }>();
 
   private ghostParts(g: MeshGroup) {
     const c = this.ghostCache.get(g);
-    if (c && c.mesh === g.mesh && c.wire === this.wireframe && c.cut === this.levelCut && c.base === (g.edges ?? c.edges)) return c;
+    if (c && c.mesh === g.mesh && c.wire === this.wireframe && c.cut === this.levelCut && c.floor === this.level?.floor && c.base === (g.edges ?? c.edges)) return c;
     if (c) this.dropGhost(g);
     const items = g.items.filter((it) => !g.hidden.has(it.feature.key) && !strokeOnly(g, it));
     let edges: THREE.LineSegments | undefined;
@@ -1006,28 +1013,63 @@ export class BuildingsLayer implements CustomLayerInterface {
       hidden.renderOrder = 998;
       hidden.frustumCulled = false;
     }
-    // План этажа: линии среза соседей на высоте среза — контуры стоящих на этой высоте частей, серым
-    let section: THREE.LineSegments | undefined;
-    const cut = this.levelCut;
+    // План этажа (сплошной стиль): соседи — как нижние этажи здания, бледно: срез стен полосой по контуру,
+    // пол на отметке этажа; в режиме контуров — серые линии среза
+    let section: THREE.Object3D | undefined;
+    const cut = this.levelCut, floor = this.level?.floor;
     if (cut !== undefined) {
-      const pos: number[] = [];
-      for (const it of items) {
-        const h = computeHeights(it.tags), base = g.lift?.get(it.feature.key) ?? h.min;
-        if (base >= cut || h.wallTop <= cut) continue;
-        for (const p of it.feature.polygons) for (const r of [p.outer, ...p.inners]) {
-          const ring = r.map(g.toLocal);
-          for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; pos.push(a[0], a[1], cut, b[0], b[1], cut); }
+      const crossing = items.filter((it) => { const h = computeHeights(it.tags), base = g.lift?.get(it.feature.key) ?? h.min; return base < cut && h.wallTop > cut; });
+      const close = (r: Pt[]) => [...r, r[0]];
+      let union: Pt[][][] = [];
+      try {
+        const polys = crossing.flatMap((it) => it.feature.polygons.map((p) => [close(p.outer.map(g.toLocal)), ...p.inners.map((r) => close(r.map(g.toLocal)))]));
+        if (polys.length) union = (polygonClipping.union(...(polys.map((p) => [p]) as never as [ClipMulti]))) as unknown as Pt[][][];
+      } catch { union = []; }
+      const rings = union.map((p) => p.map((r) => r.slice(0, -1) as Pt[]));
+      if (this.wireframe) {
+        const pos: number[] = [];
+        for (const p of rings) for (const ring of p) for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; pos.push(a[0], a[1], cut, b[0], b[1], cut); }
+        if (pos.length) {
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+          const lines = new THREE.LineSegments(geometry, GHOST_SECTION_MATERIAL);
+          lines.frustumCulled = false;
+          lines.renderOrder = 997;
+          section = lines;
         }
-      }
-      if (pos.length) {
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-        section = new THREE.LineSegments(geometry, GHOST_SECTION_MATERIAL);
-        section.frustumCulled = false;
-        section.renderOrder = 997;
+      } else if (rings.length) {
+        const capPos: number[] = [], floorPos: number[] = [];
+        const tri = (out: number[], outer: Pt[], holes: Pt[][], z: number) => {
+          const v2 = (r: Pt[]) => r.map(([x, y]) => new THREE.Vector2(x, y));
+          const contour = v2(outer), hs = holes.map(v2);
+          if (THREE.ShapeUtils.isClockWise(contour)) contour.reverse();
+          for (const h of hs) if (!THREE.ShapeUtils.isClockWise(h)) h.reverse();
+          const pts = [...contour, ...hs.flat()];
+          for (const t of THREE.ShapeUtils.triangulateShape(contour, hs)) for (const k of t) out.push(pts[k].x, pts[k].y, z);
+        };
+        for (const [outer, ...inners] of rings) {
+          if (outer.length < 3) continue;
+          const inset = offsetPolygon({ ring: outer, inners }, -GHOST_WALL, 1e-3);
+          const inside = typeof inset === 'string' ? [] : inset;
+          // Полоса стен: грань минус внутренность
+          let band: Pt[][][] = [[outer, ...inners]];
+          try { if (inside.length) band = (polygonClipping.difference([[close(outer), ...inners.map(close)]] as never, ...(inside.map((p) => [p.map(close)]) as never[])) as unknown as Pt[][][]).map((p) => p.map((r) => r.slice(0, -1) as Pt[])); } catch { /* без полосы — вся грань */ }
+          for (const [o, ...hs] of band) if (o.length >= 3) tri(capPos, o, hs, cut);
+          if (floor !== undefined) for (const [o, ...hs] of inside) if (o.length >= 3) tri(floorPos, o, hs, floor + 0.01);
+        }
+        const grp = new THREE.Group();
+        for (const [pos, mat] of [[capPos, GHOST_PLAN_CAP], [floorPos, GHOST_PLAN_FLOOR]] as const) {
+          if (!pos.length) continue;
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.frustumCulled = false;
+          grp.add(mesh);
+        }
+        section = grp;
       }
     }
-    const out = { mesh: g.mesh, base, wire: this.wireframe, cut, edges, hidden, section };
+    const out = { mesh: g.mesh, base, wire: this.wireframe, cut, floor, edges, hidden, section, plan: cut !== undefined && !this.wireframe };
     this.ghostCache.set(g, out);
     return out;
   }
@@ -1037,7 +1079,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const c = this.ghostCache.get(g);
     if (!c) return;
     this.ghostCache.delete(g);
-    for (const o of [c.edges, c.hidden, c.section]) if (o) { o.parent?.remove(o); o.geometry.dispose(); for (const ch of o.children) { (ch as THREE.LineSegments).geometry.dispose(); ((ch as THREE.LineSegments).material as THREE.Material).dispose(); } }
+    if (c.section) { c.section.parent?.remove(c.section); c.section.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose(); }); }
+    for (const o of [c.edges, c.hidden]) if (o) { o.parent?.remove(o); o.geometry.dispose(); for (const ch of o.children) { (ch as THREE.LineSegments).geometry.dispose(); ((ch as THREE.LineSegments).material as THREE.Material).dispose(); } }
   }
 
   /**
@@ -1047,9 +1090,13 @@ export class BuildingsLayer implements CustomLayerInterface {
   private ghostGroup(g: MeshGroup, pass: RenderPass): () => void {
     const c = this.ghostParts(g);
     // План этажа: окружение срезано на той же высоте, что и здание
-    DEPTH_ONLY_MATERIAL.clippingPlanes = GHOST_HIDDEN_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
+    DEPTH_ONLY_MATERIAL.clippingPlanes = GHOST_HIDDEN_MATERIAL.clippingPlanes = GHOST_PLAN_WALL.clippingPlanes = MATERIAL.clippingPlanes;
+    // План этажа — бледные стены, как у нижних этажей; рёбра — бледной линией
+    const face = c.plan ? GHOST_PLAN_WALL : DEPTH_ONLY_MATERIAL;
+    const edgeColour = EDGE_MATERIAL.color.getHex();
+    if (c.plan) EDGE_MATERIAL.color.copy(INDOOR_PALE_LINE.color);
     // Половина режима контуров с заливками — без линий: их рисует вторая половина
-    const added = pass === 'wire-fills' ? [] : [c.edges, c.hidden, c.section].filter((o): o is THREE.LineSegments => !!o);
+    const added = pass === 'wire-fills' ? [] : [c.edges, c.hidden, c.section].filter((o): o is THREE.Object3D => !!o);
     for (const o of added) g.scene.add(o);
     const sil = c.edges?.children[0] as THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | undefined;
     if (sil) sil.material.opacity = EDGE_MATERIAL.opacity;
@@ -1058,7 +1105,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const hidden: THREE.Object3D[] = [];
     for (const o of g.scene.children) {
       if (!o.visible || keep.has(o)) continue;
-      if (o === g.mesh || o === g.glass) { const m = o as THREE.Mesh; swapped.push([m, m.material, m.renderOrder]); m.material = DEPTH_ONLY_MATERIAL; m.renderOrder = -1000; }
+      if (o === g.mesh || o === g.glass) { const m = o as THREE.Mesh; swapped.push([m, m.material, m.renderOrder]); m.material = face; if (!c.plan) m.renderOrder = -1000; }
       else if (!(o instanceof THREE.Light) && !(o instanceof THREE.Camera)) hidden.push(o);
     }
     for (const o of hidden) o.visible = false;
@@ -1066,6 +1113,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const [m, mat, order] of swapped) { m.material = mat; m.renderOrder = order; }
       for (const o of hidden) o.visible = true;
       for (const o of added) g.scene.remove(o);
+      EDGE_MATERIAL.color.setHex(edgeColour);
     };
   }
 

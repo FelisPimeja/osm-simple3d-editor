@@ -653,12 +653,27 @@ overpassLayer.plainDepth = () => roadsLayer.isEnabled && !roadsLayer.hidden();
  * когда камера встала, а не на каждый пришедший тайл посреди движения.
  */
 let focusTilesTimer: ReturnType<typeof setTimeout> | undefined;
+/** Данные тайлов, по которым режим здания уже обновлён: moveend без новых тайлов пересчёта не требует. */
+let focusTilesSig = '';
+/** Здание, по которому проверки уже пересчитаны после прихода тайлов. */
+let focusIssuesSig = '';
 function scheduleFocusTiles() {
   clearTimeout(focusTilesTimer);
   focusTilesTimer = setTimeout(function run() {
     if (!focus) return;
     if (map.isMoving()) { focusTilesTimer = setTimeout(run, 200); return; }
-    syncStrayParts(); renderLevels(); renderIssues();
+    // Каждый moveend зовёт onChange; здание и его проверки (секунды на вокзале) — только при новых данных
+    const sig = `${focus.key}|${overpass.revision}|${overpass.visibilityRevision}|${overpass.displayed().join(',')}`;
+    if (sig === focusTilesSig) return;
+    focusTilesSig = sig;
+    timed('режим здания: тайлы', () => {
+      syncStrayParts(); renderLevels();
+      // Проверки — только если поменялось само здание (его части или indoor), а не тайлы соседей вокруг
+      const own = `${focus!.key}|${groupFeatures(focus!).map((f) => `${f.key}:${f.version ?? ''}:${f.polygons.length}`).join(',')}|${buildingIndoor(focus!).map((f) => f.key).join(',')}`;
+      if (own === focusIssuesSig) return;
+      focusIssuesSig = own;
+      timed('режим здания: проверки', renderIssues);
+    });
   }, 150);
 }
 
@@ -680,10 +695,16 @@ let dataEntrances = new Map<number, Record<string, string>>();
  * Пришли тайлы — входы данных заново. Режим здания открыт раньше, чем пришли входы (вход в здание по ссылке
  * с правками в сессии): правленые объекты здания — заново, с входами, и список «Двери».
  */
+let focusEntranceSig = '';
 function syncDataEntrances() {
-  const before = dataEntrances.size;
   dataEntrances = overpass.dataEntrances();
-  if (!focus || dataEntrances.size === before) return;
+  if (!focus) { focusEntranceSig = ''; return; }
+  // Только входы на узлах самого здания: с окружением тайлы соседей несут свои входы — здание и его проверки
+  // (секунды на вокзале) пересобирать из-за них незачем
+  const ids = new Set(groupFeatures(focus).flatMap((f) => f.polygons.flatMap((p) => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()])));
+  const sig = `${focus.key}|${[...ids].filter((id) => dataEntrances.has(id)).map((id) => `${id}:${JSON.stringify(dataEntrances.get(id))}`).sort().join(';')}`;
+  if (sig === focusEntranceSig) return;
+  focusEntranceSig = sig;
   // Одной пачкой: по одному — пересборка всей геометрии здания на каждую часть
   const g = focus;
   overpassLayer.previewFocusFeatures(groupFeatures(g).filter((f) => session.has(f.key)).map((f) => focusFeature(g, withEntranceEdits(f))));
@@ -14555,10 +14576,10 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
   for (const p of anchors) { const k = cell(p[0], p[1]); const a = grid.get(k); if (a) a.push(p); else grid.set(k, [p]); }
   // Здания с indoor внутри: по отрисованным объектам карты
   const buildings = new Map<string, BuildingGroup>();
-  timed('окружение: здания с indoor', () => { for (const { feature: f } of overpass.renderedFeatures()) {
+  const rendered = timed('окружение: объекты карты', () => overpass.renderedFeatures());
+  timed('окружение: здания с indoor', () => { for (const { feature: f } of rendered) {
     if (members.has(f.key) || !f.polygons?.length) continue;
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const [x, y] of f.polygons[0].outer) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    const [x0, y0, x1, y1] = featureBox(f);
     if (x1 < w - r || x0 > e + r || y1 < s - r || y0 > n + r) continue;
     const near: LonLat[] = [];
     for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++) for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) near.push(...(grid.get(`${i},${j}`) ?? []));
@@ -14580,6 +14601,17 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
     if (plan) plans.push(plan);
   }
   return plans;
+}
+
+/** Габариты внешнего кольца объекта (по объекту: тайлы с соседями приходят часто, зданий — тысячи). */
+const featureBoxes = new WeakMap<Feature3D, [number, number, number, number]>();
+function featureBox(f: Feature3D): [number, number, number, number] {
+  let b = featureBoxes.get(f);
+  if (b) return b;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of f.polygons[0].outer) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  featureBoxes.set(f, b = [x0, y0, x1, y1]);
+  return b;
 }
 
 /** Планы соседей по зданиям: indoor здания и его этажи считаются дорого. */

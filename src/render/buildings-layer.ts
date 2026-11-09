@@ -199,6 +199,8 @@ const INDOOR_PALE_WALL = new THREE.MeshLambertMaterial({ color: 0xffffff, emissi
 const INDOOR_PALE_LINE = new THREE.LineBasicMaterial({ color: 0xc4c0bb });
 withSideCull(INDOOR_PALE_LINE);
 const PALE_MIX = 0.5;
+/** Сечение стен в плане соседа: как чёрное у здания, вдвое бледнее. */
+const CONTEXT_CAP_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x808080, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 /** Чаша бассейна: стенки и дно — светлый кафель; вода — полупрозрачная, на POOL_WATER_DROP ниже пола. */
 const POOL_TILE_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 const POOL_WATER_MATERIAL = new THREE.MeshLambertMaterial({ color: 0x2f9bd6, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false });
@@ -2743,7 +2745,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
     };
     const finish = () => {
-      for (const [pos, col, mat] of [[capPos, undefined, pale ? INDOOR_PALE_WALL : INDOOR_CAP_MATERIAL], [floorPos, floorCol, pale ? INDOOR_PALE_FLOOR_MATERIAL : INDOOR_FLOOR_MATERIAL]] as const) {
+      for (const [pos, col, mat] of [[capPos, undefined, this.contextPlanning ? CONTEXT_CAP_MATERIAL : pale ? INDOOR_PALE_WALL : INDOOR_CAP_MATERIAL], [floorPos, floorCol, pale ? INDOOR_PALE_FLOOR_MATERIAL : INDOOR_FLOOR_MATERIAL]] as const) {
         if (!pos.length) continue;
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -3319,7 +3321,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const cap = (outer: Pt[], holes: Pt[][], z0: number, black = false) => {
       // Нижний этаж срезан по полу выбранного: крышка легла бы в плоскость этого пола и мерцала с ним. Снаружи
       // здания (стены приямка лестницы подвала) пола над ними нет — там крышка нужна
-      if (pale) {
+      // План соседа: крышки сечения нужны везде (пола выбранного этажа над ним нет) — серым, бледнее чёрных
+      if (pale && !this.contextPlanning) {
         if (!paleOutside) return;
         // Крышка целиком внутри сечения здания (вершины внутри, граница сечения через её рамку не идёт) — разность
         // пуста, polygon-clipping не нужен: так почти у всех стен нижних этажей
@@ -3343,7 +3346,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         for (const r of [outer, ...holes]) for (let k = 0; k < r.length; k++) { const q = r[(k + 1) % r.length]; lines.push(r[k][0], r[k][1], wallCap, q[0], q[1], wallCap); }
         return;
       }
-      const colour = black && !pale ? 0x000000 : undefined;
+      const colour = black && (!pale || this.contextPlanning) ? 0x000000 : undefined;
       if (!shell) { fill(outer, holes, top, colour); return; }
       // Высота кровли в точке — с запоминанием: соседние ячейки ниже делят углы (shell.at — самое дорогое в крышке)
       const zMemo = new Map<string, number>();

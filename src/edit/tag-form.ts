@@ -1,5 +1,5 @@
 import { INHERITABLE, inheritedTags, inheritedValue } from '../osm/inherit';
-import { computeHeights, FOOT, LEVEL_HEIGHT, parseLength } from '../osm/heights';
+import { computeHeights, FOOT, LEVEL_HEIGHT, parseLength, roofHeightOf, roofShapeOf } from '../osm/heights';
 import type { EditSession } from './session';
 import { hasOwnUnit, lengthNumber, lengthUnitOf, withUnit, writeLength, type LengthUnit } from '../osm/units';
 import { tr, trn } from '../i18n';
@@ -426,6 +426,18 @@ function stepper(input: string): string {
 }
 
 /** Обработчики формы (делегирование на контейнер; вешается один раз). */
+/**
+ * Плоская крыша стала скатной, а высота задана height без roof:height и roof:levels — крыша встаёт
+ * поверх прежнего верха (height растёт на её типичную высоту), а не врезается в стены.
+ */
+function raiseForRoof(before: Record<string, string>, after: Record<string, string>) {
+  if (roofShapeOf(before) !== 'flat' || roofShapeOf(after) === 'flat') return;
+  if (after['roof:height'] !== undefined || after['roof:levels'] !== undefined) return;
+  const h = parseLength(after.height);
+  if (h === undefined || after.height !== before.height) return;
+  after.height = writeLength(h + roofHeightOf(after), after.height);
+}
+
 export function bindTagForms(container: HTMLElement, session: () => EditSession | undefined) {
   const commit = (input: HTMLInputElement | HTMLSelectElement) => {
     if (input.dataset.indoorTag) {
@@ -453,11 +465,13 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
       if (v.trim() === REMOVE_VALUE && tag === 'building:part') delete tags[tag];
       else if (v.trim()) tags[tag] = v.trim(); else if (empty && !('emptyRemoves' in input.dataset)) tags[tag] = empty; else delete tags[tag];
       if (tags[tag] === f.tags[tag]) return [];
+      raiseForRoof(f.tags, tags);
       return [{ key, tags }];
     });
     if (edits.length === 1 && keys.length === 1) {
       const { key, tags } = edits[0];
-      s.setTags(key, { [tag]: tags[tag] });
+      const prev = s.get(key)!.tags;
+      s.setTags(key, tags.height !== prev.height ? { [tag]: tags[tag], height: tags.height } : { [tag]: tags[tag] });
     }
     else if (edits.length) s.editMany(edits);
     // Формула применена — поле покажет новое значение после перерисовки; если ничего не поменялось — очистить

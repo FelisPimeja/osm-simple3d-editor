@@ -8620,14 +8620,33 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   const snapshot=focusIndoor.get(g.key);
   const all = new Map((snapshot ?? overpass.indoorIn([w, s, e, n])).map((f) => [f.key, f]));
   addFacadeDoors(all, feats);
+  // Связный indoor, в основном лежащий вне здания (станция метро под вокзалом), — не его
+  const detached = detachedIndoor([w, s, e, n]);
+  let footRings: { r: LonLat[]; b: Bbox }[] | undefined;
   const list = withSessionIndoor(all).filter((f) => {
     if(overpass.wasUploadedDeleted(f.key))return false;
+    if (detached.has(f.key)) return false;
     const p = indoorAnchor(f);
     if (!p) return false;
     // Путь и платформа вокзала — если хоть одна вершина в здании (рельсы начинаются снаружи), дальше обрезаем
     if (f.transit) return f.polygons.some((q) => q.outer.some((v) => feats.some((b) => b.polygons.some((r) => pointInRing(v, r.outer)))));
     // Дверь на наружной стене лежит ровно на контуре — для такой точки pointInRing случаен
-    return feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || (!!f.point && nearRing(p, q.outer, 0.3)) || (f.kind === 'wall' && nearRing(p, q.outer, 0.03))));
+    if (!feats.some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || (!!f.point && nearRing(p, q.outer, 0.3)) || (f.kind === 'wall' && nearRing(p, q.outer, 0.03))))) return false;
+    // Площадь, лишь краем заходящая под здание (платформа метро под вокзалом, relation/1422963), — не его:
+    // в контуре должна быть хотя бы половина её вершин. Почти всё лежит в рамке здания целиком — сразу его
+    if (f.line || f.point || !f.polygons.length) return true;
+    const pts = f.polygons.flatMap((q) => q.outer);
+    const outsideBox = pts.filter(([x, y]) => x < w || x > e || y < s || y > n).length;
+    if (outsideBox >= pts.length / 2) return false;
+    // Кольца следа с рамками: вершина проверяется только кольцами, в рамку которых попала
+    const rings = footRings ??= feats.flatMap((b) => b.polygons.map((q) => {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const [x, y] of q.outer) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+      return { r: q.outer, b: [x0 - 5e-6, y0 - 5e-6, x1 + 5e-6, y1 + 5e-6] as Bbox };
+    }));
+    let inside = 0;
+    for (const v of pts) if (rings.some(({ r, b }) => v[0] >= b[0] && v[0] <= b[2] && v[1] >= b[1] && v[1] <= b[3] && (pointInRing(v, r) || nearRing(v, r, 0.3)))) inside++;
+    return inside >= pts.length / 2;
   }).map((f) => f.transit && !f.tags.indoor ? clipTransit(f, feats, footprint) : f).filter((f): f is IndoorFeature => !!f);
   const visible = list.filter((f) => overpass.isVisible(f)).filter((f) => f.kind === 'poi' || !!f.transit || !indoorEdited.has(indoorKey(f.key)) || !!f.tags.indoor || (f.escalator && f.tags.highway === 'steps' && !!f.tags.conveying && f.tags.conveying !== 'no'));
   const axes = visible.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2);
@@ -9021,34 +9040,7 @@ const COMPLEX_REACH = 0.01;
  */
 function orphanComplexes(bbox: Bbox): { key: string; features: IndoorFeature[]; box: Bbox }[] {
   const fs = orphanIndoor(bbox);
-  const parent = fs.map((_, i) => i);
-  const find = (i: number): number => { while (parent[i] !== i) i = parent[i] = parent[parent[i]]; return i; };
-  const join = (a: number, b: number) => { const x = find(a), y = find(b); if (x !== y) parent[x] = y; };
-  const byNode = new Map<number, number>();
-  fs.forEach((f, i) => {
-    for (const p of f.polygons) for (const id of [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]) {
-      const j = byNode.get(id);
-      if (j === undefined) byNode.set(id, i); else join(i, j);
-    }
-  });
-  // Объект внутри помещения, площадки или этажа комплекса на общем уровне (колонна в дыре платформы без общих
-  // узлов, way/1456057465) — тоже его часть; по сетке рамок, чтобы не перебирать все пары
-  const CELL = 0.0005, grid = new Map<string, number[]>();
-  const areas = fs.map((f, i) => ({ f, i })).filter(({ f }) => !f.line && !f.point && f.polygons.length && (f.kind === 'level' || f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor'));
-  for (const { f, i } of areas) {
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const p of f.polygons) for (const [x, y] of p.outer) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
-    for (let a = Math.floor(x0 / CELL); a <= Math.floor(x1 / CELL); a++) for (let b = Math.floor(y0 / CELL); b <= Math.floor(y1 / CELL); b++) {
-      const k = `${a},${b}`; const l = grid.get(k); if (l) l.push(i); else grid.set(k, [i]);
-    }
-  }
-  fs.forEach((f, i) => {
-    const p = indoorAnchor(f);
-    if (!p) return;
-    const j = (grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).find((j) => j !== i
-      && fs[j].levels.some((n) => f.levels.includes(n)) && fs[j].polygons.some((q) => pointInRing(p, q.outer)));
-    if (j !== undefined) join(i, j);
-  });
+  const find = indoorComponents(fs);
   const groups = new Map<number, IndoorFeature[]>();
   fs.forEach((f, i) => { const r = find(i); (groups.get(r) ?? groups.set(r, []).get(r)!).push(f); });
   return [...groups.values()].map((features) => {
@@ -14770,13 +14762,154 @@ function orphanIndoor(bbox: Bbox, buildings: Feature3D[] = overpass.renderedFeat
       const k = `${i},${j}`; const a = grid.get(k); if (a) a.push(f); else grid.set(k, [f]);
     }
   }
+  const detached = detachedIndoor(bbox);
   return overpass.indoorIn(bbox).filter((f) => {
     // Пути и платформы железной дороги вне вокзала — не план (и склеили бы всё вдоль линии в один комплекс)
     if (f.transit && !f.tags.indoor) return false;
     const p = indoorAnchor(f);
     if (!p || !overpass.isVisible(f)) return false;
+    if (detached.has(f.key)) return true; // под зданием, но комплекс в основном снаружи — не его
     return !(grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || nearRing(p, q.outer, 0.3)));
   });
+}
+
+/**
+ * Связные компоненты indoor-объектов: общие узлы (кроме skip — узлов контуров зданий: граница здания разрывает
+ * связность) и вложение в помещение, площадку, коридор или этаж на общем уровне. Возвращает find(i) → корень.
+ */
+function indoorComponents(fs: IndoorFeature[], skip?: Set<number>, apart?: (a: number, b: number) => boolean): (i: number) => number {
+  const parent = fs.map((_, i) => i);
+  const find = (i: number): number => { while (parent[i] !== i) i = parent[i] = parent[parent[i]]; return i; };
+  // apart — связь через границу здания: не склеивает (её видит вызывающий)
+  const join = (a: number, b: number) => { if (apart?.(a, b)) return; const x = find(a), y = find(b); if (x !== y) parent[x] = y; };
+  const byNode = new Map<number, number>();
+  // Точки (двери, кассы, магазины) не связывают: дверь — общий узел стен по обе стороны, через неё склеились бы
+  // соседние здания и метро; точка лишь присоединяется к тому, в чём лежит (ниже)
+  fs.forEach((f, i) => {
+    if (f.point) return;
+    for (const p of f.polygons) for (const id of [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]) {
+      if (skip?.has(id)) continue;
+      const j = byNode.get(id);
+      if (j === undefined) byNode.set(id, i); else join(i, j);
+    }
+  });
+  const CELL = 0.0005, grid = new Map<string, number[]>();
+  fs.forEach((f, i) => {
+    if (f.line || f.point || !f.polygons.length || !(f.kind === 'level' || f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor')) return;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of f.polygons) for (const [x, y] of p.outer) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    for (let a = Math.floor(x0 / CELL); a <= Math.floor(x1 / CELL); a++) for (let b = Math.floor(y0 / CELL); b <= Math.floor(y1 / CELL); b++) {
+      const k = `${a},${b}`; const l = grid.get(k); if (l) l.push(i); else grid.set(k, [i]);
+    }
+  });
+  fs.forEach((f, i) => {
+    const p = indoorAnchor(f);
+    if (!p) return;
+    const j = (grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).find((j) => j !== i
+      && fs[j].levels.some((n) => f.levels.includes(n)) && fs[j].polygons.some((q) => pointInRing(p, q.outer)));
+    if (j !== undefined) join(i, j);
+  });
+  return find;
+}
+
+const detachedCache = new Map<string, Set<string>>();
+
+/**
+ * Indoor под зданием, но не его: объект, у которого в контуре здания меньше половины вершин (платформа метро краем
+ * под вокзалом), и кусок внутри здания, связанный через его границу с внешним комплексом втрое больше себя
+ * (колонны той платформы). Граница здания связность разрывает: вокзал не склеивается со станцией под площадью.
+ */
+function detachedIndoor(bbox: Bbox): Set<string> {
+  // Рамка — по сетке 0,01°, с запасом: кеш общий для соседних запросов, а комплекс не обрезан
+  const q = 0.01, b: Bbox = [Math.floor(bbox[0] / q) * q - q, Math.floor(bbox[1] / q) * q - q, Math.ceil(bbox[2] / q) * q + q, Math.ceil(bbox[3] / q) * q + q];
+  const sig = `${b.map((x) => x.toFixed(2)).join(',')}|${overpass.revision}|${overpass.visibilityRevision}|${indoorEditRev}`;
+  const hit = detachedCache.get(sig);
+  if (hit) return hit;
+  const out = timed('indoor: отнесение к зданиям', () => {
+    // Все загруженные объёмы с контурами: голый контур отношения (вокзал) не рисуется, но indoor в нём — его
+    const buildings = overpass.allFeatures().filter((f) => {
+      if (!f.polygons?.length) return false;
+      const [x0, y0, x1, y1] = featureBox(f);
+      return !(x1 < b[0] || x0 > b[2] || y1 < b[1] || y0 > b[3]);
+    });
+    const CELL = 0.0005, grid = new Map<string, Feature3D[]>(), wall = new Set<number>();
+    for (const f of buildings) {
+      for (const p of f.polygons) for (const id of [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]) wall.add(id);
+      const [x0, y0, x1, y1] = featureBox(f);
+      for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++) for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) {
+        const k = `${i},${j}`; const a = grid.get(k); if (a) a.push(f); else grid.set(k, [f]);
+      }
+    }
+    const fs = overpass.indoorIn(b).filter((f) => !(f.transit && !f.tags.indoor));
+    // Рамки колец зданий — точка проверяется только кольцами, в рамку которых попала; ключ здания — один раз на объект
+    const ringBoxes = new Map<Feature3D, { r: LonLat[]; b: Bbox }[]>();
+    const ringsOf = (x: Feature3D) => {
+      let v = ringBoxes.get(x);
+      if (!v) ringBoxes.set(x, v = x.polygons.map((q) => {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const [a, c] of q.outer) { x0 = Math.min(x0, a); x1 = Math.max(x1, a); y0 = Math.min(y0, c); y1 = Math.max(y1, c); }
+        return { r: q.outer, b: [x0, y0, x1, y1] as Bbox };
+      }));
+      return v;
+    };
+    const buildingAt = (p: LonLat) => (grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? [])
+      .find((x) => ringsOf(x).some(({ r, b: bb }) => p[0] >= bb[0] && p[0] <= bb[2] && p[1] >= bb[1] && p[1] <= bb[3] && pointInRing(p, r)));
+    const keys = new Map<string, string>();
+    const keyAt = (p: LonLat) => {
+      const x = buildingAt(p);
+      if (!x) return undefined;
+      let k = keys.get(x.key);
+      if (k === undefined) keys.set(x.key, k = buildingKey(x.key));
+      return k;
+    };
+    // Дом объекта — здание, где хотя бы половина его вершин (и якорь); платформа под вокзалом краем — не его
+    const anchorIn = fs.map((f) => { const p = indoorAnchor(f); return p ? keyAt(p) : undefined; });
+    const home = fs.map((f, i) => {
+      const own = anchorIn[i];
+      if (!own || f.line || f.point || !f.polygons.length) return own;
+      const pts = [...f.polygons.flatMap((p) => p.outer), indoorAnchor(f)!];
+      return pts.filter((q) => keyAt(q) === own).length >= pts.length / 2 ? own : undefined;
+    });
+    const area = fs.map((f) => f.line || f.point ? 0 : f.polygons.reduce((a, p) => a + polyArea(p), 0));
+    const cut: [number, number][] = [];
+    const find = indoorComponents(fs, wall, (a, c) => { if (home[a] === home[c]) return false; cut.push([a, c]); return true; });
+    const compArea = new Map<number, number>();
+    fs.forEach((_, i) => compArea.set(find(i), (compArea.get(find(i)) ?? 0) + area[i]));
+    // Кусок в здании, связанный через его границу с внешним комплексом втрое больше себя (колонны станции под
+    // вокзалом), — часть того комплекса
+    const outsideLinked = new Map<number, Set<number>>();
+    for (const [a, c] of cut) {
+      const [inn, out] = home[a] && !home[c] ? [a, c] : home[c] && !home[a] ? [c, a] : [-1, -1];
+      if (inn < 0) continue;
+      const r = find(inn);
+      (outsideLinked.get(r) ?? outsideLinked.set(r, new Set()).get(r)!).add(find(out));
+    }
+    const candidates = new Set<number>();
+    for (const [r, outs] of outsideLinked) {
+      const outArea = [...outs].reduce((a, o) => a + (compArea.get(o) ?? 0), 0);
+      if (outArea > 3 * (compArea.get(r) ?? 0)) candidates.add(r);
+    }
+    // …и только если на всех его уровнях у здания больше ничего нет: двери и стены вокзала на 0 связаны с площадью
+    // снаружи, но этаж 0 — его; колонны станции на -4 — нет
+    const levelsOf = new Map<string, Set<number>>();
+    fs.forEach((f, i) => { const h = home[i]; if (h && !candidates.has(find(i))) for (const n of f.levels) (levelsOf.get(h) ?? levelsOf.set(h, new Set()).get(h)!).add(n); });
+    const members = new Map<number, number[]>();
+    fs.forEach((_, i) => { const r = find(i); if (candidates.has(r)) (members.get(r) ?? members.set(r, []).get(r)!).push(i); });
+    const moved = new Set<number>();
+    for (const [r, idx] of members) {
+      const kept = levelsOf.get(home[idx[0]]!);
+      if (!kept || idx.every((i) => fs[i].levels.every((n) => !kept.has(n)))) moved.add(r);
+    }
+    const detached = new Set<string>();
+    // Не принадлежит ни одному зданию — тоже: выгрузка здания (его собственный запрос) даёт ту же платформу
+    // с другой геометрией мультиполигона, и по ней она «в здании»
+    // Точки и линии (двери и стены по контуру) лежат на самой границе — по ним дом не определить, их не трогаем
+    fs.forEach((f, i) => { if ((!home[i] && !f.point && !f.line) || moved.has(find(i))) detached.add(f.key); });
+    return detached;
+  });
+  if (detachedCache.size > 8) detachedCache.delete(detachedCache.keys().next().value!);
+  detachedCache.set(sig, out);
+  return out;
 }
 
 /** Габариты внешнего кольца объекта (по объекту: тайлы с соседями приходят часто, зданий — тысячи). */

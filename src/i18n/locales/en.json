@@ -436,7 +436,7 @@
   "Выйти из режима здания": "Exit building mode",
   "Показать окружение": "Show surroundings",
   "Скрыть окружение": "Hide surroundings",
-  "Окружение показано: соседние здания — полупрозрачные, к ним работают привязки. Shift+N — скрыть.": "Surroundings shown: neighbouring buildings are translucent and can be snapped to. Shift+N hides them.",
+  "Окружение показано: соседние здания — рёбрами, к ним работают привязки. Shift+N — скрыть.": "Surroundings shown: neighbouring buildings as edges, and they can be snapped to. Shift+N hides them.",
   "Окружение скрыто.": "Surroundings hidden.",
   "Соседнее здание — только просмотр. Двойной клик — перейти в его режим здания.": "Neighbouring building, view only. Double-click to open it in building mode.",
   "Внутри группы {group} — Esc снимет выделение, повторный Esc — выход из режима здания.": "Inside group {group}: Esc clears the selection, Esc again exits building mode.",

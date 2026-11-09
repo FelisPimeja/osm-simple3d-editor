@@ -1509,7 +1509,7 @@ map.on('click', (e) => {
   if (focus && overpassLayer.contextShown && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
     const own = overpassLayer.pick(e.point);
     const near = own && inFocus(own) ? undefined : overpassLayer.pickContext(e.point);
-    if (near) { select(undefined); contextKey = near; renderSelected(); return; }
+    if (near) { select(undefined); contextKey = near; overpassLayer.select(near); renderSelected(); return; }
   }
   // Вход на фасаде: клик — выбрать (перенос — только инструментом «Переместить»)
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
@@ -14491,12 +14491,12 @@ function renderMulti() {
     <p class="hint">${tr('Shift+клик — добавить или убрать объект.')}</p>`;
 }
 
-/** Окружение в режиме здания: соседи полупрозрачными, с привязками; при входе в режим — выключено. */
+/** Окружение в режиме здания: соседи рёбрами без заливки, с привязками; при входе в режим — выключено. */
 function toggleContext() {
   if (!focus) return;
   overpassLayer.setContext(overpassLayer.contextShown ? undefined : focusContextHidden(focus));
-  if (!overpassLayer.contextShown) contextKey = undefined;
-  setStatus(overpassLayer.contextShown ? tr('Окружение показано: соседние здания — полупрозрачные, к ним работают привязки. Shift+N — скрыть.') : tr('Окружение скрыто.'));
+  if (!overpassLayer.contextShown && contextKey) { contextKey = undefined; overpassLayer.select(selection); }
+  setStatus(overpassLayer.contextShown ? tr('Окружение показано: соседние здания — рёбрами, к ним работают привязки. Shift+N — скрыть.') : tr('Окружение скрыто.'));
   renderSelected();
 }
 

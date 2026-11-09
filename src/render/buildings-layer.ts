@@ -436,24 +436,11 @@ const HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
 });
 /** Цвет берётся из вершин (стены/крыша, подсветка, затемнение) — один материал на всё. */
 // polygonOffset отодвигает грани от камеры: рёбра на плоскостях (основание части на крыше другой) не тонут в них
-/** Окружение режима здания: серые полупрозрачные грани и бледные рёбра. */
-const GHOST_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xb8b8b8, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });
-const GHOST_EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: 0.25, depthWrite: false });
-
-/** Нарисовать группу карты призраком: подменить материалы на время кадра; вернуть — как было. */
-function ghostGroup(g: MeshGroup): () => void {
-  const swapped: [THREE.Mesh | THREE.Line, THREE.Material | THREE.Material[]][] = [];
-  const hidden: THREE.Object3D[] = [];
-  g.scene.traverseVisible((o) => {
-    if (o instanceof THREE.Line) { swapped.push([o, o.material]); o.material = GHOST_EDGE_MATERIAL; }
-    else if (o instanceof THREE.Mesh) {
-      if (o.material instanceof LineMaterial) hidden.push(o);
-      else { swapped.push([o, o.material]); o.material = GHOST_MATERIAL; }
-    } else if (o instanceof THREE.Points || o instanceof THREE.Sprite) hidden.push(o);
-  });
-  for (const o of hidden) o.visible = false;
-  return () => { for (const [o, m] of swapped) o.material = m as never; for (const o of hidden) o.visible = true; };
-}
+/** Окружение в режиме контуров — вдвое бледнее здания. */
+const GHOST_FADE = 0.5;
+/** Скрытые рёбра окружения в режиме контуров: как у здания (0x555555), вдвое бледнее. */
+const GHOST_HIDDEN_MATERIAL = new THREE.LineDashedMaterial({ color: 0x555555, dashSize: .25, gapSize: .15, transparent: true, opacity: GHOST_FADE,
+  depthFunc: THREE.GreaterDepth, depthWrite: false });
 
 const MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 /**
@@ -941,13 +928,16 @@ export class BuildingsLayer implements CustomLayerInterface {
       const pick = g.camera.projectionMatrix = this.lastMain.clone().multiply(g.model);
       if (this.level && g === this.groups.get(FOCUS_GROUP)) cameraEye(pick, SIDE_EYE.value);
       cameraEye(pick, g.silhouetteEye.value);
+      // Окружение в режиме контуров — рёбра вдвое бледнее, чем у здания
+      const ghost = ghosts.has(g), edgeOpacity = EDGE_MATERIAL.opacity;
+      if (ghost && this.wireframe) EDGE_MATERIAL.opacity = edgeOpacity * GHOST_FADE;
       const silhouette = g.edges?.children[0] as THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | undefined;
       if (silhouette) silhouette.material.opacity = EDGE_MATERIAL.opacity;
       g.camera.projectionMatrix = main.clone().multiply(g.model);
       this.resetState();
       const restore = this.filterPass(g, pass);
-      const unghost = ghosts.has(g) ? ghostGroup(g) : () => {};
-      try { renderer.render(g.scene, g.camera); } finally { unghost(); restore(); }
+      const unghost = ghost ? this.ghostGroup(g, pass) : () => {};
+      try { renderer.render(g.scene, g.camera); } finally { unghost(); restore(); EDGE_MATERIAL.opacity = edgeOpacity; }
       g.camera.projectionMatrix = pick;
       triangles += renderer.info.render.triangles;
     }
@@ -974,7 +964,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     return g ? [g] : [];
   }
 
-  /** Окружение в режиме здания: здания карты рядом с ним — полупрозрачные, с привязками; в плане этажа — нет. */
+  /** Окружение в режиме здания: здания карты рядом с ним — рёбрами без заливки, с привязками; в плане этажа — нет. */
   private context?: Set<string>;
 
   /** Группы карты, видимые как окружение. */
@@ -984,6 +974,65 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   get contextShown() { return !!this.context; }
+
+  /** Рёбра окружения, если у группы карты своих нет (контуры выключены), и скрытые рёбра в режиме контуров. */
+  private ghostCache = new WeakMap<MeshGroup, { mesh?: THREE.Mesh; base?: THREE.Object3D; wire: boolean; edges?: THREE.LineSegments; hidden?: THREE.LineSegments }>();
+
+  private ghostParts(g: MeshGroup) {
+    const c = this.ghostCache.get(g);
+    if (c && c.mesh === g.mesh && c.wire === this.wireframe && c.base === (g.edges ?? c.edges)) return c;
+    if (c) for (const o of [c.edges, c.hidden]) if (o) { o.geometry.dispose(); for (const ch of o.children) { (ch as THREE.LineSegments).geometry.dispose(); ((ch as THREE.LineSegments).material as THREE.Material).dispose(); } }
+    const items = g.items.filter((it) => !g.hidden.has(it.feature.key) && !strokeOnly(g, it));
+    let edges: THREE.LineSegments | undefined;
+    if (!g.edges && g.mesh) {
+      edges = edgeLines(items, EDGE_MATERIAL);
+      const sil = silhouetteLines(items, EDGE_MATERIAL, g.silhouetteEye);
+      if (sil) edges.add(sil);
+    }
+    const base = g.edges ?? edges;
+    let hidden: THREE.LineSegments | undefined;
+    if (this.wireframe && base) {
+      const geometry = new THREE.BufferGeometry();
+      // Видимость рёбер меняет проход режима контуров — собираем, временно показав их
+      const shown: THREE.Object3D[] = [];
+      base.traverse((o) => { if (!o.visible) { shown.push(o); o.visible = true; } });
+      try { geometry.setAttribute('position', new THREE.BufferAttribute(wireframeEdges([base]), 3)); } finally { for (const o of shown) o.visible = false; }
+      hidden = new THREE.LineSegments(geometry, GHOST_HIDDEN_MATERIAL);
+      hidden.computeLineDistances();
+      hidden.renderOrder = 998;
+      hidden.frustumCulled = false;
+    }
+    const out = { mesh: g.mesh, base, wire: this.wireframe, edges, hidden };
+    this.ghostCache.set(g, out);
+    return out;
+  }
+
+  /**
+   * Группа карты как окружение: грани — только в глубину (рёбра за ними не видны), рёбра — как есть, в режиме
+   * контуров ещё и скрытые пунктиром; выделенный сосед — как любое выделение. Вернуть — как было.
+   */
+  private ghostGroup(g: MeshGroup, pass: RenderPass): () => void {
+    const c = this.ghostParts(g);
+    // Половина режима контуров с заливками — без линий: их рисует вторая половина
+    const added = pass === 'wire-fills' ? [] : [c.edges, c.hidden].filter((o): o is THREE.LineSegments => !!o);
+    for (const o of added) g.scene.add(o);
+    const sil = c.edges?.children[0] as THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | undefined;
+    if (sil) sil.material.opacity = EDGE_MATERIAL.opacity;
+    const keep = new Set<THREE.Object3D>([...(g.edges ? [g.edges] : []), ...added, ...(this.selEdges.get(g) ?? [])]);
+    const swapped: [THREE.Mesh, THREE.Material | THREE.Material[], number][] = [];
+    const hidden: THREE.Object3D[] = [];
+    for (const o of g.scene.children) {
+      if (!o.visible || keep.has(o)) continue;
+      if (o === g.mesh || o === g.glass) { const m = o as THREE.Mesh; swapped.push([m, m.material, m.renderOrder]); m.material = DEPTH_ONLY_MATERIAL; m.renderOrder = -1000; }
+      else if (!(o instanceof THREE.Light) && !(o instanceof THREE.Camera)) hidden.push(o);
+    }
+    for (const o of hidden) o.visible = false;
+    return () => {
+      for (const [m, mat, order] of swapped) { m.material = mat; m.renderOrder = order; }
+      for (const o of hidden) o.visible = true;
+      for (const o of added) g.scene.remove(o);
+    };
+  }
 
   /** Здание окружения под курсором (только просмотр: инструменты его не видят). */
   pickContext(point: PointLike): string | undefined {
@@ -1019,6 +1068,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.context = hide ? new Set(hide) : undefined;
     for (const [k, g] of this.groups) if (k !== FOCUS_GROUP) this.syncContextHidden(g, prev);
     this.mapSnaps = new WeakMap();
+    this.updateHiddenEdges();
     this.map?.triggerRepaint();
   }
 
@@ -4666,7 +4716,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (o instanceof LineSegments2 || o.userData.silhouette) (o.material as THREE.Material).dispose();
     }
     this.selEdges.delete(g);
-    const inFocus = g === this.groups.get(FOCUS_GROUP);
+    // Сосед в окружении выделяется как часть здания (со скрытыми рёбрами)
+    const inFocus = g === this.groups.get(FOCUS_GROUP) || this.contextGroups().includes(g);
     if (inFocus !== this.focused) return;
     const pick = (keys: Iterable<string>) => [...new Set(keys)].filter((k) => !g.hidden.has(k)).map((k) => g.byKey.get(k))
       .filter((it): it is Item => !!it && !strokeOnly(g, it));

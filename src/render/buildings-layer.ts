@@ -922,7 +922,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     let triangles = 0;
     // Окружение — полупрозрачное, поверх здания (прозрачное рисуется после непрозрачного)
     const ghosts = new Set(this.contextGroups());
-    const order = [...this.activeGroups(), ...ghosts];
+    // В сплошном стиле окружение — первым: его грани (только в глубину) закрывают здание за ним;
+    // в режиме контуров — после здания, чтобы пунктир скрытых рёбер здания не терялся за соседями
+    const order = this.wireframe ? [...this.activeGroups(), ...ghosts] : [...ghosts, ...this.activeGroups()];
     for (const g of order) {
       // Выбор и камера берут projectionMatrix с глубиной MapLibre — сжатая только на время отрисовки
       const pick = g.camera.projectionMatrix = this.lastMain.clone().multiply(g.model);

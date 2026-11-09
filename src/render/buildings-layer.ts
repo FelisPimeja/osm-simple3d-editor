@@ -296,6 +296,9 @@ export interface IndoorLevel {
 
 export interface RenderedFeature { feature: Feature3D; roofApproximated: boolean }
 
+/** Этаж соседа в окружении: его объекты, двери, лестницы и эскалаторы, высота среза. */
+export interface ContextPlan { members: string[]; items: IndoorItem[]; doors: LonLat[]; escalators: EscalatorItem[]; cut: number }
+
 export interface GraphicsOptions {
   /** Полусферический свет: небо сверху, земля снизу. */
   hemisphere: boolean;
@@ -990,9 +993,9 @@ export class BuildingsLayer implements CustomLayerInterface {
   get contextShown() { return !!this.context; }
 
   /** Этажи соседей на высоте выбранного этажа: их indoor — бледным планом, как нижние этажи здания. */
-  private contextIndoor: { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number }[] = [];
+  private contextIndoor: ContextPlan[] = [];
 
-  setContextIndoor(plans: { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number }[]) {
+  setContextIndoor(plans: ContextPlan[]) {
     // Те же планы (из кеша) — ничего не пересобирать
     if (plans.length === this.contextIndoor.length && plans.every((p, i) => p === this.contextIndoor[i])) return;
     const changed = new Set([...this.contextIndoor, ...plans].filter((p) => !plans.includes(p) || !this.contextIndoor.includes(p)).flatMap((p) => p.members));
@@ -1016,8 +1019,35 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Идёт план соседа: без связей с планом здания режима (его двери, проёмы, сечение у земли). */
   private contextPlanning = false;
 
+  /** Толстый серый контур сечения соседа на срезе — как чёрный периметр этажа здания. */
+  private drawContextPerimeter(root: THREE.Group, g: MeshGroup, floor: number, top: number) {
+    if (!this.map) return;
+    const spans: ClipMulti = [];
+    for (const it of g.items) {
+      if (strokeOnly(g, it) || thinItem(it)) continue;
+      const h = computeHeights(it.tags);
+      if ((g.lift?.get(it.feature.key) ?? h.min) > Math.max(floor, top - 0.5) || h.wallTop < top) continue;
+      for (const p of g.renderFootprints?.get(it.feature.key) ?? it.feature.polygons)
+        spans.push([p.outer, ...p.inners].map((r) => { const l = r.map(g.toLocal); return [...l, l[0]]; }) as ClipMulti[number]);
+    }
+    if (!spans.length) return;
+    let union: ClipMulti = spans;
+    try { union = polygonClipping.union(spans[0] as never, ...(spans.slice(1) as never[])) as ClipMulti; } catch { /* как есть */ }
+    const pos: number[] = [];
+    for (const p of union) for (const r of p) for (let i = 0; i + 1 < r.length; i++) pos.push(r[i][0], r[i][1], top, r[i + 1][0], r[i + 1][1], top);
+    const geo = new LineSegmentsGeometry();
+    geo.setPositions(pos);
+    const canvas = this.map.getCanvas();
+    const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+    const mat = new LineMaterial({ color: CONTEXT_CAP_MATERIAL.color.getHex(), linewidth: PERIMETER_WIDTH_PX * dpr });
+    mat.resolution.set(canvas.width, canvas.height);
+    const line = new LineSegments2(geo, mat);
+    line.frustumCulled = false;
+    root.add(line);
+  }
+
   /** План соседа в группе карты; состояние плана здания режима (рёбра, стекло, проёмы) не трогаем. */
-  private drawContextPlan(root: THREE.Group, tile: MeshGroup, plan: { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number }) {
+  private drawContextPlan(root: THREE.Group, tile: MeshGroup, plan: ContextPlan) {
     // Фасады плана — только частей этого соседа, а не всех зданий тайла
     const own = new Set(plan.members);
     const g = Object.create(tile) as MeshGroup;
@@ -1026,7 +1056,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     const occ = this.indoorEdgeOccluders.length, blk = this.indoorGlassBlockers;
     const strokes = this.indoorStrokes, walls = this.indoorWallPositions, openings = new Map(this.doorOpeningEdges);
     this.contextPlanning = true;
-    try { this.drawPlanBody(root, g, plan.items, plan.doors, plan.cut, true, undefined, []); }
+    // Один срез на всех: выше плоскости среза этажа здания всё отсекается — крышки и толстые линии тоже
+    const top = Math.min(plan.cut, (this.levelCut ?? Infinity) - 0.005);
+    try {
+      this.drawPlanBody(root, g, plan.items, plan.doors, top, true, undefined, plan.escalators);
+      this.drawEscalators(root, g, plan.escalators, false);
+      this.drawContextPerimeter(root, g, plan.items[0]?.z ?? 0, top);
+    }
     catch (e) { console.warn('план соседа', e); }
     finally {
       this.contextPlanning = false;
@@ -2281,8 +2317,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     return blocked ? undefined : best;
   }
 
-  private drawEscalators(root: THREE.Group, g: MeshGroup) {
-    for (const item of this.level?.escalators ?? []) {
+  private drawEscalators(root: THREE.Group, g: MeshGroup, list = this.level?.escalators ?? [], own = true) {
+    for (const item of list) {
       const pts = item.line.map(g.toLocal);
       if (pts.length < 2 || item.top <= item.bottom) continue;
       const cumulative = [0];
@@ -2293,7 +2329,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       model.name = 'escalator';
       model.userData.key = item.key;
       root.add(model);
-      this.escalatorObjects.set(item.key, model);
+      if (own) this.escalatorObjects.set(item.key, model); // соседские — не выбираются
       if (item.stairs) { this.drawStairs(model, item, pts, length, g); continue; }
       const landing = escalatorLanding(length);
       const halfWidth = Math.max(0.35, Math.min(2.5, item.width / 2));
@@ -2736,7 +2772,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const h of hs) if (!THREE.ShapeUtils.isClockWise(h)) h.reverse();
       const pts = [...contour, ...hs.flat()];
       const c = colour === undefined ? undefined : new THREE.Color(colour);
-      if (c && pale) c.lerp(white, PALE_MIX);
+      // Сечение у соседа — серым, как его толстые линии (чёрное пополам с белым на экране почти белое)
+      if (c && pale) { if (this.contextPlanning && colour === 0x000000) c.copy(CONTEXT_CAP_MATERIAL.color); else c.lerp(white, PALE_MIX); }
       const cut = colour === 0x000000 && !pale;
       for (const tri of THREE.ShapeUtils.triangulateShape(contour, hs)) for (const i of tri) {
         if (cut) { cutPos.push(pts[i].x, pts[i].y, typeof z === 'number' ? z : z(pts[i].x, pts[i].y)); continue; }
@@ -2954,7 +2991,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
       // Use the same 2 px cut outline for linear walls and solid polygon faces.
       // У нижнего этажа верх среза — в плоскости пола выбранного: обводка просвечивала бы сквозь него
-      if (!omitCutTop && !pale) cutTopLines.push(ax, ay, z1a, bx, by, z1b);
+      if (!omitCutTop && (!pale || this.contextPlanning)) cutTopLines.push(ax, ay, z1a, bx, by, z1b);
       if (!this.graphics.edges) return;
       if (masks.length) for (const value of escalatorOpeningOutline(faces[0], masks)) openingEdges.push(value);
       // Реальные грани после вырезания дверей: конец соседней стены внутри
@@ -3850,7 +3887,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       geometry.setPositions(positions);
       const canvas = this.map.getCanvas();
       const dpr = canvas.width / Math.max(1, canvas.clientWidth);
-      const material = new LineMaterial({ color: pale ? INDOOR_PALE_LINE.color.getHex() : 0x000000, linewidth: 2 * dpr });
+      const material = new LineMaterial({ color: this.contextPlanning ? CONTEXT_CAP_MATERIAL.color.getHex() : pale ? INDOOR_PALE_LINE.color.getHex() : 0x000000, linewidth: 2 * dpr });
       material.resolution.set(canvas.width, canvas.height);
       const stroke = new LineSegments2(geometry, material);
       stroke.name = 'indoor-wall-cut-top';

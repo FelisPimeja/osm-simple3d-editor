@@ -57,7 +57,7 @@ import { RoadsLayer } from './render/roads-layer';
 import type { TreePoint } from './osm/trees';
 import { isBridge, isTunnel, roadLevel, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
-import { BuildingsLayer, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, type EntrancePlace, type GraphicsOptions, type IndoorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit, ORBIT_EVENT } from './view/orbit';
@@ -12302,11 +12302,7 @@ function renderLevelsImpl() {
       items: fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea && !stairsArea(f) && !(f.transit && f.line)
         && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
         && (f.line || f.kind === 'wall' || f.kind === 'column' || f.kind === 'room' || floorLevels(f).includes(l.n)))
-        .map(wallAsLine).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && f.kind !== 'column' && (f.tags.area!=='yes'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), railing:(f.tags.barrier==='fence'&&f.tags.fence_type==='railing')||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
-          ...(f.transit === 'platform' ? { colour: PLATFORM_COLOUR, platform: true } : isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
-          ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
-          ...(isPool(f) ? { pool: poolDepth(f) } : {}),
-          ...(shaft(f) ? { shaft: true } : {}) })).concat(passing),
+        .map(wallAsLine).map((f) => ({ ...planItem(f, fs, l), ...(shaft(f) ? { shaft: true } : {}) })).concat(passing),
       // Помещение в несколько этажей выше своего пола: только для подсветки выбора — по основанию на нижнем этаже
       highlights: fs.filter((f) => isFloorKind(f) && f.kind !== 'room' && !f.line && !f.escalator && !f.escalatorArea && !floorLevels(f).includes(l.n))
         .flatMap((f): IndoorItem[] => {
@@ -14511,6 +14507,14 @@ function toggleContext() {
   renderSelected();
 }
 
+/** Indoor-объект этажа как элемент плана (стены линиями или полигонами, полы по категориям) — здания и соседей. */
+function planItem(f: IndoorFeature, fs: IndoorFeature[], l: Level): IndoorItem {
+  return ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && f.kind !== 'column' && (f.tags.area!=='yes'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), railing:(f.tags.barrier==='fence'&&f.tags.fence_type==='railing')||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
+          ...(f.transit === 'platform' ? { colour: PLATFORM_COLOUR, platform: true } : isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
+          ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
+    ...(isPool(f) ? { pool: poolDepth(f) } : {}) });
+}
+
 /** Indoor соседей на высоте этажа (бледным планом в окружении); пересчёт — по подписи. */
 let contextIndoorSig = '';
 const CONTEXT_INDOOR_REACH = 0.004; // ~300–400 м вокруг здания, градусы
@@ -14552,7 +14556,7 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
     if (ng && ng.key !== g.key) buildings.set(bk, ng);
   } });
   const at = level.floor + 0.3;
-  const plans: { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number }[] = [];
+  const plans: ContextPlan[] = [];
   for (const ng of buildings.values()) {
     const csig = `${level.floor}|${overpass.revision}|${indoorEditRev}|${ng.members.join(',')}`;
     const cached = contextPlanCache.get(ng.key);
@@ -14565,22 +14569,29 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
 }
 
 /** Планы соседей по зданиям: indoor здания и его этажи считаются дорого. */
-const contextPlanCache = new Map<string, { sig: string; plan?: { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number } }>();
+const contextPlanCache = new Map<string, { sig: string; plan?: ContextPlan }>();
 
-function contextPlanOf(ng: BuildingGroup, at: number): { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number } | undefined {
+function contextPlanOf(ng: BuildingGroup, at: number): ContextPlan | undefined {
   {
     const list = timed('окружение: indoor соседа', () => buildingIndoorImpl(ng));
-    const l = timed('окружение: этажи соседа', () => buildingLevels(ng, list)).find((x) => x.floor <= at && x.ceil > at);
+    const levels = timed('окружение: этажи соседа', () => buildingLevels(ng, list));
+    const l = levels.find((x) => x.floor <= at && x.ceil > at);
     if (!l) return;
     const fs = list.filter((f) => f.levels.includes(l.n));
     const items = fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea && !stairsArea(f) && !(f.transit && f.line)
+      && !(f.kind === 'area' && f.tags.stairs === 'yes' && !!f.tags.conveying && f.tags.conveying !== 'no')
       && (f.line || f.kind === 'wall' || f.kind === 'column' || f.kind === 'room' || floorLevels(f).includes(l.n)))
-      .map(wallAsLine).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line,
-        linearWall: !!f.line && f.kind !== 'column', z: l.floor, noFloor: !floorLevels(f).includes(l.n),
-        ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}) }));
+      .map(wallAsLine).map((f) => planItem(f, fs, l));
     if (!items.length) return;
     const doors = fs.filter((f) => f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!);
-    return { members: [...ng.members, ng.key], items, doors, cut: l.ceil };
+    // Лестницы и эскалаторы этажа: между своими этажами соседа
+    const escalators = list.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2 && f.levels.includes(l.n)).flatMap((f): EscalatorItem[] => {
+      const low = levels.find((x) => x.n === Math.min(...f.levels)), high = levels.find((x) => x.n === Math.max(...f.levels));
+      if (!low || !high) return [];
+      return [{ key: f.key, line: f.polygons[0].outer, bottom: low.floor, top: high.floor, width: pairWidth(f, list) ?? escalatorWidth(f),
+        incline: escalatorIncline(f), ...stairsShape(f, list), pale: true }];
+    });
+    return { members: [...ng.members, ng.key], items, doors, escalators, cut: l.ceil };
   }
 }
 

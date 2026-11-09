@@ -2241,7 +2241,7 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
       if (editGroups.has(g.key)) { editGroups.set(g.key, copy); rebuildGroupIndex(); }
     }
     drill = focus = withStrayParts(freshGroup);
-    overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
+    setFocusScene(focus);
     syncFocusHidden();
     paintSelection();
     renderSelected();
@@ -2275,7 +2275,7 @@ function enterFocus(group: BuildingGroup, flyIn = true) {
   focusToolbar.hidden = false;
   syncMapTools();
   orbit.setUnderground(true);
-  overpassLayer.setFocus(groupFeatures(g), bareOutlines(g));
+  setFocusScene(g);
   // Окружение — как в прошлый раз
   if (loadContextShown() && !overpassLayer.contextShown) { overpassLayer.setContext(focusContextHidden(g)); refreshOverpass(); }
   syncFocusHidden();
@@ -2452,6 +2452,7 @@ function closeFocus() {
   const g = focus;
   if (!g) return;
   leaveDrill();
+  if (isComplex(g)) { select(undefined); return; } // выделять на карте нечего
   select(isSolo(g) ? g.members[0] : g.key);
 }
 
@@ -8598,6 +8599,9 @@ function clipTransit(f: IndoorFeature, feats: Feature3D[], footprint: () => unkn
 }
 
 function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
+  // Комплекс без здания: его объекты (с правками сессии в его рамке)
+  const complex = complexFocus.get(g.key);
+  if (complex) return withSessionIndoor(new Map(complex.features.map((f) => [f.key, f])), complex.box);
   const feats = groupFeatures(g);
   // След здания (объединение контуров) — один раз и только если есть что им обрезать (платформа вокзала)
   let foot: unknown;
@@ -8902,9 +8906,15 @@ function orphanOutlines(bbox: Bbox): { key: string; rings: LonLat[][] }[] {
 /** Запрос с иконки карты: выбрать план после входа и догрузки indoor. Первый этаж — level=0. */
 let badgePlanBuilding: string | undefined;
 const indoorBadges = new IndoorBadges(map, overpassLayer, ICON_PLAN, (key) => {
-  // Комплекс без здания: своего режима пока нет — показать его целиком
-  const box = complexBoxes.get(key);
-  if (box) { map.fitBounds([[box[0], box[1]], [box[2], box[3]]], { padding: 80, maxZoom: 19 }); return; }
+  // Комплекс без здания — открыть как здание без объёмов, сразу на этаже с планом
+  const complex = complexFocus.get(key);
+  if (complex) {
+    const name = complex.features.find((f) => f.kind === 'level' && f.tags.name)?.tags.name ?? complex.features.find((f) => f.tags.name && f.kind !== 'poi')?.tags.name;
+    badgePlanBuilding = key;
+    enterFocus({ key, members: [], roles: [], tags: name ? { name } : {} } as unknown as BuildingGroup);
+    renderLevels();
+    return;
+  }
   const g = groupOf(key) ?? soloGroup(key);
   if (g) { badgePlanBuilding = g.key; enterFocus(g); renderLevels(); }
 });
@@ -8990,15 +9000,13 @@ function updateIndoorBadges() {
     const at = c.features.filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length).map((f) => pointOnSurface(f.polygons[0]))
       .reduce<LonLat | undefined>((best, p) => !best || Math.hypot(p[0] - cx, p[1] - cy) < Math.hypot(best[0] - cx, best[1] - cy) ? p : best, undefined)!;
     badges.push({ key: c.key, at, top: 0, title: name
-      ? trn(n, '{name} — план без здания ({n} помещение). Клик — показать|{name} — план без здания ({n} помещения). Клик — показать|{name} — план без здания ({n} помещений). Клик — показать', { name })
-      : trn(n, 'План без здания ({n} помещение). Клик — показать|План без здания ({n} помещения). Клик — показать|План без здания ({n} помещений). Клик — показать') });
-    complexBoxes.set(c.key, c.box);
+      ? trn(n, '{name} — план без здания ({n} помещение). Клик — открыть план|{name} — план без здания ({n} помещения). Клик — открыть план|{name} — план без здания ({n} помещений). Клик — открыть план', { name })
+      : trn(n, 'План без здания ({n} помещение). Клик — открыть план|План без здания ({n} помещения). Клик — открыть план|План без здания ({n} помещений). Клик — открыть план') });
+    complexFocus.set(c.key, { features: c.features, box: c.box });
   }
   indoorBadges.set(badges);
 }
 
-/** Рамки комплексов indoor без здания по ключу значка — для клика. */
-const complexBoxes = new Map<string, Bbox>();
 const COMPLEX_PREFIX = 'indoor-complex:';
 
 /**
@@ -12934,7 +12942,7 @@ function syncStrayParts() {
   const view = withStrayParts(g);
   if (view.members.length === focus.members.length && view.members.every((k) => focus!.members.includes(k))) return;
   drill = focus = view;
-  overpassLayer.setFocus(groupFeatures(view), bareOutlines(view));
+  setFocusScene(view);
   syncFocusHidden();
 }
 
@@ -14704,6 +14712,15 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
   return plans;
 }
 
+/** Сцена режима здания; у комплекса без здания объёмов нет — сцена по его рамке. */
+function setFocusScene(g: BuildingGroup) {
+  overpassLayer.setFocus(groupFeatures(g), bareOutlines(g), complexFocus.get(g.key)?.box);
+}
+
+/** Комплексы indoor без здания, открываемые как здание (значок плана на карте). */
+const complexFocus = new Map<string, { features: IndoorFeature[]; box: Bbox }>();
+const isComplex = (g: BuildingGroup | undefined) => !!g && complexFocus.has(g.key);
+
 /** Ключ плана из indoor без здания (в окружении и кеше планов). */
 const ORPHAN_INDOOR = 'indoor-without-building';
 
@@ -15134,14 +15151,14 @@ function onSessionChange(keys: string[]) {
     // Отменили создание отношения из отдельного здания — назад к нему одному
     const outline = focus.members.find((_, i) => focus!.roles[i] === 'outline');
     const back = !g && focus.id < 0 && outline ? soloGroup(outline) : undefined;
-    if (g || back) { drill = focus = withStrayParts((g ?? back)!); overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus)); syncFocusHidden(); setEditParam(isSolo(focus) ? focus.members[0] : focus.key); } else closeFocus();
+    if (g || back) { drill = focus = withStrayParts((g ?? back)!); setFocusScene(focus); syncFocusHidden(); setEditParam(isSolo(focus) ? focus.members[0] : focus.key); } else closeFocus();
   } else if (isSolo(focus)) {
     // Повтор рассечения: отдельное здание снова в отношении
     const g = groupOf(focus!.members[0]);
     // Здание без отношения получило отношение (правка или кнопка) — та же сцена, выделение сохраняется
     if (g && focus!.members.every((k, i) => focus!.roles[i] === '' || g.members.includes(k))) {
       drill = focus = withStrayParts(g);
-      overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
+      setFocusScene(focus);
       syncFocusHidden();
       setEditParam(g.key);
       paintSelection();
@@ -15152,7 +15169,7 @@ function onSessionChange(keys: string[]) {
       const gone = focus!.members.slice(1).filter((k) => keys.includes(k) && !session.get(k));
       if (gone.length) {
         drill = focus = { ...focus!, members: focus!.members.filter((k) => !gone.includes(k)), roles: focus!.roles.filter((_, i) => !gone.includes(focus!.members[i])) };
-        overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
+        setFocusScene(focus);
         syncFocusHidden();
       }
     }
@@ -15501,7 +15518,7 @@ async function doUpload() {
       const fresh = isSolo(focus) ? soloGroup(renamed(focus.members[0])) : groupOf(renamed(focus.key));
       if (fresh) {
         drill = focus = withStrayParts(fresh);
-        overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
+        setFocusScene(focus);
         syncFocusHidden();
         paintSelection();
         renderSelected();
@@ -16017,7 +16034,7 @@ async function pollJosm() {
         const fresh = isSolo(focus) ? focus : groupOf(focus.key);
         if (fresh) {
           drill = focus = withStrayParts(fresh);
-          overpassLayer.setFocus(groupFeatures(focus), bareOutlines(focus));
+          setFocusScene(focus);
           syncFocusHidden();
           levelSignature = '';
           renderLevels();

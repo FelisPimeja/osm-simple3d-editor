@@ -1230,6 +1230,28 @@ export class BuildingsLayer implements CustomLayerInterface {
     const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), hit = new THREE.Vector3();
     let best: { key: string; depth: number } | undefined;
     const planned = new Set(this.contextIndoor.flatMap((p) => p.members));
+    // План этажа: всё выше среза отсечено, пола у оболочки нет — сосед под курсором по следу на отметке пола
+    if (this.level) {
+      const z = this.level.floor + 0.05;
+      let near: { key: string; depth: number } | undefined;
+      for (const g of groups) {
+        const m = g.camera.projectionMatrix, inv = m.clone().invert();
+        const n0 = new THREE.Vector3(x, y, -1).applyMatrix4(inv), f0 = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+        const q = new THREE.Ray(n0, f0.sub(n0).normalize()).intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+        if (!q) continue;
+        for (const it of g.items) {
+          const key = it.feature.key;
+          if ((g.hidden.has(key) && !planned.has(key)) || strokeOnly(g, it) || it.box.isEmpty()) continue;
+          if (q.x < it.box.min.x || q.x > it.box.max.x || q.y < it.box.min.y || q.y > it.box.max.y) continue;
+          const h = computeHeights(it.tags), base = g.lift?.get(key) ?? h.min;
+          if (base > z || h.top < z) continue;
+          if (!it.feature.polygons.some((p) => pointInLocalRing([q.x, q.y], p.outer.map(g.toLocal)) && !p.inners.some((r) => pointInLocalRing([q.x, q.y], r.map(g.toLocal))))) continue;
+          const depth = q.clone().applyMatrix4(m).z;
+          if (!near || depth < near.depth) near = { key, depth };
+        }
+      }
+      if (near) return near.key;
+    }
     for (const g of groups) {
       const m = g.camera.projectionMatrix, inv = m.clone().invert();
       const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
@@ -1295,7 +1317,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.focused = this.sketching = true;
   }
 
-  setFocus(features: Feature3D[] | undefined, flat: Iterable<string> = []) {
+  /** frame — рамка сцены [w, s, e, n], когда объёмов нет (план без здания: вестибюль, переход). */
+  setFocus(features: Feature3D[] | undefined, flat: Iterable<string> = [], frame?: [number, number, number, number]) {
     this.sketching = false;
     this.moveGuide = undefined;
     this.movingEdges?.geometry.dispose();
@@ -1305,9 +1328,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.focused = !!features;
     if (!features && this.context) this.setContext(undefined);
     if (!features) { this.level = undefined; this.applyLevel(); } // вне режима здания срезов нет
-    if (!features?.length) { this.focusAxes = undefined; this.focusLock = undefined; this.map?.triggerRepaint(); return; }
+    if (!features || (!features.length && !frame)) { this.focusAxes = undefined; this.focusLock = undefined; this.map?.triggerRepaint(); return; }
     const box = new THREE.Box2();
     for (const f of features) for (const p of f.polygons) for (const [lng, lat] of p.outer) box.expandByPoint(new THREE.Vector2(lng, lat));
+    if (frame) { box.expandByPoint(new THREE.Vector2(frame[0], frame[1])); box.expandByPoint(new THREE.Vector2(frame[2], frame[3])); }
     // Начало сцены, оси и сетка фиксируются при входе в режим и не меняются от правок до выхода
     const lock = this.focusLock;
     const c = lock ? new THREE.Vector2(...lock.center) : box.getCenter(new THREE.Vector2());
@@ -1323,7 +1347,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
     ground.position.z = -0.02;
-    const pts: Pt[] = features.flatMap((f) => f.polygons.flatMap((p) => p.outer.map(g.toLocal)));
+    const pts: Pt[] = features.length ? features.flatMap((f) => f.polygons.flatMap((p) => p.outer.map(g.toLocal)))
+      : [[box.min.x, box.min.y], [box.max.x, box.min.y], [box.max.x, box.max.y], [box.min.x, box.max.y]].map((q) => g.toLocal(q as LonLat));
     this.focusAxes = lock ? lock.axes && { ...lock.axes } : orientedFrame(pts);
     // Начало — снаружи угла bbox, чтобы обозначение не сливалось со стенами
     if (this.focusAxes && !lock) {
@@ -4915,7 +4940,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Сосед в окружении выделяется как часть здания (со скрытыми рёбрами)
     const inFocus = g === this.groups.get(FOCUS_GROUP) || this.contextGroups().includes(g);
     if (inFocus !== this.focused) return;
-    const pick = (keys: Iterable<string>) => [...new Set(keys)].filter((k) => !g.hidden.has(k)).map((k) => g.byKey.get(k))
+    // Сосед с планом: оболочка скрыта, но выделение — по ней (срезано по этажу)
+    const planned = g !== this.groups.get(FOCUS_GROUP) ? new Set(this.contextIndoor.flatMap((p) => p.members)) : new Set<string>();
+    const pick = (keys: Iterable<string>) => [...new Set(keys)].filter((k) => !g.hidden.has(k) || planned.has(k)).map((k) => g.byKey.get(k))
       .filter((it): it is Item => !!it && !strokeOnly(g, it));
     const selected = pick(this.selected);
     const dashed = inFocus && this.wireframe ? pick([...this.selected, ...(this.hovered ? [this.hovered] : [])]) : selected;

@@ -436,6 +436,8 @@ const HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
 });
 /** Цвет берётся из вершин (стены/крыша, подсветка, затемнение) — один материал на всё. */
 // polygonOffset отодвигает грани от камеры: рёбра на плоскостях (основание части на крыше другой) не тонут в них
+/** Линии среза окружения в плане этажа: серые (у здания — чёрные толстые). */
+const GHOST_SECTION_MATERIAL = new THREE.LineBasicMaterial({ color: 0x8a8a8a });
 /** Окружение в режиме контуров — вдвое бледнее здания. */
 const GHOST_FADE = 0.5;
 /** Скрытые рёбра окружения в режиме контуров: как у здания (0x555555), вдвое бледнее. */
@@ -978,12 +980,12 @@ export class BuildingsLayer implements CustomLayerInterface {
   get contextShown() { return !!this.context; }
 
   /** Рёбра окружения, если у группы карты своих нет (контуры выключены), и скрытые рёбра в режиме контуров. */
-  private ghostCache = new WeakMap<MeshGroup, { mesh?: THREE.Mesh; base?: THREE.Object3D; wire: boolean; edges?: THREE.LineSegments; hidden?: THREE.LineSegments }>();
+  private ghostCache = new WeakMap<MeshGroup, { mesh?: THREE.Mesh; base?: THREE.Object3D; wire: boolean; cut?: number; edges?: THREE.LineSegments; hidden?: THREE.LineSegments; section?: THREE.LineSegments }>();
 
   private ghostParts(g: MeshGroup) {
     const c = this.ghostCache.get(g);
-    if (c && c.mesh === g.mesh && c.wire === this.wireframe && c.base === (g.edges ?? c.edges)) return c;
-    if (c) for (const o of [c.edges, c.hidden]) if (o) { o.geometry.dispose(); for (const ch of o.children) { (ch as THREE.LineSegments).geometry.dispose(); ((ch as THREE.LineSegments).material as THREE.Material).dispose(); } }
+    if (c && c.mesh === g.mesh && c.wire === this.wireframe && c.cut === this.levelCut && c.base === (g.edges ?? c.edges)) return c;
+    if (c) this.dropGhost(g);
     const items = g.items.filter((it) => !g.hidden.has(it.feature.key) && !strokeOnly(g, it));
     let edges: THREE.LineSegments | undefined;
     if (!g.edges && g.mesh) {
@@ -1004,9 +1006,38 @@ export class BuildingsLayer implements CustomLayerInterface {
       hidden.renderOrder = 998;
       hidden.frustumCulled = false;
     }
-    const out = { mesh: g.mesh, base, wire: this.wireframe, edges, hidden };
+    // План этажа: линии среза соседей на высоте среза — контуры стоящих на этой высоте частей, серым
+    let section: THREE.LineSegments | undefined;
+    const cut = this.levelCut;
+    if (cut !== undefined) {
+      const pos: number[] = [];
+      for (const it of items) {
+        const h = computeHeights(it.tags), base = g.lift?.get(it.feature.key) ?? h.min;
+        if (base >= cut || h.wallTop <= cut) continue;
+        for (const p of it.feature.polygons) for (const r of [p.outer, ...p.inners]) {
+          const ring = r.map(g.toLocal);
+          for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; pos.push(a[0], a[1], cut, b[0], b[1], cut); }
+        }
+      }
+      if (pos.length) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        section = new THREE.LineSegments(geometry, GHOST_SECTION_MATERIAL);
+        section.frustumCulled = false;
+        section.renderOrder = 997;
+      }
+    }
+    const out = { mesh: g.mesh, base, wire: this.wireframe, cut, edges, hidden, section };
     this.ghostCache.set(g, out);
     return out;
+  }
+
+  /** Забыть рёбра окружения группы (пересобрана геометрия — построить заново). */
+  private dropGhost(g: MeshGroup) {
+    const c = this.ghostCache.get(g);
+    if (!c) return;
+    this.ghostCache.delete(g);
+    for (const o of [c.edges, c.hidden, c.section]) if (o) { o.parent?.remove(o); o.geometry.dispose(); for (const ch of o.children) { (ch as THREE.LineSegments).geometry.dispose(); ((ch as THREE.LineSegments).material as THREE.Material).dispose(); } }
   }
 
   /**
@@ -1018,7 +1049,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // План этажа: окружение срезано на той же высоте, что и здание
     DEPTH_ONLY_MATERIAL.clippingPlanes = GHOST_HIDDEN_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
     // Половина режима контуров с заливками — без линий: их рисует вторая половина
-    const added = pass === 'wire-fills' ? [] : [c.edges, c.hidden].filter((o): o is THREE.LineSegments => !!o);
+    const added = pass === 'wire-fills' ? [] : [c.edges, c.hidden, c.section].filter((o): o is THREE.LineSegments => !!o);
     for (const o of added) g.scene.add(o);
     const sil = c.edges?.children[0] as THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | undefined;
     if (sil) sil.material.opacity = EDGE_MATERIAL.opacity;
@@ -5960,6 +5991,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   private rebuildGeometry(g: MeshGroup) {
+    this.dropGhost(g);
     // Сцена режима здания поменялась (вставка, пересборка крыш) — привязки собираются заново
     if (g === this.groups.get(FOCUS_GROUP)) this.snaps = undefined;
     // Скрытый слой на карте не рисуется — не сливаем геометрию зря, соберём при показе

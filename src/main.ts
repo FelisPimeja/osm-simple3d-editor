@@ -1233,9 +1233,9 @@ setInterval(() => {
 }, 1000);
 
 function refreshOverpass() {
-  // В режиме здания окружение не видно — тайлы не грузим и не собираем (у горизонта их в кадре десятки)
+  // В режиме здания без окружения его не видно — тайлы не грузим и не собираем (у горизонта их в кадре десятки)
   // Слой зданий выключен — тоже: догрузим при включении
-  if (!map.getLayer(overpassLayer.id) || focus || !buildingsView.shown) return;
+  if (!map.getLayer(overpassLayer.id) || (focus && !overpassLayer.contextShown) || !buildingsView.shown) return;
   timed('refreshOverpass', refreshOverpassImpl);
 }
 
@@ -2233,7 +2233,7 @@ function enterFocus(group: BuildingGroup, flyIn = true) {
   orbit.setUnderground(true);
   overpassLayer.setFocus(groupFeatures(g), bareOutlines(g));
   // Окружение — как в прошлый раз
-  if (loadContextShown() && !overpassLayer.contextShown) overpassLayer.setContext(focusContextHidden(g));
+  if (loadContextShown() && !overpassLayer.contextShown) { overpassLayer.setContext(focusContextHidden(g)); refreshOverpass(); }
   syncFocusHidden();
   // На следующем кадре: внутри обработки dblclick MapLibre после обработчиков останавливает камеру (stop)
   if (fly) requestAnimationFrame(flyToFocus);
@@ -14503,6 +14503,7 @@ function toggleContext() {
   if (!focus) return;
   overpassLayer.setContext(overpassLayer.contextShown ? undefined : focusContextHidden(focus));
   try { localStorage.setItem(CONTEXT_KEY, overpassLayer.contextShown ? '1' : '0'); } catch { /* без хранилища — до перезагрузки */ }
+  refreshOverpass(); // соседи в кадре могли ещё не загрузиться (вход по ссылке грузит только само здание)
   if (!overpassLayer.contextShown && contextKey) { contextKey = undefined; overpassLayer.select(selection); }
   setStatus(overpassLayer.contextShown ? tr('Окружение показано: соседние здания — рёбрами, к ним работают привязки. Shift+N — скрыть.') : tr('Окружение скрыто.'));
   renderSelected();

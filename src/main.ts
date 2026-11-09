@@ -1509,7 +1509,7 @@ map.on('click', (e) => {
   if (focus && overpassLayer.contextShown && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
     const own = overpassLayer.pick(e.point);
     const near = own && inFocus(own) ? undefined : overpassLayer.pickContext(e.point);
-    if (near) { select(undefined); contextKey = near; overpassLayer.select(near); renderSelected(); return; }
+    if (near) { select(undefined); contextKey = buildingKey(near); overpassLayer.select(highlightKeys(contextKey)); renderSelected(); return; }
   }
   // Вход на фасаде: клик — выбрать (перенос — только инструментом «Переместить»)
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
@@ -14637,10 +14637,17 @@ function renderSelectedImpl() {
   // Новые объекты (нарисованные, отрезанные) в режиме здания ещё не нарисованы в тайлах карты — берём из сессии
   const own = selectedKey && !overpass.get(selectedKey) ? session.get(selectedKey) as Feature3D | undefined : undefined;
   const r = selectedKey ? overpass.get(selectedKey) ?? (own?.polygons ? { feature: own, roofApproximated: false } : undefined) : undefined;
-  const ctx = focus && contextKey && !selection.length && overpassLayer.contextShown ? overpass.get(contextKey) : undefined;
-  if (ctx) {
-    infoEl.innerHTML = `<p class="hint">${tr('Соседнее здание — только просмотр. Двойной клик — перейти в его режим здания.')}</p>` + describeOsm(ctx) + focusExitButton('Esc');
-    return;
+  // Соседнее здание целиком (как на карте): отношение — его теги и контур, иначе — сам объект
+  const ctxKey = focus && contextKey && !selection.length && overpassLayer.contextShown ? contextKey : undefined;
+  if (ctxKey) {
+    const hint = `<p class="hint">${tr('Соседнее здание — только просмотр. Двойной клик — перейти в его режим здания.')}</p>`;
+    const cg = groupOf(ctxKey);
+    const ctx = cg ? undefined : overpass.get(ctxKey);
+    const t = cg ? outlineTags(cg) : undefined;
+    const body = cg ? `${buildingHeader(cg.tags.name ?? t?.name, t ?? cg.tags)}<h2>building — <a href="${server().web}/${cg.key}" target="_blank" rel="noopener">${cg.key}</a></h2>
+      <p class="hint">${tr('частей: {n}', { n: cg.members.length })}</p>${tagTable({ ...cg.tags, ...(t ?? {}) })}`
+      : ctx ? buildingHeader(ctx.feature.tags.name, ctx.feature.tags) + describeOsm(ctx) : '';
+    if (body) { infoEl.innerHTML = hint + body + focusExitButton('Esc'); return; }
   }
   if (!r && focus && !selection.length) {
     infoEl.innerHTML = describeFocus(focus);

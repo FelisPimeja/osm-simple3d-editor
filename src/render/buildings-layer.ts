@@ -966,12 +966,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     return g ? [g] : [];
   }
 
-  /** Окружение в режиме здания: здания карты рядом с ним — рёбрами без заливки, с привязками; в плане этажа — нет. */
+  /** Окружение в режиме здания: здания карты рядом с ним — рёбрами без заливки, с привязками; в плане этажа — срезаны на высоте этажа. */
   private context?: Set<string>;
 
   /** Группы карты, видимые как окружение. */
   private contextGroups(): MeshGroup[] {
-    if (!this.context || this.level || this.sketching) return [];
+    if (!this.context || this.sketching) return [];
     return [...this.groups].filter(([k]) => k !== FOCUS_GROUP).map(([, g]) => g);
   }
 
@@ -1015,6 +1015,8 @@ export class BuildingsLayer implements CustomLayerInterface {
    */
   private ghostGroup(g: MeshGroup, pass: RenderPass): () => void {
     const c = this.ghostParts(g);
+    // План этажа: окружение срезано на той же высоте, что и здание
+    DEPTH_ONLY_MATERIAL.clippingPlanes = GHOST_HIDDEN_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
     // Половина режима контуров с заливками — без линий: их рисует вторая половина
     const added = pass === 'wire-fills' ? [] : [c.edges, c.hidden].filter((o): o is THREE.LineSegments => !!o);
     for (const o of added) g.scene.add(o);
@@ -1056,6 +1058,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         for (let i = 0; i < pos.length; i += 9) {
           a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
           if (!ray.intersectTriangle(a, b, c, false, hit)) continue;
+          if (this.levelCut !== undefined && hit.z > this.levelCut + 1e-3) continue; // выше среза этажа не видно
           const depth = hit.applyMatrix4(m).z;
           if (!best || depth < best.depth) best = { key: it.feature.key, depth };
         }
@@ -3902,6 +3905,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const s of snaps.points) {
         if (s.kind !== 'vertex' && s.kind !== 'midpoint') continue;
         if (off.has(s.kind) || !filter(s.key) || g.hidden.has(s.key)) continue;
+        if (!this.sketching && this.levelCut !== undefined && s.p.z > this.levelCut + 1e-3) continue; // окружение выше среза этажа
         v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
         if (v.w <= 0) continue;
         const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
@@ -3914,6 +3918,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const a = new THREE.Vector4(), b = new THREE.Vector4(), p = new THREE.Vector3();
         if (ray) for (const e of snaps.edges) {
           if (!filter(e.key) || g.hidden.has(e.key)) continue;
+          if (!this.sketching && this.levelCut !== undefined && Math.min(e.a.z, e.b.z) > this.levelCut + 1e-3) continue;
           // Дешёвый экранный отсев до поиска точки на 3D-отрезке.
           a.set(e.a.x, e.a.y, e.a.z, 1).applyMatrix4(m);
           b.set(e.b.x, e.b.y, e.b.z, 1).applyMatrix4(m);

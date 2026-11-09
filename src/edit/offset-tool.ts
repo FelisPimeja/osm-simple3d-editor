@@ -1,6 +1,6 @@
 import { fromInputUnit, showLength, unitLabel } from '../osm/units';
 import * as THREE from 'three';
-import type { BuildingsLayer } from '../render/buildings-layer';
+import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import polygonClipping from 'polygon-clipping';
 import { tr } from '../i18n';
 
@@ -31,6 +31,8 @@ export class OffsetTool {
   /** Shift зажат — при выборе грани берётся низ. */
   private back = false;
   private lastPoint?: [number, number];
+  /** Привязка, до которой откладываем отступ (для маркера). */
+  snap?: SnapHit;
   private readonly vcb: HTMLDivElement;
 
   constructor(
@@ -132,8 +134,11 @@ export class OffsetTool {
     this.lastPoint = point;
     if (this.state === 'pick') { this.hover(point); return; }
     if (this.state !== 'offset' || !this.target) return;
-    const ray = this.layer.focusRay(point);
-    const q = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -this.target.z), new THREE.Vector3());
+    const t = this.target;
+    // Привязка к точке другого объекта: отступ — до её проекции на плоскость грани
+    this.snap = this.layer.snapAt(point, (k) => k !== t.key);
+    const ray = this.snap ? undefined : this.layer.focusRay(point);
+    const q = this.snap?.local ?? ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -t.z), new THREE.Vector3());
     if (!q) return;
     this.d = signedDistance(this.target.ring, [q.x, q.y]);
     if (this.inwardOnly) this.d = Math.min(this.d, 0);
@@ -212,6 +217,7 @@ export class OffsetTool {
   }
 
   private cancel() {
+    this.snap = undefined;
     this.layer.setOutline(undefined);
     this.target = undefined;
     this.typed = '';

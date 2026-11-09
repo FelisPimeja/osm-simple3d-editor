@@ -2232,6 +2232,8 @@ function enterFocus(group: BuildingGroup, flyIn = true) {
   syncMapTools();
   orbit.setUnderground(true);
   overpassLayer.setFocus(groupFeatures(g), bareOutlines(g));
+  // Окружение — как в прошлый раз
+  if (loadContextShown() && !overpassLayer.contextShown) overpassLayer.setContext(focusContextHidden(g));
   syncFocusHidden();
   // На следующем кадре: внутри обработки dblclick MapLibre после обработчиков останавливает камеру (stop)
   if (fly) requestAnimationFrame(flyToFocus);
@@ -14491,10 +14493,16 @@ function renderMulti() {
     <p class="hint">${tr('Shift+клик — добавить или убрать объект.')}</p>`;
 }
 
-/** Окружение в режиме здания: соседи рёбрами без заливки, с привязками; при входе в режим — выключено. */
+/** Окружение в режиме здания: соседи рёбрами без заливки, с привязками; включено ли — запоминается. */
+const CONTEXT_KEY = 'osm3d.focus-context';
+function loadContextShown(): boolean {
+  try { return localStorage.getItem(CONTEXT_KEY) === '1'; } catch { return false; }
+}
+
 function toggleContext() {
   if (!focus) return;
   overpassLayer.setContext(overpassLayer.contextShown ? undefined : focusContextHidden(focus));
+  try { localStorage.setItem(CONTEXT_KEY, overpassLayer.contextShown ? '1' : '0'); } catch { /* без хранилища — до перезагрузки */ }
   if (!overpassLayer.contextShown && contextKey) { contextKey = undefined; overpassLayer.select(selection); }
   setStatus(overpassLayer.contextShown ? tr('Окружение показано: соседние здания — рёбрами, к ним работают привязки. Shift+N — скрыть.') : tr('Окружение скрыто.'));
   renderSelected();

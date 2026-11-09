@@ -1505,6 +1505,12 @@ map.on('click', (e) => {
     const picId = p.layer.pick(e.point);
     if (picId) { void photoViewer.open(p.layer, picId); return; }
   }
+  // Окружение: клик по соседу (мимо своих частей) — его теги для просмотра
+  if (focus && overpassLayer.contextShown && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
+    const own = overpassLayer.pick(e.point);
+    const near = own && inFocus(own) ? undefined : overpassLayer.pickContext(e.point);
+    if (near) { select(undefined); contextKey = near; renderSelected(); return; }
+  }
   // Вход на фасаде: клик — выбрать (перенос — только инструментом «Переместить»)
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
     const id = overpassLayer.pickEntrance([e.point.x, e.point.y]);
@@ -1617,13 +1623,13 @@ map.on('click', (e) => {
     const screen = map.project({ lng: point.p[0], lat: point.p[1] });
     return { point, distance: Math.hypot(screen.x - e.point.x, screen.y - e.point.y) };
   }).filter((hit) => hit.distance <= 14).sort((a, b) => a.distance - b.distance)[0]?.point : undefined;
-  if (tree) { if (reclick && tree.key === selectedTreeKey) { select(undefined); infoEl.innerHTML = ''; } else selectTree(tree); return; }
+  if (tree) { if (reclick && tree.key === selectedTreeKey) { select(undefined); clearInfo(); } else selectTree(tree); return; }
   // Мост или тоннель под курсором ближе здания — его теги (только просмотр)
   const road = addingTo ? undefined : roadsLayer.pick(e.point.x, e.point.y);
   if (road) {
     const hit = key ? overpassLayer.pickHit(e.point) : undefined;
     if (!hit || road.depth < roadsLayer.depthOf(hit.lngLat, hit.altitude)) {
-      if (reclick && roadSelection.length === 1 && roadSelection[0].id === road.way.id) { select(undefined); infoEl.innerHTML = ''; return; }
+      if (reclick && roadSelection.length === 1 && roadSelection[0].id === road.way.id) { select(undefined); clearInfo(); return; }
       selectRoad(road.way, e.originalEvent.shiftKey); return;
     }
   }
@@ -1637,6 +1643,8 @@ map.on('click', (e) => {
   // Повторный клик по единственному выбранному зданию или части — снять выбор
   if (resolved && reclick && selection.length === 1 && selection[0] === resolved) { select(undefined); return; }
   if (select(resolved)) return;
+  // В режиме здания тайлов карты нет: панель — свойства здания
+  if (focus) { clearInfo(); return; }
   const f = queryTileLayers(e.point)[0];
   infoEl.innerHTML = f ? describeTile(f) : '';
   highlightedTile = f?.layer.id === MERGED_LAYER ? undefined : f?.id as number | undefined;
@@ -1688,6 +1696,10 @@ map.on('dblclick', (e) => {
       return;
     }
     if (key) return;
+    // Двойной клик по соседу в окружении — перейти в его режим здания
+    const near = overpassLayer.contextShown ? overpassLayer.pickContext(e.point) : undefined;
+    const ng = near ? groupOf(near) ?? soloGroup(near) : undefined;
+    if (ng) { leaveDrill(); enterFocus(ng); return; }
     // План этажа: мимо помещений — к зданию целиком, а не сразу на карту
     if (currentLevel !== undefined) {
       if (indoorAt([e.point.x, e.point.y])) return;
@@ -7862,7 +7874,8 @@ document.addEventListener('keydown', (e) => {
     : e.code === 'KeyR' && !e.shiftKey ? 'rect'
     : e.code === 'KeyL' && !e.shiftKey ? 'polygon'
     : e.code === 'KeyC' && !e.shiftKey ? 'circle'
-    : e.code === 'KeyN' && !e.shiftKey ? 'ngon' : undefined;
+    : e.code === 'KeyN' && !e.shiftKey ? 'ngon'
+    : e.code === 'KeyN' && e.shiftKey ? 'context' : undefined;
   if (!action) return;
   e.preventDefault();
   closeCtxMenu();
@@ -7870,7 +7883,8 @@ document.addEventListener('keydown', (e) => {
   if (action === 'move') { if (!startEntranceDrag('pick')) startMove(); } else if (action === 'push') startPush(); else if (action === 'shape') startShape(); else if (action === 'split') startSplit();
   else if (action === 'rotate') startRotate(); else if (action === 'scale') startScale(); else if (action === 'square') squareSelected(); else if (action === 'merge') mergeSelected(); else if (action === 'point') { if (pointPick) stopPoint(); else startPoint(); }
   else if (action === 'wall') startWall(); else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
-  else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action); else focusAction(action);
+  else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action);
+  else if (action === 'context') toggleContext(); else focusAction(action);
 }, { capture: true });
 document.addEventListener('keyup', (e) => { offsetTool.key(e); splitTool.key(e); shapeTool.key(e); if (moveTool.key(e) || drawTool.key(e) || measureTool.key(e) || rotateTool.key(e) || scaleTool.key(e)) e.preventDefault(); });
 
@@ -7917,6 +7931,7 @@ infoEl.addEventListener('click', (e) => {
   if (btn.dataset.merge !== undefined) return mergeIntoBuilding();
   if (btn.dataset.addSelectedParts !== undefined) return addSelectedPartsToGroup();
   if (btn.dataset.focusExit !== undefined) return closeFocus();
+  if (btn.dataset.focusContext !== undefined) return toggleContext();
   if (btn.dataset.outlineFix !== undefined) return fixOutline();
   if (btn.dataset.implicitRelation !== undefined) return createImplicitRelation();
   if (btn.dataset.exclude !== undefined) return excludeFromGroup();
@@ -7933,7 +7948,11 @@ infoEl.addEventListener('click', (e) => {
   }
 });
 
+/** Соседнее здание, выбранное в окружении режима здания: только просмотр тегов. */
+let contextKey: string | undefined;
+
 function clearSelection() {
+  contextKey = undefined;
   clearTreeSelection();
   roadsLayer.select([]);
   roadSelection = [];
@@ -7942,9 +7961,10 @@ function clearSelection() {
   addPending = [];
   selection = [];
   selectedKey = undefined;
-  infoEl.innerHTML = '';
   overpassLayer.select(undefined);
   clearTileHighlight();
+  // В режиме здания панель не пропадает: свойства здания с кнопками выхода и окружения
+  clearInfo();
 }
 
 function clearTileHighlight() {
@@ -13833,7 +13853,7 @@ const HELP: Record<string, HelpTopic> = {
     tr('Клик — выделить часть, Shift+клик — добавить к выделению, Alt+клик — следующая под курсором.'),
     tr('Перетаскивание правой или средней кнопкой (или Ctrl+левой) — облёт вокруг точки под курсором.'),
     tr('M — переместить, Q — повернуть, A — выровнять углы (90°), P — вытянуть, K — рассечь, J — объединить, R / L / C / N — новая часть (прямоугольник, полигон, круг, многоугольник), O — отступ, T — рулетка, B — заливка.'),
-    tr('Пробел — выключить инструмент. G — сетка, S — привязки, D — направление ската, H — скрыть часть, I — изолировать выделенные, Shift+H — показать все.'),
+    tr('Пробел — выключить инструмент. G — сетка, S — привязки, D — направление ската, H — скрыть часть, I — изолировать выделенные, Shift+H — показать все, Shift+N — окружение.'),
     tr('Ctrl+C / Ctrl+V — копировать и вставить части, Delete — удалить, Ctrl+Z — отменить.'),
     tr('Двойной клик по части — изолировать её (остальные скрыты); двойной клик мимо здания — показать все части, а если скрытых нет — назад к карте.'),
     tr('Esc — снять выделение, ещё раз — назад к карте.'),
@@ -14471,6 +14491,20 @@ function renderMulti() {
     <p class="hint">${tr('Shift+клик — добавить или убрать объект.')}</p>`;
 }
 
+/** Окружение в режиме здания: соседи полупрозрачными, с привязками; при входе в режим — выключено. */
+function toggleContext() {
+  if (!focus) return;
+  overpassLayer.setContext(overpassLayer.contextShown ? undefined : focusContextHidden(focus));
+  if (!overpassLayer.contextShown) contextKey = undefined;
+  setStatus(overpassLayer.contextShown ? tr('Окружение показано: соседние здания — полупрозрачные, к ним работают привязки. Shift+N — скрыть.') : tr('Окружение скрыто.'));
+  renderSelected();
+}
+
+/** Объекты здания режима: их копии в тайлах карты не рисуются поверх сцены здания. */
+function focusContextHidden(g: BuildingGroup): string[] {
+  return [g.key, ...g.members];
+}
+
 /** Снято выделение: в режиме здания — его свойства (на выбранном этаже — свойства этажа), иначе пусто. */
 function clearInfo() {
   if (focus) renderSelected();
@@ -14603,6 +14637,11 @@ function renderSelectedImpl() {
   // Новые объекты (нарисованные, отрезанные) в режиме здания ещё не нарисованы в тайлах карты — берём из сессии
   const own = selectedKey && !overpass.get(selectedKey) ? session.get(selectedKey) as Feature3D | undefined : undefined;
   const r = selectedKey ? overpass.get(selectedKey) ?? (own?.polygons ? { feature: own, roofApproximated: false } : undefined) : undefined;
+  const ctx = focus && contextKey && !selection.length && overpassLayer.contextShown ? overpass.get(contextKey) : undefined;
+  if (ctx) {
+    infoEl.innerHTML = `<p class="hint">${tr('Соседнее здание — только просмотр. Двойной клик — перейти в его режим здания.')}</p>` + describeOsm(ctx) + focusExitButton('Esc');
+    return;
+  }
   if (!r && focus && !selection.length) {
     infoEl.innerHTML = describeFocus(focus);
     const l = currentLevel !== undefined ? buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === currentLevel) : undefined;
@@ -14616,7 +14655,7 @@ function renderSelectedImpl() {
   // В режиме здания подсказка о группе не нужна (выход — Esc и панель частей); «Исключить» — под свойствами
   // Здание без отношения (контур с частями внутри) — та же шапка, что у отношения
   const header = r && !focus && highlightKeys(r.feature.key).length > 1 ? buildingHeader((session.get(r.feature.key)?.tags ?? r.feature.tags).name, session.get(r.feature.key)?.tags ?? r.feature.tags) : '';
-  infoEl.innerHTML = r ? header + (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + excludeButton() : '';
+  infoEl.innerHTML = r ? header + (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + excludeButton() + (focus ? focusExitButton() : '') : '';
 }
 
 // Рендер: часть без своих цветов/формы крыши/материалов берёт их у контура, затем у отношения
@@ -14689,7 +14728,9 @@ function describeFocus(g: BuildingGroup): string {
 }
 
 function focusExitButton(keys = 'Esc ×2'): string {
-  return `<p><button type="button" data-focus-exit>${tr('Выйти из режима здания')}</button> <span class="hint">(${keys})</span></p>`;
+  const ctx = overpassLayer.contextShown;
+  return `<p><button type="button" data-focus-exit>${tr('Выйти из режима здания')}</button> <span class="hint">(${keys})</span>
+    <button type="button" data-focus-context${ctx ? ' class="active"' : ''} aria-pressed="${ctx}">${ctx ? tr('Скрыть окружение') : tr('Показать окружение')}</button> <span class="hint">(Shift+N)</span></p>`;
 }
 
 /** Подсказка над частью, выделенной внутри группы. */

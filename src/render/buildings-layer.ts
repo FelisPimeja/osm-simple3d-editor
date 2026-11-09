@@ -436,6 +436,25 @@ const HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
 });
 /** Цвет берётся из вершин (стены/крыша, подсветка, затемнение) — один материал на всё. */
 // polygonOffset отодвигает грани от камеры: рёбра на плоскостях (основание части на крыше другой) не тонут в них
+/** Окружение режима здания: серые полупрозрачные грани и бледные рёбра. */
+const GHOST_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xb8b8b8, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });
+const GHOST_EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: 0.25, depthWrite: false });
+
+/** Нарисовать группу карты призраком: подменить материалы на время кадра; вернуть — как было. */
+function ghostGroup(g: MeshGroup): () => void {
+  const swapped: [THREE.Mesh | THREE.Line, THREE.Material | THREE.Material[]][] = [];
+  const hidden: THREE.Object3D[] = [];
+  g.scene.traverseVisible((o) => {
+    if (o instanceof THREE.Line) { swapped.push([o, o.material]); o.material = GHOST_EDGE_MATERIAL; }
+    else if (o instanceof THREE.Mesh) {
+      if (o.material instanceof LineMaterial) hidden.push(o);
+      else { swapped.push([o, o.material]); o.material = GHOST_MATERIAL; }
+    } else if (o instanceof THREE.Points || o instanceof THREE.Sprite) hidden.push(o);
+  });
+  for (const o of hidden) o.visible = false;
+  return () => { for (const [o, m] of swapped) o.material = m as never; for (const o of hidden) o.visible = true; };
+}
+
 const MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 /**
  * Плоские контуры нулевой толщины (новая часть на крыше, отступ) лежат в плоскости чужой грани — с общим
@@ -914,7 +933,10 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.scaleGizmos();
     const main = this.drawMain(options);
     let triangles = 0;
-    for (const g of this.activeGroups()) {
+    // Окружение — полупрозрачное, поверх здания (прозрачное рисуется после непрозрачного)
+    const ghosts = new Set(this.contextGroups());
+    const order = [...this.activeGroups(), ...ghosts];
+    for (const g of order) {
       // Выбор и камера берут projectionMatrix с глубиной MapLibre — сжатая только на время отрисовки
       const pick = g.camera.projectionMatrix = this.lastMain.clone().multiply(g.model);
       if (this.level && g === this.groups.get(FOCUS_GROUP)) cameraEye(pick, SIDE_EYE.value);
@@ -924,7 +946,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       g.camera.projectionMatrix = main.clone().multiply(g.model);
       this.resetState();
       const restore = this.filterPass(g, pass);
-      try { renderer.render(g.scene, g.camera); } finally { restore(); }
+      const unghost = ghosts.has(g) ? ghostGroup(g) : () => {};
+      try { renderer.render(g.scene, g.camera); } finally { unghost(); restore(); }
       g.camera.projectionMatrix = pick;
       triangles += renderer.info.render.triangles;
     }
@@ -949,6 +972,62 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!this.focused) return [...this.groups].filter(([k]) => k !== FOCUS_GROUP).map(([, g]) => g);
     const g = this.groups.get(FOCUS_GROUP);
     return g ? [g] : [];
+  }
+
+  /** Окружение в режиме здания: здания карты рядом с ним — полупрозрачные, с привязками; в плане этажа — нет. */
+  private context?: Set<string>;
+
+  /** Группы карты, видимые как окружение. */
+  private contextGroups(): MeshGroup[] {
+    if (!this.context || this.level || this.sketching) return [];
+    return [...this.groups].filter(([k]) => k !== FOCUS_GROUP).map(([, g]) => g);
+  }
+
+  get contextShown() { return !!this.context; }
+
+  /** Здание окружения под курсором (только просмотр: инструменты его не видят). */
+  pickContext(point: PointLike): string | undefined {
+    const groups = this.contextGroups();
+    if (!groups.length || !this.map) return;
+    const [px, py] = Array.isArray(point) ? point : [point.x, point.y];
+    const canvas = this.map.getCanvas();
+    const x = (px / canvas.clientWidth) * 2 - 1, y = 1 - (py / canvas.clientHeight) * 2;
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), hit = new THREE.Vector3();
+    let best: { key: string; depth: number } | undefined;
+    for (const g of groups) {
+      const m = g.camera.projectionMatrix, inv = m.clone().invert();
+      const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+      const ray = new THREE.Ray(near, far.sub(near).normalize());
+      if (!ray.intersectsBox(groupBox(g))) continue;
+      for (const it of g.items) {
+        if (g.hidden.has(it.feature.key) || !ray.intersectsBox(it.box)) continue;
+        const pos = it.positions;
+        for (let i = 0; i < pos.length; i += 9) {
+          a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
+          if (!ray.intersectTriangle(a, b, c, false, hit)) continue;
+          const depth = hit.applyMatrix4(m).z;
+          if (!best || depth < best.depth) best = { key: it.feature.key, depth };
+        }
+      }
+    }
+    return best?.key;
+  }
+
+  /** Показать окружение (hide — объекты текущего здания: их копии в тайлах не рисуются) или убрать (undefined). */
+  setContext(hide: Iterable<string> | undefined) {
+    const prev = this.context;
+    this.context = hide ? new Set(hide) : undefined;
+    for (const [k, g] of this.groups) if (k !== FOCUS_GROUP) this.syncContextHidden(g, prev);
+    this.mapSnaps = new WeakMap();
+    this.map?.triggerRepaint();
+  }
+
+  /** Копии объектов здания в группе карты скрыты, пока показано окружение (прежние — prev — вернуть). */
+  private syncContextHidden(g: MeshGroup, prev?: Set<string>) {
+    let changed = false;
+    for (const k of prev ?? []) if (!this.context?.has(k) && g.byKey.has(k) && !this.viewHidden.has(k) && g.hidden.delete(k)) changed = true;
+    for (const k of this.context ?? []) if (g.byKey.has(k) && !g.hidden.has(k)) { g.hidden.add(k); changed = true; }
+    if (changed) this.rebuildGeometry(g);
   }
 
   /**
@@ -982,6 +1061,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.removeGroup(FOCUS_GROUP);
     this.snaps = undefined;
     this.focused = !!features;
+    if (!features && this.context) this.setContext(undefined);
     if (!features) { this.level = undefined; this.applyLevel(); } // вне режима здания срезов нет
     if (!features?.length) { this.focusAxes = undefined; this.focusLock = undefined; this.map?.triggerRepaint(); return; }
     const box = new THREE.Box2();
@@ -3738,7 +3818,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     opts: SnapOpts = {}): SnapHit | undefined {
     const own = timed('привязки: поиск', () => this.findSnap(point, filter, radius, opts));
     // В наброске на карте — и привязки к геометрии карты (сцена наброска своей почти не имеет): ближайшая на экране
-    const on = this.sketching && this.snapsEnabled && !this.snapsSuspended;
+    const on = (this.sketching || this.contextGroups().length > 0) && this.snapsEnabled && !this.snapsSuspended;
     const d = (h: SnapHit) => Math.hypot(h.point[0] - point[0], h.point[1] - point[1]);
     // Фильтр инструмента — и для них (захват — только за свои); из нескольких — ближайшая на экране
     // Здания карты в 3D — их привязки (с высотой); плоские привязки контуров — только если 3D-зданий нет (низкий зум)
@@ -3763,7 +3843,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const near: { s: SnapPoint; g: MeshGroup; d: number; px: [number, number] }[] = [];
     const off = this.snapKindsOff;
     for (const [key, g] of this.groups) {
-      if (key === FOCUS_GROUP) continue;
+      if (key === FOCUS_GROUP || (!this.sketching && !this.contextGroups().includes(g))) continue;
       let snaps = this.mapSnaps.get(g);
       if (!snaps) { snaps = collectSnaps(g); this.mapSnaps.set(g, snaps); }
       const m = this.lastMain.clone().multiply(g.model);
@@ -5163,7 +5243,7 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   private install(key: string, g: MeshGroup) {
     this.removeGroup(key);
-    if (key !== FOCUS_GROUP) for (const it of g.items) if (this.viewHidden.has(it.feature.key)) g.hidden.add(it.feature.key);
+    if (key !== FOCUS_GROUP) for (const it of g.items) if (this.viewHidden.has(it.feature.key) || this.context?.has(it.feature.key)) g.hidden.add(it.feature.key);
     g.applyLighting(this.graphics);
     timed(`${this.id}: слияние геометрии`, () => this.rebuildGeometry(g), () => `${key}, ${g.items.length} зданий`);
     this.groups.set(key, g);
@@ -5205,7 +5285,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       g.items[g.items.indexOf(old)] = item;
       g.byKey.set(f.key, item);
     }
-    if (this.viewHidden.size) for (const it of g.items) if (this.viewHidden.has(it.feature.key)) g.hidden.add(it.feature.key); else g.hidden.delete(it.feature.key);
+    if (this.viewHidden.size || this.context) for (const it of g.items) if (this.viewHidden.has(it.feature.key) || this.context?.has(it.feature.key)) g.hidden.add(it.feature.key); else g.hidden.delete(it.feature.key);
     this.rebuildGeometry(g);
     this.map?.triggerRepaint();
     return upsert.map((f) => g.byKey.get(f.key)).filter((it): it is Item => !!it).map(rendered);

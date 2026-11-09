@@ -638,7 +638,7 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
   syncDataEntrances();
   updateTileFilter();
   showOverpassStatus();
-  if (focus) { syncStrayParts(); renderLevels(); renderIssues(); }
+  if (focus) scheduleFocusTiles();
   else scheduleMapIssues(); // пришли здания видимых тайлов
   scheduleIndoorBadges();
   tileBorders.setTiles(overpass.tiles());
@@ -648,6 +648,20 @@ roadsLayer.onBuilt = () => overpass.setTreeCuts(roadsLayer.treeCuts);
 // В режиме здания карта вокруг убрана — мосты и тоннели тоже
 roadsLayer.hidden = () => focusScene();
 overpassLayer.plainDepth = () => roadsLayer.isEnabled && !roadsLayer.hidden();
+/**
+ * Тайлы поменялись в режиме здания (с окружением они грузятся и при пане): части, этажи и проверки — один раз,
+ * когда камера встала, а не на каждый пришедший тайл посреди движения.
+ */
+let focusTilesTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleFocusTiles() {
+  clearTimeout(focusTilesTimer);
+  focusTilesTimer = setTimeout(function run() {
+    if (!focus) return;
+    if (map.isMoving()) { focusTilesTimer = setTimeout(run, 200); return; }
+    syncStrayParts(); renderLevels(); renderIssues();
+  }, 150);
+}
+
 /**
  * Созданные в сессии здания и части (с контуром). Новые indoor-объекты (помещения, площадки, этажи) — не объёмы:
  * они живут в плане этажа (indoorCreated), в 3D-слой зданий не идут.

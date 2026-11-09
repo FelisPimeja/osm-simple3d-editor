@@ -12392,6 +12392,7 @@ function renderLevelsImpl() {
     ...(lidLow !== undefined ? levels.filter((l) => l.n >= lidLow && l.n < level!.n).map((l) => l.n) : []),
     ...(level && level.floor > -0.01 ? levels.filter((l) => l.floor < -0.01).map((l) => l.n) : [])])].sort((a, b) => b - a);
   const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${cutEscalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.noHole ? 1 : 0}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}` : '';
+  syncContextIndoor(level);
   if (sig === levelSignature) return;
   levelSignature = sig;
   overpassLayer.setLevel(plan && {
@@ -14504,9 +14505,83 @@ function toggleContext() {
   overpassLayer.setContext(overpassLayer.contextShown ? undefined : focusContextHidden(focus));
   try { localStorage.setItem(CONTEXT_KEY, overpassLayer.contextShown ? '1' : '0'); } catch { /* без хранилища — до перезагрузки */ }
   refreshOverpass(); // соседи в кадре могли ещё не загрузиться (вход по ссылке грузит только само здание)
+  renderLevels(); // indoor соседей на этаже
   if (!overpassLayer.contextShown && contextKey) { contextKey = undefined; overpassLayer.select(selection); }
   setStatus(overpassLayer.contextShown ? tr('Окружение показано: соседние здания — рёбрами, к ним работают привязки. Shift+N — скрыть.') : tr('Окружение скрыто.'));
   renderSelected();
+}
+
+/** Indoor соседей на высоте этажа (бледным планом в окружении); пересчёт — по подписи. */
+let contextIndoorSig = '';
+const CONTEXT_INDOOR_REACH = 0.004; // ~300–400 м вокруг здания, градусы
+function syncContextIndoor(level: Level | undefined) {
+  const on = !!focus && !!level && overpassLayer.contextShown;
+  const sig = on ? `${focus!.key}|${level!.n}|${level!.floor}|${overpass.revision}|${overpass.renderedFeatures().length}|${indoorEditRev}` : '';
+  if (sig === contextIndoorSig) return;
+  contextIndoorSig = sig;
+  if (!on) { overpassLayer.setContextIndoor([]); return; }
+  overpassLayer.setContextIndoor(timed('окружение: indoor соседей', () => contextIndoorPlans(focus!, level!)));
+}
+
+function contextIndoorPlans(g: BuildingGroup, level: Level) {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const f of groupFeatures(g)) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
+  if (!Number.isFinite(w)) return [];
+  const r = CONTEXT_INDOOR_REACH;
+  const own = new Set(buildingIndoor(g).map((f) => f.key)), members = new Set(g.members);
+  const anchors = timed('окружение: точки indoor', () => overpass.indoorIn([w - r, s - r, e + r, n + r]).filter((f) => !own.has(f.key)).map(indoorAnchor).filter((p): p is LonLat => !!p));
+  if (!anchors.length) return [];
+  // Сетка точек: здание проверяет только точки своих клеток
+  const CELL = 0.0005, cell = (x: number, y: number) => `${Math.floor(x / CELL)},${Math.floor(y / CELL)}`;
+  const grid = new Map<string, LonLat[]>();
+  for (const p of anchors) { const k = cell(p[0], p[1]); const a = grid.get(k); if (a) a.push(p); else grid.set(k, [p]); }
+  // Здания с indoor внутри: по отрисованным объектам карты
+  const buildings = new Map<string, BuildingGroup>();
+  timed('окружение: здания с indoor', () => { for (const { feature: f } of overpass.renderedFeatures()) {
+    if (members.has(f.key) || !f.polygons?.length) continue;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of f.polygons[0].outer) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    if (x1 < w - r || x0 > e + r || y1 < s - r || y0 > n + r) continue;
+    const near: LonLat[] = [];
+    for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++) for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) near.push(...(grid.get(`${i},${j}`) ?? []));
+    if (!near.length) continue;
+    const bk = buildingKey(f.key);
+    if (buildings.has(bk) || members.has(bk)) continue;
+    if (!near.some((p) => f.polygons.some((q) => pointInRing(p, q.outer)))) continue;
+    const ng = groupOf(bk) ?? soloGroup(bk);
+    if (ng && ng.key !== g.key) buildings.set(bk, ng);
+  } });
+  const at = level.floor + 0.3;
+  const plans: { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number }[] = [];
+  for (const ng of buildings.values()) {
+    const csig = `${level.floor}|${overpass.revision}|${indoorEditRev}|${ng.members.join(',')}`;
+    const cached = contextPlanCache.get(ng.key);
+    if (cached?.sig === csig) { if (cached.plan) plans.push(cached.plan); continue; }
+    const plan = timed('окружение: план соседа', () => contextPlanOf(ng, at), () => ng.key);
+    contextPlanCache.set(ng.key, { sig: csig, plan });
+    if (plan) plans.push(plan);
+  }
+  return plans;
+}
+
+/** Планы соседей по зданиям: indoor здания и его этажи считаются дорого. */
+const contextPlanCache = new Map<string, { sig: string; plan?: { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number } }>();
+
+function contextPlanOf(ng: BuildingGroup, at: number): { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number } | undefined {
+  {
+    const list = timed('окружение: indoor соседа', () => buildingIndoorImpl(ng));
+    const l = timed('окружение: этажи соседа', () => buildingLevels(ng, list)).find((x) => x.floor <= at && x.ceil > at);
+    if (!l) return;
+    const fs = list.filter((f) => f.levels.includes(l.n));
+    const items = fs.filter((f) => f.kind !== 'poi' && !f.escalator && !f.escalatorArea && !stairsArea(f) && !(f.transit && f.line)
+      && (f.line || f.kind === 'wall' || f.kind === 'column' || f.kind === 'room' || floorLevels(f).includes(l.n)))
+      .map(wallAsLine).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line,
+        linearWall: !!f.line && f.kind !== 'column', z: l.floor, noFloor: !floorLevels(f).includes(l.n),
+        ...(isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}) }));
+    if (!items.length) return;
+    const doors = fs.filter((f) => f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!);
+    return { members: [...ng.members, ng.key], items, doors, cut: l.ceil };
+  }
 }
 
 /** Объекты здания режима: их копии в тайлах карты не рисуются поверх сцены здания. */

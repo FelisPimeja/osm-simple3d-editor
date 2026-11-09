@@ -10,7 +10,6 @@ import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth, wallDoorwaySpan } from './door-openings';
 import * as THREE from 'three';
 import polygonClipping, { type MultiPolygon as ClipMulti } from 'polygon-clipping';
-import { offsetPolygon } from '../edit/offset-tool';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -977,6 +976,8 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   /** Окружение в режиме здания: здания карты рядом с ним — рёбрами без заливки, с привязками; в плане этажа — срезаны на высоте этажа. */
   private context?: Set<string>;
+  /** Скрытые окружением объекты здания режима (без соседей со своим планом). */
+  private contextBase?: Set<string>;
 
   /** Группы карты, видимые как окружение. */
   private contextGroups(): MeshGroup[] {
@@ -985,6 +986,53 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   get contextShown() { return !!this.context; }
+
+  /** Этажи соседей на высоте выбранного этажа: их indoor — бледным планом, как нижние этажи здания. */
+  private contextIndoor: { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number }[] = [];
+
+  setContextIndoor(plans: { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number }[]) {
+    // Те же планы (из кеша) — ничего не пересобирать
+    if (plans.length === this.contextIndoor.length && plans.every((p, i) => p === this.contextIndoor[i])) return;
+    const changed = new Set([...this.contextIndoor, ...plans].filter((p) => !plans.includes(p) || !this.contextIndoor.includes(p)).flatMap((p) => p.members));
+    this.contextIndoor = plans;
+    if (this.contextBase) {
+      const prev = this.context;
+      this.context = new Set([...this.contextBase, ...plans.flatMap((p) => p.members)]);
+      for (const [k, g] of this.groups) if (k !== FOCUS_GROUP) this.syncContextHidden(g, prev);
+      this.mapSnaps = new WeakMap();
+    }
+    for (const [k, g] of this.groups) if (k !== FOCUS_GROUP && [...changed].some((m) => g.byKey.has(m))) this.dropGhost(g);
+    this.map?.triggerRepaint();
+  }
+
+  /** План соседа рисует первая группа карты, где есть его объект (здание бывает на стыке тайлов). */
+  private ownsPlan(g: MeshGroup, members: string[]): boolean {
+    for (const [k, x] of this.groups) if (k !== FOCUS_GROUP && members.some((m) => x.byKey.has(m))) return x === g;
+    return false;
+  }
+
+  /** Идёт план соседа: без связей с планом здания режима (его двери, проёмы, сечение у земли). */
+  private contextPlanning = false;
+
+  /** План соседа в группе карты; состояние плана здания режима (рёбра, стекло, проёмы) не трогаем. */
+  private drawContextPlan(root: THREE.Group, tile: MeshGroup, plan: { members: string[]; items: IndoorItem[]; doors: LonLat[]; cut: number }) {
+    // Фасады плана — только частей этого соседа, а не всех зданий тайла
+    const own = new Set(plan.members);
+    const g = Object.create(tile) as MeshGroup;
+    g.items = tile.items.filter((it) => own.has(it.feature.key));
+    Object.defineProperty(g, 'hidden', { value: new Set<string>() }); // в тайле они скрыты окружением — их заменяет этот план
+    const occ = this.indoorEdgeOccluders.length, blk = this.indoorGlassBlockers;
+    const strokes = this.indoorStrokes, walls = this.indoorWallPositions, openings = new Map(this.doorOpeningEdges);
+    this.contextPlanning = true;
+    try { this.drawPlanBody(root, g, plan.items, plan.doors, plan.cut, true, undefined, []); }
+    catch (e) { console.warn('план соседа', e); }
+    finally {
+      this.contextPlanning = false;
+      this.indoorEdgeOccluders.length = occ;
+      this.indoorGlassBlockers = blk; this.indoorStrokes = strokes; this.indoorWallPositions = walls;
+      this.doorOpeningEdges.clear(); for (const [k, v] of openings) this.doorOpeningEdges.set(k, v);
+    }
+  }
 
   /** Рёбра окружения, если у группы карты своих нет (контуры выключены), и скрытые рёбра в режиме контуров. */
   private ghostCache = new WeakMap<MeshGroup, { mesh?: THREE.Mesh; base?: THREE.Object3D; wire: boolean; cut?: number; floor?: number; edges?: THREE.LineSegments; hidden?: THREE.LineSegments; section?: THREE.Object3D; plan?: boolean }>();
@@ -995,11 +1043,11 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (c) this.dropGhost(g);
     const items = g.items.filter((it) => !g.hidden.has(it.feature.key) && !strokeOnly(g, it));
     let edges: THREE.LineSegments | undefined;
-    if (!g.edges && g.mesh) {
+    if (!g.edges && g.mesh) timed('окружение: рёбра', () => {
       edges = edgeLines(items, EDGE_MATERIAL);
       const sil = silhouetteLines(items, EDGE_MATERIAL, g.silhouetteEye);
-      if (sil) edges.add(sil);
-    }
+      if (sil) edges!.add(sil);
+    }, () => `${items.length} зданий`);
     const base = g.edges ?? edges;
     let hidden: THREE.LineSegments | undefined;
     if (this.wireframe && base) {
@@ -1018,14 +1066,11 @@ export class BuildingsLayer implements CustomLayerInterface {
     let section: THREE.Object3D | undefined;
     const cut = this.levelCut, floor = this.level?.floor;
     if (cut !== undefined) {
-      const crossing = items.filter((it) => { const h = computeHeights(it.tags), base = g.lift?.get(it.feature.key) ?? h.min; return base < cut && h.wallTop > cut; });
-      const close = (r: Pt[]) => [...r, r[0]];
-      let union: Pt[][][] = [];
-      try {
-        const polys = crossing.flatMap((it) => it.feature.polygons.map((p) => [close(p.outer.map(g.toLocal)), ...p.inners.map((r) => close(r.map(g.toLocal)))]));
-        if (polys.length) union = (polygonClipping.union(...(polys.map((p) => [p]) as never as [ClipMulti]))) as unknown as Pt[][][];
-      } catch { union = []; }
-      const rings = union.map((p) => p.map((r) => r.slice(0, -1) as Pt[]));
+      // Соседи со своим indoor — его планом, без условных стен и пола
+      const planned = this.wireframe ? new Set<string>() : new Set(this.contextIndoor.flatMap((p) => p.members));
+      const crossing = items.filter((it) => { const h = computeHeights(it.tags), base = g.lift?.get(it.feature.key) ?? h.min; return base < cut && h.wallTop > cut && !planned.has(it.feature.key); });
+      // Без булевых операций (их на тысяче зданий не дождаться): контуры частей как есть
+      const rings: Pt[][][] = crossing.flatMap((it) => it.feature.polygons.map((p) => [p.outer.map(g.toLocal), ...p.inners.map((r) => r.map(g.toLocal))]));
       if (this.wireframe) {
         const pos: number[] = [];
         for (const p of rings) for (const ring of p) for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; pos.push(a[0], a[1], cut, b[0], b[1], cut); }
@@ -1037,7 +1082,9 @@ export class BuildingsLayer implements CustomLayerInterface {
           lines.renderOrder = 997;
           section = lines;
         }
-      } else if (rings.length) {
+      }
+      const ownPlans = this.wireframe ? [] : this.contextIndoor.filter((p) => this.ownsPlan(g, p.members));
+      if (!this.wireframe && (rings.length || ownPlans.length)) {
         const capPos: number[] = [], floorPos: number[] = [];
         const tri = (out: number[], outer: Pt[], holes: Pt[][], z: number) => {
           const v2 = (r: Pt[]) => r.map(([x, y]) => new THREE.Vector2(x, y));
@@ -1049,13 +1096,20 @@ export class BuildingsLayer implements CustomLayerInterface {
         };
         for (const [outer, ...inners] of rings) {
           if (outer.length < 3) continue;
-          const inset = offsetPolygon({ ring: outer, inners }, -GHOST_WALL, 1e-3);
-          const inside = typeof inset === 'string' ? [] : inset;
-          // Полоса стен: грань минус внутренность
-          let band: Pt[][][] = [[outer, ...inners]];
-          try { if (inside.length) band = (polygonClipping.difference([[close(outer), ...inners.map(close)]] as never, ...(inside.map((p) => [p.map(close)]) as never[])) as unknown as Pt[][][]).map((p) => p.map((r) => r.slice(0, -1) as Pt[])); } catch { /* без полосы — вся грань */ }
-          for (const [o, ...hs] of band) if (o.length >= 3) tri(capPos, o, hs, cut);
-          if (floor !== undefined) for (const [o, ...hs] of inside) if (o.length >= 3) tri(floorPos, o, hs, floor + 0.01);
+          // Полоса стен: четырёхугольник вдоль каждой стороны внутрь материала (углы перекрываются — не видно)
+          for (const [ring, hole] of [[outer, false], ...inners.map((r) => [r, true] as const)] as const) {
+            let a2 = 0;
+            for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) a2 += ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1];
+            const sgn = (a2 > 0 ? 1 : -1) * (hole ? -1 : 1);
+            for (let i = 0; i < ring.length; i++) {
+              const a = ring[i], b = ring[(i + 1) % ring.length], dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy);
+              if (l < 1e-6) continue;
+              const w = Math.min(GHOST_WALL, l / 2), nx = -dy / l * sgn * w, ny = dx / l * sgn * w;
+              const c: Pt = [b[0] + nx, b[1] + ny], d: Pt = [a[0] + nx, a[1] + ny];
+              capPos.push(a[0], a[1], cut, b[0], b[1], cut, c[0], c[1], cut, a[0], a[1], cut, c[0], c[1], cut, d[0], d[1], cut);
+            }
+          }
+          if (floor !== undefined) tri(floorPos, outer, inners, floor + 0.01);
         }
         const grp = new THREE.Group();
         for (const [pos, mat] of [[capPos, GHOST_PLAN_CAP], [floorPos, GHOST_PLAN_FLOOR]] as const) {
@@ -1066,6 +1120,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           mesh.frustumCulled = false;
           grp.add(mesh);
         }
+        for (const p of ownPlans) timed('окружение: план соседа', () => this.drawContextPlan(grp, g, p), () => `${p.items.length} объектов`);
         section = grp;
       }
     }
@@ -1149,7 +1204,10 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Показать окружение (hide — объекты текущего здания: их копии в тайлах не рисуются) или убрать (undefined). */
   setContext(hide: Iterable<string> | undefined) {
     const prev = this.context;
-    this.context = hide ? new Set(hide) : undefined;
+    this.contextBase = hide ? new Set(hide) : undefined;
+    if (!hide) this.contextIndoor = [];
+    // Соседи со своим планом: их оболочку заменяет план (стены и фасады рисует он)
+    this.context = hide ? new Set([...hide, ...this.contextIndoor.flatMap((p) => p.members)]) : undefined;
     for (const [k, g] of this.groups) if (k !== FOCUS_GROUP) this.syncContextHidden(g, prev);
     this.mapSnaps = new WeakMap();
     this.updateHiddenEdges();
@@ -2803,7 +2861,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     /** Кусок стены в просвете двери: только для отсечения рёбер — без цветной грани фасада. */
     let doorGap = false;
     let omitCutTop = false;
-    const continuesAbove = (it: IndoorItem) => pale && !!this.level?.items.some(other => other.key === it.key && other.noFloor);
+    const continuesAbove = (it: IndoorItem) => pale && !this.contextPlanning && !!this.level?.items.some(other => other.key === it.key && other.noFloor);
     let linearCutTop = true;
     const edgeSurfaces = new Map<string, number[][]>();
     let edgeOcclusionOnly = false;
@@ -2915,7 +2973,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       end(bx, by, z0, Math.min(z1b, jambB), (ax - bx) / l, (ay - by) / l, l);
     };
     // Resolve metadata and local coordinates once, rather than scanning every door for each wall/door pair.
-    const metadata = [...this.doors, ...(this.level?.below ?? []).flatMap(b => b.doorModels ?? [])].map(d => ({ key: d.key, at: g.toLocal(this.doorAt(d)), z: d.z, diameter: revolvingDoorDiameter(d.tags), width: tagWidth(d.tags), height: doorHeight(d.tags), glass: d.tags?.material === 'glass' }));
+    const metadata = (this.contextPlanning ? [] : [...this.doors, ...(this.level?.below ?? []).flatMap(b => b.doorModels ?? [])]).map(d => ({ key: d.key, at: g.toLocal(this.doorAt(d)), z: d.z, diameter: revolvingDoorDiameter(d.tags), width: tagWidth(d.tags), height: doorHeight(d.tags), glass: d.tags?.material === 'glass' }));
     /** Ширина двери: тег width, иначе самая узкая из помещений, на стене которых она стоит, иначе DOOR_WIDTH. */
     const narrowRings = items.filter(it => it.doorWidth).flatMap(it => it.polygons.flatMap(p => [p.outer, ...p.inners].map(r => ({ ring: r.map(g.toLocal), width: it.doorWidth! }))));
     const roomDoorWidth = (p: Pt) => {
@@ -2935,7 +2993,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       return { at: p, outline: true, key: pale ? undefined : door?.key, z: door?.z, diameter: door?.diameter, width: door?.width ?? roomDoorWidth(p), height: door?.height ?? DOOR_HEIGHT, glass: !!door?.glass };
     });
     // A room boundary behind a thick wall must not close the rear of its doorway.
-    const backCuts = [{z:this.level?.floor,cuts:this.level?.doorCuts},...(this.level?.below??[]).map(b=>({z:b.items[0]?.z,cuts:b.doorCuts}))]
+    const backCuts = (this.contextPlanning ? [] : [{z:this.level?.floor,cuts:this.level?.doorCuts},...(this.level?.below??[]).map(b=>({z:b.items[0]?.z,cuts:b.doorCuts}))])
       .filter(b=>b.z!==undefined&&Math.abs(b.z-items[0].z)<0.01).flatMap(b=>b.cuts??[]);
     for(const cut of backCuts) doors.push({at:g.toLocal(cut.at),outline:false,key:undefined,z:items[0].z,diameter:undefined,width:cut.width,height:DOOR_HEIGHT,glass:false});
     const doorwayFootprints = backCuts.flatMap(c => c.polygon?.length ? [c.polygon.map(g.toLocal)] : []);
@@ -3254,7 +3312,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         wall(ax + (bx - ax) * t0, ay + (by - ay) * t0, ax + (bx - ax) * t1, ay + (by - ay) * t1, z0, za, zb);
     };
     /** След здания у земли (для крышек нижнего этажа снаружи здания). */
-    const paleOutside = pale && top > -0.01 ? this.sectionAt(g, 0.05) : undefined;
+    const paleOutside = pale && top > -0.01 && !this.contextPlanning ? this.sectionAt(g, 0.05) : undefined;
     const paleOutsideSegs = (paleOutside ?? []).flatMap((p) => p.flatMap((r) => (r as Pt[]).slice(0, -1).map((q, i): [number, number, number, number] => [q[0], q[1], r[i + 1][0], r[i + 1][1]])));
     const paleCapEdges: number[] = [];
     /** Крышка сечения (колонна, стена-полигон, короб): на срезе, а под скатом — по скату; целиком над крышей — нет крышки. */

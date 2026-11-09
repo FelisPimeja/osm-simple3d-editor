@@ -8991,7 +8991,10 @@ function updateIndoorBadges() {
     badges.push({ key, at: [(w + e) / 2, (s + nn) / 2], top, title });
   }
   // Комплексы indoor без здания (вестибюль, переход, станция) — свой значок на земле
-  for (const c of timed('комплексы indoor без здания', () => orphanComplexes(bbox))) {
+  // Комплекс целиком, а не обрезанный кадром: станция при разных кадрах распадалась бы на разные куски
+  const R = COMPLEX_REACH;
+  for (const c of timed('комплексы indoor без здания', () => orphanComplexes([bbox[0] - R, bbox[1] - R, bbox[2] + R, bbox[3] + R]))) {
+    if (c.box[2] < bbox[0] || c.box[0] > bbox[2] || c.box[3] < bbox[1] || c.box[1] > bbox[3]) continue;
     const n = c.features.filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length).length;
     if (n < BADGE_MIN_POLYGONS) continue;
     const name = c.features.find((f) => f.kind === 'level' && f.tags.name)?.tags.name ?? c.features.find((f) => f.tags.name && f.kind !== 'poi')?.tags.name;
@@ -9008,6 +9011,8 @@ function updateIndoorBadges() {
 }
 
 const COMPLEX_PREFIX = 'indoor-complex:';
+/** Запас вокруг кадра при сборке комплексов, градусы (~1 км): комплекс собирается по загруженным данным целиком. */
+const COMPLEX_REACH = 0.01;
 
 /**
  * Indoor без здания, разбитый на комплексы: связаны объекты с общими узлами (стены, двери, смежные помещения,
@@ -12611,6 +12616,9 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
   const feats = groupFeatures(g);
   let w = Infinity, s = Infinity, e = -Infinity, nn = -Infinity;
   for (const f of feats) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); nn = Math.max(nn, y); }
+  // Комплекс без здания: объёмов нет — рамка по нему самому (иначе второго света не ищем вовсе)
+  const cbox = complexFocus.get(g.key)?.box;
+  if (cbox) { w = Math.min(w, cbox[0]); s = Math.min(s, cbox[1]); e = Math.max(e, cbox[2]); nn = Math.max(nn, cbox[3]); }
   const hasParts = feats.some((f) => f.kind === 'part');
   // Части внутри здания, забытые в отношении (relation/17852191 вне relation/17852202), — тоже контур этажа
   const members = new Set(g.members);

@@ -65,6 +65,9 @@ const UPLOADED_TTL_MS = 24 * 60 * 60 * 1000;
 const DELETED = -1;
 type Uploaded = Record<string, { v: number; at: number }>;
 
+/** Рамки indoor-объектов: indoorIn зовут на каждый пересчёт значков, а перебор всех вершин всего кеша — секунды. */
+const indoorBoxes = new WeakMap<IndoorFeature, Bbox>();
+
 export class OverpassTiles {
   private readonly cache = new Map<string, Entry>(); // порядок вставки = LRU
   private wanted: string[] = [];
@@ -238,6 +241,14 @@ export class OverpassTiles {
       if (t.state !== 'ready') continue;
       for (const f of t.indoor ?? []) {
         if (out.has(f.key)) continue;
+        let bx = indoorBoxes.get(f);
+        if (!bx) {
+          let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+          if (f.point) { x0 = x1 = f.point[0]; y0 = y1 = f.point[1]; }
+          for (const p of f.polygons) for (const [x, y] of p.outer) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+          indoorBoxes.set(f, bx = [x0, y0, x1, y1]);
+        }
+        if (bx[2] < w || bx[0] > e || bx[3] < s || bx[1] > n) continue;
         if ((f.point && f.point[0] >= w && f.point[0] <= e && f.point[1] >= s && f.point[1] <= n)
           || f.polygons.some((p) => p.outer.some(([x, y]) => x >= w && x <= e && y >= s && y <= n))) out.set(f.key, f);
       }

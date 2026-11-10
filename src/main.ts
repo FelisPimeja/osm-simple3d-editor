@@ -44,7 +44,7 @@ import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFi
 import { panoramax } from './view/panoramax';
 import { mapillary } from './view/mapillary';
 import { fotoshi, fotoshiRequest } from './view/fotoshi';
-import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
+import { centroid, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointInRingFast, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { ScaleTool } from './edit/scale-tool';
 import { featureRings, glueMoves, levelApart, ON_SIDE_M } from './edit/glue-plan';
@@ -8951,7 +8951,7 @@ function updateIndoorBadges() {
   const b = map.getBounds();
   const bbox: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
   // Indoor без здания — пунктиром, как подземные здания (вне режима здания: там карта убрана)
-  updateUndergroundOutlines(underground, !focus && map.getZoom() >= 15 ? timed('контуры indoor без здания', () => orphanOutlines(bbox)) : []);
+  updateUndergroundOutlines(underground, !focus && map.getZoom() >= 15 ? timed('контуры indoor без здания', () => orphanOutlines([bbox[0] - COMPLEX_REACH, bbox[1] - COMPLEX_REACH, bbox[2] + COMPLEX_REACH, bbox[3] + COMPLEX_REACH])) : []);
   if (focus || !buildingsView.shown || map.getZoom() < BADGE_MIN_ZOOM) return indoorBadges.set([]);
   // С правками: нарисованные и рассечённые помещения — тоже, удалённые — нет
   const indoor = withSessionIndoor(new Map(overpass.indoorIn(bbox).map((f) => [f.key, f])), bbox)
@@ -9038,8 +9038,19 @@ const COMPLEX_REACH = 0.01;
  * лестницы и эскалаторы между уровнями) и помещения внутри своего indoor=level. Несвязанные вестибюли рядом —
  * разные комплексы; переход и станция под ним — один, если их соединяет лестница или эскалатор.
  */
+let complexCache: { sig: string; out: { key: string; features: IndoorFeature[]; box: Bbox }[] } | undefined;
 function orphanComplexes(bbox: Bbox): { key: string; features: IndoorFeature[]; box: Bbox }[] {
   const fs = orphanIndoor(bbox);
+  // Тот же набор объектов (кадр сдвинулся, пришёл тайл в стороне) — те же комплексы
+  let hsh = 0;
+  for (const f of fs) { const k = f.key + (f.polygons[0]?.outer.length ?? 0) + f.levels.join(); for (let i = 0; i < k.length; i++) hsh = (Math.imul(hsh, 31) + k.charCodeAt(i)) | 0; }
+  const sig = `${fs.length}|${hsh}`;
+  if (complexCache?.sig === sig) return complexCache.out;
+  const out = orphanComplexesOf(fs);
+  complexCache = { sig, out };
+  return out;
+}
+function orphanComplexesOf(fs: IndoorFeature[]): { key: string; features: IndoorFeature[]; box: Bbox }[] {
   const find = indoorComponents(fs);
   const groups = new Map<number, IndoorFeature[]>();
   fs.forEach((f, i) => { const r = find(i); (groups.get(r) ?? groups.set(r, []).get(r)!).push(f); });
@@ -14751,25 +14762,42 @@ const isComplex = (g: BuildingGroup | undefined) => !!g && complexFocus.has(g.ke
 let orphanPlansCache: { sig: string; list: ContextPlan[] } | undefined;
 
 /** Indoor-объекты в рамке, не лежащие ни в одном здании карты (и подземном): вестибюли, переходы. */
-function orphanIndoor(bbox: Bbox, buildings: Feature3D[] = overpass.renderedFeatures().map((r) => r.feature)): IndoorFeature[] {
-  const CELL = 0.0005;
-  const grid = new Map<string, Feature3D[]>();
-  for (const f of [...buildings, ...hiddenUnderground()]) {
-    if (!f.polygons?.length) continue;
-    const [x0, y0, x1, y1] = featureBox(f);
-    if (x1 < bbox[0] || x0 > bbox[2] || y1 < bbox[1] || y0 > bbox[3]) continue;
-    for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++) for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) {
-      const k = `${i},${j}`; const a = grid.get(k); if (a) a.push(f); else grid.set(k, [f]);
-    }
-  }
+/**
+ * Вердикт «вне здания» по объекту — от кадра не зависит: кадр при каждом сдвиге новый, а пересчёт сетки зданий
+ * и проверки всех объектов — сотни мс. Сбрасывается при смене тайлов, видимости, правок indoor и отнесения.
+ */
+let orphanState: { sig: string; detached: Set<string>; grid?: Map<string, Feature3D[]>; verdict: Map<IndoorFeature, boolean> } | undefined;
+function orphanIndoor(bbox: Bbox): IndoorFeature[] {
   const detached = detachedIndoor(bbox);
+  const sig = `${overpass.revision}|${overpass.visibilityRevision}|${indoorEditRev}|${hiddenUnderground().length}`;
+  if (orphanState?.sig !== sig || orphanState.detached !== detached) orphanState = { sig, detached, verdict: new Map() };
+  const st = orphanState;
+  const CELL = 0.0005;
+  const gridOf = () => {
+    if (st.grid) return st.grid;
+    const grid = new Map<string, Feature3D[]>();
+    for (const f of [...overpass.renderedFeatures().map((r) => r.feature), ...hiddenUnderground()]) {
+      if (!f.polygons?.length) continue;
+      const [x0, y0, x1, y1] = featureBox(f);
+      for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++) for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) {
+        const k = `${i},${j}`; const a = grid.get(k); if (a) a.push(f); else grid.set(k, [f]);
+      }
+    }
+    return st.grid = grid;
+  };
   return overpass.indoorIn(bbox).filter((f) => {
-    // Пути и платформы железной дороги вне вокзала — не план (и склеили бы всё вдоль линии в один комплекс)
-    if (f.transit && !f.tags.indoor) return false;
-    const p = indoorAnchor(f);
-    if (!p || !overpass.isVisible(f)) return false;
-    if (detached.has(f.key)) return true; // под зданием, но комплекс в основном снаружи — не его
-    return !(grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).some((b) => b.polygons.some((q) => pointInRing(p, q.outer) || nearRing(p, q.outer, 0.3)));
+    let v = st.verdict.get(f);
+    if (v !== undefined) return v;
+    v = (() => {
+      // Пути и платформы железной дороги вне вокзала — не план (и склеили бы всё вдоль линии в один комплекс)
+      if (f.transit && !f.tags.indoor) return false;
+      const p = indoorAnchor(f);
+      if (!p || !overpass.isVisible(f)) return false;
+      if (detached.has(f.key)) return true; // под зданием, но комплекс в основном снаружи — не его
+      return !(gridOf().get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).some((b) => b.polygons.some((q) => pointInRingFast(p, q.outer) || nearRing(p, q.outer, 0.3)));
+    })();
+    st.verdict.set(f, v);
+    return v;
   });
 }
 
@@ -14793,11 +14821,12 @@ function indoorComponents(fs: IndoorFeature[], skip?: Set<number>, apart?: (a: n
       if (j === undefined) byNode.set(id, i); else join(i, j);
     }
   });
-  const CELL = 0.0005, grid = new Map<string, number[]>();
+  const CELL = 0.0005, grid = new Map<string, number[]>(), boxes: Bbox[] = [];
   fs.forEach((f, i) => {
     if (f.line || f.point || !f.polygons.length || !(f.kind === 'level' || f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor')) return;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const p of f.polygons) for (const [x, y] of p.outer) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    boxes[i] = [x0, y0, x1, y1];
     for (let a = Math.floor(x0 / CELL); a <= Math.floor(x1 / CELL); a++) for (let b = Math.floor(y0 / CELL); b <= Math.floor(y1 / CELL); b++) {
       const k = `${a},${b}`; const l = grid.get(k); if (l) l.push(i); else grid.set(k, [i]);
     }
@@ -14805,14 +14834,20 @@ function indoorComponents(fs: IndoorFeature[], skip?: Set<number>, apart?: (a: n
   fs.forEach((f, i) => {
     const p = indoorAnchor(f);
     if (!p) return;
-    const j = (grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).find((j) => j !== i
-      && fs[j].levels.some((n) => f.levels.includes(n)) && fs[j].polygons.some((q) => pointInRing(p, q.outer)));
+    // Рамка — до точной проверки: в ячейке десятки помещений, а pointInRing по этажу в сотни вершин дорог
+    const j = (grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).find((j) => {
+      if (j === i) return false;
+      const b = boxes[j];
+      return p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]
+        && fs[j].levels.some((n) => f.levels.includes(n)) && fs[j].polygons.some((q) => pointInRingFast(p, q.outer));
+    });
     if (j !== undefined) join(i, j);
   });
   return find;
 }
 
 const detachedCache = new Map<string, Set<string>>();
+const detachedQuick = new Map<string, { rev: number; out: Set<string> }>();
 
 /**
  * Indoor под зданием, но не его: объект, у которого в контуре здания меньше половины вершин (платформа метро краем
@@ -14820,18 +14855,29 @@ const detachedCache = new Map<string, Set<string>>();
  * (колонны той платформы). Граница здания связность разрывает: вокзал не склеивается со станцией под площадью.
  */
 function detachedIndoor(bbox: Bbox): Set<string> {
-  // Рамка — по сетке 0,01°, с запасом: кеш общий для соседних запросов, а комплекс не обрезан
-  const q = 0.01, b: Bbox = [Math.floor(bbox[0] / q) * q - q, Math.floor(bbox[1] / q) * q - q, Math.ceil(bbox[2] / q) * q + q, Math.ceil(bbox[3] / q) * q + q];
-  const sig = `${b.map((x) => x.toFixed(2)).join(',')}|${overpass.revision}|${overpass.visibilityRevision}|${indoorEditRev}`;
+  // Сетка 0,02° с запасом 0,01°: кадр, кадр с запасом комплексов и рамка здания попадают в одну область
+  const q = 0.02, m = 0.01, b: Bbox = [Math.floor((bbox[0] - m) / q) * q, Math.floor((bbox[1] - m) / q) * q, Math.ceil((bbox[2] + m) / q) * q, Math.ceil((bbox[3] + m) / q) * q];
+  const region = `${b.map((x) => x.toFixed(2)).join(',')}|${overpass.visibilityRevision}|${indoorEditRev}`;
+  // Тайлы с прошлого раза не менялись — тот же ответ без подсчёта подписи (она сама — сотни мс на 30 тыс. объектов)
+  const quick = detachedQuick.get(region);
+  if (quick && quick.rev === overpass.revision) return quick.out;
+  // Подпись по содержимому, а не по ревизии тайлов: тайл где-то в стороне (или тот же ответ заново) пересчёта не требует
+  const fsAll = overpass.indoorIn(b);
+  const buildingsAll = overpass.allFeatures().filter((f) => {
+    if (!f.polygons?.length) return false;
+    const [x0, y0, x1, y1] = featureBox(f);
+    return !(x1 < b[0] || x0 > b[2] || y1 < b[1] || y0 > b[3]);
+  });
+  let hsh = 0;
+  const mix = (str: string) => { for (let i = 0; i < str.length; i++) hsh = (Math.imul(hsh, 31) + str.charCodeAt(i)) | 0; };
+  for (const f of fsAll) mix(f.key + (f.polygons[0]?.outer.length ?? 0) + f.levels.join());
+  for (const f of buildingsAll) mix(f.key + (f.version ?? '') + f.polygons.length);
+  const sig = `${region}|${fsAll.length}|${buildingsAll.length}|${hsh}`;
   const hit = detachedCache.get(sig);
-  if (hit) return hit;
+  if (hit) { detachedQuick.set(region, { rev: overpass.revision, out: hit }); return hit; }
   const out = timed('indoor: отнесение к зданиям', () => {
     // Все загруженные объёмы с контурами: голый контур отношения (вокзал) не рисуется, но indoor в нём — его
-    const buildings = overpass.allFeatures().filter((f) => {
-      if (!f.polygons?.length) return false;
-      const [x0, y0, x1, y1] = featureBox(f);
-      return !(x1 < b[0] || x0 > b[2] || y1 < b[1] || y0 > b[3]);
-    });
+    const buildings = buildingsAll;
     const CELL = 0.0005, grid = new Map<string, Feature3D[]>(), wall = new Set<number>();
     for (const f of buildings) {
       for (const p of f.polygons) for (const id of [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]) wall.add(id);
@@ -14840,7 +14886,7 @@ function detachedIndoor(bbox: Bbox): Set<string> {
         const k = `${i},${j}`; const a = grid.get(k); if (a) a.push(f); else grid.set(k, [f]);
       }
     }
-    const fs = overpass.indoorIn(b).filter((f) => !(f.transit && !f.tags.indoor));
+    const fs = fsAll.filter((f) => !(f.transit && !f.tags.indoor));
     // Рамки колец зданий — точка проверяется только кольцами, в рамку которых попала; ключ здания — один раз на объект
     const ringBoxes = new Map<Feature3D, { r: LonLat[]; b: Bbox }[]>();
     const ringsOf = (x: Feature3D) => {
@@ -14852,23 +14898,40 @@ function detachedIndoor(bbox: Bbox): Set<string> {
       }));
       return v;
     };
-    const buildingAt = (p: LonLat) => (grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? [])
-      .find((x) => ringsOf(x).some(({ r, b: bb }) => p[0] >= bb[0] && p[0] <= bb[2] && p[1] >= bb[1] && p[1] <= bb[3] && pointInRing(p, r)));
+    const inside = (x: Feature3D, p: LonLat) => ringsOf(x).some(({ r, b: bb }) => p[0] >= bb[0] && p[0] <= bb[2] && p[1] >= bb[1] && p[1] <= bb[3] && pointInRingFast(p, r));
+    // Дом — группа (отношение), иначе контур здания, иначе сама часть: часть без отношения лежит в своём контуре,
+    // так что точка в ней попадёт и в него. implicitBuilding (поиск частей вокруг контура) на тысячи зданий — секунды
+    const rank = (x: Feature3D) => groupOf(x.key) ? 0 : x.tags.building && x.tags.building !== 'no' && !x.tags['building:part'] ? 1 : 2;
+    const buildingAt = (p: LonLat) => {
+      let best: Feature3D | undefined, br = 3;
+      for (const x of grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []) {
+        const rx = rank(x);
+        if (rx < br && inside(x, p)) { best = x; br = rx; if (!rx) break; }
+      }
+      return best;
+    };
     const keys = new Map<string, string>();
-    const keyAt = (p: LonLat) => {
-      const x = buildingAt(p);
-      if (!x) return undefined;
+    const keyOf = (x: Feature3D) => {
       let k = keys.get(x.key);
-      if (k === undefined) keys.set(x.key, k = buildingKey(x.key));
+      if (k === undefined) keys.set(x.key, k = groupOf(x.key)?.key ?? x.key);
       return k;
     };
+    const keyAt = (p: LonLat) => { const x = buildingAt(p); return x && keyOf(x); };
     // Дом объекта — здание, где хотя бы половина его вершин (и якорь); платформа под вокзалом краем — не его
-    const anchorIn = fs.map((f) => { const p = indoorAnchor(f); return p ? keyAt(p) : undefined; });
+    const anchorAt = fs.map((f) => { const p = indoorAnchor(f); return p ? buildingAt(p) : undefined; });
+    const anchorIn = anchorAt.map((x) => x && keyOf(x));
     const home = fs.map((f, i) => {
-      const own = anchorIn[i];
-      if (!own || f.line || f.point || !f.polygons.length) return own;
-      const pts = [...f.polygons.flatMap((p) => p.outer), indoorAnchor(f)!];
-      return pts.filter((q) => keyAt(q) === own).length >= pts.length / 2 ? own : undefined;
+      const own = anchorIn[i], first = anchorAt[i];
+      if (!own || !first || f.line || f.point || !f.polygons.length) return own;
+      // Сначала — кольца того же объёма, что и у якоря (почти всегда он); счёт обрывается, как только исход ясен
+      const pts = [...f.polygons.flatMap((p) => p.outer), indoorAnchor(f)!], need = pts.length / 2;
+      let yes = 0, no = 0;
+      for (const q of pts) {
+        if (inside(first, q) || keyAt(q) === own) yes++; else no++;
+        if (yes >= need) return own;
+        if (no > pts.length - need) return undefined;
+      }
+      return yes >= need ? own : undefined;
     });
     const area = fs.map((f) => f.line || f.point ? 0 : f.polygons.reduce((a, p) => a + polyArea(p), 0));
     const cut: [number, number][] = [];
@@ -14909,6 +14972,8 @@ function detachedIndoor(bbox: Bbox): Set<string> {
   });
   if (detachedCache.size > 8) detachedCache.delete(detachedCache.keys().next().value!);
   detachedCache.set(sig, out);
+  if (detachedQuick.size > 8) detachedQuick.delete(detachedQuick.keys().next().value!);
+  detachedQuick.set(region, { rev: overpass.revision, out });
   return out;
 }
 

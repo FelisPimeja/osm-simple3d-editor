@@ -394,6 +394,43 @@ export function pointInRing([x, y]: LonLat, ring: LonLat[]): boolean {
   return inside;
 }
 
+/** Индекс рёбер кольца по горизонтальным полосам: в полосе точки — только пересекающие её рёбра. */
+interface RingBands { y0: number; k: number; bands: Int32Array[]; n: number }
+const ringBands = new WeakMap<LonLat[], RingBands>();
+const FAST_MIN = 32;
+
+/**
+ * pointInRing для неизменяемых колец загруженных данных (контуры зданий, этажи), которые проверяют тысячи раз:
+ * кольцо в сотни вершин — по индексу полос. Кольцо, правленное на месте, дало бы устаревший индекс — для
+ * редактируемой геометрии обычный pointInRing.
+ */
+export function pointInRingFast(p: LonLat, ring: LonLat[]): boolean {
+  if (ring.length < FAST_MIN) return pointInRing(p, ring);
+  let ix = ringBands.get(ring);
+  if (!ix || ix.n !== ring.length) {
+    let y0 = Infinity, y1 = -Infinity;
+    for (const [, y] of ring) { if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    const count = Math.max(1, Math.min(256, ring.length >> 2)), k = count / ((y1 - y0) || 1);
+    const lists: number[][] = Array.from({ length: count }, () => []);
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i][1], b = ring[j][1];
+      const lo = Math.max(0, Math.floor((Math.min(a, b) - y0) * k)), hi = Math.min(count - 1, Math.floor((Math.max(a, b) - y0) * k));
+      for (let t = lo; t <= hi; t++) lists[t].push(i);
+    }
+    ringBands.set(ring, ix = { y0, k, bands: lists.map((l) => Int32Array.from(l)), n: ring.length });
+  }
+  const [x, y] = p;
+  const t = Math.floor((y - ix.y0) * ix.k);
+  if (t < 0 || t >= ix.bands.length) return false;
+  let inside = false;
+  for (const i of ix.bands[t]) {
+    const j = i === 0 ? ring.length - 1 : i - 1;
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
 export function centroid(ring: LonLat[]): LonLat {
   let x = 0, y = 0;
   for (const p of ring) { x += p[0]; y += p[1]; }

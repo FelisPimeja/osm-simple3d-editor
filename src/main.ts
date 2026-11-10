@@ -8635,7 +8635,10 @@ function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   let footRings: { r: LonLat[]; b: Bbox }[] | undefined;
   const list = withSessionIndoor(all).filter((f) => {
     if(overpass.wasUploadedDeleted(f.key))return false;
-    if (detached.has(f.key)) return false;
+    // Контур этажа — не «оторванный» кусок: связность с комплексом снаружи зависит от того, какие тайлы вокруг
+    // загружены (кеш), и контур подземного этажа под площадью то пропадал, то появлялся. Принадлежность ему
+    // проверяют вершины в контуре здания ниже
+    if (detached.has(f.key) && f.kind !== 'level') return false;
     const p = indoorAnchor(f);
     if (!p) return false;
     // Путь и платформа вокзала — если хоть одна вершина в здании (рельсы начинаются снаружи), дальше обрезаем
@@ -12662,14 +12665,19 @@ function renderLevelsImpl() {
   }
   // Подземные этажи — и на любом надземном плане: их выход наружу (приямок лестницы) виден сквозь отверстие в земле,
   // остальное закрывают земля и здание
-  // Крышки помещений этажей ниже видны вне перекрытия (зал под навесом): эти этажи и все промежуточные — тоже,
-  // иначе крышки висят без стен
-  const lidLevels = level ? (voidsCache.get(focus.key)?.lids ?? []).filter((l) => l.level < level.n).map((l) => l.level) : [];
-  const lidLow = lidLevels.length ? Math.min(...lidLevels) : undefined;
+  // Этажи ниже, не видные сквозь проёмы, — коробкой из контура indoor=level (пунктир, скрытые грани не видны), без плана
   const through = [...new Set([...voids.flatMap((v) => v.through),
-    ...(lidLow !== undefined ? levels.filter((l) => l.n >= lidLow && l.n < level!.n).map((l) => l.n) : []),
     ...(level && level.floor > -0.01 ? levels.filter((l) => l.floor < -0.01).map((l) => l.n) : [])])].sort((a, b) => b - a);
-  const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${cutEscalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.noHole ? 1 : 0}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}` : '';
+  // Этажи под проёмами — тоже коробкой, крыша везде, кроме проёмов над ними: их план виден лишь сквозь проёмы
+  const boxes = level ? levels.filter((l) => l.n < level.n && !(level.floor > -0.01 && l.floor < -0.01))
+    .map((l) => ({ bottom: l.floor, top: Math.min(l.ceil, level.floor),
+      // Нет контура indoor=level — коробка по помещениям, площадям и коридорам этажа (крыша их объединяет)
+      polygons: ((own) => own.length ? own : visibleIndoor.filter((f) => ['room', 'area', 'corridor'].includes(f.kind) && !f.line && !f.point && f.levels.includes(l.n)).flatMap((f) => f.polygons.map((p) => ({ ...p, inners: [] }))))(
+        // Только внешние кольца: внутренние (колонны, проёмы) коробку не прорезают
+        visibleIndoor.filter((f) => f.kind === 'level' && !f.line && f.levels.includes(l.n)).flatMap((f) => f.polygons.map((p) => ({ ...p, inners: [] })))),
+      seen: through.includes(l.n), cover: voids.filter((v) => v.through.includes(l.n)).flatMap((v) => v.polygon) }))
+    .filter((b) => b.polygons.length && b.top > b.bottom) : [];
+  const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${cutEscalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.noHole ? 1 : 0}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}|${boxes.map((b) => `${b.bottom}:${b.polygons.length}:${+b.seen}`).join(',')}` : '';
   syncContextIndoor(level);
   if (sig === levelSignature) return;
   levelSignature = sig;
@@ -12677,9 +12685,10 @@ function renderLevelsImpl() {
     ...plan, floor: level!.floor,
     escalators, cutEscalators,
     voids: voids.map((v) => v.polygon).flat(),
-    // Потолки одноэтажных помещений под проёмом — перекрытие этого этажа над ними
-    ceilings: voidsCache.get(focus.key)?.caps?.get(level!.n) ?? [],
-    lids: (voidsCache.get(focus.key)?.lids ?? []).filter((l) => l.level < level!.n).map(({ polygon, z }) => ({ polygon, z })),
+    // Потолки одноэтажных помещений под проёмом в плиту не добавляются: вне контура этажа они закрывали коробки нижних этажей
+    ceilings: [],
+    // Крышки помещений нижних этажей (зал под навесом) не нужны: нижние этажи — коробками, сквозь проёмы видны их планы
+    lids: [],
     bareVoids: voids.filter((v) => v.bare).flatMap((v) => v.polygon),
     // Пустота прорезает пол этажа и полы промежуточных этажей (у самого нижнего — пол атриума)
     voidCuts: voids.map((v) => ({
@@ -12700,6 +12709,7 @@ function renderLevelsImpl() {
         const items = pitOnly ? p.items.filter((it) => it.polygons.some((pg) => pg.outer.some(outside))) : p.items;
         return { ...p, items, ...(pitOnly ? { cut: p.cut - 0.02 } : {}), voids: (allVoids.get(l.n) ?? []).flatMap((v) => v.polygon) };
       }),
+    boxes,
     // Подземные этажи для земли надземного плана: их контур (indoor=level) пунктиром и выходы лестниц — отверстиями
     underground: level!.floor > -0.01 ? levels.filter((l) => l.floor < -0.01).map((l) => ({
       z: l.floor,
@@ -15164,7 +15174,25 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
       return low && high ? [{ key: f.key, line: f.polygons[0].outer, bottom: low.floor, top: high.floor, width: pairWidth(f, list) ?? escalatorWidth(f),
         incline: escalatorIncline(f), ...stairsShape(f, list), pale: true }] : [];
     });
-    return { members: [...ng.members, ng.key], items, doors, escalators: [...escalators, ...lowerEscalators], cut: l.ceil, below };
+    // Срез соседа закрывает этажи под ним плитой: они видны только сквозь пустоты, остальные — пунктирным абрисом
+    const areaRings = (lv: Level) => list.filter((f) => f.levels.includes(lv.n) && !f.line && !f.point && f.polygons.length
+      && (f.kind === 'level' || f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor'))
+      .flatMap((f) => f.polygons.map((p) => [p.outer, ...p.inners] as [number, number][][]));
+    const unite = (polys: [number, number][][][]) => { if (!polys.length) return []; try { return polygonClipping.union(polys[0], ...polys.slice(1)) as LonLat[][][]; } catch { return polys as LonLat[][][]; } };
+    let slab: LonLat[][][] | undefined;
+    if (below.length) {
+      const holes = voids.flatMap((v) => v.polygon) as [number, number][][][];
+      // Сечение — по помещениям этажа и по контуру самого соседа: у торгового центра на этаже 0 лишь пара площадок
+      const foot = data ? [] : groupFeatures(ng).flatMap((f) => (f.polygons ?? []).map((p) => [p.outer, ...p.inners] as [number, number][][]));
+      const sec = unite([...areaRings(l), ...foot]);
+      try { slab = holes.length && sec.length ? polygonClipping.difference(sec as never, ...(holes as never[])) as LonLat[][][] : sec; } catch { slab = undefined; }
+    }
+    const shown = new Set([l.floor, ...below.map((b) => b.items[0]?.z)]);
+    const outlines = levels.filter((x) => !shown.has(x.floor)).flatMap((x) => {
+      const rings = unite(areaRings(x)).flat();
+      return rings.length ? [{ z: x.floor, rings }] : [];
+    });
+    return { members: [...ng.members, ng.key], items, doors, escalators: [...escalators, ...lowerEscalators], cut: l.ceil, below, slab, outlines };
   }
 }
 

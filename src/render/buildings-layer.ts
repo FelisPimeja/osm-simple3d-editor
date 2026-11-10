@@ -291,6 +291,8 @@ export interface IndoorLevel {
   voidCuts?: { polygon: LonLat[][][]; zs: number[] }[];
   /** Подземные этажи (для земли надземного плана): контуры indoor=level и площади лестниц, выходящих наверх. */
   underground?: { z: number; outlines: Polygon[][]; pits: Polygon[][] }[];
+  /** Этажи ниже, не видные сквозь проёмы: коробка из контура indoor=level от пола до потолка (пунктир, без скрытых граней). */
+  boxes?: { bottom: number; top: number; polygons: Polygon[]; /** Виден сквозь проёмы (план нарисован). */ seen: boolean; /** Где крыши нет: проёмы текущего этажа над этим этажом. */ cover: LonLat[][][] }[];
   below?: { cut: number; items: IndoorItem[]; /** Площади лестниц и эскалаторов этажа. */ outlines?: IndoorItem[]; doors?: LonLat[]; doorCuts?: { at: LonLat; width: number; polygon?: LonLat[] }[]; doorModels?: DoorItem[]; /** Собственные проёмы этого этажа. */ voids?: LonLat[][][] }[];
 }
 
@@ -299,7 +301,11 @@ export interface RenderedFeature { feature: Feature3D; roofApproximated: boolean
 /** Этаж соседа в окружении: его объекты, двери, лестницы и эскалаторы, высота среза. */
 export interface ContextPlan { members: string[]; items: IndoorItem[]; doors: LonLat[]; escalators: EscalatorItem[]; cut: number;
   /** Этажи соседа под его пустотами (второй свет): объекты, двери, срез и пустоты каждого. */
-  below?: { items: IndoorItem[]; doors: LonLat[]; cut: number; voids: LonLat[][][] }[] }
+  below?: { items: IndoorItem[]; doors: LonLat[]; cut: number; voids: LonLat[][][] }[];
+  /** Перекрытие под срезом (сечение этажа без пустот): закрывает нижние этажи, кроме видных сквозь пустоты. */
+  slab?: LonLat[][][];
+  /** Прочие этажи соседа — пунктирным абрисом на отметке пола. */
+  outlines?: { z: number; rings: LonLat[][] }[] }
 
 export interface GraphicsOptions {
   /** Полусферический свет: небо сверху, земля снизу. */
@@ -333,6 +339,8 @@ const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, das
 /** Выбранный контур подземной части — целиком, сквозь здание. */
 const UNDERGROUND_SELECTED = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.25, gapSize: 0.15, depthTest: false, depthWrite: false, transparent: true });
 /** Насколько близко к пунктиру подземной части выбирает клик, px. */
+/** Грани коробок нижних этажей: не видны, только пишут глубину (чуть дальше рёбер — свои рёбра на них видны). */
+const LEVEL_BOX_OCCLUDER = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 4 });
 const UNDERGROUND_PICK_PX = 6;
 /** Вершина контура на прямой (поворот меньше этого, рад) — не угол: ни вертикали, ни разрыва пунктира. */
 const CORNER_MIN_TURN = 0.05;
@@ -1030,6 +1038,40 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Рисуется нижний этаж соседа (сквозь его второй свет): как бледные этажи здания — без крышек и обводки среза. */
   private contextLower = false;
 
+  /** Плита под этажом соседа (нижние этажи — только сквозь пустоты) и пунктирные абрисы прочих его этажей. */
+  private drawContextSlab(root: THREE.Group, g: MeshGroup, plan: ContextPlan, top: number) {
+    const z = (plan.items[0]?.z ?? 0) - SLAB_THICKNESS / 2, pos: number[] = [];
+    for (const poly of plan.slab ?? []) {
+      const v2 = (r: LonLat[]) => { const pts = r.map(g.toLocal); if (pts.length > 1 && pts[0][0] === pts.at(-1)![0] && pts[0][1] === pts.at(-1)![1]) pts.pop(); return pts.map(([x, y]) => new THREE.Vector2(x, y)); };
+      const contour = v2(poly[0]), hs = poly.slice(1).map(v2);
+      if (contour.length < 3) continue;
+      const pts = [...contour, ...hs.flat()];
+      for (const tri of THREE.ShapeUtils.triangulateShape(contour, hs)) for (const i of tri) pos.push(pts[i].x, pts[i].y, z);
+    }
+    if (pos.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, INDOOR_SLAB_MATERIAL);
+      mesh.frustumCulled = false;
+      root.add(mesh);
+    }
+    const lines: number[] = [];
+    for (const o of plan.outlines ?? []) {
+      if (o.z >= top) continue; // выше среза — отрезано
+      for (const r of o.rings) { const pts = r.map(g.toLocal); for (let k = 0; k + 1 < pts.length; k++) lines.push(pts[k][0], pts[k][1], o.z, pts[k + 1][0], pts[k + 1][1], o.z); }
+    }
+    if (!lines.length) return;
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+    const dashed = new THREE.LineSegments(lg, UNDERGROUND_EDGE_MATERIAL);
+    dashed.computeLineDistances();
+    dashed.renderOrder = 999;
+    dashed.frustumCulled = false;
+    dashed.raycast = () => {};
+    root.add(dashed);
+  }
+
   /** Толстый серый контур сечения соседа на срезе — как чёрный периметр этажа здания. */
   private drawContextPerimeter(root: THREE.Group, g: MeshGroup, floor: number, top: number) {
     if (!this.map) return;
@@ -1076,6 +1118,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       try { for (const b of plan.below ?? []) this.drawPlanBody(root, g, b.items, b.doors, Math.min(b.cut, top), true, undefined, plan.escalators, b.voids); }
       finally { this.contextLower = false; }
       this.drawEscalators(root, g, plan.escalators, false);
+      this.drawContextSlab(root, g, plan, top);
       this.drawContextPerimeter(root, g, plan.items[0]?.z ?? 0, top);
     }
     catch (e) { console.warn('план соседа', e); }
@@ -2041,7 +2084,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     SHELL_FLOOR.value = cut !== undefined ? this.level!.floor : Infinity;
     const planes = cut !== undefined ? [new THREE.Plane(new THREE.Vector3(0, 0, -1), cut)] : null;
     // Входы на контуре — тоже: у частей выше среза они висели бы в воздухе
-    for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL, ENTRANCE_MATERIAL, ENTRANCE_SELECTED_MATERIAL, ENTRANCE_LINE_MATERIAL]) m.clippingPlanes = planes;
+    // Оболочка ниже текущего этажа (под его плитой) не рисуется: нижние этажи — пунктирными коробками вместо неё
+    const shellPlanes = planes && this.level?.boxes?.length ? [...planes, new THREE.Plane(new THREE.Vector3(0, 0, 1), -(this.level.floor - SLAB_THICKNESS))] : planes;
+    for (const m of [MATERIAL, THIN_MATERIAL, GLASS_MATERIAL, EDGE_MATERIAL, HIDDEN_EDGE_MATERIAL, ENTRANCE_MATERIAL, ENTRANCE_SELECTED_MATERIAL, ENTRANCE_LINE_MATERIAL]) m.clippingPlanes = shellPlanes;
     for (const m of [ESCALATOR_BELT, ESCALATOR_SIDE, ESCALATOR_STEP, ESCALATOR_BALUSTRADE, ESCALATOR_HANDRAIL,
       ESCALATOR_PALE_BELT, ESCALATOR_PALE_SIDE, ESCALATOR_PALE_STEP, ESCALATOR_PALE_BALUSTRADE, ESCALATOR_PALE_HANDRAIL,
       STAIRS_MATERIAL, STAIRS_PALE, STAIRS_RAIL, STAIRS_PALE_RAIL, STAIRS_NOSING, STAIRS_PALE_NOSING]) m.clippingPlanes = planes;
@@ -2318,10 +2363,66 @@ export class BuildingsLayer implements CustomLayerInterface {
       timed('этажи: планы нижних этажей', () => { for (const b of this.level!.below ?? []) this.drawPlan(root, g, b.items, b.doors ?? [], b.cut, true, shell(), b.voids); }, () => `${this.level!.below!.length} этажей`);
     }
     timed('этажи: план выбранного этажа', () => this.drawPlan(root, g, this.level!.items, this.previewDoors(this.level!.doors ?? []), top, false, shell()));
+    this.drawLevelBoxes(root, g);
     this.drawOpenRoofs(root, g, top);
     timed('этажи: эскалаторы', () => this.drawEscalators(root, g));
     timed('этажи: слияние геометрии', () => this.rebuildGeometry(g));
     this.attachBelowOutlines();
+  }
+
+  /**
+   * Нижние этажи коробками: невидимые грани только пишут глубину (закрывают свои задние рёбра и то, что за ними),
+   * рёбра — пунктиром с проверкой глубины, как подземная часть в режиме здания.
+   */
+  private drawLevelBoxes(root: THREE.Group, g: MeshGroup) {
+    const pos: number[] = [], lines: number[] = [];
+    for (const b of this.level?.boxes ?? []) {
+      // Объединение контуров (запасной контур — из помещений, они перекрываются): стенки и рёбра — по нему
+      const close = (r: LonLat[]) => (r[0][0] === r.at(-1)![0] && r[0][1] === r.at(-1)![1] ? r : [...r, r[0]]) as [number, number][];
+      let body: ClipMulti = b.polygons.map((p) => [close(p.outer), ...p.inners.map(close)]) as ClipMulti;
+      try { body = polygonClipping.union(body, ...body.map((p) => [p] as ClipMulti)); } catch (err) { console.warn('[levels] коробка этажа не построена', err); }
+      // Щели между помещениями и колонны — не дыры коробки: только внешние кольца
+      body = body.map((p) => [p[0]]);
+      for (const ring of body.flat()) {
+        const loc = (ring as LonLat[]).slice(0, -1).map(g.toLocal);
+        const pts = cornersOnly(loc);
+        if (pts.length < 3) continue;
+        for (let i = 0; i < pts.length; i++) {
+          const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % pts.length];
+          pos.push(x0, y0, b.bottom, x1, y1, b.bottom, x1, y1, b.top, x0, y0, b.bottom, x1, y1, b.top, x0, y0, b.top);
+          for (const z of [b.bottom, b.top]) lines.push(x0, y0, z, x1, y1, z);
+          if (turnAt(pts, i) >= UNDERGROUND_POST_TURN) lines.push(x0, y0, b.bottom, x0, y0, b.top);
+        }
+      }
+      // Крыша — с дырами по проёмам текущего этажа над этим: план под ними виден только сквозь них
+      let roof = body;
+      try { if (b.cover.length) roof = polygonClipping.difference(body, b.cover.map((p) => p.map(close)) as ClipMulti); } catch (err) { console.warn('[levels] крыша коробки этажа не построена', err); }
+      for (const poly of roof) {
+        const v2 = (r: [number, number][]) => r.slice(0, -1).map((q) => { const [x, y] = g.toLocal(q as LonLat); return new THREE.Vector2(x, y); });
+        const c = v2(poly[0] as [number, number][]), hs = poly.slice(1).map((r) => v2(r as [number, number][]));
+        if (c.length < 3) continue;
+        const all = [...c, ...hs.flat()];
+        for (const tri of THREE.ShapeUtils.triangulateShape(c, hs)) for (const i of tri) pos.push(all[i].x, all[i].y, b.top);
+      }
+    }
+    if (!lines.length) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const faces = new THREE.Mesh(geo, LEVEL_BOX_OCCLUDER);
+    faces.name = 'level-boxes';
+    faces.renderOrder = -50;
+    faces.frustumCulled = false;
+    faces.raycast = () => {};
+    root.add(faces);
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+    const dashed = new THREE.LineSegments(lg, UNDERGROUND_MATERIAL);
+    dashed.computeLineDistances();
+    dashed.name = 'level-box-edges';
+    dashed.renderOrder = 998;
+    dashed.frustumCulled = false;
+    dashed.raycast = () => {};
+    root.add(dashed);
   }
 
   /** Эскалатор с горизонтальными ступенями, подступенками и закрытым корпусом. */

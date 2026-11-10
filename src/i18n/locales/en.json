@@ -3,12 +3,9 @@
   "Середина ребра": "Edge midpoint",
   "Скопировано: {n}. Базовая точка — угловая вершина. Ctrl+V — вставить.": "Copied: {n}. Base point: a corner vertex. Ctrl+V to paste.",
   "Вырезать из контура этажа": "Cut out of the level outline",
-  "Вырезано внутреннее кольцо в контуре этажа {key}.": "Cut an inner ring in the level outline {key}.",
   "Кольцу нужно не меньше трёх вершин.": "A ring needs at least three vertices.",
   "Кольцо должно лежать внутри контура этажа.": "The ring must lie inside the level outline.",
   "Контура этажа (indoor=level) нет.": "There is no level outline (indoor=level).",
-  "Кольцо пересекает контур этажа или его внутренние кольца.": "The ring crosses the level outline or its inner rings.",
-  "Кольцо пересекается с уже вырезанным кольцом.": "The ring overlaps an inner ring that is already cut.",
   "Сгенерировать контур этажа": "Generate level outline",
   "Выделить все ({n})": "Select all ({n})",
   "Исправить все ({n})": "Fix all ({n})",
@@ -1495,5 +1492,11 @@
   "Откройте здание, чтобы перенести дверь на фасад.": "Open the building to move the door to the facade.",
   "Линейная стена на контуре полигональной стены {other}: стена описана дважды. Снимите с пути ключи стены.": "Linear wall on the outline of polygonal wall {other}: the wall is mapped twice. Remove the wall keys from the way.",
   "снять ключи стены": "remove wall keys",
-  "level=0;1;2 — стена, колонна, лестница, лифт, шахта": "level=0;1;2 — wall, column, stairs, elevator, shaft"
+  "level=0;1;2 — стена, колонна, лестница, лифт, шахта": "level=0;1;2 — wall, column, stairs, elevator, shaft",
+  "Добавить площадь в контур этажа": "Add area to the level outline",
+  "Вырезано из контура этажа {key}.": "Cut out of the level outline {key}.",
+  "Добавлено в контур этажа {key}.": "Added to the level outline {key}.",
+  "Не удалось построить новый контур этажа.": "Could not build the new level outline.",
+  "Этаж остался бы без площади.": "The level would be left without any area.",
+  "Новый контур этажа касается сам себя в точке (узел {id}) — подправьте фигуры, чтобы они перекрывались или не соприкасались.": "The new level outline touches itself at a point (node {id}) — adjust the shapes so they overlap or stay apart."
 }

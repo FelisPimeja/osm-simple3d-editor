@@ -98,6 +98,14 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
     throw new Error('Общие узлы используются на другом этаже. Сначала разделите геометрию этажей.');
   if (movedDoors.size) for (const f of otherFloors.filter(f=>!isShell(f))) {
     if (f.point) continue;
+    // Удаление общих вершин (склейка): соседа, у которого их не осталось бы на фигуру (поручень из двух узлов
+    // по стороне лестницы), не трогаем — вершины уходят только из выделенного
+    if (op.type==='remove' && glue && !selected.has(f.key) && rings(f).some(r=>{
+      if (!r.ids) return false;
+      const closedLine = !!f.line && r.ids.length > 2 && r.ids[0] === r.ids[r.ids.length-1];
+      const left = r.ids.filter(id=>!removed.has(id)).length + (closedLine && removed.has(r.ids[0]) ? 1 : 0);
+      return left < r.ids.length && left < (closedLine?4:f.line?2:3);
+    })) continue;
     let changed=false;
     const output=rings(f).map(r=>{
       if (!r.ids) return {...r};
@@ -131,6 +139,14 @@ export function editIndoorGeometry(all: IndoorFeature[], op: IndoorOperation, gl
       edits.push({key:f.key,delete:true});
       continue;
     }
+    // Удаление общих вершин (склейка): соседа, у которого их не осталось бы на фигуру (поручень из двух узлов
+    // по стороне лестницы), не трогаем — вершины уходят только из выделенного
+    if (op.type==='remove' && glue && !selected.has(f.key) && rings(f).some(r=>{
+      if (!r.ids) return false;
+      const closedLine = !!f.line && r.ids.length > 2 && r.ids[0] === r.ids[r.ids.length-1];
+      const left = r.ids.filter(id=>!removed.has(id)).length + (closedLine && removed.has(r.ids[0]) ? 1 : 0);
+      return left < r.ids.length && left < (closedLine?4:f.line?2:3);
+    })) continue;
     let changed=false;
     const output=rings(f).map(r=>{
       if (!r.ids) return {...r};

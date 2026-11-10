@@ -11994,7 +11994,9 @@ function openRepeatDialog() {
   const copies = fs.map((f) => levelCopies(f, all));
   const own = new Set(fs.flatMap((f) => parseLevels(f.tags.level)));
   const repeatOn = fs.map((f) => parseLevels(f.tags.repeat_on));
-  const mode: RepeatMode = repeatOn.some((r) => r.length) ? 'repeat_on' : fs.every((f) => parseLevels(f.tags.level).length > 1) ? 'level' : 'copies';
+  const mode: RepeatMode = repeatOn.some((r) => r.length) ? 'repeat_on' : fs.every((f) => parseLevels(f.tags.level).length > 1)
+    // Стена и колонна проходят сквозь этажи одним элементом: копии по этажам им не нужны
+    || fs.every((f) => f.kind === 'wall' || f.kind === 'column') ? 'level' : 'copies';
   const levels = [...panelLevels].sort((a, b) => b - a);
   const rows = levels.map((n) => {
     const isOwn = fs.every((f) => parseLevels(f.tags.level).includes(n));
@@ -12008,7 +12010,7 @@ function openRepeatDialog() {
     <ul class="repeat-levels">${rows}</ul>
     ${radio('copies', tr('Отдельные копии'), tr('по объекту на этаж, правятся по отдельности'))}
     ${radio('repeat_on', tr('repeat_on'), tr('один объект, повторяется на этажах (вики советует скупо)'))}
-    ${radio('level', tr('Один объект на нескольких этажах'), tr('level=0;1;2 — лестница, лифт, шахта'))}
+    ${radio('level', tr('Один объект на нескольких этажах'), tr('level=0;1;2 — стена, колонна, лестница, лифт, шахта'))}
     <p class="repeat-actions"><button type="button" data-repeat-apply>${tr('Применить')}</button><button type="button" data-popup-close>${tr('Отмена')}</button></p>`, null);
   for (const el of popupEl.querySelectorAll<HTMLInputElement>('[data-mixed]')) el.indeterminate = true;
   const touched = new Set<number>();

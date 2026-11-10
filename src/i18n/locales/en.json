@@ -1325,7 +1325,6 @@
   "repeat_on": "repeat_on",
   "один объект, повторяется на этажах (вики советует скупо)": "one object repeated on levels (the wiki advises using it sparingly)",
   "Один объект на нескольких этажах": "One object on several levels",
-  "level=0;1;2 — лестница, лифт, шахта": "level=0;1;2 — stairs, elevator, shaft",
   "Применить": "Apply",
   "Скопировать нельзя: стены-линии и мультиполигоны из нескольких частей пока не копируются.": "Can't copy: wall lines and multi-part multipolygons aren't copied yet.",
   "Этажи: копий создано {made}, убрано {removed}.": "Levels: {made} copies created, {removed} removed.",
@@ -1495,5 +1494,6 @@
   "Перенести на фасад как вход (entrance=yes)": "Move to the facade as an entrance (entrance=yes)",
   "Откройте здание, чтобы перенести дверь на фасад.": "Open the building to move the door to the facade.",
   "Линейная стена на контуре полигональной стены {other}: стена описана дважды. Снимите с пути ключи стены.": "Linear wall on the outline of polygonal wall {other}: the wall is mapped twice. Remove the wall keys from the way.",
-  "снять ключи стены": "remove wall keys"
+  "снять ключи стены": "remove wall keys",
+  "level=0;1;2 — стена, колонна, лестница, лифт, шахта": "level=0;1;2 — wall, column, stairs, elevator, shaft"
 }

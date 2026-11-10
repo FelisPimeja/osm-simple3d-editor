@@ -1609,7 +1609,17 @@ map.on('click', (e) => {
     const loop = room && !indoorAdd ? wallLoopAt([e.point.x, e.point.y], room) : undefined;
     if (loop) { if (reclick && isOnlyFreeArea(loop)) { selectIndoor(undefined); clearInfo(); } else selectFreeArea(loop); return; }
     if (room && reclick && indoorSelection.length === 1 && !freeExtra.length && indoorKey(indoorSelection[0].key) === indoorKey(room.key)) { selectIndoor(undefined); clearInfo(); return; }
-    if (room) { selectIndoor(room, indoorAdd); return; }
+    if (room) {
+      selectIndoor(room, indoorAdd);
+      // Убрали из смешанного выделения последний объект — остались куски пустой площади: снова выделение площади
+      if (indoorAdd && !indoorSelection.length && !selectedRoomWalls.length && freeExtra.length) {
+        const [a, ...rest] = freeExtra;
+        freeArea = a; freeExtra = rest;
+        overpassLayer.setFreeArea({ key: 'free-area', kind: 'area', polygons: [a, ...rest].map((b) => b.polygon), z: shownLevel?.floor ?? 0 });
+        renderFreeArea(a);
+      }
+      return;
+    }
     if (indoorAdd) { freeAreaClick([e.point.x, e.point.y], true); return; }
     if (freeAreaClick([e.point.x, e.point.y], false, reclick)) return;
   }

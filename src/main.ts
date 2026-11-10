@@ -22,7 +22,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
-import { ROOM_PAIRED_AMENITY, setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, selfIntersects, validateIndoor, validateSolidWallDoors, validateRepeatedRooms, validateStackedEscalators, validateEscalators, validateTags, OUTLINE_GROW_SHARE, partGround, type Issue } from './edit/validate';
+import { ROOM_PAIRED_AMENITY, setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, selfIntersects, validateIndoor, validateSolidWallDoors, validateRepeatedRooms, validateWallPerimeters, validateStackedEscalators, validateEscalators, validateTags, OUTLINE_GROW_SHARE, partGround, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids, voidCaps } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchElementRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -13086,7 +13086,7 @@ function renderIssues() {
   const pairedKeys = new Set(paired.map((i) => i.key));
   const indoorIssues = focusedBuilding && plan ? [...paired,
     // Дверь с парным входом — не «вход без entrance»: исправление одно, объединить
-    ...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), !pairedKeys.has(f.key) && outerDoor!(f), innerEntrance(f, outerDoor!))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateStackedEscalators(indoorAll), ...validateEscalators(indoorAll, ((ls) => (n: number) => { const l = ls.find((x) => x.n === n); return l && { floor: l.floor, explicit: !!l.explicit }; })(buildingLevels(focusedBuilding, indoorAll)))] : [];
+    ...indoorAll.flatMap((f) => validateIndoor(f, isInteriorDoor(f, focusedBuilding), !pairedKeys.has(f.key) && outerDoor!(f), innerEntrance(f, outerDoor!))), ...validateSolidWallDoors(indoorAll), ...validateRepeatedRooms(indoorAll), ...validateWallPerimeters(indoorAll), ...validateStackedEscalators(indoorAll), ...validateEscalators(indoorAll, ((ls) => (n: number) => { const l = ls.find((x) => x.n === n); return l && { floor: l.floor, explicit: !!l.explicit }; })(buildingLevels(focusedBuilding, indoorAll)))] : [];
   const duplicates = focusedBuilding && !plan ? duplicateIssues(groupFeatures(focusedBuilding), overpass.renderedFeatures().map((r) => r.feature)) : [];
   focusIssues = [...simpleIssues, ...duplicates, ...indoorIssues];
   // Слой зданий выключен — проверку карты не считаем (пересчитаем, когда включат)

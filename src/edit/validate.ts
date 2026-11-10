@@ -389,6 +389,33 @@ export function validateRepeatedRooms(features: IndoorFeature[]): Issue[] {
  * Эскалатор (ось highway=steps или площадь indoor=area с conveying) с level больше чем на два этажа — стопка
  * эскалаторов одним объектом. Предлагаем разбить на пары соседних этажей; ось — на новых узлах.
  */
+/** Ключи линейной стены: снимаются с пути, лежащего на контуре полигональной стены. */
+const LINEAR_WALL_KEYS = ['indoor', 'level', 'repeat_on', 'wall', 'height', 'min_height', 'material', 'width', 'area'];
+
+/**
+ * Линейная стена на периметре полигональной: путь indoor=wall (член мультиполигона стены или отдельный путь по тем же
+ * узлам) на тех же этажах — стена описана дважды. Исправление — снять с пути ключи линейной стены.
+ */
+export function validateWallPerimeters(features: IndoorFeature[]): Issue[] {
+  const walls = features.filter((f) => f.kind === 'wall' && f.tags.indoor === 'wall');
+  const polys = walls.filter((f) => !f.line && f.polygons.some((p) => p.outerIds?.length));
+  if (!polys.length) return [];
+  const rings = polys.map((f) => ({ f, ids: f.polygons.map((p) => new Set([...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()])) }));
+  const sameLevels = (a: number[], b: number[]) => { const x = [...new Set(a)].sort(), y = [...new Set(b)].sort(); return x.length === y.length && x.every((n, i) => n === y[i]); };
+  const out: Issue[] = [];
+  for (const w of walls) {
+    if (!w.key.startsWith('way/')) continue;
+    const ids = w.polygons[0]?.outerIds;
+    if (!ids || ids.length < 2) continue;
+    const host = rings.find((r) => r.f.key !== w.key && sameLevels(r.f.levels, w.levels) && r.ids.some((set) => ids.every((id) => set.has(id))));
+    if (!host) continue;
+    out.push({ key: w.key, other: host.f.key, level: 'warning', code: 'indoor-wall',
+      text: tr('Линейная стена на контуре полигональной стены {other}: стена описана дважды. Снимите с пути ключи стены.', { other: host.f.key }),
+      fix: { label: tr('снять ключи стены'), tags: Object.fromEntries(LINEAR_WALL_KEYS.filter((k) => w.tags[k] !== undefined).map((k) => [k, undefined])) } });
+  }
+  return out;
+}
+
 export function validateStackedEscalators(features: IndoorFeature[]): Issue[] {
   const out: Issue[] = [];
   for (const f of features) {

@@ -1493,5 +1493,7 @@
   "Откройте здание, чтобы объединить дверь со входом.": "Open the building to merge the door into the entrance.",
   "Дверь на внутренней грани наружной стены: вход в здание размечают на фасаде (entrance=*).": "Door on the inner face of an exterior wall: building entrances are mapped on the facade (entrance=*).",
   "Перенести на фасад как вход (entrance=yes)": "Move to the facade as an entrance (entrance=yes)",
-  "Откройте здание, чтобы перенести дверь на фасад.": "Open the building to move the door to the facade."
+  "Откройте здание, чтобы перенести дверь на фасад.": "Open the building to move the door to the facade.",
+  "Линейная стена на контуре полигональной стены {other}: стена описана дважды. Снимите с пути ключи стены.": "Linear wall on the outline of polygonal wall {other}: the wall is mapped twice. Remove the wall keys from the way.",
+  "снять ключи стены": "remove wall keys"
 }

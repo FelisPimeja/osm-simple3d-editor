@@ -509,6 +509,9 @@ interface Item {
   /** Стеклянные стены/крыша (building:material / roof:material = glass) — рисуются отдельным прозрачным мешем. */
   glassWalls: boolean;
   glassRoof: boolean;
+  /** Цвет стекла стен/крыши из явного building:colour / roof:colour (#51); нет — обычное голубое стекло. */
+  glassWallColour?: THREE.Color;
+  glassRoofColour?: THREE.Color;
   /** Первая вершина в стеклянной геометрии группы. */
   glassStart: number;
   /**
@@ -6602,9 +6605,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     const glassAttr = g.glass?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
     if (!glassAttr || it.glassStart < 0) return;
     const gc = glassAttr.array as Float32Array;
-    const c = selected ? HIGHLIGHT : this.monochrome ? GLASS_MONO : GLASS;
     let o = it.glassStart * 3;
-    for (const src of glassParts(it)) for (let v = 0; v < src.length; v += 3, o += 3) { gc[o] = c.r; gc[o + 1] = c.g; gc[o + 2] = c.b; }
+    glassRanges(it).forEach(([a], i) => {
+      const src = glassParts(it)[i];
+      const tint = a === 0 ? it.glassWallColour : it.glassRoofColour;
+      const c = selected ? HIGHLIGHT : this.monochrome ? GLASS_MONO : tint ?? GLASS;
+      for (let v = 0; v < src.length; v += 3, o += 3) { gc[o] = c.r; gc[o + 1] = c.g; gc[o + 2] = c.b; }
+    });
   }
 }
 
@@ -7552,6 +7559,11 @@ function describeFeature(f: Feature3D): string {
 /** Стекло: голубовато-бирюзовое, полупрозрачное; без цветов — светлее. */
 const GLASS = new THREE.Color('#7fc4cc');
 const GLASS_MONO = new THREE.Color('#bfe3e6');
+/** Явный цвет стекла (#51): при прозрачности 0.45 чистый цвет тонет в фоне — немного разбавляем голубым стеклом. */
+function glassTint(tag: string | undefined): THREE.Color | undefined {
+  if (!tag) return undefined;
+  return parseColour(tag).clone().lerp(GLASS, 0.25);
+}
 // Отодвинуто дальше сплошных граней (MATERIAL: 1/1): стекло в одной плоскости со сплошной стеной под ней не мерцает
 const GLASS_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.45, depthWrite: false,
   side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });
@@ -7957,6 +7969,8 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     // material на здании — устаревший вариант building:material: только фасад
     glassWalls,
     glassRoof: isGlass(tags['roof:material']),
+    glassWallColour: glassTint(tags['building:colour'] ?? tags.colour),
+    glassRoofColour: glassTint(tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? undefined : tags['building:colour'] ?? tags.colour)),
     glassStart: 0,
   };
 }

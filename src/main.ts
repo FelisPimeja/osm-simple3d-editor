@@ -14707,9 +14707,10 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
     const near: LonLat[] = [];
     for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++) for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) near.push(...(grid.get(`${i},${j}`) ?? []));
     if (!near.length) continue;
+    // Сначала дешёвое: есть ли точка indoor внутри; ключ здания (implicitBuilding) — только для таких
+    if (!near.some((p) => p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1 && f.polygons.some((q) => pointInRingFast(p, q.outer)))) continue;
     const bk = buildingKey(f.key);
     if (buildings.has(bk) || members.has(bk)) continue;
-    if (!near.some((p) => f.polygons.some((q) => pointInRing(p, q.outer)))) continue;
     const ng = groupOf(bk) ?? soloGroup(bk);
     if (ng && ng.key !== g.key) buildings.set(bk, ng);
   } });

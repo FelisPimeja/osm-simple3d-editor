@@ -2911,12 +2911,31 @@ export class BuildingsLayer implements CustomLayerInterface {
         const box = outer.reduce((b, [x, y]) => [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)], [Infinity, Infinity, -Infinity, -Infinity]);
         return { outer, holes, box, colour: new THREE.Color(it.colour!) };
       }));
+    // Сетка 8 м по рамкам цветных помещений: на вокзале их тысяча с лишним, а стен — тысячи кусков. Списки в ячейках
+    // — в порядке tinted (приоритет вида), так что sideColour берёт то же помещение, что и полный перебор
+    const TINT_CELL = 8, tintGrid = new Map<number, number[]>();
+    const tintKey = (i: number, j: number) => (i + 32768) * 65536 + (j + 32768);
+    tinted.forEach((t, k) => {
+      for (let i = Math.floor(t.box[0] / TINT_CELL); i <= Math.floor(t.box[2] / TINT_CELL); i++)
+        for (let j = Math.floor(t.box[1] / TINT_CELL); j <= Math.floor(t.box[3] / TINT_CELL); j++) {
+          const c = tintKey(i, j); const l = tintGrid.get(c); if (l) l.push(k); else tintGrid.set(c, [k]);
+        }
+    });
+    const tintNear = (x0: number, y0: number, x1: number, y1: number): number[] => {
+      const i0 = Math.floor(Math.min(x0, x1) / TINT_CELL), i1 = Math.floor(Math.max(x0, x1) / TINT_CELL);
+      const j0 = Math.floor(Math.min(y0, y1) / TINT_CELL), j1 = Math.floor(Math.max(y0, y1) / TINT_CELL);
+      if (i0 === i1 && j0 === j1) return tintGrid.get(tintKey(i0, j0)) ?? [];
+      const out = new Set<number>();
+      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (const k of tintGrid.get(tintKey(i, j)) ?? []) out.add(k);
+      return [...out].sort((a, b) => a - b);
+    };
     const WHITE_WALL = new THREE.Color(0xffffff);
     /** Доли отрезка a→b, где он пересекает стороны цветных помещений (там может смениться цвет стены). */
     const tintCrossings = (ax: number, ay: number, bx: number, by: number): number[] => {
       const out: number[] = [];
       const dx = bx - ax, dy = by - ay;
-      for (const t of tinted) {
+      for (const k of tintNear(ax, ay, bx, by)) {
+        const t = tinted[k];
         if (Math.max(ax, bx) < t.box[0] || Math.min(ax, bx) > t.box[2] || Math.max(ay, by) < t.box[1] || Math.min(ay, by) > t.box[3]) continue;
         for (const r of [t.outer, ...t.holes]) for (let i = 0; i < r.length; i++) {
           const [cx, cy] = r[i], [ex, ey] = r[(i + 1) % r.length], fx = ex - cx, fy = ey - cy;
@@ -2930,7 +2949,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     /** Цвет стены со стороны точки (x, y): пол помещения под ней, иначе белый. */
     const sideColour = (x: number, y: number): THREE.Color => {
-      for (const t of tinted) {
+      for (const k of tintNear(x, y, x, y)) {
+        const t = tinted[k];
         if (x < t.box[0] || x > t.box[2] || y < t.box[1] || y > t.box[3]) continue;
         if (pointInLocalRing([x, y], t.outer) && !t.holes.some((h) => pointInLocalRing([x, y], h))) return t.colour;
       }

@@ -180,12 +180,17 @@ body.mobile #statusbar { bottom: calc(var(--mobile-bottom, 44px) + 16px); }
 /* Правая колонка (панель «Этажи») — над карточкой здания, а не под ней */
 body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobile-card-h, 72px) + 20px + env(safe-area-inset-bottom)); }
 #info h2 { font-size: 14px; margin: 8px 0 4px; }
+#info .obj-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: 8px 0 6px; }
+#info .obj-head a { font-size: 12px; font-weight: 400; }
+.obj-ver { padding: 0 5px; border-radius: 4px; background: #f3f4f6; color: #555; font-size: 11px; font-weight: 400; }
+#info .dims { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 8px; font-size: 12px; color: #374151; }
+#info .dims dt { color: #6b7280; }
+#info .dims dd { margin: 0; }
 #info a { color: #2563eb; }
 #info table { border-collapse: collapse; width: 100%; font-size: 12px; }
 #info td { border-top: 1px solid #eee; padding: 2px 4px; vertical-align: top; word-break: break-all; }
 #info td:first-child { color: #555; white-space: nowrap; word-break: normal; }
 #info .warn { color: #b45309; font-size: 12px; margin: 4px 0; }
-#info pre { font-size: 12px; white-space: pre-wrap; margin: 0; }
 #info button { padding: 4px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
 #op-indicator {
   display: flex; align-items: center; justify-content: center; gap: 6px; max-width: 100%; padding: 2px 8px; border-radius: 10px; color: #333; text-align: center; pointer-events: auto;

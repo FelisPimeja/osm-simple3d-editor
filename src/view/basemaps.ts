@@ -72,6 +72,8 @@ export const findImagery = (id: string) => ALL_IMAGERY.find((i) => i.id === id);
 
 /** 'map' — векторная карта без снимков. */
 export const MAP_BASEMAP = 'map';
+/** Без подложки: ни карты, ни снимков. */
+export const NO_BASEMAP = 'none';
 export const IMAGERY_LAYER = 'imagery';
 /** Общедоступные GPS-треки OSM — эталон, по которому видно смещение снимков. */
 export const GPS_LAYER = 'gps-traces';
@@ -79,7 +81,7 @@ export const GPS_LAYER = 'gps-traces';
 const STORE_KEY = 'osm3d.basemap';
 const GPS_KEY = 'osm3d.gps-traces';
 
-export const isBasemap = (id: string | undefined | null): id is string => id === MAP_BASEMAP || ALL_IMAGERY.some((i) => i.id === id);
+export const isBasemap = (id: string | undefined | null): id is string => id === MAP_BASEMAP || id === NO_BASEMAP || ALL_IMAGERY.some((i) => i.id === id);
 
 /** scope — свой выбор у серверов с другим набором снимков (OHM: '.ohm'). */
 export function storedBasemap(scope = ''): string {
@@ -312,7 +314,7 @@ export class BasemapButton {
     const menu = this.menu = document.createElement('div');
     menu.className = 'basemap-menu';
     menu.hidden = true;
-    const items: [string, string][] = [[MAP_BASEMAP, tr('Карта')], ...list.map((i): [string, string] => [i.id, i.name])];
+    const items: [string, string][] = [[NO_BASEMAP, tr('Нет')], [MAP_BASEMAP, tr('Карта')], ...list.map((i): [string, string] => [i.id, i.name])];
     for (const [id, label] of items) {
       const row = document.createElement('label');
       const input = document.createElement('input');
@@ -325,7 +327,7 @@ export class BasemapButton {
       this.labels.set(id, text);
       row.append(input, text);
       let section: HTMLElement | undefined;
-      if (id !== MAP_BASEMAP) {
+      if (id !== MAP_BASEMAP && id !== NO_BASEMAP) {
         // Настройки снимка — раскрывающаяся секция под строкой (стрелка видна у выбранного)
         const sec = this.imagerySection(id, onOffset, onImageryEdit);
         section = sec.el;

@@ -319,6 +319,7 @@
   "Выделить все: {kind}": "Select all: {kind}",
   "Скрыть все": "Hide all",
   "Карта": "Map",
+  "Нет": "None",
   "Просмотр зданий из OSM в 3D. Выделенное здание можно править в панели «Свойства» или открыть в режиме здания.": "View OSM buildings in 3D. The selected building can be edited in the Properties panel or opened in building mode.",
   "Клик — выделить здание, Shift+клик — добавить к выделению, Alt+клик — следующий объект под курсором.": "Click: select a building, Shift+click: add to selection, Alt+click: next object under the cursor.",
   "Двойной клик по зданию — режим здания (правка частей).": "Double-click a building: building mode (edit its parts).",

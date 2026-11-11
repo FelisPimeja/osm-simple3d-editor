@@ -38,7 +38,7 @@ import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indo
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
-import { applyBasemap, applyGpsTraces, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
+import { applyBasemap, applyGpsTraces, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, NO_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
@@ -257,8 +257,6 @@ const imageryList = server().imagery ? IMAGERY : server().id === 'ohm' ? [WAYBAC
 const basemapScope = server().imagery ? '' : `.${server().id}`;
 let basemap = imageryList.length ? storedBasemap(basemapScope) : MAP_BASEMAP;
 let gpsTraces = server().imagery ? storedGps() : false;
-/** Векторная карта в здании скрыта по умолчанию; снимки и треки общие для обоих режимов. */
-let focusVectorMap = false;
 let mapLoaded = false;
 /** Сцена режима здания (окружение скрыто). */
 const focusScene = () => focusHiddenLayers.length > 0;
@@ -388,9 +386,8 @@ function toggleWireframe() {
   basemapCtrl?.setBuildings({ ...buildingsView });
 }
 
-/** Выбор снимков общий; векторную карту в здании включают явно. */
+/** Выбор подложки общий для карты, здания и этажей. */
 function pickBasemap(id: string) {
-  if (focusScene()) focusVectorMap = id === MAP_BASEMAP;
   setBasemap(id);
   void saveSetting('basemap');
 }
@@ -416,7 +413,7 @@ const usedImagery = new Set<string>();
 const usedStreet = new Set<string>();
 function noteSources() {
   const id = basemap;
-  if (id !== MAP_BASEMAP) usedImagery.add(findImagery(id)?.name ?? id);
+  if (id !== MAP_BASEMAP && id !== NO_BASEMAP) usedImagery.add(findImagery(id)?.name ?? id);
   const shown = photoViewer.service;
   if (shown) usedStreet.add(shown.name);
 }
@@ -432,16 +429,15 @@ function sourceTags(): Record<string, string> {
 function syncBasemapLayers() {
   const f = focusScene();
   const id = basemap;
-  // Ни один radio не выбран, пока векторная карта в здании скрыта.
-  basemapCtrl?.set(f && id === MAP_BASEMAP && !focusVectorMap ? '' : id);
+  basemapCtrl?.set(id);
   basemapCtrl?.setGps(gpsTraces);
   if (!mapLoaded) return; // слои добавит обработчик load
   const bounds = f ? focusImageryBounds() : undefined;
   applyGpsTraces(map, gpsTraces && (!f || !!bounds), bounds);
-  applyBasemap(map, f && !bounds ? MAP_BASEMAP : id, bounds);
+  applyBasemap(map, f && !bounds ? NO_BASEMAP : id, bounds);
   syncPhotos();
   noteSources();
-  applyVectorStyle(id !== MAP_BASEMAP || (f && !focusVectorMap));
+  applyVectorStyle(id !== MAP_BASEMAP);
 }
 
 /** Слои стиля карты (без фона и экструзий) и их видимость в стиле — запоминаются при загрузке. */
@@ -2187,9 +2183,7 @@ function hideMapLayers() {
     focusHiddenLayers.push(pending ?? { id: l.id, visibility: (map.getLayoutProperty(l.id, 'visibility') as string | undefined) ?? 'visible' });
     map.setLayoutProperty(l.id, 'visibility', 'none');
   }
-  // Только векторную карту скрываем при входе; снимки и треки сохраняем.
   offsetPanel.hide();
-  focusVectorMap = false;
   syncBasemapLayers();
 }
 

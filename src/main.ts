@@ -14860,7 +14860,7 @@ function renderMulti() {
 /** Окружение в режиме здания: соседи рёбрами без заливки, с привязками; включено ли — запоминается. */
 const CONTEXT_KEY = 'osm3d.focus-context';
 function loadContextShown(): boolean {
-  try { return localStorage.getItem(CONTEXT_KEY) === '1'; } catch { return false; }
+  try { return localStorage.getItem(CONTEXT_KEY) !== '0'; } catch { return true; }
 }
 
 function toggleContext() {

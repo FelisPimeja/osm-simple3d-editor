@@ -6,6 +6,7 @@ import { tr, trn } from '../i18n';
 import { idFieldLabel, idOptions, valueLabels } from '../osm/presets';
 import { parseDate } from '../osm/dates';
 import { placeCombo } from './combo-place';
+import { icon } from '../view/icons';
 
 type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour' | 'combo' | 'date' | 'edtf';
 
@@ -307,11 +308,11 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   const revert = session.isChanged(key) && !session.isCreated(key) ? `<button type="button" data-revert>${tr('Вернуть как было')}</button>` : '';
   // Наследование — соглашение рендереров, а не схемы: советуем задать свойства на самой части
   const warn = inheritedAny.length
-    ? `<p class="warn inherit-warn">⚠ ${tr('{fields} — взято у здания (серым в полях). Другие программы могут не наследовать: лучше задать на самой части.', { fields: esc(inheritedAny.join(', ')) })}</p>`
+    ? `<p class="warn inherit-warn">${icon('warning', 14)} ${tr('{fields} — взято у здания (серым в полях). Другие программы могут не наследовать: лучше задать на самой части.', { fields: esc(inheritedAny.join(', ')) })}</p>`
     : '';
   // material на здании — устаревший вариант building:material (вики: Key:material): предлагаем замену
   const legacy = f.tags.material !== undefined
-    ? `<p class="warn">⚠ ${f.tags['building:material']
+    ? `<p class="warn">${icon('warning', 14)} ${f.tags['building:material']
       ? tr('{tag} — для зданий устарел, фасад описывает building:material (уже задан — material можно удалить).', { tag: `material=${esc(f.tags.material)}` })
       : tr('{tag} — для зданий устарел, фасад описывает building:material.', { tag: `material=${esc(f.tags.material)}` })}
         <button type="button" data-fix-material>${f.tags['building:material'] ? tr('Удалить material') : tr('Заменить на building:material')}</button></p>`

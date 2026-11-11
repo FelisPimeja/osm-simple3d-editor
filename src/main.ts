@@ -92,6 +92,7 @@ import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from '.
 import { LOADER_TIMING, CUBE_SHAPES, MorphLoader } from './view/morph-loader';
 import { createUnderlay, deleteUnderlay, fitToBuilding, fitToView, isUnderlayFile, loadUnderlays, saveUnderlay, type Underlay } from './view/underlays';
 import { UnderlayMenu } from './view/underlay-menu';
+import { icon } from './view/icons';
 
 // Статичная разметка index.html — до того, как код ниже начнёт менять тексты
 localizeDom(document.body);
@@ -1257,11 +1258,14 @@ void showCacheInfo();
 const perfEl = document.getElementById('perf')!;
 let frames = 0;
 map.on('render', () => frames++);
-setInterval(() => {
+function updatePerf() {
   const triangles = overpassLayer.lastTriangles;
-  perfEl.textContent = tr('FPS: {fps} · треугольников: {n}', { fps: frames, n: triangles.toLocaleString(locale) });
+  const [fps, tris] = tr('FPS: {fps} · треугольников: {n}', { fps: frames, n: triangles.toLocaleString(locale) }).split(' · ');
+  perfEl.replaceChildren(...[fps, tris].map((t) => Object.assign(document.createElement('span'), { textContent: t })));
   frames = 0;
-}, 1000);
+}
+updatePerf();
+setInterval(updatePerf, 1000);
 
 function refreshOverpass() {
   // В режиме здания без окружения его не видно — тайлы не грузим и не собираем (у горизонта их в кадре десятки)
@@ -5566,11 +5570,11 @@ function outlineWarning(g: BuildingGroup): string {
   const r = partsOutsideOutline(g);
   const above = partsAboveOutline(g);
   const share = r?.out.length ? outlineGrowth(r) : undefined;
-  return (r?.out.length ? `<p class="warn">⚠ ${tr('Частей за контуром здания: {n}. Контур должен охватывать все части.', { n: r.out.length })}
+  return (r?.out.length ? `<p class="warn">${icon('warning', 14)} ${tr('Частей за контуром здания: {n}. Контур должен охватывать все части.', { n: r.out.length })}
     ${share !== undefined && share <= OUTLINE_GROW_SHARE
       ? `<button type="button" data-outline-fix title="${tr('Контур вырастет на {pct}% площади. Наведите — предпросмотр нового контура', { pct: (Math.round(share * 1000) / 10).toString() })}">${tr('Обновить контур')}</button>`
       : share !== undefined ? tr('Контур пришлось бы увеличить на {pct}% площади — проверьте сами части.', { pct: Math.round(share * 100).toString() }) : ''}</p>` : '')
-    + (above ? `<p class="warn">⚠ ${aboveOutlineText(above)}</p>` : '');
+    + (above ? `<p class="warn">${icon('warning', 14)} ${aboveOutlineText(above)}</p>` : '');
 }
 
 /**
@@ -13231,7 +13235,7 @@ map.on('moveend', (e) => { if (!(ORBIT_EVENT in e)) scheduleMapIssues(); });
 function issueMark(list: Issue[] | undefined): string {
   if (!list?.length) return '';
   const error = list.some((i) => i.level === 'error');
-  return `<span class="issue-mark ${error ? 'error' : 'warning'}" title="${esc(list.map((i) => i.text).join('\n'))}">${error ? '✖' : '⚠'}</span>`;
+  return `<span class="issue-mark ${error ? 'error' : 'warning'}" title="${esc(list.map((i) => i.text).join('\n'))}">${icon(error ? 'error' : 'warning', 14)}</span>`;
 }
 
 /** Вид проблемы для сворачивания в режиме здания: проверка и тег из начала текста («roof:colour=gray — …»). */
@@ -13301,7 +13305,7 @@ function renderIssues() {
   shownIssues = focus ? [...bundleIssues(sorted(simpleShown)), ...bundleIssues(sorted(indoorShown))] : [...mapGroups.values()].flatMap(sorted);
   const row = (i: Issue, n: number) => {
       return `<li class="${i.level}${selection.includes(i.key) || (i.other && selection.includes(i.other)) ? ' selected' : ''}${selectedIssueIds.has(issueId(i)) ? ' issue-picked' : ''}" data-i="${n}" data-key="${esc(i.key)}"${i.other ? ` data-other="${esc(i.other)}"` : ''}>
-        <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span>
+        <span class="issue-icon">${icon(i.level === 'error' ? 'error' : 'warning', 14)}</span>
         <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span>
         ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</li>`;
   };
@@ -14575,7 +14579,7 @@ function renderAdding() {
     <h2>${tr('Добавить части в {link}', { link: `<a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>` })}</h2>
     <p class="hint">${tr('Shift+клик по частям — отметить или снять. Обычный клик — отмена.')}</p>
     ${list ? `<ul class="change-list">${list}</ul>` : `<p class="hint">${tr('Пока ничего не отмечено.')}</p>`}
-    ${addMessage ? `<p class="warn">⚠ ${esc(addMessage)}</p>` : ''}
+    ${addMessage ? `<p class="warn">${icon('warning', 14)} ${esc(addMessage)}</p>` : ''}
     <p><button type="button" data-add-confirm ${addPending.length ? '' : 'disabled'}>${tr('Добавить ({n})', { n: addPending.length })}</button>
        <button type="button" data-add-cancel>${tr('Отмена')}</button></p>`;
 }
@@ -15699,7 +15703,7 @@ function renderChanges() {
   updateEditsClip();
   undoBtn.disabled = !session.canUndo();
   redoBtn.disabled = !session.canRedo();
-  editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : tr('· не выполнен вход');
+  editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : tr('· не выполнен вход').replace(/^·\s*/, '');
   // Список правок нужен редко — сама панель не раскрывается; правок не осталось — сворачиваем, в остальное время решает пользователь
   if (show !== editsHadContent && !show) setCollapsed(editsPanel, true);
   editsHadContent = show;
@@ -15721,9 +15725,9 @@ function renderChanges() {
   }).join('');
   const issues = changes.length ? changeIssues(changes.filter((c) => !c.deleted).map((c) => c.key)) : [];
   changeIssuesShown = issues;
-  const issuesHtml = issues.length ? `<p class="warn">⚠ ${tr('Проблемы в изменённых объектах ({n}) — отправить можно, но лучше поправить:', { n: issues.length })}</p>
+  const issuesHtml = issues.length ? `<p class="warn">${icon('warning', 14)} ${tr('Проблемы в изменённых объектах ({n}) — отправить можно, но лучше поправить:', { n: issues.length })}</p>
     <ul class="issue-list">${issues.map((i, n) => `<li class="${i.level}" data-key="${esc(i.key)}" data-change-issue="${n}">
-      <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span><span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span></li>`).join('')}</ul>` : '';
+      <span class="issue-icon">${icon(i.level === 'error' ? 'error' : 'warning', 14)}</span><span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span></li>`).join('')}</ul>` : '';
   changesEl.innerHTML = `
     ${changes.length ? `<ul class="change-list">${list}</ul>` : `<p class="hint">${tr('Изменений нет — можно повторить отменённое.')}</p>`}
     ${issuesHtml}
@@ -16688,8 +16692,8 @@ function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: stri
       [tr('Высота крыши'), `${fmt(h.roofHeight)} m`],
       [tr('Форма крыши'), h.roofShape],
     ])}
-    ${warn.map((w) => `<p class="warn">⚠ ${w}</p>`).join('')}
-    ${issues.map((i) => `<p class="warn ${i.level}">${i.level === 'error' ? '✖' : '⚠'} ${esc(i.text)}</p>`).join('')}
+    ${warn.map((w) => `<p class="warn">${icon('warning', 14)} ${w}</p>`).join('')}
+    ${issues.map((i) => `<p class="warn ${i.level}">${icon(i.level === 'error' ? 'error' : 'warning', 14)} ${esc(i.text)}</p>`).join('')}
     ${form ? `${form}${renderOtherTags(f.key, f.tags, form)}` : tagTable(f.tags)}`;
 }
 

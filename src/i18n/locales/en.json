@@ -471,8 +471,6 @@
   "Форма крыши «{shape}» пока не поддерживается для этой геометрии — показаны стены до верха и плоская крыша.": "Roof shape “{shape}” is not supported for this geometry yet; walls up to the top and a flat roof are shown.",
   "по частям": "from parts",
   "Нет height и building:levels — высота взята по умолчанию.": "No height or building:levels; the default height is used.",
-  "высота: {min} → {wall} → {top} м ({source})": "height: {min} → {wall} → {top} m ({source})",
-  "крыша: {shape}, {height} м": "roof: {shape}, {height} m",
   "Все теги": "All tags",
   "склеенная фича (несколько зданий) — уточняем через API…": "merged feature (several buildings); looking it up via the API…",
   "Скрыть полигон": "Hide polygon",

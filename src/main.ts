@@ -6929,7 +6929,7 @@ function renderEntrance(id: number) {
       : `<input type="text" data-entrance-tag="${k}" value="${esc(t[k] ?? '')}" placeholder="—" spellcheck="false" autocomplete="off">`;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}${input}</label>`;
   }).join('');
-  infoEl.innerHTML = `<h2>${esc(title)}${name} — <a href="${server().web}/node/${id}" target="_blank" rel="noopener">node/${id}</a></h2>`
+  infoEl.innerHTML = objectHeading(`${esc(title)}${name}`, `${server().web}/node/${id}`, `node/${id}`)
     + `<div class="tag-form">${rows}</div>`
     + `<p class="hint">${tr('Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.')} ${tr('Del — удалить вход (узел останется вершиной контура).')}</p>`
     + `<details class="all-tags" open><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b))
@@ -9341,8 +9341,7 @@ function renderIndoorSelection(add = false) {
   const kind = indoorTitle(f);
   const levels = f.levels.map((n) => levelLabel(n)).join(', ');
   const src = indoorCategorySource(f);
-  infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''} — `
-    + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
+  infoEl.innerHTML = objectHeading(`${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''}`, `${server().web}/${type}/${id}`, esc(key))
     + `<p class="hint">${esc(levels)}</p>`
     + indoorForm([f], src && roomValueOf(src.tags) ? { room: ROOM_LABELS[roomValueOf(src.tags)!] ?? roomValueOf(src.tags)! } : {})
     + (src ? `<p class="hint">${tr('Назначение взято с точки внутри: {point}', { point: `<a href="#" data-select-indoor="${esc(src.key)}">${esc(src.tags.name ? `«${src.tags.name}»` : src.key)}</a>` })}</p>` : '')
@@ -10435,7 +10434,7 @@ function selectTree(tree: TreePoint) {
   clearTileHighlight();
   overpassLayer.setTreeSelection(tree.key);
   selectedTreeKey = tree.key;
-  infoEl.innerHTML = `<h2>${tr('Дерево')} — <a href="${server().web}/${tree.key}" target="_blank" rel="noopener">${esc(tree.key)}</a></h2>`
+  infoEl.innerHTML = objectHeading(tr('Дерево'), `${server().web}/${tree.key}`, esc(tree.key))
     + `<p class="hint">${tr('только просмотр')}</p><details class="all-tags" open><summary>${tr('Все теги')}</summary>${tagTable(tree.tags ?? {})}</details>`;
 }
 
@@ -10449,8 +10448,7 @@ function selectRoad(w: RoadWay, add = false) {
   if (!roadSelection.length) { infoEl.innerHTML = ''; return; }
   if (roadSelection.length === 1) {
     const kind = isBridge(w.tags) ? tr('Мост') : isTunnel(w.tags) ? tr('Тоннель') : tr('Подход');
-    infoEl.innerHTML = `<h2>${esc(kind)}${w.tags.name ? ' ' + tr('«{name}»', { name: esc(w.tags.name) }) : w.tags.ref ? ` ${esc(w.tags.ref)}` : ''} — `
-      + `<a href="${server().web}/way/${w.id}" target="_blank" rel="noopener">way/${w.id}</a></h2>`
+    infoEl.innerHTML = objectHeading(`${esc(kind)}${w.tags.name ? ' ' + tr('«{name}»', { name: esc(w.tags.name) }) : w.tags.ref ? ` ${esc(w.tags.ref)}` : ''}`, `${server().web}/way/${w.id}`, `way/${w.id}`)
       + `<p class="hint">${tr('layer {layer} · только просмотр', { layer: roadLevel(w.tags) })}</p>`
       + `<details class="all-tags" open><summary>${tr('Все теги')}</summary>${tagTable(w.tags)}</details>`;
     return;
@@ -15528,7 +15526,7 @@ function describeGroup(g: BuildingGroup): string {
   const form = groupDateForm(g);
   return `
     ${buildingHeader(g.tags.name ?? t?.name, t)}
-    <h2>type=building — <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>${g.version ? ` v${g.version}` : ''}</h2>
+    ${objectHeading('type=building', `${server().web}/${g.key}`, g.key, g.version)}
     <p class="hint">${tr('Членов: {n}. Двойной клик по зданию — режим одного здания.', { n: g.members.length })}
       ${tr('Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.')}</p>
     <p><button type="button" data-add-parts>${tr('Добавить части')}</button></p>
@@ -16655,6 +16653,14 @@ function levelsAboveOutline(f: Feature3D): string | false {
     + ' ' + tr('на контуре принято указывать максимальную этажность — поправьте контур или часть.');
 }
 
+function summaryRows(rows: [string, string][]): string {
+  return `<dl class="dims">${rows.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join('')}</dl>`;
+}
+
+function objectHeading(title: string, href: string, key: string, version?: number | string): string {
+  return `<h2 class="obj-head"><span class="obj-title">${title}</span> <a href="${href}" target="_blank" rel="noopener">${key}</a>${version ? ` <span class="obj-ver">v${version}</span>` : ''}</h2>`;
+}
+
 function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: string): string {
   // Отрисованный объект в режиме здания отстаёт от правок: теги — из сессии, иначе новый тег не виден в списке
   const f = { ...feature, tags: session.get(feature.key)?.tags ?? feature.tags };
@@ -16675,8 +16681,13 @@ function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: stri
   const issues = (focus ? focusIssues.filter((i) => i.key === f.key || i.other === f.key) : [...validateTags(f.key, f.tags, f.hasParts), ...validateGeometry(f)])
     .filter((i) => i.code !== 'above');
   return `
-    <h2>${f.kind === 'part' ? 'building:part' : 'building'} — <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a>${f.version ? ` v${f.version}` : ''}</h2>
-    <pre>${tr('высота: {min} → {wall} → {top} м ({source})', { min: fmt(h.min), wall: fmt(roofApproximated ? h.top : h.wallTop), top: fmt(h.top), source: h.source })}\n${tr('крыша: {shape}, {height} м', { shape: h.roofShape, height: fmt(h.roofHeight) })}</pre>
+    ${objectHeading(f.kind === 'part' ? 'building:part' : 'building', `${server().web}/${f.key}`, f.key, f.version)}
+    ${form ? '' : summaryRows([
+      [tr('Низ'), `${fmt(h.min)} m`],
+      [tr('Высота'), `${fmt(h.top)} m`],
+      [tr('Высота крыши'), `${fmt(h.roofHeight)} m`],
+      [tr('Форма крыши'), h.roofShape],
+    ])}
     ${warn.map((w) => `<p class="warn">⚠ ${w}</p>`).join('')}
     ${issues.map((i) => `<p class="warn ${i.level}">${i.level === 'error' ? '✖' : '⚠'} ${esc(i.text)}</p>`).join('')}
     ${form ? `${form}${renderOtherTags(f.key, f.tags, form)}` : tagTable(f.tags)}`;

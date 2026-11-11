@@ -4,6 +4,7 @@
  * Текст выделяется и копируется. Повтор того же текста не плодит копию, а продлевает показ.
  */
 import { tr } from '../i18n';
+import { icon } from './icons';
 
 const INFO_MS = 4000;
 const ERROR_MS = 10000;
@@ -48,7 +49,7 @@ export class Toasts {
       close.type = 'button';
       close.className = 'toast-close';
       close.title = tr('Закрыть');
-      close.textContent = '×';
+      close.innerHTML = icon('close', 14);
       close.addEventListener('click', () => el.remove());
       el.append(body, close);
       el.addEventListener('mouseenter', () => clearTimeout(Number(el.dataset.timer)));

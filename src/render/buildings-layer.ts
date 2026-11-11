@@ -2050,13 +2050,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     // что это подвал всего здания
     const seg = (ax: number, ay: number, bx: number, by: number, z: number) => lines.push(ax, ay, z, bx, by, z);
     for (const u of this.level?.underground ?? []) for (const o of u.outlines.map((polygons) => ({ polygons, z: u.z }))) {
+      // Абрис единым объёмом (как коробки этажей и пунктир режима здания): вертикали только в заметных углах
       for (const p of o.polygons) for (const r of [p.outer, ...p.inners]) {
-        const pts = r.map(g.toLocal);
+        const pts = cornersOnly(r.map(g.toLocal));
         pts.forEach(([ax, ay], k) => {
           const [bx, by] = pts[(k + 1) % pts.length];
           seg(ax, ay, bx, by, o.z);
           seg(ax, ay, bx, by, 0);
-          lines.push(ax, ay, o.z, ax, ay, 0);
+          if (turnAt(pts, k) >= UNDERGROUND_POST_TURN) lines.push(ax, ay, o.z, ax, ay, 0);
         });
       }
     }

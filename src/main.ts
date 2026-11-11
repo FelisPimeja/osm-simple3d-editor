@@ -12427,13 +12427,29 @@ function levelIssue(l: Level): string | undefined {
  * Подземная часть здания для пунктира в общем виде: глубина — пол нижнего подземного этажа; контур — части
  * с building:levels:underground, а если подвал известен только из indoor-данных — контур здания (или все части).
  */
+/**
+ * Абрис этажа n единым объёмом: внешние кольца объединения контуров indoor=level, а без них — помещений, площадей
+ * и коридоров этажа. Внутренние кольца (колонны, щели между помещениями) не прорезают. Кольца не замкнуты.
+ */
+function levelBody(indoor: IndoorFeature[], n: number): LonLat[][] {
+  const flat = (fs: IndoorFeature[]) => fs.filter((f) => !f.line && !f.point && f.levels.includes(n)).flatMap((f) => f.polygons.map((p) => p.outer));
+  let rings = flat(indoor.filter((f) => f.kind === 'level'));
+  if (!rings.length) rings = flat(indoor.filter((f) => ['room', 'area', 'corridor'].includes(f.kind)));
+  if (!rings.length) return [];
+  const close = (r: LonLat[]) => (r[0][0] === r.at(-1)![0] && r[0][1] === r.at(-1)![1] ? r : [...r, r[0]]) as [number, number][];
+  try {
+    const u = polygonClipping.union(...rings.map((r) => [[close(r)]] as [number, number][][][]) as [any, ...any[]]);
+    return u.map((p) => (p[0] as LonLat[]).slice(0, -1));
+  } catch (err) { console.warn('[levels] абрис этажа не объединён', err); return rings; }
+}
+
 function undergroundOutline(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[] = []): { rings: LonLat[][]; depth: number }[] | undefined {
   const depth = Math.min(0, ...levels.filter((l) => l.n < 0).map((l) => l.floor));
   if (depth > -0.5) return undefined;
   // Контуры подземных этажей (indoor=level) — точнее следа здания: объём каждого — до пола своего этажа
-  const outlined = levels.filter((l) => l.n < 0).map((l) => ({ l, fs: indoor.filter((f) => f.kind === 'level' && !f.line && f.levels.includes(l.n)) }))
-    .filter((x) => x.fs.length);
-  if (outlined.length) return outlined.flatMap(({ l, fs }) => fs.map((f) => ({ rings: f.polygons.flatMap((p) => [p.outer, ...p.inners]), depth: l.floor })));
+  // Нет контура — абрис из помещений этажа (levelBody); нет и их — по частям здания
+  const outlined = levels.filter((l) => l.n < 0).map((l) => ({ rings: levelBody(indoor, l.n), depth: l.floor })).filter((x) => x.rings.length);
+  if (outlined.length) return outlined;
   const feats = groupFeatures(g);
   const ringsOf = (f: Feature3D) => f.polygons.flatMap((p) => [p.outer, ...p.inners]);
   // У каждой части своя глубина: пол её нижнего подвала
@@ -12672,9 +12688,7 @@ function renderLevelsImpl() {
   const boxes = level ? levels.filter((l) => l.n < level.n && !(level.floor > -0.01 && l.floor < -0.01))
     .map((l) => ({ bottom: l.floor, top: Math.min(l.ceil, level.floor),
       // Нет контура indoor=level — коробка по помещениям, площадям и коридорам этажа (крыша их объединяет)
-      polygons: ((own) => own.length ? own : visibleIndoor.filter((f) => ['room', 'area', 'corridor'].includes(f.kind) && !f.line && !f.point && f.levels.includes(l.n)).flatMap((f) => f.polygons.map((p) => ({ ...p, inners: [] }))))(
-        // Только внешние кольца: внутренние (колонны, проёмы) коробку не прорезают
-        visibleIndoor.filter((f) => f.kind === 'level' && !f.line && f.levels.includes(l.n)).flatMap((f) => f.polygons.map((p) => ({ ...p, inners: [] })))),
+      polygons: levelBody(visibleIndoor, l.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon),
       seen: through.includes(l.n), cover: voids.filter((v) => v.through.includes(l.n)).flatMap((v) => v.polygon) }))
     .filter((b) => b.polygons.length && b.top > b.bottom) : [];
   const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${cutEscalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.noHole ? 1 : 0}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}|${boxes.map((b) => `${b.bottom}:${b.polygons.length}:${+b.seen}`).join(',')}` : '';
@@ -12713,7 +12727,7 @@ function renderLevelsImpl() {
     // Подземные этажи для земли надземного плана: их контур (indoor=level) пунктиром и выходы лестниц — отверстиями
     underground: level!.floor > -0.01 ? levels.filter((l) => l.floor < -0.01).map((l) => ({
       z: l.floor,
-      outlines: visibleIndoor.filter((f) => f.kind === 'level' && !f.line && f.levels.includes(l.n)).map((f) => f.polygons),
+      outlines: [levelBody(visibleIndoor, l.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon)],
       pits: visibleIndoor.filter((f) => f.escalatorArea && f.levels.includes(l.n)).map((f) => f.polygons),
     })) : undefined,
   });

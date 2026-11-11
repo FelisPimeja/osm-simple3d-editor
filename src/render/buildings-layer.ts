@@ -7759,7 +7759,10 @@ function shellPiecesImpl(shell: Shell, ax: number, ay: number, bx: number, by: n
     const e = Math.min(2 * SHELL_EDGE_TOL / len, (t1 - t0) / 4);
     const h0 = h(t0 + e), h1 = h(t1 - e);
     const k = (h1 - h0) / (t1 - t0 - 2 * e);
-    const hA = h0 - k * e, hB = h1 + k * e;
+    let hA = h0 - k * e, hB = h1 + k * e;
+    // Плоская кровля нижней части на уровне пола или ниже (терраса, балкон на ней): стена стоит на крыше, а не под
+    // скатом — во всю высоту этажа
+    if (Math.max(hA, hB) <= z0 + 0.05 && Math.abs(hA - hB) < 0.05) hA = hB = top;
     const cuts = [t0, t1];
     for (const lvl of [top, z0]) if ((hA - lvl) * (hB - lvl) < 0) cuts.push(t0 + ((t1 - t0) * (lvl - hA)) / (hB - hA));
     cuts.sort((p, q) => p - q);

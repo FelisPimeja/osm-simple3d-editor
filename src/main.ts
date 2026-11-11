@@ -12427,6 +12427,25 @@ function levelIssue(l: Level): string | undefined {
  * Подземная часть здания для пунктира в общем виде: глубина — пол нижнего подземного этажа; контур — части
  * с building:levels:underground, а если подвал известен только из indoor-данных — контур здания (или все части).
  */
+/** Объект плана (кольца или линия) задевает пустоты cover: вершина, точка на отрезке или пересечение площадей. */
+function touchesVoid(polygons: Polygon[], line: boolean, cover: LonLat[][][]): boolean {
+  if (!cover.length) return false;
+  const inside = (q: LonLat) => cover.some(([outer, ...holes]) => pointInRing(q, outer) && !holes.some((h) => pointInRing(q, h)));
+  for (const pg of polygons) {
+    const r = pg.outer;
+    // Точки вдоль отрезков (~0,5 м): стена может пересекать проём без вершин в нём
+    for (let i = 0; i < r.length; i++) {
+      const a = r[i], b = r[(i + 1) % r.length];
+      if (line && i === r.length - 1) { if (inside(a)) return true; break; }
+      const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], (b[1] - a[1]) * 1.5) / 5e-6));
+      for (let k = 0; k < n; k++) if (inside([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n])) return true;
+    }
+    // Площадь целиком вокруг проёма
+    if (!line && cover.some(([outer]) => outer.some((q) => pointInRing(q, r)))) return true;
+  }
+  return false;
+}
+
 /**
  * Абрис этажа n единым объёмом: внешние кольца объединения контуров indoor=level, а без них — помещений, площадей
  * и коридоров этажа. Внутренние кольца (колонны, щели между помещениями) не прорезают. Кольца не замкнуты.
@@ -12720,7 +12739,11 @@ function renderLevelsImpl() {
         // След — по контурам частей и здания (оболочка к этому моменту бывает ещё не готова), с допуском 5 см
         const feet = pitOnly ? groupFeatures(focus!).filter((f) => f.kind === 'part' && computeHeights(f.tags).min < 0.05).flatMap((f) => f.polygons ?? []) : [];
         const outside = (q: LonLat) => !feet.some((pg) => (pointInRing(q, pg.outer) && !pg.inners.some((h) => pointInRing(q, h))) || nearRing(q, pg.outer, 0.05));
-        const items = pitOnly ? p.items.filter((it) => it.polygons.some((pg) => pg.outer.some(outside))) : p.items;
+        // Этаж сквозь проём: только то, что его задевает. Остальное закрыто коробкой этажа, а за её контуром
+        // (стена снаружи контура indoor=level) торчало бы сквозь этажи над ним
+        const cover = voids.filter((v) => v.through.includes(l.n)).flatMap((v) => v.polygon);
+        const items = pitOnly ? p.items.filter((it) => it.polygons.some((pg) => pg.outer.some(outside)))
+          : p.items.filter((it) => touchesVoid(it.polygons, !!it.line, cover));
         return { ...p, items, ...(pitOnly ? { cut: p.cut - 0.02 } : {}), voids: (allVoids.get(l.n) ?? []).flatMap((v) => v.polygon) };
       }),
     boxes,

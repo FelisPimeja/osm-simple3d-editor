@@ -7264,6 +7264,25 @@ function removeShapeVertex(t: ShapeTarget, merged: boolean) {
     + (neighbours ? tr(', у соседей с общим узлом — тоже: {n}', { n: neighbours }) : '') + tr('. Отменить — Ctrl+Z.'));
 }
 
+/**
+ * Исправление «дрожания» контура: узлы убираются из всех путей, где они есть (части, контур, помещения на общей
+ * стене), — как Del на вершине со склейкой; иначе соседние контуры разошлись бы. Узлы с тегами (входы) остаются.
+ */
+function removeJitterNodes(all: Set<number>) {
+  const ids = new Set([...all].filter((id) => !Object.keys(session.get(`node/${id}`)?.tags ?? sessionNodeTags.get(id) ?? dataEntrances.get(id) ?? entranceTags(id) ?? {}).length));
+  if (!ids.size) return setStatus(tr('Лишние вершины — узлы с тегами: их убирают вручную.'), true);
+  const removal = wayEndsAt(ids) ? removalRewrites(ids) : undefined;
+  if (typeof removal === 'string') return setStatus(removal, true);
+  const edits = removal ? topologyEdits(removal, [], new Map()) : nodeRemoveEdits(ids);
+  if (typeof edits === 'string') return setStatus(edits, true);
+  dropCollapsedHoles(edits);
+  session.editMany(edits);
+  indoorEditRev++;
+  renderLevels();
+  renderIssues();
+  setStatus(tr('Убрано лишних вершин: {n}; затронуто объектов: {m}. Отменить — Ctrl+Z.', { n: ids.size, m: edits.filter((e) => e.polygons).length }));
+}
+
 /** Объекты, перестроенные превью «Формы» (сама часть и соседи), — вернуть их при сбросе превью. */
 let shapePreviewed: string[] = [];
 
@@ -12709,7 +12728,8 @@ function renderLevelsImpl() {
       // Нет контура indoor=level — коробка по помещениям, площадям и коридорам этажа (крыша их объединяет)
       polygons: levelBody(visibleIndoor, l.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon),
       seen: through.includes(l.n), cover: voids.filter((v) => v.through.includes(l.n)).flatMap((v) => v.polygon) }))
-    .filter((b) => b.polygons.length && b.top > b.bottom) : [];
+    // Без разметки этажа polygons пусты — коробку строит рендер по сечению оболочки
+    .filter((b) => b.top > b.bottom) : [];
   const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${cutEscalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.noHole ? 1 : 0}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}|${boxes.map((b) => `${b.bottom}:${b.polygons.length}:${+b.seen}`).join(',')}` : '';
   syncContextIndoor(level);
   if (sig === levelSignature) return;
@@ -13382,6 +13402,7 @@ map.on('render', () => { if (issuePoints.length) placeIssuePoints(); });
 /** «Подсветить все»: рёбра объёмов с проблемами (ошибка важнее предупреждения). */
 let highlightedIssueLevels = new Map<string, 'error' | 'warning'>();
 let highlightedIssueAreas = new Set<Issue>();
+let highlightedIssuePosts = '[]';
 function highlightIssues() {
   return timed('ошибки: подсветка', () => highlightIssuesImpl());
 }
@@ -13390,18 +13411,23 @@ function highlightIssuesImpl() {
   const levels = new Map<string, 'error' | 'warning'>();
   const selected = pickedIssues();
   const active = [...(issuesAll.checked ? focus ? focusIssues : mapIssues : []), ...selected, ...(hoveredIssue ? [hoveredIssue] : [])];
+  // Дрожание контура — не весь объём, а вертикали в его вершинах (posts)
+  const posts = active.filter((i) => i.code === 'jitter' && i.points?.length).map((i) => ({ key: i.key, level: i.level, points: i.points! }));
   for (const issue of active) {
+    if (issue.code === 'jitter') continue;
     for (const key of [issue.key, issue.other]) if (key && levels.get(key) !== 'error') levels.set(key, issue.level);
   }
   const indoorKeys = focus ? [...levels.keys()].filter((key) => !!buildingIndoorFor(key)) : [];
   overpassLayer.setIndoorIssueHighlight(new Map(indoorKeys.map((key) => [key, levels.get(key)!])));
   indoorPois.setIssueHighlight(indoorKeys);
-  if (levels.size === highlightedIssueLevels.size && [...levels].every(([key, level]) => highlightedIssueLevels.get(key) === level)
+  const postSig = JSON.stringify(posts);
+  if (levels.size === highlightedIssueLevels.size && [...levels].every(([key, level]) => highlightedIssueLevels.get(key) === level) && postSig === highlightedIssuePosts
     && active.filter((i) => i.area).every((i) => highlightedIssueAreas.has(i)) && highlightedIssueAreas.size === active.filter((i) => i.area).length) { setIssuePoints(active); return; }
+  highlightedIssuePosts = postSig;
   highlightedIssueAreas = new Set(active.filter((i) => i.area));
   highlightedIssueLevels = levels;
   setIssuePoints(active);
-  overpassLayer.setIssueHighlight(levels, active.filter((i) => i.area).map((i) => ({ key: i.key, level: i.level, polygons: i.area! })));
+  overpassLayer.setIssueHighlight(levels, active.filter((i) => i.area).map((i) => ({ key: i.key, level: i.level, polygons: i.area! })), posts);
 }
 
 function syncSelectedIssues() {
@@ -13545,6 +13571,11 @@ function applyFixes(list: Issue[]) {
       }
     }catch(err){setStatus((err as Error).message,true);}
     list=list.filter(i=>!i.fix?.mergeIntoEntrance);
+  }
+  const jitter = list.filter((i) => i.fix?.dropNodes);
+  if (jitter.length) {
+    removeJitterNodes(new Set(jitter.flatMap((i) => i.fix!.dropNodes!)));
+    list = list.filter((i) => !i.fix?.dropNodes);
   }
   const splits = list.filter((i) => i.fix?.splitLevels);
   if (splits.length) void splitRoomsByLevel(splits);

@@ -1498,5 +1498,10 @@
   "Добавлено в контур этажа {key}.": "Added to the level outline {key}.",
   "Не удалось построить новый контур этажа.": "Could not build the new level outline.",
   "Этаж остался бы без площади.": "The level would be left without any area.",
-  "Новый контур этажа касается сам себя в точке (узел {id}) — подправьте фигуры, чтобы они перекрывались или не соприкасались.": "The new level outline touches itself at a point (node {id}) — adjust the shapes so they overlap or stay apart."
+  "Новый контур этажа касается сам себя в точке (узел {id}) — подправьте фигуры, чтобы они перекрывались или не соприкасались.": "The new level outline touches itself at a point (node {id}) — adjust the shapes so they overlap or stay apart.",
+  "На контуре {n} лишняя вершина: отходит от прямой стены меньше чем на {tol} см (дрожание оцифровки).|На контуре {n} лишние вершины: отходят от прямой стены меньше чем на {tol} см (дрожание оцифровки).|На контуре {n} лишних вершин: отходят от прямой стены меньше чем на {tol} см (дрожание оцифровки).": "{n} redundant vertex on the outline: it deviates from a straight wall by less than {tol} cm (digitising jitter).|{n} redundant vertices on the outline: they deviate from a straight wall by less than {tol} cm (digitising jitter).",
+  "Убрать лишние вершины": "Remove redundant vertices",
+  "Лишние вершины — узлы с тегами: их убирают вручную.": "The redundant vertices are tagged nodes: remove them by hand.",
+  "Убрано лишних вершин: {n}; затронуто объектов: {m}. Отменить — Ctrl+Z.": "Redundant vertices removed: {n}; objects changed: {m}. Undo — Ctrl+Z.",
+  "убрать repeat_on": "remove repeat_on"
 }

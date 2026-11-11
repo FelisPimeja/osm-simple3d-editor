@@ -6,6 +6,7 @@ import { ROOF_SHAPES } from './tag-form';
 import { tr, trn } from '../i18n';
 import { floatingParts } from '../osm/floating';
 import { escalatorLanding } from '../render/escalator-openings';
+import { jitterVertices, JITTER_TOL } from '../render/jitter';
 
 /**
  * Проверка здания по схеме Simple 3D: теги объёма (числа, противоречия высот и этажей), геометрия
@@ -54,6 +55,8 @@ export interface Fix {
   growOutline?: boolean;
   /** Подогнать контур под объединение частей на земле, входы контура — на новые стены. */
   fitOutline?: boolean;
+  /** Убрать узлы (дрожание оцифровки) из всех путей, где они есть, — как Del на вершине со склейкой. */
+  dropNodes?: number[];
 }
 
 /** Высота этажа, ниже и выше которой этажность и высота противоречат друг другу, м. */
@@ -343,8 +346,18 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
     tr('repeat_on=* задаёт повторения; исходный этаж укажите в level=*.'));
   if (t.repeat_on !== undefined && t.level !== undefined) {
     const base = new Set(parseLevels(t.level));
+    // Исправление: исходные этажи — вон из повторений; не осталось ничего — repeat_on не нужен
+    // Точка (дверь лифта и т. п.) с несколькими этажами в level: сразу level — нижний, repeat_on — остальные,
+    // иначе после правки сработала бы проверка «level=… у точки»
+    const point = key.startsWith('node/') && (t.indoor === 'door' || t.door !== undefined || t.entrance !== undefined || t.emergency !== undefined || t.window !== undefined);
+    const all = [...new Set([...base, ...parseLevels(t.repeat_on)])].sort((a, b) => a - b);
+    const [low, ...others] = point && base.size > 1 ? all : [undefined, ...all.filter((n) => !base.has(n))];
+    const fix: Fix = low !== undefined
+      ? { label: `level=${low}, repeat_on=${others.join(';')}`, tags: { level: String(low), repeat_on: others.length ? others.join(';') : undefined } }
+      : others.length ? { label: `repeat_on=${others.join(';')}`, tags: { repeat_on: others.join(';') } }
+      : { label: tr('убрать repeat_on'), tags: { repeat_on: undefined } };
     if (parseLevels(t.repeat_on).some((n) => base.has(n))) add('warning', 'indoor-level',
-      tr('repeat_on=* повторяет этаж из level=* — исходный этаж в список повторений не включают.'));
+      tr('repeat_on=* повторяет этаж из level=* — исходный этаж в список повторений не включают.'), fix);
   }
   out.push(...validateDeprecated(key, t));
   return out;
@@ -584,6 +597,16 @@ export function validateGeometry(f: Feature3D): Issue[] {
         const text = i ? tr('Внутреннее кольцо вырождено (разных точек: {points}, площадь {area} м²).', params)
           : tr('Контур вырожден (разных точек: {points}, площадь {area} м²).', params);
         out.push({ key: f.key, level: 'error', code: 'degenerate', text });
+      } else {
+        // Гармошка из вершин на прямой стене: на фасаде — вертикальные рёбра (рисуем объём без неё, dropJitter)
+        const closed = r.length > 1 && r[0][0] === r[r.length - 1][0] && r[0][1] === r[r.length - 1][1];
+        const pts = closed ? r.slice(0, -1) : r;
+        const gone = jitterVertices(pts as [number, number][]);
+        const ids = i ? poly.innerIds?.[i - 1] : poly.outerIds;
+        const nodes = ids ? [...new Set(gone.map((k) => ids[k]).filter((id): id is number => id !== undefined))] : [];
+        if (gone.length) out.push({ key: f.key, level: 'warning', code: 'jitter', points: gone.map((k) => p.back(pts[k])),
+          ...(nodes.length === gone.length ? { fix: { label: tr('Убрать лишние вершины'), tags: {}, dropNodes: nodes } } : {}),
+          text: trn(gone.length, 'На контуре {n} лишняя вершина: отходит от прямой стены меньше чем на {tol} см (дрожание оцифровки).|На контуре {n} лишние вершины: отходят от прямой стены меньше чем на {tol} см (дрожание оцифровки).|На контуре {n} лишних вершин: отходят от прямой стены меньше чем на {tol} см (дрожание оцифровки).', { tol: Math.round(JITTER_TOL * 100) }) });
       }
     }
   }

@@ -1,3 +1,4 @@
+import { ToolOptions } from './tool-options';
 import { fromInputUnit, showLength, unitLabel } from '../osm/units';
 import { localAxes, type AxisRing } from './local-axes';
 import * as THREE from 'three';
@@ -98,6 +99,8 @@ export class DrawTool {
   /** Форма числа углов (у правильного многоугольника). */
   private readonly opts: HTMLDivElement;
   /** Переключатель трассировки (у полигона и стены). */
+  /** Одна панель опций инструмента: число углов, трассировка, внутреннее кольцо — что доступно сейчас. */
+  private readonly options: ToolOptions;
   private readonly traceOpt: HTMLLabelElement;
   /** Переключатель «новый объект / внутреннее кольцо выделенного» (замкнутые фигуры, если ringAvailable). */
   private readonly ringOpt: HTMLLabelElement;
@@ -128,9 +131,8 @@ export class DrawTool {
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
     container.appendChild(this.vcb);
-    this.opts = document.createElement('div');
-    this.opts.className = 'draw-opts';
-    this.opts.hidden = true;
+    this.options = new ToolOptions(container);
+    this.opts = this.options.add(document.createElement('div'));
     this.opts.innerHTML = `<label>${tr('Углов')} <input type="number" min="${NGON_MIN}" max="${NGON_MAX}" step="1" /></label>`;
     const input = this.opts.querySelector('input')!;
     input.addEventListener('input', () => {
@@ -140,24 +142,19 @@ export class DrawTool {
     input.addEventListener('change', () => { input.value = String(this.sides); });
     // Enter / Esc в поле — назад к рисованию
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); input.blur(); } });
-    container.appendChild(this.opts);
-    this.traceOpt = document.createElement('label');
-    this.traceOpt.className = 'draw-opts draw-trace';
-    this.traceOpt.hidden = true;
+    this.traceOpt = this.options.add(document.createElement('label'));
+    this.traceOpt.classList.add('tool-check');
     this.traceOpt.title = tr('Путь от последней точки до курсора — по сторонам контуров, помещений и стен');
     this.traceOpt.innerHTML = `<input type="checkbox" /> ${tr('Трассировка')} (T)`;
     const box = this.traceOpt.querySelector('input')!;
     box.checked = this.tracing;
     box.addEventListener('change', () => { this.setTracing(box.checked); box.blur(); });
-    container.appendChild(this.traceOpt);
-    this.ringOpt = document.createElement('label');
-    this.ringOpt.className = 'draw-opts draw-trace draw-ring';
-    this.ringOpt.hidden = true;
+    this.ringOpt = this.options.add(document.createElement('label'));
+    this.ringOpt.classList.add('tool-check');
     this.ringOpt.title = tr('Что строит контур: новый объект или внутреннее кольцо выделенного полигона (I)');
     this.ringOpt.innerHTML = `<input type="checkbox" /> ${tr('Внутреннее кольцо')} (I)`;
     const ringBox = this.ringOpt.querySelector('input')!;
     ringBox.addEventListener('change', () => { this.setRing(ringBox.checked); ringBox.blur(); });
-    container.appendChild(this.ringOpt);
     this.dims = document.createElement('div');
     this.dims.className = 'draw-dims';
     container.appendChild(this.dims);
@@ -179,6 +176,7 @@ export class DrawTool {
     this.ring = false;
     this.ringOpt.querySelector('input')!.checked = false;
     this.ringOpt.hidden = !RING_SHAPES.includes(shape) || !this.ringAvailable?.();
+    this.options.sync();
     this.hint();
   }
 
@@ -223,6 +221,7 @@ export class DrawTool {
     this.opts.hidden = true;
     this.traceOpt.hidden = true;
     this.ringOpt.hidden = true;
+    this.options.sync();
     this.ring = false;
     this.state = 'off';
     this.onState('');

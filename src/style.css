@@ -208,13 +208,8 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 #op-indicator .retry[hidden] { display: none; }
 @keyframes op-pulse { 50% { opacity: .25; } }
 .toggle { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; cursor: pointer; user-select: none; }
-.gfx { margin-bottom: 8px; border: 1px solid #e5e7eb; border-radius: 6px; padding: 4px 8px; }
-.gfx summary { cursor: pointer; padding: 2px 0; }
-.gfx .toggle { margin: 6px 0; }
-.gfx .hint, .panel-tech .hint, #perf { font-size: 12px; margin: 0; }
+.panel-tech .hint, #perf { font-size: 12px; margin: 0; }
 #perf { display: flex; gap: 12px; font-variant-numeric: tabular-nums; }
-.cache-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 !important; }
-.cache-line button { padding: 2px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
 .orbit-pivot {
   position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; pointer-events: none;
   border: 2px solid #fff; border-radius: 50%; background: #2563eb; box-shadow: 0 0 0 1px rgba(0,0,0,.4);
@@ -646,19 +641,6 @@ body.mobile #issues-panel { display: none !important; }
 .issue-show-all { padding: 0; border: 0; background: none; font: inherit; color: #2563eb; cursor: pointer; white-space: nowrap; }
 
 /* Настройки пользователя: кнопка в панели и окно */
-.settings-open { display: flex; align-items: center; gap: 6px; width: 100%; margin: 0 0 8px; padding: 5px 8px;
-  border: 1px solid #d1d5db; border-radius: 6px; background: #fff; font: inherit; font-size: 13px; color: #333; cursor: pointer; }
-.settings-open:hover { background: #f3f4f6; }
-.settings-open svg { flex: none; color: #555; }
-.settings-dialog { width: min(360px, calc(100vw - 32px)); padding: 0; border: 0; border-radius: 8px;
-  box-shadow: 0 4px 24px rgba(0,0,0,.3); font-size: 14px; }
-.settings-dialog::backdrop { background: rgba(0,0,0,.2); }
-.settings-dialog .panel-head { cursor: default; }
-.dialog-close { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; background: transparent;
-  color: #555; cursor: pointer; }
-.dialog-close:hover { background: #f3f4f6; }
-.dialog-body { padding: 4px 12px 12px; }
-.dialog-body .server-line { display: grid; grid-template-columns: 1fr 1fr; font-size: 13px; }
 .settings-translation { margin: 4px 0 12px; font-size: 12px; }
 .settings-sync { font-size: 12px; margin: 10px 0 0; }
 .settings-sync.warn { color: #b45309; }
@@ -829,10 +811,31 @@ body.mobile #issues-panel { display: none !important; }
 #help kbd { padding: .24rem; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; vertical-align: middle; background-color: #f6f8fa;
   border: solid 1px #d1d9e0b3; box-shadow: inset 0 -1px 0 #d1d9e0b3; border-radius: 6px; line-height: 10px; display: inline-block; color: #1f2328; }
 
-.gfx summary, .all-tags summary { display: flex; align-items: center; gap: 2px; list-style: none; }
-.gfx summary::-webkit-details-marker, .all-tags summary::-webkit-details-marker { display: none; }
-.gfx summary::before, .all-tags summary::before { content: ''; flex: none; width: 16px; height: 16px; background: currentColor; transition: transform .12s;
+.all-tags summary { display: flex; align-items: center; gap: 2px; list-style: none; }
+.all-tags summary::-webkit-details-marker { display: none; }
+.all-tags summary::before { content: ''; flex: none; width: 16px; height: 16px; background: currentColor; transition: transform .12s;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7.500 5l5 5-5 5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7.500 5l5 5-5 5'/%3E%3C/svg%3E") center / contain no-repeat; }
-.gfx[open] > summary::before, .all-tags[open] > summary::before { transform: rotate(90deg); }
+.all-tags[open] > summary::before { transform: rotate(90deg); }
 .warn svg { vertical-align: -2px; }
 .issue-icon svg, .issue-mark svg { display: block; margin-top: 1px; }
+
+/* Панель настроек слева: вкладки «Вид» и «Дополнительно», разделы без рамок */
+.panel-note { margin: 0 0 20px; font-size: 12px; }
+.panel-tabs { display: flex; gap: 4px; margin: 0 0 8px; }
+.panel-tabs button { flex: 1 1 auto; min-width: 0; padding: 4px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; color: inherit; cursor: pointer; }
+.panel-tabs button:hover { background: #f3f4f6; }
+.panel-tabs button[aria-selected="true"] { background: #dbeafe; border-color: #93c5fd; }
+.panel-tab[hidden] { display: none; }
+.panel-sec { margin: 20px 0 8px; font-size: 14px; font-weight: 600; }
+.panel-tab > .panel-sec:first-child { margin-top: 4px; }
+/* Подпись тесно к своему полю, а между группами — заметно больше (Refactoring UI, «Avoid ambiguous spacing») */
+#pane-map > .server-line:first-child { margin-bottom: 4px; }
+#pane-map .settings-translation { margin: -2px 0 20px; }
+.panel-stat { margin: 2px 0 8px; font-size: 13px; }
+#cache-info b { font-weight: 700; }
+.panel-sub { color: #666; font-size: 12px; }
+#gfx-sync[hidden] { display: none; }
+
+#pane-map .server-line { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; align-items: center; margin: 0 0 8px; font-size: 13px; }
+#pane-map #gfx-sync { margin-top: 4px; }
+#pane-map .settings-sync { margin-top: 16px; }

@@ -761,6 +761,12 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
         const ph = parseLength(f.tags.height);
         if (ph !== undefined && ph > oh + 0.5) out.push({ key: f.key, level: 'warning', code: 'above', text: tr('height ({part} м) больше, чем у контура ({outline} м): на контуре указывают максимальную высоту здания.', { part: fmt(ph), outline: fmt(oh) }) });
       }
+      // На самом контуре — одно предупреждение с исправлением: height = самая высокая часть
+      const top = parts.map((f) => ({ f, h: parseLength(f.tags.height) })).filter((x): x is { f: Feature3D; h: number } => x.h !== undefined)
+        .reduce<{ f: Feature3D; h: number } | undefined>((a, x) => (!a || x.h > a.h ? x : a), undefined);
+      if (top && top.h > oh + 0.5) out.push({ key: outline.key, level: 'warning', code: 'above',
+        text: tr('height контура ({outline} м) ниже самой высокой части ({part} м, {key}): на контуре указывают максимальную высоту здания.', { outline: fmt(oh), part: fmt(top.h), key: top.f.key }),
+        fix: { label: `height=${top.f.tags.height.trim()}`, tags: { height: top.f.tags.height.trim() } } });
     }
     // Этажность контура — максимум по частям
     const ol = Number(outline.tags['building:levels']);
@@ -769,6 +775,10 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
         const l = Number(f.tags['building:levels']);
         if (Number.isFinite(l) && l > ol) out.push({ key: f.key, level: 'warning', code: 'above', text: tr('building:levels ({part}) больше, чем у контура ({outline}): на контуре указывают максимальную этажность здания.', { part: l, outline: ol }) });
       }
+      const maxLevels = Math.max(...parts.map((f) => Number(f.tags['building:levels'])).filter((l) => Number.isInteger(l)));
+      if (maxLevels > ol) out.push({ key: outline.key, level: 'warning', code: 'above',
+        text: tr('building:levels контура ({outline}) меньше, чем у самой высокой части ({part}): на контуре указывают максимальную этажность здания.', { outline: ol, part: maxLevels }),
+        fix: { label: `building:levels=${maxLevels}`, tags: { 'building:levels': String(maxLevels) } } });
     }
   }
 

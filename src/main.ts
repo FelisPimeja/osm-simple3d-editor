@@ -5481,7 +5481,8 @@ function unitedOutline(outline: Feature3D, parts: Feature3D[], fit = false): { o
 /**
  * «Обновить контур»: контур отношения — объединение его и всех частей (новые вершины — узлы частей там, где
  * совпадают, иначе новые узлы). Если у контура был свой объём, он переходит в новую часть по прежней форме,
- * а на контуре остаются только теги здания (название, адрес…). Одним шагом истории.
+ * а на контуре остаются только теги здания (название, адрес…). fit — подгонка под след частей: меняется только
+ * геометрия контура, теги (и объём) остаются на нём. Одним шагом истории.
  */
 function fixOutline(fit = false) {
   if (!focus || isSolo(focus)) return;
@@ -5531,11 +5532,11 @@ function fixOutline(fit = false) {
   if (!g) return setStatus(tr('Отношение здания не найдено.'), true);
   const outlineTags = { ...r.outline.tags };
   if (r.outline.type === 'relation') {
-    const res = relationOutlineEdits(r.outline, outlineTags, { ids, coords }, holes, g);
+    const res = relationOutlineEdits(r.outline, outlineTags, { ids, coords }, holes, g, fit);
     if (typeof res === 'string') return setStatus(res, true);
     edits.push(...res);
-  } else if (outlineHasVolume(outlineTags)) {
-    // Объём контура — новой частью прежней формы (на тех же узлах)
+  } else if (!fit && outlineHasVolume(outlineTags)) {
+    // Объём контура — новой частью прежней формы (на тех же узлах); при подгонке под след — не трогаем
     const id = nextNewId--;
     const tags: Record<string, string> = { 'building:part': 'yes' };
     for (const [k, v] of Object.entries(outlineTags)) if (PART_TAGS.test(k)) { tags[k] = v; delete outlineTags[k]; }
@@ -5578,7 +5579,7 @@ const outlineHasVolume = (t: Record<string, string>) => !isBareOutlineTags(t) &&
  * контура (не голые теги здания) — новой частью-мультиполигоном на прежних путях.
  */
 function relationOutlineEdits(outline: Feature3D, outlineTags: Record<string, string>, outer: { ids: number[]; coords: LonLat[] },
-  holes: { ids: number[]; coords: LonLat[] }[], g: EditGroup): ObjectEdit[] | string {
+  holes: { ids: number[]; coords: LonLat[] }[], g: EditGroup, keepVolume = false): ObjectEdit[] | string {
   const members = session.get(outline.key)?.relMembers ?? (outline as Tagged).relMembers;
   const lineNodes = new Map((outline.ways ?? []).map((w) => [w.id, { nodes: w.nodes, tags: w.tags ?? {} }] as const));
   for (const line of session.lineEntities()) lineNodes.set(Number(line.key.split('/')[1]), { nodes: line.line!.ids, tags: line.tags });
@@ -5609,7 +5610,7 @@ function relationOutlineEdits(outline: Feature3D, outlineTags: Record<string, st
   const kept = new Set(next.map((m) => m.ref));
   const gone = wayMembers.filter((m) => !kept.has(m.ref));
   const others = members.filter((m) => m.type !== 'way');
-  if (outlineHasVolume(outlineTags)) {
+  if (!keepVolume && outlineHasVolume(outlineTags)) {
     // Объём контура — новой частью прежней формы на прежних путях
     const relId = nextNewId--, key = `relation/${relId}`;
     const tags: Record<string, string> = { type: 'multipolygon', 'building:part': 'yes' };

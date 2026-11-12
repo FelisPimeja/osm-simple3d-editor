@@ -1522,5 +1522,10 @@
   "Галки раздела «Оформление» сохраняются в профиле вместе с остальными настройками и применяются на других устройствах": "Display settings are saved to your profile with the other settings and apply on your other devices",
   "Ещё": "Advanced",
   "Основное": "General",
-  "Личные настройки": "Personal settings"
+  "Личные настройки": "Personal settings",
+  "Закреплена: кликом на карте не выделяется": "Locked: can't be selected by clicking on the map",
+  "Имя": "Name",
+  "Закрепить": "Lock",
+  "Закреплённая подложка не выделяется кликом на карте — её не сдвинуть случайно": "A locked underlay can't be selected by clicking on the map, so it can't be moved by accident",
+  "Подложка закреплена — снимите галку «Закрепить», чтобы её двигать": "The underlay is locked. Untick “Lock” to move it"
 }

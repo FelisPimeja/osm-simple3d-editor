@@ -91,7 +91,7 @@ import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
 import { fromInputUnit, showLength, unitLabel, hasOwnUnit, lengthUnitOf, setUnitSystem, unitSystem, withUnit, writeLength, type LengthUnit, type UnitSystem } from './osm/units';
 import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from './settings';
 import { LOADER_TIMING, CUBE_SHAPES, MorphLoader } from './view/morph-loader';
-import { createUnderlay, deleteUnderlay, fitToBuilding, fitToView, isUnderlayFile, loadUnderlays, saveUnderlay, type Underlay } from './view/underlays';
+import { createUnderlay, deleteUnderlay, fitToBuilding, fitToView, isUnderlayFile, loadUnderlays, saveUnderlay, underlayOrder, type Underlay } from './view/underlays';
 import { UnderlayMenu } from './view/underlay-menu';
 import { icon } from './view/icons';
 
@@ -756,8 +756,8 @@ let sharedUnderlays: Underlay[] = [];
 let focusUnderlays: Underlay[] | undefined;
 /** С прошлой отправки были видны свои подложки — в теги changeset. */
 let usedUnderlay = false;
-/** Подложки, которые сейчас в работе: общие и (в режиме здания) этого здания. */
-const currentUnderlays = () => [...sharedUnderlays, ...(focus ? focusUnderlays ?? [] : [])];
+/** Подложки, которые сейчас в работе: общие и (в режиме здания) этого здания — в порядке отрисовки (последняя — поверх). */
+const currentUnderlays = () => [...sharedUnderlays, ...(focus ? focusUnderlays ?? [] : [])].sort((a, b) => underlayOrder(a) - underlayOrder(b));
 /** Выделенные подложки (id) — отдельно от объектов OSM; выделение может быть смешанным. */
 let underlaySelection: string[] = [];
 /** Ключ подложки в списке Alt+клика (рядом с ключами объектов OSM). */
@@ -769,13 +769,32 @@ const underlayMenu = new UnderlayMenu({
   change: (changed) => {
     // Из меню — видимость, прозрачность, этаж и где видна: положение могли изменить инструменты
     const cur = currentUnderlays().find((x) => x.id === changed.id);
-    const u = cur ? { ...cur, visible: changed.visible, opacity: changed.opacity, level: changed.level, building: changed.building } : changed;
-    replaceUnderlay(u, u.level !== cur?.level || u.building !== cur?.building);
+    const u = cur ? { ...cur, visible: changed.visible, opacity: changed.opacity, level: changed.level, building: changed.building,
+      name: changed.name, order: changed.order, locked: changed.locked } : changed;
+    // Закрепили — с выделения снять: инструменты её больше не двигают
+    if (u.locked && underlaySelection.includes(u.id)) { underlaySelection = underlaySelection.filter((id) => id !== u.id); paintSelection(); }
+    replaceUnderlay(u, u.level !== cur?.level || u.building !== cur?.building || u.name !== cur?.name || u.order !== cur?.order || u.locked !== cur?.locked);
     if (underlaySelection.includes(u.id)) renderSelected();
     scheduleUnderlaySave(u);
   },
   // «Выбрать»: выделить подложку — инструменты и свойства
   select: (u) => { basemapCtrl?.closeMenu(); selectUnderlay(u.id); },
+  // Порядок: те же ключи порядка, что были у этих подложек, — по новым местам (порядок прочих не задевает)
+  reorder: (ids) => {
+    const list = currentUnderlays();
+    const keys = list.map(underlayOrder).sort((a, b) => a - b);
+    for (let i = 1; i < keys.length; i++) if (keys[i] <= keys[i - 1]) keys[i] = keys[i - 1] + 1;
+    const byId = new Map(list.map((u) => [u.id, u]));
+    ids.forEach((id, i) => {
+      const u = byId.get(id);
+      if (!u || underlayOrder(u) === keys[i]) return;
+      const v = { ...u, order: keys[i] };
+      sharedUnderlays = sharedUnderlays.map((x) => (x.id === id ? v : x));
+      focusUnderlays = focusUnderlays?.map((x) => (x.id === id ? v : x));
+      scheduleUnderlaySave(v);
+    });
+    showUnderlays();
+  },
   remove: (u) => {
     sharedUnderlays = sharedUnderlays.filter((x) => x.id !== u.id);
     focusUnderlays = focusUnderlays?.filter((x) => x.id !== u.id);
@@ -790,8 +809,8 @@ basemapCtrl?.addSection(underlayMenu.el);
 function replaceUnderlay(u: Underlay, menu = false) {
   sharedUnderlays = sharedUnderlays.filter((x) => x.id !== u.id);
   focusUnderlays = focusUnderlays?.filter((x) => x.id !== u.id);
-  // Порядок — по времени добавления
-  const byAdded = (list: Underlay[]) => [...list, u].sort((a, b) => a.added - b.added);
+  // Порядок — порядок отрисовки (по умолчанию — по времени добавления)
+  const byAdded = (list: Underlay[]) => [...list, u].sort((a, b) => underlayOrder(a) - underlayOrder(b));
   if (u.building === undefined) sharedUnderlays = byAdded(sharedUnderlays);
   else if (focusUnderlays && u.building === focus?.key) focusUnderlays = byAdded(focusUnderlays);
   showUnderlays(menu);
@@ -1718,7 +1737,9 @@ map.on('click', (e) => {
 /** Свои подложки под точкой экрана, от ближней к дальней. */
 function underlaysAt(p: { x: number; y: number }): string[] {
   const canvas = map.getCanvas();
-  return overpassLayer.underlays.pickAll([p.x, p.y], [canvas.clientWidth, canvas.clientHeight]);
+  // Закреплённые кликом не выделяются
+  const locked = new Set(currentUnderlays().filter((u) => u.locked).map((u) => u.id));
+  return overpassLayer.underlays.pickAll([p.x, p.y], [canvas.clientWidth, canvas.clientHeight]).filter((id) => !locked.has(id));
 }
 const topUnderlay = (p: { x: number; y: number }) => underlaysAt(p)[0];
 

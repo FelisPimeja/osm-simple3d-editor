@@ -745,6 +745,15 @@ body.mobile #issues-panel { display: none !important; }
 .underlay-set-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .underlay-set-control input[type=range] { flex: 1; min-width: 0; margin: 0; }
 .underlay-set-control select { width: 100%; min-width: 0; padding: 2px 4px; font: inherit; }
+.underlay-set-control input[type=text] { width: 100%; min-width: 0; box-sizing: border-box; padding: 2px 5px; font: inherit; border: 1px solid #d1d5db; border-radius: 4px; }
+.underlay-set-control input[type=checkbox] { margin: 0; }
+.basemap-menu .underlay-set-actions button:disabled { color: #9ca3af; cursor: default; background: #fff; }
+.underlay-lock { flex: none; display: inline-flex; color: #6b7280; }
+/* Порядок подложек перетаскиванием: линия, куда встанет строка */
+.underlay-row[draggable="true"] { cursor: grab; }
+.underlay-row.dragging { opacity: .4; }
+.underlay-row.drop-before { box-shadow: inset 0 2px 0 #2563eb; }
+.underlay-row.drop-after { box-shadow: inset 0 -2px 0 #2563eb; }
 .underlay-set-value { width: 36px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
 .underlay-set-actions { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 3px; }
 .basemap-menu .underlay-set-actions button { width: auto; height: 26px; display: inline-flex; align-items: center; justify-content: center; gap: 5px;

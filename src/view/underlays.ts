@@ -41,9 +41,16 @@ export interface Underlay {
   /** Непрозрачность, 0…1. */
   opacity: number;
   visible: boolean;
-  /** Когда добавлена (мс) — порядок в списке. */
+  /** Когда добавлена (мс). */
   added: number;
+  /** Порядок отрисовки (больше — поверх); нет — по времени добавления. */
+  order?: number;
+  /** Закреплена: кликом на карте не выделяется — не сдвинуть случайно. */
+  locked?: boolean;
 }
+
+/** Ключ порядка отрисовки: меньше — ниже, больше — поверх. */
+export const underlayOrder = (u: Underlay) => u.order ?? u.added;
 
 /** Стоит (фасад, разрез), а не лежит. */
 export const isVertical = (u: Underlay) => Math.abs(u.tilt) > 1e-6;
@@ -81,7 +88,7 @@ export async function loadUnderlays(building: string | undefined): Promise<Under
       const request = building === undefined ? store.getAll() : store.index('building').getAll(building);
       request.onsuccess = () => {
         db.close();
-        resolve((request.result as Underlay[]).filter((u) => u.building === building).sort((a, b) => a.added - b.added));
+        resolve((request.result as Underlay[]).filter((u) => u.building === building).sort((a, b) => underlayOrder(a) - underlayOrder(b)));
       };
       request.onerror = () => { db.close(); resolve([]); };
     } catch { db.close(); resolve([]); }

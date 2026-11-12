@@ -14317,9 +14317,15 @@ function openCtxMenu(x: number, y: number, where: 'list' | 'scene' | 'empty' | '
     ${inScene
       ? showAll
       : `<li><button type="button" data-ctx="show"${anyHidden ? '' : ' disabled'}>${tr('Показать объекты')}${n}</button></li>`}
-    <li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>${tr('Исключить из модели')}${n}</button></li>
+    ${fitOutlineItem(keys)}<li><button type="button" data-ctx="exclude"${keys.length ? '' : ' disabled'}>${tr('Исключить из модели')}${n}</button></li>
     <li><button type="button" data-ctx="delete"${keys.length ? '' : ' disabled'}>${tr('Удалить')}${n}${kbd('Del')}</button></li>${inScene ? '' : showAll}${snaps}${exit}`;
   placeCtxMenu(x, y);
+}
+
+/** Пункт меню у выделенного контура (outline) отношения: подогнать контур под текущий след частей. */
+function fitOutlineItem(keys: string[]): string {
+  if (!focus || isSolo(focus) || keys.length !== 1 || focus.roles[focus.members.indexOf(keys[0])] !== 'outline') return '';
+  return `<li><button type="button" data-ctx="fit-outline" title="${tr('Контур здания — по следу всех частей на земле (одним шагом, Ctrl+Z — отменить)')}">${tr('Подогнать под текущий след здания')}</button></li>`;
 }
 
 function placeCtxMenu(x: number, y: number) {
@@ -14621,6 +14627,7 @@ function focusAction(action: string) {
   }
   const keys = selection.filter(inFocus);
   if (action === 'exclude') { if (keys.length) excludeFromGroup(); return; }
+  if (action === 'fit-outline') { fixOutline(true); return; }
   if (action === 'delete') { if (keys.length) deleteSelected(); return; }
   if (action === 'exit') return closeFocus();
   if (action === 'snaps') return toggleSnaps();

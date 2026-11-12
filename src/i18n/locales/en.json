@@ -1529,5 +1529,7 @@
   "Подложка закреплена — нажмите замок, чтобы её двигать": "The underlay is locked. Click the lock to move it",
   "объектов: {n}": "objects: {n}",
   "Копируются части здания, не контур.": "Building parts are copied, not the outline.",
-  "Копирование ({n}, пропущено {skipped} — контур здания): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.": "Copy ({n}, {skipped} skipped: building outline): click a base point; the copy will follow the cursor by it when pasting. Without a click, a corner vertex is used."
+  "Копирование ({n}, пропущено {skipped} — контур здания): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.": "Copy ({n}, {skipped} skipped: building outline): click a base point; the copy will follow the cursor by it when pasting. Without a click, a corner vertex is used.",
+  "Подогнать под текущий след здания": "Update to current footprint",
+  "Контур здания — по следу всех частей на земле (одним шагом, Ctrl+Z — отменить)": "Fit the building outline to the footprint of all parts on the ground (one step; undo with Ctrl+Z)"
 }

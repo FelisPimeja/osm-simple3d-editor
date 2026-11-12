@@ -125,6 +125,8 @@ const DOOR_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000 });
  * (FLOOR_ORDER + 1, без проверки глубины) — полы помещений (FLOOR_ORDER + 2, полупрозрачно поверх неё) — остальное.
  */
 const FLOOR_ORDER = -4;
+/** Выделенная подложка этажа — после всей непрозрачной геометрии. */
+const SELECTED_RASTER_ORDER = 900;
 /** Непрозрачность цвета пола помещения поверх подложки этажа. */
 const FLOOR_OVER_RASTER = 0.35;
 const DOOR_SILL_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xf97316, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
@@ -945,13 +947,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     const ids = new Set(list.map((u) => u.id));
     for (const [id, m] of this.floorUnderlays) if (!ids.has(id)) { m.removeFromParent(); (m.material as THREE.Material).dispose(); this.floorUnderlays.delete(id); }
-    for (const { id, mesh, center } of list) {
+    for (const { id, mesh, center, selected } of list) {
       let copy = this.floorUnderlays.get(id) as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | undefined;
       if (!copy) {
         // Непрозрачный список three (иначе — после всех стен), смешивание по альфе — вручную
         const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, depthTest: false, depthWrite: false, transparent: false, ...OVER_BLEND });
         copy = new THREE.Mesh(mesh.geometry, material);
-        copy.renderOrder = FLOOR_ORDER + 1;
         copy.frustumCulled = false;
         this.floorUnderlays.set(id, copy);
         this.floorUnderlayGroup.add(copy);
@@ -962,6 +963,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       copy.scale.copy(mesh.scale);
       if (copy.material.map !== mesh.material.map) { copy.material.map = mesh.material.map; copy.material.needsUpdate = true; }
       copy.material.opacity = mesh.material.opacity;
+      // Выделенная (её двигают, поворачивают, масштабируют) — поверх всей геометрии, иначе стены её прячут
+      copy.renderOrder = selected ? SELECTED_RASTER_ORDER : FLOOR_ORDER + 1;
     }
     // Полы этажа — раньше подложек
     this.indoorObj?.traverse((o) => {

@@ -186,9 +186,9 @@ export class UnderlayMeshes {
   floorInScene = false;
 
   /** Видимые подложки этажа с загруженной картинкой: меш (положение — в метрах от центра) и центр на местности. */
-  floorMeshes(): { id: string; mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; center: LonLat }[] {
+  floorMeshes(): { id: string; mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; center: LonLat; selected: boolean }[] {
     return [...this.entries.values()].filter((e) => isFloor(e.u) && e.mesh.visible && e.mesh.material.visible)
-      .map((e) => ({ id: e.u.id, mesh: e.mesh, center: e.u.center }));
+      .map((e) => ({ id: e.u.id, mesh: e.mesh, center: e.u.center, selected: this.selected.has(e.u.id) }));
   }
 
   /** Есть видимые подложки прохода 'over' (этажей и поднятые над землёй). */

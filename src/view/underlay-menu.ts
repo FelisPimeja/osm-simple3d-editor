@@ -235,11 +235,6 @@ export class UnderlayMenu {
       select.addEventListener('change', () => this.hooks.change({ ...u, level: select.value === '' ? undefined : Number(select.value) }));
       field(tr('Этаж'), select, tr('Подложка этажа лежит на отметке его пола и видна, только когда этот этаж выбран в панели этажей'));
     }
-    const lockBox = document.createElement('input');
-    lockBox.type = 'checkbox';
-    lockBox.checked = !!u.locked;
-    lockBox.addEventListener('change', () => this.hooks.change({ ...u, locked: lockBox.checked }));
-    field(tr('Закрепить'), lockBox, tr('Закреплённая подложка не выделяется кликом на карте — её не сдвинуть случайно'));
     const buttons = document.createElement('div');
     buttons.className = 'underlay-set-actions';
     const adjust = document.createElement('button');
@@ -248,7 +243,7 @@ export class UnderlayMenu {
     adjust.innerHTML = `${MOVE_SVG}<span>${tr('Выбрать')}</span>`;
     adjust.title = tr('Выделить подложку: двигать, поворачивать и масштабировать — инструментами (M, Q, E), точные значения — в свойствах');
     adjust.disabled = !!u.locked;
-    if (u.locked) adjust.title = tr('Подложка закреплена — снимите галку «Закрепить», чтобы её двигать');
+    if (u.locked) adjust.title = tr('Подложка закреплена — нажмите замок, чтобы её двигать');
     adjust.addEventListener('click', () => this.hooks.select(u));
     const remove = document.createElement('button');
     remove.type = 'button';
@@ -259,7 +254,17 @@ export class UnderlayMenu {
       if (this.open === u.id) this.open = undefined;
       this.hooks.remove(u);
     });
-    buttons.append(adjust, remove);
+    // Закрепить — кнопка-переключатель с замком
+    const lock = document.createElement('button');
+    lock.type = 'button';
+    lock.className = 'underlay-lock-btn';
+    lock.innerHTML = LOCK_SVG;
+    lock.setAttribute('aria-pressed', String(!!u.locked));
+    lock.setAttribute('aria-label', tr('Закрепить'));
+    lock.title = u.locked ? tr('Закреплена: кликом на карте не выделяется') + '. ' + tr('Нажмите, чтобы открепить')
+      : tr('Закреплённая подложка не выделяется кликом на карте — её не сдвинуть случайно');
+    lock.addEventListener('click', () => this.hooks.change({ ...u, locked: !u.locked }));
+    buttons.append(adjust, lock, remove);
     sec.append(buttons);
     return [row, sec];
   }

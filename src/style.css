@@ -760,6 +760,8 @@ body.mobile #issues-panel { display: none !important; }
   padding: 0 10px; border: 1px solid #d1d5db !important; border-radius: 5px; background: #fff; font: inherit; color: #374151; cursor: pointer; }
 .basemap-menu .underlay-set-actions button:hover { background: #f3f4f6; }
 .basemap-menu .underlay-set-actions .underlay-select { flex: 1; }
+.basemap-menu .underlay-set-actions .underlay-lock-btn { width: 26px; padding: 0; color: #6b7280; }
+.basemap-menu .underlay-set-actions .underlay-lock-btn[aria-pressed="true"] { background: #dbeafe; border-color: #93c5fd !important; color: #1e40af; }
 .underlay-select svg { width: 13px; height: 13px; flex: none; }
 .basemap-menu .underlay-set-actions .underlay-remove { color: #b91c1c; border-color: transparent !important; background: none; }
 .basemap-menu .underlay-set-actions .underlay-remove:hover { background: #fef2f2; }

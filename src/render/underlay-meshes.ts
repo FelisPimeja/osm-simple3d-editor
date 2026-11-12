@@ -7,7 +7,6 @@
  * и тогда, когда совпадает со стеной.
  */
 import * as THREE from 'three';
-type LonLat = [number, number];
 import { MercatorCoordinate } from 'maplibre-gl';
 import { decodeImage, isVertical, type Underlay } from '../view/underlays';
 
@@ -29,8 +28,6 @@ const LIFTED = 0.05;
  * закрывают её только там, где они ближе к камере, линия пересечения со стенами видна.
  */
 const over = (u: Underlay) => u.level !== undefined || isVertical(u) || Math.abs(u.elevation) > LIFTED;
-/** Лежащая подложка этажа. */
-const isFloor = (u: Underlay) => u.level !== undefined && !isVertical(u);
 /** Слой three рамки выделения: рисуется отдельным проходом поверх всего. */
 const OUTLINE = 1;
 /** Углы картинки в её плоскости (сетка 1×1). */
@@ -182,15 +179,6 @@ export class UnderlayMeshes {
 
   get size() { return this.entries.size; }
 
-  /** Подложки этажа рисует сцена здания (в режиме этажа): поверх полов, под стенами — полы для них «стеклянные». */
-  floorInScene = false;
-
-  /** Видимые подложки этажа с загруженной картинкой: меш (положение — в метрах от центра) и центр на местности. */
-  floorMeshes(): { id: string; mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; center: LonLat }[] {
-    return [...this.entries.values()].filter((e) => isFloor(e.u) && e.mesh.visible && e.mesh.material.visible)
-      .map((e) => ({ id: e.u.id, mesh: e.mesh, center: e.u.center }));
-  }
-
   /** Есть видимые подложки прохода 'over' (этажей и поднятые над землёй). */
   hasOver(): boolean {
     for (const e of this.entries.values()) if (e.mesh.visible && e.mesh.material.visible && over(e.u)) return true;
@@ -207,7 +195,6 @@ export class UnderlayMeshes {
     for (const e of this.entries.values()) {
       if (!e.mesh.visible || !e.mesh.material.visible) continue;
       if (pass === 'outline' ? !e.outline.visible : over(e.u) !== (pass === 'over')) continue;
-      if (pass === 'over' && this.floorInScene && isFloor(e.u)) continue; // рисует сцена здания
       e.camera.layers.set(pass === 'outline' ? OUTLINE : 0);
       e.camera.projectionMatrix.copy(main).multiply(e.model);
       renderer.resetState();

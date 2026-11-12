@@ -820,13 +820,7 @@ function showUnderlays(menu = true) {
   const shown = list.flatMap((u) => {
     const v = underlayPreview?.ids.has(u.id) ? transformUnderlay(u, underlayPreview.m) : u;
     const elevation = v.level === undefined || v.level === currentLevel ? underlayElevation(v) : undefined;
-    if (elevation === undefined) return [];
-    // Общая подложка на земле в режиме этажа — на полу этажа, поверх заливок помещений (полы её не закрывают)
-    const floor = currentLevel === undefined ? undefined : underlayLevels.find((l) => l.n === currentLevel)?.floor;
-    if (floor !== undefined && v.level === undefined && Math.abs(v.tilt) < 1e-6 && Math.abs(v.elevation) <= 0.05) {
-      return [{ ...v, level: currentLevel, elevation: floor + v.elevation }];
-    }
-    return [{ ...v, elevation }];
+    return elevation === undefined ? [] : [{ ...v, elevation }];
   });
   overpassLayer.underlays.set(shown);
   // Выделенную подложку больше не видно (скрыли, сменили этаж или режим, удалили) — снять с выделения

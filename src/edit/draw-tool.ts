@@ -59,6 +59,8 @@ export const NGON_MIN = 3, NGON_MAX = 64;
  */
 /** Формы с трассировкой. */
 const TRACED: DrawShape[] = ['polygon', 'wall', 'line'];
+/** Замкнутые фигуры: могут быть внутренним кольцом выделенного полигона. */
+const RING_SHAPES: DrawShape[] = ['polygon', 'rect', 'circle', 'ngon'];
 const TRACE_KEY = 'simple3d:trace';
 function loadTracing(): boolean {
   try { return localStorage.getItem(TRACE_KEY) === '1'; } catch { return false; }
@@ -97,6 +99,12 @@ export class DrawTool {
   private readonly opts: HTMLDivElement;
   /** Переключатель трассировки (у полигона и стены). */
   private readonly traceOpt: HTMLLabelElement;
+  /** Переключатель «новый объект / внутреннее кольцо выделенного» (замкнутые фигуры, если ringAvailable). */
+  private readonly ringOpt: HTMLLabelElement;
+  /** Можно ли рисовать внутреннее кольцо (выделен один полигон); спрашивается при начале рисования. */
+  ringAvailable?: () => boolean;
+  /** Режим «внутреннее кольцо»: замкнутый контур — дырой в выделенном полигоне. */
+  ring = false;
   /** Подписи длин сторон контура (HTML поверх карты). */
   private readonly dims: HTMLDivElement;
   /** Стороны для подписей: точки контура, замкнут ли он, какая сторона — текущая (тянется курсором). */
@@ -142,6 +150,14 @@ export class DrawTool {
     box.checked = this.tracing;
     box.addEventListener('change', () => { this.setTracing(box.checked); box.blur(); });
     container.appendChild(this.traceOpt);
+    this.ringOpt = document.createElement('label');
+    this.ringOpt.className = 'draw-opts draw-trace draw-ring';
+    this.ringOpt.hidden = true;
+    this.ringOpt.title = tr('Что строит контур: новый объект или внутреннее кольцо выделенного полигона (I)');
+    this.ringOpt.innerHTML = `<input type="checkbox" /> ${tr('Внутреннее кольцо')} (I)`;
+    const ringBox = this.ringOpt.querySelector('input')!;
+    ringBox.addEventListener('change', () => { this.setRing(ringBox.checked); ringBox.blur(); });
+    container.appendChild(this.ringOpt);
     this.dims = document.createElement('div');
     this.dims.className = 'draw-dims';
     container.appendChild(this.dims);
@@ -160,7 +176,19 @@ export class DrawTool {
     this.opts.hidden = shape !== 'ngon';
     this.opts.querySelector('input')!.value = String(this.sides);
     this.traceOpt.hidden = !TRACED.includes(shape) || !!maxPoints;
+    this.ring = false;
+    this.ringOpt.querySelector('input')!.checked = false;
+    this.ringOpt.hidden = !RING_SHAPES.includes(shape) || !this.ringAvailable?.();
     this.hint();
+  }
+
+  /** Режим «внутреннее кольцо» вкл/выкл (если доступен). */
+  setRing(on: boolean) {
+    if (this.ringOpt.hidden) return;
+    this.ring = on;
+    this.ringOpt.querySelector('input')!.checked = on;
+    this.onState(on ? tr('Внутреннее кольцо: замкнутый контур станет дырой в выделенном полигоне. I — новый объект.')
+      : tr('Новый объект: замкнутый контур станет отдельным объектом. I — внутреннее кольцо выделенного.'));
   }
 
   /** Сменить способ построения круга (начатое построение сбрасывается). */
@@ -194,6 +222,8 @@ export class DrawTool {
     this.reset();
     this.opts.hidden = true;
     this.traceOpt.hidden = true;
+    this.ringOpt.hidden = true;
+    this.ring = false;
     this.state = 'off';
     this.onState('');
   }
@@ -249,6 +279,10 @@ export class DrawTool {
       return true;
     }
     if (e.type !== 'keydown') return false;
+    if (e.code === 'KeyI' && !this.ringOpt.hidden && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      this.setRing(!this.ring);
+      return true;
+    }
     if (e.code === 'KeyT' && TRACED.includes(this.shape) && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       this.setTracing(!this.tracing);
       return true;

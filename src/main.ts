@@ -4137,7 +4137,7 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
   if (sketching) return createSketched(ring);
   if (drawTool.shape === 'line') return cutPlan(ring);
   if (drawTool.shape === 'wall') return createIndoorWallLine(ring);
-  if (focus && shownLevel && !tagsFor) return createIndoorDrawn(ring);
+  if (focus && shownLevel && !tagsFor) return drawTool.ring && drawRingTarget ? createIndoorHole(drawRingTarget, ring) : createIndoorDrawn(ring);
   if (!focus) return tr('Нет здания.');
   const lngLat = (p: [number, number]) => overpassLayer.focusToLngLat(p[0], p[1])!;
   // Кандидаты на общие узлы — пути рядом с контуром (грубый отбор по габаритам в градусах)
@@ -12170,6 +12170,75 @@ function applyRepeat(fs: IndoorFeature[], copies: Map<number, IndoorFeature>[], 
  * R / L / C / N на плане этажа: площадка indoor=area этого этажа по нарисованному контуру
  * (в пределах среза этажа). Вершины на соседях — их узлы.
  */
+/** Выделенный при начале рисования полигон этажа — для режима «внутреннее кольцо». */
+let drawRingTarget: IndoorFeature | undefined;
+drawTool.ringAvailable = () => {
+  const f = focus && shownLevel && indoorSelection.length === 1 && !selectedRoomWalls.length ? indoorSelection[0] : undefined;
+  drawRingTarget = f && !f.point && !f.line && f.polygons.length && /^(way|relation)\//.test(indoorKey(f.key)) ? f : undefined;
+  return !!drawRingTarget;
+};
+
+/**
+ * Нарисованный контур — внутреннее кольцо полигона f этажа (режим «внутреннее кольцо» у рисования): у мультиполигона —
+ * новый внутренний путь, путь становится внешним кольцом нового мультиполигона (теги переезжают на отношение).
+ */
+function createIndoorHole(f: IndoorFeature, ring: [number, number][]): string | undefined {
+  const key = indoorKey(f.key);
+  const cur = session.get(key) as (Feature3D & { relMembers?: OsmMember[] }) | undefined;
+  const tags = { ...(cur?.tags ?? f.tags) };
+  const polygons = f.polygons;
+  const close = (r: [number, number][]) => [...r, r[0]] as [number, number][];
+  const local = (r: LonLat[]) => close(r.map((q) => overpassLayer.focusToLocal(q)!));
+  const hole = close(ring);
+  const area = (m: [number, number][][][]) => m.reduce((a, p) => a + Math.abs(ringArea(p[0].slice(0, -1))) - p.slice(1).reduce((b, r) => b + Math.abs(ringArea(r.slice(0, -1))), 0), 0);
+  const holeArea = Math.abs(ringArea(ring));
+  if (holeArea < CUT_MIN_AREA) return tr('Контур вырожден: у него нет площади.');
+  // Полигон, внутри которого кольцо целиком (и не задевает его дыр)
+  const poly = polygons.findIndex((p) => {
+    try { return Math.abs(area(polygonClipping.intersection([hole], [local(p.outer), ...p.inners.map(local)])) - holeArea) < 1e-3 * Math.max(1, holeArea); }
+    catch { return false; }
+  });
+  if (poly < 0) return tr('Внутреннее кольцо должно лежать внутри выделенного полигона, не задевая его контур и дыры.');
+  const p = polygons[poly];
+  if (!p.outerIds) return tr('В кеше нет id узлов этого объекта.');
+  const { nodeFor } = sharedNodes([...groupFeatures(focus!), ...shownIndoor.filter((x) => !x.point)]);
+  const nodes = nodeRing(ring.map((q) => overpassLayer.focusToLngLat(q[0], q[1])! as LonLat), nodeFor);
+  if (!nodes) return tr('Кольцу нужно не меньше трёх вершин.');
+  const edits: ObjectEdit[] = [];
+  const innerId = nextNewId--;
+  const innerLine = { ids: [...nodes.map((q) => q.id), nodes[0].id], coords: [...nodes.map((q) => q.p), nodes[0].p] };
+  edits.push({ key: `way/${innerId}`, create: { key: `way/${innerId}`, version: 0, tags: {}, line: innerLine } });
+  const withHole = polygons.map((q, i) => (i === poly
+    ? { ...q, inners: [...q.inners, nodes.map((x) => x.p)], innerIds: [...(q.innerIds ?? q.inners.map(() => [])), nodes.map((x) => x.id)] } : q));
+  const innerMember = { type: 'way' as const, ref: innerId, role: 'inner' };
+  trackIndoor(key, f);
+  let result = key;
+  if (key.startsWith('relation/')) {
+    const members = cur?.relMembers ?? indoorRelationSources.get(key)?.ways?.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }));
+    if (!members) return tr('Для этого нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
+    edits.push({ key, polygons: withHole, members: [...members, innerMember] });
+  } else {
+    if (polygons.length !== 1) return tr('Объект не найден.');
+    const id = Number(key.split('/')[1]);
+    const outer = { ids: [...p.outerIds, p.outerIds[0]], coords: [...p.outer, p.outer[0]] };
+    const relId = nextNewId--;
+    result = `relation/${relId}`;
+    const relTags = { type: 'multipolygon', ...tags };
+    const ways = [{ id, role: 'outer', nodes: outer.ids }, { id: innerId, role: 'inner', nodes: innerLine.ids }];
+    edits.push({ key: result, create: { key: result, type: 'relation', id: relId, version: 0, kind: 'part', tags: relTags, polygons: withHole, hasParts: false, ways,
+      relMembers: ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } as unknown as Feature3D });
+    edits.push({ key, tags: {}, polygons: [], line: outer });
+    indoorCreated.set(result, { key: result, kind: f.kind, polygons: withHole, tags: relTags, levels: f.levels });
+    indoorEdited.add(result);
+  }
+  session.editMany(edits);
+  renderLevels();
+  const made = buildingIndoorFor(result);
+  if (made) selectIndoor(made);
+  setStatus(tr('Добавлено внутреннее кольцо: {key}.', { key: result }));
+  return;
+}
+
 function createIndoorDrawn(ring: [number, number][]): string | undefined {
   if (!focus || !shownLevel) return tr('Нет этажа.');
   let polys: Polygon[] = [{ outer: ring.map((q) => overpassLayer.focusToLngLat(q[0], q[1])! as LonLat), inners: [] }];

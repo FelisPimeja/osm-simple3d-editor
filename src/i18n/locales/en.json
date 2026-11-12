@@ -1504,5 +1504,11 @@
   "Убрать лишние вершины": "Remove redundant vertices",
   "Лишние вершины — узлы с тегами: их убирают вручную.": "The redundant vertices are tagged nodes: remove them by hand.",
   "Убрано лишних вершин: {n}; затронуто объектов: {m}. Отменить — Ctrl+Z.": "Redundant vertices removed: {n}; objects changed: {m}. Undo — Ctrl+Z.",
-  "убрать repeat_on": "remove repeat_on"
+  "убрать repeat_on": "remove repeat_on",
+  "Что строит контур: новый объект или внутреннее кольцо выделенного полигона (I)": "What the outline makes: a new object or an inner ring of the selected polygon (I)",
+  "Внутреннее кольцо": "Inner ring",
+  "Внутреннее кольцо: замкнутый контур станет дырой в выделенном полигоне. I — новый объект.": "Inner ring: the closed outline becomes a hole in the selected polygon. I — new object.",
+  "Новый объект: замкнутый контур станет отдельным объектом. I — внутреннее кольцо выделенного.": "New object: the closed outline becomes a separate object. I — inner ring of the selection.",
+  "Внутреннее кольцо должно лежать внутри выделенного полигона, не задевая его контур и дыры.": "The inner ring must lie inside the selected polygon without touching its outline or holes.",
+  "Для этого нужны пути-члены мультиполигона — перезагрузите видимые тайлы.": "This needs the multipolygon's member ways — reload the visible tiles."
 }

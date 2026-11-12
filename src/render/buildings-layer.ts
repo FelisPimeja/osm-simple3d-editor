@@ -69,10 +69,12 @@ const DOOR_HEIGHT = 2.2;
 const DOOR_SNAP = 0.15;
 /** Дверь туалета (и кабинок) — уже обычной. */
 export const TOILET_DOOR_WIDTH = 0.8;
+/** Гаражный въезд (entrance=garage) без width — шире обычной двери, м. */
+export const GARAGE_WIDTH = 2.5;
 /** Ширина из тега width двери (м), если правдоподобна. */
 const tagWidth = (tags?: Record<string, string>) => {
   const w = looseLength(tags?.width);
-  return w >= 0.5 && w <= 4 ? w : undefined;
+  return w >= 0.5 && w <= 4 ? w : tags?.entrance === 'garage' ? GARAGE_WIDTH : undefined;
 };
 /** Высота проёма двери из height (1,5–6 м), иначе DOOR_HEIGHT. */
 const doorHeight = (tags?: Record<string, string>) => {

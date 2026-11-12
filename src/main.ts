@@ -57,7 +57,7 @@ import { RoadsLayer } from './render/roads-layer';
 import type { TreePoint } from './osm/trees';
 import { isBridge, isTunnel, roadLevel, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
-import { BuildingsLayer, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit, ORBIT_EVENT } from './view/orbit';
@@ -9586,7 +9586,7 @@ const DOOR_VALUES = ['yes', 'hinged', 'sliding', 'revolving', 'folding', 'trapdo
 const DOOR_LABELS: Record<string, string> = {
   yes: tr('Неизвестного типа'), hinged: tr('Распашная'), sliding: tr('Раздвижная'),
   revolving: tr('Вращающаяся'), folding: tr('Складная'), trapdoor: tr('Люк'),
-  overhead: tr('Гаражная (подъёмная)'), no: tr('Открытый проём (без двери)'),
+  overhead: tr('Подъёмная'), no: tr('Открытый проём (без двери)'),
 };
 const INDOOR_LABELS: Record<string, string> = {
   room: tr('Помещение'), corridor: tr('Коридор'), area: tr('Зона без стен'), level: tr('Этаж'), wall: tr('Стена'),
@@ -11703,7 +11703,7 @@ function rewriteSolidWalls(walls: IndoorFeature[], pieces: WallPolygon[], edits:
   return result;
 }
 
-function openingDoorWidth(tags:Record<string,string>):number { return Math.max(0.1,parseLength(tags.width)??(tags.door==='revolving'?parseLength(tags.diameter)??2.4:1)); }
+function openingDoorWidth(tags:Record<string,string>):number { return Math.max(0.1,parseLength(tags.width)??(tags.door==='revolving'?parseLength(tags.diameter)??2.4:tags.entrance==='garage'?GARAGE_WIDTH:1)); }
 function placeSolidWallDoor(wall:IndoorFeature,at:LonLat,tags:Record<string,string>,target?:PointTarget){
   const existing=target?.node===undefined?undefined:shownIndoor.find(f=>f.key===`node/${target.node}`);
   if(existing){selectIndoor(existing);return;}

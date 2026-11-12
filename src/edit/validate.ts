@@ -1032,7 +1032,7 @@ export function validateSolidWallDoors(all:IndoorFeature[]):Issue[]{
    .map(wall=>({wall,face:nearestSolidFace(wallLocalPolygons(wall,local),[0,0],DOOR_ON_FACE)})).filter(c=>c.face).sort((a,b)=>a.face!.distance-b.face!.distance);
   const candidate=candidates[0];if(!candidate)continue;
   try{
-   const width=Math.max(0.1,parseLength(door.tags.width)??(door.tags.door==='revolving'?parseLength(door.tags.diameter)??2.4:1));
+   const width=Math.max(0.1,parseLength(door.tags.width)??(door.tags.door==='revolving'?parseLength(door.tags.diameter)??2.4:door.tags.entrance==='garage'?2.5:1));
    cutSolidWall(wallLocalPolygons(candidate.wall,local),candidate.face!.at,candidate.face!.face,width);
    result.push({key:door.key,other:candidate.wall.key,level:'warning',code:'indoor-door-notch',text:tr('Дверь на полигональной стене без выемки.'),points:[origin],fix:{label:tr('Создать выемку и обновить соседние контуры'),tags:{},solidDoorWall:candidate.wall.key}});
   }catch{/* A cut that cannot fit is not an unambiguous automatic fix. */}

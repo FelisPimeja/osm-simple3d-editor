@@ -318,14 +318,13 @@ function setPhotos(p: PhotoLayerState, on: boolean) {
   syncPhotos();
 }
 
-/** Слои уличных фото; в режиме здания — обрезаны областью вокруг здания, как снимки подложки. */
+/** Слои уличных фото; в режиме здания — целиком, как и снимки (окружение можно показать). */
 function syncPhotos() {
   if (!mapLoaded || !server().imagery) return;
-  const bounds = focusScene() ? focusImageryBounds() : undefined;
   // Под зданиями: под объёмами стиля (первый fill-extrusion) или под слоями дорог и зданий редактора
   const under = map.getStyle().layers.find((l) => l.type === 'fill-extrusion' && !photoLayers.some((p) => p.layer.isLayer(l.id)))?.id
     ?? (map.getLayer(roadsLayer.id) ? roadsLayer.id : undefined);
-  for (const p of photoLayers) p.layer.apply(p.on, photoFilter, map.getLayer(UNDERGROUND_LAYER) ? UNDERGROUND_LAYER : undefined, bounds, under);
+  for (const p of photoLayers) p.layer.apply(p.on, photoFilter, map.getLayer(UNDERGROUND_LAYER) ? UNDERGROUND_LAYER : undefined, undefined, under);
   photoViewer.syncCone();
 }
 
@@ -394,19 +393,6 @@ function pickBasemap(id: string) {
   void saveSetting('basemap');
 }
 
-/** Область снимков в режиме здания: здание с запасом FOCUS_IMAGERY_PAD_M; дальше — по границе тайлов. */
-const FOCUS_IMAGERY_PAD_M = 40;
-function focusImageryBounds(): [number, number, number, number] | undefined {
-  if (!focus) return;
-  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
-  for (const f of groupFeatures(focus)) for (const p of f.polygons ?? []) for (const [lng, lat] of p.outer) {
-    w = Math.min(w, lng); e = Math.max(e, lng); s = Math.min(s, lat); n = Math.max(n, lat);
-  }
-  if (!Number.isFinite(w)) return;
-  const dLat = FOCUS_IMAGERY_PAD_M / 111320, dLng = dLat / Math.cos(((s + n) / 2) * Math.PI / 180);
-  return [w - dLng, s - dLat, e + dLng, n + dLat];
-}
-
 /**
  * Источники правок: спутниковые снимки, включённые с прошлой отправки, и открытые уличные фото — в теги changeset
  * (imagery_used — названия, source — «aerial imagery» / «streetlevel imagery», как в iD).
@@ -429,14 +415,13 @@ function sourceTags(): Record<string, string> {
 
 /** Слои снимков и треков — по режиму (карта или здание). */
 function syncBasemapLayers() {
-  const f = focusScene();
   const id = basemap;
   basemapCtrl?.set(id);
   basemapCtrl?.setGps(gpsTraces);
   if (!mapLoaded) return; // слои добавит обработчик load
-  const bounds = f ? focusImageryBounds() : undefined;
-  applyGpsTraces(map, gpsTraces && (!f || !!bounds), bounds);
-  applyBasemap(map, f && !bounds ? NO_BASEMAP : id, bounds);
+  // В режиме здания и плана этажа снимки и треки — без обрезки по зданию: окружение можно показать
+  applyGpsTraces(map, gpsTraces);
+  applyBasemap(map, id);
   syncPhotos();
   noteSources();
   applyVectorStyle(id !== MAP_BASEMAP);

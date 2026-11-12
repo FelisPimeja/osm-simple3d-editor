@@ -739,6 +739,7 @@
   "объект удалён на сервере": "the object was deleted on the server",
   "список узлов изменён на сервере": "the node list was changed on the server",
   "Открываем changeset…": "Opening a changeset…",
+  "Нет изменений относительно сервера — changeset не создан.": "Nothing differs from the server — no changeset created.",
   "Загружаем {n} объект в changeset {changeset}…|Загружаем {n} объекта в changeset {changeset}…|Загружаем {n} объектов в changeset {changeset}…": "Uploading {n} object to changeset {changeset}…|Uploading {n} objects to changeset {changeset}…",
   "Проверяем отношения разрезанных путей…": "Checking relations of split ways…",
   "Закрыть": "Close",

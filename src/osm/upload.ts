@@ -314,6 +314,8 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   const broken = await brokenRings(payload, fresh);
   if (broken.length) throw new BrokenRingsError(broken);
 
+  // Нечего отправлять (всё уже на сервере или правки свелись к нулю) — пустой changeset не открываем
+  if (!payload.length) throw new Error(tr('Нет изменений относительно сервера — changeset не создан.'));
   onStatus(tr('Открываем changeset…'));
   const changesetXml = `<osm><changeset>${tagsXml({
     comment,

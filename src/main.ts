@@ -2590,7 +2590,7 @@ window.addEventListener('blur', () => { overpassLayer.snapsSuspended = false; })
 function updateSnapMarker(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
   if (point && entranceDrag) moveEntrance(point);
-  if (pointPick && (toolActiveExceptPoint() || !shownLevel)) stopPoint();
+  if (pointPick && (toolActiveExceptPoint() || !focus)) stopPoint();
   if (point && pointPick) hoverPoint(point);
   if (point && shapeTool.active) shapeTool.move(point);
   if (point && pushTool.state === 'push') pushTool.move(point);
@@ -11214,9 +11214,19 @@ wallBtn.addEventListener('click',e=>{
 });
 wallBtn.addEventListener('click', () => (drawTool.active && drawTool.shape === 'wall' ? drawTool.stop() : startWall()));
 
-/** Точка и Стена работают только на плане этажа: в режиме объёмов их кнопок нет. */
+/** Стена — только на плане этажа; Точка в режиме объёмов ставит вход на фасад (уровень пола нулевого этажа). */
 function syncPlanTools() {
-  pointBtn.hidden = wallBtn.hidden = !shownLevel;
+  wallBtn.hidden = !shownLevel;
+  pointBtn.hidden = !focus;
+  pointBtn.title = shownLevel ? tr('Точка на плане этажа: на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа (X)') : tr('Вход: точка entrance на фасаде здания (X)');
+}
+
+/** Этаж, на котором работает Точка: показанный, а в режиме объёмов — уровень пола нулевого этажа (входы с улицы). */
+function pointLevel(): Level | undefined {
+  if (shownLevel) return shownLevel;
+  if (!focus) return;
+  const levels = focusLevelList();
+  return levels.find((l) => l.n === 0) ?? { n: 0, floor: 0, ceil: LEVEL_HEIGHT };
 }
 
 function startWall() {
@@ -11533,14 +11543,14 @@ escalatorUi.addEventListener('pointerdown', (e) => {
 
 function startPoint() {
   if (!focus) return;
-  if (!shownLevel) { setStatus(tr('Точки ставятся на плане этажа — выберите этаж в панели «Этажи».'), true); return; }
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop();
   measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
   pointPick = true;
   pointBtn.classList.add('active');
   document.querySelector('.indoor-pois')?.classList.add('passthrough');
   syncCursor();
-  toolHint(tr('Точка: щелчок на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа. Shift — вести точку вдоль стены. Esc — выйти.'));
+  toolHint(shownLevel ? tr('Точка: щелчок на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа. Shift — вести точку вдоль стены. Esc — выйти.')
+    : tr('Вход: щелчок по фасаду у земли — узел entrance=yes на контуре здания. Shift — вести точку вдоль стены. Esc — выйти.'));
 }
 
 function stopPoint() {
@@ -11573,9 +11583,10 @@ let pointLock: [[number, number], [number, number]] | undefined;
 function pointSnapped(screen: [number, number]): [number, number] {
   const s = overpassLayer.snapAt(screen);
   const snapped = s && s.kind !== 'center' && s.kind !== 'grid' ? s : undefined;
-  if (!pointLock || !shownLevel) return snapped?.point ?? screen;
+  const lvl = pointLevel();
+  if (!pointLock || !lvl) return snapped?.point ?? screen;
   // Стена зафиксирована: место привязки (вершина соседа и т. п.) или курсора — проекцией на её сторону
-  const z = shownLevel.floor;
+  const z = lvl.floor;
   const hit = snapped ? snapped.local : overpassLayer.focusRay(screen)?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
   if (!hit) return screen;
   const [a, b] = pointLock, dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy || 1;
@@ -11584,9 +11595,17 @@ function pointSnapped(screen: [number, number]): [number, number] {
 }
 
 function pointTarget(screen: [number, number]): PointTarget | undefined {
-  if (!focus || !shownLevel) return;
+  const lvl = pointLevel();
+  if (!focus || !lvl) return;
+  // Режим объёмов: только вход на фасад
+  if (!shownLevel) { const t = pointTargetOn(screen, lvl); return t?.kind === 'entrance' ? t : undefined; }
+  return pointTargetOn(screen, lvl);
+}
+
+function pointTargetOn(screen: [number, number], lvl: Level): PointTarget | undefined {
+  if (!focus) return;
   screen = pointSnapped(screen);
-  const z = shownLevel.floor;
+  const z = lvl.floor;
   const ray = overpassLayer.focusRay(screen);
   const hit = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
   if (!hit) return;
@@ -11611,7 +11630,7 @@ function pointTarget(screen: [number, number]): PointTarget | undefined {
   // Ближайшая сторона на экране
   const px = (q: [number, number]) => overpassLayer.focusProject(new THREE.Vector3(q[0], q[1], z));
   // Стороны частей здания — только по фасаду (граница двух частей внутри — не стена этажа)
-  const section = levelSection(shownLevel) ?? [];
+  const section = levelSection(lvl) ?? [];
   const sectionLoc = section.flatMap((poly) => poly.map((ring) => ring.map((c) => overpassLayer.focusToLocal(c)!)));
   const onSection = (q: [number, number]) => sectionLoc.some((loc) => loc.some((c, i) => segDist2(q, c, loc[(i + 1) % loc.length]) < 0.05));
   let best: { r: Ring; edge: number; d: number } | undefined;
@@ -11653,7 +11672,8 @@ function hoverPoint(screen: [number, number]) {
   const t = pointTarget(screen);
   // Shift: стена под точкой — зафиксирована, пока клавиша зажата
   if (shiftHeld && !pointLock && t?.side) pointLock = t.side;
-  if (!t || !shownLevel) { overpassLayer.setDrawPreview(undefined); return; }
+  const lvl = pointLevel();
+  if (!t || !lvl) { overpassLayer.setDrawPreview(undefined); if (!shownLevel) toolHint(tr('Вход: наведите на фасад здания у земли.')); return; }
   const solid=t.indoor.find(s=>solidWall(s.f))?.f;
   if(solid){
     try{
@@ -11665,7 +11685,7 @@ function hoverPoint(screen: [number, number]) {
     }catch(err){overpassLayer.setDrawPreview(undefined);toolHint((err as Error).message,true);}
     return;
   }
-  const s = 0.25, [x, y] = t.local, z = shownLevel.floor;
+  const s = 0.25, [x, y] = t.local, z = lvl.floor;
   overpassLayer.setDrawPreview([[x - s, y - s], [x + s, y - s], [x + s, y + s], [x - s, y + s]].map(([a, b]) => new THREE.Vector3(a, b, z)), true);
   toolHint(t.kind === 'entrance' ? tr('Вход в здание (entrance=yes): щелчок — поставить.')
     : t.kind === 'door' ? tr('Дверь (door=yes) — узел войдёт в стороны: {n}. Щелчок — поставить.', { n: t.node !== undefined ? 1 : t.indoor.length + t.building.length })
@@ -12034,7 +12054,8 @@ function detachLevelWall(t: PointTarget, n: number): Map<number, number> | undef
 
 function placePointAt(screen: [number, number]) {
   let t = pointTarget(screen);
-  if (!t || !focus || !shownLevel) return;
+  if (!t || !focus) return;
+  if (!shownLevel) return placeFacadeEntrance(t);
   const n = shownLevel.n;
   if (!t.indoor.some(s => solidWall(s.f))) {
     const fresh = detachLevelWall(t, n);
@@ -12114,6 +12135,34 @@ function placePointAt(screen: [number, number]) {
   const f = buildingIndoorFor(key);
   if (f) selectIndoor(f);
   setStatus(t.kind === 'entrance' ? tr('Поставлен вход {key}.', { key }) : t.kind === 'door' ? tr('Поставлена дверь {key}.', { key }) : tr('Поставлена точка {key}: вид задайте в свойствах.', { key }));
+}
+
+/** Вход в режиме объёмов: узел entrance=yes на фасаде — вершина контура или новый узел в его стороне (и в частях по ней). */
+function placeFacadeEntrance(t: PointTarget) {
+  const tags: Record<string, string> = doorPaste?.[0] ? { ...doorPaste[0] } : { entrance: 'yes' };
+  delete tags.level;
+  const edits: ObjectEdit[] = [];
+  let id: number;
+  if (t.node !== undefined) {
+    id = t.node;
+    const key = `node/${id}`;
+    const was = session.get(key)?.tags ?? sessionNodeTags.get(id) ?? dataEntrances.get(id) ?? {};
+    if (was.entrance) return setStatus(tr('Здесь уже есть вход {key}.', { key }));
+    if (!session.has(key)) session.track({ key, version: 0, tags: { ...was } });
+    edits.push({ key, tags: { ...was, ...tags } });
+  } else {
+    id = nextNewId--;
+    const key = `node/${id}`;
+    edits.push({ key, create: { key, version: 0, tags, polygons: [{ outer: [t.at], inners: [], outerIds: [id], innerIds: [] }] } });
+    const coord = new Map<number, LonLat>([[id, t.at]]);
+    for (const b of t.building) { coord.set(b.u, b.cu); coord.set(b.v, b.cv); }
+    const sides = new Map(t.building.map((b) => [b.u < b.v ? `${b.u},${b.v}` : `${b.v},${b.u}`, b]));
+    const out = insertIntoNeighbours(key, [...sides.values()].map((b) => ({ id, p: t.local, u: b.u, v: b.v })), coord);
+    if (typeof out === 'string') return setStatus(out, true);
+    edits.push(...out);
+  }
+  session.editMany(edits);
+  setStatus(tr('Поставлен вход {key}.', { key: `node/${id}` }));
 }
 
 /** Теги без этажа: копии на других этажах совпадают по ним. */

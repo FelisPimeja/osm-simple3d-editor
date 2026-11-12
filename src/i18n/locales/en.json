@@ -1533,5 +1533,10 @@
   "Подогнать под текущий след здания": "Update to current footprint",
   "Контур здания — по следу всех частей на земле (одним шагом, Ctrl+Z — отменить)": "Fit the building outline to the footprint of all parts on the ground (one step; undo with Ctrl+Z)",
   "height контура ({outline} м) ниже самой высокой части ({part} м, {key}): на контуре указывают максимальную высоту здания.": "The outline’s height ({outline} m) is lower than the tallest part ({part} m, {key}): the outline should carry the building’s maximum height.",
-  "building:levels контура ({outline}) меньше, чем у самой высокой части ({part}): на контуре указывают максимальную этажность здания.": "The outline’s building:levels ({outline}) is less than the tallest part’s ({part}): the outline should carry the building’s maximum number of levels."
+  "building:levels контура ({outline}) меньше, чем у самой высокой части ({part}): на контуре указывают максимальную этажность здания.": "The outline’s building:levels ({outline}) is less than the tallest part’s ({part}): the outline should carry the building’s maximum number of levels.",
+  "Точка на плане этажа: на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа (X)": "Point on the floor plan: on a room wall a door, on an outer wall an entrance, inside a floor object (X)",
+  "Вход: точка entrance на фасаде здания (X)": "Entrance: an entrance point on the building facade (X)",
+  "Вход: щелчок по фасаду у земли — узел entrance=yes на контуре здания. Shift — вести точку вдоль стены. Esc — выйти.": "Entrance: click the facade near the ground to add an entrance=yes node on the building outline. Shift: slide along the wall. Esc: exit.",
+  "Вход: наведите на фасад здания у земли.": "Entrance: hover over the building facade near the ground.",
+  "Здесь уже есть вход {key}.": "There is already an entrance here: {key}."
 }

@@ -196,6 +196,8 @@ export function validateTags(key: string, t: Record<string, string>, hasParts = 
       set({ [k]: v.trim().replace(/\s*m$/, '').replace(/\s*ft$/, ' ft') }));
     else if (k === 'height' && n === 0) add('warning', 'number', tr('height=0 — у здания нулевая высота.'));
   }
+  // Низ задан в метрах (min_height) — building:min_level с ним лишний: убрать
+  const dropMinLevel = t['building:min_level'] !== undefined && parseLength(t.min_height) !== undefined ? set({ 'building:min_level': undefined }) : undefined;
   for (const k of COUNT_TAGS) {
     if (t[k] === undefined) continue;
     const n = Number(t[k]);
@@ -205,12 +207,13 @@ export function validateTags(key: string, t: Record<string, string>, hasParts = 
         : tr('{tag} — не число.', { tag: `${k}=${t[k]}` }));
     } else if (n < 0) add('error', 'number', tr('{tag} — отрицательное значение (подземные этажи — building:levels:underground).', { tag: `${k}=${t[k]}` }));
     else if (!Number.isInteger(n)) add('error', 'number', tr('{tag} — этажи считают целыми; дробную высоту задают через {key}.',
-      { tag: `${k}=${t[k]}`, key: k === 'building:min_level' ? 'min_height' : k === 'roof:levels' ? 'roof:height' : 'height' }));
+      { tag: `${k}=${t[k]}`, key: k === 'building:min_level' ? 'min_height' : k === 'roof:levels' ? 'roof:height' : 'height' }),
+      k === 'building:min_level' ? dropMinLevel : undefined);
   }
   const under = t['building:levels:underground'];
   if (under !== undefined && !(Number.isInteger(Number(under)) && Number(under) >= 0)) add('error', 'number', tr('{tag} — нужно целое неотрицательное число подземных этажей.', { tag: `building:levels:underground=${under}` }));
   if (t['building:min_level'] !== undefined && Number(t['building:min_level']) === 0) add('warning', 'levels', tr('building:min_level=0 — лишний тег: часть и так начинается с земли.'), set({ 'building:min_level': undefined }));
-  if (t['building:min_level'] !== undefined && t['building:levels'] === undefined) add('warning', 'levels', tr('building:min_level без building:levels — число этажей части не определено.'));
+  if (t['building:min_level'] !== undefined && t['building:levels'] === undefined) add('warning', 'levels', tr('building:min_level без building:levels — число этажей части не определено.'), dropMinLevel);
   if (Number(t['building:levels']) === 0 && !(Number(t['building:levels:underground']) > 0)) add('warning', 'levels', tr('building:levels=0 — у здания нет надземных этажей (подземное — с building:levels:underground).'));
   const height = parseLength(t.height), min = parseLength(t.min_height), roof = parseLength(t['roof:height']);
   const before = out.length;

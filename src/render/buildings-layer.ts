@@ -120,13 +120,8 @@ const INDOOR_SELECT_WIRE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x60a5f
 /** Маркер двери на полу проёма: плоский кружок (вид сверху и сбоку) — на любом ракурсе виден. */
 const DOOR_GEO = new THREE.SphereGeometry(0.08, 16, 8).scale(1, 1, 0.35);
 const DOOR_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000 });
-/**
- * Порядок отрисовки при подложках этажа: перекрытия и бледные полы под проёмами (FLOOR_ORDER) — подложка
- * (FLOOR_ORDER + 1, без проверки глубины) — полы помещений (FLOOR_ORDER + 2, полупрозрачно поверх неё) — остальное.
- */
-const FLOOR_ORDER = -4;
-/** Непрозрачность цвета пола помещения поверх подложки этажа. */
-const FLOOR_OVER_RASTER = 0.35;
+/** Порядок отрисовки полов этажа: до подложек этажа (FLOOR_ORDER + 1), а те — до остального. */
+const FLOOR_ORDER = -3;
 const DOOR_SILL_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xf97316, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const DOOR_AXIS_MATERIAL = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.12, gapSize: 0.08, depthTest: false, depthWrite: false });
 const DOOR_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x2563eb });
@@ -272,10 +267,7 @@ const STAIRS_EARTH = new THREE.MeshBasicMaterial({ colorWrite: false, side: THRE
 /** Земля на плане этажа: только глубина (см. addEarth). */
 const EARTH_MATERIAL = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
 /** Материалы полов этажа: подложки этажа рисуются поверх них. */
-const FLOOR_MATERIALS = new Set<THREE.Material>([INDOOR_PALE_FLOOR_MATERIAL, INDOOR_SLAB_MATERIAL]);
-/** Смешивание по альфе в непрозрачном списке three: альфа холста карты остаётся 1 (иначе сквозь неё светлеет фон страницы). */
-const OVER_BLEND = { blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
-  blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor } as const;
+const FLOOR_MATERIALS = new Set<THREE.Material>([INDOOR_FLOOR_MATERIAL, INDOOR_PALE_FLOOR_MATERIAL, INDOOR_SLAB_MATERIAL]);
 /** Рёбра подземного снаружи здания — пунктиром сквозь землю. */
 // Рисуется первым (до земли и здания), без глубины и непрозрачным списком: конструкции этажа закрашивают его,
 // а подземное до него не доходит — земля уже стоит в глубине. Виден только «сквозь землю»
@@ -923,19 +915,13 @@ export class BuildingsLayer implements CustomLayerInterface {
   private floorUnderlayGroup?: THREE.Group;
 
   /**
-   * Подложки этажа — в сцене здания: после перекрытий, до полов помещений (FLOOR_ORDER), без проверки глубины — пол их не закрывает,
+   * Подложки этажа — в сцене здания: после полов (renderOrder FLOOR_ORDER) без проверки глубины — пол их не закрывает,
    * как стеклянный; стены, двери, лестницы рисуются позже с глубиной полов — поверх подложки, как и раньше.
    */
   private syncFloorUnderlays() {
     const g = this.groups.get(FOCUS_GROUP);
     const list = this.level && g && !this.wireframe ? this.underlays.floorMeshes() : [];
     this.underlays.floorInScene = !!(this.level && g && !this.wireframe);
-    // Цвет пола помещения — полупрозрачно поверх подложки; без подложек этажа — как был
-    const tint = list.length > 0, m = INDOOR_FLOOR_MATERIAL;
-    if ((m.blending === THREE.CustomBlending) !== tint) {
-      Object.assign(m, tint ? { ...OVER_BLEND, opacity: FLOOR_OVER_RASTER } : { blending: THREE.NormalBlending, opacity: 1 });
-      m.needsUpdate = true;
-    }
     if (!list.length && !this.floorUnderlays.size) return;
     if (!this.floorUnderlayGroup || this.floorUnderlayGroup.parent !== g?.scene) {
       this.floorUnderlayGroup?.parent?.remove(this.floorUnderlayGroup);
@@ -949,7 +935,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       let copy = this.floorUnderlays.get(id) as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | undefined;
       if (!copy) {
         // Непрозрачный список three (иначе — после всех стен), смешивание по альфе — вручную
-        const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, depthTest: false, depthWrite: false, transparent: false, ...OVER_BLEND });
+        const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, depthTest: false, depthWrite: false, transparent: false,
+          blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor });
         copy = new THREE.Mesh(mesh.geometry, material);
         copy.renderOrder = FLOOR_ORDER + 1;
         copy.frustumCulled = false;
@@ -965,9 +952,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     // Полы этажа — раньше подложек
     this.indoorObj?.traverse((o) => {
-      if (!(o instanceof THREE.Mesh) || (o.renderOrder !== 0 && o.renderOrder > FLOOR_ORDER + 2)) return;
-      if (FLOOR_MATERIALS.has(o.material)) o.renderOrder = FLOOR_ORDER;
-      else if (o.material === INDOOR_FLOOR_MATERIAL) o.renderOrder = FLOOR_ORDER + 2;
+      if (o instanceof THREE.Mesh && FLOOR_MATERIALS.has(o.material) && o.renderOrder === 0) o.renderOrder = FLOOR_ORDER;
     });
   }
 

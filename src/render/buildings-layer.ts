@@ -8,6 +8,9 @@ import { occludedByTriangles } from './ray-occlusion';
 import { trimIndoorBuildingEdges } from './indoor-building-edges';
 import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth, wallDoorwaySpan } from './door-openings';
+import { RECESS_DEPTH, recessEntrances, type RecessPlace } from './entrance-recess';
+/** Прототип: ниши входов (localStorage entranceNiches=1, затем перезагрузка страницы). */
+const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') === '1'; } catch { return false; } })();
 import * as THREE from 'three';
 import polygonClipping, { type MultiPolygon as ClipMulti } from 'polygon-clipping';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
@@ -136,7 +139,7 @@ ENTRANCE_LINE_MATERIAL.onBeforeCompile = shader => {
 export const ENTRANCE_WIDTH = DOOR_WIDTH;
 export const ENTRANCE_HEIGHT = DOOR_HEIGHT;
 /** Прямоугольник входа лежит в плоскости стены (как проём на плане этажа); от мерцания — сдвиг глубины материала. */
-const ENTRANCE_OFFSET = 0;
+const ENTRANCE_OFFSET = entranceNiches ? -RECESS_DEPTH : 0;
 /** Вход со скрытого объекта режима здания виден, если стоит не дальше этого от стены видимого, м. */
 const ENTRANCE_ON_WALL = 0.3;
 /** Расстояние от точки до отрезка ab. */
@@ -8604,6 +8607,52 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     timed('здание: дно', () => {
       const rest = g.contacts && subtractFaces(polys, contactFaces(g.contacts.tops, f.key, heights.min, box2));
       tri.walls.push(...bottomTriangles(rest ?? polys, heights.min));
+    });
+  }
+  // Прототип: ниши входов — за флагом localStorage entranceNiches=1
+  if (entranceNiches && !shell && !roofOnly && !flat && !tri.pending && f.entrances?.length) {
+    timed('здание: ниши входов', () => {
+      const doors = new Map(f.entrances!.filter((e) => e.tags.entrance && e.tags.entrance !== 'no').map((e) => [e.id, e.tags]));
+      const places: RecessPlace[] = [];
+      // Ниша — на своей высоте (не на низе части): часть выше двери (узел на её контуре над входом) её не получает,
+      // а у частей, через которые проходит проём (цоколь и часть над ним), CSG вырежет каждой её долю
+      const crosses = (z: number) => z < heights.wallTop - 1e-3 && z + ENTRANCE_HEIGHT > heights.min + 1e-3;
+      const allRings = f.polygons.map((p) => [p.outer, ...p.inners].map((r) => r.map(g.toLocal)));
+      const onRing = new Set<number>();
+      f.polygons.forEach((p, k) => {
+        const rings = allRings[k];
+        [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
+          const door = doors.get(id);
+          if (!door) return;
+          onRing.add(id);
+          const z = entranceZ(door, tags);
+          if (!crosses(z)) return;
+          const place = entrancePlace(rings, r, i, z);
+          if (place) places.push({ ...place, width: tagWidth(door) });
+        }));
+      });
+      // Дверь indoor-стены на фасаде (не вершина контура) — на ближайшей стене, как прямоугольник входа
+      for (const e of f.entrances!) {
+        const door = doors.get(e.id);
+        if (!door || !e.at || onRing.has(e.id)) continue;
+        const q = g.toLocal(e.at);
+        let near: { p: Pt; t: Pt; rings: Pt[][]; d: number } | undefined;
+        for (const rings of allRings) for (const r of rings) r.forEach((a, i) => {
+          const b = r[(i + 1) % r.length], ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey;
+          if (l2 < 1e-8) return;
+          const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * ex + (q[1] - a[1]) * ey) / l2));
+          const d = Math.hypot(q[0] - a[0] - t * ex, q[1] - a[1] - t * ey);
+          if (!near || d < near.d) near = { p: [a[0] + t * ex, a[1] + t * ey], t: [ex / Math.sqrt(l2), ey / Math.sqrt(l2)], rings, d };
+        });
+        if (!near || near.d > ENTRANCE_ON_WALL) continue;
+        let n: Pt = [near.t[1], -near.t[0]];
+        const probe: Pt = [near.p[0] + n[0] * 0.2, near.p[1] + n[1] * 0.2];
+        if (pointInLocalRing(probe, near.rings[0]) && !near.rings.slice(1).some((h) => pointInLocalRing(probe, h))) n = [-n[0], -n[1]];
+        const z = entranceZ(door, tags);
+        if (crosses(z)) places.push({ p: near.p, t: near.t, n, z, width: tagWidth(door) });
+      }
+      const cut = recessEntrances(tri.walls, places, { width: ENTRANCE_WIDTH, height: ENTRANCE_HEIGHT, min: heights.min, top: heights.wallTop });
+      if (cut) tri.walls = cut;
     });
   }
   // Стеклянный фасад: внутри видны перекрытия — плиты на границах этажей (непрозрачные, после крыши)

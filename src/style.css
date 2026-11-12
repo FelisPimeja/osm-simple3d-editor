@@ -1,3 +1,9 @@
+:root {
+  --ink: #111; --ink-2: #4b5563; --ink-3: #6b7280;
+  --line: #e5e7eb; --line-strong: #ccc; --surface-2: #f3f4f6;
+  --accent: #2563eb; --accent-soft: #dbeafe; --warn: #b45309; --danger: #dc2626;
+  --radius: 4px; --control-h: 26px; --focus-ring: 0 0 0 2px rgba(37,99,235,.25);
+}
 html, body { margin: 0; height: 100%; overflow: hidden; font: 14px system-ui, sans-serif; } /* полноэкранная карта: прокрутки страницы не бывает */
 #map { position: absolute; inset: 0; }
 /* Колонки панелей: левая — настройки и панели инструментов, правая — свойства и правки */
@@ -38,10 +44,10 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 .flyout-check:hover { background: #f3f4f6; }
 .snap-icon { flex: none; }
 .snap-icon .g { stroke-opacity: .45; }
-.flyout-check.disabled { color: #9ca3af; }
-.flyout-check kbd { margin-left: auto; padding-left: 12px; color: #9ca3af; font: 11px system-ui; }
+.flyout-check.disabled { color: #6b7280; }
+.flyout-check kbd { margin-left: auto; padding-left: 12px; color: #6b7280; font: 11px system-ui; }
 .tool-flyout .flyout-all { height: 30px; justify-content: flex-start; padding: 0 10px; font-size: 13px; }
-.tool-flyout .flyout-all:disabled { color: #9ca3af; cursor: default; background: transparent; }
+.tool-flyout .flyout-all:disabled { color: #6b7280; cursor: default; background: transparent; }
 .flyout-sep { height: 1px; margin: 2px 4px; background: #e5e7eb; }
 .toolbar-sep { height: 1px; margin: 2px 4px; background: #e5e7eb; }
 .toolbar-sep:has(+ [hidden]) { display: none; }
@@ -88,9 +94,9 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 .ctx-menu button { display: block; width: 100%; padding: 5px 10px; border: 0; border-radius: 4px; background: transparent;
   font: inherit; text-align: left; cursor: pointer; }
 .ctx-menu button:hover:not(:disabled) { background: #dbe7ff; }
-.ctx-menu button:disabled { color: #aaa; cursor: default; }
+.ctx-menu button:disabled { color: #6b7280; cursor: default; }
 .ctx-menu button { display: flex; align-items: center; gap: 16px; }
-.ctx-menu kbd { margin-left: auto; font: inherit; font-size: 11px; color: #888; }
+.ctx-menu kbd { margin-left: auto; font: inherit; font-size: 11px; color: #6b7280; }
 #outliner-panel { max-height: 30%; }
 #levels-panel { max-height: 25%; }
 #levels-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
@@ -99,11 +105,11 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 .levels .lv-plan { flex: none; width: 16px; height: 16px; color: #1f2937; }
 .levels li.selected .lv-plan { color: #2563eb; }
 .levels .lv-plan svg { width: 16px; height: 16px; display: block; }
-.levels .lv-meta { color: #888; font-size: 11px; white-space: nowrap; }
-.levels .lv-sub { color: #888; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.levels .lv-meta { color: #6b7280; font-size: 11px; white-space: nowrap; }
+.levels .lv-sub { color: #6b7280; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .levels .lv-explicit { color: #1f2937; border-bottom: 1px dotted #888; cursor: help; }
 .levels .lv-warn { display: inline-block; width: 14px; height: 14px; margin-right: 4px; border-radius: 50%; background: #f59e0b; color: #fff; font-weight: 700; font-size: 10px; line-height: 14px; text-align: center; cursor: help; }
-.levels .lv-empty { color: #888; cursor: default; }
+.levels .lv-empty { color: #6b7280; cursor: default; }
 .levels .lv-empty:hover { background: transparent; }
 #outliner-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
 /* Дерево частей в режиме здания (как Outliner в SketchUp): глазик, значок, название */
@@ -114,19 +120,19 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 .outliner li.off .ol-label, .outliner li.off .ol-icon { opacity: .4; }
 /* Нет в году слайдера времени — скрыта в сцене, глазик при этом свой */
 .outliner li.dated .ol-label, .outliner li.dated .ol-icon { opacity: .4; font-style: italic; }
-.outliner li.missing { cursor: default; color: #999; }
+.outliner li.missing { cursor: default; color: #6b7280; }
 .ol-eye { flex: none; width: 22px; height: 20px; padding: 0; border: 0; background: transparent; cursor: pointer; color: #555; display: grid; place-items: center; }
 .ol-eye:hover { color: #000; }
 .ol-eye svg, .ol-icon svg { width: 16px; height: 16px; display: block; }
 .ol-icon { flex: none; color: #444; }
 .ol-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ol-key { color: #888; font-size: 11px; margin-left: 4px; }
+.ol-key { color: #6b7280; font-size: 11px; margin-left: 4px; }
 #edits-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
 #edits-panel .panel-head h1 .hint:not(:empty) { margin-left: 4px; }
 /* Кнопки карты — слева от панели свойств, пока она видна */
 .maplibregl-ctrl-top-right { right: 334px; }
 .panel-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 12px; cursor: pointer; user-select: none; }
-.panel-head h1 { font-size: 16px; margin: 0; flex: 1; }
+.panel-head h1 { font-size: 15px; font-weight: 600; letter-spacing: -.005em; margin: 0; flex: 1; }
 .panel-body { min-height: 0; overflow: auto; padding: 0 12px 12px; }
 .panel.collapsed .panel-body { display: none; }
 /* Свёрнутая панель не сжимается ниже заголовка, развёрнутая — оставляет заголовок и хоть немного содержимого */
@@ -140,7 +146,7 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 .panel.collapsed .collapse-btn::before {
   --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 7.500l5 5 5-5'/%3E%3C/svg%3E"); }
 .hint { color: #666; margin: 0 0 8px; }
-#info { font-size: 12px; margin: 0; }
+#info { font-size: 13px; margin: 0; color: var(--ink); }
 @media (max-width: 500px) {
   #left-col { width: auto; right: 12px; bottom: auto; max-height: 40%; }
   #right-col { width: auto; left: 12px; top: auto; bottom: 28px; max-height: 40%; justify-content: flex-end; }
@@ -179,19 +185,35 @@ body:not(.mobile) .vcb.vcb-track { bottom: calc(28px + var(--statusbar-h, 0px) +
 body.mobile #statusbar { bottom: calc(var(--mobile-bottom, 44px) + 16px); }
 /* Правая колонка (панель «Этажи») — над карточкой здания, а не под ней */
 body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobile-card-h, 72px) + 20px + env(safe-area-inset-bottom)); }
-#info h2 { font-size: 14px; margin: 8px 0 4px; }
-#info .obj-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: 8px 0 6px; }
+#info h2 { font-size: 15px; font-weight: 600; margin: 4px 0 4px; letter-spacing: -.005em; }
+#info .obj-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: 2px 0 12px; }
+#info .obj-head h2 { margin: 0; }
 #info .obj-head a { font-size: 12px; font-weight: 400; }
-.obj-ver { padding: 0 5px; border-radius: 4px; background: #f3f4f6; color: #555; font-size: 11px; font-weight: 400; }
+.obj-ver { padding: 1px 6px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); font-size: 11px; font-weight: 500; }
 #info .dims { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 8px; font-size: 12px; color: #374151; }
 #info .dims dt { color: #6b7280; }
 #info .dims dd { margin: 0; }
-#info a { color: #2563eb; }
+#info a { color: var(--accent); text-decoration: none; }
+#info a:hover { text-decoration: underline; }
 #info table { border-collapse: collapse; width: 100%; font-size: 12px; }
 #info td { border-top: 1px solid #eee; padding: 2px 4px; vertical-align: top; word-break: break-all; }
 #info td:first-child { color: #555; white-space: nowrap; word-break: normal; }
 #info .warn { color: #b45309; font-size: 12px; margin: 4px 0; }
-#info button { padding: 4px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+#info button { display: inline-flex; align-items: center; gap: 8px; min-height: var(--control-h); padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; color: var(--ink); font: inherit; font-weight: 500; line-height: 1; cursor: pointer; transition: background .12s, border-color .12s; }
+#info button:hover:not(:disabled) { background: var(--surface-2); border-color: #bcc3cd; }
+#info button:focus-visible, .tag-row input:focus-visible, .tag-row select:focus-visible, .other-tags input:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
+#info button:disabled { color: var(--ink-3); cursor: default; }
+#info button.active { background: var(--accent-soft); border-color: #93c5fd; color: #1e40af; }
+#info button kbd { padding: 1px 5px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2); font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+#info button.active kbd { background: rgba(255,255,255,.7); color: #1e40af; }
+/* Ряд действий под формой: одна линия, одни кнопки */
+.action-bar { gap: 6px; }
+#info .action-bar button { flex: 1 1 100%; justify-content: space-between; }
+.action-bar + .action-bar { margin-top: 6px; padding-top: 0; border-top: 0; }
+.action-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); }
+#info .tips { margin: 0 0 4px; padding: 0; list-style: none; color: var(--ink-2); font-size: 12px; line-height: 1.5; }
+#info .tips li { position: relative; padding-left: 14px; margin: 0 0 4px; }
+#info .tips li::before { content: ''; position: absolute; left: 3px; top: .62em; width: 4px; height: 4px; border-radius: 50%; background: var(--ink-3); }
 #op-indicator {
   display: flex; align-items: center; justify-content: center; gap: 6px; max-width: 100%; padding: 2px 8px; border-radius: 10px; color: #333; text-align: center; pointer-events: auto;
 }
@@ -253,10 +275,11 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 }
 .snap-marker.midpoint::after { content: none; }
 .tag-form { display: grid; gap: 4px; margin: 8px 0; }
-.tag-row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 6px; font-size: 13px; }
-.tag-row > span { color: #555; }
-.tag-row input[type="text"], .tag-row select, .server-line select { width: 100%; height: 26px; box-sizing: border-box; padding: 3px 5px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
-.tag-row.changed > span { color: #b45309; font-weight: 600; }
+.tag-row { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 8px; font-size: 13px; }
+.tag-row > span { color: var(--ink-2); font-size: 12px; }
+.tag-row input[type="text"], .tag-row select, .server-line select { width: 100%; height: var(--control-h); box-sizing: border-box; padding: 3px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); background-color: #fff; color: var(--ink); font: inherit; transition: border-color .12s, box-shadow .12s; }
+.tag-row input[type="text"]:hover, .tag-row select:hover, .other-tags input:hover { border-color: #bcc3cd; }
+.tag-row.changed > span { color: var(--warn); font-weight: 600; }
 .tag-row.changed input[type="text"], .tag-row.changed select { border-color: #f59e0b; background: #fffbeb; }
 .tag-row .invalid { border-color: #dc2626 !important; background: #fef2f2 !important; }
 .colour-field { display: flex; gap: 4px; }
@@ -265,8 +288,8 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 #info .direction-pick { flex: none; width: 28px; padding: 0; display: grid; place-items: center; cursor: pointer; }
 .direction-pick svg { width: 16px; height: 16px; display: block; }
 #info .direction-pick.active { background: #2563eb; color: #fff; border-color: #2563eb; }
-.colour-field input[type="color"] { width: 32px; height: 26px; padding: 0; border: 1px solid #ccc; border-radius: 4px; flex: none; }
-.tag-form [data-revert] { justify-self: start; margin-top: 4px; }
+.colour-field input[type="color"] { width: 32px; height: var(--control-h); padding: 2px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; flex: none; }
+.tag-form [data-revert] { justify-self: start; margin-top: 6px; }
 .inherit-field { position: relative; display: block; flex: 1; min-width: 0; }
 /* Поле этажей со стрелками ±1 (как у спиннера): справа в поле, одна над другой */
 .step-field { position: relative; display: block; flex: 1; min-width: 0; }
@@ -279,11 +302,11 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 #info .step-btn[data-step="1"], .step-btn[data-step="1"] { border-radius: 0 3px 0 0; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 5l4-4 4 4' fill='none' stroke='%23555' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
 #info .step-btn[data-step="-1"], .step-btn[data-step="-1"] { border-radius: 0 0 3px 0; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23555' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
 .inherit-field input { width: 100%; box-sizing: border-box; padding-right: 24px; }
-.inherit-field input::placeholder { color: #9ca3af; }
-.inherit-badge { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: #9ca3af; pointer-events: none; }
+.inherit-field input::placeholder { color: #6b7280; }
+.inherit-badge { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: #6b7280; pointer-events: none; }
 .inherit-badge svg { width: 14px; height: 14px; display: block; }
 /* Подсказка значения (дата здания у части): серым, Tab — подставить */
-.tag-row input.suggested::placeholder { color: #9ca3af; font-style: italic; }
+.tag-row input.suggested::placeholder { color: #6b7280; font-style: italic; }
 .colour-field input[type="color"].inherited { opacity: .55; }
 .colour-field input[type="color"].picking { outline: 2px solid #2563eb; outline-offset: 1px; }
 /* Окно выбора цвета (src/edit/colour-popover.ts) */
@@ -300,7 +323,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .colour-popover-more { padding: 4px; border: 0; background: none; color: #2563eb; text-align: left; }
 .colour-popover-more:hover { text-decoration: underline; }
 .inherit-field select { width: 100%; box-sizing: border-box; }
-.inherit-field select.inherited { color: #9ca3af; }
+.inherit-field select.inherited { color: #6b7280; }
 .inherit-field select.inherited option { color: #222; }
 .inherit-field:has(select) .inherit-badge { right: 22px; }
 .all-tags summary { cursor: pointer; font-size: 12px; color: #555; margin: 4px 0; }
@@ -319,7 +342,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .change-list .ch-icon { color: #444; padding-top: 1px; }
 .change-list .ch-icon svg { width: 16px; height: 16px; display: block; }
 .change-list .ch-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.change-list .ch-key { color: #888; font-size: 11px; margin-left: 4px; }
+.change-list .ch-key { color: #6b7280; font-size: 11px; margin-left: 4px; }
 .change-list .ch-new { color: #15803d; font-size: 11px; margin-left: 4px; }
 .change-list .ch-diff { grid-column: 2; font-size: 12px; color: #555; }
 .change-list .ch-diff div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -348,7 +371,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .account-line a:hover { text-decoration: underline; }
 .link-btn { padding: 0; border: 0; background: none; color: #2563eb; font: inherit; cursor: pointer; }
 .link-btn:hover { text-decoration: underline; }
-.link-btn:disabled { color: #aaa; cursor: default; }
+.link-btn:disabled { color: #6b7280; cursor: default; }
 .login-btn { padding: 5px 12px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; font: inherit; font-size: 13px; color: #222; cursor: pointer; }
 .select-box { position: absolute; border: 1px solid #ff7a00; background: rgba(255,122,0,.12); pointer-events: none; z-index: 2; }
 .outline-choice { border: 1px solid #e5e7eb; border-radius: 6px; margin: 6px 0; padding: 4px 8px; font-size: 12px; }
@@ -450,7 +473,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .draw-dim { position: absolute; transform: translate(-50%, -50%); padding: 1px 5px; border-radius: 3px; white-space: nowrap;
   font: 11px ui-monospace, monospace; color: #fff; background: rgba(0,0,0,.6); }
 .draw-dim.current { background: #2f7cff; font-weight: 600; }
-.tag-row .mixed, .tag-row input.mixed::placeholder { color: #9ca3af; font-style: italic; }
+.tag-row .mixed, .tag-row input.mixed::placeholder { color: #6b7280; font-style: italic; }
 .tag-row select.mixed option { color: #111; font-style: normal; }
 .colour-field input[type="color"].mixed { opacity: .45; }
 
@@ -472,7 +495,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .ol-key.bare { margin-left: 0; color: #555; font-size: 12px; }
 
 /* Одинаковая стрелка у списков: select и поле со списком (Часть здания) */
-.tag-row select, .server-line select { appearance: none; -webkit-appearance: none; padding-right: 22px; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23555' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 7px center / 10px 6px; }
+.tag-row select, .server-line select { appearance: none; -webkit-appearance: none; padding-right: 26px; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23555' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 7px center / 10px 6px; }
 .tag-row.changed select { background-color: #fffbeb; }
 .combo-field { position: relative; display: block; }
 .combo-field input[type="text"] { padding-right: 22px; }
@@ -482,7 +505,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .combo-list[hidden] { display: none; }
 .combo-list li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 8px; cursor: pointer; }
 .combo-list li b { font-weight: normal; }
-.combo-list li span { color: #888; font-size: 12px; }
+.combo-list li span { color: #6b7280; font-size: 12px; }
 .combo-list li:hover, .combo-list li.active { background: #dbe7ff; }
 .combo-list li.nomatch { display: none; }
 .combo-list li.current { background: #eef3ff; }
@@ -523,7 +546,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .indoor-badge:hover { border-color: #2563eb; color: #2563eb; }
 .indoor-badge[hidden] { display: none; }
 .indoor-badge svg { width: 100%; height: 100%; display: block; }
-.levels .lv-source { display: block; color: #888; font-size: 11px; line-height: 1.5; cursor: default; border-top: 1px solid #eee; margin-top: 4px; padding-top: 6px; }
+.levels .lv-source { display: block; color: #6b7280; font-size: 11px; line-height: 1.5; cursor: default; border-top: 1px solid #eee; margin-top: 4px; padding-top: 6px; }
 .levels .lv-source:hover { background: transparent; }
 
 /* Мобильный режим (узкий экран): только просмотр — без инструментов, свойств и правок; сверху свёрнутая панель
@@ -537,7 +560,7 @@ body.mobile #map { -webkit-touch-callout: none; -webkit-user-select: none; user-
 #mobile-card[hidden] { display: none; }
 #mobile-card .mc-text { flex: 1; min-width: 0; }
 #mobile-card .mc-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#mobile-card .mc-hint { color: #888; font-size: 12px; }
+#mobile-card .mc-hint { color: #6b7280; font-size: 12px; }
 #mobile-card button { flex: none; padding: 8px 12px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-size: 14px; }
 #mobile-card button.secondary { background: #eef2f7; color: #1f2937; }
 body.mobile #right-col { bottom: calc(72px + env(safe-area-inset-bottom)); }
@@ -628,7 +651,7 @@ body.mobile #toasts { top: 72px; max-width: calc(100% - 112px); }
 .issue-bundle .issue-list { margin: 0 0 2px 22px; }
 /* Colour stays on the icon: dozens of coloured text rows are tiring to read */
 .issue-text { color: #374151; }
-.issue-list .ol-key { margin-left: 6px; color: #888; }
+.issue-list .ol-key { margin-left: 6px; color: #6b7280; }
 .issue-icon { flex: none; }
 .issue-mark { flex: none; font-size: 12px; cursor: help; }
 #info .warn.error { color: #b91c1c; }
@@ -673,16 +696,16 @@ body.mobile #issues-panel { display: none !important; }
 .levels .lv-legend:hover { background: transparent; }
 .levels .lv-legend-item { display: inline-flex; align-items: center; gap: 4px; }
 .levels .lv-legend-item i { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #c8c6c2; flex: none; }
-.levels .lv-group { display: block; color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; cursor: default; padding-top: 6px; }
+.levels .lv-group { display: block; color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; cursor: default; padding-top: 6px; }
 .levels .lv-group:hover { background: transparent; }
 .level-hint-wrap { position: relative; display: block; }
-.level-hint { position: absolute; left: 0; top: 0; bottom: 0; display: flex; align-items: center; padding: 0 6px; color: #9ca3af; pointer-events: none; white-space: pre; overflow: hidden; font: inherit; }
+.level-hint { position: absolute; left: 0; top: 0; bottom: 0; display: flex; align-items: center; padding: 0 6px; color: #6b7280; pointer-events: none; white-space: pre; overflow: hidden; font: inherit; }
 .level-hint-pad { visibility: hidden; }
 .level-picker { position: absolute; left: 0; right: 0; top: calc(100% + 2px); z-index: 20; background: #fff; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.12); padding: 4px 0; max-height: 280px; overflow: auto; }
 .level-picker-row { display: flex; align-items: center; gap: 8px; padding: 3px 10px; cursor: pointer; font-size: 13px; }
 .level-picker-row:hover { background: #f3f4f6; }
 .level-picker-row.current { font-weight: 600; }
-.level-picker-n { margin-left: auto; color: #9ca3af; font-size: 11px; }
+.level-picker-n { margin-left: auto; color: #6b7280; font-size: 11px; }
 
 /* Окно просмотра снимка Panoramax (src/view/panoramax.ts); кнопки фильтра — в меню слоёв, внутри .maplibregl-ctrl-group: свои размеры и рамки */
 .panoramax-viewer { position: absolute; left: 10px; bottom: 34px; z-index: 5; width: min(520px, calc(100vw - 20px)); background: #fff; border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,.25); font-size: 12px; overflow: visible; display: flex; flex-direction: column; min-width: 240px; min-height: 180px; height: 360px; }
@@ -725,7 +748,7 @@ body.mobile #issues-panel { display: none !important; }
 .panoramax-filter { display: grid; grid-template-columns: auto minmax(0, 1fr) 18px; align-items: center; gap: 4px 6px; padding: 4px 0 4px 20px; font-size: 12px; }
 .panoramax-filter[hidden] { display: none; }
 .panoramax-filter > span { white-space: nowrap; justify-self: end; }
-.panoramax-filter input.empty { color: #9ca3af; }
+.panoramax-filter input.empty { color: #6b7280; }
 .panoramax-filter input { font: inherit; min-width: 0; width: 100%; box-sizing: border-box; }
 .panoramax-filter > button { width: auto; height: auto; border: 0; background: none; cursor: pointer; font-size: 14px; color: #6b7280; padding: 0; }
 .panoramax-seg { display: flex; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
@@ -743,7 +766,7 @@ body.mobile #issues-panel { display: none !important; }
 .underlay-props .field input[type=number] { width: 90px; }
 .underlay-props .field input[type=range] { flex: 1; }
 .underlay-props .field-check { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
-.underlay-row.away .underlay-name { color: #9ca3af; }
+.underlay-row.away .underlay-name { color: #6b7280; }
 .underlay-level { flex: none; padding: 0 4px; border-radius: 3px; background: #f3f4f6; color: #4b5563; font-size: 11px; }
 /* Настройки подложки в меню слоёв: подписи слева, элементы справа; отступ — до имени файла */
 .underlay-settings { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 5px 10px;
@@ -793,13 +816,18 @@ body.mobile #issues-panel { display: none !important; }
 .repeat-mode { display: block; margin: 4px 0; }
 .repeat-mode .hint { display: block; margin-left: 22px; font-size: 12px; color: #666; }
 
-.other-tags { margin-top: 12px; }
-.other-tags h3 { margin: 0 0 6px; font-size: 12px; font-weight: 500; color: #555; }
-.other-tag-row, .other-tag-add { display: grid; grid-template-columns: 120px minmax(0, 1fr) 26px; gap: 6px; align-items: center; margin: 4px 0; font-size: 13px; }
-.other-tag-row label { overflow-wrap: anywhere; font-size: 12px; }
-.other-tags input { width: 100%; height: 26px; min-width: 0; box-sizing: border-box; font: inherit; padding: 3px 5px; border: 1px solid #ccc; border-radius: 4px; }
-#info .other-tags button, .other-tags button { display: grid; place-items: center; width: 26px; padding: 0; height: 26px; box-sizing: border-box; color: #444; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; }
-#info .other-tags button:hover { background: #f3f4f6; }
+.other-tags { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.other-tags h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.other-tag-row, .other-tag-add { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: center; margin: 4px 0; font-size: 13px; }
+.other-tag-row label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink-2); }
+.other-tag-row input { padding-right: 30px; }
+.other-tag-add { grid-template-columns: 96px minmax(0, 1fr); }
+.other-tag-add input:last-of-type { padding-right: 30px; }
+.other-tag-row > button, .other-tag-add > button { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); width: 24px !important; height: 24px !important; }
+.other-tags input { width: 100%; height: var(--control-h); min-width: 0; box-sizing: border-box; font: inherit; padding: 3px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); }
+#info .other-tags button, .other-tags button { display: grid; place-items: center; width: var(--control-h); padding: 0; min-height: 0; height: var(--control-h); box-sizing: border-box; color: var(--ink-2); border: 1px solid transparent; border-radius: var(--radius); background: transparent; cursor: pointer; }
+#info .other-tags button:hover { background: var(--surface-2); color: var(--ink); border-color: transparent; }
+
 .other-tag-add { margin-top: 8px; }
 .other-tag-row, .other-tag-add { position: relative; }
 .other-tags .combo-list li b { overflow-wrap: anywhere; }
@@ -813,7 +841,7 @@ body.mobile #issues-panel { display: none !important; }
 @keyframes status-spin { to { transform: rotate(360deg); } }
 .length-field { position: relative; display: block; width: 100%; }
 .length-field input[type="text"] { padding-right: 22px; }
-.length-unit { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); color: #9ca3af; font-size: 12px; pointer-events: none; }
+.length-unit { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); color: #6b7280; font-size: 12px; pointer-events: none; }
 .inherit-field:has(.length-field) .length-unit { right: 24px; }
 .inherit-field:has(.length-field) .length-field input[type="text"] { padding-right: 40px; }
 .repeat-actions { display: flex; justify-content: space-between; gap: 8px; }
@@ -836,3 +864,59 @@ body.mobile #issues-panel { display: none !important; }
 .gfx[open] > summary::before, .all-tags[open] > summary::before { transform: rotate(90deg); }
 .warn svg { vertical-align: -2px; }
 .issue-icon svg, .issue-mark svg { display: block; margin-top: 1px; }
+
+/* Поле-список с отметкой «унаследовано»: отметка левее стрелки списка, а не поверх неё */
+.inherit-field:has(select, .combo-btn) .inherit-badge { right: 28px; }
+.inherit-field select, .inherit-field .combo-field input[type="text"] { padding-right: 46px; }
+/* Образец цвета: одна рамка, а не рамка в рамке */
+.colour-field input[type="color"] { border: 0; padding: 0; background: none; }
+.colour-field input[type="color"].inherited { opacity: .8; }
+.colour-field input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.colour-field input[type="color"]::-webkit-color-swatch { border: 1px solid var(--line-strong); border-radius: var(--radius); }
+.colour-field input[type="color"]::-moz-color-swatch { border: 1px solid var(--line-strong); border-radius: var(--radius); }
+
+/* ── Свойства: структура, а не новая тема — внешний вид общий с остальным приложением ───────────── */
+#info h2.obj-head { font-size: 16px; font-weight: 600; margin: 2px 0 12px; }
+#info .obj-title::first-letter { text-transform: uppercase; }
+/* Поля парами: подпись над полем; списки — на всю ширину */
+.tag-form { grid-template-columns: 1fr 1fr; gap: 10px 8px; margin: 4px 0 8px; }
+.tag-form > .tag-row { grid-template-columns: 1fr; gap: 3px; min-width: 0; }
+.tag-form > .tag-row:has(select, .combo-field, .direction-field) { grid-column: 1 / -1; }
+.tag-form > :not(.tag-row) { grid-column: 1 / -1; }
+.tag-form > .tag-row > span { font-size: 12px; color: var(--ink-2); }
+/* «Унаследовано» — подсказкой при наведении; единицы стоят ровно */
+.inherit-badge { display: none; }
+.inherit-field:has(.length-field) .length-unit { right: 6px; }
+.inherit-field:has(.length-field) .length-field input[type="text"] { padding-right: 22px; }
+.inherit-field:has(select, .combo-btn) .inherit-badge { display: block; right: 28px; }
+/* Стрелки ±1 — при наведении */
+.step-btns { opacity: 0; }
+.step-field:hover .step-btns, .step-field:focus-within .step-btns { opacity: 1; }
+/* Цвет: одно поле с образцом внутри */
+.colour-field { gap: 0; align-items: center; height: var(--control-h); border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; overflow: hidden; }
+.colour-field:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }
+.colour-field input[type="color"] { width: 22px; height: 16px; margin: 0 2px 0 5px; border: 0; padding: 0; background: none; }
+.colour-field input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.colour-field input[type="color"]::-webkit-color-swatch { border: 1px solid var(--line-strong); border-radius: 3px; }
+.colour-field input[type="color"].inherited, .colour-field input[type="color"].mixed { opacity: 1; }
+.colour-field input[type="color"].inherited::-webkit-color-swatch, .colour-field input[type="color"].mixed::-webkit-color-swatch {
+  background: linear-gradient(135deg, #fff calc(50% - 1px), #f87171 50%, #fff calc(50% + 1px)); }
+.colour-field > input[type="text"], .colour-field .inherit-field { flex: 1; min-width: 0; }
+.colour-field input[type="text"], .colour-field input[type="text"]:hover { border: 0 !important; background: transparent !important; box-shadow: none !important; height: calc(var(--control-h) - 2px); padding-left: 5px; }
+/* Прочие теги */
+.other-tags { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.other-tags h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); text-transform: none; letter-spacing: 0; }
+.other-tag-row, .other-tag-add { grid-template-columns: 96px minmax(0, 1fr); gap: 6px; margin: 4px 0; }
+.other-tag-row label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink-2); }
+.other-tag-row input, .other-tag-add input:last-of-type { padding-right: 28px; }
+.other-tag-row > button, .other-tag-add > button { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); width: 22px !important; height: 22px !important; min-height: 0; border: 0 !important; background: transparent !important; color: var(--ink-3); }
+.other-tag-row > button:hover { color: var(--ink); }
+/* Действия: те же кнопки, что и везде; значок-клавиша справа; опасное — отдельно, последним */
+.action-bar { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
+.action-bar + .action-bar { margin-top: 6px; padding-top: 0; border-top: 0; }
+#info .action-bar button { width: 100%; justify-content: space-between; font-weight: 400; }
+#info .action-bar button:hover:not(:disabled) { background: var(--surface-2); }
+#info .action-bar button.danger { color: var(--danger); border-color: #fca5a5; }
+#info .action-bar button.danger:hover:not(:disabled) { background: #fef2f2; }
+#info button kbd, .kbds kbd { padding: 0 5px; border-radius: 3px; background: var(--surface-2); color: var(--ink-2); box-shadow: none; font: 11px ui-monospace, monospace; }
+#info button[aria-pressed="true"] { background: var(--accent-soft); border-color: #93c5fd; color: #1e40af; }

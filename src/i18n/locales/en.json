@@ -1502,5 +1502,8 @@
   "Убрать лишние вершины": "Remove redundant vertices",
   "Лишние вершины — узлы с тегами: их убирают вручную.": "The redundant vertices are tagged nodes: remove them by hand.",
   "Убрано лишних вершин: {n}; затронуто объектов: {m}. Отменить — Ctrl+Z.": "Redundant vertices removed: {n}; objects changed: {m}. Undo — Ctrl+Z.",
-  "убрать repeat_on": "remove repeat_on"
+  "убрать repeat_on": "remove repeat_on",
+  "членов: {n}": "{n} parts",
+  "Клик по части — выделить её, Shift — несколько.": "Click a part to select it, Shift for several.",
+  "Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.": "Double-click a part to isolate it; double-click outside the building to show all parts or exit."
 }

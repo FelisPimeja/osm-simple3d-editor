@@ -14728,7 +14728,7 @@ function mergeIntoBuilding() {
 /** Кнопка исключения выделенных частей из группы, в которую «провалились». */
 function excludeButton(): string {
   if (!drill || !selection.length || !selection.every((k) => drill!.members.includes(k))) return '';
-  return `<p><button type="button" data-exclude>${tr('Исключить из этого здания')}${selection.length > 1 ? ` (${selection.length})` : ''}</button></p>`;
+  return `<div class="action-bar"><button type="button" class="btn danger" data-exclude>${tr('Исключить из этого здания')}${selection.length > 1 ? ` (${selection.length})` : ''}</button></div>`;
 }
 
 function excludeFromGroup() {
@@ -15424,7 +15424,7 @@ function renderSelectedImpl() {
   // В режиме здания подсказка о группе не нужна (выход — Esc и панель частей); «Исключить» — под свойствами
   // Здание без отношения (контур с частями внутри) — та же шапка, что у отношения
   const header = r && !focus && highlightKeys(r.feature.key).length > 1 ? buildingHeader((session.get(r.feature.key)?.tags ?? r.feature.tags).name, session.get(r.feature.key)?.tags ?? r.feature.tags) : '';
-  infoEl.innerHTML = r ? header + (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + excludeButton() + (focus ? focusExitButton() : '') : '';
+  infoEl.innerHTML = r ? header + (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + (focus ? focusExitButton() : '') + excludeButton() : '';
 }
 
 // Рендер: часть без своих цветов/формы крыши/материалов берёт их у контура, затем у отношения
@@ -15486,11 +15486,11 @@ function describeFocus(g: BuildingGroup): string {
   const level = currentLevel !== undefined ? buildingLevels(g, buildingIndoor(g)).find((l) => l.n === currentLevel) : undefined;
   if (level) return describeLevel(level) + focusExitButton('Esc');
   const name = g.tags.name ?? outlineTags(g)?.name;
+  const ref = isSolo(g) ? g.members[0] : g.key;
   return `
-    <h2>${tr('Режим здания')}</h2>
+    <div class="obj-head"><h2>${tr('Режим здания')}</h2><a href="${server().web}/${ref}" target="_blank" rel="noopener">${ref}</a>${g.members.length > 1 ? `<span class="obj-ver">${tr('членов: {n}', { n: g.members.length })}</span>` : ''}</div>
     ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
-    <p class="hint">${tr('{link}, членов: {n}.', { link: `<a href="${server().web}/${isSolo(g) ? g.members[0] : g.key}" target="_blank" rel="noopener">${isSolo(g) ? g.members[0] : g.key}</a>`, n: g.members.length })}
-      ${tr('Клик по части — выделить её, Shift — несколько. Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.')}</p>
+    <ul class="tips"><li>${tr('Клик по части — выделить её, Shift — несколько.')}</li><li>${tr('Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.')}</li></ul>
     ${outlineWarning(g)}
     ${implicitWarning(g)}
     ${focusExitButton('Esc')}`;
@@ -15498,8 +15498,9 @@ function describeFocus(g: BuildingGroup): string {
 
 function focusExitButton(keys = 'Esc ×2'): string {
   const ctx = overpassLayer.contextShown;
-  return `<p><button type="button" data-focus-exit>${tr('Выйти из режима здания')}</button> <span class="hint">(${keys})</span>
-    <button type="button" data-focus-context${ctx ? ' class="active"' : ''} aria-pressed="${ctx}">${ctx ? tr('Скрыть окружение') : tr('Показать окружение')}</button> <span class="hint">(Shift+N)</span></p>`;
+  const kbd = (k: string) => `<span class="kbds">${[k.replace(/Shift\+/, '⇧')].map((x) => `<kbd>${x}</kbd>`).join('')}</span>`;
+  return `<div class="action-bar"><button type="button" class="btn" data-focus-exit>${tr('Выйти из режима здания')}${kbd(keys)}</button>
+    <button type="button" class="btn" data-focus-context aria-pressed="${ctx}">${ctx ? tr('Скрыть окружение') : tr('Показать окружение')}${kbd('Shift+N')}</button></div>`;
 }
 
 /** Подсказка над частью, выделенной внутри группы. */

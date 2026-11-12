@@ -40,3 +40,11 @@ test('roof handles use meters without changing either level count', () => {
   assert.deepEqual(roofHeightTags(tags,-3), {...tags,'roof:height':'0'});
   assert.deepEqual(tags, {'building:levels':'3', 'roof:shape':'gabled', 'roof:levels':'1'});
 });
+
+test('building:min_level is never fractional', () => {
+  // Нарисован на крыше соседней части (0,5 м) и вытянут этажами — низ остаётся в метрах
+  assert.deepEqual(pushHeightTags({height:'0.5', min_height:'0.5'}, 'top', 6, 'levels', true), {'building:levels':'2', min_height:'0.5'});
+  // Низ этажами опущен до крыши соседней части — метрами, без дробного этажа
+  assert.deepEqual(pushHeightTags({'building:levels':'4'}, 'bottom', 0.5, 'levels'), {'building:levels':'4', min_height:'0.5'});
+  assert.deepEqual(pushHeightTags({'building:levels':'4', 'building:min_level':'1'}, 'bottom', -2.5, 'levels'), {'building:levels':'4', 'building:min_level':'1', min_height:'0.5'});
+});

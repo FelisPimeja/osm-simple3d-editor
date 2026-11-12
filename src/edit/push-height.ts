@@ -15,6 +15,9 @@ export function lockedPushUnits(tags: Record<string, string>, version: number): 
   return meters === levels ? undefined : meters ? 'm' : 'levels';
 }
 
+/** Отметка ровно на границе этажа (кратна высоте этажа) — её можно записать целым building:min_level. */
+const onLevel = (m: number) => Math.abs(m / LEVEL_HEIGHT - Math.round(m / LEVEL_HEIGHT)) < 0.01;
+
 /** h — высоты, как объект нарисован (часть без высоты в режиме здания — плоская), по умолчанию — по тегам. */
 export function pushHeightTags(tags: Record<string, string>, face: PushFace, dz: number, units: PushUnits, fresh = false, h: Heights = computeHeights(tags)): Record<string, string> {
   const out = { ...tags };
@@ -22,23 +25,29 @@ export function pushHeightTags(tags: Record<string, string>, face: PushFace, dz:
   const levels = units === 'levels';
   if (face === 'top') {
     if (levels) {
-      out['building:levels'] = fmt(Number(tags['building:levels'] ?? h.wallTop / LEVEL_HEIGHT) + dz / LEVEL_HEIGHT);
+      // Этажность — целая: без тега считаем от верха стен, округлив (контур на крыше соседней части в 0,5 м — не 0,17 этажа)
+      out['building:levels'] = fmt(Number(tags['building:levels'] ?? Math.round(h.wallTop / LEVEL_HEIGHT)) + Math.round(dz / LEVEL_HEIGHT));
     }
     if (!levels || (tags.height && !fresh)) out.height = writeLength(h.top + dz, tags.height);
     else if (fresh) {
       delete out.height;
-      if (tags.min_height) {
-        out['building:min_level'] = fmt(h.min / LEVEL_HEIGHT);
+      // Низ на границе этажа — этажами; иначе (нарисован на крыше соседней части) остаётся min_height:
+      // building:min_level — только целый
+      if (tags.min_height && onLevel(h.min)) {
+        out['building:min_level'] = fmt(Math.round(h.min / LEVEL_HEIGHT));
         delete out.min_height;
       }
     }
   } else if (face === 'bottom') {
     const min = h.min + dz;
+    // Этажами — только на границе этажа: низ, опущенный до крыши соседней части, встаёт метрами (min_height),
+    // building:min_level — только целый
+    const whole = onLevel(min);
     if (levels) {
-      if (min > 1e-4) out['building:min_level'] = fmt(min / LEVEL_HEIGHT);
-      else delete out['building:min_level'];
+      if (min <= 1e-4) delete out['building:min_level'];
+      else if (whole) out['building:min_level'] = fmt(Math.round(min / LEVEL_HEIGHT));
     }
-    if (!levels || tags.min_height) {
+    if (!levels || tags.min_height || !whole) {
       if (min > 1e-4) out.min_height = writeLength(min, tags.min_height ?? tags.height);
       else delete out.min_height;
     }

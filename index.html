@@ -27,19 +27,6 @@
       <input id="date-to" class="dp-bound" type="number" step="1" title="Конец шкалы" />
     </div>
   </div>
-  <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
-    <form method="dialog">
-      <header class="panel-head"><h1 id="settings-title">Настройки пользователя</h1><button type="submit" class="dialog-close" title="Закрыть" aria-label="Закрыть"><svg aria-hidden="true" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5.500 5.500l9 9M14.500 5.500l-9 9"/></svg></button></header>
-      <div class="dialog-body">
-        <label class="server-line">Язык интерфейса <select id="lang-select"></select></label>
-        <label class="server-line">Единицы измерения при вводе по умолчанию <select id="units-select"><option value="metric">Метрические</option><option value="imperial">Имперские</option></select></label>
-        <label class="server-line">Нумерация этажей <select id="floors-select"><option value="first">С первого: наземный — 1-й</option><option value="ground">С нуля: наземный, затем 1-й</option></select></label>
-        <p class="settings-translation hint">Скоро вы сможете помочь перевести проект через Transifex. Пока, если вам нужен новый язык, <a href="https://github.com/FelisPimeja/osm-simple3d-editor/issues/new" target="_blank" rel="noopener noreferrer">создайте запрос на GitHub</a> или <a href="mailto:felispimeja@gmail.com">напишите мне на почту</a>.</p>
-        <label class="toggle" title="Галки «Убрать цвета» и «Настройки графики» сохраняются вместе с остальными настройками и применяются на других устройствах"><input id="keep-gfx" type="checkbox" /> Хранить графические настройки</label>
-        <p id="settings-sync" class="settings-sync hint"></p>
-      </div>
-    </form>
-  </dialog>
   <!-- Строка состояния — внизу экрана, между колонками панелей: индикатор загрузки и статус -->
   <div id="statusbar">
     <div id="loading-card" role="status" hidden><canvas class="loader" aria-hidden="true"></canvas><span class="text"></span></div>
@@ -55,28 +42,49 @@
   <aside id="panel" class="panel">
     <header class="panel-head"><h1>OSM Simple 3D</h1><button type="button" class="collapse-btn" title="Свернуть" aria-expanded="true"></button></header>
     <div class="panel-body">
-    <label class="server-line">Сервер <select id="server-select" title="Откуда загружать данные для редактирования и куда отправлять"></select></label>
-    <button type="button" id="settings-open" class="settings-open" title="Язык интерфейса и другие личные настройки"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M8.20 4.17L8.65 2.12L11.35 2.12L11.80 4.17L12.85 4.60L14.62 3.47L16.53 5.38L15.40 7.15L15.83 8.20L17.88 8.65L17.88 11.35L15.83 11.80L15.40 12.85L16.53 14.62L14.62 16.53L12.85 15.40L11.80 15.83L11.35 17.88L8.65 17.88L8.20 15.83L7.15 15.40L5.38 16.53L3.47 14.62L4.60 12.85L4.17 11.80L2.12 11.35L2.12 8.65L4.17 8.20L4.60 7.15L3.47 5.38L5.38 3.47L7.15 4.60z"/><circle cx="10" cy="10" r="2.4"/></svg> Настройки пользователя</button>
-    <label class="toggle"><input id="mono-toggle" type="checkbox" /> Убрать цвета</label>
-    <details id="gfx" class="gfx">
-      <summary>Настройки графики</summary>
+    <div class="panel-tabs" role="tablist">
+      <button type="button" role="tab" id="tab-map" aria-controls="pane-map" aria-selected="true" data-tab="map">Основное</button>
+      <button type="button" role="tab" id="tab-appearance" aria-controls="pane-appearance" aria-selected="false" data-tab="appearance">Оформление</button>
+      <button type="button" role="tab" id="tab-advanced" aria-controls="pane-advanced" aria-selected="false" data-tab="advanced">Ещё</button>
+    </div>
+    <div class="panel-tab" id="pane-map" role="tabpanel" aria-labelledby="tab-map">
+    <label class="server-line">Источник данных <select id="server-select" title="Откуда загружать данные для редактирования и куда отправлять"></select></label>
+    <p class="hint panel-note">Правки сохраняются на этот же сервер.</p>
+      <p class="panel-stat"><button id="tiles-reload" type="button" class="link-btn" title="Заново запросить из OSM API тайлы на экране">Обновить данные</button><br><span id="reload-sub" class="panel-sub">Загрузить свежие данные с сервера.</span></p>
+      <h2 class="panel-sec">Личные настройки</h2>
+      <label class="server-line">Язык интерфейса <select id="lang-select"></select></label>
+      <p class="settings-translation hint">Скоро вы сможете помочь перевести проект через Transifex. Пока, если вам нужен новый язык, <a href="https://github.com/FelisPimeja/osm-simple3d-editor/issues/new" target="_blank" rel="noopener noreferrer">создайте запрос на GitHub</a> или <a href="mailto:felispimeja@gmail.com">напишите мне на почту</a>.</p>
+      <label class="server-line">Единицы измерения при вводе по умолчанию <select id="units-select"><option value="metric">Метрические</option><option value="imperial">Имперские</option></select></label>
+      <label class="server-line">Нумерация этажей <select id="floors-select"><option value="first">С первого: наземный — 1-й</option><option value="ground">С нуля: наземный, затем 1-й</option></select></label>
+      <div id="gfx-sync" hidden>
+        <label class="toggle" title="Галки раздела «Оформление» сохраняются в профиле вместе с остальными настройками и применяются на других устройствах"><input id="keep-gfx" type="checkbox" /> Синхронизировать настройки вида с профилем</label>
+      </div>
+      <p id="settings-sync" class="settings-sync hint"></p>
+    </div>
+    <div class="panel-tab" id="pane-appearance" role="tabpanel" aria-labelledby="tab-appearance" hidden>
+      <label class="toggle"><input id="mono-toggle" type="checkbox" /> Монохромная карта</label>
+      <label class="toggle"><input type="checkbox" data-gfx="edges" /> Контуры рёбер</label>
+      <label class="toggle" title="natural=tree, natural=tree_row, леса natural=wood и landuse=forest — низкополигональные модели по leaf_type"><input type="checkbox" data-gfx="trees" /> Деревья</label>
+      <label class="toggle" title="Цвет лиственных по сегодняшней дате: весна, лето, осень, голые кроны зимой; в южном полушарии — со сдвигом на полгода, в тропиках — всегда зелёные"><input type="checkbox" data-gfx="seasons" /> Деревья по времени года</label>
+      <label class="toggle"><input type="checkbox" data-gfx="noGlass" /> Выключить стёкла</label>
+      <label class="toggle" title="У зданий и частей без height и building:levels — стены 3,5 м по умолчанию; выключено — плоский след (на своём min_height)"><input type="checkbox" data-gfx="defaultHeight" /> Поднимать здания с дефолтной высотой</label>
+    </div>
+    <div class="panel-tab" id="pane-advanced" role="tabpanel" aria-labelledby="tab-advanced" hidden>
+      <h2 class="panel-sec">Данные карты</h2>
+      <p class="panel-stat"><span id="cache-info">—</span> · <button id="cache-clear" type="button" class="link-btn">Очистить</button></p>
+      <h2 class="panel-sec">Качество (это устройство)</h2>
       <label class="toggle"><input type="checkbox" data-gfx="antialias" /> Сглаживание <span class="hint">(перезагрузит страницу)</span></label>
       <label class="toggle"><input type="checkbox" data-gfx="hemisphere" /> Полусферический свет</label>
       <label class="toggle"><input type="checkbox" data-gfx="groundAO" /> Затемнение у земли</label>
-      <label class="toggle"><input type="checkbox" data-gfx="edges" /> Контуры рёбер</label>
+      <h2 class="panel-sec">Экспериментальное</h2>
       <label class="toggle" title="Не рисовать ребро между соседними частями, если их грани у него продолжают друг друга (фасад через две части, часть на части с тем же контуром). Сборка рёбер заметно дольше"><input type="checkbox" data-gfx="partSeams" /> Скрывать стыки частей</label>
-      <label class="toggle"><input type="checkbox" data-gfx="noGlass" /> Выключить стёкла</label>
-      <label class="toggle" title="У зданий и частей без height и building:levels — стены 3,5 м по умолчанию; выключено — плоский след (на своём min_height)"><input type="checkbox" data-gfx="defaultHeight" /> Поднимать здания с дефолтной высотой</label>
-      <label class="toggle" title="natural=tree, natural=tree_row, леса natural=wood и landuse=forest — низкополигональные модели по leaf_type"><input type="checkbox" data-gfx="trees" /> Деревья</label>
-      <label class="toggle" title="Цвет лиственных по сегодняшней дате: весна, лето, осень, голые кроны зимой; в южном полушарии — со сдвигом на полгода, в тропиках — всегда зелёные"><input type="checkbox" data-gfx="seasons" /> Деревья по времени года</label>
       <label class="toggle" title="Эксперимент: мосты по тегам bridge и layer; подходы к ним плавно поднимаются от земли (уклон дорог 8 %, шаг уровня 6 м)"><input type="checkbox" data-gfx="bridges3d" /> Показывать мосты</label>
       <label class="toggle" title="Эксперимент: тоннели по тегам tunnel и layer; подходы к ним плавно опускаются (уклон дорог 8 %, шаг уровня 6 м)"><input type="checkbox" data-gfx="tunnels3d" /> Показывать тоннели</label>
-      <label class="toggle" title="Отладка: границы тайлов данных — розовые полупрозрачные стенки высотой 50 м, к верху тают"><input type="checkbox" data-gfx="tileBorders" /> Границы тайлов</label>
-    </details>
-    <div class="panel-tech">
-      <p class="hint cache-line"><span id="cache-info">Кэш тайлов: —</span> <button id="cache-clear" type="button">Очистить</button></p>
-      <p class="hint cache-line"><button id="tiles-reload" type="button" title="Отладка: заново запросить из OSM API тайлы на экране">Перезагрузить видимые тайлы</button></p>
-      <p id="perf" class="hint">FPS: — · треугольников: —</p>
+      <h2 class="panel-sec">Диагностика</h2>
+      <div class="panel-tech">
+        <label class="toggle" title="Отладка: границы тайлов данных — розовые полупрозрачные стенки высотой 50 м, к верху тают"><input type="checkbox" data-gfx="tileBorders" /> Границы тайлов</label>
+        <p id="perf" class="hint">FPS: — · треугольников: —</p>
+      </div>
     </div>
     </div>
   </aside>

@@ -15105,7 +15105,9 @@ let orphanPlansCache: { sig: string; list: ContextPlan[] } | undefined;
 let orphanState: { sig: string; detached: Set<string>; grid?: Map<string, Feature3D[]>; verdict: Map<IndoorFeature, boolean> } | undefined;
 function orphanIndoor(bbox: Bbox): IndoorFeature[] {
   const detached = detachedIndoor(bbox);
-  const sig = `${overpass.revision}|${overpass.visibilityRevision}|${indoorEditRev}|${hiddenUnderground().length}`;
+  // Здания рисуются позже прихода тайла: сетка по нарисованным — с их счётчиком, иначе план под ещё не
+  // показанным зданием так и остался бы «без здания»
+  const sig = `${overpass.revision}|${overpass.renderRevision}|${overpass.visibilityRevision}|${indoorEditRev}|${hiddenUnderground().length}`;
   if (orphanState?.sig !== sig || orphanState.detached !== detached) orphanState = { sig, detached, verdict: new Map() };
   const st = orphanState;
   const CELL = 0.0005;

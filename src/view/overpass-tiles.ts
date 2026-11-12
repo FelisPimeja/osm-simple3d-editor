@@ -775,6 +775,8 @@ export class OverpassTiles {
   /** Тайл получил данные: показать его и, если надо, перестроить соседей (их контуры могли «увидеть» части). */
   /** Растёт с каждым пришедшим тайлом — для кешей поверх данных тайлов (indoor здания). */
   revision = 0;
+  /** Растёт, когда тайл дорисован (объекты попали в renderedFeatures) — это позже, чем revision. */
+  renderRevision = 0;
 
   private tileReady(key: string) {
     this.revision++;
@@ -956,6 +958,7 @@ export class OverpassTiles {
     void this.layer.setGroupAsync(key, features, [(w + e) / 2, (s + n) / 2]).then((rendered) => {
       if (!rendered) return; // сборку отменили — тайл ушёл из вида или пересобирается заново
       for (const r of rendered) this.rendered.set(r.feature.key, r);
+      this.renderRevision++;
       this.onChange();
     });
   }

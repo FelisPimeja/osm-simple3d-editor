@@ -1513,5 +1513,6 @@
   "Для этого нужны пути-члены мультиполигона — перезагрузите видимые тайлы.": "This needs the multipolygon's member ways — reload the visible tiles.",
   "Отступ — внутреннее кольцо: клик внутри помещения или другого полигона этажа. I — буфер стен, Esc — выйти.": "Offset — inner ring: click inside a room or another floor polygon. I for the wall buffer, Esc to exit.",
   "Отступ — внутреннее кольцо: клик внутри помещения или другого полигона этажа.": "Offset — inner ring: click inside a room or another floor polygon.",
-  "буфер стен": "wall buffer"
+  "буфер стен": "wall buffer",
+  "Пересечения частей": "Part intersections"
 }

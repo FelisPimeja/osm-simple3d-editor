@@ -33,6 +33,7 @@ import { recordMs, timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
 import { setTreesMonochrome, setTreesSeasonal, type TreeGroup } from './trees';
 import { UnderlayMeshes } from './underlay-meshes';
+import { edgeIntersections } from './edge-intersections';
 
 const DEFAULT_WALL = '#ffffff';
 const DEFAULT_ROOF = '#ffffff';
@@ -4497,7 +4498,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // На плане этажа геометрия выше среза не нарисована — и привязок к ней нет
     const planCut = this.level ? (this.levelCut ?? this.level.cut) + 1e-3 : Infinity;
     for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...this.belowOutlinePoints, ...doorPoints, ...extra]) {
-      if (off.has(s.kind) || (!extra.has(s) && !filter(s.key)) || opts.skip?.(s.p, s.key, s.kind) || (!extra.has(s) && s.p.z > planCut)) continue;
+      if (off.has(s.kind) || (!extra.has(s) && (!filter(s.key) || ((s as SnapPoint).also !== undefined && !filter((s as SnapPoint).also!)))) || opts.skip?.(s.p, s.key, s.kind) || (!extra.has(s) && s.p.z > planCut)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;
       const px: [number, number] = [(v.x / v.w + 1) / 2 * canvas.clientWidth, (1 - v.y / v.w) / 2 * canvas.clientHeight];
@@ -7934,11 +7935,11 @@ function shellPiecesImpl(shell: Shell, ax: number, ay: number, bx: number, by: n
   return pieces;
 }
 
-export type SnapKind = 'level' | 'vertex' | 'midpoint' | 'center' | 'shape' | 'grid' | 'perpendicular' | 'edge' | 'extension' | 'corner' | 'tracking' | 'tracked';
+export type SnapKind = 'level' | 'vertex' | 'midpoint' | 'center' | 'shape' | 'grid' | 'perpendicular' | 'edge' | 'extension' | 'corner' | 'tracking' | 'tracked' | 'intersection';
 /** Ключ привязки к узлу сетки основания: фильтр snapAt пропускает его, если инструменту нужна и сетка. */
 export const GRID_SNAP_KEY = '@grid';
 /** axis, dist — у оси откладывания: номер оси якоря и расстояние от него со знаком. */
-interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3; label?: string; axis?: number; dist?: number }
+interface SnapPoint { kind: SnapKind; key: string; p: THREE.Vector3; label?: string; axis?: number; dist?: number; /** Второй объект пересечения: точка — только если проходят оба. */ also?: string }
 /**
  * Нарисованные вырезы под эскалаторы: внутренние кольца полов этажа, в которых лежит середина эскалатора.
  * Такие эскалаторы автовырез не получают (он — запасной), а кольцо прорезает плиту.
@@ -7985,7 +7986,7 @@ const SNAP_SELECTED_BONUS_PX = 8;
 /** Заслонённые привязки «дальше» на столько px — выигрывают, только если видимых рядом нет. */
 const SNAP_HIDDEN_PENALTY_PX = 100;
 /** Точка на ребре — последней: курсор у ребра почти всегда, она не должна перебивать вершины и середины. */
-const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, shape: 1, grid: 2, center: 2, extension: 4, corner: 1, edge: 3, tracked: 0, tracking: 2, level: 1 };
+const SNAP_PRIORITY: Record<SnapKind, number> = { vertex: 0, midpoint: 1, perpendicular: 1, shape: 1, grid: 2, center: 2, extension: 4, corner: 1, edge: 3, tracked: 0, tracking: 2, level: 1, intersection: 0.5 };
 /** Как далеко за конец ребра тянется его продолжение, м. */
 const EXTENSION_M = 30;
 /** Продолжение ловит курсор ближе обычного (px): иначе срабатывает почти везде вокруг здания. */
@@ -8062,6 +8063,8 @@ function collectSnaps(g: MeshGroup, floors: number[] = []): { points: SnapPoint[
     const c = it.box.getCenter(new THREE.Vector3());
     add('center', key, c.x, c.y, c.z);
   }
+  // Пересечения рёбер разных частей без общей вершины
+  for (const x of edgeIntersections(edges)) out.push({ kind: 'intersection', key: x.keys[0], also: x.keys[1], p: new THREE.Vector3(x.p.x, x.p.y, x.p.z) });
   return { points: out, edges };
 }
 

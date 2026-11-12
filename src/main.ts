@@ -10419,7 +10419,7 @@ function setIndoorTags(edits: { key: string; tags: Record<string, string> }[], c
   try {
     const changes:ObjectEdit[] = out.filter((e) => { const cur = session.get(e.key)?.tags ?? {}; return JSON.stringify(Object.entries(cur).sort()) !== JSON.stringify(Object.entries(e.tags).sort()); });
     let extra:ObjectEdit[]=[];
-    if (changedTag === 'width' || changedTag === 'diameter' || changedTag === 'door') {
+    if (changedTag === 'width' || changedTag === 'diameter' || changedTag === 'door' || changedTag === 'entrance') {
       const targets=out.map(e=>all.find(f=>f.key===e.key&&isDoor(f))).filter((f):f is IndoorFeature=>!!f);
       extra=batchSolidDoorEdits(targets,door=>({at:door.point,tags:out.find(e=>e.key===door.key)!.tags}));
     }

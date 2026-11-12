@@ -1528,5 +1528,6 @@
   "Закрепить": "Lock",
   "Закреплённая подложка не выделяется кликом на карте — её не сдвинуть случайно": "A locked underlay can't be selected by clicking on the map, so it can't be moved by accident",
   "Нажмите, чтобы открепить": "Click to unlock",
-  "Подложка закреплена — нажмите замок, чтобы её двигать": "The underlay is locked. Click the lock to move it"
+  "Подложка закреплена — нажмите замок, чтобы её двигать": "The underlay is locked. Click the lock to move it",
+  "объектов: {n}": "objects: {n}"
 }

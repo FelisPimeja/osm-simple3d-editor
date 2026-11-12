@@ -6592,14 +6592,34 @@ function pushSidePolygons(f: Feature3D, edge: NonNullable<PushTarget['edge']>, d
     : { ...p, outer: ring }));
 }
 
+/**
+ * Верх или низ одного из нескольких выделенных объектов — сдвигается у всех выделенных (тем же dz);
+ * стена — только у своего объекта.
+ */
+function pushKeys(t: PushTarget): string[] {
+  if (t.face === 'side' || selection.length < 2 || !selection.includes(t.key)) return [t.key];
+  return selection.filter((k) => !!(entity(k) as Feature3D | undefined)?.polygons?.length);
+}
+
+/** Тег высоты после сдвига верха или низа объекта на dz. */
+const pushedTags = (f: Feature3D, face: PushTarget['face'], dz: number) =>
+  pushHeightTags(f.tags, face, dz, pushTool.units, isFreshFlat(f.tags, f.version, drawnHeights(f)), drawnHeights(f));
+
 function clampPush(t: PushTarget, dz: number): number {
-  const f = entity(t.key) as Feature3D | undefined;
+  if (t.face === 'side') return entity(t.key) ? dz : 0;
+  // Несколько объектов: сдвиг, допустимый для каждого из них
+  const keys = pushKeys(t);
+  for (const k of keys) dz = clampPushOne(k, t.face, dz);
+  return dz;
+}
+
+function clampPushOne(key: string, face: PushTarget['face'], dz: number): number {
+  const f = entity(key) as Feature3D | undefined;
   if (!f) return 0;
-  if (t.face === 'side') return dz;
   const h = drawnHeights(f);
   // Верх не ниже низа + крыша; низ — не ниже земли и не выше верха стен
-  let lower = t.face === 'top' ? h.min + h.roofHeight + MIN_THICKNESS - h.top : -h.min;
-  let upper = t.face === 'top' ? Infinity : h.wallTop - MIN_THICKNESS - h.min;
+  let lower = face === 'top' ? h.min + h.roofHeight + MIN_THICKNESS - h.top : -h.min;
+  let upper = face === 'top' ? Infinity : h.wallTop - MIN_THICKNESS - h.min;
   if (pushTool.units === 'levels') {
     lower = Math.ceil(lower / LEVEL_HEIGHT) * LEVEL_HEIGHT;
     upper = Math.floor(upper / LEVEL_HEIGHT) * LEVEL_HEIGHT;
@@ -6617,6 +6637,7 @@ function previewPush(t: PushTarget, dz: number | undefined) {
   };
   pushTool.linked = 0;
   if (dz === undefined) { restore(new Set()); overpassLayer.setLinked([]); return previewFocus(f); }
+  if (t.face !== 'side') restore(new Set(pushKeys(t)));
   overpassLayer.setLinked([]);
   if (t.face === 'side' && pushTool.glue) {
     const e = pushSideEnds(f, t.edge!, dz);
@@ -6641,9 +6662,12 @@ function previewPush(t: PushTarget, dz: number | undefined) {
       return;
     }
   }
-  previewFocus(t.face === 'side'
-    ? { ...f, polygons: pushSidePolygons(f, t.edge!, dz) }
-    : { ...f, tags: pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version, drawnHeights(f)), drawnHeights(f)) });
+  if (t.face === 'side') return previewFocus({ ...f, polygons: pushSidePolygons(f, t.edge!, dz) });
+  previewFocus({ ...f, tags: pushedTags(f, t.face, dz) });
+  // Остальные выделенные — тем же сдвигом
+  const others = pushKeys(t).filter((k) => k !== t.key);
+  for (const k of others) { const g = entity(k) as Feature3D | undefined; if (g) previewFocus({ ...g, tags: pushedTags(g, t.face, dz) }); }
+  pushPreviewed = others;
 }
 
 function commitPush(t: PushTarget, dz: number) {
@@ -6660,9 +6684,15 @@ function commitPush(t: PushTarget, dz: number) {
     const rel = edits.find((e) => e.create && e.key.startsWith('relation/') && (e.create as Feature3D).ways?.some((w) => w.id === f.id && w.role === 'outer'));
     if (rel) select(rel.key);
   }
-  else session.setTags(t.key, diffTags(f.tags, pushHeightTags(f.tags, t.face, dz, pushTool.units, isFreshFlat(f.tags, f.version, drawnHeights(f)), drawnHeights(f))));
+  else {
+    const keys = pushKeys(t);
+    if (keys.length === 1) session.setTags(t.key, diffTags(f.tags, pushedTags(f, t.face, dz)));
+    // Несколько — одним шагом истории
+    else session.editMany(keys.flatMap((k) => { const g = entity(k) as Feature3D | undefined; return g ? [{ key: k, tags: pushedTags(g, t.face, dz) }] : []; }));
+  }
   const levels = t.face !== 'side' && pushTool.units === 'levels' ? ' ' + tr('({n} эт.)', { n: `${dz >= 0 ? '+' : ''}${Math.round(dz / LEVEL_HEIGHT)}` }) : '';
-  const params = { key: t.key, d: `${dz >= 0 ? '+' : ''}${dz.toFixed(2)}`, levels };
+  const n = t.face === 'side' ? 1 : pushKeys(t).length;
+  const params = { key: n > 1 ? tr('объектов: {n}', { n }) : t.key, d: `${dz >= 0 ? '+' : ''}${dz.toFixed(2)}`, levels };
   setStatus(t.face === 'top' ? tr('Верх {key} сдвинут на {d} м{levels}.', params)
     : t.face === 'bottom' ? tr('Низ {key} сдвинут на {d} м{levels}.', params)
     : tr('Стена {key} сдвинута на {d} м{levels}.', params));

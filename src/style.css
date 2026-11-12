@@ -271,7 +271,11 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 #info .direction-pick { flex: none; width: 28px; padding: 0; display: grid; place-items: center; cursor: pointer; }
 .direction-pick svg { width: 16px; height: 16px; display: block; }
 #info .direction-pick.active { background: #2563eb; color: #fff; border-color: #2563eb; }
-.colour-field input[type="color"] { width: 32px; height: 26px; padding: 0; border: 1px solid #ccc; border-radius: 4px; flex: none; }
+.colour-field input[type="color"] { width: 32px; height: 26px; padding: 0; border: 0; background: none; flex: none; }
+/* Рамка — только у самого образца, без второй рамки браузера вокруг него */
+.colour-field input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.colour-field input[type="color"]::-webkit-color-swatch { border: 1px solid #ccc; border-radius: 4px; }
+.colour-field input[type="color"]::-moz-color-swatch { border: 1px solid #ccc; border-radius: 4px; }
 .tag-form [data-revert] { justify-self: start; margin-top: 4px; }
 .inherit-field { position: relative; display: block; flex: 1; min-width: 0; }
 /* Поле этажей со стрелками ±1 (как у спиннера): справа в поле, одна над другой */
@@ -309,6 +313,9 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .inherit-field select.inherited { color: #9ca3af; }
 .inherit-field select.inherited option { color: #222; }
 .inherit-field:has(select) .inherit-badge { right: 22px; }
+/* Поле со списком: значок левее кнопки списка, текст до значка не доходит */
+.inherit-field:has(.combo-btn) .inherit-badge { right: 26px; }
+.inherit-field .combo-field input[type="text"] { padding-right: 44px; }
 .all-tags summary { cursor: pointer; font-size: 12px; color: #555; margin: 4px 0; }
 /* Панель правок: строки как в списке частей, отмена/повтор — значками в заголовке */
 .head-tools { display: flex; gap: 2px; }

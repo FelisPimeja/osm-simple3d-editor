@@ -6068,7 +6068,9 @@ export class BuildingsLayer implements CustomLayerInterface {
           const place = entrancePlace(rings, r, i, floorZ ?? entranceZ(door, it.tags));
           // Дверь этажа вне высоты своего видимого объекта (вход подвала на контуре части выше) при скрытых частях
           // (изоляция) — тоже только на видимой стене на её высоте; без скрытых частей её этаж виден — дверь на месте
-          const h = computeHeights(it.tags), outside = !!partsHidden && floorZ !== undefined && (floorZ < min - 0.3 || floorZ >= min + h.top - h.min);
+          // Так же и вход у земли под поднятой видимой частью (узел её контура над входом нижней): при изоляции его нет
+          const h = computeHeights(it.tags), z = place?.z ?? floorZ;
+          const outside = !!partsHidden && z !== undefined && (z < min - 0.3 || z >= min + h.top - h.min);
           if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
         }));
       }
@@ -6095,7 +6097,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const lv = parseFloat((e.tags.level ?? '').split(';')[0]);
         const floorZ = !onMap && Number.isFinite(lv) ? this.entranceFloors.get(lv) : undefined;
         const place = { p: near.p, t: near.t, n: nrm, z: floorZ ?? entranceZ(e.tags, it.tags) };
-        const h = computeHeights(it.tags), outside = !!partsHidden && floorZ !== undefined && (floorZ < min - 0.3 || floorZ >= min + h.top - h.min);
+        const h = computeHeights(it.tags), outside = !!partsHidden && (place.z < min - 0.3 || place.z >= min + h.top - h.min);
         if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, width: tagWidth(e.tags) }, rank });
       }
     }

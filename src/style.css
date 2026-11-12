@@ -167,10 +167,10 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 .status-line .status-copy { order: -1; margin-top: 1px; }
 .status-line:not(:has(#status:not(:empty))) { display: none; }
 .status-copy[data-done] { color: #15803d; }
-body:not(.mobile) .vcb { box-sizing: border-box; bottom: calc(20px + var(--statusbar-h, 0px)); }
+body:not(.mobile) .vcb, body:not(.mobile) .tool-bar { box-sizing: border-box; bottom: calc(20px + var(--statusbar-h, 0px)); }
 /* Над основным полем инструмента, какой бы высоты оно ни стало */
 body:not(.mobile) .vcb.vcb-track { bottom: calc(28px + var(--statusbar-h, 0px) + var(--vcb-h, 0px)); }
-@media (max-width: 1000px) { body.mobile #statusbar { max-width: calc(100% - 24px); } body.mobile .vcb { bottom: calc(64px + var(--statusbar-h, 0px)); } body.mobile .vcb.vcb-track { bottom: calc(104px + var(--statusbar-h, 0px)); } }
+@media (max-width: 1000px) { body.mobile #statusbar { max-width: calc(100% - 24px); } body.mobile .vcb, body.mobile .tool-bar { bottom: calc(64px + var(--statusbar-h, 0px)); } body.mobile .vcb.vcb-track { bottom: calc(104px + var(--statusbar-h, 0px)); } }
 /* Мобильная версия: над карточкой здания и панелями, прижатыми к низу (отступ считает main.ts) */
 body.mobile #statusbar { bottom: calc(var(--mobile-bottom, 44px) + 16px); }
 /* Правая колонка (панель «Этажи») — над карточкой здания, а не под ней */
@@ -809,10 +809,16 @@ body.mobile #issues-panel { display: none !important; }
 .inherit-field:has(.length-field) .length-unit { right: 24px; }
 .inherit-field:has(.length-field) .length-field input[type="text"] { padding-right: 40px; }
 .repeat-actions { display: flex; justify-content: space-between; gap: 8px; }
-.tool-options { display: flex; flex-direction: column; gap: 6px; }
-.tool-options[hidden], .tool-option[hidden] { display: none; }
-.tool-options .tool-check { display: flex; align-items: center; gap: 6px; color: #444; cursor: pointer; user-select: none; }
-.tool-options .tool-check input { width: auto; margin: 0; }
+/* Панель инструмента: строка ввода и опции в ряд, по центру внизу (как у «Вытянуть») */
+.tool-bar { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(36px + var(--statusbar-h, 0px)); z-index: 3; display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; background: rgba(255,255,255,.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.2); font-size: 13px; }
+.tool-bar:not(:has(> :not([hidden]))) { display: none; }
+.tool-bar > .vcb, body:not(.mobile) .tool-bar > .vcb, body.mobile .tool-bar > .vcb { position: static; transform: none; padding: 0; background: none; box-shadow: none; }
+.tool-options { display: inline-flex; align-items: center; gap: 8px; }
+.tool-options[hidden], .tool-options .tool-option[hidden] { display: none; }
+.tool-options .vcb-units { margin-left: 0; }
+.tool-options .tool-field { display: inline-flex; align-items: center; gap: 6px; color: #666; font-size: 12px; }
+.tool-options .tool-field input { width: 48px; padding: 2px 4px; border: 1px solid #d1d5db; border-radius: 4px; font: inherit; }
 
 .handrail-sides-row { padding: 0 0 2px 12px; }
 .handrail-sides { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: #555; }

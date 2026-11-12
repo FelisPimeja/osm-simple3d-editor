@@ -5,6 +5,7 @@ import { LEVEL_HEIGHT } from '../osm/heights';
 import { levelsNote } from './push-height';
 import { glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
 import { tr, trn } from '../i18n';
+import { ToolOptions } from './tool-options';
 
 export type PushUnits = 'm' | 'levels';
 const UNITS_STORAGE = 'push-units';
@@ -81,7 +82,7 @@ export class PushTool {
     this.vcb = document.createElement('div');
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
-    container.appendChild(this.vcb);
+    new ToolOptions(container, this.vcb); // общая плашка инструмента по центру внизу
     // Клики по панели — не карте (иначе выбор единиц ещё и тянул бы грань)
     for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
     this.vcb.addEventListener('click', (e) => {

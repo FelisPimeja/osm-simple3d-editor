@@ -1,4 +1,4 @@
-import { ToolOptions } from './tool-options';
+import { ToolOptions, type Segment } from './tool-options';
 import { fromInputUnit, showLength, unitLabel } from '../osm/units';
 import { localAxes, type AxisRing } from './local-axes';
 import * as THREE from 'three';
@@ -97,13 +97,15 @@ export class DrawTool {
   private typed = '';
   private readonly vcb: HTMLDivElement;
   /** Форма числа углов (у правильного многоугольника). */
-  private readonly opts: HTMLDivElement;
+  private readonly opts: HTMLLabelElement;
   /** Переключатель трассировки (у полигона и стены). */
   /** Одна панель опций инструмента: число углов, трассировка, внутреннее кольцо — что доступно сейчас. */
   private readonly options: ToolOptions;
-  private readonly traceOpt: HTMLLabelElement;
+  private readonly traceOpt: HTMLElement;
+  private readonly traceSeg: Segment<boolean>;
+  private readonly ringSeg: Segment<boolean>;
   /** Переключатель «новый объект / внутреннее кольцо выделенного» (замкнутые фигуры, если ringAvailable). */
-  private readonly ringOpt: HTMLLabelElement;
+  private readonly ringOpt: HTMLElement;
   /** Можно ли рисовать внутреннее кольцо (выделен один полигон); спрашивается при начале рисования. */
   ringAvailable?: () => boolean;
   /** Режим «внутреннее кольцо»: замкнутый контур — дырой в выделенном полигоне. */
@@ -130,10 +132,10 @@ export class DrawTool {
     this.vcb = document.createElement('div');
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
-    container.appendChild(this.vcb);
-    this.options = new ToolOptions(container);
-    this.opts = this.options.add(document.createElement('div'));
-    this.opts.innerHTML = `<label>${tr('Углов')} <input type="number" min="${NGON_MIN}" max="${NGON_MAX}" step="1" /></label>`;
+    this.options = new ToolOptions(container, this.vcb);
+    this.opts = this.options.add(document.createElement('label'));
+    this.opts.classList.add('tool-field');
+    this.opts.innerHTML = `${tr('Углов')} <input type="number" min="${NGON_MIN}" max="${NGON_MAX}" step="1" />`;
     const input = this.opts.querySelector('input')!;
     input.addEventListener('input', () => {
       const n = Math.round(Number(input.value));
@@ -142,19 +144,13 @@ export class DrawTool {
     input.addEventListener('change', () => { input.value = String(this.sides); });
     // Enter / Esc в поле — назад к рисованию
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); input.blur(); } });
-    this.traceOpt = this.options.add(document.createElement('label'));
-    this.traceOpt.classList.add('tool-check');
-    this.traceOpt.title = tr('Путь от последней точки до курсора — по сторонам контуров, помещений и стен');
-    this.traceOpt.innerHTML = `<input type="checkbox" /> ${tr('Трассировка')} (T)`;
-    const box = this.traceOpt.querySelector('input')!;
-    box.checked = this.tracing;
-    box.addEventListener('change', () => { this.setTracing(box.checked); box.blur(); });
-    this.ringOpt = this.options.add(document.createElement('label'));
-    this.ringOpt.classList.add('tool-check');
-    this.ringOpt.title = tr('Что строит контур: новый объект или внутреннее кольцо выделенного полигона (I)');
-    this.ringOpt.innerHTML = `<input type="checkbox" /> ${tr('Внутреннее кольцо')} (I)`;
-    const ringBox = this.ringOpt.querySelector('input')!;
-    ringBox.addEventListener('change', () => { this.setRing(ringBox.checked); ringBox.blur(); });
+    this.traceSeg = this.options.segment([{ value: true, label: `${tr('Трассировка')} (T)` }],
+      tr('Путь от последней точки до курсора — по сторонам контуров, помещений и стен'), (on) => this.setTracing(on));
+    this.traceOpt = this.traceSeg.el;
+    this.traceSeg.set(this.tracing);
+    this.ringSeg = this.options.segment([{ value: false, label: tr('новый объект') }, { value: true, label: tr('внутреннее кольцо') }],
+      tr('Что строит контур: новый объект или внутреннее кольцо выделенного полигона (I)'), (on) => this.setRing(on));
+    this.ringOpt = this.ringSeg.el;
     this.dims = document.createElement('div');
     this.dims.className = 'draw-dims';
     container.appendChild(this.dims);
@@ -174,7 +170,7 @@ export class DrawTool {
     this.opts.querySelector('input')!.value = String(this.sides);
     this.traceOpt.hidden = !TRACED.includes(shape) || !!maxPoints;
     this.ring = false;
-    this.ringOpt.querySelector('input')!.checked = false;
+    this.ringSeg.set(false);
     this.ringOpt.hidden = !RING_SHAPES.includes(shape) || !this.ringAvailable?.();
     this.options.sync();
     this.hint();
@@ -184,7 +180,7 @@ export class DrawTool {
   setRing(on: boolean) {
     if (this.ringOpt.hidden) return;
     this.ring = on;
-    this.ringOpt.querySelector('input')!.checked = on;
+    this.ringSeg.set(on);
     this.onState(on ? tr('Внутреннее кольцо: замкнутый контур станет дырой в выделенном полигоне. I — новый объект.')
       : tr('Новый объект: замкнутый контур станет отдельным объектом. I — внутреннее кольцо выделенного.'));
   }
@@ -574,7 +570,7 @@ export class DrawTool {
   setTracing(on: boolean) {
     this.tracing = on;
     try { localStorage.setItem(TRACE_KEY, on ? '1' : '0'); } catch { /* без запоминания */ }
-    this.traceOpt.querySelector('input')!.checked = on;
+    this.traceSeg.set(on);
     this.onState(on ? tr('Трассировка включена: путь до курсора идёт по сторонам контуров, помещений и стен. T — выключить.')
       : tr('Трассировка выключена. T — включить.'));
     if (this.lastPoint) this.move(this.lastPoint);

@@ -16602,7 +16602,7 @@ if (josmMode) setTimeout(pollJosm, 2000);
 // Панели ввода инструментов (VCB) стоят над строкой состояния: её высоту пишем в --statusbar-h (style.css)
 const statusbar = document.getElementById('statusbar')!;
 // В одной системе координат со строкой состояния (контейнер карты бывает выше окна)
-statusbar.after(...map.getContainer().querySelectorAll<HTMLElement>(':scope > .vcb'));
+statusbar.after(...map.getContainer().querySelectorAll<HTMLElement>(':scope > .vcb, :scope > .tool-bar'));
 /** По центру экрана; мешают панели на этой высоте — сдвиг ровно настолько, а не хватает места — перенос текста. */
 function fitBetweenPanels(el: HTMLElement) {
   const s = el.style;
@@ -16622,7 +16622,8 @@ function fitBetweenPanels(el: HTMLElement) {
   s.left = `${Math.max(left, Math.min((box.width - el.offsetWidth) / 2, right - el.offsetWidth))}px`;
   s.visibility = right - left < 200 ? 'hidden' : '';
 }
-const vcbs = [...document.querySelectorAll<HTMLElement>('.vcb')];
+// Плашки инструментов (строка ввода с опциями) и отдельные строки ввода вне плашек (трек)
+const vcbs = [...document.querySelectorAll<HTMLElement>('.tool-bar, .vcb:not(.tool-bar > .vcb)')];
 const statusbarWatch = new ResizeObserver(() => {
   document.body.style.setProperty('--statusbar-h', `${statusbar.offsetHeight}px`);
   for (const el of [statusbar, ...vcbs]) fitBetweenPanels(el);

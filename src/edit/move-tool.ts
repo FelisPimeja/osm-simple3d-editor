@@ -4,6 +4,7 @@ import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import { tr } from '../i18n';
 import type { UnderlayTarget } from './underlay-target';
 import { linkedNote, type LinkPreview, glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
+import { ToolOptions } from './tool-options';
 
 /** Угол между движением курсора и осью на экране, при котором движение «прилипает» к оси. */
 const AXIS_SNAP_DEG = 15;
@@ -62,7 +63,7 @@ export class MoveTool {
     this.vcb = document.createElement('div');
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
-    container.appendChild(this.vcb);
+    new ToolOptions(container, this.vcb); // общая плашка инструмента по центру внизу
     for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
     this.vcb.addEventListener('click', (e) => { const g = glueClick(e); if (g !== undefined) this.setGlue(g); });
   }

@@ -5,6 +5,7 @@ import { linkedNote, glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from
 import { tr, trn } from '../i18n';
 import { MIN_ROOF_HEIGHT } from './push-height';
 import { LEVEL_HEIGHT } from '../osm/heights';
+import { ToolOptions } from './tool-options';
 
 type Pt = [number, number];
 
@@ -133,7 +134,7 @@ export class ShapeTool {
     this.vcb = document.createElement('div');
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
-    container.appendChild(this.vcb);
+    new ToolOptions(container, this.vcb); // общая плашка инструмента по центру внизу
     for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
     this.vcb.addEventListener('click', (e) => {
       const g = glueClick(e);

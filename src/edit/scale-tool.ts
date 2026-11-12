@@ -4,6 +4,7 @@ import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import type { UnderlayTarget } from './underlay-target';
 import { linkedNote, type LinkPreview, glueClick, glueSwitch, isGlueKey, loadGlue, saveGlue } from './glue';
 import { tr } from '../i18n';
+import { ToolOptions } from './tool-options';
 
 export type ScaleMode = 'factor' | 'distance' | 'points';
 const MODES: ScaleMode[] = ['factor', 'distance', 'points'];
@@ -74,7 +75,7 @@ export class ScaleTool {
     this.vcb = document.createElement('div');
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
-    container.appendChild(this.vcb);
+    new ToolOptions(container, this.vcb); // общая плашка инструмента по центру внизу
     this.vcb.addEventListener('mousedown', (e) => e.stopPropagation());
     this.vcb.addEventListener('click', (e) => {
       const t = e.target as HTMLElement;

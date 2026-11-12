@@ -2,6 +2,7 @@ import { showLength, unitLabel } from '../osm/units';
 import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import { tr } from '../i18n';
+import { ToolOptions } from './tool-options';
 
 /**
  * Инструмент «Рулетка»: расстояние между двумя точками (с привязками). Клик — первая точка, второй клик —
@@ -28,7 +29,7 @@ export class MeasureTool {
     this.vcb = document.createElement('div');
     this.vcb.className = 'vcb';
     this.vcb.hidden = true;
-    container.appendChild(this.vcb);
+    new ToolOptions(container, this.vcb); // общая плашка инструмента по центру внизу
   }
 
   get active() { return this.state !== 'off'; }

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import polygonClipping from 'polygon-clipping';
 import { tr } from '../i18n';
-import { ToolOptions } from './tool-options';
+import { ToolOptions, type Segment } from './tool-options';
 
 type Pt = [number, number];
 
@@ -50,13 +50,9 @@ export class OffsetTool {
     container.appendChild(this.vcb);
     // Клики по панели — не карте
     for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
-    this.options = new ToolOptions(container);
-    this.ringOpt = this.options.add(document.createElement('label'));
-    this.ringOpt.classList.add('tool-check');
-    this.ringOpt.title = tr('Что строит отступ: новый объект или внутреннее кольцо исходного объекта (I)');
-    this.ringOpt.innerHTML = `<input type="checkbox" /> ${tr('Внутреннее кольцо')} (I)`;
-    const box = this.ringOpt.querySelector('input')!;
-    box.addEventListener('change', () => { this.setRing(box.checked); box.blur(); });
+    this.options = new ToolOptions(container, this.vcb);
+    this.ringSeg = this.options.segment([{ value: false, label: tr('новый объект') }, { value: true, label: tr('внутреннее кольцо') }],
+      tr('Что строит отступ: новый объект или внутреннее кольцо исходного объекта (I)'), (on) => this.setRing(on));
   }
 
   /** Режим доступен: не буфер стен на плане этажа. */
@@ -86,10 +82,10 @@ export class OffsetTool {
 
   /** Панель опций: переключатель «внутреннее кольцо» — пока инструмент включён и режим доступен. */
   private readonly options: ToolOptions;
-  private readonly ringOpt: HTMLLabelElement;
+  private readonly ringSeg: Segment<boolean>;
   private syncOptions() {
-    this.ringOpt.hidden = !this.active || !this.modes;
-    this.ringOpt.querySelector('input')!.checked = this.ring;
+    this.ringSeg.el.hidden = !this.active || !this.modes;
+    this.ringSeg.set(this.ring);
     this.options.sync();
   }
 

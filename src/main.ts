@@ -15512,7 +15512,7 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
       return low && high ? [{ key: f.key, line: f.polygons[0].outer, bottom: low.floor, top: high.floor, width: pairWidth(f, list) ?? escalatorWidth(f),
         incline: escalatorIncline(f), ...stairsShape(f, list), pale: true }] : [];
     });
-    // Срез соседа закрывает этажи под ним плитой: они видны только сквозь пустоты, остальные — пунктирным абрисом
+    // Срез соседа закрывает этажи под ним плитой: они видны только сквозь пустоты
     const areaRings = (lv: Level) => list.filter((f) => f.levels.includes(lv.n) && !f.line && !f.point && f.polygons.length
       && (f.kind === 'level' || f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor'))
       .flatMap((f) => f.polygons.map((p) => [p.outer, ...p.inners] as [number, number][][]));
@@ -15525,12 +15525,14 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
       const sec = unite([...areaRings(l), ...foot]);
       try { slab = holes.length && sec.length ? polygonClipping.difference(sec as never, ...(holes as never[])) as LonLat[][][] : sec; } catch { slab = undefined; }
     }
-    const shown = new Set([l.floor, ...below.map((b) => b.items[0]?.z)]);
-    const outlines = levels.filter((x) => !shown.has(x.floor)).flatMap((x) => {
-      const rings = unite(areaRings(x)).flat();
-      return rings.length ? [{ z: x.floor, rings }] : [];
-    });
-    return { members: [...ng.members, ng.key], items, doors, escalators: [...escalators, ...lowerEscalators], cut: l.ceil, below, slab, outlines };
+    // Этажи ниже — коробками, как у здания режима (renderLevelsImpl): контур indoor=level, иначе объединение
+    // помещений (levelBody), иначе рендер берёт сечение по следам частей; подземные под надземным этажом — нет
+    const boxes = levels.filter((x) => x.n < l.n && !(l.floor > -0.01 && x.floor < -0.01))
+      .map((x) => ({ bottom: x.floor, top: Math.min(x.ceil, l.floor),
+        polygons: levelBody(list, x.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon),
+        seen: below.some((b) => b.cut === x.ceil), cover: voids.filter((v) => v.through.includes(x.n)).flatMap((v) => v.polygon) }))
+      .filter((b) => b.top > b.bottom);
+    return { members: [...ng.members, ng.key], items, doors, escalators: [...escalators, ...lowerEscalators], cut: l.ceil, below, slab, boxes };
   }
 }
 

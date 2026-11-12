@@ -1510,5 +1510,8 @@
   "Внутреннее кольцо: замкнутый контур станет дырой в выделенном полигоне. I — новый объект.": "Inner ring: the closed outline becomes a hole in the selected polygon. I — new object.",
   "Новый объект: замкнутый контур станет отдельным объектом. I — внутреннее кольцо выделенного.": "New object: the closed outline becomes a separate object. I — inner ring of the selection.",
   "Внутреннее кольцо должно лежать внутри выделенного полигона, не задевая его контур и дыры.": "The inner ring must lie inside the selected polygon without touching its outline or holes.",
-  "Для этого нужны пути-члены мультиполигона — перезагрузите видимые тайлы.": "This needs the multipolygon's member ways — reload the visible tiles."
+  "Для этого нужны пути-члены мультиполигона — перезагрузите видимые тайлы.": "This needs the multipolygon's member ways — reload the visible tiles.",
+  "Отступ — внутреннее кольцо: клик внутри помещения или другого полигона этажа. I — буфер стен, Esc — выйти.": "Offset — inner ring: click inside a room or another floor polygon. I for the wall buffer, Esc to exit.",
+  "Отступ — внутреннее кольцо: клик внутри помещения или другого полигона этажа.": "Offset — inner ring: click inside a room or another floor polygon.",
+  "буфер стен": "wall buffer"
 }

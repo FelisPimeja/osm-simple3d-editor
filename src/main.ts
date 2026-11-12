@@ -3510,7 +3510,7 @@ function startPaint() {
 const offsetBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="offset"]')!;
 const offsetTool = new OffsetTool(overpassLayer, map.getContainer(),
   (point, back) => {
-    if (shownLevel) return levelOffsetTarget(point, back);
+    if (shownLevel) return offsetTool.ring ? levelRingTarget(point) : levelOffsetTarget(point, back);
     const member = (k: string) => !!focus?.members.includes(k) && !hiddenInFocus(k);
     // Ребро (вершина, середина) верхнего или нижнего контура плоской грани — сразу эта грань
     const snap = overpassLayer.snapAt(point, member);
@@ -3605,6 +3605,17 @@ function createDrawnMultipolygon(shape: [number, number][][][], z: number, tags:
  * становится мультиполигоном), без новой части внутри. Распалось на несколько кусков — каждый отдельным кольцом.
  */
 function offsetInnerRing(t: OffsetTarget, shape: [number, number][][][]): string | undefined {
+  // План этажа: цель — полигон этажа; несколько кусков — по очереди (объект после первого кольца — уже отношение)
+  if (shownLevel) {
+    let f = buildingIndoorFor(t.key);
+    for (const p of shape) {
+      if (!f) return tr('Объект не найден.');
+      const err = addInnerRing({ indoor: f }, p[0]);
+      if (err) return err;
+      f = indoorSelection.length === 1 ? indoorSelection[0] : undefined;
+    }
+    return;
+  }
   // Каждый кусок — отдельным кольцом той же части (после первого путь мог стать мультиполигоном — новый ключ);
   // дворы, которые съел бы отступ, — не наша забота: кольцо не должно их задевать (addInnerRing)
   const rings = shape.map((p) => p[0]);
@@ -3653,6 +3664,21 @@ function faceTarget(key: string, at: [number, number], z: number): OffsetTarget 
  * «Отступ» на плане этажа — буфер стен: грань — контур здания на этаже (сечение оболочки), Shift — оболочка
  * части здания, проходящей через этаж. Отступ только внутрь.
  */
+/** «Отступ» на плане в режиме кольца: полигон этажа под курсором (его полигон, где курсор), отступ — внутрь. */
+function levelRingTarget(point: [number, number]): OffsetTarget | string | undefined {
+  if (!shownLevel) return;
+  const z = shownLevel.floor;
+  const q = overpassLayer.focusRay(point)?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+  const at = q && overpassLayer.focusToLngLat(q.x, q.y) as LonLat | undefined;
+  // Точка на полу — в самом маленьком полигоне этажа (вложенные — внутреннее)
+  const hits = at ? shownIndoor.flatMap((f) => f.point || f.line ? [] : f.polygons
+    .filter((p) => pointInRing(at, p.outer) && !p.inners.some((r) => pointInRing(at, r))).map((p) => ({ f, p }))) : [];
+  const local = (r: LonLat[]) => r.map((c) => overpassLayer.focusToLocal(c)!);
+  const best = hits.sort((a, b) => Math.abs(ringArea(local(a.p.outer))) - Math.abs(ringArea(local(b.p.outer))))[0];
+  if (!best) return tr('Отступ — внутреннее кольцо: клик внутри помещения или другого полигона этажа.');
+  return { key: best.f.key, face: 'bottom', z, ring: local(best.p.outer), inners: best.p.inners.map(local) };
+}
+
 function levelOffsetTarget(point: [number, number], back: boolean): OffsetTarget | string | undefined {
   if (!focus || !shownLevel) return;
   const z = shownLevel.floor;
@@ -3706,6 +3732,7 @@ function startOffset() {
   if (!focus) return;
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop();
   offsetTool.levelHint = shownLevel ? tr('Буфер стен: клик внутри контура этажа (Shift+клик — оболочка части здания). Esc — выйти.') : undefined;
+  offsetTool.levelRingHint = shownLevel ? tr('Отступ — внутреннее кольцо: клик внутри помещения или другого полигона этажа. I — буфер стен, Esc — выйти.') : undefined;
   offsetTool.start();
 }
 

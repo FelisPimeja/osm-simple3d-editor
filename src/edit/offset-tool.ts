@@ -56,7 +56,8 @@ export class OffsetTool {
   }
 
   /** Режим доступен: не буфер стен на плане этажа. */
-  private get modes() { return !this.levelHint && !this.target?.inward; }
+  /** Режим доступен: везде, кроме уже выбранного буфера стен (на плане этажа кольцо — в помещении). */
+  private get modes() { return !this.target?.inward; }
 
   setRing(on: boolean) { this.ringMode.set(on); }
 
@@ -70,7 +71,7 @@ export class OffsetTool {
   }
 
   private hint(): string {
-    if (this.state === 'pick') return this.levelHint ?? (this.ring
+    if (this.state === 'pick') return (this.ring ? this.levelRingHint : this.levelHint) ?? (this.ring
       ? tr('Отступ — внутреннее кольцо: клик по плоской грани или по её ребру (Shift+клик по объекту — низ). I — новый объект, Esc — выйти.')
       : tr('Отступ: клик по плоской грани или по её ребру (Shift+клик по объекту — низ). Esc — выйти.'));
     const t = this.target;
@@ -83,7 +84,10 @@ export class OffsetTool {
   /** Панель опций: переключатель «внутреннее кольцо» — пока инструмент включён и режим доступен. */
   private readonly options: ToolOptions;
   private readonly ringMode: RingMode;
-  private syncOptions() { this.ringMode.show(this.active && this.modes); }
+  private syncOptions() {
+    this.ringMode.offLabel(this.levelHint ? tr('буфер стен') : tr('новый объект'));
+    this.ringMode.show(this.active && this.modes);
+  }
 
   /** Выбор грани: панели ввода нет, только опции. */
   private pickBar() {
@@ -101,6 +105,8 @@ export class OffsetTool {
 
   /** Подсказка выбора на плане этажа (undefined — обычный режим). */
   levelHint?: string;
+  /** Подсказка выбора на плане этажа в режиме «внутреннее кольцо». */
+  levelRingHint?: string;
 
   stop() {
     this.cancel();

@@ -38,6 +38,9 @@ export class RingMode {
     this.changed(on);
   }
 
+  /** Подпись режима без кольца (у «Отступа» на плане этажа — буфер стен). */
+  offLabel(text: string) { const b = this.seg.el.querySelector('button'); if (b && b.textContent !== text) b.textContent = text; }
+
   /** Сбросить на «новый объект» (новый запуск инструмента). */
   reset() { this.on = false; this.seg.set(false); }
 

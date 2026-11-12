@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import type { BuildingsLayer, SnapHit } from '../render/buildings-layer';
 import polygonClipping from 'polygon-clipping';
 import { tr } from '../i18n';
-import { ToolOptions, type Segment } from './tool-options';
+import { ToolOptions } from './tool-options';
+import { RingMode } from './inner-ring';
 
 type Pt = [number, number];
 
@@ -28,7 +29,7 @@ export class OffsetTool {
   private d = 0;
   private typed = '';
   /** Режим «внутреннее кольцо»: отступ только внутрь, контур — дырой в исходном объекте (иначе — новый объект). */
-  ring = false;
+  get ring() { return this.ringMode.on; }
   /** Shift зажат — при выборе грани берётся низ. */
   private back = false;
   private lastPoint?: [number, number];
@@ -51,16 +52,15 @@ export class OffsetTool {
     // Клики по панели — не карте
     for (const ev of ['mousedown', 'click', 'dblclick'] as const) this.vcb.addEventListener(ev, (e) => e.stopPropagation());
     this.options = new ToolOptions(container, this.vcb);
-    this.ringSeg = this.options.segment([{ value: false, label: tr('новый объект') }, { value: true, label: tr('внутреннее кольцо') }],
-      tr('Что строит отступ: новый объект или внутреннее кольцо исходного объекта (I)'), (on) => this.setRing(on));
+    this.ringMode = new RingMode(this.options, tr('Что строит отступ: новый объект или внутреннее кольцо исходного объекта (I)'), (on) => this.onRing(on));
   }
 
   /** Режим доступен: не буфер стен на плане этажа. */
   private get modes() { return !this.levelHint && !this.target?.inward; }
 
-  setRing(on: boolean) {
-    if (!this.modes) return;
-    this.ring = on;
+  setRing(on: boolean) { this.ringMode.set(on); }
+
+  private onRing(on: boolean) {
     if (this.state === 'offset') {
       if (on) this.d = Math.min(this.d, 0);
       this.preview();
@@ -82,12 +82,8 @@ export class OffsetTool {
 
   /** Панель опций: переключатель «внутреннее кольцо» — пока инструмент включён и режим доступен. */
   private readonly options: ToolOptions;
-  private readonly ringSeg: Segment<boolean>;
-  private syncOptions() {
-    this.ringSeg.el.hidden = !this.active || !this.modes;
-    this.ringSeg.set(this.ring);
-    this.options.sync();
-  }
+  private readonly ringMode: RingMode;
+  private syncOptions() { this.ringMode.show(this.active && this.modes); }
 
   /** Выбор грани: панели ввода нет, только опции. */
   private pickBar() {
@@ -110,7 +106,7 @@ export class OffsetTool {
     this.cancel();
     this.state = 'off';
     // Каждый новый запуск — с режима нового объекта
-    this.ring = false;
+    this.ringMode.reset();
     this.syncOptions();
     this.onState('');
   }
@@ -167,7 +163,7 @@ export class OffsetTool {
 
   key(e: KeyboardEvent): boolean {
     if (!this.active) return false;
-    if (e.type === 'keydown' && e.code === 'KeyI' && !e.ctrlKey && !e.metaKey && !e.altKey && this.modes) { this.setRing(!this.ring); return true; }
+    if (this.ringMode.key(e)) return true;
     if (e.key === 'Shift') {
       this.back = e.type === 'keydown';
       if (this.state === 'pick' && this.lastPoint) this.hover(this.lastPoint);

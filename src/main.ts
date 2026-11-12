@@ -76,6 +76,7 @@ import { PAINT_TAGS, PaintTool, type PaintFace, type PaintSample } from './edit/
 import { Eyedropper, glPixels, pickFieldHint } from './edit/eyedropper';
 import { openColourPopover } from './edit/colour-popover';
 import { loadRecentColours, recordColour } from './edit/recent-colours';
+import { ringInside } from './edit/inner-ring';
 import { CIRCLE_LABELS, CIRCLE_MODES, CIRCLE_TITLES, DrawTool, RECT_LABELS, RECT_MODES, RECT_TITLES, type CircleMode, type DrawShape, type RectMode } from './edit/draw-tool';
 import { suggestComment, isIndoorChange, commentBuildingName } from './edit/changeset-comment';
 import { EditSession, type ObjectEdit, type SessionSnapshot, type Tagged, type TagChange } from './edit/session';
@@ -3604,18 +3605,11 @@ function createDrawnMultipolygon(shape: [number, number][][][], z: number, tags:
  * становится мультиполигоном), без новой части внутри. Распалось на несколько кусков — каждый отдельным кольцом.
  */
 function offsetInnerRing(t: OffsetTarget, shape: [number, number][][][]): string | undefined {
-  const f = entity(t.key) as Feature3D | undefined;
-  if (!f?.polygons?.length) return tr('Объект не найден.');
-  // Полигон объекта, от внешнего контура которого шёл отступ
-  const local = f.polygons.map((p) => p.outer.map((c) => overpassLayer.focusToLocal(c)!));
-  const near = (r: [number, number][]) => r.length === t.ring.length && r.every((p, i) => Math.hypot(p[0] - t.ring[i][0], p[1] - t.ring[i][1]) < 0.01);
-  let polyIndex = local.findIndex(near);
-  if (polyIndex < 0) polyIndex = local.findIndex((r) => pointInRing(shape[0][0][0], r as never));
-  if (polyIndex < 0) return tr('Грань не найдена.');
-  // Дворы, которые съел бы отступ, — не наша забота: кольцо не должно их задевать (holeError)
+  // Каждый кусок — отдельным кольцом той же части (после первого путь мог стать мультиполигоном — новый ключ);
+  // дворы, которые съел бы отступ, — не наша забота: кольцо не должно их задевать (addInnerRing)
   const rings = shape.map((p) => p[0]);
   for (let i = 0; i < rings.length; i++) {
-    const err = cutHoleIn(i === 0 ? t.key : currentRingKey(t.key), polyIndex, rings[i], undefined, undefined, true);
+    const err = addInnerRing({ part: i === 0 ? t.key : currentRingKey(t.key) }, rings[i]);
     if (err) return err;
   }
   return;
@@ -4137,8 +4131,8 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
   if (sketching) return createSketched(ring);
   if (drawTool.shape === 'line') return cutPlan(ring);
   if (drawTool.shape === 'wall') return createIndoorWallLine(ring);
-  if (focus && shownLevel && !tagsFor) return drawTool.ring && drawRingTarget ? createIndoorHole(drawRingTarget, ring) : createIndoorDrawn(ring);
-  if (drawTool.ring && drawRingPart && !tagsFor) return createPartHole(drawRingPart, ring);
+  if (drawTool.ring && drawRingTarget && !tagsFor) return addInnerRing(drawRingTarget, ring);
+  if (focus && shownLevel && !tagsFor) return createIndoorDrawn(ring);
   if (!focus) return tr('Нет здания.');
   const lngLat = (p: [number, number]) => overpassLayer.focusToLngLat(p[0], p[1])!;
   // Кандидаты на общие узлы — пути рядом с контуром (грубый отбор по габаритам в градусах)
@@ -12171,48 +12165,47 @@ function applyRepeat(fs: IndoorFeature[], copies: Map<number, IndoorFeature>[], 
  * R / L / C / N на плане этажа: площадка indoor=area этого этажа по нарисованному контуру
  * (в пределах среза этажа). Вершины на соседях — их узлы.
  */
-/** Выделенный при начале рисования полигон этажа — для режима «внутреннее кольцо». */
-let drawRingTarget: IndoorFeature | undefined;
-/** В режиме здания (не на плане этажа) — выделенная часть: кольцо режется в ней, как у «Отступа». */
-let drawRingPart: string | undefined;
-drawTool.ringAvailable = () => {
-  const f = focus && shownLevel && indoorSelection.length === 1 && !selectedRoomWalls.length ? indoorSelection[0] : undefined;
-  drawRingTarget = f && !f.point && !f.line && f.polygons.length && /^(way|relation)\//.test(indoorKey(f.key)) ? f : undefined;
-  const part = focus && !shownLevel && selection.length === 1 && selectedKey && focus.members.includes(selectedKey) ? (entity(selectedKey) as Feature3D | undefined) : undefined;
-  drawRingPart = part?.polygons?.length ? part.key : undefined;
-  return !!drawRingTarget || !!drawRingPart;
-};
+/**
+ * Цель внутреннего кольца — одна для всех инструментов (рисование фигур, «Отступ»): часть здания (режим здания)
+ * или полигон этажа (план). Кольцо (метры сцены) проверяется одинаково — ringInside, — а добавляется своим бэкендом.
+ */
+type RingTarget = { part: string } | { indoor: IndoorFeature };
 
-/** Нарисованный контур — внутреннее кольцо выделенной части здания (в полигоне, где лежит его первая точка). */
-function createPartHole(key: string, ring: [number, number][]): string | undefined {
-  const f = entity(key) as Feature3D | undefined;
-  if (!f?.polygons?.length) return tr('Объект не найден.');
-  const polyIndex = f.polygons.findIndex((p) => ring.every((q) => pointInRing(q, p.outer.map((c) => overpassLayer.focusToLocal(c)!) as never)));
-  if (polyIndex < 0) return tr('Внутреннее кольцо должно лежать внутри выделенного полигона, не задевая его контур и дыры.');
-  return cutHoleIn(key, polyIndex, ring, undefined, undefined, true);
+/** Цель кольца по выделению: на плане — один полигон этажа, в режиме здания — одна часть. */
+function ringTargetFromSelection(): RingTarget | undefined {
+  if (!focus) return;
+  if (shownLevel) {
+    const f = indoorSelection.length === 1 && !selectedRoomWalls.length ? indoorSelection[0] : undefined;
+    return f && !f.point && !f.line && f.polygons.length && /^(way|relation)\//.test(indoorKey(f.key)) ? { indoor: f } : undefined;
+  }
+  const part = selection.length === 1 && selectedKey && focus.members.includes(selectedKey) ? (entity(selectedKey) as Feature3D | undefined) : undefined;
+  return part?.polygons?.length ? { part: part.key } : undefined;
+}
+
+/** Цель кольца, выбранная при начале рисования. */
+let drawRingTarget: RingTarget | undefined;
+drawTool.ringAvailable = () => !!(drawRingTarget = ringTargetFromSelection());
+
+/** Внутреннее кольцо ring (метры сцены) в цели t: в полигоне, внутри которого оно целиком. Строка — почему нельзя. */
+function addInnerRing(t: RingTarget, ring: [number, number][]): string | undefined {
+  const polygons = 'indoor' in t ? t.indoor.polygons : (entity(t.part) as Feature3D | undefined)?.polygons;
+  if (!polygons?.length) return tr('Объект не найден.');
+  if (Math.abs(ringArea(ring)) < CUT_MIN_AREA) return tr('Контур вырожден: у него нет площади.');
+  const local = (r: LonLat[]) => r.map((q) => overpassLayer.focusToLocal(q)!);
+  const poly = polygons.findIndex((p) => ringInside(ring, local(p.outer), p.inners.map(local)));
+  if (poly < 0) return tr('Внутреннее кольцо должно лежать внутри выделенного полигона, не задевая его контур и дыры.');
+  return 'indoor' in t ? indoorInnerRing(t.indoor, poly, ring) : cutHoleIn(t.part, poly, ring, undefined, undefined, true);
 }
 
 /**
- * Нарисованный контур — внутреннее кольцо полигона f этажа (режим «внутреннее кольцо» у рисования): у мультиполигона —
- * новый внутренний путь, путь становится внешним кольцом нового мультиполигона (теги переезжают на отношение).
+ * Бэкенд плана этажа: кольцо — в полигоне poly объекта f. У мультиполигона — новый внутренний путь, путь становится
+ * внешним кольцом нового мультиполигона (теги переезжают на отношение).
  */
-function createIndoorHole(f: IndoorFeature, ring: [number, number][]): string | undefined {
+function indoorInnerRing(f: IndoorFeature, poly: number, ring: [number, number][]): string | undefined {
   const key = indoorKey(f.key);
   const cur = session.get(key) as (Feature3D & { relMembers?: OsmMember[] }) | undefined;
   const tags = { ...(cur?.tags ?? f.tags) };
   const polygons = f.polygons;
-  const close = (r: [number, number][]) => [...r, r[0]] as [number, number][];
-  const local = (r: LonLat[]) => close(r.map((q) => overpassLayer.focusToLocal(q)!));
-  const hole = close(ring);
-  const area = (m: [number, number][][][]) => m.reduce((a, p) => a + Math.abs(ringArea(p[0].slice(0, -1))) - p.slice(1).reduce((b, r) => b + Math.abs(ringArea(r.slice(0, -1))), 0), 0);
-  const holeArea = Math.abs(ringArea(ring));
-  if (holeArea < CUT_MIN_AREA) return tr('Контур вырожден: у него нет площади.');
-  // Полигон, внутри которого кольцо целиком (и не задевает его дыр)
-  const poly = polygons.findIndex((p) => {
-    try { return Math.abs(area(polygonClipping.intersection([hole], [local(p.outer), ...p.inners.map(local)])) - holeArea) < 1e-3 * Math.max(1, holeArea); }
-    catch { return false; }
-  });
-  if (poly < 0) return tr('Внутреннее кольцо должно лежать внутри выделенного полигона, не задевая его контур и дыры.');
   const p = polygons[poly];
   if (!p.outerIds) return tr('В кеше нет id узлов этого объекта.');
   const { nodeFor } = sharedNodes([...groupFeatures(focus!), ...shownIndoor.filter((x) => !x.point)]);

@@ -33,7 +33,12 @@ function clean(closed: number[][]): Pt[] {
  * или вырождено.
  */
 export function unitedRings(rings: Pt[][]): { outer: Pt[]; holes: Pt[][] } | undefined {
-  const polys = rings.map((r) => [[...r, r[0]]] as Pt[][]);
+  return unitedPolygons(rings.map((r) => [r]));
+}
+
+/** То же для многоугольников с дырами (кольца: внешнее, затем внутренние) — дыры частей остаются дырами следа. */
+export function unitedPolygons(shapes: Pt[][][]): { outer: Pt[]; holes: Pt[][] } | undefined {
+  const polys = shapes.map((rings) => rings.map((r) => [...r, r[0]]) as Pt[][]);
   const u = polygonClipping.union(polys[0], ...polys.slice(1));
   if (u.length !== 1) return;
   const outer = clean(u[0][0]);

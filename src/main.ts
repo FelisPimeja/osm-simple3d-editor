@@ -15,7 +15,7 @@ import { escalatorAreaMatches, isStairsAreaTags, stairsOutline, stairsRoomClip, 
 import { fetchRelationRelations } from './osm/api';
 import { loneOuterWay, replaceMember, wayTagsOf } from './edit/lone-outer';
 import polygonClipping from 'polygon-clipping';
-import { keepOutlineEntrances, raisedOutside, unitedRings } from './edit/fit-outline';
+import { keepOutlineEntrances, raisedOutside, unitedPolygons } from './edit/fit-outline';
 import * as maplibregl from 'maplibre-gl';
 import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJSONFeature } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -5472,10 +5472,12 @@ function partsOutsideOutline(g: BuildingGroup): { outline: Feature3D; parts: Fea
  */
 function unitedOutline(outline: Feature3D, parts: Feature3D[], fit = false): { outer: [number, number][]; holes: [number, number][][] } | string {
   // fit — только части: контур подгоняется под их след, а не растёт
-  const rings = (fit ? parts : [outline, ...parts]).flatMap((f) => f.polygons.map((p) => p.outer.map((c) => overpassLayer.focusToLocal(c)!)));
-  const u = unitedRings(rings);
+  const local = (r: LonLat[]) => r.map((c) => overpassLayer.focusToLocal(c)!);
+  // Дыры частей (дворы, атриумы) — дыры и следа; у контура-пути их сохраняет только подгонка (контур станет мультиполигоном)
+  const shapes = (fit ? parts : [outline, ...parts]).flatMap((f) => f.polygons.map((p) => [local(p.outer), ...p.inners.map(local)]));
+  const u = unitedPolygons(shapes);
   if (!u) return tr('Части не соприкасаются с контуром: контур из нескольких кусков (мультиполигон) пока не поддерживается — соедините части.');
-  return { outer: u.outer, holes: outline.type === 'relation' ? u.holes : [] };
+  return { outer: u.outer, holes: outline.type === 'relation' || fit ? u.holes : [] };
 }
 
 /**
@@ -5545,7 +5547,27 @@ function fixOutline(fit = false) {
     edits.push({ key: part.key, create: part });
     edits.push({ key: g.key, members: [...g.relMembers, { type: 'way', ref: id, role: 'part' }] });
   }
-  if (r.outline.type !== 'relation') edits.push({ key: r.outline.key, polygons: [{ outer: coords, inners: [], outerIds: ids, innerIds: [] }], tags: outlineTags });
+  if (r.outline.type !== 'relation' && holes.length) {
+    // След с дворами, контур — путь: контур становится мультиполигоном (теги — на отношение, путь — его внешнее
+    // кольцо, дворы — новые пути), в отношении здания outline — уже отношение
+    const way = r.outline;
+    const outerNodes = [...ids, ids[0]];
+    const ways: MemberWay[] = [{ id: way.id, role: 'outer', nodes: outerNodes }];
+    for (const h of holes) {
+      const id = nextNewId--;
+      const line = { ids: [...h.ids, h.ids[0]], coords: [...h.coords, h.coords[0]] };
+      edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line } });
+      ways.push({ id, role: 'inner', nodes: line.ids });
+    }
+    const relId = nextNewId--;
+    const relMembers: OsmMember[] = ways.map((w) => ({ type: 'way', ref: w.id, role: w.role }));
+    edits.push({ key: `relation/${relId}`, create: { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, kind: way.kind,
+      tags: { type: 'multipolygon', ...outlineTags }, hasParts: false, ways, relMembers,
+      polygons: [{ outer: coords, inners: holes.map((h) => h.coords), outerIds: ids, innerIds: holes.map((h) => h.ids) }] } as Feature3D });
+    edits.push({ key: way.key, tags: {}, polygons: [], line: { ids: outerNodes, coords: [...coords, coords[0]] } });
+    edits.push(groupMembersEdit(g, g.relMembers.map((m) => (m.type === 'way' && m.ref === way.id && m.role === 'outline'
+      ? { type: 'relation' as const, ref: relId, role: 'outline' } : m))));
+  } else if (r.outline.type !== 'relation') edits.push({ key: r.outline.key, polygons: [{ outer: coords, inners: [], outerIds: ids, innerIds: [] }], tags: outlineTags });
   // Нависающие части, оказавшиеся за новым контуром, — layer=1, как советует вики (над тем, что на земле)
   const raised = fit ? raisedOutside(focus.members.filter((k, i) => focus!.roles[i] === 'part' && !session.isDeleted(k))
     .map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f), united.outer, (c) => overpassLayer.focusToLocal(c)!) : [];

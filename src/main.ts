@@ -4335,17 +4335,19 @@ function copySelected() {
   for (const k of keys) {
     const f = entity(k) as Feature3D | undefined;
     const role = focus.roles[focus.members.indexOf(k)];
-    if (!f?.polygons?.length || role === 'outline' || f.polygons.some((p) => p.inners.length)) { skipped++; continue; }
-    // Мультиполигон без дыр — каждое внешнее кольцо копией-путём (тег type не переносим)
+    if (!f?.polygons?.length || role === 'outline') { skipped++; continue; }
     const tags = Object.fromEntries(Object.entries(f.tags).filter(([t]) => t !== 'type'));
-    for (const p of f.polygons) items.push({ tags: { ...tags }, polygons: [{ outer: p.outer.map((c) => [...c] as LonLat), inners: [] }] });
+    const copy = (r: LonLat[]) => r.map((c) => [...c] as LonLat);
+    // С дырами — целиком, новым мультиполигоном; без дыр — каждое внешнее кольцо копией-путём (тег type не переносим)
+    if (f.polygons.some((p) => p.inners.length)) items.push({ tags, polygons: f.polygons.map((p) => ({ outer: copy(p.outer), inners: p.inners.map(copy) })) });
+    else for (const p of f.polygons) items.push({ tags: { ...tags }, polygons: [{ outer: copy(p.outer), inners: [] }] });
   }
-  if (!items.length) return setStatus(keys.length ? tr('Копируются части-пути и мультиполигоны без дыр (не контур здания).') : tr('Выберите части здания, затем Ctrl+C.'), true);
+  if (!items.length) return setStatus(keys.length ? tr('Копируются части здания, не контур.') : tr('Выберите части здания, затем Ctrl+C.'), true);
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   copyPick = { items };
   setDefaultClipboard(items);
   setStatus(skipped
-    ? tr('Копирование ({n}, пропущено {skipped} — контур или мультиполигон с дырами): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.', { n: items.length, skipped })
+    ? tr('Копирование ({n}, пропущено {skipped} — контур здания): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.', { n: items.length, skipped })
     : tr('Копирование ({n}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.', { n: items.length }));
   if (lastPointer) updateSnap(lastPointer);
 }
@@ -4439,7 +4441,9 @@ function pasteClipboard() {
   const wayIds: number[] = [];
   const keys: string[] = [];
   // Копии — части этого здания (у отдельного здания — в новом отношении); за контуром — «Обновить контур»
+  const members: { type: 'way' | 'relation'; ref: number }[] = [];
   for (const c of clipboard.items) {
+    if (c.polygons.some((p) => p.inners.length)) { keys.push(pasteMultipolygon(c, edits, members)); continue; }
     const outer = c.polygons[0].outer.map((p) => [...p] as LonLat);
     const ids = outer.map(() => nextNewId--);
     const wayId = nextNewId--;
@@ -4453,7 +4457,7 @@ function pasteClipboard() {
     wayIds.push(wayId);
     keys.push(key);
   }
-  const group = attachParts(edits, wayIds);
+  const group = attachParts(edits, [...wayIds, ...members]);
   if (typeof group === 'string') return setStatus(group, true);
   session.editMany(edits);
   if (group) enterFocus(group);
@@ -4468,6 +4472,32 @@ function pasteClipboard() {
     tr('Вставка ({n}): кликните, куда поставить базовую точку. Shift/стрелки — ось, число + Enter — сдвиг. Esc — отмена вставки.', { n: keys.length }),
     () => setStatus(tr('Вставлено частей: {n}.', { n: keys.length })),
     () => { selectAfterHistory(session.undo()); setStatus(tr('Вставка отменена.')); });
+}
+
+/** Копия части с дырами — новый мультиполигон (свои пути и узлы колец); правки — в edits, член здания — в members. */
+function pasteMultipolygon(c: NonNullable<typeof clipboard>['items'][number], edits: ObjectEdit[], members: { type: 'way' | 'relation'; ref: number }[]): string {
+  const relId = nextNewId--;
+  const key = `relation/${relId}`;
+  const ways: MemberWay[] = [];
+  const polygons: Polygon[] = [];
+  const ring = (r: LonLat[]) => ({ coords: r.map((p) => [...p] as LonLat), ids: r.map(() => nextNewId--) });
+  for (const p of c.polygons) {
+    const o = ring(p.outer), ins = p.inners.map(ring);
+    polygons.push({ outer: o.coords, inners: ins.map((x) => x.coords), outerIds: o.ids, innerIds: ins.map((x) => x.ids) });
+    for (const [r, role] of [[o, 'outer'], ...ins.map((x) => [x, 'inner'] as const)] as const) {
+      const id = nextNewId--;
+      const line = { ids: [...r.ids, r.ids[0]], coords: [...r.coords, r.coords[0]] };
+      edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line } });
+      ways.push({ id, role, nodes: line.ids });
+    }
+  }
+  const tags = { ...c.tags };
+  if (!tags['building:part'] && tags.building) { tags['building:part'] = tags.building === 'no' ? 'yes' : tags.building; delete tags.building; }
+  const part: Feature3D = { key, type: 'relation', id: relId, version: 0, kind: kindOf(tags) ?? 'part', tags: { type: 'multipolygon', ...tags },
+    polygons, hasParts: false, ways };
+  edits.push({ key, create: { ...part, relMembers: ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } as Feature3D });
+  members.push({ type: 'relation', ref: relId });
+  return key;
 }
 
 /**

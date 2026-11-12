@@ -153,9 +153,7 @@
   "Создана часть {key} (общих узлов: {shared}, новых на сторонах соседей: {fresh}). Высоту задайте «Вытянуть» (P).": "Created part {key} (shared nodes: {shared}, new nodes on neighbors’ sides: {fresh}). Set the height with Push (P).",
   "Создана часть {key}. Высоту задайте «Вытянуть» (P).": "Created part {key}. Set the height with Push (P).",
   "Отношение здания не найдено.": "Building relation not found.",
-  "Копируются части-пути и мультиполигоны без дыр (не контур здания).": "Only ways and multipolygons without holes can be copied (not the building outline).",
   "Выберите части здания, затем Ctrl+C.": "Select building parts, then press Ctrl+C.",
-  "Копирование ({n}, пропущено {skipped} — контур или мультиполигон с дырами): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.": "Copy ({n}, {skipped} skipped: outline or multipolygon with holes): click a base point; the copy will follow the cursor by it when pasting. Without a click, a corner vertex is used.",
   "Копирование ({n}): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.": "Copy ({n}): click a base point; the copy will follow the cursor by it when pasting. Without a click, a corner vertex is used.",
   "Кликните по точке здания или земли.": "Click a point on the building or the ground.",
   "Скопировано частей: {n}. Ctrl+V — вставить (копия поедет за курсором).": "Parts copied: {n}. Ctrl+V: paste (the copy follows the cursor).",
@@ -1529,5 +1527,7 @@
   "Закреплённая подложка не выделяется кликом на карте — её не сдвинуть случайно": "A locked underlay can't be selected by clicking on the map, so it can't be moved by accident",
   "Нажмите, чтобы открепить": "Click to unlock",
   "Подложка закреплена — нажмите замок, чтобы её двигать": "The underlay is locked. Click the lock to move it",
-  "объектов: {n}": "objects: {n}"
+  "объектов: {n}": "objects: {n}",
+  "Копируются части здания, не контур.": "Building parts are copied, not the outline.",
+  "Копирование ({n}, пропущено {skipped} — контур здания): кликните базовую точку — за неё копия будет привязана к курсору при вставке. Без клика — угловая вершина.": "Copy ({n}, {skipped} skipped: building outline): click a base point; the copy will follow the cursor by it when pasting. Without a click, a corner vertex is used."
 }

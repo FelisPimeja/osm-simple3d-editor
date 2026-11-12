@@ -513,6 +513,8 @@ const HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
 });
 /** Цвет берётся из вершин (стены/крыша, подсветка, затемнение) — один материал на всё. */
 // polygonOffset отодвигает грани от камеры: рёбра на плоскостях (основание части на крыше другой) не тонут в них
+/** Пол соседа без indoor на плане этажа — бледнее заливки этажа здания. */
+const GHOST_PLAN_FLOOR = new THREE.MeshBasicMaterial({ color: 0xf9f8f6, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 8 });
 /** Линии среза окружения в плане этажа: серые (у здания — чёрные толстые). */
 const GHOST_SECTION_MATERIAL = new THREE.LineBasicMaterial({ color: 0x8a8a8a });
 /** Окружение в режиме контуров — вдвое бледнее здания. */
@@ -1220,11 +1222,55 @@ export class BuildingsLayer implements CustomLayerInterface {
       const below = this.wireframe ? [] : items.filter((it) => { const h = computeHeights(it.tags); return (g.lift?.get(it.feature.key) ?? h.min) < cut && !planned.has(it.feature.key); });
       if (!this.wireframe && (below.length || ownPlans.length)) {
         const grp = new THREE.Group();
+        // Целиком ниже среза — коробка (как нижний этаж); стоящая сквозь срез — как здание режима без разметки:
+        // пунктирный абрис без граней (не закрывает соседей) и заливка пола на отметке этажа
         const boxes = below.flatMap((it) => {
-          const h = computeHeights(it.tags), bottom = g.lift?.get(it.feature.key) ?? h.min, top = Math.min(h.wallTop, cut);
-          return top > bottom + 1e-3 ? [{ bottom, top, polygons: it.feature.polygons, seen: false, cover: [] }] : [];
+          const h = computeHeights(it.tags), bottom = g.lift?.get(it.feature.key) ?? h.min;
+          return h.wallTop <= cut && h.wallTop > bottom + 1e-3 ? [{ bottom, top: h.wallTop, polygons: it.feature.polygons, seen: false, cover: [] }] : [];
         });
         timed('окружение: коробки соседей', () => this.drawLevelBoxes(grp, g, { boxes, floor: Infinity, raw: true }), () => `${boxes.length} частей`);
+        const lines: number[] = [], floorPos: number[] = [];
+        for (const it of below) {
+          const h = computeHeights(it.tags);
+          if (h.wallTop <= cut) continue;
+          const bottom = Math.max(floor ?? -Infinity, g.lift?.get(it.feature.key) ?? h.min);
+          if (cut <= bottom + 1e-3) continue;
+          for (const p of it.feature.polygons) {
+            const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));
+            for (const r of rings) {
+              const base = cornersOnly(r);
+              if (base.length < 3) continue;
+              for (let i = 0; i < base.length; i++) {
+                const [x0, y0] = base[i], [x1, y1] = base[(i + 1) % base.length];
+                for (const z of [bottom, cut]) lines.push(x0, y0, z, x1, y1, z);
+                if (turnAt(base, i) >= UNDERGROUND_POST_TURN) lines.push(x0, y0, bottom, x0, y0, cut);
+              }
+            }
+            const v2 = (r: Pt[]) => { const q = r.slice(); if (q.length > 1 && q[0][0] === q.at(-1)![0] && q[0][1] === q.at(-1)![1]) q.pop(); return q.map(([x, y]) => new THREE.Vector2(x, y)); };
+            const contour = v2(rings[0]), hs = rings.slice(1).map(v2);
+            if (contour.length < 3) continue;
+            const all = [...contour, ...hs.flat()];
+            for (const t of THREE.ShapeUtils.triangulateShape(contour, hs)) for (const k of t) floorPos.push(all[k].x, all[k].y, bottom + 0.01);
+          }
+        }
+        if (floorPos.length) {
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', new THREE.Float32BufferAttribute(floorPos, 3));
+          const mesh = new THREE.Mesh(geo, GHOST_PLAN_FLOOR);
+          mesh.frustumCulled = false;
+          mesh.raycast = () => {};
+          grp.add(mesh);
+        }
+        if (lines.length) {
+          const lg = new THREE.BufferGeometry();
+          lg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+          const dashed = new THREE.LineSegments(lg, PALE_OUTLINE_MATERIAL);
+          dashed.computeLineDistances();
+          dashed.renderOrder = 998;
+          dashed.frustumCulled = false;
+          dashed.raycast = () => {};
+          grp.add(dashed);
+        }
         for (const p of ownPlans) timed('окружение: план соседа', () => this.drawContextPlan(grp, g, p), () => `${p.items.length} объектов`);
         section = grp;
       }

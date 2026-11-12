@@ -3289,6 +3289,9 @@ const splitTool = new SplitTool(overpassLayer, () => selectedKey, () => focus?.m
 });
 splitBtn.addEventListener('click', () => (wallSplitKey ? stopWallSplit() : splitTool.active ? splitTool.stop() : drawTool.active && drawTool.shape === 'line' ? drawTool.stop() : startSplit()));
 
+/** Рассечение на плане ограничено этими объектами (выделенными при запуске); undefined — все. */
+let cutOnly: Set<string> | undefined;
+
 function startSplit() {
   if (!focus) return;
   // План этажа: разрез ломаной по полу — помещения и пустая площадь
@@ -3307,6 +3310,9 @@ function startSplit() {
       toolHint(tr('Рассечь стену: кликните по точке на ней. Esc — выход.'));
       return;
     }
+    // Выделены полигоны — рассекаются только они
+    const only = indoorSelection.filter((f) => isIndoorCutPolygon(f) && f.polygons.length).map((f) => f.key);
+    cutOnly = only.length ? new Set(only) : undefined;
     select(undefined);
     drawTool.begin('line');
     return;
@@ -10938,7 +10944,8 @@ function cutPlan(pts: [number, number][]): string | undefined {
         .flatMap((q) => cleanPiece(q, CUT_MIN_AREA)).filter((q) => localArea(q) >= CUT_MIN_AREA);
     } catch (err) { console.warn('[cut-plan]', err); return []; }
   };
-  const rooms = shownIndoor.filter((f) => isIndoorCutPolygon(f) && f.polygons.length);
+  const allRooms = shownIndoor.filter((f) => isIndoorCutPolygon(f) && f.polygons.length);
+  const rooms = cutOnly ? allRooms.filter((f) => cutOnly!.has(f.key)) : allRooms;
   const targets: { f: IndoorFeature; pieces: [number, number][][][] }[] = [];
   /** Мультиполигоны (помещение с дырами): заменяются кусками — новыми объектами с их тегами. */
   const replaced: typeof targets = [];
@@ -10961,11 +10968,11 @@ function cutPlan(pts: [number, number][]): string | undefined {
   // Пустая площадь: срез этажа минус помещения
   const free: [number, number][][][] = [];
   const section = levelSection(level);
-  if (section?.length) timed('разрез: пустая площадь', () => {
+  if (section?.length && !cutOnly) timed('разрез: пустая площадь', () => {
     const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
     try {
       // Проёмы лестниц и залов в два света — не пустая площадь
-      const holes = [...rooms, ...levelOpenings(level)].map((f) => f.polygons.map((p) => [close(p.outer), ...p.inners.map(close)]));
+      const holes = [...allRooms, ...levelOpenings(level)].map((f) => f.polygons.map((p) => [close(p.outer), ...p.inners.map(close)]));
       for (const q of polygonClipping.difference(section.map((p) => p.map(close)), ...holes)) {
         const pieces = cut({ outer: q[0].slice(0, -1) as LonLat[], inners: q.slice(1).map((r) => r.slice(0, -1) as LonLat[]) });
         if (pieces.length >= 2) free.push(...pieces);

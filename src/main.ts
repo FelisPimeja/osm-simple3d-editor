@@ -14855,7 +14855,7 @@ function mergeIntoBuilding() {
 /** Кнопка исключения выделенных частей из группы, в которую «провалились». */
 function excludeButton(): string {
   if (!drill || !selection.length || !selection.every((k) => drill!.members.includes(k))) return '';
-  return `<p><button type="button" data-exclude>${tr('Исключить из этого здания')}${selection.length > 1 ? ` (${selection.length})` : ''}</button></p>`;
+  return `<div class="action-bar"><button type="button" class="danger" data-exclude>${tr('Исключить из этого здания')}${selection.length > 1 ? ` (${selection.length})` : ''}</button></div>`;
 }
 
 function excludeFromGroup() {
@@ -15551,7 +15551,7 @@ function renderSelectedImpl() {
   // В режиме здания подсказка о группе не нужна (выход — Esc и панель частей); «Исключить» — под свойствами
   // Здание без отношения (контур с частями внутри) — та же шапка, что у отношения
   const header = r && !focus && highlightKeys(r.feature.key).length > 1 ? buildingHeader((session.get(r.feature.key)?.tags ?? r.feature.tags).name, session.get(r.feature.key)?.tags ?? r.feature.tags) : '';
-  infoEl.innerHTML = r ? header + (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + excludeButton() + (focus ? focusExitButton() : '') : '';
+  infoEl.innerHTML = r ? header + (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + (focus ? focusExitButton() : '') + excludeButton() : '';
 }
 
 // Рендер: часть без своих цветов/формы крыши/материалов берёт их у контура, затем у отношения
@@ -15625,8 +15625,10 @@ function describeFocus(g: BuildingGroup): string {
 
 function focusExitButton(keys = 'Esc ×2'): string {
   const ctx = overpassLayer.contextShown;
-  return `<p><button type="button" data-focus-exit>${tr('Выйти из режима здания')}</button> <span class="hint">(${keys})</span>
-    <button type="button" data-focus-context${ctx ? ' class="active"' : ''} aria-pressed="${ctx}">${ctx ? tr('Скрыть окружение') : tr('Показать окружение')}</button> <span class="hint">(Shift+N)</span></p>`;
+  // Кнопки на всю ширину панели, сочетание клавиш — справа на самой кнопке (идея из PR #54)
+  const kbd = (k: string) => `<kbd>${k.replace('Shift+', '⇧')}</kbd>`;
+  return `<div class="action-bar"><button type="button" data-focus-exit>${tr('Выйти из режима здания')}${kbd(keys)}</button>
+    <button type="button" data-focus-context${ctx ? ' class="active"' : ''} aria-pressed="${ctx}">${ctx ? tr('Скрыть окружение') : tr('Показать окружение')}${kbd('Shift+N')}</button></div>`;
 }
 
 /** Подсказка над частью, выделенной внутри группы. */

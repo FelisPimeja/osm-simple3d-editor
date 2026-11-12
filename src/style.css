@@ -192,6 +192,16 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 #info td:first-child { color: #555; white-space: nowrap; word-break: normal; }
 #info .warn { color: #b45309; font-size: 12px; margin: 4px 0; }
 #info button { padding: 4px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+/* Ряд действий под свойствами: кнопки на всю ширину, клавиши справа, опасное — последним и красным */
+.action-bar { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding-top: 10px; border-top: 1px solid #e5e7eb; }
+.action-bar + .action-bar { margin-top: 6px; padding-top: 0; border-top: 0; }
+#info .action-bar button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; }
+#info .action-bar button:hover { background: #f3f4f6; }
+#info .action-bar button.active { background: #dbeafe; border-color: #93c5fd; color: #1e40af; }
+#info .action-bar button.danger { color: #dc2626; border-color: #fca5a5; }
+#info .action-bar button.danger:hover { background: #fef2f2; }
+#info .action-bar kbd { padding: 0 5px; border-radius: 3px; background: #f3f4f6; color: #4b5563; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+#info .action-bar button.active kbd { background: rgba(255,255,255,.7); color: #1e40af; }
 #op-indicator {
   display: flex; align-items: center; justify-content: center; gap: 6px; max-width: 100%; padding: 2px 8px; border-radius: 10px; color: #333; text-align: center; pointer-events: auto;
 }

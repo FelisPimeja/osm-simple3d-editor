@@ -15621,11 +15621,12 @@ function describeFocus(g: BuildingGroup): string {
   const level = currentLevel !== undefined ? buildingLevels(g, buildingIndoor(g)).find((l) => l.n === currentLevel) : undefined;
   if (level) return describeLevel(level) + focusExitButton('Esc');
   const name = g.tags.name ?? outlineTags(g)?.name;
+  const ref = isSolo(g) ? g.members[0] : g.key;
+  // Шапка — как у объекта (objHead): заголовок, ссылка, плашка; подсказки — списком
   return `
-    <h2>${tr('Режим здания')}</h2>
+    <h2 class="obj-head"><span class="obj-title">${tr('Режим здания')}</span> <a href="${server().web}/${ref}" target="_blank" rel="noopener">${ref}</a>${g.members.length > 1 ? ` <span class="obj-ver">${trn(g.members.length, '{n} часть|{n} части|{n} частей')}</span>` : ''}</h2>
     ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
-    <p class="hint">${tr('{link}, членов: {n}.', { link: `<a href="${server().web}/${isSolo(g) ? g.members[0] : g.key}" target="_blank" rel="noopener">${isSolo(g) ? g.members[0] : g.key}</a>`, n: g.members.length })}
-      ${tr('Клик по части — выделить её, Shift — несколько. Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.')}</p>
+    <ul class="hint tips"><li>${tr('Клик по части — выделить её, Shift — несколько.')}</li><li>${tr('Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.')}</li></ul>
     ${outlineWarning(g)}
     ${implicitWarning(g)}
     ${focusExitButton('Esc')}`;

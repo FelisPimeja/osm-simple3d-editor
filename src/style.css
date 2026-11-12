@@ -365,6 +365,9 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .outline-cand input { margin: 2px 0 0; flex: none; }
 #info [data-hover-key]:hover { background: #fff3e6; }
 #info .group-name { font-size: 15px; margin-bottom: 2px; }
+/* Подсказки режима здания — по одной на строку */
+#info .tips { padding-left: 18px; }
+#info .tips li { margin: 2px 0; }
 
 /* View cube — в ряд слева от кнопок масштаба */
 .maplibregl-ctrl-top-right { display: flex; align-items: flex-start; top: 12px; }

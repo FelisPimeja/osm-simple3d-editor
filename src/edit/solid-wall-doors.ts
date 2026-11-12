@@ -58,9 +58,12 @@ export function cutSolidWall(polys:WallPolygon[],at:Pt,face:[Pt,Pt],width:number
  if(!probe(normal)) normal=[-normal[0],-normal[1]];
  if(!probe(normal)) throw new Error(tr('Дверь не находится на грани полигональной стены.'));
  /** Through the wall along the normal from just outside the front: where the ray leaves the wall, from p. */
+ // По объединению: у соприкасающихся стен (примыкание у края широкого проёма) общая граница — не выход из стены,
+ // иначе задняя кромка выреза шла наискось и за дверью оставался клин
+ const solid=pc.union(polys);
  const reach=(p:Pt)=>{
   const from=plus(p,normal,-SLIVER_REACH),hits:number[]=[];
-  for(const poly of polys) for(const r of poly) for(let i=0;i+1<r.length;i++){
+  for(const poly of solid) for(const r of poly) for(let i=0;i+1<r.length;i++){
    const d=sub(r[i+1],r[i]),den=cross(normal,d);
    if(Math.abs(den)<1e-9) continue;
    const t=cross(sub(r[i],from),d)/den,u=cross(sub(r[i],from),normal)/den;
@@ -69,7 +72,7 @@ export function cutSolidWall(polys:WallPolygon[],at:Pt,face:[Pt,Pt],width:number
   // A ray through a vertex crosses both of its edges: one crossing
   hits.sort((x,y)=>x-y);
   const uniq=hits.filter((h,i)=>i===0||h-hits[i-1]>1e-6);
-  const exit=inside(from,polys)?uniq[0]:uniq[1];
+  const exit=inside(from,solid)?uniq[0]:uniq[1];
   if(exit===undefined||exit-SLIVER_REACH<=0.001) throw new Error(tr('Не удалось найти противоположную грань стены.'));
   return exit-SLIVER_REACH;
  };

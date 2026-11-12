@@ -122,6 +122,7 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 .ol-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ol-key { color: #888; font-size: 11px; margin-left: 4px; }
 #edits-panel .panel-head h1 .hint { font-size: 13px; font-weight: normal; }
+#edits-panel .panel-head h1 .hint:not(:empty) { margin-left: 4px; }
 /* Кнопки карты — слева от панели свойств, пока она видна */
 .maplibregl-ctrl-top-right { right: 334px; }
 .panel-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 12px; cursor: pointer; user-select: none; }
@@ -131,10 +132,13 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 /* Свёрнутая панель не сжимается ниже заголовка, развёрнутая — оставляет заголовок и хоть немного содержимого */
 .panel.collapsed { flex-shrink: 0; }
 .panel:not(.collapsed) { min-height: 80px; }
-.collapse-btn { width: 24px; height: 24px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; font-size: 12px; color: #555; }
+.collapse-btn { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; cursor: pointer; color: #555; }
 .collapse-btn:hover { background: #f3f4f6; }
-.collapse-btn::before { content: "▲"; }
-.panel.collapsed .collapse-btn::before { content: "▼"; }
+.collapse-btn::before { content: ""; display: block; width: 18px; height: 18px; margin: auto; background: currentColor;
+  -webkit-mask: var(--chevron) center / contain no-repeat; mask: var(--chevron) center / contain no-repeat;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.500l5-5 5 5'/%3E%3C/svg%3E"); }
+.panel.collapsed .collapse-btn::before {
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 7.500l5 5 5-5'/%3E%3C/svg%3E"); }
 .hint { color: #666; margin: 0 0 8px; }
 #info { font-size: 12px; margin: 0; }
 @media (max-width: 500px) {
@@ -176,12 +180,17 @@ body.mobile #statusbar { bottom: calc(var(--mobile-bottom, 44px) + 16px); }
 /* Правая колонка (панель «Этажи») — над карточкой здания, а не под ней */
 body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobile-card-h, 72px) + 20px + env(safe-area-inset-bottom)); }
 #info h2 { font-size: 14px; margin: 8px 0 4px; }
+#info .obj-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: 8px 0 6px; }
+#info .obj-head a { font-size: 12px; font-weight: 400; }
+.obj-ver { padding: 0 5px; border-radius: 4px; background: #f3f4f6; color: #555; font-size: 11px; font-weight: 400; }
+#info .dims { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 8px; font-size: 12px; color: #374151; }
+#info .dims dt { color: #6b7280; }
+#info .dims dd { margin: 0; }
 #info a { color: #2563eb; }
 #info table { border-collapse: collapse; width: 100%; font-size: 12px; }
 #info td { border-top: 1px solid #eee; padding: 2px 4px; vertical-align: top; word-break: break-all; }
 #info td:first-child { color: #555; white-space: nowrap; word-break: normal; }
 #info .warn { color: #b45309; font-size: 12px; margin: 4px 0; }
-#info pre { font-size: 12px; white-space: pre-wrap; margin: 0; }
 #info button { padding: 4px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
 #op-indicator {
   display: flex; align-items: center; justify-content: center; gap: 6px; max-width: 100%; padding: 2px 8px; border-radius: 10px; color: #333; text-align: center; pointer-events: auto;
@@ -199,12 +208,8 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 #op-indicator .retry[hidden] { display: none; }
 @keyframes op-pulse { 50% { opacity: .25; } }
 .toggle { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; cursor: pointer; user-select: none; }
-.gfx { margin-bottom: 8px; border: 1px solid #e5e7eb; border-radius: 6px; padding: 4px 8px; }
-.gfx summary { cursor: pointer; padding: 2px 0; }
-.gfx .toggle { margin: 6px 0; }
-.gfx .hint, .panel-tech .hint, #perf { font-size: 12px; margin: 0; }
-.cache-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 !important; }
-.cache-line button { padding: 2px 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+.panel-tech .hint, #perf { font-size: 12px; margin: 0; }
+#perf { display: flex; gap: 12px; font-variant-numeric: tabular-nums; }
 .orbit-pivot {
   position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; pointer-events: none;
   border: 2px solid #fff; border-radius: 50%; background: #2563eb; box-shadow: 0 0 0 1px rgba(0,0,0,.4);
@@ -541,12 +546,12 @@ body.mobile #right-col { bottom: calc(72px + env(safe-area-inset-bottom)); }
 }
 #date-panel[hidden] { display: none; }
 .dp-row { display: flex; align-items: center; gap: 6px; }
-.dp-btn { width: 26px; height: 26px; padding: 0; border: 1px solid #ccc; border-radius: 50%; background: #fff; cursor: pointer; font-size: 11px; line-height: 1; color: #1f2937; }
+.dp-btn { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 1px solid #ccc; border-radius: 50%; background: #fff; cursor: pointer; font-size: 11px; line-height: 1; color: #1f2937; }
 .dp-btn:hover { background: #f3f4f6; }
 .dp-play { background: #2563eb; border-color: #2563eb; color: #fff; }
 .dp-play:hover { background: #1d4ed8; }
-.dp-play::before { content: '▶'; }
-.dp-play.playing::before { content: '❚❚'; font-size: 9px; letter-spacing: -1px; }
+.dp-play::before { content: ''; width: 14px; height: 14px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M6 3.500v13L16.500 10z'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M6 3.500v13L16.500 10z'/%3E%3C/svg%3E") center / contain no-repeat; }
+.dp-play.playing::before { -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 4h3.500v12H5zM11.500 4H15v12h-3.500z'/%3E%3C/svg%3E"); mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 4h3.500v12H5zM11.500 4H15v12h-3.500z'/%3E%3C/svg%3E"); }
 .dp-year { width: 104px; font: 600 15px system-ui, sans-serif; text-align: center; padding: 1px 4px; border: 1px solid #ccc; border-radius: 4px; }
 .dp-opt { display: flex; align-items: center; gap: 3px; color: #555; margin-left: auto; }
 .dp-opt + .dp-opt { margin-left: 0; }
@@ -606,7 +611,6 @@ body.mobile #toasts { top: 72px; max-width: calc(100% - 112px); }
 .issue-list li:hover { background: #f0f2f5; }
 .issue-list li.selected { background: #dbe7ff; }
 .issue-list li.issue-picked { background: #bfdbfe; box-shadow: inset 3px 0 #2563eb; }
-.issue-list li.error .issue-text { color: #991b1b; }
 .issue-list li.issue-bundle { display: block; padding: 0; cursor: default; }
 .issue-list li.issue-bundle:hover { background: none; }
 .issue-bundle summary { display: flex; gap: 6px; align-items: center; padding: 1px 4px 1px 0; border-radius: 4px; cursor: pointer; line-height: 1.35; list-style: none; }
@@ -617,10 +621,9 @@ body.mobile #toasts { top: 72px; max-width: calc(100% - 112px); }
 .issue-bundle summary:hover { background: #f0f2f5; }
 .issue-bundle summary.issue-picked { box-shadow: inset 3px 0 #2563eb; }
 .issue-bundle summary .issue-text { font-weight: 600; }
-.issue-bundle.error > details > summary .issue-text { color: #991b1b; }
-.issue-bundle.warning > details > summary .issue-text { color: #92400e; }
 .issue-bundle .issue-list { margin: 0 0 2px 22px; }
-.issue-list li.warning .issue-text { color: #92400e; }
+/* Colour stays on the icon: dozens of coloured text rows are tiring to read */
+.issue-text { color: #374151; }
 .issue-list .ol-key { margin-left: 6px; color: #888; }
 .issue-icon { flex: none; }
 .issue-mark { flex: none; font-size: 12px; cursor: help; }
@@ -639,19 +642,6 @@ body.mobile #issues-panel { display: none !important; }
 .issue-show-all { padding: 0; border: 0; background: none; font: inherit; color: #2563eb; cursor: pointer; white-space: nowrap; }
 
 /* Настройки пользователя: кнопка в панели и окно */
-.settings-open { display: flex; align-items: center; gap: 6px; width: 100%; margin: 0 0 8px; padding: 5px 8px;
-  border: 1px solid #d1d5db; border-radius: 6px; background: #fff; font: inherit; font-size: 13px; color: #333; cursor: pointer; }
-.settings-open:hover { background: #f3f4f6; }
-.settings-open svg { flex: none; color: #555; }
-.settings-dialog { width: min(360px, calc(100vw - 32px)); padding: 0; border: 0; border-radius: 8px;
-  box-shadow: 0 4px 24px rgba(0,0,0,.3); font-size: 14px; }
-.settings-dialog::backdrop { background: rgba(0,0,0,.2); }
-.settings-dialog .panel-head { cursor: default; }
-.dialog-close { width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; font-size: 20px; line-height: 1;
-  color: #555; cursor: pointer; }
-.dialog-close:hover { background: #f3f4f6; }
-.dialog-body { padding: 4px 12px 12px; }
-.dialog-body .server-line { display: grid; grid-template-columns: 1fr 1fr; font-size: 13px; }
 .settings-translation { margin: 4px 0 12px; font-size: 12px; }
 .settings-sync { font-size: 12px; margin: 10px 0 0; }
 .settings-sync.warn { color: #b45309; }
@@ -828,3 +818,32 @@ body.mobile #issues-panel { display: none !important; }
 /* Клавиши в справке — как на GitHub (issue #38) */
 #help kbd { padding: .24rem; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; vertical-align: middle; background-color: #f6f8fa;
   border: solid 1px #d1d9e0b3; box-shadow: inset 0 -1px 0 #d1d9e0b3; border-radius: 6px; line-height: 10px; display: inline-block; color: #1f2328; }
+
+.all-tags summary { display: flex; align-items: center; gap: 2px; list-style: none; }
+.all-tags summary::-webkit-details-marker { display: none; }
+.all-tags summary::before { content: ''; flex: none; width: 16px; height: 16px; background: currentColor; transition: transform .12s;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7.500 5l5 5-5 5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7.500 5l5 5-5 5'/%3E%3C/svg%3E") center / contain no-repeat; }
+.all-tags[open] > summary::before { transform: rotate(90deg); }
+.warn svg { vertical-align: -2px; }
+.issue-icon svg, .issue-mark svg { display: block; margin-top: 1px; }
+
+/* Панель настроек слева: вкладки «Вид» и «Дополнительно», разделы без рамок */
+.panel-note { margin: 0 0 20px; font-size: 12px; }
+.panel-tabs { display: flex; gap: 4px; margin: 0 0 8px; }
+.panel-tabs button { flex: 1 1 auto; min-width: 0; padding: 4px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid #ccc; border-radius: 4px; background: #fff; font: inherit; color: inherit; cursor: pointer; }
+.panel-tabs button:hover { background: #f3f4f6; }
+.panel-tabs button[aria-selected="true"] { background: #dbeafe; border-color: #93c5fd; }
+.panel-tab[hidden] { display: none; }
+.panel-sec { margin: 20px 0 8px; font-size: 14px; font-weight: 600; }
+.panel-tab > .panel-sec:first-child { margin-top: 4px; }
+/* Подпись тесно к своему полю, а между группами — заметно больше (Refactoring UI, «Avoid ambiguous spacing») */
+#pane-map > .server-line:first-child { margin-bottom: 4px; }
+#pane-map .settings-translation { margin: -2px 0 20px; }
+.panel-stat { margin: 2px 0 8px; font-size: 13px; }
+#cache-info b { font-weight: 700; }
+.panel-sub { color: #666; font-size: 12px; }
+#gfx-sync[hidden] { display: none; }
+
+#pane-map .server-line { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; align-items: center; margin: 0 0 8px; font-size: 13px; }
+#pane-map #gfx-sync { margin-top: 4px; }
+#pane-map .settings-sync { margin-top: 16px; }

@@ -93,6 +93,7 @@ import { registerSetting, saveLang, saveSetting, syncPrefs, syncStatus } from '.
 import { LOADER_TIMING, CUBE_SHAPES, MorphLoader } from './view/morph-loader';
 import { createUnderlay, deleteUnderlay, fitToBuilding, fitToView, isUnderlayFile, loadUnderlays, saveUnderlay, type Underlay } from './view/underlays';
 import { UnderlayMenu } from './view/underlay-menu';
+import { icon } from './view/icons';
 
 // Статичная разметка index.html — до того, как код ниже начнёт менять тексты
 localizeDom(document.body);
@@ -1227,7 +1228,8 @@ function syncGraphicsInputs() {
 // Постоянный кеш тайлов OSM API (IndexedDB)
 const cacheInfo = document.getElementById('cache-info')!;
 async function showCacheInfo() {
-  cacheInfo.textContent = tr('Кэш тайлов: {n}', { n: await overpass.store.count() });
+  const n = await overpass.store.count();
+  cacheInfo.innerHTML = trn(n, '{n} тайл сохранён на этом устройстве|{n} тайла сохранено на этом устройстве|{n} тайлов сохранено на этом устройстве', { n: `<b>${n}</b>` });
 }
 document.getElementById('cache-clear')!.addEventListener('click', async () => {
   await overpass.clearStore();
@@ -1236,7 +1238,8 @@ document.getElementById('cache-clear')!.addEventListener('click', async () => {
 const tilesReload = document.getElementById('tiles-reload')!;
 /** В режиме здания кнопка обновляет только его: части, отношение и внутренние планы. */
 function syncReloadButton() {
-  tilesReload.textContent = focus ? tr('Обновить здание') : tr('Перезагрузить видимые тайлы');
+  tilesReload.textContent = focus ? tr('Обновить здание') : tr('Обновить данные');
+  document.getElementById('reload-sub')!.textContent = focus ? tr('Загрузить свежие данные этого здания.') : tr('Загрузить свежие данные с сервера.');
   tilesReload.title = focus ? tr('Заново запросить из OSM API это здание, его части и внутренние планы') : tr('Отладка: заново запросить из OSM API тайлы на экране');
 }
 tilesReload.addEventListener('click', () => {
@@ -1251,18 +1254,35 @@ tilesReload.addEventListener('click', () => {
   if (overpass.mode !== 'full') return setStatus(tr('Тайлы загружаются с z ≥ {z}.', { z: OVERPASS_MIN_ZOOM }), true);
   setStatus(tr('Перезапрашиваем тайлов ({src}): {n}.', { src: overpass.sourceLabel, n: overpass.reloadVisible() }));
 });
-document.getElementById('gfx')!.addEventListener('toggle', () => void showCacheInfo());
 void showCacheInfo();
+
+// Панель настроек: вкладки «Вид» и «Дополнительно»
+const panelTabs = [...document.querySelectorAll<HTMLButtonElement>('.panel-tabs [data-tab]')];
+function selectPanelTab(id: string) {
+  for (const t of panelTabs) {
+    const on = t.dataset.tab === id;
+    t.setAttribute('aria-selected', String(on));
+    document.getElementById(t.getAttribute('aria-controls')!)!.hidden = !on;
+  }
+  if (id === 'advanced') void showCacheInfo();
+  if (id === 'map') renderPersonalSettings();
+  try { localStorage.setItem('osm3d.panel-tab', id); } catch { /* нет хранилища */ }
+}
+for (const t of panelTabs) t.addEventListener('click', () => selectPanelTab(t.dataset.tab!));
+
 
 // FPS считаем по кадрам MapLibre (рисует по требованию — смотреть при движении карты)
 const perfEl = document.getElementById('perf')!;
 let frames = 0;
 map.on('render', () => frames++);
-setInterval(() => {
+function updatePerf() {
   const triangles = overpassLayer.lastTriangles;
-  perfEl.textContent = tr('FPS: {fps} · треугольников: {n}', { fps: frames, n: triangles.toLocaleString(locale) });
+  const [fps, tris] = tr('FPS: {fps} · треугольников: {n}', { fps: frames, n: triangles.toLocaleString(locale) }).split(' · ');
+  perfEl.replaceChildren(...[fps, tris].map((t) => Object.assign(document.createElement('span'), { textContent: t })));
   frames = 0;
-}, 1000);
+}
+updatePerf();
+setInterval(updatePerf, 1000);
 
 function refreshOverpass() {
   // В режиме здания без окружения его не видно — тайлы не грузим и не собираем (у горизонта их в кадре десятки)
@@ -2688,7 +2708,7 @@ function startRotate() {
   if (!keys.length && !underlaySelection.length) return setStatus(tr('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Повернуть».'), true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
-    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Обновить данные» в настройках.'), true);
   }
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   rotateTool.start(keys, underlaySelection);
@@ -2719,7 +2739,7 @@ function startScale() {
   if (!keys.length && !underlaySelection.length) return setStatus(tr('Сначала выберите в здании объект (или несколько с Shift), затем инструмент «Масштаб».'), true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
-    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Обновить данные» в настройках.'), true);
   }
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   scaleTool.start(keys, underlaySelection);
@@ -2801,7 +2821,7 @@ function squareSelected() {
   if (!keys.length) return setStatus(tr('Сначала выберите в здании части (или несколько с Shift), затем «Выровнять углы».'), true);
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (features.some((f) => !nodeIds(f))) {
-    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Обновить данные» в настройках.'), true);
   }
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop();
   const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
@@ -2920,7 +2940,7 @@ function mergeIn(pending: EditGroup | undefined): string | undefined {
   if (keys.some((k) => focus!.roles[focus!.members.indexOf(k)] !== 'part')) return tr('Объединять можно только части, контур здания (outline) — нет.');
   const features = keys.map((k) => entity(k) as Feature3D | undefined);
   if (features.some((f) => !f?.polygons?.length || !nodeIds(f))) {
-    return tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.');
+    return tr('В кеше нет id узлов или путей этих объектов — нажмите «Обновить данные» в настройках.');
   }
   const parts = features as Feature3D[];
   if (parts.some((f) => f.type === 'relation' && (f.tags.type !== 'multipolygon' || !relWays(f)))) {
@@ -4560,7 +4580,7 @@ function splitReason(key: string): string | undefined {
   const shape = f.tags['roof:shape'];
   const h = computeHeights(f.tags);
   if (!(outline && overpassLayer.focusFlat(key)) && shape && shape !== 'flat' && h.top - h.min > 0.1) return tr('Резать можно плоский объект или с плоской крышей, здесь roof:shape={shape}.', { shape });
-  if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
+  if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Обновить данные» в настройках.');
   return;
 }
 
@@ -4622,7 +4642,7 @@ function sideCutRange(key: string): SideRange | string {
   if (overpassLayer.focusFlat(key) || (isOutlineIn(focus, key) && !isSolo(focus)) || (isSolo(focus) && key === focus.members[0] && focus.roles.includes('part')))
     return tr('Контур здания (outline) по высоте не делится — режьте его части.');
   if (f.type === 'relation' && (f.tags.type !== 'multipolygon' || !relWays(f))) return tr('Для рассечения нужны пути-члены мультиполигона — перезагрузите видимые тайлы.');
-  if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
+  if (!nodeIds(f)) return tr('В кеше нет id узлов этого объекта — нажмите «Обновить данные» в настройках.');
   const h = computeHeights(f.tags);
   const base = box.min.z - h.min;
   const lo = box.min.z, hi = base + h.wallTop;
@@ -4902,7 +4922,7 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
     const tp = polygons[polyIndex];
     const rIds = touch.ring ? tp?.innerIds?.[touch.ring - 1] : tp?.outerIds;
     const rCoords = touch.ring ? tp?.inners[touch.ring - 1] : tp?.outer;
-    if (!rIds || !rCoords) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
+    if (!rIds || !rCoords) return tr('В кеше нет id узлов этого объекта — нажмите «Обновить данные» в настройках.');
     if (touch.vertex !== undefined) { touchId = rIds[touch.vertex]; touchAt = rCoords[touch.vertex]; }
     else {
       // Новый узел на стороне — в контур этого объекта и во все пути и объекты с этой стороной
@@ -5146,7 +5166,7 @@ function splitAtHole(f: Feature3D, g: EditGroup, a: CutPoint, b: CutPoint, bends
   const poly = f.polygons[a.poly];
   const k = a.ring - 1;
   const hIds = poly.innerIds?.[k];
-  if (!hIds || f.type !== 'relation') return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
+  if (!hIds || f.type !== 'relation') return tr('В кеше нет id узлов этого объекта — нажмите «Обновить данные» в настройках.');
   const local = (c: LonLat) => overpassLayer.focusToLocal(c)!;
   const outer = poly.outer.map(local);
   const holes = poly.inners.map((h) => h.map(local));
@@ -5594,11 +5614,11 @@ function outlineWarning(g: BuildingGroup): string {
   const r = partsOutsideOutline(g);
   const above = partsAboveOutline(g);
   const share = r?.out.length ? outlineGrowth(r) : undefined;
-  return (r?.out.length ? `<p class="warn">⚠ ${tr('Частей за контуром здания: {n}. Контур должен охватывать все части.', { n: r.out.length })}
+  return (r?.out.length ? `<p class="warn">${icon('warning', 14)} ${tr('Частей за контуром здания: {n}. Контур должен охватывать все части.', { n: r.out.length })}
     ${share !== undefined && share <= OUTLINE_GROW_SHARE
       ? `<button type="button" data-outline-fix title="${tr('Контур вырастет на {pct}% площади. Наведите — предпросмотр нового контура', { pct: (Math.round(share * 1000) / 10).toString() })}">${tr('Обновить контур')}</button>`
       : share !== undefined ? tr('Контур пришлось бы увеличить на {pct}% площади — проверьте сами части.', { pct: Math.round(share * 100).toString() }) : ''}</p>` : '')
-    + (above ? `<p class="warn">⚠ ${aboveOutlineText(above)}</p>` : '');
+    + (above ? `<p class="warn">${icon('warning', 14)} ${aboveOutlineText(above)}</p>` : '');
 }
 
 /**
@@ -5686,7 +5706,7 @@ function allowPushSide(t: PushTarget): boolean {
   const f = entity(t.key) as Feature3D | undefined;
   const nodes = f && t.edge ? sideNodes(f, t.edge) : undefined;
   if (!nodes || (f!.type === 'relation' && !relWays(f!))) {
-    setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
+    setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Обновить данные» в настройках.'), true);
     return false;
   }
   return true;
@@ -6957,7 +6977,7 @@ function renderEntrance(id: number) {
       : `<input type="text" data-entrance-tag="${k}" value="${esc(t[k] ?? '')}" placeholder="—" spellcheck="false" autocomplete="off">`;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}${input}</label>`;
   }).join('');
-  infoEl.innerHTML = `<h2>${esc(title)}${name} — <a href="${server().web}/node/${id}" target="_blank" rel="noopener">node/${id}</a></h2>`
+  infoEl.innerHTML = objectHeading(`${esc(title)}${name}`, `${server().web}/node/${id}`, `node/${id}`)
     + `<div class="tag-form">${rows}</div>`
     + `<p class="hint">${tr('Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.')} ${tr('Del — удалить вход (узел останется вершиной контура).')}</p>`
     + `<details class="all-tags" open><summary>${tr('Все теги')}</summary><table>${Object.entries(t).sort(([a], [b]) => a.localeCompare(b))
@@ -7130,7 +7150,7 @@ function entranceMoveEdits(n: number, t: EntranceTarget): ObjectEdit[] | string 
   const f = entity(t.key) as Feature3D | undefined;
   const p = f?.polygons?.[t.poly];
   const rids = p && (t.ring ? p.innerIds?.[t.ring - 1] : p.outerIds);
-  if (!rids) return tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.');
+  if (!rids) return tr('В кеше нет id узлов или путей этих объектов — нажмите «Обновить данные» в настройках.');
   const live = liveFeatures();
   const coords = new Map<number, LonLat>();
   const ways = new Map<number, { nodes: number[]; tags: Record<string, string> }>();
@@ -7251,7 +7271,7 @@ function removeShapeVertex(t: ShapeTarget, merged: boolean) {
   const f = entity(t.key) as Feature3D | undefined;
   const rings = f?.polygons && shapeRings(f, t);
   if (!f || !rings || (f.type === 'relation' && !relWays(f))) {
-    return setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
+    return setStatus(tr('В кеше нет id узлов или путей этого объекта — нажмите «Обновить данные» в настройках.'), true);
   }
   const after = rings.map((r) => ({ poly: r.poly, ring: r.ring, ids: r.ids.filter((_, k) => !r.ks.includes(k)), coords: r.coords.filter((_, k) => !r.ks.includes(k)) }));
   // Внутреннее кольцо вырождается в линию (слили вершины треугольника) — убираем кольцо целиком
@@ -7402,7 +7422,7 @@ function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
       : tr('Высота стен {key}: {h} м. Отменить — Ctrl+Z.', { key, h: (h.wallTop - h.min).toFixed(2) }));
     return true;
   }
-  const noIds = tr('В кеше нет id узлов или путей этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
+  const noIds = tr('В кеше нет id узлов или путей этого объекта — нажмите «Обновить данные» в настройках.');
   if (f.type === 'relation' && !relWays(f)) return fail(noIds);
   let edits: ObjectEdit[] | string;
   if (t.insert !== undefined) {
@@ -7562,7 +7582,7 @@ function startMove() {
   const keys = indoor.length ? indoor.map(f => f.key) : doors.length ? doors.map(d => d.key) : selection.filter((k) => focus!.members.includes(k));
   const features = keys.map((k) => entity(k) as Feature3D | undefined).filter((f): f is Feature3D => !!f?.polygons);
   if (!doors.length && !indoor.length && features.some((f) => !nodeIds(f) || (f.type === 'relation' && !relWays(f)))) {
-    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Перезагрузить видимые тайлы» в настройках.'), true);
+    return setStatus(tr('В кеше нет id узлов или путей этих объектов — нажмите «Обновить данные» в настройках.'), true);
   }
   pushTool.stop(); shapeTool.stop();
   splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
@@ -9369,8 +9389,7 @@ function renderIndoorSelection(add = false) {
   const kind = indoorTitle(f);
   const levels = f.levels.map((n) => levelLabel(n)).join(', ');
   const src = indoorCategorySource(f);
-  infoEl.innerHTML = `<h2>${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''} — `
-    + `<a href="${server().web}/${type}/${id}" target="_blank" rel="noopener">${esc(key)}</a></h2>`
+  infoEl.innerHTML = objectHeading(`${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''}`, `${server().web}/${type}/${id}`, esc(key))
     + `<p class="hint">${esc(levels)}</p>`
     + indoorForm([f], src && roomValueOf(src.tags) ? { room: ROOM_LABELS[roomValueOf(src.tags)!] ?? roomValueOf(src.tags)! } : {})
     + (src ? `<p class="hint">${tr('Назначение взято с точки внутри: {point}', { point: `<a href="#" data-select-indoor="${esc(src.key)}">${esc(src.tags.name ? `«${src.tags.name}»` : src.key)}</a>` })}</p>` : '')
@@ -10463,7 +10482,7 @@ function selectTree(tree: TreePoint) {
   clearTileHighlight();
   overpassLayer.setTreeSelection(tree.key);
   selectedTreeKey = tree.key;
-  infoEl.innerHTML = `<h2>${tr('Дерево')} — <a href="${server().web}/${tree.key}" target="_blank" rel="noopener">${esc(tree.key)}</a></h2>`
+  infoEl.innerHTML = objectHeading(tr('Дерево'), `${server().web}/${tree.key}`, esc(tree.key))
     + `<p class="hint">${tr('только просмотр')}</p><details class="all-tags" open><summary>${tr('Все теги')}</summary>${tagTable(tree.tags ?? {})}</details>`;
 }
 
@@ -10477,8 +10496,7 @@ function selectRoad(w: RoadWay, add = false) {
   if (!roadSelection.length) { infoEl.innerHTML = ''; return; }
   if (roadSelection.length === 1) {
     const kind = isBridge(w.tags) ? tr('Мост') : isTunnel(w.tags) ? tr('Тоннель') : tr('Подход');
-    infoEl.innerHTML = `<h2>${esc(kind)}${w.tags.name ? ' ' + tr('«{name}»', { name: esc(w.tags.name) }) : w.tags.ref ? ` ${esc(w.tags.ref)}` : ''} — `
-      + `<a href="${server().web}/way/${w.id}" target="_blank" rel="noopener">way/${w.id}</a></h2>`
+    infoEl.innerHTML = objectHeading(`${esc(kind)}${w.tags.name ? ' ' + tr('«{name}»', { name: esc(w.tags.name) }) : w.tags.ref ? ` ${esc(w.tags.ref)}` : ''}`, `${server().web}/way/${w.id}`, `way/${w.id}`)
       + `<p class="hint">${tr('layer {layer} · только просмотр', { layer: roadLevel(w.tags) })}</p>`
       + `<details class="all-tags" open><summary>${tr('Все теги')}</summary>${tagTable(w.tags)}</details>`;
     return;
@@ -12434,7 +12452,7 @@ function reshapeLevel(sources: { poly: Polygon; way?: number }[], mode: 'cut' | 
     return finish(made);
   }
   const key = indoorKey(lvl.key);
-  if (!lvl.polygons.every((p) => p.outerIds)) return tr('В кеше нет id узлов этого объекта — нажмите «Перезагрузить видимые тайлы» в настройках.');
+  if (!lvl.polygons.every((p) => p.outerIds)) return tr('В кеше нет id узлов этого объекта — нажмите «Обновить данные» в настройках.');
   trackIndoor(key, lvl);
   // Этаж-путь, кольцо одно — меняется только он
   if (key.startsWith('way/') && rings.length === 1) { edits.push({ key, polygons }); return finish(key); }
@@ -13343,7 +13361,7 @@ map.on('moveend', (e) => { if (!(ORBIT_EVENT in e)) scheduleMapIssues(); });
 function issueMark(list: Issue[] | undefined): string {
   if (!list?.length) return '';
   const error = list.some((i) => i.level === 'error');
-  return `<span class="issue-mark ${error ? 'error' : 'warning'}" title="${esc(list.map((i) => i.text).join('\n'))}">${error ? '✖' : '⚠'}</span>`;
+  return `<span class="issue-mark ${error ? 'error' : 'warning'}" title="${esc(list.map((i) => i.text).join('\n'))}">${icon(error ? 'error' : 'warning', 14)}</span>`;
 }
 
 /** Вид проблемы для сворачивания в режиме здания: проверка и тег из начала текста («roof:colour=gray — …»). */
@@ -13413,7 +13431,7 @@ function renderIssues() {
   shownIssues = focus ? [...bundleIssues(sorted(simpleShown)), ...bundleIssues(sorted(indoorShown))] : [...mapGroups.values()].flatMap(sorted);
   const row = (i: Issue, n: number) => {
       return `<li class="${i.level}${selection.includes(i.key) || (i.other && selection.includes(i.other)) ? ' selected' : ''}${selectedIssueIds.has(issueId(i)) ? ' issue-picked' : ''}" data-i="${n}" data-key="${esc(i.key)}"${i.other ? ` data-other="${esc(i.other)}"` : ''}>
-        <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span>
+        <span class="issue-icon">${icon(i.level === 'error' ? 'error' : 'warning', 14)}</span>
         <span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span>
         ${i.fix ? `<button type="button" class="issue-fix" data-i="${n}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</li>`;
   };
@@ -14688,7 +14706,7 @@ function renderAdding() {
     <h2>${tr('Добавить части в {link}', { link: `<a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>` })}</h2>
     <p class="hint">${tr('Shift+клик по частям — отметить или снять. Обычный клик — отмена.')}</p>
     ${list ? `<ul class="change-list">${list}</ul>` : `<p class="hint">${tr('Пока ничего не отмечено.')}</p>`}
-    ${addMessage ? `<p class="warn">⚠ ${esc(addMessage)}</p>` : ''}
+    ${addMessage ? `<p class="warn">${icon('warning', 14)} ${esc(addMessage)}</p>` : ''}
     <p><button type="button" data-add-confirm ${addPending.length ? '' : 'disabled'}>${tr('Добавить ({n})', { n: addPending.length })}</button>
        <button type="button" data-add-cancel>${tr('Отмена')}</button></p>`;
 }
@@ -15639,7 +15657,7 @@ function describeGroup(g: BuildingGroup): string {
   const form = groupDateForm(g);
   return `
     ${buildingHeader(g.tags.name ?? t?.name, t)}
-    <h2>type=building — <a href="${server().web}/${g.key}" target="_blank" rel="noopener">${g.key}</a>${g.version ? ` v${g.version}` : ''}</h2>
+    ${objectHeading('type=building', `${server().web}/${g.key}`, g.key, g.version)}
     <p class="hint">${tr('Членов: {n}. Двойной клик по зданию — режим одного здания.', { n: g.members.length })}
       ${tr('Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.')}</p>
     <p><button type="button" data-add-parts>${tr('Добавить части')}</button></p>
@@ -15812,7 +15830,7 @@ function renderChanges() {
   updateEditsClip();
   undoBtn.disabled = !session.canUndo();
   redoBtn.disabled = !session.canRedo();
-  editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : tr('· не выполнен вход');
+  editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : tr('· не выполнен вход').replace(/^·\s*/, '');
   // Список правок нужен редко — сама панель не раскрывается; правок не осталось — сворачиваем, в остальное время решает пользователь
   if (show !== editsHadContent && !show) setCollapsed(editsPanel, true);
   editsHadContent = show;
@@ -15834,9 +15852,9 @@ function renderChanges() {
   }).join('');
   const issues = changes.length ? changeIssues(changes.filter((c) => !c.deleted).map((c) => c.key)) : [];
   changeIssuesShown = issues;
-  const issuesHtml = issues.length ? `<p class="warn">⚠ ${tr('Проблемы в изменённых объектах ({n}) — отправить можно, но лучше поправить:', { n: issues.length })}</p>
+  const issuesHtml = issues.length ? `<p class="warn">${icon('warning', 14)} ${tr('Проблемы в изменённых объектах ({n}) — отправить можно, но лучше поправить:', { n: issues.length })}</p>
     <ul class="issue-list">${issues.map((i, n) => `<li class="${i.level}" data-key="${esc(i.key)}" data-change-issue="${n}">
-      <span class="issue-icon">${i.level === 'error' ? '✖' : '⚠'}</span><span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span></li>`).join('')}</ul>` : '';
+      <span class="issue-icon">${icon(i.level === 'error' ? 'error' : 'warning', 14)}</span><span class="issue-text">${esc(i.text)}<span class="ol-key">${esc(i.key)}</span></span></li>`).join('')}</ul>` : '';
   changesEl.innerHTML = `
     ${changes.length ? `<ul class="change-list">${list}</ul>` : `<p class="hint">${tr('Изменений нет — можно повторить отменённое.')}</p>`}
     ${issuesHtml}
@@ -16250,7 +16268,7 @@ changesEl.addEventListener('input', (e) => {
 accountEl.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
   if (t.closest('[data-login]')) return void doLogin();
-  if (t.closest('[data-logout]')) { logout(); osmUser = undefined; renderChanges(); }
+  if (t.closest('[data-logout]')) { logout(); osmUser = undefined; renderGraphicsSync(); renderChanges(); }
 });
 
 const serverSelect = document.getElementById('server-select') as HTMLSelectElement;
@@ -16263,7 +16281,6 @@ serverSelect.innerHTML = josmMode
     + `<option value="josm" title="${esc(tr('Активный слой запущенного JOSM (Remote Control, localhost:8111)'))}">${esc(tr('JOSM (локально)'))}</option>`;
 serverSelect.value = josmMode ? 'josm' : server().id;
 // Настройки пользователя — отдельное окно; хранятся в браузере и в профиле на сервере (см. src/settings.ts)
-const settingsDialog = document.getElementById('settings-dialog') as HTMLDialogElement;
 const settingsSyncEl = document.getElementById('settings-sync')!;
 const langSelect = document.getElementById('lang-select') as HTMLSelectElement;
 const keepGfxToggle = document.getElementById('keep-gfx') as HTMLInputElement;
@@ -16308,7 +16325,16 @@ keepGfxToggle.addEventListener('change', () => {
 langSelect.innerHTML = LANGS.map((l) => `<option value="${l.id}">${esc(l.label)}</option>`).join('');
 langSelect.value = lang;
 
+/** Галка «синхронизировать настройки вида» нужна только вошедшему пользователю: без входа синхронизировать нечего. */
+const gfxSyncRow = document.getElementById('gfx-sync')!;
+function renderGraphicsSync() {
+  gfxSyncRow.hidden = syncStatus(server()) === 'local';
+  keepGfxToggle.checked = keepGraphics();
+}
+renderGraphicsSync();
+
 function renderSettingsSync() {
+  renderGraphicsSync();
   const s = server();
   const st = syncStatus(s);
   settingsSyncEl.classList.toggle('warn', st === 'readonly');
@@ -16321,21 +16347,19 @@ function renderSettingsSync() {
         + ` <button type="button" class="link-btn" data-settings-relogin>${esc(tr('Войти заново'))}</button>`;
 }
 
-document.getElementById('settings-open')!.addEventListener('click', () => {
+/** Личные настройки живут во вкладке «Настройки» панели: подставить текущие значения. */
+function renderPersonalSettings() {
   langSelect.value = lang;
-  keepGfxToggle.checked = keepGraphics();
   unitsSelect.value = unitSystem();
   floorsSelect.value = floorNumbering;
   renderSettingsSync();
-  settingsDialog.showModal();
-});
-// Клик по затемнению вокруг окна — закрыть
-settingsDialog.addEventListener('click', (e) => { if (e.target === settingsDialog) settingsDialog.close(); });
-// Пока окно открыто, горячие клавиши редактора молчат (Esc закрывает само окно)
-window.addEventListener('keydown', (e) => { if (settingsDialog.open) e.stopImmediatePropagation(); }, true);
+}
+renderPersonalSettings();
+// Выбранная вкладка панели запоминается
+try { selectPanelTab(['appearance', 'advanced'].find((id) => id === localStorage.getItem('osm3d.panel-tab')) ?? 'map'); } catch { /* нет хранилища */ }
 settingsSyncEl.addEventListener('click', async (e) => {
   const t = e.target as HTMLElement;
-  if (t.closest('[data-settings-relogin]')) { allowPrefsScope(); logout(); osmUser = undefined; }
+  if (t.closest('[data-settings-relogin]')) { allowPrefsScope(); logout(); osmUser = undefined; renderGraphicsSync(); }
   else if (!t.closest('[data-settings-login]')) return;
   await doLogin();
   renderSettingsSync();
@@ -16353,7 +16377,7 @@ async function syncSettings() {
   if (!osmUser) return;
   try {
     const reload = await syncPrefs();
-    if (settingsDialog.open) keepGfxToggle.checked = keepGraphics();
+    renderGraphicsSync();
     // Правки переживут перезагрузку: их сохраняет и восстанавливает автосохранение
     if (reload) location.reload();
   } catch (err) {
@@ -16767,6 +16791,14 @@ function levelsAboveOutline(f: Feature3D): string | false {
     + ' ' + tr('на контуре принято указывать максимальную этажность — поправьте контур или часть.');
 }
 
+function summaryRows(rows: [string, string][]): string {
+  return `<dl class="dims">${rows.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join('')}</dl>`;
+}
+
+function objectHeading(title: string, href: string, key: string, version?: number | string): string {
+  return `<h2 class="obj-head"><span class="obj-title">${title}</span> <a href="${href}" target="_blank" rel="noopener">${key}</a>${version ? ` <span class="obj-ver">v${version}</span>` : ''}</h2>`;
+}
+
 function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: string): string {
   // Отрисованный объект в режиме здания отстаёт от правок: теги — из сессии, иначе новый тег не виден в списке
   const f = { ...feature, tags: session.get(feature.key)?.tags ?? feature.tags };
@@ -16787,10 +16819,15 @@ function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: stri
   const issues = (focus ? focusIssues.filter((i) => i.key === f.key || i.other === f.key) : [...validateTags(f.key, f.tags, f.hasParts), ...validateGeometry(f)])
     .filter((i) => i.code !== 'above');
   return `
-    <h2>${f.kind === 'part' ? 'building:part' : 'building'} — <a href="${server().web}/${f.key}" target="_blank" rel="noopener">${f.key}</a>${f.version ? ` v${f.version}` : ''}</h2>
-    <pre>${tr('высота: {min} → {wall} → {top} м ({source})', { min: fmt(h.min), wall: fmt(roofApproximated ? h.top : h.wallTop), top: fmt(h.top), source: h.source })}\n${tr('крыша: {shape}, {height} м', { shape: h.roofShape, height: fmt(h.roofHeight) })}</pre>
-    ${warn.map((w) => `<p class="warn">⚠ ${w}</p>`).join('')}
-    ${issues.map((i) => `<p class="warn ${i.level}">${i.level === 'error' ? '✖' : '⚠'} ${esc(i.text)}</p>`).join('')}
+    ${objectHeading(f.kind === 'part' ? 'building:part' : 'building', `${server().web}/${f.key}`, f.key, f.version)}
+    ${form ? '' : summaryRows([
+      [tr('Низ'), `${fmt(h.min)} m`],
+      [tr('Высота'), `${fmt(h.top)} m`],
+      [tr('Высота крыши'), `${fmt(h.roofHeight)} m`],
+      [tr('Форма крыши'), h.roofShape],
+    ])}
+    ${warn.map((w) => `<p class="warn">${icon('warning', 14)} ${w}</p>`).join('')}
+    ${issues.map((i) => `<p class="warn ${i.level}">${icon(i.level === 'error' ? 'error' : 'warning', 14)} ${esc(i.text)}</p>`).join('')}
     ${form ? `${form}${renderOtherTags(f.key, f.tags, form)}` : tagTable(f.tags)}`;
 }
 

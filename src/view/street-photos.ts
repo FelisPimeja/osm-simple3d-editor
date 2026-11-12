@@ -9,6 +9,7 @@ import type { ExpressionSpecification, GeoJSONSource, LayerSpecification, Map as
 import * as THREE from 'three';
 import { tr } from '../i18n';
 import { glPixels } from '../edit/eyedropper';
+import { icon } from './icons';
 
 /** Выражение MapLibre (собираем из частей — типы спецификации тут не помогают). */
 export type Expr = ExpressionSpecification;
@@ -425,7 +426,7 @@ export function photoFilterSettings(f: PhotoFilter, onChange: (f: PhotoFilter) =
   const from = date(f.from), to = date(f.to);
   const clear = document.createElement('button');
   clear.type = 'button';
-  clear.textContent = '×';
+  clear.innerHTML = icon('close', 12);
   clear.title = tr('Сбросить даты');
   const emit = () => onChange({ type: typeValue, from: from.value, to: to.value });
   for (const i of [from, to]) i.addEventListener('change', emit);
@@ -520,7 +521,7 @@ export class PhotoViewer {
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'panoramax-close';
-    close.textContent = '×';
+    close.innerHTML = icon('close', 16);
     close.title = tr('Закрыть');
     close.addEventListener('click', () => this.close());
     head.append(title, close);

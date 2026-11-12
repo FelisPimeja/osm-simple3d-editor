@@ -8,6 +8,7 @@
 import type { GeoJSONSource, LngLat, Map as MlMap, MapMouseEvent } from 'maplibre-gl';
 import { tr } from '../i18n';
 import { findImagery, getOffset, isOffset, refreshImagery, storeOffset, type Offset } from './basemaps';
+import { icon } from './icons';
 
 const R = 6378137;
 const POS_KEY = 'osm3d.offset-panel-pos';
@@ -57,7 +58,7 @@ export class ImageryOffsetPanel {
     close.type = 'button';
     close.className = 'offset-close';
     close.title = tr('Отменить');
-    close.textContent = '×';
+    close.innerHTML = icon('close', 14);
     close.addEventListener('click', () => this.cancel());
     head.append(this.title, close);
     this.draggable(head);

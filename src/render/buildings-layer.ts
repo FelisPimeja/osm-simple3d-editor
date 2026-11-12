@@ -121,12 +121,12 @@ const INDOOR_SELECT_WIRE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x60a5f
 const DOOR_GEO = new THREE.SphereGeometry(0.08, 16, 8).scale(1, 1, 0.35);
 const DOOR_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000 });
 /**
- * Порядок отрисовки при подложках этажа: перекрытия и бледные полы под проёмами (FLOOR_ORDER) — подложка
- * (FLOOR_ORDER + 1, без проверки глубины) — полы помещений (FLOOR_ORDER + 2, полупрозрачно поверх неё) — остальное.
+ * Порядок отрисовки при подложках этажа: перекрытия и бледные полы под проёмами (FLOOR_ORDER) — остальная геометрия —
+ * подложка (RASTER_ORDER) — полы помещений (полупрозрачно поверх неё).
  */
 const FLOOR_ORDER = -4;
-/** Выделенная подложка этажа — после всей непрозрачной геометрии. */
-const SELECTED_RASTER_ORDER = 900;
+/** Подложка этажа — после всей непрозрачной геометрии (с её глубиной), полы помещений — сразу за ней. */
+const RASTER_ORDER = 900;
 /** Непрозрачность цвета пола помещения поверх подложки этажа. */
 const FLOOR_OVER_RASTER = 0.35;
 const DOOR_SILL_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xf97316, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
@@ -925,8 +925,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   private floorUnderlayGroup?: THREE.Group;
 
   /**
-   * Подложки этажа — в сцене здания: после перекрытий, до полов помещений (FLOOR_ORDER), без проверки глубины — пол их не закрывает,
-   * как стеклянный; стены, двери, лестницы рисуются позже с глубиной полов — поверх подложки, как и раньше.
+   * Подложки этажа — в сцене здания: после геометрии, до полов помещений — пол их не закрывает, как стеклянный;
+   * стены, двери, лестницы закрывают по глубине там, где ближе к камере (видна высота подложки).
    */
   private syncFloorUnderlays() {
     const g = this.groups.get(FOCUS_GROUP);
@@ -947,11 +947,13 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     const ids = new Set(list.map((u) => u.id));
     for (const [id, m] of this.floorUnderlays) if (!ids.has(id)) { m.removeFromParent(); (m.material as THREE.Material).dispose(); this.floorUnderlays.delete(id); }
-    for (const { id, mesh, center, selected } of list) {
+    for (const { id, mesh, center } of list) {
       let copy = this.floorUnderlays.get(id) as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | undefined;
       if (!copy) {
         // Непрозрачный список three (иначе — после всех стен), смешивание по альфе — вручную
-        const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, depthTest: false, depthWrite: false, transparent: false, ...OVER_BLEND });
+        // С проверкой глубины: стены закрывают её там, где ближе (видна её высота); к камере придвинута — пол на её отметке не спорит
+        const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, depthTest: true, depthWrite: false, transparent: false, ...OVER_BLEND,
+          polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 });
         copy = new THREE.Mesh(mesh.geometry, material);
         copy.frustumCulled = false;
         this.floorUnderlays.set(id, copy);
@@ -963,14 +965,13 @@ export class BuildingsLayer implements CustomLayerInterface {
       copy.scale.copy(mesh.scale);
       if (copy.material.map !== mesh.material.map) { copy.material.map = mesh.material.map; copy.material.needsUpdate = true; }
       copy.material.opacity = mesh.material.opacity;
-      // Выделенная (её двигают, поворачивают, масштабируют) — поверх всей геометрии, иначе стены её прячут
-      copy.renderOrder = selected ? SELECTED_RASTER_ORDER : FLOOR_ORDER + 1;
+      copy.renderOrder = RASTER_ORDER;
     }
     // Полы этажа — раньше подложек
     this.indoorObj?.traverse((o) => {
-      if (!(o instanceof THREE.Mesh) || (o.renderOrder !== 0 && o.renderOrder > FLOOR_ORDER + 2)) return;
+      if (!(o instanceof THREE.Mesh) || (o.renderOrder !== 0 && o.renderOrder !== FLOOR_ORDER && o.renderOrder !== RASTER_ORDER + 1)) return;
       if (FLOOR_MATERIALS.has(o.material)) o.renderOrder = FLOOR_ORDER;
-      else if (o.material === INDOOR_FLOOR_MATERIAL) o.renderOrder = FLOOR_ORDER + 2;
+      else if (o.material === INDOOR_FLOOR_MATERIAL) o.renderOrder = RASTER_ORDER + 1;
     });
   }
 

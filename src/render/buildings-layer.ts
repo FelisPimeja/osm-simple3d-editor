@@ -936,7 +936,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (!copy) {
         // Непрозрачный список three (иначе — после всех стен), смешивание по альфе — вручную
         const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, depthTest: false, depthWrite: false, transparent: false,
-          blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor });
+          blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+          // Альфа холста карты остаётся 1: иначе у полупрозрачной подложки сквозь холст светлел фон страницы (пересвет)
+          blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor });
         copy = new THREE.Mesh(mesh.geometry, material);
         copy.renderOrder = FLOOR_ORDER + 1;
         copy.frustumCulled = false;

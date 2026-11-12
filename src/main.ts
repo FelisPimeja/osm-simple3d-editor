@@ -9574,7 +9574,7 @@ const DOOR_VALUES = ['yes', 'hinged', 'sliding', 'revolving', 'folding', 'trapdo
 const DOOR_LABELS: Record<string, string> = {
   yes: tr('Неизвестного типа'), hinged: tr('Распашная'), sliding: tr('Раздвижная'),
   revolving: tr('Вращающаяся'), folding: tr('Складная'), trapdoor: tr('Люк'),
-  overhead: tr('Подъёмная'), no: tr('Открытый проём (без двери)'),
+  overhead: tr('Гаражная (подъёмная)'), no: tr('Открытый проём (без двери)'),
 };
 const INDOOR_LABELS: Record<string, string> = {
   room: tr('Помещение'), corridor: tr('Коридор'), area: tr('Зона без стен'), level: tr('Этаж'), wall: tr('Стена'),

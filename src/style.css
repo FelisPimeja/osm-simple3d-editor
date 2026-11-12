@@ -748,7 +748,8 @@ body.mobile #issues-panel { display: none !important; }
 .underlay-set-control input[type=text] { width: 100%; min-width: 0; box-sizing: border-box; padding: 2px 5px; font: inherit; border: 1px solid #d1d5db; border-radius: 4px; }
 .underlay-set-control input[type=checkbox] { margin: 0; }
 .basemap-menu .underlay-set-actions button:disabled { color: #9ca3af; cursor: default; background: #fff; }
-.underlay-lock { flex: none; display: inline-flex; color: #6b7280; }
+.underlay-lock { flex: none; display: inline-flex; margin-left: auto; color: #6b7280; }
+.basemap-menu .underlay-lock + .basemap-offset-btn { margin-left: 2px; }
 /* Порядок подложек перетаскиванием: линия, куда встанет строка */
 .underlay-row[draggable="true"] { cursor: grab; }
 .underlay-row.dragging { opacity: .4; }

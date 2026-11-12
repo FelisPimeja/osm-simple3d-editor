@@ -123,13 +123,6 @@ export class UnderlayMenu {
       this.render();
     });
     row.append(input, name);
-    if (u.locked) {
-      const lock = document.createElement('span');
-      lock.className = 'underlay-lock';
-      lock.innerHTML = LOCK_SVG;
-      lock.title = tr('Закреплена: кликом на карте не выделяется');
-      row.append(lock);
-    }
     // Порядок — перетаскиванием строки: выше в списке — поверх на карте
     if (this.items.length > 1) {
       row.draggable = true;
@@ -158,6 +151,14 @@ export class UnderlayMenu {
       lv.className = 'underlay-level';
       lv.textContent = this.levelLabel(u.level);
       row.append(lv);
+    }
+    // Замок закреплённой — справа, перед стрелкой настроек
+    if (u.locked) {
+      const lock = document.createElement('span');
+      lock.className = 'underlay-lock';
+      lock.innerHTML = LOCK_SVG;
+      lock.title = tr('Закреплена: кликом на карте не выделяется');
+      row.append(lock);
     }
     row.append(fold);
     if (this.open !== u.id) return [row];

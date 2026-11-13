@@ -9158,6 +9158,8 @@ function updateIndoorBadges() {
   const bbox: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
   // Indoor без здания — пунктиром, как подземные здания (вне режима здания: там карта убрана)
   updateUndergroundOutlines(underground, !focus && map.getZoom() >= 15 ? timed('контуры indoor без здания', () => orphanOutlines([bbox[0] - COMPLEX_REACH, bbox[1] - COMPLEX_REACH, bbox[2] + COMPLEX_REACH, bbox[3] + COMPLEX_REACH])) : []);
+  // Входы в них (спуски, лестницы, стены на уровне земли) — их план первого этажа прямо на карте
+  overpassLayer.setMapIndoor(!focus && buildingsView.shown && map.getZoom() >= MAP_INDOOR_MIN_ZOOM ? timed('карта: планы indoor без здания', () => mapIndoorPlans(bbox)) : []);
   if (focus || !buildingsView.shown || map.getZoom() < BADGE_MIN_ZOOM) return indoorBadges.set([]);
   // С правками: нарисованные и рассечённые помещения — тоже, удалённые — нет
   const indoor = withSessionIndoor(new Map(overpass.indoorIn(bbox).map((f) => [f.key, f])), bbox)
@@ -15289,6 +15291,45 @@ function contextIndoorPlans(g: BuildingGroup, level: Level) {
   return plans;
 }
 
+/** С какого зума планы indoor без здания рисуются на карте. */
+const MAP_INDOOR_MIN_ZOOM = 17;
+/** Комплексы крупнее (объектов) на карте не строятся: сборка их плана подвешивала бы карту. */
+const MAP_INDOOR_MAX_FEATURES = 800;
+/** Планы комплексов по ключу: при сдвиге карты пересчитываются только новые и изменившиеся. */
+const mapIndoorCache = new Map<string, { sig: string; plan?: ContextPlan }>();
+let mapIndoorList: ContextPlan[] = [];
+/** Планы комплексов без здания на уровне земли для карты (тот же план, что у соседа на первом этаже). */
+function mapIndoorPlans(bbox: Bbox): ContextPlan[] {
+  const cs = orphanComplexes([bbox[0] - COMPLEX_REACH, bbox[1] - COMPLEX_REACH, bbox[2] + COMPLEX_REACH, bbox[3] + COMPLEX_REACH]);
+  const list: ContextPlan[] = [];
+  // Не больше ~40 мс за пересчёт: большие станции считаются по одной в следующих пересчётах (без подвисания)
+  const deadline = performance.now() + 40;
+  let more = false;
+  for (const c of cs) {
+    if (c.box[2] < bbox[0] || c.box[0] > bbox[2] || c.box[3] < bbox[1] || c.box[1] > bbox[3]) continue;
+    // Огромные комплексы (станция на тысячи объектов) строятся секунду и больше — на карте только абрисом
+    if (c.features.length > MAP_INDOOR_MAX_FEATURES) continue;
+    // По содержимому комплекса, а не по ревизии тайлов: тайлы приходят порциями, комплекс в них тот же
+    let h = 0;
+    for (const f of c.features) { const k = f.key + (f.polygons[0]?.outer.length ?? 0) + f.levels.join(); for (let i = 0; i < k.length; i++) h = (Math.imul(h, 31) + k.charCodeAt(i)) | 0; }
+    const sig = `${indoorEditRev}|${c.features.length}|${h}`;
+    let hit = mapIndoorCache.get(c.key);
+    if (hit?.sig !== sig && performance.now() > deadline) { more = true; continue; }
+    if (hit?.sig !== sig) {
+      complexFocus.set(c.key, { features: c.features, box: c.box });
+      // С правками сессии (удалённые стены не рисуются) — как в режиме здания
+      const plan = contextPlanOf(complexGroup(c.key)!, 0.3, new Set(), buildingIndoorImpl(complexGroup(c.key)!));
+      hit = { sig, plan: plan && { ...plan, members: [c.key] } };
+      mapIndoorCache.set(c.key, hit);
+    }
+    if (hit.plan) list.push(hit.plan);
+  }
+  if (more) scheduleIndoorBadges();
+  // Тот же набор — тот же массив: слой не пересобирается
+  if (list.length === mapIndoorList.length && list.every((p, i) => p === mapIndoorList[i])) return mapIndoorList;
+  return mapIndoorList = list;
+}
+
 /** Комплекс без здания как группа режима здания (без частей), если он известен. */
 function complexGroup(key: string): BuildingGroup | undefined {
   const c = complexFocus.get(key);
@@ -15557,7 +15598,6 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
     };
     const doorsOf = (lv: Level) => list.filter((f) => f.levels.includes(lv.n) && f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!);
     const items = itemsOf(l);
-    if (!items.length) return;
     const doors = doorsOf(l);
     // Второй свет соседа: этажи под его пустотами — бледно, как нижние этажи здания (пустота — вырез в их полу ниже)
     const voids = timed('окружение: второй свет соседа', () => levelVoids(ng, levels, list, l.n));
@@ -15594,11 +15634,14 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
     }
     // Этажи ниже — коробками, как у здания режима (renderLevelsImpl): контур indoor=level, иначе объединение
     // помещений (levelBody), иначе рендер берёт сечение по следам частей; подземные под надземным этажом — нет
-    const boxes = levels.filter((x) => x.n < l.n && !(l.floor > -0.01 && x.floor < -0.01))
+    // Комплекс без здания (data): земли-оболочки нет — подземные этажи тоже коробками, с рёбрами верха (как в его плане)
+    const boxes = levels.filter((x) => x.n < l.n && (!!data || !(l.floor > -0.01 && x.floor < -0.01)))
       .map((x) => ({ bottom: x.floor, top: Math.min(x.ceil, l.floor),
         polygons: levelBody(list, x.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon),
-        seen: below.some((b) => b.cut === x.ceil), cover: voids.filter((v) => v.through.includes(x.n)).flatMap((v) => v.polygon) }))
+        seen: below.some((b) => b.cut === x.ceil), cover: voids.filter((v) => v.through.includes(x.n)).flatMap((v) => v.polygon),
+        ...(data ? { topEdges: true } : {}) }))
       .filter((b) => b.top > b.bottom);
+    if (!items.length && !escalators.length && !below.length) return;
     return { members: [...ng.members, ng.key], items, doors, escalators: [...escalators, ...lowerEscalators], cut: l.ceil, below, slab, boxes };
   }
 }

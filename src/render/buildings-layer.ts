@@ -620,6 +620,12 @@ interface Item {
  * Группа зданий со своей локальной системой координат (метры от origin).
  * Все здания группы слиты в одну геометрию — один draw call на группу вместо двух на здание.
  */
+/** Освободить геометрию поддерева (материалы общие). */
+function disposeTree(o: THREE.Object3D) {
+  o.parent?.remove(o);
+  o.traverse((x) => { if (x instanceof THREE.Mesh || x instanceof THREE.LineSegments) x.geometry.dispose(); });
+}
+
 class MeshGroup {
   readonly scene = new THREE.Scene();
   readonly origin: MercatorCoordinate;
@@ -1003,10 +1009,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     const main = this.drawMain(options);
     let triangles = 0;
     // Окружение — полупрозрачное, поверх здания (прозрачное рисуется после непрозрачного)
+    this.syncMapIndoor();
     const ghosts = new Set(this.contextGroups());
     // В сплошном стиле окружение — первым: его грани (только в глубину) закрывают здание за ним;
     // в режиме контуров — после здания, чтобы пунктир скрытых рёбер здания не терялся за соседями
     const order = this.wireframe ? [...this.activeGroups(), ...ghosts] : [...ghosts, ...this.activeGroups()];
+    if (!this.focused && this.mapIndoorObj?.built.size) order.push(this.mapIndoorObj.g);
     for (const g of order) {
       // Выбор и камера берут projectionMatrix с глубиной MapLibre — сжатая только на время отрисовки
       const pick = g.camera.projectionMatrix = this.lastMain.clone().multiply(g.model);
@@ -1081,6 +1089,54 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** План соседа рисует первая группа карты, где есть его объект (здание бывает на стыке тайлов). */
+  /** Режим карты: indoor без здания (подземные переходы, вестибюли) — его план на уровне земли: входы и спуски. */
+  private mapIndoor: ContextPlan[] = [];
+  /** Своя сцена планов карты: начало — у первого плана (здания карты бывают не в этом слое — векторные тайлы). */
+  private mapIndoorObj?: { g: MeshGroup; obj: THREE.Group; built: Map<ContextPlan, THREE.Group> };
+
+  setMapIndoor(plans: ContextPlan[]) {
+    if (plans === this.mapIndoor) return;
+    this.mapIndoor = plans;
+    this.map?.triggerRepaint();
+  }
+
+  /** Планы карты в сцене: собрать новые, убрать ушедшие (остальные — как есть). */
+  private syncMapIndoor() {
+    const first = this.mapIndoor.flatMap((p) => [...p.items, ...p.escalators.map((e) => ({ polygons: [{ outer: e.line }] }))])
+      .find((it) => it.polygons[0]?.outer.length)?.polygons[0].outer[0];
+    let c = this.mapIndoorObj;
+    // Начало далеко (карту увели за километры) — сцена заново, иначе теряется точность
+    if (c && first) { const [x, y] = c.g.toLocal(first); if (Math.hypot(x, y) > 5000) { this.dropMapIndoor(); c = undefined; } }
+    if (!this.mapIndoor.length && !c) return;
+    if (!c) {
+      if (!first) return;
+      const g = new MeshGroup([first[0], first[1]]);
+      g.applyLighting(this.graphics);
+      const obj = new THREE.Group();
+      obj.name = 'map-indoor';
+      g.scene.add(obj);
+      c = this.mapIndoorObj = { g, obj, built: new Map() };
+    }
+    const keep = new Set(this.mapIndoor);
+    for (const [p, grp] of c.built) if (!keep.has(p)) { c.obj.remove(grp); disposeTree(grp); c.built.delete(p); }
+    // Сборка порциями (~30 мс за кадр): большая станция не подвешивает жест
+    const deadline = performance.now() + 30;
+    for (const p of this.mapIndoor) if (!c.built.has(p)) {
+      if (performance.now() > deadline) { this.map?.triggerRepaint(); break; }
+      const grp = new THREE.Group();
+      timed('карта: indoor без здания', () => this.drawContextPlan(grp, c!.g, p), () => `${p.items.length} объектов`);
+      c.obj.add(grp);
+      c.built.set(p, grp);
+    }
+  }
+
+  private dropMapIndoor() {
+    const c = this.mapIndoorObj;
+    if (!c) return;
+    disposeTree(c.obj);
+    this.mapIndoorObj = undefined;
+  }
+
   private ownsPlan(g: MeshGroup, members: string[]): boolean {
     let first: MeshGroup | undefined;
     for (const [k, x] of this.groups) {
@@ -1147,7 +1203,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Один срез на всех: выше плоскости среза этажа здания всё отсекается — крышки и толстые линии тоже
     const top = Math.min(plan.cut, (this.levelCut ?? Infinity) - 0.005);
     try {
-      this.drawPlanBody(root, g, plan.items, plan.doors, top, true, undefined, plan.escalators);
+      // Этаж без своих объектов (переход: на земле только спуски) — тела плана нет, остальное есть
+      if (plan.items.length) this.drawPlanBody(root, g, plan.items, plan.doors, top, true, undefined, plan.escalators);
       // Нижние этажи соседа, видные сквозь его второй свет
       this.contextLower = true;
       try { for (const b of plan.below ?? []) this.drawPlanBody(root, g, b.items, b.doors, Math.min(b.cut, top), true, undefined, plan.escalators, b.voids); }

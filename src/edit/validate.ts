@@ -1,6 +1,6 @@
 import { solidWall, wallLocalPolygons, nearestSolidFace, DOOR_ON_FACE, cutSolidWall, findSolidDoorBinding, doorIndex } from './solid-wall-doors';
 import polygonClipping, { type MultiPolygon } from 'polygon-clipping';
-import { parseLevels, pointInRing, transitOf, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type Polygon } from '../osm/model';
+import { entranceOf, parseLevels, pointInRing, transitOf, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type LonLat, type Polygon } from '../osm/model';
 import { computeHeights, parseLength, roofShapeOf } from '../osm/heights';
 import { ROOF_SHAPES } from './tag-form';
 import { tr, trn } from '../i18n';
@@ -283,6 +283,21 @@ export function validateTags(key: string, t: Record<string, string>, hasParts = 
 }
 
 /**
+ * Вход в здание (entrance=*, въезд на парковку) — он же дверь плана этажа: без indoor=door и level=* поэтажный план
+ * его толкует сам (этаж 0). Исправление ставит недостающие ключи.
+ */
+export function entranceIndoorIssue(key: string, t: Record<string, string>): Issue | undefined {
+  const kind = entranceOf(t);
+  if (!key.startsWith('node/') || !kind || kind === 'no' || (t.indoor !== undefined && (t.level !== undefined || t.repeat_on !== undefined))) return;
+  const tags: Record<string, string> = {};
+  if (t.indoor === undefined) tags.indoor = 'door';
+  if (t.level === undefined && t.repeat_on === undefined) tags.level = '0';
+  return { key, level: 'warning', code: 'indoor-door',
+    text: tr('Вход без indoor-ключей: для поэтажного плана добавьте {tags}.', { tags: Object.entries(tags).map(([k, v]) => `${k}=${v}`).join(' + ') }),
+    fix: { label: Object.entries(tags).map(([k, v]) => `${k}=${v}`).join(', '), tags } };
+}
+
+/**
  * Ошибки Simple Indoor Tagging и страниц его ключей. Проверяем только загруженные indoor-объекты.
  * interiorDoor и outerDoor — по геометрии: дверь далеко от наружных стен / на наружной стене на своём этаже.
  */
@@ -324,6 +339,8 @@ export function validateIndoor(f: Pick<IndoorFeature, 'key' | 'tags'>, interiorD
   // Вход не на контуре, но на наружной стене своего этажа — обычный вход; внутри оболочки — проверить
   if (innerEntrance && t.entrance !== undefined && !(t.entrance === 'yes' && interiorDoor)) add('warning', 'indoor-door',
     tr('Вход (entrance={value}) внутри здания, а не на наружной стене своего этажа: проверьте этаж и положение двери.', { value: t.entrance }));
+  const missing = entranceIndoorIssue(key, t);
+  if (missing) out.push(missing);
   if (t.entrance === 'gate') add('warning', 'indoor-door', tr('entrance=gate — для ворот проверьте barrier=gate.'));
   if (t['addr:entrance'] === 'yes') add('warning', 'indoor-door', tr('addr:entrance=yes — вход обозначают тегом entrance=*.'));
 
@@ -1045,7 +1062,7 @@ export function validateSolidWallDoors(all:IndoorFeature[]):Issue[]{
    .map(wall=>({wall,face:nearestSolidFace(wallLocalPolygons(wall,local),[0,0],DOOR_ON_FACE)})).filter(c=>c.face).sort((a,b)=>a.face!.distance-b.face!.distance);
   const candidate=candidates[0];if(!candidate)continue;
   try{
-   const width=Math.max(0.1,parseLength(door.tags.width)??(door.tags.door==='revolving'?parseLength(door.tags.diameter)??2.4:door.tags.entrance==='garage'?2.5:1));
+   const width=Math.max(0.1,parseLength(door.tags.width)??(door.tags.door==='revolving'?parseLength(door.tags.diameter)??2.4:entranceOf(door.tags)==='garage'?2.5:1));
    cutSolidWall(wallLocalPolygons(candidate.wall,local),candidate.face!.at,candidate.face!.face,width);
    result.push({key:door.key,other:candidate.wall.key,level:'warning',code:'indoor-door-notch',text:tr('Дверь на полигональной стене без выемки.'),points:[origin],fix:{label:tr('Создать выемку и обновить соседние контуры'),tags:{},solidDoorWall:candidate.wall.key}});
   }catch{/* A cut that cannot fit is not an unambiguous automatic fix. */}

@@ -357,7 +357,7 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
 
   for (const f of features) {
     const ids = new Set(f.polygons.flatMap((p) => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]));
-    const entrances = [...ids].flatMap((id) => { const t = nodes.get(id)?.tags; return t?.entrance ? [{ id, tags: t }] : []; });
+    const entrances = [...ids].flatMap((id) => { const t = nodes.get(id)?.tags; return entranceOf(t) ? [{ id, tags: t! }] : []; });
     if (entrances.length) f.entrances = entrances;
   }
   attachWallEntrances(features, nodes);
@@ -546,12 +546,20 @@ export function isStraight(pts: LonLat[]): boolean {
 /** Вход на стене объекта не дальше этого, м. */
 const WALL_ENTRANCE_TOL = 0.1;
 /**
+ * Тип входа узла: entrance=*, а въезд на парковку (amenity=parking_entrance) без него — гаражный въезд.
+ * Тег в данные не пишется: только толкование при отрисовке и проверках.
+ */
+export function entranceOf(t?: Record<string, string>): string | undefined {
+  return t?.entrance ?? (t?.amenity === 'parking_entrance' ? 'garage' : undefined);
+}
+
+/**
  * Входы, не входящие в контур ни одного объекта (дверь на indoor-стене, вход с дорожкой), но лежащие на стене
  * объекта: вход в здание — ставим на этот фасад (по точке, а не по вершине).
  */
 function attachWallEntrances(features: Feature3D[], nodes: Map<number, OsmNode>) {
   const used = new Set(features.flatMap((f) => (f.entrances ?? []).map((e) => e.id)));
-  const loose = [...nodes.values()].filter((n) => n.tags?.entrance && !used.has(n.id));
+  const loose = [...nodes.values()].filter((n) => entranceOf(n.tags) && !used.has(n.id));
   if (!loose.length) return;
   const pad = 2e-6;
   const boxes = features.map((f) => {

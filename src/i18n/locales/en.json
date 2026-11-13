@@ -1539,5 +1539,9 @@
   "Вход: точка entrance на фасаде здания (X)": "Entrance: an entrance point on the building facade (X)",
   "Вход: щелчок по фасаду у земли — узел entrance=yes на контуре здания. Shift — вести точку вдоль стены. Esc — выйти.": "Entrance: click the facade near the ground to add an entrance=yes node on the building outline. Shift: slide along the wall. Esc: exit.",
   "Вход: наведите на фасад здания у земли.": "Entrance: hover over the building facade near the ground.",
-  "Здесь уже есть вход {key}.": "There is already an entrance here: {key}."
+  "Здесь уже есть вход {key}.": "There is already an entrance here: {key}.",
+  "Вход без indoor-ключей: для поэтажного плана добавьте {tags}.": "Entrance without indoor keys: add {tags} for the floor plan.",
+  "Выбран {n} вход|Выбрано {n} входа|Выбрано {n} входов": "{n} entrance selected|{n} entrances selected",
+  "Shift+клик — добавить или убрать вход. Del — удалить выбранные входы (узлы останутся вершинами контура).": "Shift+click adds or removes an entrance. Del deletes the selected entrances (the nodes stay vertices of the outline).",
+  "Удалён {n} вход: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} входа: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} входов: узлы остались вершинами контура. Отменить — Ctrl+Z.": "{n} entrance deleted; the nodes stay vertices of the outline. Press Ctrl+Z to undo.|{n} entrances deleted; the nodes stay vertices of the outline. Press Ctrl+Z to undo."
 }

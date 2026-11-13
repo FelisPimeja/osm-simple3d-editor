@@ -441,7 +441,8 @@ function raiseForRoof(before: Record<string, string>, after: Record<string, stri
 
 export function bindTagForms(container: HTMLElement, session: () => EditSession | undefined) {
   const commit = (input: HTMLInputElement | HTMLSelectElement) => {
-    if (input.dataset.indoorTag) {
+    // Поля со своим обработчиком change (indoor-объекты, входы на фасаде): выбор из списка — тот же change
+    if (input.dataset.indoorTag || input.dataset.entranceTag) {
       input.dispatchEvent(new Event('change', { bubbles: true }));
       return;
     }

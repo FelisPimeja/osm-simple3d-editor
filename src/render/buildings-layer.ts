@@ -9,8 +9,8 @@ import { trimIndoorBuildingEdges } from './indoor-building-edges';
 import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth, wallDoorwaySpan } from './door-openings';
 import { RECESS_DEPTH, recessEntrances, type RecessPlace } from './entrance-recess';
-/** Прототип: ниши входов (localStorage entranceNiches=1, затем перезагрузка страницы). */
-const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') === '1'; } catch { return false; } })();
+/** Ниши входов: по умолчанию включены (localStorage entranceNiches=0 и перезагрузка — выключить). */
+const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') !== '0'; } catch { return true; } })();
 import * as THREE from 'three';
 import polygonClipping, { type MultiPolygon as ClipMulti } from 'polygon-clipping';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
@@ -26,7 +26,7 @@ import { trimInWorker, trimSync, trimWorkersAvailable, type TrimJob, type TrimRe
 import { areaLedgeTriangles } from './area-ledge';
 import { dropJitter } from './jitter';
 import { floatingParts } from '../osm/floating';
-import { pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
+import { entranceOf, pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
 import { dropPartSeams } from './part-seams';
 import { COUNTER_DEPTH, closedCounterSplit, counterRing, isClosedCounterRing } from './counter-ring';
 import { edgePass } from './edge-pass';
@@ -78,7 +78,7 @@ export const GARAGE_WIDTH = 2.5;
 /** Ширина из тега width двери (м), если правдоподобна. */
 const tagWidth = (tags?: Record<string, string>) => {
   const w = looseLength(tags?.width);
-  return w >= 0.5 && w <= 4 ? w : tags?.entrance === 'garage' ? GARAGE_WIDTH : undefined;
+  return w >= 0.5 && w <= 4 ? w : entranceOf(tags) === 'garage' ? GARAGE_WIDTH : undefined;
 };
 /** Высота проёма двери из height (1,5–6 м), иначе DOOR_HEIGHT. */
 const doorHeight = (tags?: Record<string, string>) => {
@@ -1664,9 +1664,10 @@ export class BuildingsLayer implements CustomLayerInterface {
       const at = this.doorAt(d);
       const [x, y] = g.toLocal(at);
       const sel = this.indoorSelected.includes(d.key) || this.indoorIssueHighlighted.includes(d.key);
-      // Направление ближайшей стены (включая границы помещений)
+      // Направление ближайшей стены (включая границы помещений и фасад: вход на здании без indoor-стен)
       let nearest = Infinity, angle = 0;
-      for (const item of items) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
+      const shell = g.items.map((it) => it.feature);
+      for (const item of [...items, ...shell]) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
         for (let i = 1; i < ring.length; i++) {
           const a = g.toLocal(ring[i - 1]), b = g.toLocal(ring[i]);
           const dx = b[0] - a[0], dy = b[1] - a[1], length2 = dx * dx + dy * dy;
@@ -5882,14 +5883,16 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Деревья тайла (undefined — убрать). */
-  /** Выбранный вход (id узла) — синим. */
-  private entranceSelected?: number;
+  /** Выбранные входы (id узлов) — синим; основной — последний (за его точку вход переносят). */
+  private entrancesSelected: number[] = [];
+  private get entranceSelected(): number | undefined { return this.entrancesSelected[this.entrancesSelected.length - 1]; }
   /** Перетаскиваемый вход: место на стене в метрах сцены режима здания. */
   private entrancePreview?: { id: number; place: Omit<EntrancePlace, 'id'> };
 
-  setEntranceSelection(id: number | undefined) {
-    if (this.entranceSelected === id) return;
-    this.entranceSelected = id;
+  setEntranceSelection(ids: number | number[] | undefined) {
+    const next = ids === undefined ? [] : Array.isArray(ids) ? ids : [ids];
+    if (next.length === this.entrancesSelected.length && next.every((x, i) => x === this.entrancesSelected[i])) return;
+    this.entrancesSelected = next;
     for (const g of this.groups.values()) if (g.entrances.length) this.applyEntrances(g);
     this.map?.triggerRepaint();
   }
@@ -5920,13 +5923,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     let best: number | undefined, bestT = Infinity;
     const hit = new THREE.Vector3();
     for (const e of g.entrances) {
-      const n = new THREE.Vector3(e.n[0], e.n[1], 0);
-      const c = new THREE.Vector3(e.p[0] + e.n[0] * ENTRANCE_OFFSET, e.p[1] + e.n[1] * ENTRANCE_OFFSET, e.z);
-      if (!ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n, c), hit)) continue;
-      const u = (hit.x - c.x) * e.t[0] + (hit.y - c.y) * e.t[1], v = hit.z - e.z;
-      const t = hit.distanceTo(ray.origin);
-      // Чуть шире самого прямоугольника — попасть проще
-      if (Math.abs(u) <= (e.width ?? ENTRANCE_WIDTH) / 2 + 0.15 && v >= -0.15 && v <= ENTRANCE_HEIGHT + 0.15 && t < bestT) { best = e.id; bestT = t; }
+      // Ниша — коробка от фасада вглубь стены: попадание в проём, пол, боковины или заднюю стенку; без ниш — плоский прямоугольник
+      // Координаты: u — вдоль стены, d — вглубь (от фасада), v — вверх от порога; с запасом, чтобы попасть было проще
+      const o = ray.origin, dir = ray.direction;
+      const lo = new THREE.Vector3(o.x - e.p[0], o.y - e.p[1], o.z - e.z);
+      const local = new THREE.Ray(
+        new THREE.Vector3(lo.x * e.t[0] + lo.y * e.t[1], -(lo.x * e.n[0] + lo.y * e.n[1]), lo.z),
+        new THREE.Vector3(dir.x * e.t[0] + dir.y * e.t[1], -(dir.x * e.n[0] + dir.y * e.n[1]), dir.z));
+      const w = (e.width ?? ENTRANCE_WIDTH) / 2 + 0.15, depth = Math.max(0, -ENTRANCE_OFFSET);
+      const box = new THREE.Box3(new THREE.Vector3(-w, -0.05, -0.15), new THREE.Vector3(w, depth + 0.05, ENTRANCE_HEIGHT + 0.15));
+      if (!local.intersectBox(box, hit)) continue;
+      const t = hit.distanceTo(local.origin);
+      if (t < bestT) { best = e.id; bestT = t; }
     }
     return best;
   }
@@ -6035,7 +6043,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       g.entrances.push(e);
       // План этажа рисует проём и маркер двери сам; вход ниже выбранного этажа — на сплошном фасаде, нужен прямоугольник
       if (onPlan(e)) continue;
-      const out = e.id === this.entranceSelected || lit.has(e.id) ? selected : plain;
+      const out = this.entrancesSelected.includes(e.id) || lit.has(e.id) ? selected : plain;
       const w = (e.width ?? ENTRANCE_WIDTH) / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
       const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w];
       const z0 = e.z, z1 = e.z + ENTRANCE_HEIGHT;
@@ -6052,8 +6060,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       root.add(mesh);
     }
     // Выбранный — точка узла на контуре у основания (за неё вход и переносят), как у дверей на плане этажа
-    const sel = g.entrances.find((e) => e.id === this.entranceSelected && !onPlan(e));
-    if (sel) {
+    for (const sel of g.entrances.filter((e) => this.entrancesSelected.includes(e.id) && !onPlan(e))) {
       const dot = new THREE.Mesh(DOOR_GEO, DOOR_MATERIAL);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.025, 8, 24), DOOR_SELECTED_MATERIAL);
       dot.position.set(sel.p[0], sel.p[1], sel.z + 0.04);
@@ -7780,7 +7787,8 @@ function sameItemGeometry(old: Item, item: Item): boolean {
 
 /** Подпись версии объекта для рендера: геометрия, теги и роль в здании. */
 function shapeSig(f: Feature3D): string {
-  return JSON.stringify([f.kind, f.hasParts, f.tags, f.polygons]);
+  // Входы тоже: по ним в стене режутся ниши (ширина — по типу входа)
+  return JSON.stringify([f.kind, f.hasParts, f.tags, f.polygons, f.entrances]);
 }
 
 /** Оболочка группы для планов этажей: та же, пока не менялись треугольники, скрытые и висящие части. */
@@ -8523,10 +8531,10 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       tri.walls.push(...bottomTriangles(rest ?? polys, heights.min));
     });
   }
-  // Прототип: ниши входов — за флагом localStorage entranceNiches=1
+  // Ниши входов (выключаются флагом localStorage entranceNiches=0)
   if (entranceNiches && !shell && !roofOnly && !flat && !tri.pending && f.entrances?.length) {
     timed('здание: ниши входов', () => {
-      const doors = new Map(f.entrances!.filter((e) => e.tags.entrance && e.tags.entrance !== 'no').map((e) => [e.id, e.tags]));
+      const doors = new Map(f.entrances!.filter((e) => entranceOf(e.tags) && entranceOf(e.tags) !== 'no').map((e) => [e.id, e.tags]));
       const places: RecessPlace[] = [];
       // Ниша — на своей высоте (не на низе части): часть выше двери (узел на её контуре над входом) её не получает,
       // а у частей, через которые проходит проём (цоколь и часть над ним), CSG вырежет каждой её долю

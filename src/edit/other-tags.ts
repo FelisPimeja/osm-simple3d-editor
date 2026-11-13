@@ -6,7 +6,7 @@ let serial = 0;
 const icon = (d: string) => `<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 /** Exclude precisely the keys with a visible specialized widget. */
 export function otherTagEntries(tags: Record<string, string>, form: string): [string,string][] {
-  const named = new Set([...form.matchAll(/data-(?:indoor-)?tag="([^"]+)"/g)].map(m=>m[1]));
+  const named = new Set([...form.matchAll(/data-(?:indoor-|entrance-)?tag="([^"]+)"/g)].map(m=>m[1]));
   return Object.entries(tags).filter(([k])=>!named.has(esc(k))).sort(([a],[b])=>a.localeCompare(b));
 }
 export function renderOtherTags(key: string, tags: Record<string,string>, form = '', indoor = false, mixed = new Set<string>()): string {

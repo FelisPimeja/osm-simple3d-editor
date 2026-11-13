@@ -1242,13 +1242,14 @@ document.getElementById('cache-clear')!.addEventListener('click', async () => {
 const tilesReload = document.getElementById('tiles-reload')!;
 /** В режиме здания кнопка обновляет только его: части, отношение и внутренние планы. */
 function syncReloadButton() {
-  tilesReload.textContent = focus ? tr('Обновить здание') : tr('Обновить данные');
+  tilesReload.textContent = focus ? (isComplex(focus) ? tr('Обновить объект') : tr('Обновить здание')) : tr('Обновить данные');
   document.getElementById('reload-sub')!.textContent = focus ? tr('Загрузить свежие данные этого здания.') : tr('Загрузить свежие данные с сервера.');
   tilesReload.title = focus ? tr('Заново запросить из OSM API это здание, его части и внутренние планы') : tr('Отладка: заново запросить из OSM API тайлы на экране');
 }
 tilesReload.addEventListener('click', () => {
   if (focus) {
     if (josmMode) return setStatus(tr('Слой JOSM обновляется сам.'));
+    if (isComplex(focus)) { void refreshComplex(focus); return; }
     setStatus(tr('Обновляем здание…'));
     focusIndoor.delete(focus.key);
     loadFocusIndoor(focus);
@@ -2216,6 +2217,46 @@ function hideMapLayers() {
 }
 
 let focusRefreshId = 0;
+
+/**
+ * «Обновить объект» у комплекса без здания: его indoor заново из API по рамке комплекса — в кеш тайлов (план, карта
+ * и соседи пересоберутся из него), затем тот же комплекс: по постоянному ключу (complexAnchor), а если якорь удалён —
+ * тот, где больше всего прежних объектов. Этаж остаётся.
+ */
+async function refreshComplex(g: BuildingGroup) {
+  const c = complexFocus.get(g.key);
+  if (!c) return;
+  const api = server().api, id = ++focusRefreshId;
+  const pad = 0.0002; // ~20 м: объекты по краю и соседние, которые могли присоединиться
+  const box: Bbox = [c.box[0] - pad, c.box[1] - pad, c.box[2] + pad, c.box[3] + pad];
+  const oldKeys = new Set(c.features.map((f) => f.key));
+  const digest = (fs: IndoorFeature[]) => JSON.stringify(fs.map((f) => [f.key, f.tags, f.polygons, f.point]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+  const before = digest(c.features);
+  setStatus(tr('Обновляем объект…'));
+  try {
+    const els = await fetchMapSplit(box, api).then((x) => completeRelations(x, (y) => incompleteIndoorRelations(y, 200), api));
+    if (api !== server().api) return;
+    const parsed = parseBuildings(els);
+    rememberIndoorRelations(els, parsed.indoor);
+    await overpass.replaceIndoor(parsed.indoor.filter((f) => !overpass.wasUploadedDeleted(f.key)), box);
+    if (id !== focusRefreshId || focus?.key !== g.key) return;
+    buildingIndoorCache = undefined;
+    const found = orphanComplexes(box);
+    const next = found.find((x) => x.key === g.key)
+      ?? found.map((x) => ({ x, n: x.features.filter((f) => oldKeys.has(f.key)).length })).sort((a, b) => b.n - a.n).find((x) => x.n > 0)?.x;
+    if (!next) { setStatus(tr('Объекта больше нет в данных OSM.'), true); return; }
+    complexFocus.set(next.key, { features: next.features, box: next.box });
+    if (next.key !== g.key) drill = focus = complexGroup(next.key)!;
+    setFocusScene(focus!);
+    renderLevels();
+    renderIssues();
+    const touched = next.features.some((f) => session.touched(indoorKey(f.key)));
+    setStatus(touched ? tr('Данные объекта обновлены; ваши несохранённые правки остаются поверх них.')
+      : digest(next.features) === before ? tr('Данные объекта актуальны.') : tr('Данные объекта обновлены до актуальной версии OSM.'));
+  } catch (err) {
+    if (id === focusRefreshId) setStatus(tr('Не удалось обновить объект: {error}', { error: (err as Error).message }), true);
+  }
+}
 
 /** manual — по кнопке «Обновить здание»: сообщить и об актуальных данных. */
 async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manual = false) {
@@ -9258,6 +9299,20 @@ function orphanComplexes(bbox: Bbox): { key: string; features: IndoorFeature[]; 
   complexCache = { sig, out };
   return out;
 }
+/**
+ * Постоянный ключ комплекса без здания — его самый старый объект OSM: отношение с наименьшим id, иначе путь, иначе
+ * точка. Новые объекты получают бóльшие id, так что ключ не меняется, пока комплекс дополняют или делят;
+ * меняется, только если удалят сам якорь. Правленные в сессии (отрицательные id) якорем не бывают, пока есть другие.
+ */
+function complexAnchor(features: IndoorFeature[]): string {
+  const rank = { relation: 0, way: 1, node: 2 } as Record<string, number>;
+  const parse = (k: string) => { const [type, id] = k.replace('#poi', '').split('/'); return { k: `${type}/${id}`, type, id: Number(id) }; };
+  const all = features.map((f) => parse(f.key)).filter((x) => Number.isFinite(x.id));
+  const pool = all.some((x) => x.id > 0) ? all.filter((x) => x.id > 0) : all;
+  pool.sort((a, b) => (rank[a.type] ?? 3) - (rank[b.type] ?? 3) || Math.abs(a.id) - Math.abs(b.id));
+  return pool[0]?.k ?? features.map((f) => f.key).sort()[0];
+}
+
 function orphanComplexesOf(fs: IndoorFeature[]): { key: string; features: IndoorFeature[]; box: Bbox }[] {
   const find = indoorComponents(fs);
   const groups = new Map<number, IndoorFeature[]>();
@@ -9265,7 +9320,7 @@ function orphanComplexesOf(fs: IndoorFeature[]): { key: string; features: Indoor
   return [...groups.values()].map((features) => {
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
     for (const f of features) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
-    return { key: COMPLEX_PREFIX + features.map((f) => f.key).sort()[0], features, box: [w, s, e, n] as Bbox };
+    return { key: COMPLEX_PREFIX + complexAnchor(features), features, box: [w, s, e, n] as Bbox };
   }).filter((c) => Number.isFinite(c.box[0]));
 }
 

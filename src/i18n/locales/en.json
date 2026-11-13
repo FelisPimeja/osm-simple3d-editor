@@ -1545,5 +1545,12 @@
   "Shift+клик — добавить или убрать вход. Del — удалить выбранные входы (узлы останутся вершинами контура).": "Shift+click adds or removes an entrance. Del deletes the selected entrances (the nodes stay vertices of the outline).",
   "Удалён {n} вход: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} входа: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} входов: узлы остались вершинами контура. Отменить — Ctrl+Z.": "{n} entrance deleted; the nodes stay vertices of the outline. Press Ctrl+Z to undo.|{n} entrances deleted; the nodes stay vertices of the outline. Press Ctrl+Z to undo.",
   "незамкнутый путь": "unclosed way",
-  "неполный мультиполигон (члены вне области)": "incomplete multipolygon (members outside the loaded area)"
+  "неполный мультиполигон (члены вне области)": "incomplete multipolygon (members outside the loaded area)",
+  "Обновить объект": "Reload object",
+  "Обновляем объект…": "Reloading object…",
+  "Объекта больше нет в данных OSM.": "The object is no longer in OSM data.",
+  "Данные объекта обновлены; ваши несохранённые правки остаются поверх них.": "Object data reloaded; your unsaved edits stay on top of it.",
+  "Данные объекта актуальны.": "Object data is up to date.",
+  "Данные объекта обновлены до актуальной версии OSM.": "Object data updated to the current OSM version.",
+  "Не удалось обновить объект: {error}": "Could not reload the object: {error}"
 }

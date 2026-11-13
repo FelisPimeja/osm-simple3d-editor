@@ -744,6 +744,44 @@ export class OverpassTiles {
     }
   }
 
+  /**
+   * Свежие indoor-объекты рамки box (загружены из API целиком по ней): заменить ими кешированные, добавить новые
+   * в тайл их первой точки, убрать те, что целиком в рамке, но в ответе их нет (удалены в OSM). Память и IndexedDB.
+   */
+  async replaceIndoor(fresh: IndoorFeature[], [w, s, e, n]: Bbox) {
+    const byKey = new Map(fresh.map((f) => [f.key, f]));
+    const inside = (f: IndoorFeature) => (f.point ? [f.point] : f.polygons.flatMap((p) => p.outer)).every(([x, y]) => x >= w && x <= e && y >= s && y <= n);
+    const anchor = (f: IndoorFeature) => f.point ?? f.polygons[0]?.outer[0];
+    const placed = new Set<string>();
+    const patch = (tile: string, list: IndoorFeature[] | undefined): IndoorFeature[] => {
+      const out: IndoorFeature[] = [];
+      for (const f of list ?? []) {
+        const nf = byKey.get(f.key);
+        if (nf) { out.push(nf); placed.add(f.key); } else if (!inside(f)) out.push(f);
+      }
+      const [tw, ts, te, tn] = tileBbox(tile);
+      for (const f of fresh) {
+        if (placed.has(f.key) || out.some((x) => x.key === f.key)) continue;
+        const a = anchor(f);
+        if (a && a[0] >= tw && a[0] < te && a[1] > ts && a[1] <= tn) out.push(f);
+      }
+      return out;
+    };
+    const near = (tile: string) => { const [tw, ts, te, tn] = tileBbox(tile); return !(te < w || tw > e || tn < s || ts > n); };
+    for (const [key, entry] of this.cache) {
+      if (entry.state !== 'ready' || !near(key)) continue;
+      entry.indoor = patch(key, entry.indoor);
+      if (!entry.partial) void this.store.put(key, entry);
+    }
+    for (const key of this.stored) {
+      if (this.cache.has(key) || !near(key)) continue;
+      const stored = await this.store.get(key);
+      if (stored) await this.store.put(key, { ...stored, indoor: patch(key, stored.indoor) });
+    }
+    this.revision++;
+    this.onChange();
+  }
+
   /** Повторить сейчас тайлы, упавшие с ошибкой (не дожидаясь паузы перед повтором). */
   retryFailed() {
     for (const e of this.cache.values()) if (e.state === 'error') e.retryAt = 0;

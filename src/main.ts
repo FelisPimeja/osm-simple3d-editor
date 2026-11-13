@@ -2239,7 +2239,7 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
       ? { features: parsed.features.filter((f) => freshGroup.members.includes(f.key)), unrendered: [] }
       : buildingRefreshMembers(freshGroup, parsed, elements);
     const warning = unrendered.length ? tr('Загружены, но не отображаются члены {building}: {members}', {
-      building: g.key, members: unrendered.map((m) => `${m.key} (role=${m.role || '—'}${m.type ? `, type=${m.type}` : ''}${m.reason ? `, ${m.reason}` : ''})`).join('; '),
+      building: g.key, members: unrendered.map((m) => `${m.key} (role=${m.role || '—'}${m.type ? `, type=${m.type}` : ''}${m.reason ? `, ${tr(m.reason)}` : ''})`).join('; '),
     }) : undefined;
     if (warning) console.warn('[building refresh]', warning, unrendered);
     const changed = features.filter((f) => {

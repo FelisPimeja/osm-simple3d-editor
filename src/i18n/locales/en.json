@@ -1543,5 +1543,7 @@
   "Вход без indoor-ключей: для поэтажного плана добавьте {tags}.": "Entrance without indoor keys: add {tags} for the floor plan.",
   "Выбран {n} вход|Выбрано {n} входа|Выбрано {n} входов": "{n} entrance selected|{n} entrances selected",
   "Shift+клик — добавить или убрать вход. Del — удалить выбранные входы (узлы останутся вершинами контура).": "Shift+click adds or removes an entrance. Del deletes the selected entrances (the nodes stay vertices of the outline).",
-  "Удалён {n} вход: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} входа: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} входов: узлы остались вершинами контура. Отменить — Ctrl+Z.": "{n} entrance deleted; the nodes stay vertices of the outline. Press Ctrl+Z to undo.|{n} entrances deleted; the nodes stay vertices of the outline. Press Ctrl+Z to undo."
+  "Удалён {n} вход: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} входа: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} входов: узлы остались вершинами контура. Отменить — Ctrl+Z.": "{n} entrance deleted; the nodes stay vertices of the outline. Press Ctrl+Z to undo.|{n} entrances deleted; the nodes stay vertices of the outline. Press Ctrl+Z to undo.",
+  "незамкнутый путь": "unclosed way",
+  "неполный мультиполигон (члены вне области)": "incomplete multipolygon (members outside the loaded area)"
 }

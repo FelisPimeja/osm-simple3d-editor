@@ -15615,8 +15615,10 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
         incline: escalatorIncline(f), ...stairsShape(f, list), pale: true }];
     });
     // Эскалаторы нижних этажей, видные сквозь пустоты, — тоже (между этажами под этим)
+    // …только видные сквозь пустоты этажа: остальные закрыты плитой (и за коробками нижних этажей торчали бы)
+    const inVoid = (line: LonLat[]) => line.some((q) => voids.some((v) => v.polygon.some(([o, ...h]) => pointInRing(q, o) && !h.some((r) => pointInRing(q, r)))));
     const lowerEscalators = list.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2 && !f.levels.includes(l.n)
-      && below.length && f.levels.every((n) => n < l.n)).flatMap((f): EscalatorItem[] => {
+      && below.length && f.levels.every((n) => n < l.n) && inVoid(f.polygons[0].outer)).flatMap((f): EscalatorItem[] => {
       const low = levels.find((x) => x.n === Math.min(...f.levels)), high = levels.find((x) => x.n === Math.max(...f.levels));
       return low && high ? [{ key: f.key, line: f.polygons[0].outer, bottom: low.floor, top: high.floor, width: pairWidth(f, list) ?? escalatorWidth(f),
         incline: escalatorIncline(f), ...stairsShape(f, list), pale: true }] : [];

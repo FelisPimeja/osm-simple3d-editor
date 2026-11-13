@@ -15610,7 +15610,7 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
       .map((n) => levels.find((x) => x.n === n)).filter((x): x is Level => !!x)
       // Только то, что задевает проёмы над этажом (как в плане здания): остальное закрыто, а за коробкой — торчало бы
       .map((bl) => { const cover = voids.filter((v) => v.through.includes(bl.n)).flatMap((v) => v.polygon);
-        return { items: itemsOf(bl).filter((it) => touchesVoid(it.polygons, !!it.line, cover)), doors: doorsOf(bl), cut: bl.ceil, voids: levelVoids(ng, levels, list, bl.n).flatMap((v) => v.polygon) }; })
+        return { items: itemsOf(bl).filter((it) => touchesVoid(it.polygons, !!it.line, cover)), doors: doorsOf(bl), cut: Math.min(bl.ceil, l.floor - 0.3), voids: levelVoids(ng, levels, list, bl.n).flatMap((v) => v.polygon) }; })
       .filter((b) => b.items.length);
     // Лестницы и эскалаторы этажа: между своими этажами соседа
     const escalators = list.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2 && f.levels.includes(l.n)).flatMap((f): EscalatorItem[] => {
@@ -15647,7 +15647,7 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
       // Крыша — на толщину перекрытия ниже пола среза: ближе (вдали точности глубины мало) она закрывала бы пол соседа
       .map((x) => ({ bottom: x.floor, top: Math.min(x.ceil, l.floor - 0.3),
         polygons: levelBody(list, x.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon),
-        seen: below.some((b) => b.cut === x.ceil), cover: voids.filter((v) => v.through.includes(x.n)).flatMap((v) => v.polygon),
+        seen: below.some((b) => b.cut === Math.min(x.ceil, l.floor - 0.3)), cover: voids.filter((v) => v.through.includes(x.n)).flatMap((v) => v.polygon),
         topEdges: true }))
       .filter((b) => b.top > b.bottom);
     if (!items.length && !escalators.length && !below.length) return;

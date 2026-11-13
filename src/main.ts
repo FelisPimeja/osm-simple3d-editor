@@ -13033,7 +13033,7 @@ function renderLevelsImpl() {
     .map((l) => ({ bottom: l.floor, top: Math.min(l.ceil, level.floor),
       // Нет контура indoor=level — коробка по помещениям, площадям и коридорам этажа (крыша их объединяет)
       polygons: levelBody(visibleIndoor, l.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon),
-      seen: through.includes(l.n), cover: voids.filter((v) => v.through.includes(l.n)).flatMap((v) => v.polygon) }))
+      seen: through.includes(l.n), ...(bare ? { topEdges: true } : {}), cover: voids.filter((v) => v.through.includes(l.n)).flatMap((v) => v.polygon) }))
     // Без разметки этажа polygons пусты — коробку строит рендер по сечению оболочки
     .filter((b) => b.top > b.bottom) : [];
   const sig = plan ? `${level!.n}|${level!.ceil}|${plan.items.map((i) => i.key).join(',')}|${plan.doors.map((d) => d.join(',')).join(';')}|${voids.length}|${cutEscalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.noHole ? 1 : 0}`).join(',')}|${indoorEditRev}|${[...indoorHidden].sort().join(',')}|${boxes.map((b) => `${b.bottom}:${b.polygons.length}:${+b.seen}`).join(',')}` : '';

@@ -306,7 +306,7 @@ export interface IndoorLevel {
   /** Подземные этажи (для земли надземного плана): контуры indoor=level и площади лестниц, выходящих наверх. */
   underground?: { z: number; outlines: Polygon[][]; pits: Polygon[][] }[];
   /** Этажи ниже, не видные сквозь проёмы: коробка из контура indoor=level от пола до потолка (пунктир, без скрытых граней). */
-  boxes?: { bottom: number; top: number; polygons: Polygon[]; /** Виден сквозь проёмы (план нарисован). */ seen: boolean; /** Где крыши нет: проёмы текущего этажа над этим этажом. */ cover: LonLat[][][] }[];
+  boxes?: { bottom: number; top: number; polygons: Polygon[]; /** Виден сквозь проёмы (план нарисован). */ seen: boolean; /** Где крыши нет: проёмы текущего этажа над этим этажом. */ cover: LonLat[][][]; /** Рёбра верха пунктиром и под полом этажа: абриса оболочки нет (комплекс без здания). */ topEdges?: boolean }[];
   below?: { cut: number; items: IndoorItem[]; /** Площади лестниц и эскалаторов этажа. */ outlines?: IndoorItem[]; doors?: LonLat[]; doorCuts?: { at: LonLat; width: number; polygon?: LonLat[] }[]; doorModels?: DoorItem[]; /** Собственные проёмы этого этажа. */ voids?: LonLat[][][] }[];
 }
 
@@ -2530,7 +2530,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           pos.push(x0, y0, b.bottom, x1, y1, b.bottom, x1, y1, b.top, x0, y0, b.bottom, x1, y1, b.top, x0, y0, b.top);
           const [u0, v0] = pts[i], [u1, v1] = pts[(i + 1) % pts.length];
           // Верх под полом текущего этажа — низ его абриса (drawShellOutline): второй пунктир рядом не нужен
-          for (const z of b.top >= floorZ - 1e-3 ? [b.bottom] : [b.bottom, b.top]) lines.push(u0, v0, z, u1, v1, z);
+          for (const z of b.top >= floorZ - 1e-3 && !b.topEdges ? [b.bottom] : [b.bottom, b.top]) lines.push(u0, v0, z, u1, v1, z);
           if (turnAt(base, i) >= UNDERGROUND_POST_TURN) lines.push(u0, v0, b.bottom, u0, v0, b.top);
         }
       }

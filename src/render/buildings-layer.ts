@@ -357,7 +357,8 @@ const UNDERGROUND_SELECTED = new THREE.LineDashedMaterial({ color: 0x2563eb, das
 /** Насколько близко к пунктиру подземной части выбирает клик, px. */
 /** Грани коробок нижних этажей: не видны, только пишут глубину (чуть дальше рёбер — свои рёбра на них видны). */
 // Без polygonOffset: он отодвигал грани дальше их выноса, и рёбра плана на контуре пробивали грань
-const LEVEL_BOX_OCCLUDER = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
+/** Грани коробки отодвинуты по глубине: стены этажа на его контуре (видные сквозь проём) с ними не мерцают. */
+const LEVEL_BOX_OCCLUDER = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 4 });
 /** Крыша коробки — в плоскости пола текущего этажа: отодвинута по глубине, иначе закрывала бы его заливку. */
 const LEVEL_BOX_ROOF = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 4 });
 const UNDERGROUND_PICK_PX = 6;
@@ -3042,8 +3043,11 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
       }
     }
+    // Пол самого нижнего этажа ни над чем не висит: торца плиты под ним не видно (подземный переход: полоса под −1)
+    const bottomZ = Math.min(this.level!.floor, ...(this.level!.below ?? []).map((b) => b.items.reduce((m, i) => Math.min(m, i.z), Infinity)),
+      ...(this.level!.boxes ?? []).map((b) => b.bottom));
     for (const it of items) {
-      if (it.kind !== 'area' || !it.areaLedge || it.line) continue;
+      if (it.kind !== 'area' || !it.areaLedge || it.line || it.z <= bottomZ + 1e-3) continue;
       const floorVoids = ownVoids ?? (Math.abs(it.z - this.level!.floor) < 1e-3 ? this.level!.voids ?? []
         : (this.level!.voidCuts ?? []).filter((c) => c.zs.some((z) => Math.abs(z - it.z) < 1e-3)).flatMap((c) => c.polygon));
       // Самый нижний видимый этаж может не иметь собственного проёма. Его свободный край всё равно

@@ -208,12 +208,18 @@ export function escalatorFloorHoles(escalators: EscalatorCut[], floorZ: number):
     }
     // Лестница с контуром: проём — полосы, обрезанные контуром площади
     if(e.stairs&&e.outline&&out.length>from){
-      const own=out.splice(from).map(r=>[[...r,r[0]]] as unknown as MultiPolygon);
-      const clipped=polygonClipping.intersection(polygonClipping.union(own[0],...own.slice(1)),[[[...e.outline,e.outline[0]]]] as unknown as MultiPolygon);
-      for(const poly of clipped)out.push(poly[0].slice(0,-1) as Pt[]);
+      const strips=out.splice(from);
+      const own=strips.map(r=>[[...r,r[0]]] as unknown as MultiPolygon);
+      // polygon-clipping иногда не замыкает кольцо на почти совпадающих вершинах — тогда полосы без обрезки,
+      // а не исключение, обрывающее весь план (relation/6194297 у Театральной)
+      try{
+        const clipped=polygonClipping.intersection(polygonClipping.union(own[0],...own.slice(1)),[[[...e.outline,e.outline[0]]]] as unknown as MultiPolygon);
+        for(const poly of clipped)out.push(poly[0].slice(0,-1) as Pt[]);
+      }catch(err){console.warn('[escalator] проём лестницы не обрезан контуром',err);out.push(...strips);}
     }
   }
   if(!out.length)return [];
   const polys=out.map(r=>[[...r,r[0]]] as unknown as MultiPolygon);
-  return polygonClipping.union(polys[0],...polys.slice(1));
+  try{return polygonClipping.union(polys[0],...polys.slice(1));}
+  catch(err){console.warn('[escalator] проёмы не объединены',err);return polys.flat() as unknown as MultiPolygon;}
 }

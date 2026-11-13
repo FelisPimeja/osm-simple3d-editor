@@ -15642,12 +15642,13 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
     }
     // Этажи ниже — коробками, как у здания режима (renderLevelsImpl): контур indoor=level, иначе объединение
     // помещений (levelBody), иначе рендер берёт сечение по следам частей; подземные под надземным этажом — нет
-    // Комплекс без здания (data): земли-оболочки нет — подземные этажи тоже коробками, с рёбрами верха (как в его плане)
-    const boxes = levels.filter((x) => x.n < l.n && (!!data || !(l.floor > -0.01 && x.floor < -0.01)))
-      .map((x) => ({ bottom: x.floor, top: Math.min(x.ceil, l.floor),
+    // Оболочки у соседа нет (её заменяет план) — подземные этажи тоже коробками: крыша прячет всё, кроме проёмов
+    const boxes = levels.filter((x) => x.n < l.n)
+      // Крыша — на толщину перекрытия ниже пола среза: ближе (вдали точности глубины мало) она закрывала бы пол соседа
+      .map((x) => ({ bottom: x.floor, top: Math.min(x.ceil, l.floor - 0.3),
         polygons: levelBody(list, x.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon),
         seen: below.some((b) => b.cut === x.ceil), cover: voids.filter((v) => v.through.includes(x.n)).flatMap((v) => v.polygon),
-        ...(data ? { topEdges: true } : {}) }))
+        topEdges: true }))
       .filter((b) => b.top > b.bottom);
     if (!items.length && !escalators.length && !below.length) return;
     return { members: [...ng.members, ng.key], items, doors, escalators: [...escalators, ...lowerEscalators], cut: l.ceil, below, slab, boxes };

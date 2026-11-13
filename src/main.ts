@@ -10505,9 +10505,9 @@ async function deleteIndoorWalls() {
       }) || [...editGroups.values(), ...session.createdAlive()].some((r) => r.relMembers?.some((m) => `${m.type}/${m.ref}` === f.key));
       if (referenced) {
         const tags = { ...session.get(f.key)!.tags };
-        delete tags.indoor;
-        delete tags.level;
-        delete tags.repeat_on;
+        // Путь остаётся только контуром отношения: теги стены уходят все (barrier=wall без indoor — уличная стена)
+        for (const k of ['indoor', 'level', 'repeat_on', 'height', 'min_height', 'min_level', 'max_level', 'fence_type', 'material', 'wall', 'area']) delete tags[k];
+        if (['wall', 'fence', 'handrail'].includes(tags.barrier)) delete tags.barrier;
         edits.push({ key: f.key, tags });
       } else edits.push({ key: f.key, delete: true });
     }

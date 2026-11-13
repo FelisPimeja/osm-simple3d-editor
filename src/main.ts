@@ -12981,7 +12981,8 @@ function renderLevelsImpl() {
           pointInRing(p, outer) && !holes.some((hole) => pointInRing(p, hole))));
       }));
       // Марш подвала снаружи здания (в приямке) виден с любого надземного этажа — сквозь отверстие в земле
-      const pit = level.floor > -0.01 && low.floor < -0.01 && line.some((p) => !feet.some((pg) =>
+      // Без следа (комплекс без здания) приямков нет: снаружи «следа» оказался бы любой подземный марш
+      const pit = feet.length > 0 && level.floor > -0.01 && low.floor < -0.01 && line.some((p) => !feet.some((pg) =>
         (pointInRing(p, pg.outer) && !pg.inners.some((h) => pointInRing(p, h))) || nearRing(p, pg.outer, 0.05)));
       return { key: f.key, line, bottom: low.floor, top: high.floor,
         width: pairWidth(f, visibleIndoor) ?? escalatorWidth(f), incline: escalatorIncline(f), ...stairsShape(f, visibleIndoor), ...(stairsInVoid.has(f.key) ? { noHole: true } : {}),
@@ -13071,7 +13072,9 @@ function renderLevelsImpl() {
         // Этаж сквозь проём: только то, что его задевает. Остальное закрыто коробкой этажа, а за её контуром
         // (стена снаружи контура indoor=level) торчало бы сквозь этажи над ним
         const cover = voids.filter((v) => v.through.includes(l.n)).flatMap((v) => v.polygon);
-        const items = pitOnly ? p.items.filter((it) => it.polygons.some((pg) => pg.outer.some(outside)))
+        // Комплекс без здания: следа нет — «снаружи» оказался бы весь этаж; его закрывает коробка, видно лишь сквозь проёмы
+        const items = pitOnly && bare ? []
+          : pitOnly ? p.items.filter((it) => it.polygons.some((pg) => pg.outer.some(outside)))
           : p.items.filter((it) => touchesVoid(it.polygons, !!it.line, cover));
         return { ...p, items, ...(pitOnly ? { cut: p.cut - 0.02 } : {}), voids: (allVoids.get(l.n) ?? []).flatMap((v) => v.polygon) };
       }),

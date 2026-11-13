@@ -13192,6 +13192,15 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
         const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
         if (through.length) list.push({ polygon: f.polygons.map((p) => [p.outer, ...p.inners]), through });
       }
+      // Помещение или площадь на несколько этажей (спуск, атриум) — второй свет: проём на верхних этажах до нижнего
+      // (лестничные площади режут свой проём по маршу ниже, лифты — выше)
+      for (const f of indoor.filter((f) => !f.line && !f.point && !f.escalatorArea && !stairsArea(f) && ['room', 'area', 'corridor'].includes(f.kind)
+        && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels) && !isElevatorRoom(f, indoor))) {
+        const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
+        const mid = pointOnSurface(f.polygons[0]);
+        if (!through.length || list.some((v) => v.polygon.some(([o, ...h]) => pointInRing(mid, o) && !h.some((r) => pointInRing(mid, r))))) continue;
+        list.push({ polygon: f.polygons.map((p) => [p.outer, ...p.inners]), through });
+      }
       // Площадь эскалатора — только контур (пунктир): проём в перекрытии режут сами эскалаторы по ширине
       const base = list.slice();
       for (const f of indoor.filter((f) => f.escalator

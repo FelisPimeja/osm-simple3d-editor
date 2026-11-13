@@ -2504,7 +2504,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     ctx?: { boxes: NonNullable<IndoorLevel['boxes']>; floor: number; section?: (z: number) => ClipMulti | undefined;
       /** Без объединения контуров: каждая часть окружения — своя коробка (булевы операции на тысяче зданий не дождаться). */
       raw?: boolean }) {
-    const pos: number[] = [], roofPos: number[] = [], lines: number[] = [];
+    const pos: number[] = [], roofPos: number[] = [], lines: number[] = [], solid: number[] = [];
     // Сосед в окружении: его коробки, его пол и сечение по следам частей; пунктир бледнее
     const floorZ = ctx?.floor ?? this.level?.floor ?? Infinity;
     const section = ctx ? ctx.section ?? (() => undefined) : (z: number) => this.sectionAt(g, z);
@@ -2533,6 +2533,11 @@ export class BuildingsLayer implements CustomLayerInterface {
           for (const z of b.top >= floorZ - 1e-3 && !b.topEdges ? [b.bottom] : [b.bottom, b.top]) lines.push(u0, v0, z, u1, v1, z);
           if (turnAt(base, i) >= UNDERGROUND_POST_TURN) lines.push(u0, v0, b.bottom, u0, v0, b.top);
         }
+      }
+      // Без перекрытия (комплекс без здания) края проёмов никто не обводит — сплошной линией по верху коробки
+      if (b.topEdges) for (const poly of b.cover) for (const r of poly) {
+        const loc = r.map(g.toLocal);
+        for (let i = 0; i < loc.length; i++) { const [x0, y0] = loc[i], [x1, y1] = loc[(i + 1) % loc.length]; solid.push(x0, y0, b.top, x1, y1, b.top); }
       }
       // Крыша — с дырами по проёмам текущего этажа над этим: план под ними виден только сквозь них
       let roof = body;
@@ -2563,6 +2568,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     const dashed = new THREE.LineSegments(lg, levelBoxEdgeMaterial(g.silhouetteEye, !!ctx));
     dashed.computeLineDistances();
     dashed.name = 'level-box-edges';
+    if (solid.length) {
+      const sg = new THREE.BufferGeometry();
+      sg.setAttribute('position', new THREE.Float32BufferAttribute(solid, 3));
+      const se = new THREE.LineSegments(sg, INDOOR_VOID_EDGE);
+      se.name = 'level-box-void-edges';
+      se.frustumCulled = false;
+      se.raycast = () => {};
+      root.add(se);
+    }
     dashed.renderOrder = 998;
     dashed.frustumCulled = false;
     dashed.raycast = () => {};

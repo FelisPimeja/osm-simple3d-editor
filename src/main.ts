@@ -13049,6 +13049,7 @@ function renderLevelsImpl() {
     // Крышки помещений нижних этажей (зал под навесом) не нужны: нижние этажи — коробками, сквозь проёмы видны их планы
     lids: [],
     bareVoids: voids.filter((v) => v.bare).flatMap((v) => v.polygon),
+    ...(bare ? { noSlab: true } : {}),
     // Пустота прорезает пол этажа и полы промежуточных этажей (у самого нижнего — пол атриума)
     voidCuts: voids.map((v) => ({
       polygon: v.polygon,

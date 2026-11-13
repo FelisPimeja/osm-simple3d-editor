@@ -17,16 +17,16 @@ export class IndoorBadges {
   constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, private readonly icon: string, onPick: (key: string) => void) {
     this.root = document.createElement('div');
     this.root.className = 'indoor-badges';
+    // Значки — внутри контейнера холста: MapLibre принимает жесты (драг, поворот, колесо) только оттуда,
+    // и над значком они иначе не работали. Клик после перетаскивания — не выбор.
+    let down: [number, number] | undefined;
+    this.root.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
     this.root.addEventListener('click', (e) => {
+      const moved = down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4;
       const el = (e.target as HTMLElement).closest<HTMLElement>('.indoor-badge');
-      if (el?.dataset.key) { e.stopPropagation(); onPick(el.dataset.key); }
+      if (el?.dataset.key && !moved) { e.stopPropagation(); onPick(el.dataset.key); }
     });
-    // Колесо над значком — карте: значки лежат вне слоя, где MapLibre слушает колесо, и зум над ними не работал
-    this.root.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      map.getCanvas().dispatchEvent(new WheelEvent('wheel', e));
-    }, { passive: false });
-    map.getContainer().appendChild(this.root);
+    map.getCanvasContainer().appendChild(this.root);
     map.on('render', () => this.place());
   }
 

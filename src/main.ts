@@ -13197,7 +13197,9 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
       }
       // Помещение или площадь на несколько этажей (спуск, атриум) — второй свет: проём на верхних этажах до нижнего
       // (лестничные площади режут свой проём по маршу ниже, лифты — выше)
-      for (const f of indoor.filter((f) => !f.line && !f.point && !f.escalatorArea && !stairsArea(f) && ['room', 'area', 'corridor'].includes(f.kind)
+      // Площадь лестницы без прямого марша внутри (марш с поворотом не моделируется) — тоже проёмом целиком
+      const marchIn = (f: IndoorFeature) => indoor.some((e) => e.escalator && e.polygons[0]?.outer.some((q) => f.polygons.some((p) => pointInRing(q, p.outer))));
+      for (const f of indoor.filter((f) => !f.line && !f.point && !f.escalatorArea && (!stairsArea(f) || !marchIn(f)) && ['room', 'area', 'corridor'].includes(f.kind)
         && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels) && !isElevatorRoom(f, indoor))) {
         const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
         const mid = pointOnSurface(f.polygons[0]);

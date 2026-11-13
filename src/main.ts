@@ -15608,7 +15608,9 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
     const voids = timed('окружение: второй свет соседа', () => levelVoids(ng, levels, list, l.n));
     const below = [...new Set(voids.flatMap((v) => v.through))].sort((a, b) => b - a)
       .map((n) => levels.find((x) => x.n === n)).filter((x): x is Level => !!x)
-      .map((bl) => ({ items: itemsOf(bl), doors: doorsOf(bl), cut: bl.ceil, voids: levelVoids(ng, levels, list, bl.n).flatMap((v) => v.polygon) }))
+      // Только то, что задевает проёмы над этажом (как в плане здания): остальное закрыто, а за коробкой — торчало бы
+      .map((bl) => { const cover = voids.filter((v) => v.through.includes(bl.n)).flatMap((v) => v.polygon);
+        return { items: itemsOf(bl).filter((it) => touchesVoid(it.polygons, !!it.line, cover)), doors: doorsOf(bl), cut: bl.ceil, voids: levelVoids(ng, levels, list, bl.n).flatMap((v) => v.polygon) }; })
       .filter((b) => b.items.length);
     // Лестницы и эскалаторы этажа: между своими этажами соседа
     const escalators = list.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2 && f.levels.includes(l.n)).flatMap((f): EscalatorItem[] => {
@@ -15634,9 +15636,8 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
     let slab: LonLat[][][] | undefined;
     if (below.length) {
       const holes = voids.flatMap((v) => v.polygon) as [number, number][][][];
-      // Сечение — по помещениям этажа и по контуру самого соседа: у торгового центра на этаже 0 лишь пара площадок
-      const foot = data ? [] : groupFeatures(ng).flatMap((f) => (f.polygons ?? []).map((p) => [p.outer, ...p.inners] as [number, number][][]));
-      const sec = unite([...areaRings(l), ...foot]);
+      // Плита — только по indoor этажа (план строится из indoor): остальное закрывают коробки нижних этажей пунктиром
+      const sec = unite(areaRings(l));
       try { slab = holes.length && sec.length ? polygonClipping.difference(sec as never, ...(holes as never[])) as LonLat[][][] : sec; } catch { slab = undefined; }
     }
     // Этажи ниже — коробками, как у здания режима (renderLevelsImpl): контур indoor=level, иначе объединение

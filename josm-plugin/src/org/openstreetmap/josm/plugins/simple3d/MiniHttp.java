@@ -36,7 +36,9 @@ final class MiniHttp {
     });
 
     MiniHttp(int port, Handler handler) throws IOException {
-        socket = new ServerSocket(port, 50, InetAddress.getLoopbackAddress());
+        // Именно IPv4 127.0.0.1: страница открывается по нему, а getLoopbackAddress() при
+        // java.net.preferIPv6Addresses=true вернёт ::1 — и браузер получит «connection refused» (Windows)
+        socket = new ServerSocket(port, 50, InetAddress.getByAddress(new byte[] {127, 0, 0, 1}));
         Thread accept = new Thread(() -> {
             while (!socket.isClosed()) {
                 try {

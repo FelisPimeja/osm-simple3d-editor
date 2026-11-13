@@ -13027,7 +13027,9 @@ function renderLevelsImpl() {
   const through = [...new Set([...voids.flatMap((v) => v.through),
     ...(level && level.floor > -0.01 ? levels.filter((l) => l.floor < -0.01).map((l) => l.n) : [])])].sort((a, b) => b - a);
   // Этажи под проёмами — тоже коробкой, крыша везде, кроме проёмов над ними: их план виден лишь сквозь проёмы
-  const boxes = level ? levels.filter((l) => l.n < level.n && !(level.floor > -0.01 && l.floor < -0.01))
+  // Комплекс без здания (подземный переход): земли-«оболочки» нет, подземный этаж — тоже коробкой, сплошной только в проёмах
+  const bare = !!complexFocus.get(focus.key);
+  const boxes = level ? levels.filter((l) => l.n < level.n && (bare || !(level.floor > -0.01 && l.floor < -0.01)))
     .map((l) => ({ bottom: l.floor, top: Math.min(l.ceil, level.floor),
       // Нет контура indoor=level — коробка по помещениям, площадям и коридорам этажа (крыша их объединяет)
       polygons: levelBody(visibleIndoor, l.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon),

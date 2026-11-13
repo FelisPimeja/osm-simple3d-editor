@@ -12753,6 +12753,21 @@ function levelIssue(l: Level): string | undefined {
  * с building:levels:underground, а если подвал известен только из indoor-данных — контур здания (или все части).
  */
 /** Объект плана (кольца или линия) задевает пустоты cover: вершина, точка на отрезке или пересечение площадей. */
+/**
+ * Пол (помещение, площадь, коридор) нижнего этажа — только в пределах проёмов над ним: он виден лишь сквозь них,
+ * а целиком торчал бы за коробкой этажа, когда контур indoor=level меньше его площадей (станция у Театральной, −2).
+ * Стены и колонны — как есть.
+ */
+function clipFloorToVoids<T extends { kind: string; line?: boolean; polygons: Polygon[] }>(it: T, cover: LonLat[][][]): T {
+  if (it.line || !['room', 'area', 'corridor'].includes(it.kind) || !cover.length) return it;
+  const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
+  try {
+    const out = polygonClipping.intersection(it.polygons.map((p) => [close(p.outer), ...p.inners.map(close)]) as never,
+      cover.map((p) => p.map(close)) as never) as unknown as [number, number][][][];
+    return { ...it, polygons: out.map((p) => ({ outer: p[0].slice(0, -1) as LonLat[], inners: p.slice(1).map((r) => r.slice(0, -1) as LonLat[]) })) };
+  } catch { return it; }
+}
+
 function touchesVoid(polygons: Polygon[], line: boolean, cover: LonLat[][][]): boolean {
   if (!cover.length) return false;
   const inside = (q: LonLat) => cover.some(([outer, ...holes]) => pointInRing(q, outer) && !holes.some((h) => pointInRing(q, h)));
@@ -13075,7 +13090,7 @@ function renderLevelsImpl() {
         // Комплекс без здания: следа нет — «снаружи» оказался бы весь этаж; его закрывает коробка, видно лишь сквозь проёмы
         const items = pitOnly && bare ? []
           : pitOnly ? p.items.filter((it) => it.polygons.some((pg) => pg.outer.some(outside)))
-          : p.items.filter((it) => touchesVoid(it.polygons, !!it.line, cover));
+          : p.items.filter((it) => touchesVoid(it.polygons, !!it.line, cover)).map((it) => clipFloorToVoids(it, cover));
         return { ...p, items, ...(pitOnly ? { cut: p.cut - 0.02 } : {}), voids: (allVoids.get(l.n) ?? []).flatMap((v) => v.polygon) };
       }),
     boxes,
@@ -13200,9 +13215,10 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
       }
       // Помещение или площадь на несколько этажей (спуск, атриум) — второй свет: проём на верхних этажах до нижнего
       // (лестничные площади режут свой проём по маршу ниже, лифты — выше)
-      // Площадь лестницы без прямого марша внутри (марш с поворотом не моделируется) — тоже проёмом целиком
+      // Площадь или помещение лестницы (room + stairs=yes, relation/6226707) с прямым маршем внутри режет проём по маршу;
+      // без марша (с поворотом он не моделируется) — проёмом целиком
       const marchIn = (f: IndoorFeature) => indoor.some((e) => e.escalator && e.polygons[0]?.outer.some((q) => f.polygons.some((p) => pointInRing(q, p.outer))));
-      for (const f of indoor.filter((f) => !f.line && !f.point && !f.escalatorArea && (!stairsArea(f) || !marchIn(f)) && ['room', 'area', 'corridor'].includes(f.kind)
+      for (const f of indoor.filter((f) => !f.line && !f.point && !f.escalatorArea && (!(stairsArea(f) || isStairsAreaTags(f.tags)) || !marchIn(f)) && ['room', 'area', 'corridor'].includes(f.kind)
         && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels) && !isElevatorRoom(f, indoor))) {
         const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
         const mid = pointOnSurface(f.polygons[0]);

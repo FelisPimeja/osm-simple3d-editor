@@ -3324,8 +3324,28 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Верх стены-линии с явной высотой (height ниже этажа): стена обычная, в цвет помещения, но ниже
     let wallCap = Infinity;
     /** Рёбра низких стен (стена-полигон с height ниже среза) и их верх. */
-    const lowTaken: { s: PlanSeg; top: number }[] = [];
-    let aboveLow = false;
+    const lowTaken: { s: PlanSeg; top: number; key: string }[] = [];
+    let aboveLow = false, lowKey = '', aboveLowTint: THREE.Color | undefined;
+    /** Цвет пространства у низкой стены: первое цветное помещение у любого её ребра (торец прилавка — между ним и помещением). */
+    const lowTints = new Map<string, THREE.Color | undefined>();
+    const lowTint = (key: string) => {
+      if (lowTints.has(key)) return lowTints.get(key);
+      const own = lowTaken.filter((l) => l.key === key);
+      // Прилавок буквой П обнимает свою площадку: середина его рёбер — внутри неё
+      const cx = own.reduce((m, l) => m + l.s[0] + l.s[2], 0) / (2 * own.length || 1), cy = own.reduce((m, l) => m + l.s[1] + l.s[3], 0) / (2 * own.length || 1);
+      let found: THREE.Color | undefined = own.length ? sideColour(cx, cy) : undefined;
+      if (found === WHITE_WALL) found = undefined;
+      if (!found) for (const { s: [ax, ay, bx, by] } of own) {
+        const l0 = Math.hypot(bx - ax, by - ay) || 1, mx = (ax + bx) / 2, my = (ay + by) / 2;
+        for (const d of [WALL_SIDE_PROBE, -WALL_SIDE_PROBE]) {
+          const c = sideColour(mx + (by - ay) / l0 * d, my - (bx - ax) / l0 * d);
+          if (c !== WHITE_WALL) { found = c; break; }
+        }
+        if (found) break;
+      }
+      lowTints.set(key, found);
+      return found;
+    };
     const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, ends = true, jambA = Infinity, jambB = Infinity) => {
       if (z1a > wallCap || z1b > wallCap) { z1a = Math.min(z1a, wallCap); z1b = Math.min(z1b, wallCap); if (Math.max(z1a, z1b) <= z0) return; }
       if (edgeOcclusionOnly) {
@@ -3385,6 +3405,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const mx = (px + qx) / 2, my = (py + qy) / 2;
         // Над низкой стеной (прилавок) рядом с гранью — сама стена: цвет помещения ищем дальше, за её толщиной
         const probe = (sx: number, sy: number) => { if (!aboveLow) return sideColour(mx + sx, my + sy);
+          if (aboveLowTint) return aboveLowTint;
           // …и вдоль: прилавок буквой П — над его торцом помещение лежит сбоку, не напротив
           const ux = (qx - px) / (Math.hypot(qx - px, qy - py) || 1), uy = (qy - py) / (Math.hypot(qx - px, qy - py) || 1);
           for (const k of [1, 4, 10, 20, 40]) for (const l of [0, 0.5, -0.5, 1, -1, 2, -2]) {
@@ -3793,7 +3814,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         for (const [t0, t1] of uncovered(ax, ay, bx, by, undefined, merge)) {
           const x0 = ax + (bx - ax) * t0, y0 = ay + (by - ay) * t0, x1 = ax + (bx - ax) * t1, y1 = ay + (by - ay) * t1;
           shellWall(x0, y0, x1, y1, z0);
-          lowTaken.push({ s: [x0, y0, x1, y1], top: wallCap });
+          lowTaken.push({ s: [x0, y0, x1, y1], top: wallCap, key: lowKey });
         }
         linearCutTop = previousLinear;
         return;
@@ -3805,9 +3826,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (lows.length) {
           for (const l of lows) for (const [c0, c1] of complementSpans(uncoveredSpans(x0, y0, x1, y1, [l.s], merge))) {
             if (c1 - c0 < 1e-6) continue;
-            aboveLow = true;
+            aboveLow = true; aboveLowTint = lowTint(l.key);
             shellWall(x0 + (x1 - x0) * c0, y0 + (y1 - y0) * c0, x0 + (x1 - x0) * c1, y0 + (y1 - y0) * c1, l.top);
-            aboveLow = false;
+            aboveLow = false; aboveLowTint = undefined;
           }
           for (const [u0, u1] of uncoveredSpans(x0, y0, x1, y1, lows.map((l) => l.s), merge))
             shellWall(x0 + (x1 - x0) * u0, y0 + (y1 - y0) * u0, x0 + (x1 - x0) * u1, y0 + (y1 - y0) * u1, z0);
@@ -3957,7 +3978,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const closed = !!capRing;
         for (let i = 0; i + 1 < pts.length; i++) {
           omitFloorSeam = bordersVoid(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
-          wallFree(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], it.z, closed);
+          lowKey = it.key; wallFree(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], it.z, closed);
         }
         omitFloorSeam = false;
         if (capRing) cap(capRing, [], it.z, it.kind === 'wall' || it.kind === 'column');
@@ -3993,12 +4014,14 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (thin) cap(rp, [], it.z, true);
           for (let i = 0; i < rp.length; i++) {
             const [ax, ay] = rp[i], [bx, by] = rp[(i + 1) % rp.length];
-            if (solid) wallFree(ax, ay, bx, by, it.z, true);
+            if (solid) { lowKey = it.key; wallFree(ax, ay, bx, by, it.z, true); }
             else if (it.kind === 'room') {
               // Стена помещения — там, где её ещё нет (периметр, indoor=wall с проёмами, соседнее помещение)
               wallFree(ax, ay, bx, by, it.z, thin);
             }
-            if (!solid && !omitFloorSeam && !it.noFloor) lines.push(ax, ay, z, bx, by, z);
+            // Шов по полу под низкой стеной (прилавком) закрыт ею — не просвечивает сквозь неё
+            if (!solid && !omitFloorSeam && !it.noFloor) for (const [t0, t1] of lowTaken.length ? uncoveredSpans(ax, ay, bx, by, lowTaken.map((l) => l.s)) : [[0, 1] as [number, number]])
+              lines.push(ax + (bx - ax) * t0, ay + (by - ay) * t0, z, ax + (bx - ax) * t1, ay + (by - ay) * t1, z);
           }
         }
       }

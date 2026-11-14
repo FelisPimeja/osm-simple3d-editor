@@ -5972,7 +5972,9 @@ function splitRoot(id: number, local?: Map<number, number | undefined>): number 
  */
 function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inserts: Insert[], newCoords: Map<number, LonLat>,
   /** Объекты, удаляемые этим же шагом: им не нужны ни куски путей, ни сами пути. */
-  gone = new Set<string>(), context: Feature3D[] = []): ObjectEdit[] | string {
+  gone = new Set<string>(), context: Feature3D[] = [],
+  /** Узлы, удалённые из колец этим шагом (удаление вершины), — по путям-членам: убрать их и из путей. */
+  removedFrom: Map<number, Set<number>> = new Map()): ObjectEdit[] | string {
   const all = [...new Map([...liveFeatures(), ...context, ...items.map(i => i.f)].map(f => [f.key, f])).values()];
   const live = all.filter((g) => !gone.has(g.key));
   const coords = new Map<number, LonLat>();
@@ -5991,6 +5993,17 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
   const edit = (key: string) => edits.get(key) ?? edits.set(key, { key }).get(key)!;
   /** Новые списки узлов путей-членов (существующих и созданных). */
   const lines = new Map<number, number[]>();
+  for (const [id, gone] of removedFrom) {
+    const w = ways.get(id);
+    if (!w || !w.nodes.some((n) => gone.has(n))) continue;
+    const closed = w.nodes.length > 2 && w.nodes[0] === w.nodes[w.nodes.length - 1];
+    let nodes = (closed ? w.nodes.slice(0, -1) : w.nodes).filter((n) => !gone.has(n));
+    if (closed && nodes.length) nodes = [...nodes, nodes[0]];
+    if (nodes.length < 2) continue;
+    if (!session.has(`way/${id}`)) session.track({ key: `way/${id}`, version: 0, tags: { ...w.tags }, line: { ids: w.nodes, coords: w.nodes.map(at) } });
+    ways.set(id, { ...w, nodes });
+    lines.set(id, nodes);
+  }
   const created = new Map<number, { tags?: Record<string, string>; splitFrom?: number }>();
   const lineOf = (id: number) => lines.get(id) ?? ways.get(id)?.nodes;
   /** Серверный путь куска — и созданного этим же шагом (у него splitFrom уже серверный). */
@@ -10104,14 +10117,28 @@ function indoorRelationTopology(edits: ObjectEdit[], inserts: Insert[] = []): Ob
   const context = current.filter(f => !f.point && !f.line).map(f => ({ ...indoorRelationSources.get(f.key),
     ...(f.key.startsWith('relation/') && (session.get(f.key)?.relMembers || !indoorRelationSources.has(f.key)) ? { ways: sessionWays(f.key) ?? indoorRelationSources.get(f.key)?.ways } : {}), ...f,
     type: f.key.startsWith('relation/') ? 'relation' as const : 'way' as const, id: Number(f.key.split('/')[1]), version: 0, kind: 'part' as const, hasParts: false }));
+  const removedFrom = new Map<number, Set<number>>();
   const items = changed.map(e => {
     const f = context.find(f => f.key === e.key)!;
     if (!f?.ways) throw new Error('Не хватает данных путей indoor-мультиполигона. Перезагрузите здание.');
     trackIndoor(f.key, current.find(g => g.key === f.key));
     session.track({ key: f.key, version: f.version, tags: f.tags, relMembers: f.ways.map(w => ({type:'way',ref:w.id,role:w.role})) });
     const members = new Set(f.ways.map(w => `way/${w.id}`));
-    const lines = session.lineEntities().filter(t => members.has(t.key)).map(t => t.line!);
+    // Узлы, которые были в кольце отношения и ушли из него этой правкой (удаление вершины), — удалены намеренно:
+    // не возвращать их из путей-членов, иначе отношение теряет вершину, а путь её хранит, и кольца расходятся
+    const before = current.find(g => g.key === f.key);
+    const was = new Set(before?.polygons.flatMap(p => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]) ?? []);
+    const now = new Set(e.polygons!.flatMap(p => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]));
+    const lines = session.lineEntities().filter(t => members.has(t.key)).map(t => t.line!).map(l => {
+      const keep = l.ids.map((id) => !(was.has(id) && !now.has(id)));
+      return keep.every(Boolean) ? l : { ids: l.ids.filter((_, i) => keep[i]), coords: l.coords.filter((_, i) => keep[i]) };
+    });
     const sync = (ids: number[], coords: LonLat[]) => syncRingNodes(ids, coords, lines);
+    const removedHere = new Set([...was].filter((id) => !now.has(id)));
+    if (removedHere.size) for (const k of members) {
+      const id = Number(k.split('/')[1]);
+      removedFrom.set(id, new Set([...(removedFrom.get(id) ?? []), ...removedHere]));
+    }
     return { f, rewrites: e.polygons!.flatMap((p, poly) => [{ poly, ring: 0, ...sync(p.outerIds!, p.outer) }, ...p.inners.map((coords,i) => ({ poly, ring: i+1, ...sync(p.innerIds![i], coords) }))]) };
   });
   const coords = new Map<number, LonLat>();
@@ -10123,7 +10150,7 @@ function indoorRelationTopology(edits: ObjectEdit[], inserts: Insert[] = []): Ob
     trackIndoor(f.key, current.find(g => g.key === f.key));
     session.track({ key: f.key, version: f.version, tags: f.tags, relMembers: f.ways.map(w => ({type:'way',ref:w.id,role:w.role})) });
   }
-  const topo = topologyEdits(inserts.length ? [] : items, inserts, coords, new Set(), context);
+  const topo = topologyEdits(inserts.length ? [] : items, inserts, coords, new Set(), context, removedFrom);
   if (typeof topo === 'string') throw new Error(topo);
   const merged = new Map(edits.map(e => [e.key,e]));
   for (const e of topo) merged.set(e.key,{...merged.get(e.key),...e,polygons:merged.get(e.key)?.polygons ?? e.polygons});
@@ -16491,12 +16518,62 @@ async function collapseLoneOuters() {
   }
 }
 
+/**
+ * Новый (созданный в сессии) мультиполигон с разорванными кольцами путей-членов при целых кольцах своей геометрии
+ * (след старой ошибки: удаление вершины контура этажа не доходило до путей) — пути пересобираются по геометрии:
+ * путь на кольцо; прежние новые пути без тегов, не нужные никому, удаляются. Одним шагом истории.
+ */
+function repairNewRelationRings(): string[] {
+  const repaired: string[] = [];
+  const live = session.snapshot().features.filter((f) => !session.isDeleted(f.key));
+  const usedElsewhere = (ref: number, own: string) => live.some((f) => f.key !== own && f.relMembers?.some((m) => m.type === 'way' && m.ref === ref));
+  for (const rel of live) {
+    if (!rel.key.startsWith('relation/-') || !rel.relMembers || !rel.polygons?.length || rel.tags.type !== 'multipolygon') continue;
+    const ways = rel.relMembers.filter((m) => m.type === 'way');
+    const lines = ways.map((m) => session.get(`way/${m.ref}`)?.line?.ids);
+    if (!ways.length || lines.some((l) => !l)) continue;
+    // Кольца целы, если у каждой роли каждый конец пути встречается чётное число раз
+    const open = ['outer', 'inner'].some((role) => {
+      const ends = new Map<number, number>();
+      ways.forEach((m, i) => {
+        if ((m.role === 'inner') !== (role === 'inner')) return;
+        const l = lines[i]!;
+        if (l[0] === l[l.length - 1]) return;
+        for (const e of [l[0], l[l.length - 1]]) ends.set(e, (ends.get(e) ?? 0) + 1);
+      });
+      return [...ends.values()].some((n) => n % 2);
+    });
+    if (!open) continue;
+    const rings = rel.polygons.flatMap((p) => [
+      { ids: p.outerIds, coords: p.outer, role: 'outer' },
+      ...p.inners.map((r, j) => ({ ids: p.innerIds?.[j], coords: r, role: 'inner' }))]);
+    if (rings.some((r) => !r.ids || r.ids.length !== r.coords.length || r.ids.length < 3)) continue;
+    const edits: ObjectEdit[] = [];
+    const members: OsmMember[] = rel.relMembers.filter((m) => m.type !== 'way');
+    for (const r of rings) {
+      const id = nextNewId--, key = `way/${id}`;
+      edits.push({ key, create: { key, version: 0, tags: {}, line: { ids: [...r.ids!, r.ids![0]], coords: [...r.coords, r.coords[0]] } } });
+      members.push({ type: 'way', ref: id, role: r.role });
+    }
+    edits.push({ key: rel.key, members });
+    for (const m of ways) {
+      const key = `way/${m.ref}`, w = session.get(key);
+      if (m.ref < 0 && w && !Object.keys(w.tags).length && !w.polygons?.length && !usedElsewhere(m.ref, rel.key)) edits.push({ key, delete: true });
+    }
+    session.editMany(edits);
+    repaired.push(rel.key);
+  }
+  return repaired;
+}
+
 async function doUpload() {
   if (uploading || deletingIndoorWalls) return;
   const s = server();
   uploading = true;
   renderChanges();
   try {
+    const repaired = repairNewRelationRings();
+    if (repaired.length) console.warn('[upload] пути колец пересобраны по геометрии:', repaired.join(', '));
     await collapseLoneOuters();
     const changes = session.changes();
     const edits = changes.map((c) => {

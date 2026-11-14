@@ -243,7 +243,11 @@ export class CursorOrbit {
     if (this.underground && newPitch > 80) {
       // Точка на оси взгляда на расстоянии до pivot: экран не прыгает, а центр остаётся конечным
       const nb = ((bearing + dBearing) * Math.PI) / 180, np = (newPitch * Math.PI) / 180;
-      const dist = Math.max(5, Math.hypot(ox2, oy2, oz));
+      let dist = Math.max(5, Math.hypot(ox2, oy2, oz));
+      // Точка на расстоянии pivot ушла бы под землю — подрезка tz до 0 поднимала её и ломала угол: MapLibre ставил
+      // наклон под 90°, камера прыгала туда-сюда через порог 80°. Берём точку не дальше пересечения луча с землёй
+      const down = Math.cos(np);
+      if (down > 1e-6) dist = Math.min(dist, altitude / down);
       const tx = Math.sin(nb) * Math.sin(np) * dist, ty = Math.cos(nb) * Math.sin(np) * dist;
       const tz = altitude - Math.cos(np) * dist;
       // ox2/oy2 — камера относительно pivot, t* — шаг от камеры вдоль взгляда

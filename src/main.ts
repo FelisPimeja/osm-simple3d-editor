@@ -10822,16 +10822,6 @@ function levelSection(l: Level): LonLat[][][] | undefined {
   // Подземный этаж: оболочка части под землю не уходит — след части, по тегам которой этаж посчитан
   const src = l.src ? entity(l.src) as Feature3D | undefined : undefined;
   if (src?.polygons?.length) return src.polygons.map((p) => [p.outer, ...p.inners]);
-  // Комплекс без здания (вестибюль, переход): ни оболочки, ни частей — объединение помещений и стен-полигонов этажа
-  if (focus && complexFocus.get(focus.key)) {
-    const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
-    const rooms = buildingIndoor(focus).filter((f) => f.levels.includes(l.n) && !f.line && !f.point && f.polygons.length && (f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor' || f.kind === 'wall'))
-      .flatMap((f) => f.polygons).map((p) => [close(p.outer), ...p.inners.map(close)]);
-    if (!rooms.length) return cut;
-    try {
-      return cleanSection(polygonClipping.union(...(rooms as [[[number, number][]]])).map((poly) => poly.map((r) => r.slice(0, -1) as LonLat[])));
-    } catch (err) { console.warn('[level-section]', err); return cut; }
-  }
   // Этаж начинается под землёй (потолок может быть и выше нуля — цоколь, пол первого этажа на подиуме)
   if (l.floor > -0.01 || !focus) return cut;
   // Подземный этаж из indoor-данных: след здания у земли, без оболочки — объединение следов частей.
@@ -12636,11 +12626,30 @@ function createIndoorDrawn(ring: [number, number][]): string | undefined {
  * Вершины, совпадающие с узлами контура или частей, — эти же узлы (attached: двигаются вместе с фасадом),
  * остальные — новые. Сечение с дырами (двор-колодец) — мультиполигон с внутренними кольцами.
  */
+/**
+ * Контур подземного этажа и этажа комплекса без здания для «Сгенерировать контур этажа»: объединение помещений,
+ * площадей, коридоров и стен-полигонов этажа (форма подвала — по indoor, а не по следу здания). undefined — indoor нет.
+ * Только для генерации: levelSection (пустая площадь, обрезка рисуемого по этажу) остаётся по оболочке и следам.
+ */
+function indoorUnion(l: Level): LonLat[][][] | undefined {
+  if (!focus) return;
+  const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
+  const rings = buildingIndoor(focus).filter((f) => f.levels.includes(l.n) && !f.line && !f.point && f.polygons.length
+    && (f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor' || f.kind === 'wall'))
+    .flatMap((f) => f.polygons).map((p) => [close(p.outer), ...p.inners.map(close)]);
+  if (!rings.length) return;
+  try {
+    return cleanSection(polygonClipping.union(...(rings as [[[number, number][]]])).map((poly) => poly.map((r) => r.slice(0, -1) as LonLat[])));
+  } catch (err) { console.warn('[level-section]', err); return; }
+}
+
 function levelFromOutline(n: number, extra: Record<string, string> = {}): boolean {
   if (!focus) return false;
   const l = buildingLevels(focus, buildingIndoor(focus)).find((x) => x.n === n);
   // На полу пусто (низ части выше расчётного пола: подвал по этажности глубже самой части) — середина этажа
-  const section = l && levelSection(l);
+  // Подземный этаж без оболочки на этой высоте и комплекс без здания — по indoor этажа, иначе — сечение и следы
+  const shell = l && [l.floor + 0.1, (l.floor + l.ceil) / 2].some((h) => !!overpassLayer.focusSection(h)?.length);
+  const section = l && ((!shell && (l.floor < -0.01 || isComplex(focus)) ? indoorUnion(l) : undefined) ?? levelSection(l));
   if (!l || !section?.length) { setStatus(tr('Контур этажа ещё не посчитан — повторите через пару секунд.'), true); return false; }
   const { nodeFor, used } = sharedNodes(groupFeatures(focus));
   const edits: ObjectEdit[] = [];

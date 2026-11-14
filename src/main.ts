@@ -10822,10 +10822,10 @@ function levelSection(l: Level): LonLat[][][] | undefined {
   // Подземный этаж: оболочка части под землю не уходит — след части, по тегам которой этаж посчитан
   const src = l.src ? entity(l.src) as Feature3D | undefined : undefined;
   if (src?.polygons?.length) return src.polygons.map((p) => [p.outer, ...p.inners]);
-  // Комплекс без здания (вестибюль, переход): ни оболочки, ни частей — объединение помещений этажа
+  // Комплекс без здания (вестибюль, переход): ни оболочки, ни частей — объединение помещений и стен-полигонов этажа
   if (focus && complexFocus.get(focus.key)) {
     const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
-    const rooms = buildingIndoor(focus).filter((f) => f.levels.includes(l.n) && !f.line && !f.point && f.polygons.length && (f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor'))
+    const rooms = buildingIndoor(focus).filter((f) => f.levels.includes(l.n) && !f.line && !f.point && f.polygons.length && (f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor' || f.kind === 'wall'))
       .flatMap((f) => f.polygons).map((p) => [close(p.outer), ...p.inners.map(close)]);
     if (!rooms.length) return cut;
     try {

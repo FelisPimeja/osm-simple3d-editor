@@ -45,7 +45,9 @@ export function findVoids(n: number, plans: Map<number, LevelPlan>): LevelVoid[]
     for (const k of lower) {
       through.push(k);
       const lp = plans.get(k)!;
-      const cover = lp.solid?.length ? safe(() => polygonClipping.union(lp.mapped, lp.solid!)) : lp.mapped;
+      let cover = lp.solid?.length ? safe(() => polygonClipping.union(lp.mapped, lp.solid!)) : lp.mapped;
+      // Своя пустота этажа ниже (та же лестница на level=0-2) — не пол: смотрим дальше вниз
+      if (lp.explicitVoids?.length && cover.length) cover = safe(() => polygonClipping.difference(cover, lp.explicitVoids!));
       if (multiArea(safe(() => polygonClipping.intersection([poly], cover))) >= area * .999) break;
     }
     return {polygon:[poly], through};

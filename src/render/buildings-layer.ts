@@ -3325,6 +3325,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     let wallCap = Infinity;
     /** Рёбра низких стен (стена-полигон с height ниже среза) и их верх. */
     const lowTaken: { s: PlanSeg; top: number }[] = [];
+    let aboveLow = false;
     const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, ends = true, jambA = Infinity, jambB = Infinity) => {
       if (z1a > wallCap || z1b > wallCap) { z1a = Math.min(z1a, wallCap); z1b = Math.min(z1b, wallCap); if (Math.max(z1a, z1b) <= z0) return; }
       if (edgeOcclusionOnly) {
@@ -3382,7 +3383,14 @@ export class BuildingsLayer implements CustomLayerInterface {
         const px = ax + (bx - ax) * t0, py = ay + (by - ay) * t0, qx = ax + (bx - ax) * t1, qy = ay + (by - ay) * t1;
         const za = z1a + (z1b - z1a) * t0, zb = z1a + (z1b - z1a) * t1;
         const mx = (px + qx) / 2, my = (py + qy) / 2;
-        const colours = [sideColour(mx + nx, my + ny), sideColour(mx - nx, my - ny)];
+        // Над низкой стеной (прилавок) рядом с гранью — сама стена: цвет помещения ищем дальше, за её толщиной
+        const probe = (sx: number, sy: number) => { if (!aboveLow) return sideColour(mx + sx, my + sy);
+          // …и вдоль: прилавок буквой П — над его торцом помещение лежит сбоку, не напротив
+          const ux = (qx - px) / (Math.hypot(qx - px, qy - py) || 1), uy = (qy - py) / (Math.hypot(qx - px, qy - py) || 1);
+          for (const k of [1, 4, 10, 20, 40]) for (const l of [0, 0.5, -0.5, 1, -1, 2, -2]) {
+            const c = sideColour(mx + sx * k + ux * l, my + sy * k + uy * l); if (c !== WHITE_WALL) return c; }
+          return WHITE_WALL; };
+        const colours = [probe(nx, ny), probe(-nx, -ny)];
         const part = ts.length === 2 ? faces : [
           [px, py, z0, qx, qy, z0, qx, qy, zb, px, py, z0, qx, qy, zb, px, py, za],
           [px, py, z0, qx, qy, zb, qx, qy, z0, px, py, z0, px, py, za, qx, qy, zb],
@@ -3797,7 +3805,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (lows.length) {
           for (const l of lows) for (const [c0, c1] of complementSpans(uncoveredSpans(x0, y0, x1, y1, [l.s], merge))) {
             if (c1 - c0 < 1e-6) continue;
+            aboveLow = true;
             shellWall(x0 + (x1 - x0) * c0, y0 + (y1 - y0) * c0, x0 + (x1 - x0) * c1, y0 + (y1 - y0) * c1, l.top);
+            aboveLow = false;
           }
           for (const [u0, u1] of uncoveredSpans(x0, y0, x1, y1, lows.map((l) => l.s), merge))
             shellWall(x0 + (x1 - x0) * u0, y0 + (y1 - y0) * u0, x0 + (x1 - x0) * u1, y0 + (y1 - y0) * u1, z0);

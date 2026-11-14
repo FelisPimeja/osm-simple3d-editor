@@ -17579,8 +17579,11 @@ function keepView(replace: () => void) {
     enterFocus(g, false);
     map.jumpTo(was.cam);
   }
-  // Этаж — как из ссылки: дождётся indoor здания
-  if (was.level !== undefined && currentLevel !== was.level) { levelsFocusKey = undefined; linkLevel = was.level; renderLevels(); }
+  // Этаж — как из ссылки: дождётся indoor здания. Сцену режима пересобрали (setFocusScene) — план этажа в ней
+  // пропал, а подпись плана та же: сбросить, иначе панель покажет этаж, а на экране — всё здание
+  if (was.level !== undefined && currentLevel !== was.level) { levelsFocusKey = undefined; linkLevel = was.level; }
+  levelSignature = '';
+  renderLevels();
 }
 
 /** «Очистить»: все правки прочь одним шагом (с подтверждением; отменить нельзя). */

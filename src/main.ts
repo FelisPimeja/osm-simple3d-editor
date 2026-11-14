@@ -434,8 +434,17 @@ let styleLayers: { id: string; visibility: 'visible' | 'none' }[] = [];
  * Под снимками стиль карты не нужен (сквозь прозрачный снимок проглядывал бы): скрыть его заливки, линии и подписи,
  * оставив здания (наши слои). В режиме здания векторную карту можно включить явно.
  */
+let vectorStyleHidden = false;
 function applyVectorStyle(hidden: boolean) {
   for (const l of styleLayers) if (map.getLayer(l.id)) map.setLayoutProperty(l.id, 'visibility', hidden ? 'none' : l.visibility);
+  // Тайлы, загруженные при скрытых слоях, собраны без них (MapLibre не строит бакеты скрытых слоёв) и при показе
+  // не пересобираются — до панорамирования на экране нет подписей и значков. Перезагрузить векторные источники стиля.
+  if (vectorStyleHidden && !hidden) {
+    const tm = (map.style as unknown as { tileManagers?: Record<string, { reload(): void }> }).tileManagers;
+    const sources = new Set(styleLayers.map((l) => (map.getLayer(l.id) as { source?: string } | undefined)?.source));
+    for (const s of sources) if (s && map.getSource(s)?.type === 'vector') tm?.[s]?.reload();
+  }
+  vectorStyleHidden = hidden;
 }
 
 const offsetPanel = new ImageryOffsetPanel(map, {

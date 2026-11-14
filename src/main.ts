@@ -17558,21 +17558,29 @@ function applyEditsText(text: string) {
   if (rec.server !== server().id && !confirm(tr('Правки скопированы для сервера «{from}», а открыт «{to}». Вставить всё равно?', { from: rec.server ?? '?', to: server().id }))) return;
   const n = session.changes().length;
   if (n && !confirm(trn(n, 'Текущие правки ({n} объект) будут заменены вставленными. Продолжить?|Текущие правки ({n} объекта) будут заменены вставленными. Продолжить?|Текущие правки ({n} объектов) будут заменены вставленными. Продолжить?'))) return;
-  // Режим здания или плана этажа — вернуть после вставки (тот же ракурс и этаж)
+  keepView(() => {
+    const old = session.snapshot().features.map((f) => f.key);
+    clearSelection();
+    resetSession();
+    onSessionChange(old); // прежние правки — с карты долой
+    restoreEdits({ count: rec.count ?? 0, data: rec.data! });
+  });
+}
+
+/** Замена всех правок (вставка, очистка) — режим здания или плана этажа вернуть: то же здание, ракурс и этаж. */
+function keepView(replace: () => void) {
   const was = focus && { key: focus.key, solo: isSolo(focus) ? focus.members[0] : undefined, level: currentLevel,
     cam: { center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() } };
-  const old = session.snapshot().features.map((f) => f.key);
-  clearSelection();
-  resetSession();
-  onSessionChange(old); // прежние правки — с карты долой
-  restoreEdits({ count: rec.count ?? 0, data: rec.data });
-  if (!was || focus) return;
-  const g = was.solo ? groupOf(was.solo) ?? soloGroup(was.solo) : groupOf(was.key) ?? complexGroup(was.key) ?? soloGroup(was.key);
-  if (!g) return;
-  enterFocus(g, false);
-  map.jumpTo(was.cam);
+  replace();
+  if (!was) return;
+  if (!focus) {
+    const g = was.solo ? groupOf(was.solo) ?? soloGroup(was.solo) : groupOf(was.key) ?? complexGroup(was.key) ?? soloGroup(was.key);
+    if (!g) return;
+    enterFocus(g, false);
+    map.jumpTo(was.cam);
+  }
   // Этаж — как из ссылки: дождётся indoor здания
-  if (was.level !== undefined) { levelsFocusKey = undefined; linkLevel = was.level; renderLevels(); }
+  if (was.level !== undefined && currentLevel !== was.level) { levelsFocusKey = undefined; linkLevel = was.level; renderLevels(); }
 }
 
 /** «Очистить»: все правки прочь одним шагом (с подтверждением; отменить нельзя). */
@@ -17587,10 +17595,12 @@ function clearEdits() {
 
 function doClearEdits() {
   stopAllTools();
-  const old = session.snapshot().features.map((f) => f.key);
-  clearSelection();
-  resetSession();
-  onSessionChange(old); // прежние правки — с карты долой
+  keepView(() => {
+    const old = session.snapshot().features.map((f) => f.key);
+    clearSelection();
+    resetSession();
+    onSessionChange(old); // прежние правки — с карты долой
+  });
   setStatus(tr('Правки очищены.'));
 }
 

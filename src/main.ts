@@ -224,7 +224,7 @@ const map = new maplibregl.Map({
 // View cube (только в режиме здания, слева от кнопок масштаба): вид с грани, ребра или угла куба по осям здания
 const viewCube = new ViewCube({
   frame: () => {
-    const box = focus ? overpassLayer.focusBox() : undefined;
+    const box = focus ? overpassLayer.focusBox() ?? complexBox() : undefined;
     if (!box) return;
     const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
     const a = overpassLayer.focusAxes;
@@ -15497,6 +15497,17 @@ function complexGroup(key: string): BuildingGroup | undefined {
   if (!c) return;
   const name = c.features.find((f) => f.kind === 'level' && f.tags.name)?.tags.name ?? c.features.find((f) => f.tags.name && f.kind !== 'poi')?.tags.name;
   return { key, members: [], roles: [], tags: name ? { name } : {} } as unknown as BuildingGroup;
+}
+
+/** Габариты комплекса без здания в сцене (у него нет объёмов): рамка по плану, по высоте — от низа нижнего этажа до верха верхнего. */
+function complexBox(): THREE.Box3 | undefined {
+  const c = focus && complexFocus.get(focus.key);
+  if (!c) return;
+  const a = overpassLayer.focusToLocal([c.box[0], c.box[1]]), b = overpassLayer.focusToLocal([c.box[2], c.box[3]]);
+  if (!a || !b) return;
+  const ls = buildingLevels(focus!, buildingIndoor(focus!));
+  const lo = ls.length ? Math.min(...ls.map((l) => l.floor)) : 0, hi = ls.length ? Math.max(...ls.map((l) => l.ceil)) : 3;
+  return new THREE.Box3(new THREE.Vector3(Math.min(a[0], b[0]), Math.min(a[1], b[1]), lo), new THREE.Vector3(Math.max(a[0], b[0]), Math.max(a[1], b[1]), hi));
 }
 
 /** Сцена режима здания; у комплекса без здания объёмов нет — сцена по его рамке. */

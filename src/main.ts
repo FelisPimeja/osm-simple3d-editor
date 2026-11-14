@@ -15615,6 +15615,19 @@ function indoorComponents(fs: IndoorFeature[], skip?: Set<number>, apart?: (a: n
     });
     if (j !== undefined) join(i, j);
   });
+  // Стены-линии вокруг неразмеченного помещения: замкнуты сами на себя, без общих узлов с соседями, а первая
+  // точка — в щели толщины стены, ни в чьём полигоне. Их место — по любой вершине внутри полигона или у его
+  // края (до толщины стены); иначе они уходят в отдельный «комплекс» и пропадают с плана
+  const WALL_REACH = 1.5;
+  fs.forEach((f, i) => {
+    if (!f.line || f.kind !== 'wall') return;
+    for (const p of f.polygons[0]?.outer ?? []) {
+      const j = (grid.get(`${Math.floor(p[0] / CELL)},${Math.floor(p[1] / CELL)}`) ?? []).find((j) => j !== i
+        && fs[j].levels.some((n) => f.levels.includes(n))
+        && fs[j].polygons.some((q) => pointInRingFast(p, q.outer) || nearRing(p, q.outer, WALL_REACH)));
+      if (j !== undefined) { join(i, j); return; }
+    }
+  });
   return find;
 }
 

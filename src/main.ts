@@ -1620,6 +1620,13 @@ map.on('click', (e) => {
   if (focus && shownLevel && !addingTo && (!e.originalEvent.shiftKey || indoorAdd) && !e.originalEvent.altKey) {
     const wall = roomWallAt([e.point.x, e.point.y]);
     if (wall) { selectRoomWall(wall, e.originalEvent.shiftKey, reclick); return; }
+    // Край контура этажа (indoor=level): он больше всех и лежит под помещениями — иначе только Alt-перебором
+    const edge = levelEdgeAt([e.point.x, e.point.y]);
+    if (edge) {
+      if (reclick && indoorSelection.length === 1 && indoorKey(indoorSelection[0].key) === indoorKey(edge.key)) { selectIndoor(undefined); clearInfo(); }
+      else selectIndoor(edge, indoorAdd);
+      return;
+    }
     // На этаже приоритет у помещений: части здания — Shift/Alt-кликом или при «Всё здание»
     const room = indoorAt([e.point.x, e.point.y]);
     // Shift+клик внутри кольца стен в помещении — его пространство к выделенным кускам, а не само помещение
@@ -9460,6 +9467,20 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
     if (f) return f;
   }
   return indoorStackAt(point)[0];
+}
+
+/** Контур этажа (indoor=level), у края которого (до ~6 px) клик на плане. */
+function levelEdgeAt(point: [number, number]): IndoorFeature | undefined {
+  if (!shownLevel) return;
+  const outlines = levelOutlineFeatures(shownLevel.n).filter((f) => f.polygons.length && !f.line);
+  if (!outlines.length) return;
+  const ray = overpassLayer.focusRay(point);
+  const hit = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -shownLevel.floor), new THREE.Vector3());
+  if (!hit) return;
+  const at = overpassLayer.focusToLngLat(hit.x, hit.y);
+  if (!at) return;
+  const tol = 6 * 40_075_016 * Math.cos(at[1] * Math.PI / 180) / (512 * 2 ** map.getZoom());
+  return outlines.find((f) => f.polygons.some((p) => [p.outer, ...p.inners].some((r) => nearRing(at, r, tol))));
 }
 
 /** Все помещения показанного этажа под курсором: от самого маленького к самому большому. */

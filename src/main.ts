@@ -13457,7 +13457,7 @@ function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[
       // без марша (с поворотом он не моделируется) — проёмом целиком
       const marchIn = (f: IndoorFeature) => indoor.some((e) => e.escalator && e.polygons[0]?.outer.some((q) => f.polygons.some((p) => pointInRing(q, p.outer))));
       for (const f of indoor.filter((f) => !f.line && !f.point && !f.escalatorArea && (!(stairsArea(f) || isStairsAreaTags(f.tags)) || !marchIn(f)) && ['room', 'area', 'corridor'].includes(f.kind)
-        && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels) && !isElevatorRoom(f, indoor))) {
+        && f.levels.length > 1 && l.n > Math.min(...f.levels) && l.n <= Math.max(...f.levels) && !floorLevels(f).includes(l.n) && !isElevatorRoom(f, indoor))) {
         const through = levels.filter((x) => x.n < l.n && x.n >= Math.min(...f.levels)).map((x) => x.n);
         const mid = pointOnSurface(f.polygons[0]);
         if (!through.length || list.some((v) => v.polygon.some(([o, ...h]) => pointInRing(mid, o) && !h.some((r) => pointInRing(mid, r))))) continue;

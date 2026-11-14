@@ -2383,6 +2383,9 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     drill = focus = withStrayParts(freshGroup);
     setFocusScene(focus);
     syncFocusHidden();
+    // Сцена пересобрана без плана этажа — нарисовать его заново (подпись та же)
+    levelSignature = '';
+    renderLevels();
     paintSelection();
     renderSelected();
     if (cacheChanged || manual || warning) {
@@ -8855,7 +8858,8 @@ function loadFocusIndoor(g: BuildingGroup) {
       focusIndoor.set(g.key, parsed.indoor.filter(f=>!overpass.wasUploadedDeleted(f.key)));
       buildingIndoorCache=undefined;
       while (focusIndoor.size > 8) focusIndoor.delete(focusIndoor.keys().next().value!);
-      if (focus?.key === g.key) { renderLevels(); renderIssues(); }
+      // Подпись плана — по ключам объектов, не по геометрии: свежие данные (обновили здание) перерисовать в любом случае
+      if (focus?.key === g.key) { levelSignature = ''; renderLevels(); renderIssues(); }
     })
     .catch((err) => console.warn('[levels] indoor здания не загрузился', err))
     .finally(() => focusIndoorLoading.delete(g.key));

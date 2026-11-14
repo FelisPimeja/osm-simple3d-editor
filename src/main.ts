@@ -8925,7 +8925,22 @@ function clipTransit(f: IndoorFeature, feats: Feature3D[], footprint: () => unkn
 function buildingIndoorImpl(g: BuildingGroup): IndoorFeature[] {
   // Комплекс без здания: его объекты (с правками сессии в его рамке)
   const complex = complexFocus.get(g.key);
-  if (complex) return withSessionIndoor(new Map(complex.features.map((f) => [f.key, f])), complex.box);
+  if (complex) {
+    // Новые объекты сессии в рамке комплекса — его, только если не лежат в здании (контур этажа здания рядом
+    // с переходом — этаж здания, не комплекса); оторванные от здания (detachedIndoor) — снова комплекса
+    const own = new Set(complex.features.map((f) => f.key));
+    const detached = detachedIndoor(complex.box);
+    const houses = overpass.allFeatures().filter((b) => {
+      if (!b.polygons?.length) return false;
+      const [x0, y0, x1, y1] = featureBox(b);
+      return !(x1 < complex.box[0] || x0 > complex.box[2] || y1 < complex.box[1] || y0 > complex.box[3]);
+    });
+    return withSessionIndoor(new Map(complex.features.map((f) => [f.key, f])), complex.box).filter((f) => {
+      if (own.has(f.key) || !indoorCreated.has(f.key) || detached.has(f.key)) return true;
+      const p = indoorAnchor(f);
+      return !p || !houses.some((b) => b.polygons.some((q) => pointInRing(p, q.outer)));
+    });
+  }
   const feats = groupFeatures(g);
   // След здания (объединение контуров) — один раз и только если есть что им обрезать (платформа вокзала)
   let foot: unknown;
@@ -15779,7 +15794,19 @@ function detachedIndoor(bbox: Bbox): Set<string> {
     // Не принадлежит ни одному зданию — тоже: выгрузка здания (его собственный запрос) даёт ту же платформу
     // с другой геометрией мультиполигона, и по ней она «в здании»
     // Точки и линии (двери и стены по контуру) лежат на самой границе — по ним дом не определить, их не трогаем
-    fs.forEach((f, i) => { if ((!home[i] && !f.point && !f.line) || moved.has(find(i))) detached.add(f.key); });
+    // Контур этажа (indoor=level) в здании — этаж этого здания, внешнему комплексу его не отдаём; вместе с ним —
+    // объекты того же этажа, целиком лежащие в нём
+    const outlines = fs.map((f, i) => i).filter((i) => fs[i].kind === 'level' && home[i] && !fs[i].line && fs[i].polygons.length);
+    const within = (f: IndoorFeature, o: IndoorFeature) => {
+      const pts = f.point ? [f.point] : f.polygons.flatMap((p) => p.outer);
+      return pts.length > 0 && pts.every((q) => o.polygons.some((p) => pointInRingFast(q, p.outer) || nearRing(q, p.outer, 0.05)));
+    };
+    const kept = new Set(outlines);
+    if (outlines.length) fs.forEach((f, i) => {
+      if (kept.has(i) || !moved.has(find(i))) return;
+      if (outlines.some((o) => (home[o] === home[i] || f.point || f.line) && fs[o].levels.some((n) => f.levels.includes(n)) && within(f, fs[o]))) kept.add(i);
+    });
+    fs.forEach((f, i) => { if ((!home[i] && !f.point && !f.line) || (moved.has(find(i)) && !kept.has(i))) detached.add(f.key); });
     return detached;
   });
   if (detachedCache.size > 8) detachedCache.delete(detachedCache.keys().next().value!);

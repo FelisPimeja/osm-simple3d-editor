@@ -298,6 +298,10 @@ export class ShapeTool {
     this.target = hit.target;
     this.origin.clear();
     this.extraSnaps = [];
+    // Вершины «also» в той же точке — один общий узел (контур этажа, помещение и стена на нём): не перенос нескольких
+    const at0 = (v: ShapeVert) => { const p = this.layer.focusPolygons(v.key)?.[v.poly]; return (v.ring ? p?.inners[v.ring - 1] : p?.outer)?.[v.i]; };
+    const a0 = at0(t);
+    const oneNode = !!a0 && (t.also ?? []).every((v) => { const b = at0(v); return !!b && Math.abs(b[0] - a0[0]) < 1e-6 && Math.abs(b[1] - a0[1]) < 1e-6; });
     if (t.insert === undefined && !t.roof && !t.eave && !t.width) for (const v of [t, ...(t.also ?? [])]) {
       const p = this.layer.focusPolygons(v.key)?.[v.poly], ring = v.ring ? p?.inners[v.ring - 1] : p?.outer, at = ring?.[v.i];
       if (!ring || !at) continue;
@@ -310,7 +314,7 @@ export class ShapeTool {
       if (inserted) this.extraSnaps.push({ kind: 'midpoint', key: v.key, p: mid(prev, next), label });
       // Пересечение продолжений соседних сторон (AB и ED для вершины C): угол встаёт в створ примыкающих стен
       const open = this.isOpen?.(v.key);
-      if (!inserted && !t.also?.length && (!open || (v.i >= 2 && v.i + 2 < n))) {
+      if (!inserted && (!t.also?.length || oneNode) && (!open || (v.i >= 2 && v.i + 2 < n))) {
         const corner = sidesMeet(ring[(v.i - 2 + n) % n], prev, ring[(v.i + 2) % n], next);
         if (corner) this.extraSnaps.push({ kind: 'corner', key: v.key, p: new THREE.Vector3(corner[0], corner[1], t.from.z) });
       }

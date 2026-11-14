@@ -13309,7 +13309,7 @@ function renderLevelsImpl() {
     // Пустота прорезает пол этажа и полы промежуточных этажей (у самого нижнего — пол атриума)
     voidCuts: voids.map((v) => ({
       polygon: v.polygon,
-      zs: [level!.floor, ...v.through.slice(0, -1).map((n) => levels.find((l) => l.n === n)?.floor).filter((z): z is number => z !== undefined)],
+      zs: [level!.floor, ...v.through.filter((n) => n !== Math.min(...v.through)).map((n) => levels.find((l) => l.n === n)?.floor).filter((z): z is number => z !== undefined)],
     })),
     below: through.map((n) => levels.find((l) => l.n === n)).filter((l): l is Level => !!l)
       .map((l) => {

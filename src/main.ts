@@ -1651,11 +1651,15 @@ map.on('click', (e) => {
       return;
     }
     if (indoorAdd) { freeAreaClick([e.point.x, e.point.y], true); return; }
-    // Пол этажа вне помещений — сам этаж (indoor=level); повторный клик — кусок пустой площади (из него — помещение)
+    // Пол этажа вне помещений: кусок пустой площади (из него — помещение); повторный клик — сам этаж (indoor=level),
+    // ещё один — снять выбор
     const lv = levelEdgeAt([e.point.x, e.point.y], true);
     const lvSelected = !!lv && indoorSelection.length === 1 && indoorKey(indoorSelection[0].key) === indoorKey(lv.key);
-    if (lv && !(reclick && lvSelected)) { selectIndoor(lv); return; }
-    if (freeAreaClick([e.point.x, e.point.y], false, reclick)) return;
+    const free = freeAreaAt([e.point.x, e.point.y]) ?? wallLoopAt([e.point.x, e.point.y]);
+    if (lv && reclick && free && isOnlyFreeArea(free)) { selectIndoor(lv); return; }
+    if (lvSelected && reclick) { selectIndoor(undefined); clearInfo(); return; }
+    if (free) { selectFreeArea(free); return; }
+    if (lv) { selectIndoor(lv); return; }
   }
   // Alt+клик на этаже: перебор наложенных помещений от меньшего к большему, за последним — части здания
   if (focus && shownLevel && !addingTo && e.originalEvent.altKey && !e.originalEvent.shiftKey) {

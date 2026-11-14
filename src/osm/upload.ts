@@ -471,7 +471,11 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
     const p = payload[i];
     if (!p.created || p.element.type !== 'way') continue;
     const e = edits.find((x) => x.created?.id === p.element.id && x.created.type === 'way');
-    if (e?.splitFrom === undefined || rootOf(e.splitFrom) === undefined || wayRefs.has(p.element.id)) continue;
+    if (!e || wayRefs.has(p.element.id)) continue;
+    // Новый путь без тегов, не вошедший ни в одно отношение, никому не нужен: прежние пути-члены пересобранного
+    // контура этажа, кольца отменённых генераций (changeset 191932235). Кусок разрезанного серверного пути — тоже
+    const bare = !Object.keys(p.tags ?? {}).length;
+    if (!bare && (e.splitFrom === undefined || rootOf(e.splitFrom) === undefined)) continue;
     payload.splice(i, 1);
     dropped.add(e.key);
     for (const n of p.element.nodes) if (n > 0) dropNodes.add(n);

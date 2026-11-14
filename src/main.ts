@@ -1651,6 +1651,10 @@ map.on('click', (e) => {
       return;
     }
     if (indoorAdd) { freeAreaClick([e.point.x, e.point.y], true); return; }
+    // Пол этажа вне помещений — сам этаж (indoor=level); повторный клик — кусок пустой площади (из него — помещение)
+    const lv = levelEdgeAt([e.point.x, e.point.y], true);
+    const lvSelected = !!lv && indoorSelection.length === 1 && indoorKey(indoorSelection[0].key) === indoorKey(lv.key);
+    if (lv && !(reclick && lvSelected)) { selectIndoor(lv); return; }
     if (freeAreaClick([e.point.x, e.point.y], false, reclick)) return;
   }
   // Alt+клик на этаже: перебор наложенных помещений от меньшего к большему, за последним — части здания
@@ -9469,8 +9473,8 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
   return indoorStackAt(point)[0];
 }
 
-/** Контур этажа (indoor=level), у края которого (до ~6 px) клик на плане. */
-function levelEdgeAt(point: [number, number]): IndoorFeature | undefined {
+/** Контур этажа (indoor=level), у края которого (до ~6 px) клик на плане; inside — или внутри него. */
+function levelEdgeAt(point: [number, number], inside = false): IndoorFeature | undefined {
   if (!shownLevel) return;
   const outlines = levelOutlineFeatures(shownLevel.n).filter((f) => f.polygons.length && !f.line);
   if (!outlines.length) return;
@@ -9480,7 +9484,8 @@ function levelEdgeAt(point: [number, number]): IndoorFeature | undefined {
   const at = overpassLayer.focusToLngLat(hit.x, hit.y);
   if (!at) return;
   const tol = 6 * 40_075_016 * Math.cos(at[1] * Math.PI / 180) / (512 * 2 ** map.getZoom());
-  return outlines.find((f) => f.polygons.some((p) => [p.outer, ...p.inners].some((r) => nearRing(at, r, tol))));
+  return outlines.find((f) => f.polygons.some((p) => [p.outer, ...p.inners].some((r) => nearRing(at, r, tol))
+    || (inside && pointInRing(at, p.outer) && !p.inners.some((r) => pointInRing(at, r)))));
 }
 
 /** Все помещения показанного этажа под курсором: от самого маленького к самому большому. */

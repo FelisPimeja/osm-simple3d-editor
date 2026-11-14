@@ -3293,7 +3293,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const edges: number[] = [];
     const floorContactEdges: number[] = [];
     const cutTopLines: number[] = [];
-    const continuingRooms = new Set(!pale ? items.filter(it => it.kind === 'room' && this.level?.below?.some(b => b.items.some(other => other.key === it.key && other.kind === 'room'))).map(it => it.key) : []);
+    const continuingRooms = new Set(!pale ? items.filter(it => it.kind === 'room' && it.noFloor !== false && this.level?.below?.some(b => b.items.some(other => other.key === it.key && other.kind === 'room'))).map(it => it.key) : []);
     let omitFloorSeam = false;
     /** Внешние кольца помещений, проходящих сквозь пол этажа (с этажа ниже или без пола здесь), в локальных метрах. */
     const throughRooms = items.filter((it) => it.kind === 'room' && !it.line && (it.noFloor || continuingRooms.has(it.key)))

@@ -8911,7 +8911,7 @@ function clipTransit(f: IndoorFeature, feats: Feature3D[], footprint: () => unkn
       }
     }
     if (run.length > 1) runs.push(run);
-    return runs.length ? { ...f, noLevel, polygons: runs.map((outer) => ({ outer, inners: [] })) } : undefined;
+    return runs.length ? { ...f, noLevel, trackRuns: runs } : undefined;
   }
   try {
     const close = (r: LonLat[]) => [...r, r[0]];
@@ -9497,7 +9497,25 @@ function indoorAt(point: [number, number]): IndoorFeature | undefined {
     const f = shownIndoor.find((x) => x.key === solid.key);
     if (f) return f;
   }
-  return indoorStackAt(point)[0];
+  return (floorPoint && trackAt(floorPoint)) || indoorStackAt(point)[0];
+}
+
+/** Путь вокзала под точкой пола: между рельсами (полколеи от оси) с запасом. */
+function trackAt(p: LonLat): IndoorFeature | undefined {
+  let best: { f: IndoorFeature; d: number } | undefined;
+  const k = 111_320 * Math.cos(p[1] * Math.PI / 180);
+  for (const f of shownIndoor) {
+    if (!f.transit || !f.line) continue;
+    const reach = (trackGauge(f.tags) ?? 1.435) / 2 + 0.25;
+    for (const run of f.trackRuns ?? f.polygons.map((q) => q.outer)) for (let i = 0; i + 1 < run.length; i++) {
+      const a = run[i], b = run[i + 1];
+      const dx = (b[0] - a[0]) * k, dy = (b[1] - a[1]) * 111_320, px = (p[0] - a[0]) * k, py = (p[1] - a[1]) * 111_320;
+      const t = Math.max(0, Math.min(1, (px * dx + py * dy) / (dx * dx + dy * dy || 1)));
+      const d = Math.hypot(px - t * dx, py - t * dy);
+      if (d <= reach && (!best || d < best.d)) best = { f, d };
+    }
+  }
+  return best?.f;
 }
 
 /** Контуры показанного этажа (indoor=level) под курсором. */
@@ -13146,7 +13164,7 @@ function renderLevelsImpl() {
       // Площади эскалаторов и лестниц (indoor=area с тегами лестницы) — пунктирным контуром, без заливки
       outlines: fs.filter(f=>f.escalatorArea||stairsArea(f)).map((f):IndoorItem=>({key:f.key,kind:f.kind,polygons:f.polygons,z:l.floor})),
       // Пути вокзала — линиями по полу (не стены)
-      tracks: fs.filter((f) => f.transit && f.line).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.polygons, z: l.floor, ...(trackGauge(f.tags) ? { gauge: trackGauge(f.tags) } : {}) })),
+      tracks: fs.filter((f) => f.transit && f.line).map((f): IndoorItem => ({ key: f.key, kind: f.kind, polygons: f.trackRuns ? f.trackRuns.map((outer) => ({ outer, inners: [] })) : f.polygons, axis: f.polygons, z: l.floor, ...(trackGauge(f.tags) ? { gauge: trackGauge(f.tags) } : {}) })),
       get doorCuts() { return doorCutsOf(); },
       // Площадь эскалатора задаёт его след и проём, но не сплошной пол под ступенями.
       // Многоэтажные помещения имеют пол только внизу; стены и колонны есть на всех указанных уровнях.

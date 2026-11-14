@@ -87,6 +87,8 @@ export interface IndoorFeature {
   transit?: 'platform' | 'rail';
   /** Уровень не размечен (нет level и repeat_on): этаж выбран по умолчанию. */
   noLevel?: boolean;
+  /** Путь вокзала: куски оси в пределах здания (рисуются рельсами); сама геометрия с узлами — целиком, для правки. */
+  trackRuns?: LonLat[][];
   /** Лестница (highway=steps без conveying) — модель и правка как у эскалатора, escalator тоже true. */
   stairs?: boolean;
   escalatorArea?: boolean;

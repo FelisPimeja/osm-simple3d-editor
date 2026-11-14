@@ -46,7 +46,7 @@ const HIGHLIGHT = new THREE.Color('#97beff'); // #2f7cff, смешанный с 
 const MONOCHROME = new THREE.Color('#ffffff');
 
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
-export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Платформа вокзала: снаружи здания её пол вырезает землю вокруг. */ platform?: boolean; /** Путь: ширина колеи, м (рельсы — двумя линиями). */ gauge?: number; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
+export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Платформа вокзала: снаружи здания её пол вырезает землю вокруг. */ platform?: boolean; /** Путь: ширина колеи, м (рельсы — двумя линиями). */ gauge?: number; /** Путь: ось целиком (геометрия объекта; рельсы — по кускам в здании). */ axis?: Polygon[]; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
   /** A closed way without area=yes is a linear wall. */ linearWall?: boolean;
   railing?: boolean;
   /** material=glass у стены-линии или ограждения. */ glass?: boolean;
@@ -1851,8 +1851,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (this.indoorSelObj) {
       this.indoorSelObj.parent?.remove(this.indoorSelObj);
       this.indoorSelObj.traverse((o) => {
-        if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments || o instanceof LineSegments2) o.geometry.dispose();
-        if (o instanceof LineSegments2) o.material.dispose();
+        if (o instanceof THREE.Mesh || o instanceof THREE.Line || o instanceof LineSegments2) o.geometry.dispose();
+        if (o instanceof LineSegments2 || (o instanceof THREE.Line && o.material instanceof THREE.LineDashedMaterial)) (o.material as THREE.Material).dispose();
       });
       this.indoorSelObj = undefined;
     }
@@ -1866,10 +1866,29 @@ export class BuildingsLayer implements CustomLayerInterface {
     const items = [...this.level?.items ?? [], ...this.level?.highlights ?? [], ...this.level?.outlines ?? []].filter((i) => keys.has(i.key));
     if (this.level && this.wireframe) for (const b of this.level.below ?? []) items.push(...b.items.filter(it => keys.has(it.key) && !items.some(other=>other.key===it.key)));
     if (this.level) items.push(...this.roomWallSelection, ...(this.freeArea ? [this.freeArea] : []));
-    if (!g || (!items.length && ![...keys].some((key) => this.doorOpeningEdges.has(key)))) return;
+    const tracks = (this.level?.tracks ?? []).filter((t) => keys.has(t.key));
+    if (!g || (!items.length && !tracks.length && ![...keys].some((key) => this.doorOpeningEdges.has(key)))) return;
     const root = new THREE.Group();
     this.indoorSelObj = root;
     g.scene.add(root);
+    // Выбранный путь: рельсы — синим пунктиром, ось (геометрия объекта) — сплошной синей
+    for (const t of tracks) {
+      for (const points of trackRails(g, t, 0.03)) {
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.35, gapSize: 0.2, depthTest: false }));
+        line.computeLineDistances(); line.renderOrder = 1000; root.add(line);
+      }
+      const canvas = this.map!.getCanvas(), dpr = canvas.width / canvas.clientWidth;
+      for (const p of t.axis ?? t.polygons) {
+        const pts = p.outer.map((q) => g.toLocal(q));
+        if (pts.length < 2) continue;
+        const geo = new LineSegmentsGeometry();
+        geo.setPositions(pts.slice(1).flatMap(([x, y], i) => [pts[i][0], pts[i][1], t.z + 0.03, x, y, t.z + 0.03]));
+        const material = new LineMaterial({ color: 0x2563eb, linewidth: 2.5 * dpr, depthTest: false, depthWrite: false });
+        material.resolution.set(canvas.width, canvas.height);
+        const line = new LineSegments2(geo, material);
+        line.renderOrder = 1001; line.frustumCulled = false; root.add(line);
+      }
+    }
     for (const it of items) {
       const from = root.children.length;
       this.addIndoorHighlight(root, g, it);
@@ -2250,21 +2269,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     // Пути вокзала — два рельса по полу этажа: ось пути, сдвинутая на половину колеи в обе стороны (срез углов
     // по биссектрисе)
-    for (const it of this.level?.tracks ?? []) for (const p of it.polygons) {
-      const pts = p.outer.map((q) => g.toLocal(q));
-      if (pts.length < 2) continue;
-      const half = (it.gauge ?? 1.435) / 2;
-      for (const side of [-1, 1]) {
-        const points = pts.map(([x, y], i) => {
-          const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
-          const n1 = i > 0 ? normal(pts[i - 1], pts[i]) : normal(pts[i], b), n2 = i + 1 < pts.length ? normal(pts[i], pts[i + 1]) : normal(a, pts[i]);
-          const mx = n1[0] + n2[0], my = n1[1] + n2[1], l = Math.hypot(mx, my) || 1, cos = Math.max(0.3, (mx * n1[0] + my * n1[1]) / l);
-          const k = side * half / cos / l;
-          return new THREE.Vector3(x + mx * k, y + my * k, it.z + .015);
-        });
-        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), TRACK_MATERIAL);
-        line.name = 'indoor-track'; line.renderOrder = 4; root.add(line);
-      }
+    for (const it of this.level?.tracks ?? []) for (const points of trackRails(g, it)) {
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), TRACK_MATERIAL);
+      line.name = 'indoor-track'; line.renderOrder = 4; root.add(line);
     }
     g.scene.add(root);
     if (this.level.floor > -0.01) this.addEarth(root, g);
@@ -8767,4 +8774,22 @@ function editDistance(a: string, b: string): number {
     }
   }
   return d[a.length][b.length];
+}
+
+/** Рельсы пути: ось (куски в здании), сдвинутая на половину колеи в обе стороны (срез углов по биссектрисе). */
+function trackRails(g: MeshGroup, it: IndoorItem, lift = 0.015): THREE.Vector3[][] {
+  const out: THREE.Vector3[][] = [];
+  for (const p of it.polygons) {
+    const pts = p.outer.map((q) => g.toLocal(q));
+    if (pts.length < 2) continue;
+    const half = (it.gauge ?? 1.435) / 2;
+    for (const side of [-1, 1]) out.push(pts.map(([x, y], i) => {
+      const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+      const n1 = i > 0 ? normal(pts[i - 1], pts[i]) : normal(pts[i], b), n2 = i + 1 < pts.length ? normal(pts[i], pts[i + 1]) : normal(a, pts[i]);
+      const mx = n1[0] + n2[0], my = n1[1] + n2[1], l = Math.hypot(mx, my) || 1, cos = Math.max(0.3, (mx * n1[0] + my * n1[1]) / l);
+      const k = side * half / cos / l;
+      return new THREE.Vector3(x + mx * k, y + my * k, it.z + lift);
+    }));
+  }
+  return out;
 }

@@ -3323,6 +3323,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     /** jambA/jambB — у конца откос проёма: вертикаль только до перемычки (выше стена сплошная, без шва). */
     // Верх стены-линии с явной высотой (height ниже этажа): стена обычная, в цвет помещения, но ниже
     let wallCap = Infinity;
+    /** Рёбра низких стен (стена-полигон с height ниже среза) и их верх. */
+    const lowTaken: { s: PlanSeg; top: number }[] = [];
     const slab = (ax: number, ay: number, bx: number, by: number, z0: number, z1a: number, z1b: number, ends = true, jambA = Infinity, jambB = Infinity) => {
       if (z1a > wallCap || z1b > wallCap) { z1a = Math.min(z1a, wallCap); z1b = Math.min(z1b, wallCap); if (Math.max(z1a, z1b) <= z0) return; }
       if (edgeOcclusionOnly) {
@@ -3776,9 +3778,30 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
       const previousLinear: boolean = linearCutTop;
       linearCutTop = !solid;
-      for (const [t0, t1] of uncovered(ax, ay, bx, by, undefined, solid ? SOLID_MERGE_DIST : WALL_MERGE_DIST)) {
+      const merge = solid ? SOLID_MERGE_DIST : WALL_MERGE_DIST;
+      // Низкая стена (стена-полигон с height, way/1577261259) не занимает ребро целиком: выше неё стена
+      // помещения на том же ребре идёт от её верха до среза
+      if (wallCap < Infinity) {
+        for (const [t0, t1] of uncovered(ax, ay, bx, by, undefined, merge)) {
+          const x0 = ax + (bx - ax) * t0, y0 = ay + (by - ay) * t0, x1 = ax + (bx - ax) * t1, y1 = ay + (by - ay) * t1;
+          shellWall(x0, y0, x1, y1, z0);
+          lowTaken.push({ s: [x0, y0, x1, y1], top: wallCap });
+        }
+        linearCutTop = previousLinear;
+        return;
+      }
+      for (const [t0, t1] of uncovered(ax, ay, bx, by, undefined, merge)) {
         const x0 = ax + (bx - ax) * t0, y0 = ay + (by - ay) * t0, x1 = ax + (bx - ax) * t1, y1 = ay + (by - ay) * t1;
-        shellWall(x0, y0, x1, y1, z0);
+        // Участки над низкими стенами — от их верха
+        const lows = lowTaken.filter((l) => uncoveredSpans(x0, y0, x1, y1, [l.s], merge).reduce((m, [a2, b2]) => m + b2 - a2, 0) < 1 - 1e-6);
+        if (lows.length) {
+          for (const l of lows) for (const [c0, c1] of complementSpans(uncoveredSpans(x0, y0, x1, y1, [l.s], merge))) {
+            if (c1 - c0 < 1e-6) continue;
+            shellWall(x0 + (x1 - x0) * c0, y0 + (y1 - y0) * c0, x0 + (x1 - x0) * c1, y0 + (y1 - y0) * c1, l.top);
+          }
+          for (const [u0, u1] of uncoveredSpans(x0, y0, x1, y1, lows.map((l) => l.s), merge))
+            shellWall(x0 + (x1 - x0) * u0, y0 + (y1 - y0) * u0, x0 + (x1 - x0) * u1, y0 + (y1 - y0) * u1, z0);
+        } else shellWall(x0, y0, x1, y1, z0);
         // A linear wall removed by a doorway draws nothing there: the solid jamb on the same edge must still appear.
         let from = 0;
         for (const [lo, hi] of linearCutTop ? doorwaySpans(x0, y0, x1, y1) : []) {
@@ -7751,6 +7774,13 @@ function planCells(x0: number, y0: number, x1: number, y1: number, pad: number):
 
 /** Участки ребра a→b (доли 0…1), не закрытые уже стоящими стенами, — стена ставится только на них. */
 /** mergeDist — насколько далеко может стоять стена, закрывающая ребро. */
+/** Дополнение участков [0,1] к списку отсортированных непересекающихся участков. */
+function complementSpans(spans: [number, number][]): [number, number][] {
+  const out: [number, number][] = []; let from = 0;
+  for (const [a, b] of [...spans].sort((p, q) => p[0] - q[0])) { if (a > from) out.push([from, a]); from = Math.max(from, b); }
+  if (from < 1) out.push([from, 1]);
+  return out;
+}
 function uncoveredSpans(ax: number, ay: number, bx: number, by: number, segments: Iterable<PlanSeg>, mergeDist = WALL_MERGE_DIST): [number, number][] {
   const len = Math.hypot(bx - ax, by - ay);
   if (len < 1e-6) return [];

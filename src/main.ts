@@ -1817,8 +1817,11 @@ function undergroundAt(pt: maplibregl.Point, ll: maplibregl.LngLat): string | un
 /** Здание режима здания в адресе: ?edit=w123 / ?edit=r456 (хэш карты не трогаем, в историю не пишем). */
 function setEditParam(key: string | undefined) {
   const m = key?.match(/^(way|relation)\/(\d+)$/); // новые (отрицательные id) — не в адрес
+  // Комплекс без здания: c + ключ его якоря (самого старого объекта), ?edit=cr19186182
+  const c = key?.match(/^indoor-complex:(node|way|relation)\/(\d+)$/);
   const url = new URL(location.href);
   if (m) url.searchParams.set('edit', m[1][0] + m[2]);
+  else if (c) url.searchParams.set('edit', 'c' + c[1][0] + c[2]);
   else url.searchParams.delete('edit');
   if (url.href !== location.href) history.replaceState(history.state, '', url);
 }
@@ -1863,6 +1866,8 @@ function showLoading(text: string | undefined, down = false) {
 
 /** Открыть здание из ссылки ?edit=: без хэша — подлёт к объекту, вход — когда он появится в данных тайлов. */
 async function openEditLink() {
+  const cm = new URLSearchParams(location.search).get('edit')?.match(/^c([nwr])(\d+)$/);
+  if (cm) return openComplexLink(cm[1] === 'n' ? 'node' : cm[1] === 'w' ? 'way' : 'relation', cm[2]);
   const m = new URLSearchParams(location.search).get('edit')?.match(/^([wr])(\d+)$/);
   if (!m) return;
   const type = m[1] === 'w' ? 'way' : 'relation', key = `${type}/${m[2]}`;
@@ -1934,6 +1939,57 @@ async function openEditLink() {
     }
   };
   // Не ждём, пока догрузится вся карта (idle): входим, как только здание пришло с первым тайлом
+  const timer = setInterval(tryEnter, 100);
+}
+
+/**
+ * Комплекс без здания из ссылки ?edit=c…: без хэша — подлёт к якорю; вход — когда комплекс с этим якорем
+ * (или содержащий его, если якорь сменился) соберётся из загруженного indoor.
+ */
+async function openComplexLink(type: 'node' | 'way' | 'relation', id: string) {
+  const anchor = `${type}/${id}`, key = COMPLEX_PREFIX + anchor;
+  const what = tr('Объект {key}', { key: anchor });
+  if (!startHashValid) {
+    showLoading(tr('{what}: ищу объект на сервере {server}…', { what, server: server().short }));
+    try {
+      const res = await fetch(`${server().api}/${type}/${id}${type === 'node' ? '' : '/full'}.json`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const nodes = ((await res.json()) as { elements: OsmElement[] }).elements.filter((e): e is OsmNode => e.type === 'node');
+      if (!nodes.length) throw new Error(tr('нет узлов'));
+      const lon = nodes.map((n) => n.lon), lat = nodes.map((n) => n.lat);
+      map.fitBounds([[Math.min(...lon), Math.min(...lat)], [Math.max(...lon), Math.max(...lat)]], { padding: 80, maxZoom: 18, pitch: map.getPitch(), bearing: map.getBearing(), duration: 0 });
+    } catch (err) {
+      setEditParam(undefined);
+      showLoading(undefined);
+      return setStatus(tr('Ссылка на {key}: объект не загрузился ({error}).', { key: anchor, error: (err as Error).message }), true);
+    }
+  }
+  const hardDeadline = Date.now() + 300_000;
+  let loadedSince: number | undefined;
+  const tryEnter = () => {
+    if (focus) { showLoading(undefined); return clearInterval(timer); }
+    if (!map.getLayer(overpassLayer.id)) return showLoading(tr('{what}: загружаю карту…', { what }));
+    const { ready, total, loading, waiting } = overpass.status();
+    loadedSince = total && !loading && !waiting ? loadedSince ?? Date.now() : undefined;
+    showLoading(total ? tr('{what}: загружаю данные ({ready} из {total} участков карты)…', { what, ready, total }) : tr('{what}: загружаю данные…', { what }));
+    const b = map.getBounds(), R = COMPLEX_REACH;
+    // Пока грузятся тайлы, комплекс собран не целиком: ключ (самый старый объект) ещё может смениться
+    if (loadedSince === undefined && Date.now() < hardDeadline) return;
+    const cs = orphanComplexes([b.getWest() - R, b.getSouth() - R, b.getEast() + R, b.getNorth() + R]);
+    const c = cs.find((x) => x.key === key) ?? cs.find((x) => x.features.some((f) => f.key === anchor));
+    if (c) {
+      clearInterval(timer);
+      showLoading(undefined);
+      complexFocus.set(c.key, { features: c.features, box: c.box });
+      enterFocus(complexGroup(c.key)!, !startHashValid);
+      if (startHashValid) map.jumpTo({ center: [startHash[2], startHash[1]], zoom: startHash[0], bearing: startHash[3] || 0, pitch: Math.min(startHash[4] || 0, map.getMaxPitch()) });
+    } else if ((loadedSince !== undefined && Date.now() - loadedSince > 10_000) || Date.now() > hardDeadline) {
+      clearInterval(timer);
+      showLoading(undefined);
+      setEditParam(undefined);
+      setStatus(tr('{key}: план без здания не найден в загруженных данных.', { key: anchor }), true);
+    }
+  };
   const timer = setInterval(tryEnter, 100);
 }
 

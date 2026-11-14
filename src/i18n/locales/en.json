@@ -1552,5 +1552,9 @@
   "Данные объекта обновлены; ваши несохранённые правки остаются поверх них.": "Object data reloaded; your unsaved edits stay on top of it.",
   "Данные объекта актуальны.": "Object data is up to date.",
   "Данные объекта обновлены до актуальной версии OSM.": "Object data updated to the current OSM version.",
-  "Не удалось обновить объект: {error}": "Could not reload the object: {error}"
+  "Не удалось обновить объект: {error}": "Could not reload the object: {error}",
+  "Объект {key}": "Object {key}",
+  "{what}: загружаю данные ({ready} из {total} участков карты)…": "{what}: loading data ({ready} of {total} map tiles)…",
+  "{what}: загружаю данные…": "{what}: loading data…",
+  "{key}: план без здания не найден в загруженных данных.": "{key}: plan without a building not found in the loaded data."
 }

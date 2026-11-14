@@ -272,8 +272,12 @@ export class EditSession {
   /** merge — дописать в последний шаг истории (следствие только что сделанной правки, отменяется вместе с ней). */
   /** После каждой правки (не дописанной в шаг): следствия, которые редактор достраивает сам. */
   afterEdit?: (edits: ObjectEdit[]) => void;
+  /** Проверка шага до применения: строка — шаг отклонён (ничего не меняется), причина — пользователю. */
+  guard?: (edits: ObjectEdit[]) => string | undefined;
   editMany(edits: ObjectEdit[], merge = false) {
     edits = this.keepSharedWays(this.propagateMoves(edits));
+    const refused = this.guard?.(edits);
+    if (refused) throw new Error(refused);
     const step: Entry[] = [];
     for (const e of edits) {
       if (e.create) {

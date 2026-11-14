@@ -605,6 +605,7 @@ const monoToggle = document.getElementById('mono-toggle') as HTMLInputElement;
  */
 let session = new EditSession([], onSessionChange);
 session.afterEdit = autoNotchWalls;
+session.guard = guardBuildingMemberWays;
 session.extraParents = (key) => relationParentsOf(key);
 session.beforeStep = (keys) => autoRelation(keys);
 const overpassLayer = new BuildingsLayer('osm-overpass-buildings');
@@ -10237,6 +10238,30 @@ function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false
   // Марш — пара «линия + полигон»: двигается одна — вторая следует (docs/indoor-stairs.md)
   return editIndoorGeometry([...all, ...shell], pairs ? withStairsPartners(op, all) : op, glue, () => preview ? temporary-- : nextNewId--, true, memberWays);
 }
+
+/**
+ * Путь, который ещё и член мультиполигона здания или части (стена по контуру): шаг, меняющий его список узлов,
+ * отклоняется — кольцо здания разорвалось бы (changeset 191935052 — здание пропало с карты). Сдвиг узлов можно;
+ * правки самого здания (его отношения в том же шаге) — тоже.
+ */
+function guardBuildingMemberWays(edits: ObjectEdit[]): string | undefined {
+  const reshaped = edits.filter((e) => e.key.startsWith('way/') && !e.create && (e.delete || e.line || e.polygons));
+  if (!reshaped.length) return;
+  const touched = new Set(edits.map((e) => e.key));
+  // Кольцо держат концы пути: открытый — те же два конца, замкнутый — остаётся замкнутым; середина может меняться
+  const norm = (ids?: number[]) => ids && (ids.length < 2 ? '' : ids[0] === ids[ids.length - 1] ? 'closed' : `${ids[0]}|${ids[ids.length - 1]}`);
+  const ownersOf = (id: number) => liveFeatures().filter((f) => f.type === 'relation'
+    && (relWays(f)?.some((w) => w.id === id)) && !touched.has(f.key) && !f.tags.indoor);
+  for (const e of reshaped) {
+    const f = session.get(e.key);
+    const ring = (x?: { line?: { ids: number[] } | null; polygons?: Polygon[] }) => x?.line?.ids ?? (x?.polygons?.[0]?.outerIds && [...x.polygons[0].outerIds, x.polygons[0].outerIds[0]]);
+    const before = norm(ring(f));
+    const after = e.delete ? '' : norm(ring(e));
+    if (before === undefined || after === undefined || before === after) continue;
+    const owner = ownersOf(Number(e.key.split('/')[1]))[0];
+    if (owner) return tr('{key} — ещё и часть контура {owner}: смена концов этого пути разорвала бы кольцо здания. Двигайте вершины или сначала разделите геометрию.', { key: e.key, owner: owner.key });
+  }
+}
 function drawIndoorGeometryPreview(edits: ObjectEdit[]) {
   const lines: THREE.Vector3[][] = [];
   for (const e of edits) {
@@ -17737,6 +17762,7 @@ function doClearEdits() {
 function resetSession() {
   session = new EditSession([], onSessionChange);
   session.afterEdit = autoNotchWalls;
+  session.guard = guardBuildingMemberWays;
   session.extraParents = (key) => relationParentsOf(key);
   sessionRevision++;
   session.beforeStep = autoRelation;

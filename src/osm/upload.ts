@@ -409,6 +409,19 @@ async function brokenRings(payload: Payload, fresh: Map<string, OsmWay | OsmRela
     .filter(({ rel, created, before }) => created || !before
       || JSON.stringify(before.members) !== JSON.stringify(rel.members)
       || rel.members.some((m) => m.type === 'way' && ways.has(m.ref)));
+  // Мультиполигоны вне пакета, чьи пути мы перекроили (путь стены — член контура здания, changeset 191935052):
+  // их состав не менялся, но кольцо могло разорваться
+  const inPayload = new Set(payload.filter((p) => p.element.type === 'relation').map((p) => p.element.id));
+  for (const p of payload) {
+    if (p.element.type !== 'way' || p.created || p.element.id < 0) continue;
+    const was = fresh.get(`way/${p.element.id}`);
+    if (!p.deleted && was?.type === 'way' && JSON.stringify(was.nodes) === JSON.stringify(p.element.nodes)) continue;
+    for (const r of await fetchWayRelations(p.element.id, api())) {
+      if (inPayload.has(r.id) || r.tags?.type !== 'multipolygon') continue;
+      inPayload.add(r.id);
+      rels.push({ rel: r, created: false, before: r });
+    }
+  }
   if (!rels.length) return [];
   // Пути с сервера: не входящие в пакет (для «после») и все прежние (для «до»)
   const need = new Set<string>();

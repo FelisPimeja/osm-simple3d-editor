@@ -1556,5 +1556,6 @@
   "Объект {key}": "Object {key}",
   "{what}: загружаю данные ({ready} из {total} участков карты)…": "{what}: loading data ({ready} of {total} map tiles)…",
   "{what}: загружаю данные…": "{what}: loading data…",
-  "{key}: план без здания не найден в загруженных данных.": "{key}: plan without a building not found in the loaded data."
+  "{key}: план без здания не найден в загруженных данных.": "{key}: plan without a building not found in the loaded data.",
+  "{key} — ещё и часть контура {owner}: смена концов этого пути разорвала бы кольцо здания. Двигайте вершины или сначала разделите геометрию.": "{key} is also part of the outline of {owner}: changing the ends of this way would break the building ring. Move vertices, or separate the geometry first."
 }

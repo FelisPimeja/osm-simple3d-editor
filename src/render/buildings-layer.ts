@@ -719,6 +719,8 @@ class MeshGroup {
 
   /** Стекло группы — прозрачное, поэтому отдельно от непрозрачной слитой геометрии. */
   glass?: THREE.Mesh;
+  /** Рельсы под арками с railway=*. */
+  rails?: THREE.Mesh;
   /** Входы на фасадах (entrance=*) и где они стоят — для выбора кликом. */
   entranceObj?: THREE.Group;
   entrances: EntrancePlace[] = [];
@@ -735,6 +737,7 @@ class MeshGroup {
     this.disposeEdges();
     this.disposeStrokes();
     if (this.glass) { this.glass.geometry.dispose(); this.scene.remove(this.glass); this.glass = undefined; }
+    if (this.rails) { this.rails.geometry.dispose(); this.scene.remove(this.rails); this.rails = undefined; }
     if (!this.mesh) return;
     this.mesh.geometry.dispose();
     this.scene.remove(this.mesh);
@@ -6719,6 +6722,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.mesh.frustumCulled = false; // своя матрица проекции — штатный culling не годится
     g.scene.add(g.mesh);
     timed('геометрия: стекло', () => this.rebuildGlass(g));
+    buildPassageRails(g);
     this.applyEntrances(g);
     this.paintGroup(g);
     timed('геометрия: рёбра', () => this.applyEdges(g));
@@ -8387,6 +8391,57 @@ function glassTint(tag: string | undefined): THREE.Color | undefined {
   return parseColour(tag).clone().lerp(GLASS, 0.25);
 }
 // Отодвинуто дальше сплошных граней (MATERIAL: 1/1): стекло в одной плоскости со сплошной стеной под ней не мерцает
+const RAIL_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+const BALLAST_RGB = [0.55, 0.52, 0.48], RAIL_RGB = [0.33, 0.34, 0.37];
+/** Колея: половина расстояния между рельсами, м (1520 мм; узкоколейка — 750). */
+const railHalfGauge = (rail: string) => (rail === 'narrow_gauge' ? 0.375 : rail === 'miniature' ? 0.2 : 0.76);
+
+/**
+ * Рельсы под арками с railway=*: балластная призма и две нитки по оси пути, на низу объекта. Путь — один раз,
+ * хотя арка режет несколько частей.
+ */
+function buildPassageRails(g: MeshGroup) {
+  const pos: number[] = [], col: number[] = [];
+  const seen = new Set<number>();
+  const quad = (rgb: number[], a: number[], b: number[], c: number[], d: number[]) => {
+    pos.push(...a, ...b, ...c, ...a, ...c, ...d);
+    for (let i = 0; i < 6; i++) col.push(...rgb);
+  };
+  for (const it of g.items) {
+    if (g.hidden.has(it.feature.key)) continue;
+    for (const p of it.passage?.ways ?? []) {
+      if (!p.rail || seen.has(p.id)) continue;
+      seen.add(p.id);
+      const z0 = p.min ?? 0, top = z0 + 0.12, rh = 0.15, gauge = railHalfGauge(p.rail);
+      const half = Math.min(Math.max(gauge + 0.9, 1), ((p.width ?? 4) - 0.4) / 2);
+      for (let i = 0; i + 1 < p.line.length; i++) {
+        const [ax, ay] = p.line[i], [bx, by] = p.line[i + 1], l = Math.hypot(bx - ax, by - ay);
+        if (l < 1e-3) continue;
+        const nx = -(by - ay) / l, ny = (bx - ax) / l;
+        const at = (o: number, t: 0 | 1, z: number) => [t ? bx + nx * o : ax + nx * o, t ? by + ny * o : ay + ny * o, z];
+        // Балласт: верх и откосы
+        quad(BALLAST_RGB, at(half, 0, top), at(-half, 0, top), at(-half, 1, top), at(half, 1, top));
+        quad(BALLAST_RGB, at(half, 0, top), at(half, 1, top), at(half + 0.2, 1, z0 + 0.01), at(half + 0.2, 0, z0 + 0.01));
+        quad(BALLAST_RGB, at(-half, 0, top), at(-half, 1, top), at(-half - 0.2, 1, z0 + 0.01), at(-half - 0.2, 0, z0 + 0.01));
+        for (const off of [gauge, -gauge]) {
+          const o1 = off + 0.04, o2 = off - 0.04;
+          quad(RAIL_RGB, at(o1, 0, top + rh), at(o1, 1, top + rh), at(o2, 1, top + rh), at(o2, 0, top + rh));
+          quad(RAIL_RGB, at(o1, 0, top), at(o1, 1, top), at(o1, 1, top + rh), at(o1, 0, top + rh));
+          quad(RAIL_RGB, at(o2, 0, top), at(o2, 1, top), at(o2, 1, top + rh), at(o2, 0, top + rh));
+        }
+      }
+    }
+  }
+  if (!pos.length) return;
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
+  geom.computeVertexNormals();
+  g.rails = new THREE.Mesh(geom, RAIL_MATERIAL);
+  g.rails.frustumCulled = false;
+  g.scene.add(g.rails);
+}
+
 const GLASS_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.45, depthWrite: false,
   side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 });
 
@@ -8615,9 +8670,9 @@ let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => und
 export function setInheritance(fn: (f: Feature3D) => Record<string, string> | undefined) { inheritFor = fn; }
 
 /** Арка (tunnel=building_passage) у объекта: ось проезда, ширина и высота, м. */
-export interface PassageCut { id: number; line: LonLat[]; width: number; height?: number }
+export interface PassageCut { id: number; line: LonLat[]; width: number; height?: number; /** railway=* под аркой — рисуем рельсы. */ rail?: string }
 /** Кусок арки в объекте: путь id, его ось и проём в этом объекте (локальные метры), верх z. */
-export interface PassagePiece { id: number; line: Pt[]; opening: LocalPolygon[]; z: number }
+export interface PassagePiece { id: number; line: Pt[]; opening: LocalPolygon[]; z: number; min?: number; width?: number; rail?: string }
 /** Арки, задевающие объект, — задаёт main. */
 let passagesFor: (f: Feature3D) => PassageCut[] = () => [];
 export function setPassages(fn: (f: Feature3D) => PassageCut[]) { passagesFor = fn; }
@@ -8695,7 +8750,7 @@ function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heig
       const opening = m.length ? polygonClipping.intersection(body, m) : [];
       if (!opening.length) continue;
       strips.push(m);
-      ways.push({ id: c.id, line, opening: dropCollinear(fromClip(opening)), z });
+      ways.push({ id: c.id, line, opening: dropCollinear(fromClip(opening)), z, min: h.min, width: c.width, rail: c.rail });
     }
     if (!strips.length) return;
     const strip = polygonClipping.union(strips[0], ...strips.slice(1));

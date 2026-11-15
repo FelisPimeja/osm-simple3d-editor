@@ -55,7 +55,7 @@ import { inheritedTags, inheritedValue } from './osm/inherit';
 import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
 import type { TreePoint } from './osm/trees';
-import { isBridge, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
+import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
 import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
@@ -16354,7 +16354,7 @@ function livePassage(p: PassageWay, preview = false): PassageWay | undefined {
 setPassages((f) => {
   if (!f.polygons.length) return [];
   return passagesNear(featureBox(f)).map((p) => livePassage(p, true)).filter((p): p is PassageWay => !!p)
-    .map((p) => ({ id: p.id, line: p.coords, width: passageWidth(p.tags), height: passageHeight(p.tags) }));
+    .map((p) => ({ id: p.id, line: p.coords, width: passageWidth(p.tags), height: passageHeight(p.tags), rail: isRailTags(p.tags) ? p.tags.railway : undefined }));
 });
 
 /** Арки здания — indoor-объектами (линия этажа 0): выбор, панель свойств и «Форма» — как у indoor-путей. */

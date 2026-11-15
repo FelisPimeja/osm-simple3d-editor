@@ -200,6 +200,7 @@ const RAIL_PASSAGE: Record<string, { width: number; height: number }> = {
   monorail: { width: 4, height: 5 }, funicular: { width: 4, height: 4.5 }, miniature: { width: 2, height: 2.5 },
 };
 
+/** Без highway — как service (дефолт карточки арки). */
 export function passageWidth(tags: Record<string, string>): number {
   const w = parseLength(tags.width) ?? parseLength(tags.est_width) ?? parseLength(tags['maxwidth:physical']) ?? parseLength(tags.maxwidth);
   if (w && w > 0.5 && w < 30) return w;
@@ -207,7 +208,7 @@ export function passageWidth(tags: Record<string, string>): number {
   if (rail) return rail.width;
   const lanes = Number.parseInt(tags.lanes ?? '', 10);
   if (lanes >= 1 && lanes <= 8 && !PASSAGE_NARROW.has(tags.highway)) return lanes * 3;
-  return PASSAGE_NARROW.has(tags.highway) ? 2.5 : tags.highway === 'service' ? 3.5 : 5;
+  return PASSAGE_NARROW.has(tags.highway) ? 2.5 : tags.highway === 'service' || !tags.highway ? 3.5 : 5;
 }
 
 /** Высота арки без maxheight, м: не выше первого этажа здания. */

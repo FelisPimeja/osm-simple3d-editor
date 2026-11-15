@@ -55,7 +55,7 @@ import { inheritedTags, inheritedValue } from './osm/inherit';
 import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
 import type { TreePoint } from './osm/trees';
-import { isBridge, isTunnel, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
+import { isBridge, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
 import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
@@ -9804,7 +9804,8 @@ function renderIndoorSelection(add = false) {
         w: String(Math.round(w * 10) / 10),
         wsrc: t.width || t.est_width || t.maxwidth || t['maxwidth:physical'] ? tr('по тегу') : tr('по умолчанию'),
         h: h !== undefined ? tr('{h} м', { h: String(Math.round(h * 10) / 10) }) + (t.maxheight || t['maxheight:physical'] ? '' : ' ' + tr('(по умолчанию)')) : tr('до верха первого этажа (нет maxheight)') }))}</p>`
-      + renderOtherTags(key, t, '', true);
+      + passageForm(f)
+      + renderOtherTags(key, t, passageForm(f), true);
     bindIndoorForm([f]);
     return;
   }
@@ -10097,6 +10098,23 @@ function handrailRow(fs: IndoorFeature[], changed: boolean): string {
   // div, а не label: внутри — свой список с радиокнопками, вложенные label ломают клики
   return `<div class="tag-row${changed ? ' changed' : ''}"><span title="handrail">${esc(indoorFieldLabel('handrail', fs))}</span>${select}</div>`
     + (sides ? `<div class="handrail-sides-row">${sides}</div>` : '');
+}
+
+const PASSAGE_HIGHWAYS = ['service', 'footway', 'pedestrian', 'cycleway', 'path', 'residential', 'unclassified', 'tertiary', 'living_street', 'track'];
+/** Карточка арки: highway (серым — service), width (серым — ширина выреза по умолчанию), maxheight (серым — высота первого этажа). */
+function passageForm(f: IndoorFeature): string {
+  const t = f.tags, key = indoorKey(f.key);
+  const floor0 = focusLevelList().find((l) => l.n === 0);
+  const h = floor0 ? Math.round(Math.min(PASSAGE_HEIGHT, floor0.ceil - floor0.floor) * 100) / 100 : PASSAGE_HEIGHT;
+  const rail = !!t.railway;
+  const defaults: Record<string, string> = { width: String(passageWidth({ ...t, width: '' })), maxheight: String(passageHeight({ ...t, maxheight: '', 'maxheight:physical': '' }) ?? h) };
+  const row = (k: string, control: string) => `<label class="tag-row${session.isChanged(key, k) ? ' changed' : ''}"><span title="${k}">${k}</span>${control}</label>`;
+  const length = (k: string) => {
+    const value = t[k] ?? '', unit = lengthUnitOf(value);
+    return row(k, `<span class="length-field"><input type="text" data-indoor-tag="${k}" data-unit="${unit}" value="${esc(value)}" placeholder="${esc(defaults[k])}" spellcheck="false" autocomplete="off">`
+      + `<span class="length-unit"${hasOwnUnit(value) ? ' hidden' : ''}>${unit === 'ft' ? 'ft' : tr('м')}</span></span>`);
+  };
+  return `<div class="tag-form">${rail ? '' : row('highway', renderValueCombo(PASSAGE_HIGHWAYS, 'data-indoor-tag="highway"', t.highway ?? '', 'service', undefined, 'highway'))}${length('width')}${length('maxheight')}</div>`;
 }
 
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {

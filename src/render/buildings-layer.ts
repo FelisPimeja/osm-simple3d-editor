@@ -8629,6 +8629,24 @@ export function passageStrip(line: Pt[], width: number): ClipMulti {
     const A: Pt = [ax - tx * a0, ay - ty * a0], B: Pt = [bx + tx * b0, by + ty * b0];
     rects.push([[[[A[0] + nx, A[1] + ny], [B[0] + nx, B[1] + ny], [B[0] - nx, B[1] - ny], [A[0] - nx, A[1] - ny], [A[0] + nx, A[1] + ny]]]]);
   }
+  // Изломы оси: с внешней стороны поворота между прямоугольниками соседних отрезков — клин-выемка. Закрываем
+  // его стыком «под углом» (до пересечения сторон), у острого поворота — срезом
+  const normal = (i: number): Pt | undefined => {
+    const [ax, ay] = line[i], [bx, by] = line[i + 1], len = Math.hypot(bx - ax, by - ay);
+    return len < 1e-3 ? undefined : [-(by - ay) / len * w, (bx - ax) / len * w];
+  };
+  for (let i = 1; i + 1 < line.length; i++) {
+    const n1 = normal(i - 1), n2 = normal(i);
+    if (!n1 || !n2) continue;
+    const [px, py] = line[i];
+    for (const sgn of [1, -1]) {
+      const a1: Pt = [px + sgn * n1[0], py + sgn * n1[1]], a2: Pt = [px + sgn * n2[0], py + sgn * n2[1]];
+      const bx = sgn * (n1[0] + n2[0]), by = sgn * (n1[1] + n2[1]), b2 = bx * bx + by * by;
+      const k = b2 > 1e-9 ? 2 * w * w / b2 : 0;
+      const ring: Pt[] = k > 0 && k * Math.sqrt(b2) <= 2 * w ? [[px, py], a1, [px + bx * k, py + by * k], a2] : [[px, py], a1, a2];
+      rects.push([[[...ring, ring[0]]]]);
+    }
+  }
   return rects.length ? polygonClipping.union(rects[0], ...rects.slice(1)) : [];
 }
 

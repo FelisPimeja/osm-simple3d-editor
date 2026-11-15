@@ -3364,7 +3364,7 @@ shapeTool.widthHandles = (key) => {
     if (best < 0.1) return;
     const [a, b] = [pts[i], pts[i + 1]], dir = new THREE.Vector3(-(b[1] - a[1]) / best, (b[0] - a[0]) / best, 0);
     const mid = new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 0), width = passageWidth(session.get(key)?.tags ?? pf.tags);
-    return { a: mid.clone().addScaledVector(dir, -width / 2), b: mid.clone().addScaledVector(dir, width / 2), dir, width, own: [pf.key] };
+    return { a: mid.clone().addScaledVector(dir, -width / 2), b: mid.clone().addScaledVector(dir, width / 2), dir, width, own: [pf.key], passage: true };
   }
   const f = buildingIndoorFor(key);
   const width = f?.escalator && shownLevel ? pairWidth(f, focus ? buildingIndoor(focus) : []) : undefined;

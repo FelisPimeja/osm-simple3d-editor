@@ -33,7 +33,7 @@ const EDGE_END = 0.02;
 export interface ShapeTarget { key: string; poly: number; ring: number; i: number; from: THREE.Vector3; insert?: number; roof?: boolean; eave?: boolean; width?: -1 | 1; oneSide?: boolean; also?: ShapeVert[] }
 
 /** Ручки ширины марша: середины боковых сторон (a — сторона -1, b — сторона 1), dir — единичный от a к b, ширина, м. */
-export interface WidthHandles { a: THREE.Vector3; b: THREE.Vector3; dir: THREE.Vector3; width: number; /** Сам марш и его полигон — не привязки. */ own: string[] }
+export interface WidthHandles { a: THREE.Vector3; b: THREE.Vector3; dir: THREE.Vector3; width: number; /** Ширина проёма арки (свои подсказки), иначе марша. */ passage?: boolean; /** Сам марш и его полигон — не привязки. */ own: string[] }
 /** Уже этого марш ручкой ширины не сужается, м. */
 const MIN_FLIGHT_WIDTH = 0.3;
 
@@ -330,7 +330,9 @@ export class ShapeTool {
     // Оси, по которым ручка не ходит, — серые: у вершин основания — вертикаль, у верха стен и крыши — горизонтали
     this.layer.setMoveGuide({ from: hit.target.from, gizmoScale: 0.375, free: base !== undefined || t.width ? PLAN : VERTICAL });
     this.updateVcb();
-    if (t.width) { this.say(tr('Ведите курсор поперёк марша: обе стороны полигона расходятся симметрично. Клик — применить, число + Enter — ширина в метрах, Esc — отмена.')); return; }
+    if (t.width) { this.say(this.widthHandles?.(t.key)?.passage
+      ? tr('Ведите курсор поперёк проезда: обе стороны арки расходятся симметрично от оси пути, Alt — двигается одна сторона. Клик — применить, число + Enter — ширина в метрах (тег width), Esc — отмена.')
+      : tr('Ведите курсор поперёк марша: обе стороны полигона расходятся симметрично. Клик — применить, число + Enter — ширина в метрах, Esc — отмена.')); return; }
     this.say((hit.target.roof
       ? tr('Ведите курсор вверх или вниз: верх стен стоит, меняется высота крыши. Клик — применить, число + Enter — сдвиг {units}, Esc — отмена.', { units })
       : hit.target.eave
@@ -842,7 +844,7 @@ export class ShapeTool {
       const h = this.widthHandles?.(this.target.key);
       const value = this.typed || (h ? showLength(this.widthAfter(this.target, h)) : '');
       this.vcb.innerHTML = `<span class="vcb-label">${tr('Ширина')}</span><span class="vcb-value${this.typed ? ' typed' : ''}">${value}</span> ${unitLabel()}
-        <span class="vcb-axis">${(() => { const along = this.target.oneSide ? tr('одна сторона, ось следом') : tr('поперёк марша, симметрично (Alt — одна сторона)'); return this.snap ? tr('к точке · {along}', { along }) : along; })()}</span>${this.problem ? `<span class="vcb-axis vcb-error">${this.problem}</span>` : ''}`;
+        <span class="vcb-axis">${(() => { const arch = this.widthHandles?.(this.target.key)?.passage; const along = this.target.oneSide ? tr('одна сторона, ось следом') : arch ? tr('поперёк проезда, симметрично (Alt — одна сторона)') : tr('поперёк марша, симметрично (Alt — одна сторона)'); return this.snap ? tr('к точке · {along}', { along }) : along; })()}</span>${this.problem ? `<span class="vcb-axis vcb-error">${this.problem}</span>` : ''}`;
       return;
     }
     if (this.target?.roof || this.target?.eave) {

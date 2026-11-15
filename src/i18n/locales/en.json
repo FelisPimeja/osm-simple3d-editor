@@ -1576,5 +1576,7 @@
   "(по умолчанию)": "(default)",
   "до верха первого этажа (нет maxheight)": "up to the top of the ground floor (no maxheight)",
   "Ширина арки не меньше 0,5 м.": "Passage width must be at least 0.5 m.",
-  "Ширина арки: {w} м.": "Passage width: {w} m."
+  "Ширина арки: {w} м.": "Passage width: {w} m.",
+  "Ведите курсор поперёк проезда: обе стороны арки расходятся симметрично от оси пути, Alt — двигается одна сторона. Клик — применить, число + Enter — ширина в метрах (тег width), Esc — отмена.": "Move the cursor across the passage: both sides of the opening move symmetrically from the way's axis, Alt moves one side. Click to apply, number + Enter for the width in metres (width tag), Esc to cancel.",
+  "поперёк проезда, симметрично (Alt — одна сторона)": "across the passage, symmetric (Alt — one side)"
 }

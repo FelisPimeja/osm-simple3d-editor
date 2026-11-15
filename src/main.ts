@@ -7563,6 +7563,24 @@ function removalRewrites(ids: Set<number>): { f: Feature3D; rewrites: RingRewrit
   return out;
 }
 
+/** Узлы ids с тегами, которые не держит ни один путь этажа: правки их удаления. */
+function droppedTaggedNodes(ids: Set<number>): ObjectEdit[] {
+  const indoor = focus ? buildingIndoor(focus) : [];
+  const used = new Set(indoor.filter((g) => !g.point).flatMap((g) => g.polygons.flatMap((p) => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()])));
+  const out: ObjectEdit[] = [];
+  for (const id of ids) {
+    const key = `node/${id}`;
+    if (used.has(id) || session.isDeleted(key)) continue;
+    const f = indoor.find((g) => g.point && indoorKey(g.key) === key);
+    const tags = session.get(key)?.tags ?? sessionNodeTags.get(id) ?? dataEntrances.get(id) ?? f?.tags;
+    if (!tags || !Object.keys(tags).length) continue;
+    if (f) trackIndoor(key, f);
+    else if (!session.has(key)) session.track({ key, version: 0, tags: { ...tags } });
+    out.push({ key, delete: true });
+  }
+  return out;
+}
+
 /** Удалить вершины t: «с соседями» (или узлы только наши) — отовсюду, «отдельно» — только из своих колец. */
 function removeShapeVertex(t: ShapeTarget, merged: boolean) {
   // У эскалатора две точки: без одной его нет — удаляется целиком
@@ -7600,6 +7618,10 @@ function removeShapeVertex(t: ShapeTarget, merged: boolean) {
     : glued ? nodeRemoveEdits(ids) : topologyEdits([{ f, rewrites: after }], [], new Map());
   if (typeof edits === 'string') return setStatus(edits, true);
   dropCollapsedHoles(edits);
+  // Узел с тегами (вход, дверь), ушедший отовсюду, удаляется сам: иначе он остался бы отдельной точкой —
+  // в 3D входа нет (входы — только на контуре), а план этажа показывает его дверью. В стене помещения — остаётся
+  const gone = glued ? droppedTaggedNodes(ids) : [];
+  edits.push(...gone);
   session.editMany(edits);
   const neighbours = edits.filter((e) => e.polygons && e.key !== t.key).length;
   setStatus((merged ? tr('Вершина {key} слита с соседней', { key: t.key })

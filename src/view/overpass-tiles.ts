@@ -223,10 +223,14 @@ export class OverpassTiles {
     return out.filter((f) => this.visible(f));
   }
 
-  /** Арки показанных тайлов, по id (путь на границе тайлов — один раз). */
+  /**
+   * Арки всех тайлов в памяти, по id (путь на границе тайлов — один раз). Не только показанных: индекс арок
+   * пересобирается по revision, а она не меняется, когда камера возвращается к тайлам, уже лежащим в памяти, —
+   * индекс, собранный в другом месте, остался бы без их арок.
+   */
   passages(): PassageWay[] {
     const out = new Map<number, PassageWay>();
-    for (const k of this.wanted) { const e = this.cache.get(k); if (e?.state === 'ready' && e.passages) for (const p of e.passages) out.set(p.id, p); }
+    for (const e of this.cache.values()) if (e.state === 'ready' && e.passages) for (const p of e.passages) out.set(p.id, p);
     return [...out.values()];
   }
 

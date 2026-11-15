@@ -160,7 +160,10 @@ export class DrawTool {
 
   /** Подпись двухточечной линии в подсказке (эскалатор, лестница). */
   private lineLabel?: string;
-  begin(shape: DrawShape, maxPoints?: number, lineLabel?: string) {
+  /** Трассировка недоступна (арка — путь на земле, а не по контурам). */
+  private noTrace = false;
+  begin(shape: DrawShape, maxPoints?: number, lineLabel?: string, noTrace = false) {
+    this.noTrace = noTrace;
     this.reset();
     this.shape = shape;
     this.maxPoints = maxPoints;
@@ -168,7 +171,7 @@ export class DrawTool {
     this.state = 'draw';
     this.opts.hidden = shape !== 'ngon';
     this.opts.querySelector('input')!.value = String(this.sides);
-    this.traceOpt.hidden = !TRACED.includes(shape) || !!maxPoints;
+    this.traceOpt.hidden = !TRACED.includes(shape) || !!maxPoints || noTrace;
     this.ringMode.reset();
     this.ringMode.show(RING_SHAPES.includes(shape) && !!this.ringAvailable?.());
     this.hint();
@@ -262,7 +265,7 @@ export class DrawTool {
     }
     if (e.type !== 'keydown') return false;
     if (this.ringMode.key(e)) return true;
-    if (e.code === 'KeyT' && TRACED.includes(this.shape) && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+    if (e.code === 'KeyT' && TRACED.includes(this.shape) && !this.noTrace && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       this.setTracing(!this.tracing);
       return true;
     }
@@ -563,7 +566,7 @@ export class DrawTool {
   /** Промежуточные точки трассировки от последней точки до q (пусто — трассировка выключена или пути нет). */
   private traceTo(q: Pt): Pt[] {
     const last = this.pts[this.pts.length - 1];
-    if (!this.tracing || !TRACED.includes(this.shape) || !last || this.maxPoints) return [];
+    if (!this.tracing || this.noTrace || !TRACED.includes(this.shape) || !last || this.maxPoints) return [];
     const parts = this.layer.traceEdges();
     if (!this.traceSrc || parts.some((p, i) => p !== this.traceSrc!.parts[i])) this.traceSrc = { parts, all: parts.flat() };
     return tracePath(this.traceSrc.all, this.z, last, q) ?? [];

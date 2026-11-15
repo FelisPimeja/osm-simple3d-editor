@@ -11615,7 +11615,7 @@ function startWall() {
   measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
   select(undefined);
   const kind = linearKind();
-  drawTool.begin('wall', kind === 'escalator' || kind === 'stairs' ? 2 : undefined, kind === 'stairs' || kind === 'passage' ? LINEAR_TITLES[kind] : undefined);
+  drawTool.begin('wall', kind === 'escalator' || kind === 'stairs' ? 2 : undefined, kind === 'stairs' || kind === 'passage' ? LINEAR_TITLES[kind] : undefined, kind === 'passage');
 }
 
 /** Ломаная (метры сцены) — путь indoor=wall этажа; вершины на узлах соседей — их узлы. */

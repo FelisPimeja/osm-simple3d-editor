@@ -1584,5 +1584,7 @@
   "{what}: кликните начало пути через здание на земле. Esc — выйти.": "{what}: click the start of the way through the building on the ground. Esc exits.",
   "Создана арка {key} (tunnel=building_passage).": "Passage {key} created (tunnel=building_passage).",
   "window=* на узлах контура: ниша на своём этаже (level), размеры — window:width, window:height, window:breast": "Window recesses on outline nodes with window=*: on their own level (level), sizes from window:width, window:height, window:breast",
-  "Окна по тегам": "Windows from tags"
+  "Окна по тегам": "Windows from tags",
+  "У зданий с building:levels без размеченных окон: окна по этажам с шагом около 2 м, без окон на глухих стенах к соседям, у входов и у служебных зданий": "Buildings with building:levels and no mapped windows: windows on every level about 2 m apart, none on blind walls against neighbours, at entrances or on utility buildings",
+  "Генерировать окна": "Generate windows"
 }

@@ -9,6 +9,7 @@ import { trimIndoorBuildingEdges } from './indoor-building-edges';
 import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth, wallDoorwaySpan } from './door-openings';
 import { RECESS_DEPTH, recessEntrances, type RecessPlace } from './entrance-recess';
+import { generateWindows, wantsGeneratedWindows } from './window-gen';
 /** Ниши входов: по умолчанию включены (localStorage entranceNiches=0 и перезагрузка — выключить). */
 const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') !== '0'; } catch { return true; } })();
 import * as THREE from 'three';
@@ -343,6 +344,8 @@ export interface GraphicsOptions {
   seasons?: boolean;
   /** Окна по тегам: ниши на узлах контура с window=* (тестовое). */
   windows?: boolean;
+  /** Окна, сгенерированные на фасадах без разметки (тестовое). */
+  windowsAuto?: boolean;
 }
 
 /** Высота, на которой затемнение у земли сходит на нет, м (для зданий выше AO_HEIGHT). */
@@ -6457,6 +6460,10 @@ export class BuildingsLayer implements CustomLayerInterface {
       raiseDefault = raise;
       void this.rebuildWhere((f) => computeHeights(f.tags).source === 'default');
     }
+    if (!!o.windowsAuto !== windowsAuto) {
+      windowsAuto = !!o.windowsAuto;
+      void this.rebuildWhere((f) => Number(f.tags['building:levels']) > 0);
+    }
     if (!!o.windows !== windowsEnabled) {
       windowsEnabled = !!o.windows;
       void this.rebuildWhere((f) => !!f.windows?.length);
@@ -7515,7 +7522,9 @@ function itemEdges(it: Item): Float32Array {
   const roofShape = it.tags['roof:shape'] ?? 'flat';
   const hit = edgeCache.get(it.positions);
   if (hit && hit.wallVertices === it.wallVertices && hit.roofShape === roofShape) return hit.edges;
-  const edges = computeItemEdges(it);
+  // Стёкла окон (хвост вершин) — без рёбер: на тысячах окон сборка рёбер — секунды, а тёмный прямоугольник виден и так
+  const panes = it.paneVertices ?? 0;
+  const edges = computeItemEdges(panes ? { ...it, positions: it.positions.subarray(0, it.positions.length - panes * 3) } : it);
   edgeCache.set(it.positions, { wallVertices: it.wallVertices, roofShape, edges });
   return edges;
 }
@@ -8676,8 +8685,12 @@ const TIE_DEPTH = 0.02;
 let raiseDefault = true;
 /** Ниши окон (window=* на контуре) — флаг графики windows. */
 let windowsEnabled = false;
+/** Сгенерированные окна на фасадах без разметки — флаг графики windowsAuto. */
+let windowsAuto = false;
 /** Окно по умолчанию (как в OSM2World): ширина, м; высота и подоконник — доли высоты этажа; глубина ниши, м. */
 const WINDOW_WIDTH = 1, WINDOW_HEIGHT = 0.5, WINDOW_BREAST = 0.3, WINDOW_DEPTH = 0.15;
+/** Сгенерированное окно — накладное стекло на таком расстоянии перед стеной, м. */
+const PANE_OFFSET = 0.03;
 
 /** Унаследованные частью теги (цвета, форма крыши, материалы контура/отношения) — задаёт main. */
 let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;
@@ -8828,7 +8841,9 @@ const CONTACT_DZ = 0.05;
 
 interface ContactFace { key: string; z: number; polys: LocalPolygon[]; box: THREE.Box2 }
 /** Плоские верхи и дна объектов группы по высоте (ключ — высота шагом CONTACT_DZ). */
-interface Contacts { tops: Map<number, ContactFace[]>; bottoms: Map<number, ContactFace[]> }
+interface Contacts { tops: Map<number, ContactFace[]>; bottoms: Map<number, ContactFace[]>;
+  /** Объёмы группы (низ z, верх top): глухие стены к соседям — без сгенерированных окон. */
+  solids: (ContactFace & { top: number })[] }
 
 function hasBottom(prep: ReturnType<typeof prepItem>): boolean {
   const { tags, heights, flat } = prep;
@@ -8848,7 +8863,7 @@ function buildContacts(g: MeshGroup, features: Iterable<Feature3D>): Contacts {
 /** То же порциями: step(deadline) считает до срока (performance.now()), true — всё посчитано. */
 function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Contacts; step: (deadline: number) => boolean } {
   g.renderFootprints = outlineRemainders(features.filter(f => !g.hidden.has(f.key)));
-  const c: Contacts = { tops: new Map(), bottoms: new Map() };
+  const c: Contacts = { tops: new Map(), bottoms: new Map(), solids: [] };
   const add = (m: Map<number, ContactFace[]>, face: ContactFace) => {
     const k = Math.round(face.z / CONTACT_DZ);
     (m.get(k) ?? m.set(k, []).get(k)!).push(face);
@@ -8863,9 +8878,10 @@ function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Conta
     if (!shouldRender(f) || g.hidden.has(f.key)) return;
     const prep = prepItem(g, f);
     const top = hasFlatTop(prep), bottom = hasBottom(prep);
-    if (!top && !bottom) return;
     const box = new THREE.Box2();
     for (const p of prep.polys) for (const [x, y] of p.outer) box.expandByPoint(new THREE.Vector2(x, y));
+    if (!prep.flat) c.solids.push({ key: f.key, z: prep.heights.min, top: prep.heights.top, polys: prep.polys, box });
+    if (!top && !bottom) return;
     if (top) add(c.tops, { key: f.key, z: prep.heights.wallTop, polys: prep.polys, box });
     if (bottom) add(c.bottoms, { key: f.key, z: prep.heights.min, polys: prep.polys, box });
   };
@@ -8961,6 +8977,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       tri.walls.push(...bottomTriangles(rest ?? base, heights.min));
     });
   }
+  const doorPlaces: RecessPlace[] = [];
   // Ниши входов (выключаются флагом localStorage entranceNiches=0)
   if (entranceNiches && !shell && !roofOnly && !flat && !tri.pending && f.entrances?.length) {
     timed('здание: ниши входов', () => {
@@ -9003,12 +9020,34 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
         const z = entranceZ(door, tags);
         if (crosses(z)) places.push({ p: near.p, t: near.t, n, z, width: tagWidth(door) });
       }
+      doorPlaces.push(...places);
       const cut = recessEntrances(tri.walls, places, { width: ENTRANCE_WIDTH, height: ENTRANCE_HEIGHT, min: heights.min, top: heights.wallTop });
       if (cut) tri.walls = cut;
     });
   }
   // Окна по тегам (флаг графики): ниша на своём этаже, подоконник и размеры — window:* или от высоты этажа
   const panes: number[] = [];
+  const tagged = f.windows?.some((w) => isWallWindow(w.tags));
+  // Сгенерированные окна (флаг графики): у части с этажами и без размеченных окон, кроме глухих стен к соседям
+  if (windowsAuto && !tagged && !shell && !roofOnly && !flat && !tri.pending && wantsGeneratedWindows(tags) && !isGlass(roofPartWallMaterial(tags))) {
+    timed('здание: сгенерированные окна', () => {
+      const levels = Number(tags['building:levels']) - (Number(tags['building:min_level']) || 0);
+      if (!(levels >= 1)) return;
+      const solids = g.contacts?.solids.filter((s) => s.key !== f.key && s.box.intersectsBox(box2)) ?? [];
+      const blocked = (p: Pt, z: number) => solids.some((s) => z >= s.z && z <= s.top && s.polys.some((q) =>
+        pointInLocalRing(p, q.outer) && !q.inners.some((h) => pointInLocalRing(p, h))));
+      const places = generateWindows(polys.map((q) => [q.outer, ...q.inners]), { min: heights.min, top: heights.wallTop, levels,
+        width: WINDOW_WIDTH, height: WINDOW_HEIGHT, breast: WINDOW_BREAST, doors: doorPlaces,
+        doorWidth: ENTRANCE_WIDTH, doorHeight: ENTRANCE_HEIGHT, blocked });
+      // Без вырезания ниш (на сотнях фасадов это секунды): стекло — прямоугольником чуть перед стеной
+      for (const w of places) {
+        const hw = (w.width ?? WINDOW_WIDTH) / 2, z1 = w.z + (w.height ?? 1);
+        const x = w.p[0] + w.n[0] * PANE_OFFSET, y = w.p[1] + w.n[1] * PANE_OFFSET;
+        const ax = x - w.t[0] * hw, ay = y - w.t[1] * hw, bx = x + w.t[0] * hw, by = y + w.t[1] * hw;
+        panes.push(ax, ay, w.z, bx, by, w.z, bx, by, z1, ax, ay, w.z, bx, by, z1, ax, ay, z1);
+      }
+    });
+  }
   if (windowsEnabled && !shell && !roofOnly && !flat && !tri.pending && f.windows?.length) {
     timed('здание: ниши окон', () => {
       // Фильтр и здесь: в кеше тайлов признаки, собранные до правил (window=yes на входе — дверь со стеклом)

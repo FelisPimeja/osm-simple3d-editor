@@ -43,9 +43,11 @@ export function recessEntrances(walls: ArrayLike<number>, places: RecessPlace[],
   opts: { width: number; height: number; min: number; top: number; depth?: number }): number[] | undefined {
   if (!places.length || !walls.length) return;
   const depth = opts.depth ?? RECESS_DEPTH;
-  // Проём — от пола ниши (на земле он на SILL выше порога), иначе под полом осталась бы щель
+  // Проём — от порога. Пол ниши на земле на SILL выше; щель под ним закрывает отдельная грань шириной
+  // в дверь: полоса стены в SILL под проёмом до самого угла разрезалась бы в «щепки», и сборка рёбер
+  // теряла бы вместе с ними низ стены и угла
   const sill = (e: RecessPlace) => (e.z <= 1e-3 ? SILL : 0);
-  const doors = places.map((e) => ({ x: e.p[0], y: e.p[1], z: e.z + sill(e), width: e.width ?? opts.width, height: opts.height - sill(e) }));
+  const doors = places.map((e) => ({ x: e.p[0], y: e.p[1], z: e.z, width: e.width ?? opts.width, height: opts.height }));
   const cut = cutDoorOpenings(Float32Array.from(walls), doors, opts.width, opts.height, ON_WALL);
   const out = dropSlivers(cut);
   const quad = (a: number[], b: number[], c: number[], d: number[]) => out.push(...a, ...b, ...c, ...a, ...c, ...d);
@@ -62,7 +64,10 @@ export function recessEntrances(walls: ArrayLike<number>, places: RecessPlace[],
     quad(v(a, lo), v(a2, lo), v(a2, z1), v(a, z1)); // боковая
     quad(v(b, lo), v(b2, lo), v(b2, z1), v(b, z1)); // боковая
     quad(v(a2, lo), v(b2, lo), v(b2, z1), v(a2, z1)); // задняя
-    if (floor !== undefined) quad(v(a, floor), v(b, floor), v(b2, floor), v(a2, floor));
+    if (floor !== undefined) {
+      quad(v(a, floor), v(b, floor), v(b2, floor), v(a2, floor));
+      if (sill(e) && e.z >= opts.min - 1e-3) quad(v(a, e.z), v(b, e.z), v(b, floor), v(a, floor)); // под полом
+    }
     if (e.z + opts.height <= opts.top + 1e-3) quad(v(a, z1), v(b, z1), v(b2, z1), v(a2, z1)); // потолок
   }
   return out;

@@ -170,7 +170,7 @@ export class MinHeap {
 }
 
 /** Путь через арку в здании (tunnel=building_passage): только он сам, без подходов. */
-export interface PassageWay { id: number; tags: Record<string, string>; coords: LonLat[] }
+export interface PassageWay { id: number; tags: Record<string, string>; nodes: number[]; coords: LonLat[] }
 
 export function isPassageTags(tags?: Record<string, string>): boolean {
   return tags?.tunnel === 'building_passage' && (!!tags.highway || isRailTags(tags)) && tags.area !== 'yes';
@@ -184,25 +184,43 @@ export function parsePassages(elements: OsmElement[]): PassageWay[] {
   for (const e of elements) {
     if (e.type !== 'way' || !isPassageTags(e.tags)) continue;
     const coords = e.nodes.map((n) => nodes.get(n));
-    if (coords.length >= 2 && coords.every(Boolean)) out.push({ id: e.id, tags: e.tags!, coords: coords as LonLat[] });
+    if (coords.length >= 2 && coords.every(Boolean)) out.push({ id: e.id, tags: e.tags!, nodes: e.nodes.slice(), coords: coords as LonLat[] });
   }
   return out;
 }
 
-/** Ширина проезда без width: тротуары и дорожки — 2.5 м, служебные — 3.5, остальные дороги и рельсы — 5. */
+/**
+ * Ширина проезда без width/est_width: по числу полос (lanes × 3 м), иначе по виду пути. Рельсы — габарит
+ * приближения строений на один путь (железная дорога ~5 м, трамвай и метро ~4 м).
+ */
 const PASSAGE_NARROW = new Set(['footway', 'path', 'pedestrian', 'cycleway', 'steps', 'bridleway', 'corridor']);
+const RAIL_PASSAGE: Record<string, { width: number; height: number }> = {
+  rail: { width: 5, height: 6.5 }, narrow_gauge: { width: 4, height: 5 }, preserved: { width: 5, height: 5.5 },
+  light_rail: { width: 4, height: 5 }, subway: { width: 4, height: 4.5 }, tram: { width: 4, height: 5 },
+  monorail: { width: 4, height: 5 }, funicular: { width: 4, height: 4.5 }, miniature: { width: 2, height: 2.5 },
+};
 
 export function passageWidth(tags: Record<string, string>): number {
-  const w = parseLength(tags.width) ?? parseLength(tags.est_width);
+  const w = parseLength(tags.width) ?? parseLength(tags.est_width) ?? parseLength(tags['maxwidth:physical']) ?? parseLength(tags.maxwidth);
   if (w && w > 0.5 && w < 30) return w;
+  const rail = tags.railway && RAIL_PASSAGE[tags.railway];
+  if (rail) return rail.width;
+  const lanes = Number.parseInt(tags.lanes ?? '', 10);
+  if (lanes >= 1 && lanes <= 8 && !PASSAGE_NARROW.has(tags.highway)) return lanes * 3;
   return PASSAGE_NARROW.has(tags.highway) ? 2.5 : tags.highway === 'service' ? 3.5 : 5;
 }
 
 /** Высота арки без maxheight, м: не выше первого этажа здания. */
 export const PASSAGE_HEIGHT = 3.5;
 
-/** Высота арки по тегам пути; undefined — не задана (берётся по первому этажу здания). */
+/**
+ * Высота арки по тегам пути; undefined — не задана (берётся по первому этажу здания). Рельсы без maxheight —
+ * по габариту (контактная сеть железной дороги выше этажа: electrified=no — ниже).
+ */
 export function passageHeight(tags: Record<string, string>): number | undefined {
   const h = parseLength(tags['maxheight:physical']) ?? parseLength(tags.maxheight);
-  return h && h > 1 && h < 20 ? h : undefined;
+  if (h && h > 1 && h < 20) return h;
+  const rail = tags.railway && RAIL_PASSAGE[tags.railway];
+  if (!rail) return;
+  return tags.railway === 'rail' && tags.electrified === 'no' ? 5.5 : rail.height;
 }

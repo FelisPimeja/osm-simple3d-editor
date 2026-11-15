@@ -579,7 +579,7 @@ const MAP_HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
 interface Item {
   feature: Feature3D;
   /** Арка: ниже z объём — контур без полосы проезда (локальные метры). */
-  passage?: { z: number; lower: LocalPolygon[] };
+  passage?: { z: number; lower: LocalPolygon[]; ways: PassagePiece[] };
   /** Ключи объектов, с которыми у него общие грани (крыша–дно): их правка требует пересборки этого. */
   contacts: string;
   /** Теги для рисования: свои + унаследованные от контура/отношения. */
@@ -4834,6 +4834,65 @@ export class BuildingsLayer implements CustomLayerInterface {
    * треугольников дна — нижнюю грань (плоскость низа внутри контура) добавляем как отдельное пересечение.
    * wall — стена (почти вертикальный треугольник).
    */
+  /** Куски арок здания режима (по объектам). */
+  private focusPassagePieces(): PassagePiece[] {
+    const g = this.groups.get(FOCUS_GROUP);
+    return g ? g.items.filter((it) => !g.hidden.has(it.feature.key)).flatMap((it) => it.passage?.ways ?? []) : [];
+  }
+
+  /**
+   * Арка под курсором: луч упёрся в её стенку, потолок или основание (земля в проёме) — id пути.
+   * На плане этажа — только если этаж проходит через арку.
+   */
+  pickPassage(point: [number, number], floor = 0): number | undefined {
+    const pieces = this.focusPassagePieces().filter((p) => floor < p.z - 0.01);
+    const ray = this.focusRay(point);
+    if (!pieces.length || !ray) return;
+    const inside = (x: number, y: number, ps: LocalPolygon[], tol: number) => ps.some((q) =>
+      (pointInLocalRing([x, y], q.outer) || ringNear([x, y], q.outer, tol)) && !q.inners.some((h) => pointInLocalRing([x, y], h)));
+    const hit = this.focusRayHits(point)[0];
+    if (hit) for (const p of pieces) if (hit.local.z <= p.z + 0.05 && inside(hit.local.x, hit.local.y, p.opening, 0.15)) return p.id;
+    if (Math.abs(ray.direction.z) < 1e-6) return;
+    const t = (floor - ray.origin.z) / ray.direction.z;
+    if (t <= 0 || (hit && hit.t < t - 0.01)) return;
+    const q = ray.at(t, new THREE.Vector3());
+    return pieces.find((p) => inside(q.x, q.y, p.opening, 0))?.id;
+  }
+
+  private passageHighlight?: THREE.Object3D;
+  /** Подсветка выбранных арок: объём проёма — пунктиром, ось пути — сплошной линией (синим). */
+  setPassageSelection(ids: number[]) {
+    if (this.passageHighlight) { this.passageHighlight.parent?.remove(this.passageHighlight); disposeTree(this.passageHighlight); this.passageHighlight = undefined; }
+    const pieces = this.focusPassagePieces().filter((p) => ids.includes(p.id));
+    if (pieces.length) {
+      const overlay = { depthTest: false, depthWrite: false, transparent: true };
+      const dashed = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.4, gapSize: 0.25, ...overlay });
+      const solid = new THREE.LineBasicMaterial({ color: 0x2563eb, ...overlay });
+      const root = new THREE.Group();
+      const seg: number[] = [];
+      const axes = new Map<number, Pt[]>();
+      for (const p of pieces) {
+        axes.set(p.id, p.line);
+        for (const q of p.opening) for (const r of [q.outer, ...q.inners]) r.forEach((a, i) => {
+          const b = r[(i + 1) % r.length];
+          seg.push(a[0], a[1], 0.02, b[0], b[1], 0.02, a[0], a[1], p.z, b[0], b[1], p.z, a[0], a[1], 0.02, a[0], a[1], p.z);
+        });
+      }
+      const box = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(seg, 3)), dashed);
+      box.computeLineDistances();
+      box.renderOrder = 1003;
+      root.add(box);
+      for (const line of axes.values()) {
+        const axis = new THREE.Line(new THREE.BufferGeometry().setFromPoints(line.map(([x, y]) => new THREE.Vector3(x, y, 0.05))), solid);
+        axis.renderOrder = 1004;
+        root.add(axis);
+      }
+      this.toolOverlay.add(root);
+      this.passageHighlight = root;
+    }
+    this.map?.triggerRepaint();
+  }
+
   focusRayHits(point: [number, number], allowed: (key: string) => boolean = () => true): FocusHit[] {
     const g = this.groups.get(FOCUS_GROUP);
     const ray = this.focusRay(point);
@@ -7653,6 +7712,12 @@ const FOCUS_GROUP = '@focus';
 export interface FocusHit { key: string; t: number; local: THREE.Vector3; face: 'wall' | 'roof' | 'bottom' }
 
 /** Отрезки ab и cd пересекаются (собственно, не касанием). */
+/** Точка не дальше tol от стороны кольца (локальные метры). */
+function ringNear([x, y]: Pt, ring: Pt[], tol: number): boolean {
+  if (tol <= 0) return false;
+  return ring.some((a, i) => distToSegment([x, y], a, ring[(i + 1) % ring.length]) <= tol);
+}
+
 function segmentsCross(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
   const o = (p: Pt, q: Pt, r: Pt) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
   const d1 = o(c, d, a), d2 = o(c, d, b), d3 = o(a, b, c), d4 = o(a, b, d);
@@ -8531,7 +8596,9 @@ let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => und
 export function setInheritance(fn: (f: Feature3D) => Record<string, string> | undefined) { inheritFor = fn; }
 
 /** Арка (tunnel=building_passage) у объекта: ось проезда, ширина и высота, м. */
-export interface PassageCut { line: LonLat[]; width: number; height?: number }
+export interface PassageCut { id: number; line: LonLat[]; width: number; height?: number }
+/** Кусок арки в объекте: путь id, его ось и проём в этом объекте (локальные метры), верх z. */
+export interface PassagePiece { id: number; line: Pt[]; opening: LocalPolygon[]; z: number }
 /** Арки, задевающие объект, — задаёт main. */
 let passagesFor: (f: Feature3D) => PassageCut[] = () => [];
 export function setPassages(fn: (f: Feature3D) => PassageCut[]) { passagesFor = fn; }
@@ -8558,22 +8625,30 @@ export function passageStrip(line: Pt[], width: number): ClipMulti {
  * Объём под аркой: ниже её верха — только стены контура без полосы проезда (стороны проезда — её стены),
  * над полосой — потолок арки. undefined — арки нет или она не задевает объект по высоте.
  */
-function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heights, tags: Record<string, string>): { lower: LocalPolygon[]; ceiling: LocalPolygon[]; z: number } | undefined {
+function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heights, tags: Record<string, string>): { lower: LocalPolygon[]; ceiling: LocalPolygon[]; z: number; ways: PassagePiece[] } | undefined {
   const cuts = passagesFor(f);
   if (!cuts.length) return;
   // Без maxheight — до верха первого этажа (по building:levels), но не выше PASSAGE_HEIGHT
   const levels = Number.parseFloat(tags['building:levels'] ?? '');
   const first = h.min + Math.min(PASSAGE_HEIGHT, levels >= 1 ? (h.wallTop - h.min) / levels : PASSAGE_HEIGHT);
-  const z = Math.max(...cuts.map((c) => c.height ?? first));
-  if (h.min >= z - 0.01 || z > h.wallTop - PASSAGE_MIN_ABOVE) return;
+  // Арка выше объекта (габарит железной дороги под невысоким зданием) — до верха его стен, под перекрытием
+  const z = Math.min(Math.max(...cuts.map((c) => c.height ?? first)), h.wallTop - PASSAGE_MIN_ABOVE);
+  if (z < h.min + 1) return;
   try {
-    const strips = cuts.map((c) => passageStrip(c.line.map(g.toLocal), c.width)).filter((m) => m.length);
+    const body = toClip(polys);
+    const ways: PassagePiece[] = [], strips: ClipMulti[] = [];
+    for (const c of cuts) {
+      const line = c.line.map(g.toLocal), m = passageStrip(line, c.width);
+      const opening = m.length ? polygonClipping.intersection(body, m) : [];
+      if (!opening.length) continue;
+      strips.push(m);
+      ways.push({ id: c.id, line, opening: fromClip(opening), z });
+    }
     if (!strips.length) return;
     const strip = polygonClipping.union(strips[0], ...strips.slice(1));
-    const body = toClip(polys);
     const ceiling = polygonClipping.intersection(body, strip);
     if (!ceiling.length) return;
-    return { lower: fromClip(polygonClipping.difference(body, strip)), ceiling: fromClip(ceiling), z };
+    return { lower: fromClip(polygonClipping.difference(body, strip)), ceiling: fromClip(ceiling), z, ways };
   } catch (err) { console.warn('[passage]', f.key, err); return; }
 }
 
@@ -8797,7 +8872,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   return {
     contacts: contactKeys(g, f),
     feature: f,
-    passage: passage && !tri.pending ? { z: passage.z, lower: passage.lower } : undefined,
+    passage: passage && !tri.pending ? { z: passage.z, lower: passage.lower, ways: passage.ways } : undefined,
     tags,
     roofApproximated: tri.roofApproximated,
     pending: !!tri.pending,

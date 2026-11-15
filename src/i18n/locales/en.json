@@ -1567,5 +1567,12 @@
   "Вставка входов: не на фасаде {miss} из {n} — наведите группу ближе к стенам. Клик — поставить остальные.": "Pasting entrances: {miss} of {n} are off a facade — move the group closer to the walls. Click to place the rest.",
   "Вставка входов ({n}): клик — поставить группу. Esc — отменить.": "Pasting entrances ({n}): click to place the group. Esc to cancel.",
   "Наведите группу входов на фасад здания у земли.": "Move the entrance group onto a facade near the ground.",
-  "Вставлено входов: {n} из {total}.": "Entrances pasted: {n} of {total}."
+  "Вставлено входов: {n} из {total}.": "Entrances pasted: {n} of {total}.",
+  "Арка": "Building passage",
+  "Проём: ширина {w} м ({wsrc}), высота {h}.": "Opening: width {w} m ({wsrc}), height {h}.",
+  "по тегу": "from the tag",
+  "по умолчанию": "default",
+  "{h} м": "{h} m",
+  "(по умолчанию)": "(default)",
+  "до верха первого этажа (нет maxheight)": "up to the top of the ground floor (no maxheight)"
 }

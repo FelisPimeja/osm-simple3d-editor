@@ -17,7 +17,8 @@ const STORE = 'overpass-tiles';
 // 14 — indoor=yes на линейных объектах (дорожки) больше не площадка; записи 13 показываются и обновляются в фоне
 // 15 — входы на стене объекта, не узлы его контура (дверь indoor-стены на фасаде); записи 14 обновляются в фоне
 // 16 — арки (tunnel=building_passage, passages); записи 15 показываются без них и обновляются в фоне
-const FORMAT = 16;
+// 17 — у арок id узлов (правка формы пути); записи 16 обновляются в фоне
+const FORMAT = 17;
 /** Роль члена, которая неизвестна (кеш старого формата): при отправке сверяемся с сервером только по type/ref. */
 export const UNKNOWN_ROLE = '?';
 /** Сколько тайлов хранить; при превышении удаляются самые старые. */
@@ -65,6 +66,7 @@ export class TileStore {
   async get(key: string): Promise<StoredTile | undefined> {
     const rec = await this.request<TileRecord | undefined>('readonly', (s) => s.get(key), 'тайлы: запрос к IndexedDB');
     if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, passages: rec.passages, fetchedAt: rec.fetchedAt, via: rec.via };
+    if (rec?.format === 16) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
     if (rec?.format === 15) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
     if (rec?.format === 14) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
     if (rec?.format === 13) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };

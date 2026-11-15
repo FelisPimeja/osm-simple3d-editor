@@ -1578,6 +1578,11 @@ map.on('click', (e) => {
     const near = own && inFocus(own) ? undefined : overpassLayer.pickContext(e.point);
     if (near) { select(undefined); contextKey = buildingKey(near); overpassLayer.select(highlightKeys(contextKey)); renderSelected(); return; }
   }
+  // Арка: клик в проём или в её основание — выбрать путь (Shift — добавить к выбранным)
+  if (focus && !shownLevel && !toolActive() && !e.originalEvent.altKey) {
+    const passage = passageAt([e.point.x, e.point.y]);
+    if (passage) { selectIndoor(passage, e.originalEvent.shiftKey); return; }
+  }
   // Вход на фасаде: клик — выбрать (перенос — только инструментом «Переместить»)
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.altKey) {
     const id = overpassLayer.pickEntrance([e.point.x, e.point.y]);
@@ -3327,6 +3332,8 @@ const shapeBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="shap
 const shapeSelected = () => indoorSelection.some(editableIndoorGeometry) ? indoorSelection.filter(editableIndoorGeometry).map(f => f.key) : selection.filter((k) => focus?.members.includes(k) && !hiddenInFocus(k));
 /** Низ и верх стен части и высота крыши, м сцены (для «Формы»). */
 function shapeWalls(key: string) {
+  // Ось арки — на земле (и на плане этажа над ней)
+  if (focus && passageFeatures(focus).some((f) => f.key === key)) return { min: 0, top: 0, roof: 0 };
   const indoor = shownIndoor.find(f => f.key === key && editableIndoorGeometry(f));
   if (indoor && shownLevel) return { min: shownLevel.floor, top: shownLevel.floor, roof: 0 };
   const f = entity(key) as Feature3D | undefined;
@@ -8558,6 +8565,8 @@ function select(key: string | undefined): boolean {
   roadsLayer.select([]);
   roadSelection = [];
   if (key && (selectedIndoor || selectedRoomWalls.length)) selectIndoor(undefined);
+  // Мимо всего в режиме здания — снять и выбор арки (у плана этажа свой сброс)
+  else if (!key && !shownLevel && indoorSelection.some((f) => f.passage)) selectIndoor(undefined);
   addingTo = undefined;
   addPending = [];
   // Переход из списка правок или undo к объекту вне текущей группы — выходим из неё
@@ -9545,6 +9554,9 @@ const INDOOR_NAMES: Record<string, string> = { room: tr('Помещение'), c
 
 /** Помещение, коридор или площадка показанного этажа под курсором (самое маленькое из накрывающих). */
 function indoorAt(point: [number, number]): IndoorFeature | undefined {
+  // Арка — в режиме здания и на плане этажа, через который она проходит
+  const passage = passageAt(point);
+  if (passage) return passage;
   if (!shownLevel) return;
   const ray = overpassLayer.focusRay(point);
   const hit = ray?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -shownLevel.floor), new THREE.Vector3());
@@ -9740,6 +9752,7 @@ const indoorGeometry = (f: IndoorFeature): PresetGeometry => (indoorKey(f.key).s
 function indoorTitle(f: IndoorFeature): string {
   if(f.tags.barrier==='fence' && f.tags.fence_type==='railing')return tr('Ограждение');
   if(f.tags.wall==='counter')return tr('Прилавок');
+  if (f.passage) return tr('Арка');
   const own = f.stairs ? tr('Лестница') : f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
   if (f.escalator) return own;
   loadPresets(() => { if (indoorSelection.length) renderIndoorSelection(); });
@@ -9755,6 +9768,7 @@ function renderIndoorSelection(add = false) {
   const all = focus ? buildingIndoor(focus) : [];
   const partners = indoorSelection.map((x) => stairsPartner(x, all)?.key).filter((k): k is string => !!k && !indoorSelection.some((x) => x.key === k));
   overpassLayer.setIndoorSelection([...indoorSelection.map((x) => x.key), ...partners]);
+  syncPassageSelection();
   indoorPois.setSelection(indoorSelection.map((x) => x.key));
   renderEscalatorUi();
   syncIssueFilter();
@@ -9770,6 +9784,18 @@ function renderIndoorSelection(add = false) {
   const t = f.tags;
   const kind = indoorTitle(f);
   const levels = f.levels.map((n) => levelLabel(n)).join(', ');
+  if (f.passage) {
+    // Арка: без полей этажа и назначения — размеры проёма и теги пути
+    const h = passageHeight(t), w = passageWidth(t);
+    infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
+      + `<p class="hint">${esc(tr('Проём: ширина {w} м ({wsrc}), высота {h}.', {
+        w: String(Math.round(w * 10) / 10),
+        wsrc: t.width || t.est_width || t.maxwidth || t['maxwidth:physical'] ? tr('по тегу') : tr('по умолчанию'),
+        h: h !== undefined ? tr('{h} м', { h: String(Math.round(h * 10) / 10) }) + (t.maxheight || t['maxheight:physical'] ? '' : ' ' + tr('(по умолчанию)')) : tr('до верха первого этажа (нет maxheight)') }))}</p>`
+      + renderOtherTags(key, t, '', true);
+    bindIndoorForm([f]);
+    return;
+  }
   const src = indoorCategorySource(f);
   infoEl.innerHTML = objectHeading(`${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''}`, `${server().web}/${type}/${id}`, esc(key))
     + `<p class="hint">${esc(levels)}</p>`
@@ -9981,7 +10007,7 @@ function indoorLegend(onLevel: IndoorFeature[]): string {
 
 /** Indoor-объект здания режима по ключу OSM (с правками сессии); недоступен — undefined. */
 function buildingIndoorFor(key: string): IndoorFeature | undefined {
-  return focus ? buildingIndoor(focus).find((f) => f.key === key) : undefined;
+  return focus ? buildingIndoor(focus).find((f) => f.key === key) ?? passageFeatures(focus).find((f) => f.key === key) : undefined;
 }
 
 /** Ключи indoor-объектов, которые правились в сессии (их теги берутся из сессии). */
@@ -10289,7 +10315,7 @@ function indoorMoveOperation(fs: IndoorFeature[], offset: THREE.Vector3): Indoor
   return { type: 'move', vertices, delta: indoorDelta(offset) };
 }
 function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false, pairs = true): ObjectEdit[] {
-  const all = focus ? buildingIndoor(focus).filter(f => !f.key.endsWith('#poi')) : [];
+  const all = focus ? [...buildingIndoor(focus).filter(f => !f.key.endsWith('#poi')), ...passageFeatures(focus)] : [];
   const building = focus ? groupFeatures(focus) : [];
   // Части и контур здания — «чужой этаж»: их узлы при правке indoor не двигаются, общий узел отцепляется новым.
   // Геометрию Simple 3D в режиме этажа не меняем: срез этажа не даёт увидеть части целиком
@@ -10372,7 +10398,7 @@ function applyIndoorGeometry(op: IndoorOperation, glue: boolean): boolean {
     // Удаление — после правок соседей: оно сверяет состояние сессии
     if (gone.length) void deleteIndoorSpaces(gone);
     return true;
-  } catch (err) { setStatus(tr((err as Error).message), true); return false; }
+  } catch (err) { console.warn('[indoor-geometry]', err); setStatus(tr((err as Error).message), true); return false; }
 }
 
 /** Начать отслеживать indoor-объект в сессии (у точки — с её узлом: дверь можно и сдвинуть). */
@@ -13362,7 +13388,8 @@ function renderLevelsImpl() {
   // Все эскалаторы здания режут проёмы в планах нижних этажей (те не зависят от выбранного этажа и кешируются)
   const cutEscalators = allEscalators.map(({ visible: _, ...e }) => e);
   const escalators = cutEscalators.filter((_, i) => allEscalators[i].visible);
-  const selectable = new Set([...onLevel.map((f) => f.key), ...escalators.map((e) => e.key)]);
+  // Арки — не объекты этажа: выбираются и в режиме здания, и на любом плане
+  const selectable = new Set([...onLevel.map((f) => f.key), ...escalators.map((e) => e.key), ...(focus ? passageFeatures(focus).map((f) => f.key) : [])]);
   // Выбранные, которых на этаже больше нет (сменили level или этаж) — из выбора вон
   if (indoorSelection.some((s) => !selectable.has(s.key))) {
     const keep = indoorSelection.filter((s) => selectable.has(s.key));
@@ -16249,11 +16276,55 @@ function passagesNear([w, s, e, n]: Bbox): PassageWay[] {
   }) };
   return passageIndex.list.filter(({ box }) => box[2] >= w && box[0] <= e && box[3] >= s && box[1] <= n).map((x) => x.p);
 }
+/** Арка с правками сессии: теги и ось пути (правка «Формой»); удалённая — нет. */
+function livePassage(p: PassageWay): PassageWay | undefined {
+  const key = `way/${p.id}`;
+  if (session.isDeleted(key)) return;
+  const e = session.get(key);
+  if (!e) return p;
+  const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
+  return { ...p, tags: e.tags, ...(line ? { nodes: line.ids, coords: line.coords } : {}) };
+}
 setPassages((f) => {
   if (!f.polygons.length) return [];
-  const near = passagesNear(featureBox(f));
-  return near.map((p) => ({ line: p.coords, width: passageWidth(p.tags), height: passageHeight(p.tags) }));
+  return passagesNear(featureBox(f)).map(livePassage).filter((p): p is PassageWay => !!p)
+    .map((p) => ({ id: p.id, line: p.coords, width: passageWidth(p.tags), height: passageHeight(p.tags) }));
 });
+
+/** Арки здания — indoor-объектами (линия этажа 0): выбор, панель свойств и «Форма» — как у indoor-путей. */
+let passageFeatureCache: { sig: string; list: IndoorFeature[] } | undefined;
+function passageFeatures(g: BuildingGroup): IndoorFeature[] {
+  const sig = `${g.key}|${overpass.revision}|${sessionRevision}`;
+  if (passageFeatureCache?.sig === sig) return passageFeatureCache.list;
+  const feats = groupFeatures(g).filter((f) => f.polygons.length);
+  const box = feats.map(featureBox).reduce<Bbox | undefined>((a, b) => a ? [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])] : b, undefined);
+  const list = !box ? [] : passagesNear(box).map(livePassage).filter((p): p is PassageWay => !!p && p.nodes?.length === p.coords.length)
+    .filter((p) => p.coords.some((c) => feats.some((f) => f.polygons.some((q) => pointInRing(c, q.outer) || nearRing(c, q.outer, 0.3)))))
+    .map((p): IndoorFeature => ({ key: `way/${p.id}`, tags: p.tags, kind: 'area', line: true, passage: true, levels: [0],
+      polygons: [{ outer: p.coords, inners: [], outerIds: p.nodes, innerIds: [] }] }));
+  passageFeatureCache = { sig, list };
+  return list;
+}
+
+/** Арка под курсором (стенка, потолок или земля в проёме) — режим здания и план этажа, через который она проходит. */
+function passageAt(point: [number, number]): IndoorFeature | undefined {
+  if (!focus) return;
+  const id = overpassLayer.pickPassage(point, shownLevel?.floor ?? 0);
+  return id === undefined ? undefined : passageFeatures(focus).find((f) => f.key === `way/${id}`);
+}
+
+/** Подсветка выбранных арок в сцене здания. */
+function syncPassageSelection() {
+  overpassLayer.setPassageSelection(indoorSelection.filter((f) => f.passage).map((f) => Number(f.key.slice(4))));
+}
+
+/** Правка пути арки: объёмы здания по новой оси (вырез) и подсветка. */
+function syncPassageEdits(keys: string[]) {
+  if (!focus || !keys.some((k) => passageFeatures(focus!).some((f) => f.key === k))) return;
+  overpassLayer.previewFocusFeatures(groupFeatures(focus).map((f) => focusFeature(focus!, withEntranceEdits(f))));
+  indoorSelection = indoorSelection.map((f) => f.passage ? passageFeatures(focus!).find((x) => x.key === f.key) ?? f : f);
+  syncPassageSelection();
+}
 
 // Перекрытия стеклянных частей — на высотах полов из той же раскладки, что у панели «Этажи»; с пустотами второго света
 setLevelGrid((f) => {
@@ -16376,6 +16447,7 @@ function onSessionChange(keys: string[]) {
   // Значки планов над зданиями — по правкам тоже (в режиме здания они скрыты, пересчёт — дёшев)
   if (!focus && keys.some((k) => indoorEdited.has(k) || indoorCreated.has(k))) scheduleIndoorBadges();
   syncEntranceEdits(keys);
+  syncPassageEdits(keys);
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
     if (selectedRoomWalls.length) { selectIndoor(undefined); clearInfo(); }
@@ -16515,7 +16587,7 @@ function renderChanges() {
   renderAccount();
   if (josmPlugin()) return renderJosmChanges();
   // Пути-члены мультиполигонов (разрезание при правке контуров) — служебные: отправляются, но в списке не видны
-  const changes = session.changes().filter((c) => !c.feature.line || isIndoorChange(c) || uploadIssueKeys.has(c.key));
+  const changes = session.changes().filter((c) => !c.feature.line || isIndoorChange(c) || c.feature.tags?.tunnel === 'building_passage' || uploadIssueKeys.has(c.key));
   // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
   // Шаги скрытия частей — тоже в истории, но панель ради них не раскрываем
   const show = changes.length > 0 || session.hasDataHistory();
@@ -16618,7 +16690,7 @@ let insertedSuggestion: string | undefined;
 
 function commentSuggestion(): string {
   const groupKey = (key: string) => editGroups.get(key)?.key ?? groupOf(key)?.key;
-  return suggestComment(session.changes().filter((c) => !c.feature.line || isIndoorChange(c)), {
+  return suggestComment(session.changes().filter((c) => !c.feature.line || isIndoorChange(c) || c.feature.tags?.tunnel === 'building_passage'), {
     groupOf: (key) => { const g = groupKey(key); return g && g !== key ? g : undefined; },
     isGroup: (key) => editGroups.has(key),
     buildingName: (key) => {

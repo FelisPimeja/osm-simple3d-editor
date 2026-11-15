@@ -1578,5 +1578,9 @@
   "Ширина арки не меньше 0,5 м.": "Passage width must be at least 0.5 m.",
   "Ширина арки: {w} м.": "Passage width: {w} m.",
   "Ведите курсор поперёк проезда: обе стороны арки расходятся симметрично от оси пути, Alt — двигается одна сторона. Клик — применить, число + Enter — ширина в метрах (тег width), Esc — отмена.": "Move the cursor across the passage: both sides of the opening move symmetrically from the way's axis, Alt moves one side. Click to apply, number + Enter for the width in metres (width tag), Esc to cancel.",
-  "поперёк проезда, симметрично (Alt — одна сторона)": "across the passage, symmetric (Alt — one side)"
+  "поперёк проезда, симметрично (Alt — одна сторона)": "across the passage, symmetric (Alt — one side)",
+  "Арке нужны хотя бы две точки.": "A passage needs at least two points.",
+  "Создана арка {key} (highway=footway, tunnel=building_passage).": "Passage {key} created (highway=footway, tunnel=building_passage).",
+  "{what}: следующая точка; Enter или клик в последнюю точку — закончить, Backspace — убрать точку, Esc — отмена.": "{what}: next point; Enter or click the last point to finish, Backspace removes a point, Esc cancels.",
+  "{what}: кликните начало пути через здание на земле. Esc — выйти.": "{what}: click the start of the way through the building on the ground. Esc exits."
 }

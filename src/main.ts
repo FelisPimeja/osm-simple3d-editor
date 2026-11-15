@@ -4052,7 +4052,7 @@ circleBtn.addEventListener('click', () => toggleDraw('circle'));
 ngonBtn.addEventListener('click', () => toggleDraw('ngon'));
 try { const n = Number(localStorage.getItem('ngon-sides')); if (n) drawTool.sides = n; } catch { /* нет хранилища */ }
 // На плане этажа рисуем в плоскости его пола
-drawTool.plane = () => (focus && shownLevel ? shownLevel.floor : undefined);
+drawTool.plane = () => (focus && shownLevel ? shownLevel.floor : focus && drawTool.shape === 'wall' ? 0 : undefined);
 
 
 // Новое здание прямо с карты: «Прямоугольник» и «Полигон» рисуют контур на земле поверх карты (набросок),
@@ -4313,7 +4313,7 @@ const SHARE_EPS = 0.03;
 function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<string, string>): string | undefined {
   if (sketching) return createSketched(ring);
   if (drawTool.shape === 'line') return cutPlan(ring);
-  if (drawTool.shape === 'wall') return createIndoorWallLine(ring);
+  if (drawTool.shape === 'wall') return linearKind() === 'passage' ? createPassage(ring) : createIndoorWallLine(ring);
   if (drawTool.ring && drawRingTarget && !tagsFor) return addInnerRing(drawRingTarget, ring);
   if (focus && shownLevel && !tagsFor) return createIndoorDrawn(ring);
   if (!focus) return tr('Нет здания.');
@@ -11569,8 +11569,10 @@ const POINT_SIDE_PX = 8;
 
 // Инструмент «Стена»: линейная стена indoor=wall этажа по точкам ломаной
 const wallBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="wall"]')!;
-let linearPreset: 'wall'|'railing'|'escalator'|'stairs' = 'wall';
-const LINEAR_TITLES = { wall: tr('Стена'), railing: tr('Ограждение'), escalator: tr('Эскалатор'), stairs: tr('Лестница') };
+let linearPreset: 'wall'|'railing'|'escalator'|'stairs'|'passage' = 'wall';
+const LINEAR_TITLES = { wall: tr('Стена'), railing: tr('Ограждение'), escalator: tr('Эскалатор'), stairs: tr('Лестница'), passage: tr('Арка') };
+/** Линейный инструмент в действии: в режиме здания (без плана этажа) — только «Арка». */
+const linearKind = () => (shownLevel ? linearPreset : 'passage');
 wallBtn.title=`${tr('Стена')} (F)`;
 wallBtn.insertAdjacentHTML('beforeend','<span class="flyout-arrow" data-linear-menu data-flyout></span>');
 wallBtn.addEventListener('click',e=>{
@@ -11578,11 +11580,12 @@ wallBtn.addEventListener('click',e=>{
   e.stopImmediatePropagation();
   if(rectFlyout){closeRectFlyout();return;}
   const menu=document.createElement('div');menu.className='tool-flyout';
-  menu.innerHTML=`<button type="button" data-linear="wall">${tr('Стена')}</button><button type="button" data-linear="railing">${tr('Ограждение')}</button><button type="button" data-linear="escalator">${tr('Эскалатор')}</button><button type="button" data-linear="stairs">${tr('Лестница')}</button>`;
+  const passageItem=`<button type="button" data-linear="passage">${tr('Арка')}</button>`;
+  menu.innerHTML=shownLevel?`<button type="button" data-linear="wall">${tr('Стена')}</button><button type="button" data-linear="railing">${tr('Ограждение')}</button><button type="button" data-linear="escalator">${tr('Эскалатор')}</button><button type="button" data-linear="stairs">${tr('Лестница')}</button>${passageItem}`:passageItem;
   menu.addEventListener('click',e=>{
     const choice=(e.target as HTMLElement).closest<HTMLElement>('[data-linear]');if(!choice)return;
     e.stopPropagation();linearPreset=choice.dataset.linear as typeof linearPreset;
-    wallBtn.title=`${LINEAR_TITLES[linearPreset]} (F)`;
+    if(shownLevel||linearPreset==='passage')wallBtn.title=`${LINEAR_TITLES[linearPreset]} (F)`;
     closeRectFlyout();startWall();
   });
   wallBtn.after(menu);placeFlyout(menu,wallBtn);rectFlyout=menu;
@@ -11591,7 +11594,8 @@ wallBtn.addEventListener('click', () => (drawTool.active && drawTool.shape === '
 
 /** Стена — только на плане этажа; Точка в режиме объёмов ставит вход на фасад (уровень пола нулевого этажа). */
 function syncPlanTools() {
-  wallBtn.hidden = !shownLevel;
+  wallBtn.hidden = !focus;
+  wallBtn.title = `${LINEAR_TITLES[linearKind()]} (F)`;
   pointBtn.hidden = !focus;
   pointBtn.title = shownLevel ? tr('Точка на плане этажа: на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа (X)') : tr('Вход: точка entrance на фасаде здания (X)');
 }
@@ -11606,12 +11610,12 @@ function pointLevel(): Level | undefined {
 
 function startWall() {
   if (!focus) return;
-  if (!shownLevel) { setStatus(tr('Стены рисуются на плане этажа — выберите этаж в панели «Этажи».'), true); return; }
   if (pointPick) stopPoint();
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop();
   measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
   select(undefined);
-  drawTool.begin('wall', linearPreset === 'escalator' || linearPreset === 'stairs' ? 2 : undefined, linearPreset === 'stairs' ? tr('Лестница') : undefined);
+  const kind = linearKind();
+  drawTool.begin('wall', kind === 'escalator' || kind === 'stairs' ? 2 : undefined, kind === 'stairs' || kind === 'passage' ? LINEAR_TITLES[kind] : undefined);
 }
 
 /** Ломаная (метры сцены) — путь indoor=wall этажа; вершины на узлах соседей — их узлы. */
@@ -11669,6 +11673,26 @@ function wallAsLine(f: IndoorFeature): IndoorFeature {
   if (f.kind !== 'wall' || f.line || f.tags.area === 'yes' || f.tags.barrier || !f.key.startsWith('way/') || f.polygons.length !== 1) return f;
   const { outer, outerIds } = f.polygons[0];
   return { ...f, line: true, polygons: [{ ...f.polygons[0], outer: [...outer, outer[0]], ...(outerIds ? { outerIds: [...outerIds, outerIds[0]] } : {}) }] };
+}
+
+/**
+ * Нарисованная ломаная (метры сцены) — новый путь арки: highway=footway + tunnel=building_passage, свои узлы
+ * (с контуром здания путь не связываем). Вырез в здании — сразу, путь выделен.
+ */
+function createPassage(pts: [number, number][]): string | undefined {
+  if (!focus) return tr('Нет здания.');
+  const { nodeFor } = sharedNodes([]);
+  const nodes = pts.map((q) => nodeFor(overpassLayer.focusToLngLat(q[0], q[1])! as LonLat));
+  if (nodes.length < 2) return tr('Арке нужны хотя бы две точки.');
+  const id = nextNewId--, key = `way/${id}`, tags = { highway: 'footway', tunnel: 'building_passage' };
+  const line = { ids: nodes.map((q) => q.id), coords: nodes.map((q) => q.p) };
+  createdPassages.set(key, { id, tags, nodes: line.ids, coords: line.coords });
+  session.editMany([{ key, create: { key, version: 0, tags, line, polygons: [] } }]);
+  rebuildPassageCut([key]);
+  const made = passageFeatures(focus).find((f) => f.key === key);
+  if (made) selectIndoor(made);
+  setStatus(tr('Создана арка {key} (highway=footway, tunnel=building_passage).', { key }));
+  return;
 }
 
 function createIndoorWallLine(pts: [number, number][], own?: Record<string, string>): string | undefined {
@@ -16291,8 +16315,11 @@ function passagesNear([w, s, e, n]: Bbox): PassageWay[] {
     const xs = p.coords.map((c) => c[0]), ys = p.coords.map((c) => c[1]);
     return { p, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as Bbox };
   }) };
-  return passageIndex.list.filter(({ box }) => box[2] >= w && box[0] <= e && box[3] >= s && box[1] <= n).map((x) => x.p);
+  const created = [...createdPassages.values()].filter((p) => p.coords.some(([x, y]) => x >= w && x <= e && y >= s && y <= n));
+  return [...passageIndex.list.filter(({ box }) => box[2] >= w && box[0] <= e && box[3] >= s && box[1] <= n).map((x) => x.p), ...created];
 }
+/** Арки, нарисованные в сессии (новые пути): в тайлах их нет. */
+const createdPassages = new Map<string, PassageWay>();
 /** Арка с правками сессии: теги и ось пути (правка «Формой»); удалённая — нет. */
 /** Ось арки во время перетаскивания вершины «Формой»: вырез строится по ней, пока правка не применена. */
 const passagePreview = new Map<string, { ids: number[]; coords: LonLat[]; width?: number }>();
@@ -16302,7 +16329,7 @@ function livePassage(p: PassageWay, preview = false): PassageWay | undefined {
   const pre = preview ? passagePreview.get(key) : undefined;
   if (pre) { const tags = session.get(key)?.tags ?? p.tags; return { ...p, tags: pre.width ? { ...tags, width: writeLength(pre.width) } : tags, nodes: pre.ids, coords: pre.coords }; }
   const e = session.get(key);
-  if (!e) return p;
+  if (!e) return p.id < 0 ? undefined : p;
   const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
   return { ...p, tags: e.tags, ...(line ? { nodes: line.ids, coords: line.coords } : {}) };
 }

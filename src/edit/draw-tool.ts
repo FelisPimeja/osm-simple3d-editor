@@ -669,6 +669,12 @@ export class DrawTool {
         : tr('{what}: кликните нижний конец на плане этажа. Esc — выйти.', { what: this.lineLabel ?? tr('Эскалатор') }));
       return;
     }
+    if (this.shape === 'wall' && this.lineLabel && !this.maxPoints) {
+      this.onState(this.pts.length
+        ? tr('{what}: следующая точка; Enter или клик в последнюю точку — закончить, Backspace — убрать точку, Esc — отмена.', { what: this.lineLabel })
+        : tr('{what}: кликните начало пути через здание на земле. Esc — выйти.', { what: this.lineLabel }));
+      return;
+    }
     if (this.shape === 'wall') {
       this.onState(this.pts.length
         ? tr('Стена: следующая точка (на другой линии — закончить); Enter или клик в последнюю точку — закончить, Backspace — убрать точку, Esc — отмена.')

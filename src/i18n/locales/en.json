@@ -1378,7 +1378,6 @@
   "Вставлено indoor-объектов: {n} ({level}).": "Indoor objects pasted: {n} ({level}).",
   "Общих узлов с соседями: {n}.": "Shared nodes with neighbours: {n}.",
   "Скопировано дверей: {n}. Ctrl+V — вставить: клик по стене ставит копию.": "Doors copied: {n}. Ctrl+V — paste: a click on a wall places a copy.",
-  "Двери вставляются на план этажа — выберите этаж в панели «Этажи».": "Doors are pasted onto a floor plan — pick a level in the Levels panel.",
   "Вставка дверей ({n}): клик по стене помещения или наружной стене — копия двери. Esc — закончить.": "Pasting doors ({n}): click a room wall or an outer wall — a door copy. Esc — finish.",
   "Дверь ставится на стену помещения или наружную стену.": "A door goes on a room wall or an outer wall.",
   "Отменить все правки ({n} объект)? Вернуть их будет нельзя.|Отменить все правки ({n} объекта)? Вернуть их будет нельзя.|Отменить все правки ({n} объектов)? Вернуть их будет нельзя.": "Discard all edits ({n} object)? They cannot be restored.|Discard all edits ({n} objects)? They cannot be restored.",
@@ -1557,5 +1556,7 @@
   "{what}: загружаю данные ({ready} из {total} участков карты)…": "{what}: loading data ({ready} of {total} map tiles)…",
   "{what}: загружаю данные…": "{what}: loading data…",
   "{key}: план без здания не найден в загруженных данных.": "{key}: plan without a building not found in the loaded data.",
-  "{key} — ещё и часть контура {owner}: смена концов этого пути разорвала бы кольцо здания. Двигайте вершины или сначала разделите геометрию.": "{key} is also part of the outline of {owner}: changing the ends of this way would break the building ring. Move vertices, or separate the geometry first."
+  "{key} — ещё и часть контура {owner}: смена концов этого пути разорвала бы кольцо здания. Двигайте вершины или сначала разделите геометрию.": "{key} is also part of the outline of {owner}: changing the ends of this way would break the building ring. Move vertices, or separate the geometry first.",
+  "Скопировано входов: {n}. Ctrl+V — вставить: клик по фасаду ставит копию.": "Entrances copied: {n}. Ctrl+V to paste: click a facade to place a copy.",
+  "Вставка входов ({n}): клик по фасаду у земли — копия входа. Esc — закончить.": "Pasting entrances ({n}): click a facade near the ground to place a copy. Esc to finish."
 }

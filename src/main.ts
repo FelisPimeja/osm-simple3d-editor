@@ -4439,6 +4439,7 @@ function defaultCopyBase(items: NonNullable<typeof clipboard>['items'], indoor?:
 /** Ctrl+C в режиме здания: выделенные части (простые пути; контур здания — нет), затем клик — базовая точка. */
 function copySelected() {
   if (!focus) return;
+  if (selectedEntrance !== undefined && !(shownLevel && indoorSelection.length)) return copyEntrances();
   if (shownLevel && indoorSelection.length && indoorSelection.every(isDoor)) return copyDoors();
   if (shownLevel && (indoorSelection.length || selectedRoomWalls.length)) return copyIndoor();
   const keys = selection.filter((k) => focus!.members.includes(k));
@@ -4475,11 +4476,20 @@ function copyDoors() {
   setStatus(tr('Скопировано дверей: {n}. Ctrl+V — вставить: клик по стене ставит копию.', { n: doorClipboard.length }));
 }
 
+/** Ctrl+C выбранных входов (фасад): теги в буфер дверей — вставка кликами по фасаду или, на плане, по стенам. */
+function copyEntrances() {
+  doorClipboard = selectedEntrances().map((id) => Object.fromEntries(Object.entries(session.get(`node/${id}`)?.tags ?? entranceTags(id) ?? { entrance: 'yes' })
+    .filter(([k]) => k !== 'level' && k !== 'repeat_on')));
+  clipboard = undefined;
+  setStatus(tr('Скопировано входов: {n}. Ctrl+V — вставить: клик по фасаду ставит копию.', { n: doorClipboard.length }));
+}
+
 /** Ctrl+V дверей: режим «Точка», каждый клик по стене — следующая копия; поставлены все или Esc — конец. */
 function pasteDoors() {
-  if (!focus || !shownLevel || !doorClipboard) return setStatus(tr('Двери вставляются на план этажа — выберите этаж в панели «Этажи».'), true);
+  if (!focus || !doorClipboard) return;
   startPoint();
   doorPaste = doorClipboard.map((t) => ({ ...t }));
+  if (!shownLevel) return toolHint(tr('Вставка входов ({n}): клик по фасаду у земли — копия входа. Esc — закончить.', { n: doorPaste.length }));
   toolHint(tr('Вставка дверей ({n}): клик по стене помещения или наружной стене — копия двери. Esc — закончить.', { n: doorPaste.length }));
 }
 
@@ -8186,7 +8196,7 @@ document.addEventListener('keydown', (e) => {
   // Ctrl/Cmd+C, Ctrl/Cmd+V — копировать и вставить части здания (по физической клавише — и в русской раскладке)
   // Выделен текст на странице (строка состояния, панель) — Ctrl+C копирует его, как обычно
   const textSelected = !!window.getSelection()?.toString();
-  if (focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === 'KeyV' || (e.code === 'KeyC' && (selection.length || (shownLevel && (indoorSelection.length || selectedRoomWalls.length))) && !textSelected)) && !toolActive()) {
+  if (focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === 'KeyV' || (e.code === 'KeyC' && (selection.length || selectedEntrance !== undefined || (shownLevel && (indoorSelection.length || selectedRoomWalls.length))) && !textSelected)) && !toolActive()) {
     e.preventDefault();
     closeCtxMenu();
     if (e.code === 'KeyC') copySelected(); else pasteClipboard();
@@ -12261,12 +12271,13 @@ function solidDoorEditsImpl(door:IndoorFeature,at:LonLat|undefined,tags=door.tag
 
 /** Поставить точку: новый узел (в стороны помещений и, у входа, в пути здания) или теги на готовую вершину. */
 function placePoint(screen: [number, number]) {
-  const rev = indoorEditRev;
+  const rev = indoorEditRev, fRev = facadeEntranceRev;
   placePointAt(screen);
   // Вставка дверей: поставлена — следующая копия, все поставлены — конец
-  if (!doorPaste || indoorEditRev === rev) return;
+  if (!doorPaste || (indoorEditRev === rev && facadeEntranceRev === fRev)) return;
   doorPaste.shift();
-  if (doorPaste.length) toolHint(tr('Вставка дверей ({n}): клик по стене помещения или наружной стене — копия двери. Esc — закончить.', { n: doorPaste.length }));
+  if (doorPaste.length) toolHint(shownLevel ? tr('Вставка дверей ({n}): клик по стене помещения или наружной стене — копия двери. Esc — закончить.', { n: doorPaste.length })
+    : tr('Вставка входов ({n}): клик по фасаду у земли — копия входа. Esc — закончить.', { n: doorPaste.length }));
   else stopPoint();
 }
 
@@ -12427,8 +12438,11 @@ function placeFacadeEntrance(t: PointTarget) {
     edits.push(...out);
   }
   session.editMany(edits);
+  facadeEntranceRev++;
   setStatus(tr('Поставлен вход {key}.', { key: `node/${id}` }));
 }
+/** Счётчик входов, поставленных на фасад: по нему вставка входов берёт следующую копию. */
+let facadeEntranceRev = 0;
 
 /** Теги без этажа: копии на других этажах совпадают по ним. */
 const tagsNoLevel = (t: Record<string, string>) => JSON.stringify(Object.entries(t).filter(([k]) => k !== 'level' && k !== 'repeat_on').sort());

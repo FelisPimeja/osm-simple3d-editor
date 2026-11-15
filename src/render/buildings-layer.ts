@@ -346,6 +346,8 @@ export interface GraphicsOptions {
   windows?: boolean;
   /** Окна, сгенерированные на фасадах без разметки (тестовое). */
   windowsAuto?: boolean;
+  /** Заливка стёкол окон; без неё — только обводка. */
+  windowFill?: boolean;
 }
 
 /** Высота, на которой затемнение у земли сходит на нет, м (для зданий выше AO_HEIGHT). */
@@ -7403,7 +7405,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const depth = (1 - AO_MIN) * Math.min(1, it.top / AO_HEIGHT);
     const n = it.positions.length / 3;
     for (let v = 0; v < n; v++) {
-      const base = selected ? HIGHLIGHT : v >= n - (it.paneVertices ?? 0) ? (this.monochrome ? WINDOW_PANE_MONO : WINDOW_PANE) : this.monochrome ? MONOCHROME : v < it.wallVertices ? it.wall : v >= n - (it.paneVertices ?? 0) ? WINDOW_PANE : v >= n - it.floorVertices ? FLOOR_SLAB : it.roof;
+      const base = selected ? HIGHLIGHT : v >= n - (it.paneVertices ?? 0) ? (this.graphics.windowFill === false ? (this.monochrome ? MONOCHROME : it.wall) : this.monochrome ? WINDOW_PANE_MONO : WINDOW_PANE) : this.monochrome ? MONOCHROME : v < it.wallVertices ? it.wall : v >= n - (it.paneVertices ?? 0) ? WINDOW_PANE : v >= n - it.floorVertices ? FLOOR_SLAB : it.roof;
       let k = 1;
       if (ao) {
         const t = Math.min(1, Math.max(0, it.positions[v * 3 + 2] / fade));
@@ -7524,7 +7526,8 @@ function itemEdges(it: Item): Float32Array {
   if (hit && hit.wallVertices === it.wallVertices && hit.roofShape === roofShape) return hit.edges;
   // Стёкла окон (хвост вершин) — без рёбер: на тысячах окон сборка рёбер — секунды, а тёмный прямоугольник виден и так
   const panes = it.paneVertices ?? 0;
-  const edges = computeItemEdges(panes ? { ...it, positions: it.positions.subarray(0, it.positions.length - panes * 3) } : it);
+  const body = computeItemEdges(panes ? { ...it, positions: it.positions.subarray(0, it.positions.length - panes * 3) } : it);
+  const edges = panes ? withPaneOutlines(body, it.positions.subarray(it.positions.length - panes * 3)) : body;
   edgeCache.set(it.positions, { wallVertices: it.wallVertices, roofShape, edges });
   return edges;
 }
@@ -7541,6 +7544,21 @@ function fixed2(v: number): string {
     fixedCache.set(v, s = v.toFixed(2));
   }
   return s;
+}
+
+/** Обводка стёкол окон без сборки рёбер: стекло — два треугольника (a b c, a c d), рамка — a-b, b-c, c-d, d-a. */
+function withPaneOutlines(edges: Float32Array, panes: Float32Array): Float32Array {
+  const out = new Float32Array(edges.length + (panes.length / 18) * 24);
+  out.set(edges);
+  let o = edges.length;
+  for (let i = 0; i + 17 < panes.length; i += 18) {
+    const c = [0, 3, 6, 15].map((k) => i + k);
+    for (let j = 0; j < 4; j++) {
+      const a = c[j], b = c[(j + 1) % 4];
+      out.set(panes.subarray(a, a + 3), o); out.set(panes.subarray(b, b + 3), o + 3); o += 6;
+    }
+  }
+  return out;
 }
 
 function computeItemEdges(it: Item): Float32Array {
@@ -8465,7 +8483,7 @@ const GLASS_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, trans
 /** Цвет перекрытий (срезов этажей) внутри здания. */
 const FLOOR_SLAB = new THREE.Color(0xffffff);
 /** Стекло окна в нише: тёмное, с холодным оттенком; на монохромной карте — серое. */
-const WINDOW_PANE = new THREE.Color(0x3a4a58), WINDOW_PANE_MONO = new THREE.Color(0x8a8f94);
+const WINDOW_PANE = new THREE.Color(0x9ca4ab), WINDOW_PANE_MONO = new THREE.Color(0xc4c7c9);
 
 /** Отступ плиты от низа и верха стен, м: у самого края плита совпала бы с дном или крышей. */
 const SLAB_MARGIN = 0.3;

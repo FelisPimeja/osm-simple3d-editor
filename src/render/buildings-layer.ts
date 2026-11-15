@@ -7599,6 +7599,13 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
       shared.set(key, list);
     }
   }
+  // Стык двух вертикальных стен — плоский при том же угле, что у обычных рёбер (EDGE_ANGLE): иначе
+  // излом контура в пару градусов (дверь — вершина контура) даёт ребро, где проём разрезал стену
+  const coplanar = (t: number, u: number) => {
+    const dot = Math.abs(normals[t * 3] * normals[u * 3] + normals[t * 3 + 1] * normals[u * 3 + 1] + normals[t * 3 + 2] * normals[u * 3 + 2]);
+    const walls = Math.abs(normals[t * 3 + 2]) < 1e-3 && Math.abs(normals[u * 3 + 2]) < 1e-3;
+    return dot >= (walls ? WALL_FLAT_COS : FLAT_COS);
+  };
   const EPS = 0.02;
   // Триангулятор может снова склеить коллинеарные стороны. Разделяем
   // кандидаты на рёбра в Т-узлах: на одной части может быть излом,
@@ -7645,7 +7652,7 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
     const exact = shared.get(ekey(vkey(segs, i), vkey(segs, i + 3)));
     if (exact && exact.length >= 2) {
       const first = exact[0];
-      const flat = exact.every((t) => Math.abs(normals[t * 3] * normals[first * 3] + normals[t * 3 + 1] * normals[first * 3 + 1] + normals[t * 3 + 2] * normals[first * 3 + 2]) >= FLAT_COS);
+      const flat = exact.every((t) => coplanar(t, first));
       if (!flat) for (let j = 0; j < 6; j++) keep.push(segs[i + j]);
       continue;
     }
@@ -7676,7 +7683,7 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
         if (tm < Math.min(ta, tb) - EPS || tm > Math.max(ta, tb) + EPS) continue;
         count++;
         if (first < 0) first = t;
-        else if (Math.abs(normals[t * 3] * normals[first * 3] + normals[t * 3 + 1] * normals[first * 3 + 1] + normals[t * 3 + 2] * normals[first * 3 + 2]) < FLAT_COS) flat = false;
+        else if (!coplanar(t, first)) flat = false;
         break;
       }
     }
@@ -7685,6 +7692,7 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
   return new Float32Array(keep);
 }
 const FLAT_COS = Math.cos(THREE.MathUtils.degToRad(1));
+const WALL_FLAT_COS = Math.cos(THREE.MathUtils.degToRad(EDGE_ANGLE));
 
 
 /**

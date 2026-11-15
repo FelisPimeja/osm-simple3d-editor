@@ -10371,8 +10371,13 @@ function drawIndoorGeometryPreview(edits: ObjectEdit[]) {
   overpassLayer.setOutline(lines.length ? lines : undefined, 3, false, false);
 }
 function previewIndoorShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string | undefined {
-  if (!offset) { overpassLayer.setOutline(undefined); return; }
-  try { drawIndoorGeometryPreview(indoorGeometryEdits(indoorShapeOperation(t, offset), shapeTool.glue, true)); }
+  if (!offset) { overpassLayer.setOutline(undefined); if (passagePreview.size) previewPassageEdits(undefined); return; }
+  try {
+    const edits = indoorGeometryEdits(indoorShapeOperation(t, offset), shapeTool.glue, true);
+    drawIndoorGeometryPreview(edits);
+    // Арка: вырез в объёме — по оси превью, сразу
+    if (focus && passageFeatures(focus).some((f) => f.key === t.key)) previewPassageEdits(edits);
+  }
   catch (err) { return tr((err as Error).message); }
 }
 function applyIndoorGeometry(op: IndoorOperation, glue: boolean): boolean {
@@ -16277,9 +16282,13 @@ function passagesNear([w, s, e, n]: Bbox): PassageWay[] {
   return passageIndex.list.filter(({ box }) => box[2] >= w && box[0] <= e && box[3] >= s && box[1] <= n).map((x) => x.p);
 }
 /** Арка с правками сессии: теги и ось пути (правка «Формой»); удалённая — нет. */
-function livePassage(p: PassageWay): PassageWay | undefined {
+/** Ось арки во время перетаскивания вершины «Формой»: вырез строится по ней, пока правка не применена. */
+const passagePreview = new Map<string, { ids: number[]; coords: LonLat[] }>();
+function livePassage(p: PassageWay, preview = false): PassageWay | undefined {
   const key = `way/${p.id}`;
   if (session.isDeleted(key)) return;
+  const pre = preview ? passagePreview.get(key) : undefined;
+  if (pre) return { ...p, tags: session.get(key)?.tags ?? p.tags, nodes: pre.ids, coords: pre.coords };
   const e = session.get(key);
   if (!e) return p;
   const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
@@ -16287,7 +16296,7 @@ function livePassage(p: PassageWay): PassageWay | undefined {
 }
 setPassages((f) => {
   if (!f.polygons.length) return [];
-  return passagesNear(featureBox(f)).map(livePassage).filter((p): p is PassageWay => !!p)
+  return passagesNear(featureBox(f)).map((p) => livePassage(p, true)).filter((p): p is PassageWay => !!p)
     .map((p) => ({ id: p.id, line: p.coords, width: passageWidth(p.tags), height: passageHeight(p.tags) }));
 });
 
@@ -16298,7 +16307,7 @@ function passageFeatures(g: BuildingGroup): IndoorFeature[] {
   if (passageFeatureCache?.sig === sig) return passageFeatureCache.list;
   const feats = groupFeatures(g).filter((f) => f.polygons.length);
   const box = feats.map(featureBox).reduce<Bbox | undefined>((a, b) => a ? [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])] : b, undefined);
-  const list = !box ? [] : passagesNear(box).map(livePassage).filter((p): p is PassageWay => !!p && p.nodes?.length === p.coords.length)
+  const list = !box ? [] : passagesNear(box).map((p) => livePassage(p)).filter((p): p is PassageWay => !!p && p.nodes?.length === p.coords.length)
     .filter((p) => p.coords.some((c) => feats.some((f) => f.polygons.some((q) => pointInRing(c, q.outer) || nearRing(c, q.outer, 0.3)))))
     .map((p): IndoorFeature => ({ key: `way/${p.id}`, tags: p.tags, kind: 'area', line: true, passage: true, levels: [0],
       polygons: [{ outer: p.coords, inners: [], outerIds: p.nodes, innerIds: [] }] }));
@@ -16318,9 +16327,35 @@ function syncPassageSelection() {
   overpassLayer.setPassageSelection(indoorSelection.filter((f) => f.passage).map((f) => Number(f.key.slice(4))));
 }
 
+/** Пересобрать объёмы здания, задетые арками keys (рамка оси с запасом), и подсветку. */
+function rebuildPassageCut(keys: string[]) {
+  if (!focus) return;
+  const lines = keys.flatMap((k) => [passagePreview.get(k)?.coords, passageFeatures(focus!).find((f) => f.key === k)?.polygons[0]?.outer]).filter((l): l is LonLat[] => !!l);
+  if (!lines.length) return;
+  const pad = 2e-4, xs = lines.flat().map((c) => c[0]), ys = lines.flat().map((c) => c[1]);
+  const [w, s, e, n] = [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad];
+  const hit = groupFeatures(focus).filter((f) => { if (!f.polygons.length) return false; const b = featureBox(f); return b[2] >= w && b[0] <= e && b[3] >= s && b[1] <= n; });
+  overpassLayer.previewFocusFeatures(hit.map((f) => focusFeature(focus!, withEntranceEdits(f))));
+  syncPassageSelection();
+}
+
+/** Превью «Формы»: правки путей арок — сразу в вырез; undefined — вернуть ось из сессии. */
+function previewPassageEdits(edits: ObjectEdit[] | undefined) {
+  const before = [...passagePreview.keys()];
+  passagePreview.clear();
+  for (const e of edits ?? []) {
+    if (!focus || !passageFeatures(focus).some((f) => f.key === e.key)) continue;
+    const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
+    if (line) passagePreview.set(e.key, { ids: line.ids, coords: line.coords });
+  }
+  const keys = [...new Set([...before, ...passagePreview.keys()])];
+  if (keys.length) rebuildPassageCut(keys);
+}
+
 /** Правка пути арки: объёмы здания по новой оси (вырез) и подсветка. */
 function syncPassageEdits(keys: string[]) {
   if (!focus || !keys.some((k) => passageFeatures(focus!).some((f) => f.key === k))) return;
+  passagePreview.clear();
   overpassLayer.previewFocusFeatures(groupFeatures(focus).map((f) => focusFeature(focus!, withEntranceEdits(f))));
   indoorSelection = indoorSelection.map((f) => f.passage ? passageFeatures(focus!).find((x) => x.key === f.key) ?? f : f);
   syncPassageSelection();

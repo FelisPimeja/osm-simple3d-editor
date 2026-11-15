@@ -4867,7 +4867,6 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (pieces.length) {
       const overlay = { depthTest: false, depthWrite: false, transparent: true };
       const dashed = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.4, gapSize: 0.25, ...overlay });
-      const solid = new THREE.LineBasicMaterial({ color: 0x2563eb, ...overlay });
       const root = new THREE.Group();
       const seg: number[] = [];
       const axes = new Map<number, Pt[]>();
@@ -4882,10 +4881,21 @@ export class BuildingsLayer implements CustomLayerInterface {
       box.computeLineDistances();
       box.renderOrder = 1003;
       root.add(box);
+      // Ось пути — толстой яркой линией (пиксели экрана), поверх всего
+      const canvas = this.map?.getCanvas();
+      const thick = new LineMaterial({ color: 0x1d4ed8, linewidth: 4, ...overlay });
+      if (canvas) thick.resolution.set(canvas.width, canvas.height);
       for (const line of axes.values()) {
-        const axis = new THREE.Line(new THREE.BufferGeometry().setFromPoints(line.map(([x, y]) => new THREE.Vector3(x, y, 0.05))), solid);
+        const geo = new LineGeometry();
+        geo.setPositions(line.flatMap(([x, y]) => [x, y, 0.05]));
+        const axis = new Line2(geo, thick);
+        axis.frustumCulled = false;
         axis.renderOrder = 1004;
         root.add(axis);
+        const pts = new THREE.Points(new THREE.BufferGeometry().setFromPoints(line.map(([x, y]) => new THREE.Vector3(x, y, 0.05))),
+          new THREE.PointsMaterial({ color: 0x1d4ed8, size: 7, sizeAttenuation: false, ...overlay }));
+        pts.renderOrder = 1004;
+        root.add(pts);
       }
       this.toolOverlay.add(root);
       this.passageHighlight = root;
@@ -8005,7 +8015,8 @@ function sameItemGeometry(old: Item, item: Item): boolean {
 /** Подпись версии объекта для рендера: геометрия, теги и роль в здании. */
 function shapeSig(f: Feature3D): string {
   // Входы тоже: по ним в стене режутся ниши (ширина — по типу входа)
-  return JSON.stringify([f.kind, f.hasParts, f.tags, f.polygons, f.entrances]);
+  // И арки: правка оси пути (в том числе превью «Формы») меняет вырез в объёме
+  return JSON.stringify([f.kind, f.hasParts, f.tags, f.polygons, f.entrances, passagesFor(f)]);
 }
 
 /** Оболочка группы для планов этажей: та же, пока не менялись треугольники, скрытые и висящие части. */

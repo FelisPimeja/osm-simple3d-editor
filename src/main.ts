@@ -4403,7 +4403,13 @@ function attachParts(edits: Parameters<typeof session.editMany>[0], wayIds: (num
 /** indoor — indoor-объекты плана этажа (помещения, стены, колонны; line — линейная стена): вставляются на показанный этаж. */
 let clipboard: { items: { tags: Record<string, string>; polygons: Feature3D['polygons']; line?: boolean }[]; base: { lngLat: LonLat; z: number }; indoor?: boolean } | undefined;
 /** Ctrl+C: части скопированы, ждём клика по базовой точке. */
-let copyPick: { items: NonNullable<typeof clipboard>['items']; indoor?: boolean } | undefined;
+let copyPick: { items: NonNullable<typeof clipboard>['items']; indoor?: boolean; entrances?: EntranceCopy[] } | undefined;
+/** Скопированный вход: теги (без этажа) и место. */
+type EntranceCopy = { tags: Record<string, string>; at: LonLat };
+/** Скопированные входы группой: вставка в режиме объёмов едет за курсором за базовую точку. */
+let entranceClip: { items: EntranceCopy[]; base: LonLat } | undefined;
+/** Вставка входов группой: смещения от базовой точки (метры сцены). */
+let entranceGroup: { tags: Record<string, string>; d: [number, number] }[] | undefined;
 
 /**
  * Базовая точка по умолчанию (если её не кликнули): вершина выпуклой оболочки всех контуров — на опоясывающем контуре,
@@ -4473,23 +4479,43 @@ let doorPaste: Record<string, string>[] | undefined;
 function copyDoors() {
   doorClipboard = indoorSelection.map((f) => Object.fromEntries(Object.entries(f.tags).filter(([k]) => k !== 'level' && k !== 'repeat_on')));
   clipboard = undefined;
+  entranceClip = undefined;
   setStatus(tr('Скопировано дверей: {n}. Ctrl+V — вставить: клик по стене ставит копию.', { n: doorClipboard.length }));
 }
 
 /** Ctrl+C выбранных входов (фасад): теги в буфер дверей — вставка кликами по фасаду или, на плане, по стенам. */
 function copyEntrances() {
-  doorClipboard = selectedEntrances().map((id) => Object.fromEntries(Object.entries(session.get(`node/${id}`)?.tags ?? entranceTags(id) ?? { entrance: 'yes' })
-    .filter(([k]) => k !== 'level' && k !== 'repeat_on')));
+  const items: EntranceCopy[] = [];
+  for (const id of selectedEntrances()) {
+    const pl = overpassLayer.focusEntrance(id), at = pl && overpassLayer.focusToLngLat(pl.p[0], pl.p[1]);
+    if (!at) continue;
+    const tags = session.get(`node/${id}`)?.tags ?? entranceTags(id) ?? { entrance: 'yes' };
+    items.push({ tags: Object.fromEntries(Object.entries(tags).filter(([k]) => k !== 'level' && k !== 'repeat_on')), at: [...at] as LonLat });
+  }
+  if (!items.length) return setStatus(tr('Выберите входы здания, затем Ctrl+C.'), true);
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop(); stopPoint();
+  // На плане этажа те же входы вставляются дверями по одной
+  doorClipboard = items.map((e) => ({ ...e.tags }));
   clipboard = undefined;
-  setStatus(tr('Скопировано входов: {n}. Ctrl+V — вставить: клик по фасаду ставит копию.', { n: doorClipboard.length }));
+  entranceClip = { items, base: items[0].at };
+  copyPick = { items: [], entrances: items };
+  setStatus(tr('Копирование входов ({n}): кликните базовую точку — за неё группа будет привязана к курсору при вставке. Без клика — первый вход.', { n: items.length }));
+  if (lastPointer) updateSnap(lastPointer);
 }
 
 /** Ctrl+V дверей: режим «Точка», каждый клик по стене — следующая копия; поставлены все или Esc — конец. */
 function pasteDoors() {
   if (!focus || !doorClipboard) return;
+  if (!shownLevel && !entranceClip) return setStatus(tr('Двери вставляются на план этажа — выберите этаж в панели «Этажи».'), true);
   startPoint();
+  if (!shownLevel && entranceClip) {
+    const b = overpassLayer.focusToLocal(entranceClip.base)!;
+    entranceGroup = entranceClip.items.map((e) => { const q = overpassLayer.focusToLocal(e.at)!; return { tags: { ...e.tags }, d: [q[0] - b[0], q[1] - b[1]] as [number, number] }; });
+    toolHint(tr('Вставка входов ({n}): группа едет за курсором, каждый вход — на ближайший фасад. Клик — поставить. Esc — отменить.', { n: entranceGroup.length }));
+    if (lastPointer) hoverPoint(lastPointer);
+    return;
+  }
   doorPaste = doorClipboard.map((t) => ({ ...t }));
-  if (!shownLevel) return toolHint(tr('Вставка входов ({n}): клик по фасаду у земли — копия входа. Esc — закончить.', { n: doorPaste.length }));
   toolHint(tr('Вставка дверей ({n}): клик по стене помещения или наружной стене — копия двери. Esc — закончить.', { n: doorPaste.length }));
 }
 
@@ -4525,6 +4551,12 @@ function pickCopyBase(point: [number, number]) {
   if (!p) return setStatus(tr('Кликните по точке здания или земли.'), true);
   const ll = overpassLayer.focusToLngLat(p.x, p.y);
   if (!ll) return;
+  if (copyPick.entrances) {
+    entranceClip = { items: copyPick.entrances, base: [...ll] as LonLat };
+    copyPick = undefined;
+    updateSnap(undefined);
+    return setStatus(tr('Скопировано входов: {n}. Ctrl+V — вставить: группа поедет за курсором, клик по фасаду ставит её.', { n: entranceClip.items.length }));
+  }
   clipboard = { items: copyPick.items, base: { lngLat: ll, z: p.z }, indoor: copyPick.indoor };
   doorClipboard = undefined;
   copyPick = undefined;
@@ -4540,13 +4572,16 @@ function setDefaultClipboard(items: NonNullable<typeof clipboard>['items'], indo
   if (!base) return;
   clipboard = { items, base, indoor };
   doorClipboard = undefined;
+  entranceClip = undefined;
 }
 
 /** Esc / вставка без клика: остаётся базовая точка по умолчанию (угловая вершина). */
 function cancelCopyPick(quiet = false) {
   if (!copyPick) return;
+  const ent = copyPick.entrances;
   copyPick = undefined;
   updateSnap(undefined);
+  if (ent) { if (!quiet) setStatus(tr('Скопировано входов: {n}. Базовая точка — первый вход. Ctrl+V — вставить.', { n: ent.length })); return; }
   if (!quiet) setStatus(clipboard ? tr('Скопировано: {n}. Базовая точка — угловая вершина. Ctrl+V — вставить.', { n: clipboard.items.length }) : tr('Копирование отменено.'));
 }
 
@@ -11832,6 +11867,7 @@ function stopPoint() {
   if (!pointPick) return;
   pointPick = false;
   doorPaste = undefined;
+  entranceGroup = undefined;
   pointLock = undefined;
   pointBtn.classList.remove('active');
   document.querySelector('.indoor-pois')?.classList.remove('passthrough');
@@ -11943,7 +11979,52 @@ function pointTargetOn(screen: [number, number], lvl: Level): PointTarget | unde
   return { at, local: q, kind: outside ? 'entrance' : 'door', node, indoor, building: outside ? building : [], side: [a, b] };
 }
 
+/** Вставка входов группой: место каждого входа — курсор плюс его смещение, прижатое к ближайшему фасаду. */
+function entranceGroupTargets(screen: [number, number]): { scr: [number, number]; t?: PointTarget; tags: Record<string, string> }[] | undefined {
+  const lvl = pointLevel();
+  if (!entranceGroup || !lvl) return;
+  const z = lvl.floor;
+  const hit = overpassLayer.focusRay(pointSnapped(screen))?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+  if (!hit) return;
+  return entranceGroup.map((g) => {
+    const scr = overpassLayer.focusProject(new THREE.Vector3(hit.x + g.d[0], hit.y + g.d[1], z)) ?? screen;
+    const t = pointTargetOn(scr, lvl);
+    return { scr, t: t?.kind === 'entrance' ? t : undefined, tags: g.tags };
+  });
+}
+
+function hoverEntranceGroup(screen: [number, number]) {
+  const ts = entranceGroupTargets(screen), lvl = pointLevel();
+  if (!ts || !lvl) { overpassLayer.setDrawPreview(undefined); return; }
+  const s = 0.25, z = lvl.floor, pts: THREE.Vector3[] = [];
+  for (const { t } of ts) if (t) {
+    const [x, y] = t.local;
+    pts.push(...[[x - s, y - s], [x + s, y - s], [x + s, y + s], [x - s, y + s], [x - s, y - s], [x, y]].map(([a, b]) => new THREE.Vector3(a, b, z)));
+  }
+  overpassLayer.setDrawPreview(pts.length ? pts : undefined, false, true);
+  const miss = ts.filter((x) => !x.t).length;
+  toolHint(miss ? tr('Вставка входов: не на фасаде {miss} из {n} — наведите группу ближе к стенам. Клик — поставить остальные.', { miss, n: ts.length })
+    : tr('Вставка входов ({n}): клик — поставить группу. Esc — отменить.', { n: ts.length }));
+}
+
+/** Клик при вставке входов группой: каждый вход по очереди (место пересчитывается после предыдущего — узлы в сторонах меняются). */
+function placeEntranceGroup(screen: [number, number]) {
+  const ts = entranceGroupTargets(screen), lvl = pointLevel();
+  if (!ts || !lvl) return;
+  if (!ts.some((x) => x.t)) return setStatus(tr('Наведите группу входов на фасад здания у земли.'), true);
+  const rev = facadeEntranceRev;
+  for (const x of ts) {
+    if (!x.t) continue;
+    const t = pointTargetOn(x.scr, lvl);
+    if (t?.kind === 'entrance') placeFacadeEntrance(t, x.tags);
+  }
+  const n = facadeEntranceRev - rev;
+  stopPoint();
+  setStatus(tr('Вставлено входов: {n} из {total}.', { n, total: ts.length }));
+}
+
 function hoverPoint(screen: [number, number]) {
+  if (entranceGroup) return hoverEntranceGroup(screen);
   const t = pointTarget(screen);
   // Shift: стена под точкой — зафиксирована, пока клавиша зажата
   if (shiftHeld && !pointLock && t?.side) pointLock = t.side;
@@ -12271,6 +12352,7 @@ function solidDoorEditsImpl(door:IndoorFeature,at:LonLat|undefined,tags=door.tag
 
 /** Поставить точку: новый узел (в стороны помещений и, у входа, в пути здания) или теги на готовую вершину. */
 function placePoint(screen: [number, number]) {
+  if (entranceGroup) return placeEntranceGroup(screen);
   const rev = indoorEditRev, fRev = facadeEntranceRev;
   placePointAt(screen);
   // Вставка дверей: поставлена — следующая копия, все поставлены — конец
@@ -12414,9 +12496,9 @@ function placePointAt(screen: [number, number]) {
 }
 
 /** Вход в режиме объёмов: узел entrance=yes на фасаде — вершина контура или новый узел в его стороне (и в частях по ней). */
-function placeFacadeEntrance(t: PointTarget) {
+function placeFacadeEntrance(t: PointTarget, copy = doorPaste?.[0]) {
   // Вход на фасаде — он же дверь плана первого этажа: indoor=door и level=0
-  const tags: Record<string, string> = { ...(doorPaste?.[0] ?? { entrance: 'yes' }), indoor: 'door', level: '0' };
+  const tags: Record<string, string> = { ...(copy ?? { entrance: 'yes' }), indoor: 'door', level: '0' };
   const edits: ObjectEdit[] = [];
   let id: number;
   if (t.node !== undefined) {

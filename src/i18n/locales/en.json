@@ -1557,6 +1557,15 @@
   "{what}: загружаю данные…": "{what}: loading data…",
   "{key}: план без здания не найден в загруженных данных.": "{key}: plan without a building not found in the loaded data.",
   "{key} — ещё и часть контура {owner}: смена концов этого пути разорвала бы кольцо здания. Двигайте вершины или сначала разделите геометрию.": "{key} is also part of the outline of {owner}: changing the ends of this way would break the building ring. Move vertices, or separate the geometry first.",
-  "Скопировано входов: {n}. Ctrl+V — вставить: клик по фасаду ставит копию.": "Entrances copied: {n}. Ctrl+V to paste: click a facade to place a copy.",
-  "Вставка входов ({n}): клик по фасаду у земли — копия входа. Esc — закончить.": "Pasting entrances ({n}): click a facade near the ground to place a copy. Esc to finish."
+  "Вставка входов ({n}): клик по фасаду у земли — копия входа. Esc — закончить.": "Pasting entrances ({n}): click a facade near the ground to place a copy. Esc to finish.",
+  "Двери вставляются на план этажа — выберите этаж в панели «Этажи».": "Doors are pasted onto a floor plan — pick a level in the Levels panel.",
+  "Выберите входы здания, затем Ctrl+C.": "Select building entrances, then Ctrl+C.",
+  "Копирование входов ({n}): кликните базовую точку — за неё группа будет привязана к курсору при вставке. Без клика — первый вход.": "Copying entrances ({n}): click a base point — the group will follow the cursor by it when pasted. Without a click, the first entrance.",
+  "Скопировано входов: {n}. Ctrl+V — вставить: группа поедет за курсором, клик по фасаду ставит её.": "Entrances copied: {n}. Ctrl+V to paste: the group follows the cursor, a click on a facade places it.",
+  "Скопировано входов: {n}. Базовая точка — первый вход. Ctrl+V — вставить.": "Entrances copied: {n}. Base point is the first entrance. Ctrl+V to paste.",
+  "Вставка входов ({n}): группа едет за курсором, каждый вход — на ближайший фасад. Клик — поставить. Esc — отменить.": "Pasting entrances ({n}): the group follows the cursor, each entrance snaps to the nearest facade. Click to place. Esc to cancel.",
+  "Вставка входов: не на фасаде {miss} из {n} — наведите группу ближе к стенам. Клик — поставить остальные.": "Pasting entrances: {miss} of {n} are off a facade — move the group closer to the walls. Click to place the rest.",
+  "Вставка входов ({n}): клик — поставить группу. Esc — отменить.": "Pasting entrances ({n}): click to place the group. Esc to cancel.",
+  "Наведите группу входов на фасад здания у земли.": "Move the entrance group onto a facade near the ground.",
+  "Вставлено входов: {n} из {total}.": "Entrances pasted: {n} of {total}."
 }

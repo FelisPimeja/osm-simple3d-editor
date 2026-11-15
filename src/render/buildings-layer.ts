@@ -9056,7 +9056,10 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
         pointInLocalRing(p, q.outer) && !q.inners.some((h) => pointInLocalRing(p, h))));
       const places = generateWindows(polys.map((q) => [q.outer, ...q.inners]), { min: heights.min, top: heights.wallTop, levels,
         width: WINDOW_WIDTH, height: WINDOW_HEIGHT, breast: WINDOW_BREAST, doors: doorPlaces,
-        doorWidth: ENTRANCE_WIDTH, doorHeight: ENTRANCE_HEIGHT, blocked });
+        doorWidth: ENTRANCE_WIDTH, doorHeight: ENTRANCE_HEIGHT, blocked,
+        // Проём арки: окно, задевающее его по высоте, не ставим (полоса арки — с запасом окна в ширину)
+        hole: passage && ((p, t, z0, z1) => passage.ways.some((w) => z0 < w.z && z1 > (w.min ?? heights.min) && w.opening.some((q) =>
+          [0, -1, 1].some((k) => pointInLocalRing([p[0] + t[0] * k * WINDOW_WIDTH / 2, p[1] + t[1] * k * WINDOW_WIDTH / 2], q.outer))))) || undefined });
       // Без вырезания ниш (на сотнях фасадов это секунды): стекло — прямоугольником чуть перед стеной
       for (const w of places) {
         const hw = (w.width ?? WINDOW_WIDTH) / 2, z1 = w.z + (w.height ?? 1);

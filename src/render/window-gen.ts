@@ -37,6 +37,8 @@ export interface WindowGenOpts {
   doorHeight: number;
   /** За стеной в точке p на высоте z — другой объём (глухая стена к соседу). */
   blocked: (p: Pt, z: number) => boolean;
+  /** В стене в точке p (чуть внутри объёма) на высотах z0..z1 — проём (арка): окна там нет. */
+  hole?: (p: Pt, t: Pt, z0: number, z1: number) => boolean;
 }
 
 /** Окна на фасадах части: по этажам, равным шагом вдоль каждой стены. rings — кольца полигона (первое — внешнее). */
@@ -62,10 +64,12 @@ export function generateWindows(polygons: Pt[][][], o: WindowGenOpts): RecessPla
         const s = Math.min(Math.max((k + 0.5) * step, CORNER + o.width / 2), len - CORNER - o.width / 2);
         const p: Pt = [a[0] + t[0] * s, a[1] + t[1] * s];
         const probe: Pt = [p[0] + nrm[0] * 0.3, p[1] + nrm[1] * 0.3];
+        const inner: Pt = [p[0] - nrm[0] * 0.3, p[1] - nrm[1] * 0.3];
         for (let l = 0; l < o.levels; l++) {
           const z = o.min + l * levelH + breast;
           if (z + h > o.top - 0.05) continue;
           if (o.blocked(probe, z + h / 2)) continue;
+          if (o.hole?.(inner, t, z - 0.2, z + h + 0.2)) continue;
           const door = o.doors.some((d) => {
             const along = (d.p[0] - p[0]) * t[0] + (d.p[1] - p[1]) * t[1];
             const off = Math.abs((d.p[0] - p[0]) * nrm[0] + (d.p[1] - p[1]) * nrm[1]);

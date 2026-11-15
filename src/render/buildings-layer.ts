@@ -27,7 +27,7 @@ import { trimInWorker, trimSync, trimWorkersAvailable, type TrimJob, type TrimRe
 import { areaLedgeTriangles } from './area-ledge';
 import { dropJitter } from './jitter';
 import { floatingParts } from '../osm/floating';
-import { entranceOf, pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
+import { entranceOf, isWallWindow, pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
 import { dropPartSeams } from './part-seams';
 import { COUNTER_DEPTH, closedCounterSplit, counterRing, isClosedCounterRing } from './counter-ring';
 import { edgePass } from './edge-pass';
@@ -9011,7 +9011,8 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   const panes: number[] = [];
   if (windowsEnabled && !shell && !roofOnly && !flat && !tri.pending && f.windows?.length) {
     timed('здание: ниши окон', () => {
-      const wins = new Map(f.windows!.map((w) => [w.id, w.tags]));
+      // Фильтр и здесь: в кеше тайлов признаки, собранные до правил (window=yes на входе — дверь со стеклом)
+      const wins = new Map(f.windows!.filter((w) => isWallWindow(w.tags)).map((w) => [w.id, w.tags]));
       const levels = Number(tags['building:levels']);
       const levelH = levels > 0 ? computeHeights(tags).wallTop / levels : LEVEL_HEIGHT;
       const places: RecessPlace[] = [];

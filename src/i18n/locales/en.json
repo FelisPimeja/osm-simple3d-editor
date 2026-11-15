@@ -1574,5 +1574,7 @@
   "по умолчанию": "default",
   "{h} м": "{h} m",
   "(по умолчанию)": "(default)",
-  "до верха первого этажа (нет maxheight)": "up to the top of the ground floor (no maxheight)"
+  "до верха первого этажа (нет maxheight)": "up to the top of the ground floor (no maxheight)",
+  "Ширина арки не меньше 0,5 м.": "Passage width must be at least 0.5 m.",
+  "Ширина арки: {w} м.": "Passage width: {w} m."
 }

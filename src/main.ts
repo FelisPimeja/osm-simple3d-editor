@@ -3355,6 +3355,17 @@ shapeTool.multiObject = () => indoorSelection.some(editableIndoorGeometry);
 shapeTool.noInsert = key => !!buildingIndoorFor(key)?.escalator;
 // Ширина марша с полигоном пары: ручки на серединах боковых сторон (на полу этажа)
 shapeTool.widthHandles = (key) => {
+  // Арка: ручки ширины проёма — на середине самого длинного отрезка оси, на земле
+  const pf = focus ? passageFeatures(focus).find((x) => x.key === key) : undefined;
+  if (pf) {
+    const pts = pf.polygons[0].outer.map((c) => overpassLayer.focusToLocal(c)!);
+    let i = 0, best = -1;
+    pts.forEach((p, k) => { if (k + 1 < pts.length) { const d = Math.hypot(pts[k + 1][0] - p[0], pts[k + 1][1] - p[1]); if (d > best) { best = d; i = k; } } });
+    if (best < 0.1) return;
+    const [a, b] = [pts[i], pts[i + 1]], dir = new THREE.Vector3(-(b[1] - a[1]) / best, (b[0] - a[0]) / best, 0);
+    const mid = new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 0), width = passageWidth(session.get(key)?.tags ?? pf.tags);
+    return { a: mid.clone().addScaledVector(dir, -width / 2), b: mid.clone().addScaledVector(dir, width / 2), dir, width, own: [pf.key] };
+  }
   const f = buildingIndoorFor(key);
   const width = f?.escalator && shownLevel ? pairWidth(f, focus ? buildingIndoor(focus) : []) : undefined;
   if (!f || width === undefined || !editableEscalator(f)) return;
@@ -7678,6 +7689,7 @@ function widthShift(t: ShapeTarget, w: number): number {
 function previewShape(t: ShapeTarget, offset: THREE.Vector3 | undefined): string | undefined {
   if (t.width) {
     const f = buildingIndoorFor(t.key), w = offset && shapeWidth(t, offset);
+    if (f?.passage) { previewPassageWidth(t, f, w || undefined); return; }
     if (!f || !w) { overpassLayer.setOutline(undefined); return; }
     try { drawIndoorGeometryPreview(pairWidthEdits(f, w, true, widthShift(t, w))); } catch (err) { return tr((err as Error).message); }
     return;
@@ -7733,7 +7745,7 @@ function shapeGlued(rings: ShapeRings): boolean {
 }
 
 function commitShape(t: ShapeTarget, offset: THREE.Vector3): boolean {
-  if (t.width) { const f = buildingIndoorFor(t.key), w = shapeWidth(t, offset); return !!f && !!w && setFlightWidth(f, w, widthShift(t, w)); }
+  if (t.width) { const f = buildingIndoorFor(t.key), w = shapeWidth(t, offset); return !!f && !!w && (f.passage ? setPassageWidth(t, f, w) : setFlightWidth(f, w, widthShift(t, w))); }
   // Indoor — всегда своим путём (и выделенный): общий путь частей двигал бы общие с частями узлы
   if (buildingIndoorFor(t.key)) return applyIndoorGeometry(indoorShapeOperation(t, offset), shapeTool.glue);
   const fail = (msg: string) => { setStatus(msg, true); return false; };
@@ -16283,12 +16295,12 @@ function passagesNear([w, s, e, n]: Bbox): PassageWay[] {
 }
 /** Арка с правками сессии: теги и ось пути (правка «Формой»); удалённая — нет. */
 /** Ось арки во время перетаскивания вершины «Формой»: вырез строится по ней, пока правка не применена. */
-const passagePreview = new Map<string, { ids: number[]; coords: LonLat[] }>();
+const passagePreview = new Map<string, { ids: number[]; coords: LonLat[]; width?: number }>();
 function livePassage(p: PassageWay, preview = false): PassageWay | undefined {
   const key = `way/${p.id}`;
   if (session.isDeleted(key)) return;
   const pre = preview ? passagePreview.get(key) : undefined;
-  if (pre) return { ...p, tags: session.get(key)?.tags ?? p.tags, nodes: pre.ids, coords: pre.coords };
+  if (pre) { const tags = session.get(key)?.tags ?? p.tags; return { ...p, tags: pre.width ? { ...tags, width: writeLength(pre.width) } : tags, nodes: pre.ids, coords: pre.coords }; }
   const e = session.get(key);
   if (!e) return p;
   const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
@@ -16350,6 +16362,42 @@ function previewPassageEdits(edits: ObjectEdit[] | undefined) {
   }
   const keys = [...new Set([...before, ...passagePreview.keys()])];
   if (keys.length) rebuildPassageCut(keys);
+}
+
+/** Ось арки, сдвинутая вбок (сдвиг одной стороны ручкой ширины с Alt): сдвиг — вдоль dir ручек, м. */
+function passageShifted(f: IndoorFeature, t: ShapeTarget, w: number): LonLat[] {
+  const h = shapeTool.widthHandles?.(t.key), shift = widthShift(t, w), line = f.polygons[0].outer;
+  if (!h || !shift) return line;
+  const d = indoorDelta(h.dir.clone().multiplyScalar(shift));
+  return line.map(([x, y]) => [x + d[0], y + d[1]] as LonLat);
+}
+
+/** Превью ручки ширины арки: вырез и подсветка — по новой ширине (и оси); undefined — как было. */
+function previewPassageWidth(t: ShapeTarget, f: IndoorFeature, w: number | undefined) {
+  if (!w || w < 0.5) { previewPassageEdits(undefined); return; }
+  passagePreview.clear();
+  passagePreview.set(f.key, { ids: f.polygons[0].outerIds!, coords: passageShifted(f, t, w), width: w });
+  rebuildPassageCut([f.key]);
+}
+
+/** Записать ширину арки (тег width) и, при сдвиге одной стороны, ось пути — одним шагом. */
+function setPassageWidth(t: ShapeTarget, f: IndoorFeature, w: number): boolean {
+  if (w < 0.5) { setStatus(tr('Ширина арки не меньше 0,5 м.'), true); return false; }
+  try {
+    const shift = widthShift(t, w), h = shapeTool.widthHandles?.(t.key);
+    let edits: ObjectEdit[] = [];
+    if (shift && h) edits = indoorGeometryEdits({ type: 'move', vertices: f.polygons[0].outer.map((_, i) => ({ key: f.key, poly: 0, ring: 0, i })),
+      delta: indoorDelta(h.dir.clone().multiplyScalar(shift)) }, false);
+    trackIndoor(f.key, f);
+    const tags = { ...(session.get(f.key)?.tags ?? f.tags), width: writeLength(w) };
+    const own = edits.find((e) => e.key === f.key);
+    if (own) own.tags = tags; else edits.push({ key: f.key, tags });
+    passagePreview.clear();
+    session.editMany(edits);
+    shapeTool.refresh();
+    setStatus(tr('Ширина арки: {w} м.', { w: w.toFixed(2) }));
+    return true;
+  } catch (err) { setStatus(tr((err as Error).message), true); return false; }
 }
 
 /** Правка пути арки: объёмы здания по новой оси (вырез) и подсветка. */

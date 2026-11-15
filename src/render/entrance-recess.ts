@@ -38,7 +38,7 @@ function dropSlivers(p: ArrayLike<number>): number[] {
  * Ориентация граней не важна (материал зданий двусторонний). Нечего делать — undefined.
  */
 export function recessEntrances(walls: ArrayLike<number>, places: RecessPlace[],
-  opts: { width: number; height: number; min: number; top: number; depth?: number }): number[] | undefined {
+  opts: { width: number; height: number; min: number; top: number; depth?: number; panes?: number[] }): number[] | undefined {
   if (!places.length || !walls.length) return;
   const depth = opts.depth ?? RECESS_DEPTH;
   // Проём — от порога. У входа на земле пола у ниши нет: её дно — карта, без порожка
@@ -59,7 +59,9 @@ export function recessEntrances(walls: ArrayLike<number>, places: RecessPlace[],
     const lo = floor ?? Math.max(z0, e.z);
     quad(v(a, lo), v(a2, lo), v(a2, z1), v(a, z1)); // боковая
     quad(v(b, lo), v(b2, lo), v(b2, z1), v(b, z1)); // боковая
-    quad(v(a2, lo), v(b2, lo), v(b2, z1), v(a2, z1)); // задняя
+    // Задняя: у окна — стекло (в opts.panes, своим цветом), у входа — стена
+    const back = [...v(a2, lo), ...v(b2, lo), ...v(b2, z1), ...v(a2, lo), ...v(b2, z1), ...v(a2, z1)];
+    (opts.panes ?? out).push(...back);
     if (floor !== undefined) quad(v(a, floor), v(b, floor), v(b2, floor), v(a2, floor));
     if (e.z + h <= opts.top + 1e-3) quad(v(a, z1), v(b, z1), v(b2, z1), v(a2, z1)); // потолок
   }

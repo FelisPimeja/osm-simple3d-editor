@@ -594,6 +594,8 @@ interface Item {
   wallVertices: number;
   /** Перекрытия (плиты стеклянных частей и крыша под соседней частью) — последние вершины, после крыши. */
   floorVertices: number;
+  /** Стёкла окон — последние из floorVertices (идут вместе с плитами, красятся WINDOW_PANE). */
+  paneVertices?: number;
   wall: THREE.Color;
   roof: THREE.Color;
   top: number;
@@ -7394,7 +7396,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const depth = (1 - AO_MIN) * Math.min(1, it.top / AO_HEIGHT);
     const n = it.positions.length / 3;
     for (let v = 0; v < n; v++) {
-      const base = selected ? HIGHLIGHT : this.monochrome ? MONOCHROME : v < it.wallVertices ? it.wall : v >= n - it.floorVertices ? FLOOR_SLAB : it.roof;
+      const base = selected ? HIGHLIGHT : v >= n - (it.paneVertices ?? 0) ? (this.monochrome ? WINDOW_PANE_MONO : WINDOW_PANE) : this.monochrome ? MONOCHROME : v < it.wallVertices ? it.wall : v >= n - (it.paneVertices ?? 0) ? WINDOW_PANE : v >= n - it.floorVertices ? FLOOR_SLAB : it.roof;
       let k = 1;
       if (ao) {
         const t = Math.min(1, Math.max(0, it.positions[v * 3 + 2] / fade));
@@ -8453,6 +8455,8 @@ const GLASS_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, trans
 
 /** Цвет перекрытий (срезов этажей) внутри здания. */
 const FLOOR_SLAB = new THREE.Color(0xffffff);
+/** Стекло окна в нише: тёмное, с холодным оттенком; на монохромной карте — серое. */
+const WINDOW_PANE = new THREE.Color(0x3a4a58), WINDOW_PANE_MONO = new THREE.Color(0x8a8f94);
 
 /** Отступ плиты от низа и верха стен, м: у самого края плита совпала бы с дном или крышей. */
 const SLAB_MARGIN = 0.3;
@@ -9004,6 +9008,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     });
   }
   // Окна по тегам (флаг графики): ниша на своём этаже, подоконник и размеры — window:* или от высоты этажа
+  const panes: number[] = [];
   if (windowsEnabled && !shell && !roofOnly && !flat && !tri.pending && f.windows?.length) {
     timed('здание: ниши окон', () => {
       const wins = new Map(f.windows!.map((w) => [w.id, w.tags]));
@@ -9023,13 +9028,13 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
           if (place) places.push({ ...place, width: m('window:width', m('width', WINDOW_WIDTH)), height });
         }));
       });
-      const cut = recessEntrances(tri.walls, places, { width: WINDOW_WIDTH, height: WINDOW_HEIGHT * levelH, min: heights.min, top: heights.wallTop, depth: WINDOW_DEPTH });
+      const cut = recessEntrances(tri.walls, places, { width: WINDOW_WIDTH, height: WINDOW_HEIGHT * levelH, min: heights.min, top: heights.wallTop, depth: WINDOW_DEPTH, panes });
       if (cut) tri.walls = cut;
     });
   }
   // Стеклянный фасад: внутри видны перекрытия — плиты на границах этажей (непрозрачные, после крыши)
   const glassWalls = isGlass(roofPartWallMaterial(tags));
-  const floors = [...joint, ...(glassWalls && !flat && !roofOnly ? timed('здание: перекрытия за стеклом', () => floorSlabs(polys, heights, tags, levelGridFor(f)?.map((l) => ({ z: l.z, holes: l.holes.map((p) => p.map((r) => r.map(g.toLocal))) })))) : [])];
+  const floors = [...joint, ...(glassWalls && !flat && !roofOnly ? timed('здание: перекрытия за стеклом', () => floorSlabs(polys, heights, tags, levelGridFor(f)?.map((l) => ({ z: l.z, holes: l.holes.map((p) => p.map((r) => r.map(g.toLocal))) })))) : []), ...panes];
   const positions = new Float32Array(tri.walls.length + tri.roof.length + floors.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);
@@ -9048,6 +9053,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     positions,
     wallVertices: tri.walls.length / 3,
     floorVertices: floors.length / 3,
+    paneVertices: panes.length / 3,
     wall: parseColour(wall),
     roof: parseColour(roof),
     top: heights.top,

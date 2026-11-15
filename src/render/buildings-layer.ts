@@ -8697,6 +8697,35 @@ function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heig
   } catch (err) { console.warn('[passage]', f.key, err); return; }
 }
 
+/**
+ * Стены объекта с аркой: в стенах контура — проёмы там, где проём арки выходит на сторону контура (от низа до z),
+ * стороны проёма внутри объекта — стенки проезда, сверху — потолок арки.
+ */
+function passageWalls(walls: number[], polys: LocalPolygon[], passage: { ceiling: LocalPolygon[]; z: number }, min: number): number[] {
+  const sides = polys.flatMap((p) => [p.outer, ...p.inners]).flatMap((r) => r.map((a, i) => [a, r[(i + 1) % r.length]] as [Pt, Pt]));
+  // Сторона проёма на фасаде может проходить через узел контура (конец пути арки — вершина контура): концы и
+  // середина — каждая на какой-нибудь стороне контура, не обязательно одной
+  const near = (p: Pt) => sides.some(([a, b]) => distToSegment(p, a, b) < 0.03);
+  const onOutline = (p: Pt, q: Pt) => near(p) && near(q) && near([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]);
+  const doors: { x: number; y: number; z: number; width: number; height: number }[] = [];
+  const inner: number[] = [];
+  const h = passage.z - min;
+  for (const q of passage.ceiling) for (const r of [q.outer, ...q.inners]) r.forEach((p, i) => {
+    const n = r[(i + 1) % r.length], len = Math.hypot(n[0] - p[0], n[1] - p[1]);
+    if (len < 1e-3) return;
+    if (onOutline(p, n)) doors.push({ x: (p[0] + n[0]) / 2, y: (p[1] + n[1]) / 2, z: min, width: len, height: h });
+    else {
+      // Лицом в проезд (освещение — по нормали): правая сторона p→n должна смотреть внутрь проёма
+      const mx = (p[0] + n[0]) / 2 + (n[1] - p[1]) / len * 0.05, my = (p[1] + n[1]) / 2 - (n[0] - p[0]) / len * 0.05;
+      const into = passage.ceiling.some((c) => pointInLocalRing([mx, my], c.outer) && !c.inners.some((h) => pointInLocalRing([mx, my], h)));
+      const [a, b] = into ? [p, n] : [n, p];
+      inner.push(a[0], a[1], min, b[0], b[1], min, b[0], b[1], passage.z, a[0], a[1], min, b[0], b[1], passage.z, a[0], a[1], passage.z);
+    }
+  });
+  const cut = doors.length ? Array.from(cutDoorOpenings(Float32Array.from(walls), doors, 1, h, 0.05)) : walls;
+  return [...cut, ...inner, ...bottomTriangles(passage.ceiling, passage.z)];
+}
+
 /** Теги для рисования, контур в локальных метрах и высоты объекта (с поправкой на плоский след). */
 function prepItem(g: MeshGroup, f: Feature3D) {
   // Свои теги главнее унаследованных; в данных объекта ничего не меняется — только для рисования
@@ -8822,11 +8851,9 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   for (const p of polys) for (const [x, y] of p.outer) box2.expandByPoint(new THREE.Vector2(x, y));
   // Арка: объём — от её верха, ниже — стены без полосы проезда и потолок арки
   const passage = !flat && !isRoofPart(tags) ? passageSplit(g, f, polys, heights, tags) : undefined;
-  const tri = timed('здание: стены и крыша', () => buildTriangles(polys, passage ? { ...heights, min: passage.z } : heights, tags));
-  if (passage && !tri.pending) {
-    const low = buildTriangles(passage.lower, { ...heights, wallTop: passage.z, top: passage.z, roofShape: 'flat', roofHeight: 0 }, {});
-    tri.walls.push(...low.walls, ...bottomTriangles(passage.ceiling, passage.z));
-  }
+  const tri = timed('здание: стены и крыша', () => buildTriangles(polys, heights, tags));
+  // Стены — целиком (без шва по фасаду на высоте арки): в них только проём, внутри — стенки проезда и потолок
+  if (passage && !tri.pending) tri.walls = passageWalls(tri.walls, polys, passage, heights.min);
   // Плоская крыша, на которой стоят другие части: закрытый ими участок — уже не крыша, а перекрытие между
   // частями (видно сквозь стекло) — рисуем его плитой перекрытия, остальное — крышей
   let joint: number[] = [];

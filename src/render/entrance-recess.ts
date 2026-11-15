@@ -2,7 +2,7 @@ import { cutDoorOpenings } from './door-openings';
 
 type Pt = [number, number];
 /** Вход на стене: точка p на фасаде, t — вдоль стены, n — наружу, z — порог. */
-export interface RecessPlace { p: Pt; t: Pt; n: Pt; z: number; width?: number }
+export interface RecessPlace { p: Pt; t: Pt; n: Pt; z: number; width?: number; height?: number }
 
 /** Глубина ниши входа, м. */
 export const RECESS_DEPTH = 0.3;
@@ -42,13 +42,14 @@ export function recessEntrances(walls: ArrayLike<number>, places: RecessPlace[],
   if (!places.length || !walls.length) return;
   const depth = opts.depth ?? RECESS_DEPTH;
   // Проём — от порога. У входа на земле пола у ниши нет: её дно — карта, без порожка
-  const doors = places.map((e) => ({ x: e.p[0], y: e.p[1], z: e.z, width: e.width ?? opts.width, height: opts.height }));
+  const doors = places.map((e) => ({ x: e.p[0], y: e.p[1], z: e.z, width: e.width ?? opts.width, height: e.height ?? opts.height }));
   const cut = cutDoorOpenings(Float32Array.from(walls), doors, opts.width, opts.height, ON_WALL);
   const out = dropSlivers(cut);
   const quad = (a: number[], b: number[], c: number[], d: number[]) => out.push(...a, ...b, ...c, ...a, ...c, ...d);
   for (const e of places) {
     const w = (e.width ?? opts.width) / 2;
-    const z0 = Math.max(e.z, opts.min), z1 = Math.min(e.z + opts.height, opts.top);
+    const h = e.height ?? opts.height;
+    const z0 = Math.max(e.z, opts.min), z1 = Math.min(e.z + h, opts.top);
     if (z1 - z0 < 1e-3) continue;
     const at = (s: number, d: number): Pt => [e.p[0] + e.t[0] * s - e.n[0] * d, e.p[1] + e.t[1] * s - e.n[1] * d];
     const [a, b, a2, b2] = [at(-w, 0), at(w, 0), at(-w, depth), at(w, depth)];
@@ -60,7 +61,7 @@ export function recessEntrances(walls: ArrayLike<number>, places: RecessPlace[],
     quad(v(b, lo), v(b2, lo), v(b2, z1), v(b, z1)); // боковая
     quad(v(a2, lo), v(b2, lo), v(b2, z1), v(a2, z1)); // задняя
     if (floor !== undefined) quad(v(a, floor), v(b, floor), v(b2, floor), v(a2, floor));
-    if (e.z + opts.height <= opts.top + 1e-3) quad(v(a, z1), v(b, z1), v(b2, z1), v(a2, z1)); // потолок
+    if (e.z + h <= opts.top + 1e-3) quad(v(a, z1), v(b, z1), v(b2, z1), v(a2, z1)); // потолок
   }
   return out;
 }

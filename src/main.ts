@@ -139,7 +139,7 @@ const userHidden = new Set<string>();
 /** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
 interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, windows: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {

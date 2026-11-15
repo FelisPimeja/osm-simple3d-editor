@@ -1542,5 +1542,7 @@
   "Арке нужны хотя бы две точки.": "Арке нужны хотя бы две точки.",
   "{what}: следующая точка; Enter или клик в последнюю точку — закончить, Backspace — убрать точку, Esc — отмена.": "{what}: следующая точка; Enter или клик в последнюю точку — закончить, Backspace — убрать точку, Esc — отмена.",
   "{what}: кликните начало пути через здание на земле. Esc — выйти.": "{what}: кликните начало пути через здание на земле. Esc — выйти.",
-  "Создана арка {key} (tunnel=building_passage).": "Создана арка {key} (tunnel=building_passage)."
+  "Создана арка {key} (tunnel=building_passage).": "Создана арка {key} (tunnel=building_passage).",
+  "window=* на узлах контура: ниша на своём этаже (level), размеры — window:width, window:height, window:breast": "window=* на узлах контура: ниша на своём этаже (level), размеры — window:width, window:height, window:breast",
+  "Окна по тегам": "Окна по тегам"
 }

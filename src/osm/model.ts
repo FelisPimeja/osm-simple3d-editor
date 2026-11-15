@@ -22,6 +22,8 @@ export interface Feature3D {
   ways?: MemberWay[];
   /** Узлы контура с entrance=* (вход на фасаде): id и теги узла. */
   entrances?: Entrance[];
+  /** Узлы контура с window=* (кроме no и skylight): id и теги узла. */
+  windows?: Entrance[];
 }
 
 /** at — вход не узел контура объекта, а лежит на его стене (дверь indoor-стены на фасаде): там его и ставить. */
@@ -363,6 +365,8 @@ export function parseBuildings(elements: OsmElement[]): ParseResult {
     const ids = new Set(f.polygons.flatMap((p) => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()]));
     const entrances = [...ids].flatMap((id) => { const t = nodes.get(id)?.tags; return entranceOf(t) ? [{ id, tags: t! }] : []; });
     if (entrances.length) f.entrances = entrances;
+    const windows = [...ids].flatMap((id) => { const t = nodes.get(id)?.tags; return isWallWindow(t) ? [{ id, tags: t! }] : []; });
+    if (windows.length) f.windows = windows;
   }
   attachWallEntrances(features, nodes);
   markOutlinesWithParts(features, features, groups);
@@ -553,6 +557,11 @@ const WALL_ENTRANCE_TOL = 0.1;
  * Тип входа узла: entrance=*, а въезд на парковку (amenity=parking_entrance) без него — гаражный въезд.
  * Тег в данные не пишется: только толкование при отрисовке и проверках.
  */
+/** Окно в стене: window=* на узле, кроме no и мансардного skylight. */
+export function isWallWindow(t?: Record<string, string>): boolean {
+  return !!t?.window && t.window !== 'no' && t.window !== 'skylight';
+}
+
 export function entranceOf(t?: Record<string, string>): string | undefined {
   return t?.entrance ?? (t?.amenity === 'parking_entrance' ? 'garage' : undefined);
 }

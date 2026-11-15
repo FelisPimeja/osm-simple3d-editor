@@ -341,6 +341,8 @@ export interface GraphicsOptions {
   trees?: boolean;
   /** Цвет лиственных — по времени года (сегодняшняя дата). */
   seasons?: boolean;
+  /** Окна по тегам: ниши на узлах контура с window=* (тестовое). */
+  windows?: boolean;
 }
 
 /** Высота, на которой затемнение у земли сходит на нет, м (для зданий выше AO_HEIGHT). */
@@ -6453,6 +6455,10 @@ export class BuildingsLayer implements CustomLayerInterface {
       raiseDefault = raise;
       void this.rebuildWhere((f) => computeHeights(f.tags).source === 'default');
     }
+    if (!!o.windows !== windowsEnabled) {
+      windowsEnabled = !!o.windows;
+      void this.rebuildWhere((f) => !!f.windows?.length);
+    }
     this.userEdges = o.edges;
     this.graphics = { ...o, edges: o.edges || this.wireframe };
     // Стекло — отдельный меш: при переключении пересобираем слитую геометрию
@@ -8028,7 +8034,7 @@ function sameItemGeometry(old: Item, item: Item): boolean {
 function shapeSig(f: Feature3D): string {
   // Входы тоже: по ним в стене режутся ниши (ширина — по типу входа)
   // И арки: правка оси пути (в том числе превью «Формы») меняет вырез в объёме
-  return JSON.stringify([f.kind, f.hasParts, f.tags, f.polygons, f.entrances, passagesFor(f)]);
+  return JSON.stringify([f.kind, f.hasParts, f.tags, f.polygons, f.entrances, f.windows, passagesFor(f)]);
 }
 
 /** Оболочка группы для планов этажей: та же, пока не менялись треугольники, скрытые и висящие части. */
@@ -8664,6 +8670,10 @@ const TIE_DEPTH = 0.02;
 
 /** Поднимать здания без высоты и этажей на высоту по умолчанию (настройка «Поднимать здания с дефолтной высотой»). */
 let raiseDefault = true;
+/** Ниши окон (window=* на контуре) — флаг графики windows. */
+let windowsEnabled = false;
+/** Окно по умолчанию (как в OSM2World): ширина, м; высота и подоконник — доли высоты этажа; глубина ниши, м. */
+const WINDOW_WIDTH = 1, WINDOW_HEIGHT = 0.5, WINDOW_BREAST = 0.3, WINDOW_DEPTH = 0.15;
 
 /** Унаследованные частью теги (цвета, форма крыши, материалы контура/отношения) — задаёт main. */
 let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;
@@ -8990,6 +9000,30 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
         if (crosses(z)) places.push({ p: near.p, t: near.t, n, z, width: tagWidth(door) });
       }
       const cut = recessEntrances(tri.walls, places, { width: ENTRANCE_WIDTH, height: ENTRANCE_HEIGHT, min: heights.min, top: heights.wallTop });
+      if (cut) tri.walls = cut;
+    });
+  }
+  // Окна по тегам (флаг графики): ниша на своём этаже, подоконник и размеры — window:* или от высоты этажа
+  if (windowsEnabled && !shell && !roofOnly && !flat && !tri.pending && f.windows?.length) {
+    timed('здание: ниши окон', () => {
+      const wins = new Map(f.windows!.map((w) => [w.id, w.tags]));
+      const levels = Number(tags['building:levels']);
+      const levelH = levels > 0 ? computeHeights(tags).wallTop / levels : LEVEL_HEIGHT;
+      const places: RecessPlace[] = [];
+      f.polygons.forEach((p) => {
+        const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));
+        [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
+          const w = wins.get(id);
+          if (!w) return;
+          const m = (k: string, d: number) => { const v = parseFloat(w[k] ?? ''); return Number.isFinite(v) && v > 0 ? v : d; };
+          const breast = m('window:breast', WINDOW_BREAST * levelH), height = m('window:height', m('height', WINDOW_HEIGHT * levelH));
+          const z = entranceZ(w, tags) + breast;
+          if (z >= heights.wallTop - 1e-3 || z + height <= heights.min + 1e-3) return;
+          const place = entrancePlace(rings, r, i, z);
+          if (place) places.push({ ...place, width: m('window:width', m('width', WINDOW_WIDTH)), height });
+        }));
+      });
+      const cut = recessEntrances(tri.walls, places, { width: WINDOW_WIDTH, height: WINDOW_HEIGHT * levelH, min: heights.min, top: heights.wallTop, depth: WINDOW_DEPTH });
       if (cut) tri.walls = cut;
     });
   }

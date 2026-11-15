@@ -559,7 +559,7 @@ const WALL_ENTRANCE_TOL = 0.1;
  */
 /** Окно в стене: window=* на узле, кроме no и мансардного skylight. */
 export function isWallWindow(t?: Record<string, string>): boolean {
-  return !!t?.window && t.window !== 'no' && t.window !== 'skylight';
+  return !!t?.window && t.window !== 'no' && t.window !== 'skylight' && !entranceOf(t); // window=yes на входе — дверь со стеклом
 }
 
 export function entranceOf(t?: Record<string, string>): string | undefined {

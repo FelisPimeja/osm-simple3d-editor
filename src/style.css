@@ -220,6 +220,8 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 #op-indicator .retry[hidden] { display: none; }
 @keyframes op-pulse { 50% { opacity: .25; } }
 .toggle { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; cursor: pointer; user-select: none; }
+.toggle .hint { margin: 0; }
+.toggle:has(input:disabled) { opacity: .5; cursor: default; }
 .panel-tech .hint, #perf { font-size: 12px; margin: 0; }
 #perf { display: flex; gap: 12px; font-variant-numeric: tabular-nums; }
 .orbit-pivot {

@@ -1192,9 +1192,11 @@ for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
     gfx[key] = input.checked;
     saveGraphics();
     if (key === 'antialias') return location.reload();
+    syncGraphicsDeps();
     applyGraphics();
   });
 }
+syncGraphicsDeps();
 
 function applyGraphics() {
   overpassLayer.setGraphics(gfx);
@@ -1237,6 +1239,13 @@ applyGraphics();
 function syncGraphicsInputs() {
   monoToggle.checked = gfx.monochrome;
   for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) input.checked = !!gfx[input.dataset.gfx as keyof GraphicsSettings];
+  syncGraphicsDeps();
+}
+
+/** Зависимые галки графики: сезонные деревья — только при включённых деревьях. */
+function syncGraphicsDeps() {
+  const seasons = document.querySelector<HTMLInputElement>('[data-gfx="seasons"]');
+  if (seasons) seasons.disabled = !gfx.trees;
 }
 
 // Постоянный кеш тайлов OSM API (IndexedDB)

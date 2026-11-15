@@ -6,8 +6,6 @@ export interface RecessPlace { p: Pt; t: Pt; n: Pt; z: number; width?: number }
 
 /** Глубина ниши входа, м. */
 export const RECESS_DEPTH = 0.3;
-/** Пол ниши чуть выше порога: на земле он иначе мерцает с картой. */
-const SILL = 0.01;
 /** Точка входа считается на стене, если до её плоскости не дальше этого, м. */
 const ON_WALL = 0.15;
 
@@ -43,10 +41,7 @@ export function recessEntrances(walls: ArrayLike<number>, places: RecessPlace[],
   opts: { width: number; height: number; min: number; top: number; depth?: number }): number[] | undefined {
   if (!places.length || !walls.length) return;
   const depth = opts.depth ?? RECESS_DEPTH;
-  // Проём — от порога. Пол ниши на земле на SILL выше; щель под ним закрывает отдельная грань шириной
-  // в дверь: полоса стены в SILL под проёмом до самого угла разрезалась бы в «щепки», и сборка рёбер
-  // теряла бы вместе с ними низ стены и угла
-  const sill = (e: RecessPlace) => (e.z <= 1e-3 ? SILL : 0);
+  // Проём — от порога. У входа на земле пола у ниши нет: её дно — карта, без порожка
   const doors = places.map((e) => ({ x: e.p[0], y: e.p[1], z: e.z, width: e.width ?? opts.width, height: opts.height }));
   const cut = cutDoorOpenings(Float32Array.from(walls), doors, opts.width, opts.height, ON_WALL);
   const out = dropSlivers(cut);
@@ -58,16 +53,13 @@ export function recessEntrances(walls: ArrayLike<number>, places: RecessPlace[],
     const at = (s: number, d: number): Pt => [e.p[0] + e.t[0] * s - e.n[0] * d, e.p[1] + e.t[1] * s - e.n[1] * d];
     const [a, b, a2, b2] = [at(-w, 0), at(w, 0), at(-w, depth), at(w, depth)];
     const v = (p: Pt, z: number) => [p[0], p[1], z];
-    // Пол ниши — у той части, где порог; на земле — чуть выше, чтобы не мерцать с картой
-    const floor = e.z >= opts.min - 1e-3 ? e.z + sill(e) : undefined;
-    const lo = floor ?? z0;
+    // Пол ниши — у той части, где порог, и только над землёй
+    const floor = e.z > 1e-3 && e.z >= opts.min - 1e-3 ? e.z : undefined;
+    const lo = floor ?? Math.max(z0, e.z);
     quad(v(a, lo), v(a2, lo), v(a2, z1), v(a, z1)); // боковая
     quad(v(b, lo), v(b2, lo), v(b2, z1), v(b, z1)); // боковая
     quad(v(a2, lo), v(b2, lo), v(b2, z1), v(a2, z1)); // задняя
-    if (floor !== undefined) {
-      quad(v(a, floor), v(b, floor), v(b2, floor), v(a2, floor));
-      if (sill(e) && e.z >= opts.min - 1e-3) quad(v(a, e.z), v(b, e.z), v(b, floor), v(a, floor)); // под полом
-    }
+    if (floor !== undefined) quad(v(a, floor), v(b, floor), v(b2, floor), v(a2, floor));
     if (e.z + opts.height <= opts.top + 1e-3) quad(v(a, z1), v(b, z1), v(b2, z1), v(a2, z1)); // потолок
   }
   return out;

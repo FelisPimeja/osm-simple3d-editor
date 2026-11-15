@@ -1,7 +1,7 @@
 import { recordMs } from '../perf';
 import type { BuildingGroup, Feature3D, IndoorFeature } from '../osm/model';
 import type { TreeData } from '../osm/trees';
-import type { RoadWay } from '../osm/roads';
+import type { PassageWay, RoadWay } from '../osm/roads';
 
 const STORE = 'overpass-tiles';
 /** Версия формата записи: при изменении Feature3D старые записи игнорируются. */
@@ -16,19 +16,20 @@ const STORE = 'overpass-tiles';
 // 13 — входы (entrance=*) на контурах зданий; записи 12 показываются без них и обновляются в фоне
 // 14 — indoor=yes на линейных объектах (дорожки) больше не площадка; записи 13 показываются и обновляются в фоне
 // 15 — входы на стене объекта, не узлы его контура (дверь indoor-стены на фасаде); записи 14 обновляются в фоне
-const FORMAT = 15;
+// 16 — арки (tunnel=building_passage, passages); записи 15 показываются без них и обновляются в фоне
+const FORMAT = 16;
 /** Роль члена, которая неизвестна (кеш старого формата): при отправке сверяемся с сервером только по type/ref. */
 export const UNKNOWN_ROLE = '?';
 /** Сколько тайлов хранить; при превышении удаляются самые старые. */
 const MAX_TILES = 300;
 
-interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[]; groups: BuildingGroup[]; indoor?: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; via?: TileVia }
+interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[]; groups: BuildingGroup[]; indoor?: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; passages?: PassageWay[]; via?: TileVia }
 
 /** Откуда пришли данные тайла: OSM API (overpass — старые записи кеша, когда данные брались из Overpass). */
 export type TileVia = 'overpass' | 'api';
 
 /** roads — нет у записей до формата 9. */
-export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; indoor: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; fetchedAt: number; via?: TileVia }
+export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; indoor: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; passages?: PassageWay[]; fetchedAt: number; via?: TileVia }
 
 /**
  * Постоянный кеш тайлов (данные OSM API) в IndexedDB.
@@ -63,7 +64,8 @@ export class TileStore {
 
   async get(key: string): Promise<StoredTile | undefined> {
     const rec = await this.request<TileRecord | undefined>('readonly', (s) => s.get(key), 'тайлы: запрос к IndexedDB');
-    if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: rec.fetchedAt, via: rec.via };
+    if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, passages: rec.passages, fetchedAt: rec.fetchedAt, via: rec.via };
+    if (rec?.format === 15) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
     if (rec?.format === 14) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
     if (rec?.format === 13) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
     if (rec?.format === 12) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
@@ -81,8 +83,8 @@ export class TileStore {
     return undefined;
   }
 
-  async put(key: string, { features, groups, indoor, trees, roads, fetchedAt, via }: StoredTile) {
-    const rec: TileRecord = { key, format: FORMAT, fetchedAt, features, groups, indoor, trees, roads, via };
+  async put(key: string, { features, groups, indoor, trees, roads, passages, fetchedAt, via }: StoredTile) {
+    const rec: TileRecord = { key, format: FORMAT, fetchedAt, features, groups, indoor, trees, roads, passages, via };
     const ok = await this.request('readwrite', (s) => s.put(rec));
     if (ok === undefined) {
       // Скорее всего, квота: освобождаем половину и пробуем ещё раз

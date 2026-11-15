@@ -55,9 +55,9 @@ import { inheritedTags, inheritedValue } from './osm/inherit';
 import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
 import type { TreePoint } from './osm/trees';
-import { isBridge, isTunnel, roadLevel, type RoadWay } from './osm/roads';
+import { isBridge, isTunnel, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
-import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { CursorOrbit, ORBIT_EVENT } from './view/orbit';
@@ -16238,6 +16238,21 @@ setInheritance((f) => {
   if (outline === f.key) return;
   const t = outlineTags(g);
   return inheritedTags(f.tags, t ? [t, g.tags] : [g.tags]);
+});
+
+// Арки (tunnel=building_passage): пути загруженных тайлов, рамки — один раз на ревизию данных
+let passageIndex: { rev: number; list: { p: PassageWay; box: Bbox }[] } | undefined;
+function passagesNear([w, s, e, n]: Bbox): PassageWay[] {
+  if (passageIndex?.rev !== overpass.revision) passageIndex = { rev: overpass.revision, list: overpass.passages().map((p) => {
+    const xs = p.coords.map((c) => c[0]), ys = p.coords.map((c) => c[1]);
+    return { p, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as Bbox };
+  }) };
+  return passageIndex.list.filter(({ box }) => box[2] >= w && box[0] <= e && box[3] >= s && box[1] <= n).map((x) => x.p);
+}
+setPassages((f) => {
+  if (!f.polygons.length) return [];
+  const near = passagesNear(featureBox(f));
+  return near.map((p) => ({ line: p.coords, width: passageWidth(p.tags), height: passageHeight(p.tags) }));
 });
 
 // Перекрытия стеклянных частей — на высотах полов из той же раскладки, что у панели «Этажи»; с пустотами второго света

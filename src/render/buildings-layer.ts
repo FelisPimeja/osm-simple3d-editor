@@ -20,6 +20,7 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, looseLength, LEVEL_HEIGHT, type Heights } from '../osm/heights';
+import { PASSAGE_HEIGHT } from '../osm/roads';
 import { clipAbove, prepareSolid, sectionOf, trimCoplanarWalls, trimTriangles, type PreparedSolid } from './shell-trim';
 import { nextFrameSlot } from './frame-budget';
 import { trimInWorker, trimSync, trimWorkersAvailable, type TrimJob, type TrimResult } from './shell-trim-pool';
@@ -577,6 +578,8 @@ const MAP_HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
 /** Здание внутри группы: треугольники в локальных метрах и всё, что нужно для раскраски и выбора. */
 interface Item {
   feature: Feature3D;
+  /** Арка: ниже z объём — контур без полосы проезда (локальные метры). */
+  passage?: { z: number; lower: LocalPolygon[] };
   /** Ключи объектов, с которыми у него общие грани (крыша–дно): их правка требует пересборки этого. */
   contacts: string;
   /** Теги для рисования: свои + унаследованные от контура/отношения. */
@@ -6781,6 +6784,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           roof: full.positions.subarray(full.wallVertices * 3, end * 3),
           glassWalls: glassShell && it.glassWalls,
           glassRoof: glassShell && it.glassRoof,
+          under: it.passage && { z: it.passage.z, polys: it.passage.lower },
         });
         cache.solids.set(it, { base: full.positions, solid });
         solids.set(it, solid);
@@ -6946,6 +6950,7 @@ export class BuildingsLayer implements CustomLayerInterface {
             min: g.lift?.get(o.it.feature.key) ?? h.min, wallTop: o.it.roofApproximated ? h.top : h.wallTop,
             roof: o.it.positions.subarray(o.it.wallVertices * 3, (n - o.it.floorVertices) * 3),
             glassWalls: false, glassRoof: glassEnabled && o.it.glassRoof,
+            under: o.it.passage && { z: o.it.passage.z, polys: o.it.passage.lower },
           });
         }
         return o.solid;
@@ -8525,6 +8530,53 @@ let raiseDefault = true;
 let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;
 export function setInheritance(fn: (f: Feature3D) => Record<string, string> | undefined) { inheritFor = fn; }
 
+/** Арка (tunnel=building_passage) у объекта: ось проезда, ширина и высота, м. */
+export interface PassageCut { line: LonLat[]; width: number; height?: number }
+/** Арки, задевающие объект, — задаёт main. */
+let passagesFor: (f: Feature3D) => PassageCut[] = () => [];
+export function setPassages(fn: (f: Feature3D) => PassageCut[]) { passagesFor = fn; }
+/** Ось арки продлевается за концы: путь кончается на контуре, полоса должна пройти стену насквозь, м. */
+const PASSAGE_OVERSHOOT = 1;
+/** Арка ниже этого под верхом стен не вырезается (объём над ней — тоньше перекрытия), м. */
+const PASSAGE_MIN_ABOVE = 0.3;
+
+/** Полоса проезда в локальных метрах: прямоугольники отрезков оси, объединённые. */
+export function passageStrip(line: Pt[], width: number): ClipMulti {
+  const w = width / 2, rects: ClipMulti[] = [];
+  for (let i = 0; i + 1 < line.length; i++) {
+    const [ax, ay] = line[i], [bx, by] = line[i + 1], len = Math.hypot(bx - ax, by - ay);
+    if (len < 1e-3) continue;
+    const tx = (bx - ax) / len, ty = (by - ay) / len, nx = -ty * w, ny = tx * w;
+    const a0 = i === 0 ? PASSAGE_OVERSHOOT : 0, b0 = i + 2 === line.length ? PASSAGE_OVERSHOOT : 0;
+    const A: Pt = [ax - tx * a0, ay - ty * a0], B: Pt = [bx + tx * b0, by + ty * b0];
+    rects.push([[[[A[0] + nx, A[1] + ny], [B[0] + nx, B[1] + ny], [B[0] - nx, B[1] - ny], [A[0] - nx, A[1] - ny], [A[0] + nx, A[1] + ny]]]]);
+  }
+  return rects.length ? polygonClipping.union(rects[0], ...rects.slice(1)) : [];
+}
+
+/**
+ * Объём под аркой: ниже её верха — только стены контура без полосы проезда (стороны проезда — её стены),
+ * над полосой — потолок арки. undefined — арки нет или она не задевает объект по высоте.
+ */
+function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heights, tags: Record<string, string>): { lower: LocalPolygon[]; ceiling: LocalPolygon[]; z: number } | undefined {
+  const cuts = passagesFor(f);
+  if (!cuts.length) return;
+  // Без maxheight — до верха первого этажа (по building:levels), но не выше PASSAGE_HEIGHT
+  const levels = Number.parseFloat(tags['building:levels'] ?? '');
+  const first = h.min + Math.min(PASSAGE_HEIGHT, levels >= 1 ? (h.wallTop - h.min) / levels : PASSAGE_HEIGHT);
+  const z = Math.max(...cuts.map((c) => c.height ?? first));
+  if (h.min >= z - 0.01 || z > h.wallTop - PASSAGE_MIN_ABOVE) return;
+  try {
+    const strips = cuts.map((c) => passageStrip(c.line.map(g.toLocal), c.width)).filter((m) => m.length);
+    if (!strips.length) return;
+    const strip = polygonClipping.union(strips[0], ...strips.slice(1));
+    const body = toClip(polys);
+    const ceiling = polygonClipping.intersection(body, strip);
+    if (!ceiling.length) return;
+    return { lower: fromClip(polygonClipping.difference(body, strip)), ceiling: fromClip(ceiling), z };
+  } catch (err) { console.warn('[passage]', f.key, err); return; }
+}
+
 /** Теги для рисования, контур в локальных метрах и высоты объекта (с поправкой на плоский след). */
 function prepItem(g: MeshGroup, f: Feature3D) {
   // Свои теги главнее унаследованных; в данных объекта ничего не меняется — только для рисования
@@ -8648,7 +8700,13 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   const { tags, polys, heights, flat } = prep;
   const box2 = new THREE.Box2();
   for (const p of polys) for (const [x, y] of p.outer) box2.expandByPoint(new THREE.Vector2(x, y));
-  const tri = timed('здание: стены и крыша', () => buildTriangles(polys, heights, tags));
+  // Арка: объём — от её верха, ниже — стены без полосы проезда и потолок арки
+  const passage = !flat && !isRoofPart(tags) ? passageSplit(g, f, polys, heights, tags) : undefined;
+  const tri = timed('здание: стены и крыша', () => buildTriangles(polys, passage ? { ...heights, min: passage.z } : heights, tags));
+  if (passage && !tri.pending) {
+    const low = buildTriangles(passage.lower, { ...heights, wallTop: passage.z, top: passage.z, roofShape: 'flat', roofHeight: 0 }, {});
+    tri.walls.push(...low.walls, ...bottomTriangles(passage.ceiling, passage.z));
+  }
   // Плоская крыша, на которой стоят другие части: закрытый ими участок — уже не крыша, а перекрытие между
   // частями (видно сквозь стекло) — рисуем его плитой перекрытия, остальное — крышей
   let joint: number[] = [];
@@ -8674,8 +8732,9 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // просвечивает поверх крыши. Крышу оставляем — она и есть перекрытие между частями (видна сквозь стекло)
   if (!shell && hasBottom(prep)) {
     timed('здание: дно', () => {
-      const rest = g.contacts && subtractFaces(polys, contactFaces(g.contacts.tops, f.key, heights.min, box2));
-      tri.walls.push(...bottomTriangles(rest ?? polys, heights.min));
+      const base = passage?.lower ?? polys;
+      const rest = g.contacts && subtractFaces(base, contactFaces(g.contacts.tops, f.key, heights.min, box2));
+      tri.walls.push(...bottomTriangles(rest ?? base, heights.min));
     });
   }
   // Ниши входов (выключаются флагом localStorage entranceNiches=0)
@@ -8738,6 +8797,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   return {
     contacts: contactKeys(g, f),
     feature: f,
+    passage: passage && !tri.pending ? { z: passage.z, lower: passage.lower } : undefined,
     tags,
     roofApproximated: tri.roofApproximated,
     pending: !!tri.pending,

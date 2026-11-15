@@ -1,5 +1,6 @@
 import type { OsmElement, OsmNode, OsmWay } from './api';
 import type { LonLat } from './model';
+import { parseLength } from './heights';
 
 /**
  * Дороги и железные дороги для объёмных мостов, тоннелей и развязок (эксперимент). Рисуем не все дороги, а только «неплоские»:
@@ -166,4 +167,42 @@ export class MinHeap {
     }
     return top;
   }
+}
+
+/** Путь через арку в здании (tunnel=building_passage): только он сам, без подходов. */
+export interface PassageWay { id: number; tags: Record<string, string>; coords: LonLat[] }
+
+export function isPassageTags(tags?: Record<string, string>): boolean {
+  return tags?.tunnel === 'building_passage' && (!!tags.highway || isRailTags(tags)) && tags.area !== 'yes';
+}
+
+/** Арки из ответа API или Overpass. */
+export function parsePassages(elements: OsmElement[]): PassageWay[] {
+  const nodes = new Map<number, LonLat>();
+  for (const e of elements) if (e.type === 'node') nodes.set(e.id, [e.lon, e.lat]);
+  const out: PassageWay[] = [];
+  for (const e of elements) {
+    if (e.type !== 'way' || !isPassageTags(e.tags)) continue;
+    const coords = e.nodes.map((n) => nodes.get(n));
+    if (coords.length >= 2 && coords.every(Boolean)) out.push({ id: e.id, tags: e.tags!, coords: coords as LonLat[] });
+  }
+  return out;
+}
+
+/** Ширина проезда без width: тротуары и дорожки — 2.5 м, служебные — 3.5, остальные дороги и рельсы — 5. */
+const PASSAGE_NARROW = new Set(['footway', 'path', 'pedestrian', 'cycleway', 'steps', 'bridleway', 'corridor']);
+
+export function passageWidth(tags: Record<string, string>): number {
+  const w = parseLength(tags.width) ?? parseLength(tags.est_width);
+  if (w && w > 0.5 && w < 30) return w;
+  return PASSAGE_NARROW.has(tags.highway) ? 2.5 : tags.highway === 'service' ? 3.5 : 5;
+}
+
+/** Высота арки без maxheight, м: не выше первого этажа здания. */
+export const PASSAGE_HEIGHT = 3.5;
+
+/** Высота арки по тегам пути; undefined — не задана (берётся по первому этажу здания). */
+export function passageHeight(tags: Record<string, string>): number | undefined {
+  const h = parseLength(tags['maxheight:physical']) ?? parseLength(tags.maxheight);
+  return h && h > 1 && h < 20 ? h : undefined;
 }

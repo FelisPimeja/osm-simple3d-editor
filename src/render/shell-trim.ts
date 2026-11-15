@@ -22,6 +22,8 @@ export interface ShellSolid {
   roof: ArrayLike<number>;
   glassWalls: boolean;
   glassRoof: boolean;
+  /** Арка: ниже z объём — только polys (контур без полосы проезда). */
+  under?: { z: number; polys: LocalPolygon[] };
 }
 
 type Plane = [number, number, number];
@@ -37,6 +39,7 @@ export interface PreparedSolid {
   box: Box;
   opaqueWalls: boolean;
   roof: RoofColumn[];
+  under?: { z: number; clip: ClipMulti };
 }
 
 /** Сдвиг пробной линии от стены наружу, м: дальше зазора между частями, нарисованными без общих узлов. */
@@ -69,7 +72,8 @@ export function prepareSolid(s: ShellSolid): PreparedSolid {
     grow(b, x0, y0); grow(b, x1, y1); grow(b, x2, y2);
     roof.push({ tri: [[x0, y0], [x1, y1], [x2, y2]], plane, box: b, opaque: !s.glassRoof });
   }
-  return { polys: s.polys, clip: snap(toClip(s.polys)), min: s.min, wallTop: s.wallTop, top, box, opaqueWalls: !s.glassWalls, roof };
+  return { polys: s.polys, clip: snap(toClip(s.polys)), min: s.min, wallTop: s.wallTop, top, box, opaqueWalls: !s.glassWalls, roof,
+    under: s.under && { z: s.under.z, clip: snap(toClip(s.under.polys)) } };
 }
 
 /**
@@ -523,6 +527,7 @@ export function sectionOf(solids: Iterable<PreparedSolid>, h: number): ClipMulti
   const pieces: ClipMulti = [];
   for (const s of solids) {
     if (h < s.min - 1e-6 || h > s.top + 1e-6) continue;
+    if (s.under && h < s.under.z) { pieces.push(...s.under.clip); continue; }
     if (h < s.wallTop) { pieces.push(...s.clip); continue; }
     for (const { tri, plane: [a, b, c] } of s.roof) {
       // Треугольник ската, отсечённый полуплоскостью a·x + b·y + c ≥ h

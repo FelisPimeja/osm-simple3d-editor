@@ -11676,7 +11676,7 @@ function wallAsLine(f: IndoorFeature): IndoorFeature {
 }
 
 /**
- * Нарисованная ломаная (метры сцены) — новый путь арки: highway=footway + tunnel=building_passage, свои узлы
+ * Нарисованная ломаная (метры сцены) — новый путь арки: tunnel=building_passage (тип пути — за маппером), свои узлы
  * (с контуром здания путь не связываем). Вырез в здании — сразу, путь выделен.
  */
 function createPassage(pts: [number, number][]): string | undefined {
@@ -11684,14 +11684,14 @@ function createPassage(pts: [number, number][]): string | undefined {
   const { nodeFor } = sharedNodes([]);
   const nodes = pts.map((q) => nodeFor(overpassLayer.focusToLngLat(q[0], q[1])! as LonLat));
   if (nodes.length < 2) return tr('Арке нужны хотя бы две точки.');
-  const id = nextNewId--, key = `way/${id}`, tags = { highway: 'footway', tunnel: 'building_passage' };
+  const id = nextNewId--, key = `way/${id}`, tags = { tunnel: 'building_passage' };
   const line = { ids: nodes.map((q) => q.id), coords: nodes.map((q) => q.p) };
   createdPassages.set(key, { id, tags, nodes: line.ids, coords: line.coords });
   session.editMany([{ key, create: { key, version: 0, tags, line, polygons: [] } }]);
   rebuildPassageCut([key]);
   const made = passageFeatures(focus).find((f) => f.key === key);
   if (made) selectIndoor(made);
-  setStatus(tr('Создана арка {key} (highway=footway, tunnel=building_passage).', { key }));
+  setStatus(tr('Создана арка {key} (tunnel=building_passage).', { key }));
   return;
 }
 

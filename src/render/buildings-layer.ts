@@ -8650,6 +8650,22 @@ export function passageStrip(line: Pt[], width: number): ClipMulti {
   return rects.length ? polygonClipping.union(rects[0], ...rects.slice(1)) : [];
 }
 
+/** Без вершин на прямой (стыки кусков полосы, вершины оси): вертикальных рёбер у них быть не должно. */
+function dropCollinear(ps: LocalPolygon[]): LocalPolygon[] {
+  const ring = (r: Pt[]) => {
+    let out = r;
+    for (let changed = true; changed && out.length > 3;) {
+      changed = false;
+      for (let i = 0; i < out.length && out.length > 3; i++) {
+        const a = out[(i + out.length - 1) % out.length], b = out[i], c = out[(i + 1) % out.length];
+        if (distToSegment(b, a, c) < 0.02) { out = out.filter((_, k) => k !== i); changed = true; break; }
+      }
+    }
+    return out;
+  };
+  return ps.map((p) => ({ outer: ring(p.outer), inners: p.inners.map(ring) }));
+}
+
 /**
  * Объём под аркой: ниже её верха — только стены контура без полосы проезда (стороны проезда — её стены),
  * над полосой — потолок арки. undefined — арки нет или она не задевает объект по высоте.
@@ -8671,13 +8687,13 @@ function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heig
       const opening = m.length ? polygonClipping.intersection(body, m) : [];
       if (!opening.length) continue;
       strips.push(m);
-      ways.push({ id: c.id, line, opening: fromClip(opening), z });
+      ways.push({ id: c.id, line, opening: dropCollinear(fromClip(opening)), z });
     }
     if (!strips.length) return;
     const strip = polygonClipping.union(strips[0], ...strips.slice(1));
     const ceiling = polygonClipping.intersection(body, strip);
     if (!ceiling.length) return;
-    return { lower: fromClip(polygonClipping.difference(body, strip)), ceiling: fromClip(ceiling), z, ways };
+    return { lower: dropCollinear(fromClip(polygonClipping.difference(body, strip))), ceiling: dropCollinear(fromClip(ceiling)), z, ways };
   } catch (err) { console.warn('[passage]', f.key, err); return; }
 }
 

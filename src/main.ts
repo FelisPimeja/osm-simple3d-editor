@@ -1355,6 +1355,50 @@ function barrierNear(pt: { x: number; y: number }): { way: BarrierWay; depth: nu
   return best && { way: best.way, depth: barriersLayer.depthOf(best.ll, 0) };
 }
 
+/**
+ * Привязки к ограждениям (в наброске на карте и в режиме здания с окружением): вершины оси внизу и вверху, середины
+ * сторон, точка на ребре низа или верха. Вершины важнее середин, середины — рёбер.
+ */
+overpassLayer.extraSnap = (pt, radius, opts) => {
+  if (!barriersLayer.isEnabled || barriersLayer.hidden()) return;
+  const project = overpassLayer.geoProjector();
+  if (!project) return;
+  const off = overpassLayer.snapKindsOff;
+  let best: { kind: SnapKind; key: string; ll: LonLat; z: number; px: [number, number]; d: number } | undefined;
+  const consider = (kind: SnapKind, key: string, ll: LonLat, z: number, px: [number, number] | undefined, bonus: number) => {
+    if (!px || off.has(kind)) return;
+    const d = Math.hypot(px[0] - pt[0], px[1] - pt[1]);
+    if (d > radius || (best && d + bonus >= best.d)) return;
+    const local = overpassLayer.focusToLocal(ll);
+    if (!local || opts.skip?.(new THREE.Vector3(local[0], local[1], z), key, kind)) return;
+    best = { kind, key, ll, z, px, d: d + bonus };
+  };
+  for (const raw of overpass.barriers()) {
+    const b = liveBarrier(raw);
+    if (!b || !isBarrierTags(b.tags)) continue;
+    const key = `way/${b.id}`, sh = barrierShape(b.tags);
+    for (const z of [sh.min, sh.top]) {
+      const ps = b.coords.map((c) => project(c, z));
+      b.coords.forEach((c, i) => {
+        consider('vertex', key, c, z, ps[i], 0);
+        if (i + 1 >= b.coords.length) return;
+        const q = b.coords[i + 1], a = ps[i], e = ps[i + 1];
+        const mid: LonLat = [(c[0] + q[0]) / 2, (c[1] + q[1]) / 2];
+        consider('midpoint', key, mid, z, project(mid, z), 6);
+        if (opts.noEdge || !a || !e) return;
+        const dx = e[0] - a[0], dy = e[1] - a[1], l2 = dx * dx + dy * dy;
+        const t = l2 ? Math.max(0, Math.min(1, ((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / l2)) : 0;
+        const ll: LonLat = [c[0] + (q[0] - c[0]) * t, c[1] + (q[1] - c[1]) * t];
+        consider('edge', key, ll, z, project(ll, z), 18);
+      });
+    }
+  }
+  const hit = best as { kind: SnapKind; key: string; ll: LonLat; z: number; px: [number, number] } | undefined;
+  if (!hit) return;
+  const local = overpassLayer.focusToLocal(hit.ll)!;
+  return { kind: hit.kind, key: hit.key, local: new THREE.Vector3(local[0], local[1], hit.z), lngLat: new maplibregl.LngLat(hit.ll[0], hit.ll[1]), altitude: hit.z, point: hit.px };
+};
+
 /** Ограждения показанных тайлов; пересборка не чаще раза в 300 мс. */
 let barriersTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleBarriers() {

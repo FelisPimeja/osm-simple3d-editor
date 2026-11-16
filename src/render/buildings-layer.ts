@@ -4464,7 +4464,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Фильтр инструмента — и для них (захват — только за свои); из нескольких — ближайшая на экране
     // Здания карты в 3D — их привязки (с высотой); плоские привязки контуров — только если 3D-зданий нет (низкий зум)
     const map3d = [...this.groups.keys()].some((k) => k !== FOCUS_GROUP);
-    const cands = on ? [map3d ? this.mapGroupSnap(point, filter, radius, opts) : this.sketchSnap?.(point)].filter((h): h is SnapHit => !!h && filter(h.key)) : [];
+    const cands = on ? [map3d ? this.mapGroupSnap(point, filter, radius, opts) : this.sketchSnap?.(point), this.extraSnap?.(point, radius, opts)].filter((h): h is SnapHit => !!h && filter(h.key)) : [];
     return [own, ...cands].filter((h): h is SnapHit => !!h).sort((a, b) => d(a) - d(b))[0];
   }
 
@@ -4543,6 +4543,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!ll) return;
     return { kind: best.s.kind, key: best.s.key, local, lngLat: new LngLat(ll[0], ll[1]), altitude: local.z, point: best.px };
   }
+
+  /** Привязки к объектам вне групп (ограждения) — в наброске и с окружением; подключает main.ts. */
+  extraSnap?: (point: [number, number], radius: number, opts: SnapOpts) => SnapHit | undefined;
 
   /** Привязки к геометрии карты в наброске (подключает main.ts); undefined — без них. */
   sketchSnap?: (point: [number, number]) => SnapHit | undefined;

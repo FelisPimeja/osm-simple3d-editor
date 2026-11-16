@@ -8,7 +8,7 @@ import { occludedByTriangles } from './ray-occlusion';
 import { trimIndoorBuildingEdges } from './indoor-building-edges';
 import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth, wallDoorwaySpan } from './door-openings';
-import { RECESS_DEPTH, recessEntrances, type RecessPlace } from './entrance-recess';
+import { dropSlivers, RECESS_DEPTH, recessEntrances, type RecessPlace } from './entrance-recess';
 import { generateWindows, wantsGeneratedWindows, windowTuning } from './window-gen';
 /** Ниши входов: по умолчанию включены (localStorage entranceNiches=0 и перезагрузка — выключить). */
 const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') !== '0'; } catch { return true; } })();
@@ -8908,7 +8908,8 @@ function passageWalls(walls: number[], polys: LocalPolygon[], passage: { ceiling
       inner.push(a[0], a[1], min, b[0], b[1], min, b[0], b[1], passage.z, a[0], a[1], min, b[0], b[1], passage.z, a[0], a[1], passage.z);
     }
   });
-  const cut = doors.length ? Array.from(cutDoorOpenings(Float32Array.from(walls), doors, 1, h, 0.05)) : walls;
+  // Без вырожденных треугольников разрезки: их непарные стороны рисовались линиями поперёк проёма
+  const cut = doors.length ? dropSlivers(cutDoorOpenings(Float32Array.from(walls), doors, 1, h, 0.05)) : walls;
   return [...cut, ...inner, ...bottomTriangles(passage.ceiling, passage.z)];
 }
 

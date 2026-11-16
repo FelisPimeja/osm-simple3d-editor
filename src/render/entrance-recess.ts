@@ -17,7 +17,7 @@ const SLIVER = 1e-3;
  * (на диагонали исходного четырёхугольника). Их не видно, но их стороны — непарные, и сборка рёбер рисует
  * их линиями поперёк проёма.
  */
-function dropSlivers(p: ArrayLike<number>): number[] {
+export function dropSlivers(p: ArrayLike<number>): number[] {
   const out: number[] = [];
   for (let i = 0; i + 8 < p.length; i += 9) {
     const ux = p[i + 3] - p[i], uy = p[i + 4] - p[i + 1], uz = p[i + 5] - p[i + 2];

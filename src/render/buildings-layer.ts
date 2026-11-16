@@ -8924,8 +8924,16 @@ function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Conta
   };
   const addFeature = (f: Feature3D) => {
     // Скрытые (глазик, изоляция) не стоят на крышах: иначе под ними у соседа вместо крыши — плита перекрытия
-    if (!shouldRender(f) || g.hidden.has(f.key)) return;
+    if (!shouldRender(f)) return;
     const prep = prepItem(g, f);
+    // Скрытые (изоляция) — только как объёмы для окон: окна части остаются лишь на внешней оболочке здания
+    if (g.hidden.has(f.key)) {
+      if (prep.flat) return;
+      const box = new THREE.Box2();
+      for (const p of prep.polys) for (const [x, y] of p.outer) box.expandByPoint(new THREE.Vector2(x, y));
+      c.solids.push({ key: f.key, z: prep.heights.min, top: prep.heights.top, polys: prep.polys, box });
+      return;
+    }
     const top = hasFlatTop(prep), bottom = hasBottom(prep);
     const box = new THREE.Box2();
     for (const p of prep.polys) for (const [x, y] of p.outer) box.expandByPoint(new THREE.Vector2(x, y));

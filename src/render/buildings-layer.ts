@@ -8888,7 +8888,9 @@ interface ContactFace { key: string; z: number; polys: LocalPolygon[]; box: THRE
 /** Плоские верхи и дна объектов группы по высоте (ключ — высота шагом CONTACT_DZ). */
 interface Contacts { tops: Map<number, ContactFace[]>; bottoms: Map<number, ContactFace[]>;
   /** Объёмы группы (низ z, верх top): глухие стены к соседям — без сгенерированных окон. */
-  solids: (ContactFace & { top: number })[] }
+  solids: (ContactFace & { top: number })[];
+  /** Входы всех частей группы (точка, высота низа, ширина): сгенерированные окна обходят и входы соседних частей. */
+  doors: { key: string; p: Pt; z: number; width?: number }[] }
 
 function hasBottom(prep: ReturnType<typeof prepItem>): boolean {
   const { tags, heights, flat } = prep;
@@ -8908,7 +8910,7 @@ function buildContacts(g: MeshGroup, features: Iterable<Feature3D>): Contacts {
 /** То же порциями: step(deadline) считает до срока (performance.now()), true — всё посчитано. */
 function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Contacts; step: (deadline: number) => boolean } {
   g.renderFootprints = outlineRemainders(features.filter(f => !g.hidden.has(f.key)));
-  const c: Contacts = { tops: new Map(), bottoms: new Map(), solids: [] };
+  const c: Contacts = { tops: new Map(), bottoms: new Map(), solids: [], doors: [] };
   const add = (m: Map<number, ContactFace[]>, face: ContactFace) => {
     const k = Math.round(face.z / CONTACT_DZ);
     (m.get(k) ?? m.set(k, []).get(k)!).push(face);
@@ -8926,6 +8928,16 @@ function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Conta
     const box = new THREE.Box2();
     for (const p of prep.polys) for (const [x, y] of p.outer) box.expandByPoint(new THREE.Vector2(x, y));
     if (!prep.flat) c.solids.push({ key: f.key, z: prep.heights.min, top: prep.heights.top, polys: prep.polys, box });
+    if (f.entrances?.length) {
+      const at = new Map<number, LonLat>();
+      for (const p of f.polygons) [p.outer, ...p.inners].forEach((r, k) => ([p.outerIds, ...(p.innerIds ?? [])][k] ?? []).forEach((id, i) => { if (r[i]) at.set(id, r[i]); }));
+      for (const e of f.entrances) {
+        const kind = entranceOf(e.tags);
+        const ll = e.at ?? at.get(e.id);
+        if (!kind || kind === 'no' || !ll) continue;
+        c.doors.push({ key: f.key, p: g.toLocal(ll), z: entranceZ(e.tags, f.tags), width: tagWidth(e.tags) });
+      }
+    }
     if (!top && !bottom) return;
     if (top) add(c.tops, { key: f.key, z: prep.heights.wallTop, polys: prep.polys, box });
     if (bottom) add(c.bottoms, { key: f.key, z: prep.heights.min, polys: prep.polys, box });
@@ -9083,7 +9095,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       const blocked = (p: Pt, z: number) => solids.some((s) => z >= s.z && z <= s.top && s.polys.some((q) =>
         pointInLocalRing(p, q.outer) && !q.inners.some((h) => pointInLocalRing(p, h))));
       const places = generateWindows(polys.map((q) => [q.outer, ...q.inners]), { min: heights.min, top: heights.wallTop, levels,
-        width: windowTuning.width, step: windowTuning.step, corner: windowTuning.corner, alignDoors: windowTuning.alignDoors, height: windowTuning.height, breast: windowTuning.breast, doors: doorPlaces,
+        width: windowTuning.width, step: windowTuning.step, corner: windowTuning.corner, alignDoors: windowTuning.alignDoors, height: windowTuning.height, breast: windowTuning.breast, doors: [...doorPlaces, ...(g.contacts?.doors ?? []).filter((d) => d.key !== f.key).map((d) => ({ p: d.p, t: [1, 0] as Pt, n: [0, 1] as Pt, z: d.z, width: d.width }))],
         doorWidth: ENTRANCE_WIDTH, doorHeight: ENTRANCE_HEIGHT, blocked,
         // Проём арки: окно, задевающее его по высоте, не ставим (полоса арки — с запасом окна в ширину)
         hole: passage && ((p, t, z0, z1) => passage.ways.some((w) => z0 < w.z && z1 > (w.min ?? heights.min) && w.opening.some((q) =>

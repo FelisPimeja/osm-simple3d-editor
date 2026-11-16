@@ -9,7 +9,7 @@ import { trimIndoorBuildingEdges } from './indoor-building-edges';
 import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth, wallDoorwaySpan } from './door-openings';
 import { RECESS_DEPTH, recessEntrances, type RecessPlace } from './entrance-recess';
-import { generateWindows, wantsGeneratedWindows } from './window-gen';
+import { generateWindows, wantsGeneratedWindows, windowTuning } from './window-gen';
 /** Ниши входов: по умолчанию включены (localStorage entranceNiches=0 и перезагрузка — выключить). */
 const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') !== '0'; } catch { return true; } })();
 import * as THREE from 'three';
@@ -348,6 +348,8 @@ export interface GraphicsOptions {
   windowsAuto?: boolean;
   /** Заливка стёкол окон; без неё — только обводка. */
   windowFill?: boolean;
+  /** Окна у соседей в режиме здания. */
+  windowsNeighbours?: boolean;
 }
 
 /** Высота, на которой затемнение у земли сходит на нет, м (для зданий выше AO_HEIGHT). */
@@ -639,6 +641,8 @@ function disposeTree(o: THREE.Object3D) {
 }
 
 class MeshGroup {
+  /** Сцена режима здания (не тайл). */
+  focusScene = false;
   readonly scene = new THREE.Scene();
   readonly origin: MercatorCoordinate;
   readonly metersToMerc: number;
@@ -1515,6 +1519,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.removeGroup(FOCUS_GROUP);
     this.snaps = undefined;
     this.focused = !!features;
+    this.syncFocusWindows(!!features);
     if (!features && this.context) this.setContext(undefined);
     if (!features) { this.level = undefined; this.applyLevel(); } // вне режима здания срезов нет
     if (!features || (!features.length && !frame)) { this.focusAxes = undefined; this.focusLock = undefined; this.map?.triggerRepaint(); return; }
@@ -1525,6 +1530,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const lock = this.focusLock;
     const c = lock ? new THREE.Vector2(...lock.center) : box.getCenter(new THREE.Vector2());
     const g = new MeshGroup([c.x, c.y]);
+    g.focusScene = true;
     g.footprint = 0; // объекты нулевой высоты — точно на своём уровне: к ним привязываются следующие
     for (const k of flat) g.flat.add(k);
     g.contacts = buildContacts(g, features);
@@ -6453,7 +6459,24 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  /** Вход/выход из режима здания: пересобрать окна соседей (они там скрыты, пока флаг снят). */
+  private syncFocusWindows(on: boolean) {
+    if (on === focusSceneOn) return;
+    focusSceneOn = on;
+    if (focusOnlyWindows && (windowsAuto || windowsEnabled)) void this.rebuildWhere((f) => Number(f.tags['building:levels']) > 0 || !!f.windows?.length);
+  }
+
+  /** Параметры генерации окон (временная панель подбора). */
+  setWindowTuning(t: Partial<typeof windowTuning>) {
+    Object.assign(windowTuning, t);
+    if (windowsAuto) void this.rebuildWhere((f) => Number(f.tags['building:levels']) > 0);
+  }
+
   setGraphics(o: GraphicsOptions) {
+    if (!o.windowsNeighbours !== focusOnlyWindows) {
+      focusOnlyWindows = !o.windowsNeighbours;
+      if (focusSceneOn) void this.rebuildWhere((f) => Number(f.tags['building:levels']) > 0 || !!f.windows?.length);
+    }
     const glassChanged = glassEnabled === !!o.noGlass;
     glassEnabled = !o.noGlass;
     // Высота по умолчанию: пересобрать здания без высоты и этажей (только их — порциями по кадрам)
@@ -8705,6 +8728,10 @@ let raiseDefault = true;
 let windowsEnabled = false;
 /** Сгенерированные окна на фасадах без разметки — флаг графики windowsAuto. */
 let windowsAuto = false;
+/** В режиме здания окна только у него, без соседей — флаг графики windowsNeighbours (снят). */
+let focusOnlyWindows = true;
+/** Открыт режим здания (сцена FOCUS_GROUP). */
+let focusSceneOn = false;
 /** Окно по умолчанию (как в OSM2World): ширина, м; высота и подоконник — доли высоты этажа; глубина ниши, м. */
 const WINDOW_WIDTH = 1, WINDOW_HEIGHT = 0.5, WINDOW_BREAST = 0.3, WINDOW_DEPTH = 0.15;
 /** Сгенерированное окно — накладное стекло на таком расстоянии перед стеной, м. */
@@ -9047,7 +9074,8 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   const panes: number[] = [];
   const tagged = f.windows?.some((w) => isWallWindow(w.tags));
   // Сгенерированные окна (флаг графики): у части с этажами и без размеченных окон, кроме глухих стен к соседям
-  if (windowsAuto && !tagged && !shell && !roofOnly && !flat && !tri.pending && wantsGeneratedWindows(tags) && !isGlass(roofPartWallMaterial(tags))) {
+  const winHere = !focusOnlyWindows || !focusSceneOn || g.focusScene;
+  if (windowsAuto && winHere && !tagged && !shell && !roofOnly && !flat && !tri.pending && wantsGeneratedWindows(tags) && !isGlass(roofPartWallMaterial(tags))) {
     timed('здание: сгенерированные окна', () => {
       const levels = Number(tags['building:levels']) - (Number(tags['building:min_level']) || 0);
       if (!(levels >= 1)) return;
@@ -9055,21 +9083,21 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       const blocked = (p: Pt, z: number) => solids.some((s) => z >= s.z && z <= s.top && s.polys.some((q) =>
         pointInLocalRing(p, q.outer) && !q.inners.some((h) => pointInLocalRing(p, h))));
       const places = generateWindows(polys.map((q) => [q.outer, ...q.inners]), { min: heights.min, top: heights.wallTop, levels,
-        width: WINDOW_WIDTH, height: WINDOW_HEIGHT, breast: WINDOW_BREAST, doors: doorPlaces,
+        width: windowTuning.width, step: windowTuning.step, corner: windowTuning.corner, height: windowTuning.height, breast: windowTuning.breast, doors: doorPlaces,
         doorWidth: ENTRANCE_WIDTH, doorHeight: ENTRANCE_HEIGHT, blocked,
         // Проём арки: окно, задевающее его по высоте, не ставим (полоса арки — с запасом окна в ширину)
         hole: passage && ((p, t, z0, z1) => passage.ways.some((w) => z0 < w.z && z1 > (w.min ?? heights.min) && w.opening.some((q) =>
-          [0, -1, 1].some((k) => pointInLocalRing([p[0] + t[0] * k * WINDOW_WIDTH / 2, p[1] + t[1] * k * WINDOW_WIDTH / 2], q.outer))))) || undefined });
+          [0, -1, 1].some((k) => pointInLocalRing([p[0] + t[0] * k * windowTuning.width / 2, p[1] + t[1] * k * windowTuning.width / 2], q.outer))))) || undefined });
       // Без вырезания ниш (на сотнях фасадов это секунды): стекло — прямоугольником чуть перед стеной
       for (const w of places) {
-        const hw = (w.width ?? WINDOW_WIDTH) / 2, z1 = w.z + (w.height ?? 1);
+        const hw = (w.width ?? windowTuning.width) / 2, z1 = w.z + (w.height ?? 1);
         const x = w.p[0] + w.n[0] * PANE_OFFSET, y = w.p[1] + w.n[1] * PANE_OFFSET;
         const ax = x - w.t[0] * hw, ay = y - w.t[1] * hw, bx = x + w.t[0] * hw, by = y + w.t[1] * hw;
         panes.push(ax, ay, w.z, bx, by, w.z, bx, by, z1, ax, ay, w.z, bx, by, z1, ax, ay, z1);
       }
     });
   }
-  if (windowsEnabled && !shell && !roofOnly && !flat && !tri.pending && f.windows?.length) {
+  if (windowsEnabled && winHere && !shell && !roofOnly && !flat && !tri.pending && f.windows?.length) {
     timed('здание: ниши окон', () => {
       // Фильтр и здесь: в кеше тайлов признаки, собранные до правил (window=yes на входе — дверь со стеклом)
       const wins = new Map(f.windows!.filter((w) => isWallWindow(w.tags)).map((w) => [w.id, w.tags]));

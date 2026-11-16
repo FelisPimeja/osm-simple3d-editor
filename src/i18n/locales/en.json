@@ -1588,5 +1588,7 @@
   "У зданий с building:levels без размеченных окон: окна по этажам с шагом около 2 м, без окон на глухих стенах к соседям, у входов и у служебных зданий": "Buildings with building:levels and no mapped windows: windows on every level about 2 m apart, none on blind walls against neighbours, at entrances or on utility buildings",
   "Генерировать окна": "Generate windows",
   "Снято — у окон только обводка": "Off: windows are outlined only",
-  "Заливка окон": "Window fill"
+  "Заливка окон": "Window fill",
+  "В режиме здания показывать окна и у соседних зданий": "In building mode, show windows on neighbouring buildings too",
+  "Окна у соседей": "Windows on neighbours"
 }

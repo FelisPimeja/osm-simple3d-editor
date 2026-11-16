@@ -6,8 +6,10 @@ type Pt = [number, number];
 const NO_WINDOWS = new Set(['garage', 'garages', 'carport', 'roof', 'greenhouse', 'hangar', 'industrial', 'church',
   'parking', 'transformer_tower', 'water_tower', 'silo', 'storage_tank', 'bunker', 'ruins', 'construction']);
 
-/** Шаг окон по фасаду — две ширины окна; от угла до края окна — не меньше этого, м. */
-const CORNER = 0.5;
+/** Подбор параметров генерации (временная панель): шаг, м; ширина, м; высота и подоконник — доли этажа; простенок у угла, м. */
+export const windowTuning = { step: 2, width: 1, height: 0.5, breast: 0.3, corner: 0.5 };
+/** Поворот контура меньше этого (рад) — не угол: узел входа посреди стены не делит фасад. */
+const STRAIGHT = 0.05;
 /** Зазор между окном и входом по горизонтали, м. */
 const DOOR_GAP = 0.3;
 
@@ -28,6 +30,10 @@ export interface WindowGenOpts {
   /** Этажей в части (building:levels − building:min_level). */
   levels: number;
   width: number;
+  /** Шаг окон вдоль фасада, м. */
+  step: number;
+  /** От угла до края окна — не меньше, м. */
+  corner: number;
   /** Доли высоты этажа. */
   height: number;
   breast: number;
@@ -52,16 +58,26 @@ export function generateWindows(polygons: Pt[][][], o: WindowGenOpts): RecessPla
     for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; area += a[0] * b[1] - b[0] * a[1]; }
     // Наружу из объёма: у внешнего кольца — вправо от обхода против часовой, у дыр — наоборот
     const right = (area > 0) === (r === 0);
-    for (let i = 0; i < ring.length; i++) {
-      const a = ring[i], b = ring[(i + 1) % ring.length];
+    // Фасады — между настоящими углами: вершины на прямой (узлы входов, стыки) фасад не делят
+    const m = ring.length;
+    const corners: number[] = [];
+    for (let i = 0; i < m; i++) {
+      const p = ring[(i + m - 1) % m], c = ring[i], q = ring[(i + 1) % m];
+      const a1 = Math.atan2(c[1] - p[1], c[0] - p[0]), a2 = Math.atan2(q[1] - c[1], q[0] - c[0]);
+      const d = Math.abs(Math.atan2(Math.sin(a2 - a1), Math.cos(a2 - a1)));
+      if (d > STRAIGHT) corners.push(i);
+    }
+    if (corners.length < 2) return;
+    for (let ci = 0; ci < corners.length; ci++) {
+      const a = ring[corners[ci]], b = ring[corners[(ci + 1) % corners.length]];
       const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      const n = Math.round(len / (2 * o.width));
-      if (n < 1 || len < o.width + 2 * CORNER) continue;
+      const n = Math.round(len / o.step);
+      if (n < 1 || len < o.width + 2 * o.corner) continue;
       const t: Pt = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
       const nrm: Pt = right ? [t[1], -t[0]] : [-t[1], t[0]];
       const step = len / n;
       for (let k = 0; k < n; k++) {
-        const s = Math.min(Math.max((k + 0.5) * step, CORNER + o.width / 2), len - CORNER - o.width / 2);
+        const s = Math.min(Math.max((k + 0.5) * step, o.corner + o.width / 2), len - o.corner - o.width / 2);
         const p: Pt = [a[0] + t[0] * s, a[1] + t[1] * s];
         const probe: Pt = [p[0] + nrm[0] * 0.3, p[1] + nrm[1] * 0.3];
         const inner: Pt = [p[0] - nrm[0] * 0.3, p[1] - nrm[1] * 0.3];

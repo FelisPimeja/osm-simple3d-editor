@@ -1,4 +1,5 @@
 import { withEntranceTags } from './edit/entrance-edits';
+import { windowTuning } from './render/window-gen';
 import { cleanPiece, freeAreaPieces, joinedWalls } from './edit/free-area';
 import { joinedWallLine } from './edit/indoor-wall-union';
 import { pointWallRings, insertWallPoint } from './edit/point-wall-rings';
@@ -139,7 +140,7 @@ const userHidden = new Set<string>();
 /** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
 interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, windows: false, windowsAuto: false, windowFill: true, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -1184,6 +1185,55 @@ function applyMonochrome() {
 }
 applyMonochrome();
 
+// Временная панель подбора параметров генерации окон (видна при «Генерировать окна»)
+const windowTuner = (() => {
+  const box = document.createElement('div');
+  box.className = 'window-tuner';
+  const rows: [keyof typeof windowTuning, string, number, number, number, (v: number) => string][] = [
+    ['step', 'Шаг, м', 1, 6, 0.1, (v) => v.toFixed(1)],
+    ['width', 'Ширина, м', 0.4, 3, 0.05, (v) => v.toFixed(2)],
+    ['height', 'Высота, % этажа', 0.1, 0.9, 0.01, (v) => `${Math.round(v * 100)}%`],
+    ['breast', 'Подоконник, % этажа', 0, 0.8, 0.01, (v) => `${Math.round(v * 100)}%`],
+    ['corner', 'Простенок у угла, м', 0, 5, 0.1, (v) => v.toFixed(1)],
+  ];
+  const TUNE_KEY = 'osm3d.windowTuning';
+  try { Object.assign(windowTuning, JSON.parse(localStorage.getItem(TUNE_KEY) ?? '{}')); } catch { /* нет хранилища */ }
+  const pier = document.createElement('div');
+  const showPier = () => { pier.textContent = `Простенок между окнами ≈ ${(windowTuning.step - windowTuning.width).toFixed(2)} м`; };
+  let timer = 0;
+  const apply = () => {
+    showPier();
+    try { localStorage.setItem(TUNE_KEY, JSON.stringify(windowTuning)); } catch { /* приватный режим */ }
+    clearTimeout(timer);
+    timer = window.setTimeout(() => overpassLayer.setWindowTuning({}), 250);
+  };
+  const title = document.createElement('b');
+  title.textContent = 'Окна (подбор)';
+  box.append(title);
+  for (const [k, label, min, max, st, fmt] of rows) {
+    const row = document.createElement('label');
+    const name = document.createElement('span');
+    const val = document.createElement('span');
+    const input = document.createElement('input');
+    Object.assign(input, { type: 'range', min: String(min), max: String(max), step: String(st), value: String(windowTuning[k]) });
+    name.textContent = label;
+    val.textContent = fmt(windowTuning[k]);
+    input.addEventListener('input', () => { windowTuning[k] = Number(input.value); val.textContent = fmt(windowTuning[k]); apply(); });
+    row.append(name, input, val);
+    box.append(row);
+  }
+  const reset = document.createElement('button');
+  reset.textContent = 'Сбросить';
+  reset.addEventListener('click', () => {
+    Object.assign(windowTuning, { step: 2, width: 1, height: 0.5, breast: 0.3, corner: 0.5 });
+    box.querySelectorAll<HTMLInputElement>('input').forEach((inp, i) => { inp.value = String(windowTuning[rows[i][0]]); inp.dispatchEvent(new Event('input')); });
+  });
+  showPier();
+  box.append(pier, reset);
+  document.body.append(box);
+  return box;
+})();
+
 // Настройки графики: отдельные галки, чтобы сравнивать влияние на производительность
 for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
   const key = input.dataset.gfx as keyof GraphicsSettings;
@@ -1244,6 +1294,7 @@ function syncGraphicsInputs() {
 
 /** Зависимые галки графики: сезонные деревья — только при включённых деревьях. */
 function syncGraphicsDeps() {
+  windowTuner.hidden = !gfx.windowsAuto;
   const seasons = document.querySelector<HTMLInputElement>('[data-gfx="seasons"]');
   if (seasons) seasons.disabled = !gfx.trees;
 }

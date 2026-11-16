@@ -38,7 +38,7 @@ export interface BarrierShape { min: number; top: number; width: number; colour:
 /** Высота, толщина и цвет ограждения: теги, без них — типичные для вида. */
 export function barrierShape(tags: Record<string, string>): BarrierShape {
   const kind = tags.barrier, ft = tags.fence_type, mat = tags.material ?? tags.wall;
-  const defH = kind === 'wall' ? 2 : ft === 'railing' ? 1 : 1.5;
+  const defH = kind === 'wall' ? 3 : kind === 'hedge' ? 1.5 : ft === 'railing' ? 1 : 2.5;
   // Забор без width — плоскость: толщина сетки или штакетника не видна и не размечена
   const defW = kind === 'hedge' ? 0.8 : kind === 'wall' ? (mat === 'dry_stone' ? 0.5 : 0.3) : 0;
   const min = parseLength(tags.min_height) ?? 0;

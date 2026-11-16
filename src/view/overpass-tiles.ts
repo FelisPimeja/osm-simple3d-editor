@@ -412,6 +412,16 @@ export class OverpassTiles {
     return this.layer.groupKeys();
   }
 
+  /** Все нужные тайлы, задевающие рамку, загружены (арки и части здания из соседних тайлов — уже в памяти). */
+  readyAround([w, s, e, n]: Bbox): boolean {
+    return this.wanted.every((k) => {
+      const [tw, ts, te, tn] = tileBbox(k);
+      if (te < w || tw > e || tn < s || ts > n) return true;
+      const c = this.cache.get(k);
+      return c?.state === 'error' || (c?.state === 'ready' && !c.partial && !this.reloading.has(k));
+    });
+  }
+
   status(): { ready: number; total: number; loading: number; waiting: number } {
     const count = (state: Entry['state']) => this.wanted.filter((k) => this.cache.get(k)?.state === state && !this.reloading.has(k)).length;
     const reloading = this.wanted.filter((k) => this.reloading.has(k)).length;

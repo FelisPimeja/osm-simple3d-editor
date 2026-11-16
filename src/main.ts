@@ -630,6 +630,7 @@ const indoorPois = new IndoorPois(map, overpassLayer, (f, add, point) => {
 indoorPois.setLabels(!buildingsView.wireframe);
 const overpass = new OverpassTiles(map, overpassLayer, () => {
   syncDataEntrances();
+  syncFocusPassages();
   updateTileFilter();
   showOverpassStatus();
   if (focus) scheduleFocusTiles();
@@ -703,6 +704,23 @@ function syncDataEntrances() {
   const g = focus;
   overpassLayer.previewFocusFeatures(groupFeatures(g).filter((f) => session.has(f.key)).map((f) => focusFeature(g, withEntranceEdits(f))));
   renderOutliner();
+}
+
+/**
+ * Пришли тайлы — арки здания режима заново. Здание открыто по ссылке раньше, чем пришли пути арок (первый заход,
+ * кеша нет): объёмы собраны без вырезов, пересобираем части, когда набор арок у здания поменялся.
+ */
+let focusPassageSig = '';
+function syncFocusPassages() {
+  if (!focus) { focusPassageSig = ''; return; }
+  const sig = `${focus.key}|${passageFeatures(focus).map((f) => f.key).sort().join(',')}`;
+  if (sig === focusPassageSig) return;
+  const first = !focusPassageSig.startsWith(`${focus.key}|`);
+  focusPassageSig = sig;
+  // Первый подсчёт при входе в здание: сцена собрана с теми же арками — пересобирать нечего, если их нет
+  if (first && sig.endsWith('|')) return;
+  const members = new Set(groupFeatures(focus).map((f) => f.key));
+  void overpassLayer.rebuildWhere((f) => members.has(f.key));
 }
 
 /** Узлы с правками: теги из сессии (нет в сессии — убрать). */
@@ -1959,6 +1977,8 @@ function showLoading(text: string | undefined, down = false) {
   if (text !== undefined) loadingCard.querySelector('.text')!.textContent = text;
 }
 
+/** Здание из ссылки найдено — ждать соседние тайлы под ним не дольше этого, мс. */
+const ENTER_WAIT = 8000;
 /** Открыть здание из ссылки ?edit=: без хэша — подлёт к объекту, вход — когда он появится в данных тайлов. */
 async function openEditLink() {
   const cm = new URLSearchParams(location.search).get('edit')?.match(/^c([nwr])(\d+)$/);
@@ -1996,7 +2016,7 @@ async function openEditLink() {
   // «Не найдено» — только когда все участки карты загрузились (плюс пауза: отношение собирается из соседних тайлов),
   // а здания так и нет; медленный сервер ждём, но не бесконечно
   const hardDeadline = Date.now() + 300_000;
-  let loadedSince: number | undefined;
+  let loadedSince: number | undefined, foundAt: number | undefined;
   const tryEnter = () => {
     if (focus) { showLoading(undefined); return clearInterval(timer); }
     if (!map.getLayer(overpassLayer.id)) return showLoading(tr('{what}: загружаю карту…', { what })); // стиль и слой зданий ещё не готовы
@@ -2011,7 +2031,11 @@ async function openEditLink() {
     if (!focusHiddenLayers.length) { hideMapLayers(); overpassLayer.setFocus([]); }
     const g = type === 'relation' ? (groupOf(key)?.key === key ? groupOf(key) : soloGroup(key)) : groupOf(key) ?? soloGroup(key);
     // Отношение может прийти с соседним тайлом раньше своих частей — ждём, пока появится хоть одна
-    if (g && groupFeatures(g).length) {
+    // Здание пришло — ждём и соседние тайлы под ним (ось арки бывает в соседнем: без неё здание собралось бы без
+    // выреза и перестроилось бы с задержкой), но не дольше ENTER_WAIT
+    const box = g && groupFeatures(g).length ? groupFeatures(g).map(featureBox).reduce((a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])] as Bbox) : undefined;
+    if (box) foundAt ??= Date.now();
+    if (g && box && (overpass.readyAround(box) || Date.now() - foundAt! > ENTER_WAIT)) {
       clearInterval(timer);
       showLoading(undefined);
       enterFocus(g, !linked);

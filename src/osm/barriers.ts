@@ -69,3 +69,9 @@ export function barrierShape(tags: Record<string, string>): BarrierShape {
     : ft === 'wood' || mat === 'wood' ? '#9a7650' : ft === 'concrete' || mat === 'concrete' ? '#bdbab3' : ft === 'stone' ? '#a39c8f' : ft === 'brick' ? '#a65a43' : '#ffffff');
   return { min, top: Math.max(top, min + 0.1), width, colour, seeThrough: kind === 'fence' && (SEE_THROUGH.has(ft ?? '') || !ft) };
 }
+
+/** Цвет створки ворот: colour, иначе по material (дерево, металл…), без них — белый. */
+export function gateColour(tags: Record<string, string>): string {
+  const m = tags.material;
+  return tags.colour ?? (m === 'wood' ? '#9a7650' : m === 'metal' || m === 'steel' || m === 'iron' ? '#8a8f94' : m === 'concrete' ? '#bdbab3' : '#ffffff');
+}

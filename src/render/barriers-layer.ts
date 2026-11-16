@@ -1,14 +1,12 @@
 import * as THREE from 'three';
 import { MercatorCoordinate, type Map as MlMap } from 'maplibre-gl';
-import { barrierShape, gateWidth, type BarrierGate, type BarrierWay } from '../osm/barriers';
+import { barrierShape, gateColour, gateWidth, type BarrierGate, type BarrierWay } from '../osm/barriers';
 import { parseLength } from '../osm/heights';
 import { DOOR_GEO, DOOR_MATERIAL, DOOR_SELECTED_MATERIAL, EDGE_MATERIAL, parseColour } from './buildings-layer';
 
 const SOLID = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
-const SEE = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.5, depthWrite: false });
+const SEE = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.8, depthWrite: false });
 const MONO = new THREE.Color('#ffffff');
-/** Створки ворот — тёмный металл. */
-const GATE_COLOUR = new THREE.Color('#5b6166');
 /** Подсветка выбранного прохода — полупрозрачная плоскость проёма. */
 const OPENING = new THREE.MeshBasicMaterial({ color: 0x97beff, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false });
 /** Выделенное — как у зданий. */
@@ -314,7 +312,7 @@ export class BarriersLayer {
         const gh = parseLength(gp.gate.tags.height);
         const bar = b === 'lift_gate' || b === 'chain' || b === 'rope';
         const lo = bar ? 0.9 : 0.05, hi = bar ? 1.0 : Math.max(0.8, gh ?? Math.min(z1, 2));
-        const gq = quadOf(put(gateBuf, GATE_COLOUR, gi));
+        const gq = quadOf(put(gateBuf, parseColour(gateColour(gp.gate.tags)), gi));
         for (let i = 0; i + 1 < leaf.length; i++) {
           gq([...leaf[i], lo], [...leaf[i + 1], lo], [...leaf[i + 1], hi], [...leaf[i], hi]);
           seg(leaf[i], leaf[i + 1], lo); seg(leaf[i], leaf[i + 1], hi);

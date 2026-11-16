@@ -339,19 +339,35 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   } finally {
     // Сервер отклонил пакет — changeset пуст: не закрываем, следующая попытка загрузит в него же (иначе на
     // каждую попытку оставался пустой changeset). Брошенный закроется сервером сам через час.
-    if (uploaded) { failedChangeset = undefined; try { await call('PUT', `/changeset/${changeset}/close`); } catch { /* закроется сам через час */ } }
-    else failedChangeset = { id: changeset, api: api() };
+    if (uploaded) { setFailedChangeset(undefined); try { await call('PUT', `/changeset/${changeset}/close`); } catch { /* закроется сам через час */ } }
+    else setFailedChangeset({ id: changeset, api: api(), at: Date.now() });
   }
 }
 
 /** Открытый пустой changeset, оставшийся от отклонённой загрузки (того же сервера). */
-let failedChangeset: { id: number; api: string } | undefined;
+/**
+ * Чейнджсет, загрузку в который сервер отклонил: открыт и пуст — следующая попытка загружает в него. Хранится и
+ * в localStorage: после перезагрузки страницы (или с другой вкладки) повтор не открывает ещё один пустой.
+ */
+type FailedChangeset = { id: number; api: string; at: number };
+const FAILED_KEY = 'osm3d.failedChangeset';
+/** Сервер закрывает пустой чейнджсет через час бездействия — старше этого не пробуем. */
+const FAILED_MAX_AGE_MS = 55 * 60 * 1000;
+let failedChangeset: FailedChangeset | undefined;
+function getFailedChangeset(): FailedChangeset | undefined {
+  if (failedChangeset) return failedChangeset;
+  try { const v = JSON.parse(localStorage.getItem(FAILED_KEY) ?? 'null') as FailedChangeset | null; return v ?? undefined; } catch { return undefined; }
+}
+function setFailedChangeset(v: FailedChangeset | undefined) {
+  failedChangeset = v;
+  try { if (v) localStorage.setItem(FAILED_KEY, JSON.stringify(v)); else localStorage.removeItem(FAILED_KEY); } catch { /* только в памяти */ }
+}
 
 /** Пустой changeset прошлой неудачной попытки, если он ещё открыт: теги обновляем, загружаем в него. */
 async function reusableChangeset(xml: string): Promise<number | undefined> {
-  const was = failedChangeset;
-  failedChangeset = undefined;
-  if (!was || was.api !== api()) return;
+  const was = getFailedChangeset();
+  setFailedChangeset(undefined);
+  if (!was || was.api !== api() || Date.now() - (was.at ?? 0) > FAILED_MAX_AGE_MS) return;
   try {
     const info = await call('GET', `/changeset/${was.id}`);
     if (!/open="true"/.test(info) || !/changes_count="0"/.test(info)) return;

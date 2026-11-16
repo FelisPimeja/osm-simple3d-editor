@@ -1599,5 +1599,7 @@
   "Отдельностоящие стены, заборы и живые изгороди (barrier=wall/fence/hedge): высота — height, толщина — width": "Freestanding walls, fences and hedges (barrier=wall/fence/hedge): height from height, thickness from width",
   "Живая изгородь": "Hedge",
   "Забор": "Fence",
-  "Высота {h} м, толщина {w} м.": "Height {h} m, thickness {w} m."
+  "Высота {h} м, толщина {w} м.": "Height {h} m, thickness {w} m.",
+  "Вершина общая с другим объектом — её не убрать отсюда.": "The vertex is shared with another object — it cannot be removed here.",
+  "У ограждения останется слишком мало вершин.": "The barrier would be left with too few vertices."
 }

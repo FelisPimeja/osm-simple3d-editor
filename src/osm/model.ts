@@ -91,6 +91,8 @@ export interface IndoorFeature {
   passage?: boolean;
   /** Отдельностоящее ограждение (barrier=wall/fence/hedge вне здания): выбирается на карте, правится панелью свойств. */
   barrier?: boolean;
+  /** Ворота, калитка или проход на ограждении (узел barrier=gate/entrance/…); у него — barrier тоже. */
+  gate?: boolean;
   /** Уровень не размечен (нет level и repeat_on): этаж выбран по умолчанию. */
   noLevel?: boolean;
   /** Путь вокзала: куски оси в пределах здания (рисуются рельсами); сама геометрия с узлами — целиком, для правки. */

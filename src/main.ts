@@ -56,7 +56,7 @@ import { inheritedTags, inheritedValue } from './osm/inherit';
 import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
 import { BarriersLayer } from './render/barriers-layer';
-import { barrierShape, isBarrierTags, type BarrierWay } from './osm/barriers';
+import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, type BarrierWay } from './osm/barriers';
 import type { TreePoint } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
@@ -1321,6 +1321,22 @@ function liveBarrier(b: BarrierWay): BarrierWay | undefined {
   const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
   return { ...b, tags: e.tags, ...(line ? { nodes: line.ids, coords: line.coords } : {}) };
 }
+/** Ворота ограждения с правками сессии: теги узла; снят barrier ворот или узел удалён — их нет. */
+function liveGates(b: BarrierWay): BarrierWay {
+  if (!b.gates?.length) return b;
+  const gates = b.gates.flatMap((g) => {
+    const k = `node/${g.id}`;
+    if (session.isDeleted(k)) return [];
+    const tags = session.get(k)?.tags ?? g.tags;
+    return isGateTags(tags) && b.nodes.includes(g.id) ? [{ id: g.id, tags }] : [];
+  });
+  return { ...b, gates };
+}
+/** Ворота — точечным indoor-объектом: выбор и панель свойств (теги узла). */
+function gateFeature(b: BarrierWay, g: BarrierGate): IndoorFeature {
+  const at = b.coords[b.nodes.indexOf(g.id)];
+  return { key: `node/${g.id}`, tags: g.tags, kind: 'poi', point: at, barrier: true, gate: true, levels: [0], polygons: [] };
+}
 /** Ограждение — indoor-объектом (линия): выбор, панель свойств и правка тегов — как у арок. */
 function barrierFeature(b: BarrierWay): IndoorFeature {
   return { key: `way/${b.id}`, tags: b.tags, kind: 'area', line: true, barrier: true, levels: [0],
@@ -1328,17 +1344,27 @@ function barrierFeature(b: BarrierWay): IndoorFeature {
 }
 /** Ограждение по ключу (с правками сессии), если оно ещё ограждение. */
 function barrierFeatureFor(key: string): IndoorFeature | undefined {
+  if (key.startsWith('node/')) {
+    const id = Number(key.slice(5));
+    for (const raw of overpass.barriers()) {
+      if (!raw.gates?.some((g) => g.id === id)) continue;
+      const b = liveBarrier(raw), g = b && liveGates(b).gates?.find((x) => x.id === id);
+      if (b && g) return gateFeature(b, g);
+    }
+    return;
+  }
   const b = overpass.barriers().find((x) => `way/${x.id}` === key);
   const live = b && liveBarrier(b);
   return live && isBarrierTags(live.tags) ? barrierFeature(live) : undefined;
 }
 function syncBarrierSelection() {
-  barriersLayer.select(indoorSelection.filter((f) => f.barrier).map((f) => Number(f.key.slice(4))));
+  barriersLayer.select(indoorSelection.filter((f) => f.barrier && !f.gate).map((f) => Number(f.key.slice(4))),
+    indoorSelection.filter((f) => f.gate).map((f) => Number(f.key.slice(5))));
 }
 
 
 /** Ось ограждения в пределах 6 px от точки экрана (тонкий забор сверху не попасть лучом); глубина — у земли. */
-function barrierNear(pt: { x: number; y: number }): { way: BarrierWay; depth: number } | undefined {
+function barrierNear(pt: { x: number; y: number }): { way: BarrierWay; gate?: BarrierGate; depth: number } | undefined {
   if (!barriersLayer.isEnabled || (focus && !overpassLayer.contextShown)) return;
   let best: { way: BarrierWay; d: number; ll: maplibregl.LngLat } | undefined;
   for (const raw of overpass.barriers()) {
@@ -1403,7 +1429,7 @@ overpassLayer.extraSnap = (pt, radius, opts) => {
 let barriersTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleBarriers() {
   if (!barriersLayer.isEnabled || barriersTimer) return;
-  barriersTimer = setTimeout(() => { barriersTimer = undefined; barriersLayer.setBarriers(overpass.barriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags))); syncBarrierSelection(); }, 300);
+  barriersTimer = setTimeout(() => { barriersTimer = undefined; barriersLayer.setBarriers(overpass.barriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags)).map(liveGates)); syncBarrierSelection(); }, 300);
 }
 
 /** Мосты и развязки — по дорогам показанных тайлов; пересборка не чаще раза в 300 мс. */
@@ -1787,7 +1813,10 @@ map.on('click', (e) => {
     const fence = overpassLayer.contextShown ? barriersLayer.pick(e.point.x, e.point.y) ?? barrierNear(e.point) : undefined;
     const own = fence ? overpassLayer.pickHit(e.point) : undefined;
     const live = fence && (!own || fence.depth < barriersLayer.depthOf(own.lngLat, own.altitude)) ? liveBarrier(fence.way) : undefined;
-    if (live && isBarrierTags(live.tags)) { selectIndoor(barrierFeature(live), e.originalEvent.shiftKey); return; }
+    if (live && isBarrierTags(live.tags)) {
+      const gate = fence!.gate && liveGates(live).gates?.find((g) => g.id === fence!.gate!.id);
+      selectIndoor(gate ? gateFeature(live, gate) : barrierFeature(live), e.originalEvent.shiftKey); return;
+    }
   }
   // Вход на фасаде: клик — выбрать (перенос — только инструментом «Переместить»)
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.altKey) {
@@ -1921,8 +1950,10 @@ map.on('click', (e) => {
     if (!hit || fence.depth < barriersLayer.depthOf(hit.lngLat, hit.altitude)) {
       const live = liveBarrier(fence.way);
       if (live) {
-        if (reclick && !e.originalEvent.shiftKey && indoorSelection.length === 1 && indoorSelection[0].key === `way/${live.id}`) { selectIndoor(undefined); clearInfo(); return; }
-        selectIndoor(barrierFeature(live), e.originalEvent.shiftKey); return;
+        const gate = fence.gate && liveGates(live).gates?.find((g) => g.id === fence.gate!.id);
+        const f = gate ? gateFeature(live, gate) : barrierFeature(live);
+        if (reclick && !e.originalEvent.shiftKey && indoorSelection.length === 1 && indoorSelection[0].key === f.key) { selectIndoor(undefined); clearInfo(); return; }
+        selectIndoor(f, e.originalEvent.shiftKey); return;
       }
     }
   }
@@ -9901,6 +9932,9 @@ let panelLevelRefs = new Map<number, string>();
 let shownIndoor: IndoorFeature[] = [];
 let selectedIndoor: IndoorFeature | undefined;
 
+const GATE_NAMES: Record<string, string> = { gate: tr('Ворота'), swing_gate: tr('Ворота'), sliding_gate: tr('Откатные ворота'), wicket_gate: tr('Калитка'),
+  entrance: tr('Проход'), lift_gate: tr('Шлагбаум'), kissing_gate: tr('Калитка-лабиринт'), turnstile: tr('Турникет'), 'full-height_turnstile': tr('Турникет'),
+  stile: tr('Перелаз'), chain: tr('Цепь'), rope: tr('Верёвка') };
 const INDOOR_NAMES: Record<string, string> = { room: tr('Помещение'), corridor: tr('Коридор'), area: tr('Площадка'), level: tr('Этаж'), wall: tr('Стена'), column: tr('Колонна'), poi: tr('Объект') };
 
 /** Помещение, коридор или площадка показанного этажа под курсором (самое маленькое из накрывающих). */
@@ -10104,6 +10138,7 @@ function indoorTitle(f: IndoorFeature): string {
   if(f.tags.barrier==='fence' && f.tags.fence_type==='railing')return tr('Ограждение');
   if(f.tags.wall==='counter')return tr('Прилавок');
   if (f.passage) return tr('Арка');
+  if (f.gate) return GATE_NAMES[f.tags.barrier] ?? tr('Ворота');
   if (f.barrier) return f.tags.barrier === 'wall' ? tr('Стена') : f.tags.barrier === 'hedge' ? tr('Живая изгородь') : tr('Забор');
   const own = f.stairs ? tr('Лестница') : f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
   if (f.escalator) return own;
@@ -10152,6 +10187,15 @@ function renderIndoorSelection(add = false) {
     bindIndoorForm([f]);
     return;
   }
+  if (f.gate) {
+    const m = (v: number) => String(Math.round(v * 100) / 100);
+    infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
+      + `<p class="hint">${esc(tr('Проём {w} м.', { w: m(gateWidth(t)) }))}</p>`
+      + indoorForm([f])
+      + renderOtherTags(key, t, indoorForm([f]), true);
+    bindIndoorForm([f]);
+    return;
+  }
   if (f.barrier) {
     const sh = barrierShape(t), m = (v: number) => String(Math.round(v * 100) / 100);
     infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
@@ -10186,7 +10230,7 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
  * Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений
  * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance и номер ref (как у пресета iD «Вход / выход»).
  */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && f.tags.fence_type==='railing') ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.gate) ? ['barrier', 'width', 'height', 'access', 'locked', 'opening_hours', 'material'] : fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && f.tags.fence_type==='railing') ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
   : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : ['width', 'height', 'material'])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
@@ -16988,7 +17032,7 @@ function onSessionChange(keys: string[]) {
   if (!focus && keys.some((k) => indoorEdited.has(k) || indoorCreated.has(k))) scheduleIndoorBadges();
   syncEntranceEdits(keys);
   syncPassageEdits(keys);
-  if (keys.some((k) => k.startsWith('way/'))) scheduleBarriers();
+  if (keys.some((k) => k.startsWith('way/') || k.startsWith('node/'))) scheduleBarriers();
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
     if (selectedRoomWalls.length) { selectIndoor(undefined); clearInfo(); }

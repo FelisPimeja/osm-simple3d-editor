@@ -30,7 +30,7 @@ export async function fetchOverpassTile([w, s, e, n]: Bbox, signal: AbortSignal,
 (
   way["building"](${b}); way["building:part"](${b});
   relation["building"](${b}); relation["building:part"](${b}); relation["type"="building"](${b});
-  way["indoor"](${b}); relation["indoor"](${b}); node["level"](${b}); node["repeat_on"](${b}); node["entrance"](${b}); node["window"](${b}); way["tunnel"="building_passage"](${b}); way["barrier"~"^(wall|fence|hedge)$"](${b});
+  way["indoor"](${b}); relation["indoor"](${b}); node["level"](${b}); node["repeat_on"](${b}); node["entrance"](${b}); node["window"](${b}); way["tunnel"="building_passage"](${b}); way["barrier"~"^(wall|fence|hedge)$"](${b}); node["barrier"~"^(gate|entrance|wicket_gate|swing_gate|sliding_gate|lift_gate|kissing_gate|turnstile|full-height_turnstile|stile|chain|rope)$"](${b});
   node["natural"="tree"](${b}); way["natural"="tree_row"](${b});
   way["natural"="wood"](${b}); way["landuse"="forest"](${b});${roadSets}
 )->.a;

@@ -124,11 +124,11 @@ const INDOOR_ISSUE_MATERIAL = Object.fromEntries((['error', 'warning'] as const)
 /** Выделенное помещение в каркасе — как заливка выделенной части (SELECTED_FILL_MATERIAL). */
 const INDOOR_SELECT_WIRE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 /** Маркер двери на полу проёма: плоский кружок (вид сверху и сбоку) — на любом ракурсе виден. */
-const DOOR_GEO = new THREE.SphereGeometry(0.08, 16, 8).scale(1, 1, 0.35);
-const DOOR_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000 });
+export const DOOR_GEO = new THREE.SphereGeometry(0.08, 16, 8).scale(1, 1, 0.35);
+export const DOOR_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x000000 });
 const DOOR_SILL_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xf97316, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const DOOR_AXIS_MATERIAL = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.12, gapSize: 0.08, depthTest: false, depthWrite: false });
-const DOOR_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x2563eb });
+export const DOOR_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x2563eb });
 /** Вход на фасаде (entrance=*): белый прямоугольник 1×2 м чуть перед стеной, с тёмной обводкой. */
 const ENTRANCE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const ENTRANCE_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x97beff, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });

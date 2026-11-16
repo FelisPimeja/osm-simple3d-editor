@@ -1599,5 +1599,16 @@
   "Отдельностоящие стены, заборы и живые изгороди (barrier=wall/fence/hedge): высота — height, толщина — width": "Freestanding walls, fences and hedges (barrier=wall/fence/hedge): height from height, thickness from width",
   "Живая изгородь": "Hedge",
   "Забор": "Fence",
-  "Высота {h} м, толщина {w} м.": "Height {h} m, thickness {w} m."
+  "Высота {h} м, толщина {w} м.": "Height {h} m, thickness {w} m.",
+  "Ворота": "Gate",
+  "Откатные ворота": "Sliding gate",
+  "Калитка": "Wicket gate",
+  "Проход": "Entrance",
+  "Шлагбаум": "Lift gate",
+  "Калитка-лабиринт": "Kissing gate",
+  "Турникет": "Turnstile",
+  "Перелаз": "Stile",
+  "Цепь": "Chain",
+  "Верёвка": "Rope",
+  "Проём {w} м.": "Opening {w} m."
 }

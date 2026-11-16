@@ -56,6 +56,7 @@ import { inheritedTags, inheritedValue } from './osm/inherit';
 import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
 import { BarriersLayer } from './render/barriers-layer';
+import { barrierShape, isBarrierTags, type BarrierWay } from './osm/barriers';
 import type { TreePoint } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
@@ -1311,11 +1312,35 @@ function applyGraphics() {
   }
 }
 
+/** Ограждение с правками сессии (теги, ось); удалённое — нет. */
+function liveBarrier(b: BarrierWay): BarrierWay | undefined {
+  const key = `way/${b.id}`;
+  if (session.isDeleted(key)) return;
+  const e = session.get(key);
+  if (!e) return b;
+  const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
+  return { ...b, tags: e.tags, ...(line ? { nodes: line.ids, coords: line.coords } : {}) };
+}
+/** Ограждение — indoor-объектом (линия): выбор, панель свойств и правка тегов — как у арок. */
+function barrierFeature(b: BarrierWay): IndoorFeature {
+  return { key: `way/${b.id}`, tags: b.tags, kind: 'area', line: true, barrier: true, levels: [0],
+    polygons: [{ outer: b.coords, inners: [], outerIds: b.nodes, innerIds: [] }] };
+}
+/** Ограждение по ключу (с правками сессии), если оно ещё ограждение. */
+function barrierFeatureFor(key: string): IndoorFeature | undefined {
+  const b = overpass.barriers().find((x) => `way/${x.id}` === key);
+  const live = b && liveBarrier(b);
+  return live && isBarrierTags(live.tags) ? barrierFeature(live) : undefined;
+}
+function syncBarrierSelection() {
+  barriersLayer.select(indoorSelection.filter((f) => f.barrier).map((f) => Number(f.key.slice(4))));
+}
+
 /** Ограждения показанных тайлов; пересборка не чаще раза в 300 мс. */
 let barriersTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleBarriers() {
   if (!barriersLayer.isEnabled || barriersTimer) return;
-  barriersTimer = setTimeout(() => { barriersTimer = undefined; barriersLayer.setBarriers(overpass.barriers()); }, 300);
+  barriersTimer = setTimeout(() => { barriersTimer = undefined; barriersLayer.setBarriers(overpass.barriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags))); syncBarrierSelection(); }, 300);
 }
 
 /** Мосты и развязки — по дорогам показанных тайлов; пересборка не чаще раза в 300 мс. */
@@ -1821,6 +1846,18 @@ map.on('click', (e) => {
     return { point, distance: Math.hypot(screen.x - e.point.x, screen.y - e.point.y) };
   }).filter((hit) => hit.distance <= 14).sort((a, b) => a.distance - b.distance)[0]?.point : undefined;
   if (tree) { if (reclick && tree.key === selectedTreeKey) { select(undefined); clearInfo(); } else selectTree(tree); return; }
+  // Забор или стена под курсором ближе здания — выбрать (Shift — добавить к выбранным)
+  const fence = addingTo || focus ? undefined : barriersLayer.pick(e.point.x, e.point.y);
+  if (fence) {
+    const hit = key ? overpassLayer.pickHit(e.point) : undefined;
+    if (!hit || fence.depth < barriersLayer.depthOf(hit.lngLat, hit.altitude)) {
+      const live = liveBarrier(fence.way);
+      if (live) {
+        if (reclick && !e.originalEvent.shiftKey && indoorSelection.length === 1 && indoorSelection[0].key === `way/${live.id}`) { selectIndoor(undefined); clearInfo(); return; }
+        selectIndoor(barrierFeature(live), e.originalEvent.shiftKey); return;
+      }
+    }
+  }
   // Мост или тоннель под курсором ближе здания — его теги (только просмотр)
   const road = addingTo ? undefined : roadsLayer.pick(e.point.x, e.point.y);
   if (road) {
@@ -8776,7 +8813,7 @@ function select(key: string | undefined): boolean {
   roadSelection = [];
   if (key && (selectedIndoor || selectedRoomWalls.length)) selectIndoor(undefined);
   // Мимо всего в режиме здания — снять и выбор арки (у плана этажа свой сброс)
-  else if (!key && !shownLevel && indoorSelection.some((f) => f.passage)) selectIndoor(undefined);
+  else if (!key && !shownLevel && indoorSelection.some((f) => f.passage || f.barrier)) selectIndoor(undefined);
   addingTo = undefined;
   addPending = [];
   // Переход из списка правок или undo к объекту вне текущей группы — выходим из неё
@@ -9963,6 +10000,7 @@ function indoorTitle(f: IndoorFeature): string {
   if(f.tags.barrier==='fence' && f.tags.fence_type==='railing')return tr('Ограждение');
   if(f.tags.wall==='counter')return tr('Прилавок');
   if (f.passage) return tr('Арка');
+  if (f.barrier) return f.tags.barrier === 'wall' ? tr('Стена') : f.tags.barrier === 'hedge' ? tr('Живая изгородь') : tr('Забор');
   const own = f.stairs ? tr('Лестница') : f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
   if (f.escalator) return own;
   loadPresets(() => { if (indoorSelection.length) renderIndoorSelection(); });
@@ -9979,6 +10017,7 @@ function renderIndoorSelection(add = false) {
   const partners = indoorSelection.map((x) => stairsPartner(x, all)?.key).filter((k): k is string => !!k && !indoorSelection.some((x) => x.key === k));
   overpassLayer.setIndoorSelection([...indoorSelection.map((x) => x.key), ...partners]);
   syncPassageSelection();
+  syncBarrierSelection();
   syncOutlinerPassages();
   indoorPois.setSelection(indoorSelection.map((x) => x.key));
   renderEscalatorUi();
@@ -10008,6 +10047,15 @@ function renderIndoorSelection(add = false) {
     bindIndoorForm([f]);
     return;
   }
+  if (f.barrier) {
+    const sh = barrierShape(t), m = (v: number) => String(Math.round(v * 100) / 100);
+    infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
+      + `<p class="hint">${esc(tr('Высота {h} м, толщина {w} м.', { h: m(sh.top - sh.min), w: m(sh.width) }))}</p>`
+      + indoorForm([f])
+      + renderOtherTags(key, t, indoorForm([f]), true);
+    bindIndoorForm([f]);
+    return;
+  }
   const src = indoorCategorySource(f);
   infoEl.innerHTML = objectHeading(`${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''}`, `${server().web}/${type}/${id}`, esc(key))
     + `<p class="hint">${esc(levels)}</p>`
@@ -10033,7 +10081,7 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
  * Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений
  * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance и номер ref (как у пресета iD «Вход / выход»).
  */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.every(f=>f.tags.barrier==='fence' && f.tags.fence_type==='railing') ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && f.tags.fence_type==='railing') ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
   : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : ['width', 'height', 'material'])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
@@ -16831,6 +16879,7 @@ function onSessionChange(keys: string[]) {
   if (!focus && keys.some((k) => indoorEdited.has(k) || indoorCreated.has(k))) scheduleIndoorBadges();
   syncEntranceEdits(keys);
   syncPassageEdits(keys);
+  if (keys.some((k) => k.startsWith('way/'))) scheduleBarriers();
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
     if (selectedRoomWalls.length) { selectIndoor(undefined); clearInfo(); }
@@ -16844,7 +16893,7 @@ function onSessionChange(keys: string[]) {
       const sel = indoorSelection.map((f) => indoorKey(f.key));
       if (levelsRenders === stamp) renderLevels();
       // Выбор — по новым объектам плана (одним разом: по одному — квадратично)
-      const again = sel.map((k) => buildingIndoorFor(k)).filter((f): f is IndoorFeature => !!f);
+      const again = sel.map((k) => buildingIndoorFor(k) ?? barrierFeatureFor(k)).filter((f): f is IndoorFeature => !!f);
       indoorSelection = [];
       if (again.length) selectIndoorMany(again, again.length > 1);
     });
@@ -16970,7 +17019,7 @@ function renderChanges() {
   renderAccount();
   if (josmPlugin()) return renderJosmChanges();
   // Пути-члены мультиполигонов (разрезание при правке контуров) — служебные: отправляются, но в списке не видны
-  const changes = session.changes().filter((c) => !c.feature.line || isIndoorChange(c) || c.feature.tags?.tunnel === 'building_passage' || uploadIssueKeys.has(c.key));
+  const changes = session.changes().filter((c) => !c.feature.line || isIndoorChange(c) || c.feature.tags?.tunnel === 'building_passage' || isBarrierTags(c.feature.tags) || uploadIssueKeys.has(c.key));
   // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
   // Шаги скрытия частей — тоже в истории, но панель ради них не раскрываем
   const show = changes.length > 0 || session.hasDataHistory();
@@ -17073,7 +17122,7 @@ let insertedSuggestion: string | undefined;
 
 function commentSuggestion(): string {
   const groupKey = (key: string) => editGroups.get(key)?.key ?? groupOf(key)?.key;
-  return suggestComment(session.changes().filter((c) => !c.feature.line || isIndoorChange(c) || c.feature.tags?.tunnel === 'building_passage'), {
+  return suggestComment(session.changes().filter((c) => !c.feature.line || isIndoorChange(c) || c.feature.tags?.tunnel === 'building_passage' || isBarrierTags(c.feature.tags)), {
     groupOf: (key) => { const g = groupKey(key); return g && g !== key ? g : undefined; },
     isGroup: (key) => editGroups.has(key),
     buildingName: (key) => {

@@ -6,6 +6,8 @@ import { depthMain, parseColour } from './buildings-layer';
 const SOLID = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
 const SEE = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.5, depthWrite: false });
 const MONO = new THREE.Color('#ffffff');
+/** Выделенное — как у зданий. */
+const HIGHLIGHT = new THREE.Color('#97beff');
 
 type Pt = [number, number];
 
@@ -42,9 +44,17 @@ export class BarriersLayer implements CustomLayerInterface {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.Camera();
   private model = new THREE.Matrix4();
+  /** Проекция без сжатия глубины — для луча клика и глубины попадания (сравнение с pickHit зданий). */
+  private pickMatrix = new THREE.Matrix4();
+  private origin = new MercatorCoordinate(0, 0, 0);
+  private metre = 1;
   private meshes: THREE.Mesh[] = [];
   /** Исходные цвета вершин каждого меша — чтобы снимать монохром. */
   private colours: Float32Array[] = [];
+  /** Для клика: позиции и номер пути каждого треугольника, по мешам. */
+  private tris: { pos: Float32Array; way: Int32Array }[] = [];
+  private ways: BarrierWay[] = [];
+  private selectedIds = new Set<number>();
   private signature = '';
   private enabled = true;
   private monochrome = false;
@@ -76,6 +86,7 @@ export class BarriersLayer implements CustomLayerInterface {
 
   render(_gl: WebGL2RenderingContext, options: CustomRenderMethodInput) {
     if (!this.enabled || !this.renderer || !this.meshes.length || this.hidden()) return;
+    this.pickMatrix = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]).multiply(this.model);
     const main = this.plainDepth() ? new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]) : depthMain(options);
     this.camera.projectionMatrix = main.multiply(this.model);
     this.renderer.resetState();
@@ -92,12 +103,51 @@ export class BarriersLayer implements CustomLayerInterface {
 
   setMonochrome(on: boolean) {
     this.monochrome = on;
+    this.paint();
+  }
+
+  /** Подсветить ограждения (id путей); пустой список — снять. */
+  select(ids: number[]) {
+    if (ids.length === this.selectedIds.size && ids.every((id) => this.selectedIds.has(id))) return;
+    this.selectedIds = new Set(ids);
+    this.paint();
+  }
+
+  /** Цвета вершин: исходные, монохром, подсветка выделенного. */
+  private paint() {
     this.meshes.forEach((m, i) => {
-      const attr = m.geometry.getAttribute('color') as THREE.BufferAttribute, out = attr.array as Float32Array, src = this.colours[i];
-      for (let k = 0; k < out.length; k += 3) { out[k] = on ? MONO.r : src[k]; out[k + 1] = on ? MONO.g : src[k + 1]; out[k + 2] = on ? MONO.b : src[k + 2]; }
+      const attr = m.geometry.getAttribute('color') as THREE.BufferAttribute, out = attr.array as Float32Array, src = this.colours[i], way = this.tris[i].way;
+      for (let t = 0; t < way.length; t++) {
+        const c = this.selectedIds.has(this.ways[way[t]].id) ? HIGHLIGHT : this.monochrome ? MONO : undefined;
+        for (let k = t * 9; k < t * 9 + 9; k += 3) {
+          if (c) { out[k] = c.r; out[k + 1] = c.g; out[k + 2] = c.b; } else { out[k] = src[k]; out[k + 1] = src[k + 1]; out[k + 2] = src[k + 2]; }
+        }
+      }
       attr.needsUpdate = true;
     });
     this.map?.triggerRepaint();
+  }
+
+  /** Ограждение под курсором (ближайший треугольник) и глубина попадания в clip space — для сравнения со зданиями. */
+  pick(px: number, py: number): { way: BarrierWay; depth: number } | undefined {
+    if (!this.enabled || !this.map || !this.meshes.length || this.hidden()) return;
+    const canvas = this.map.getCanvas();
+    const x = (px / canvas.clientWidth) * 2 - 1, y = 1 - (py / canvas.clientHeight) * 2;
+    const m = this.pickMatrix, inv = m.clone().invert();
+    const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+    const ray = new THREE.Ray(near, far.sub(near).normalize());
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), hit = new THREE.Vector3();
+    let best: { wi: number; dist: number; p: THREE.Vector3 } | undefined;
+    for (const { pos, way } of this.tris) {
+      for (let i = 0, t = 0; i < pos.length; i += 9, t++) {
+        a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
+        if (!ray.intersectTriangle(a, b, c, false, hit)) continue;
+        const dist = hit.distanceTo(ray.origin);
+        if (!best || dist < best.dist) best = { wi: way[t], dist, p: hit.clone() };
+      }
+    }
+    if (!best) return;
+    return { way: this.ways[best.wi], depth: best.p.applyMatrix4(m).z };
   }
 
   /** Ограждения показанных тайлов (с повторами на границе тайлов). */
@@ -106,7 +156,7 @@ export class BarriersLayer implements CustomLayerInterface {
     const byId = new Map<number, BarrierWay>();
     for (const w of all) byId.set(w.id, w);
     const ways = [...byId.values()];
-    const signature = ways.map((w) => `${w.id}:${w.nodes.length}:${w.coords[0]?.join(',')}`).sort().join('|');
+    const signature = ways.map((w) => `${w.id}:${w.coords.map((c) => c.join(',')).join(';')}:${JSON.stringify(w.tags)}`).sort().join('|');
     if (signature === this.signature) return;
     this.signature = signature;
     this.clearMeshes();
@@ -116,10 +166,13 @@ export class BarriersLayer implements CustomLayerInterface {
     const origin = MercatorCoordinate.fromLngLat({ lng: (w + e) / 2, lat: (s + n) / 2 }, 0);
     const m = origin.meterInMercatorCoordinateUnits();
     // Локальная система в метрах: x — восток, y — север, z — вверх (как у RoadsLayer)
+    this.origin = origin;
+    this.metre = m;
     this.model = new THREE.Matrix4().makeTranslation(origin.x, origin.y, 0).scale(new THREE.Vector3(m, -m, m));
     const local = ([lng, lat]: [number, number]): Pt => { const c = MercatorCoordinate.fromLngLat({ lng, lat }, 0); return [(c.x - origin.x) / m, -(c.y - origin.y) / m]; };
-    const buf = { solid: { p: [] as number[], c: [] as number[] }, see: { p: [] as number[], c: [] as number[] } };
-    for (const way of ways) {
+    const buf = { solid: { p: [] as number[], c: [] as number[], w: [] as number[] }, see: { p: [] as number[], c: [] as number[], w: [] as number[] } };
+    this.ways = ways;
+    for (const [wi, way] of ways.entries()) {
       const sh = barrierShape(way.tags);
       const closed = way.nodes.length > 3 && way.nodes[0] === way.nodes[way.nodes.length - 1];
       let pts = way.coords.map(local);
@@ -128,7 +181,7 @@ export class BarriersLayer implements CustomLayerInterface {
       const { l, r } = offsets(pts, sh.width / 2, closed);
       const col = parseColour(sh.colour), out = sh.seeThrough ? buf.see : buf.solid;
       const z0 = sh.min, z1 = sh.top;
-      const tri = (a: number[], b: number[], c: number[]) => { out.p.push(...a, ...b, ...c); for (let k = 0; k < 3; k++) out.c.push(col.r, col.g, col.b); };
+      const tri = (a: number[], b: number[], c: number[]) => { out.p.push(...a, ...b, ...c); out.w.push(wi); for (let k = 0; k < 3; k++) out.c.push(col.r, col.g, col.b); };
       const quad = (a: number[], b: number[], c: number[], d: number[]) => { tri(a, b, c); tri(a, c, d); };
       const segs = closed ? pts.length : pts.length - 1;
       for (let i = 0; i < segs; i++) {
@@ -156,11 +209,17 @@ export class BarriersLayer implements CustomLayerInterface {
       mesh.frustumCulled = false;
       this.meshes.push(mesh);
       this.colours.push(colours);
+      this.tris.push({ pos: new Float32Array(part.p), way: Int32Array.from(part.w) });
       this.scene.add(mesh);
     }
     this.drawnWays = ways.length;
-    if (this.monochrome) this.setMonochrome(true);
-    this.map?.triggerRepaint();
+    this.paint();
+  }
+
+  /** Глубина точки (lngLat, высота над землёй) в clip space той же камеры, что у pick. */
+  depthOf(lngLat: { lng: number; lat: number }, altitude: number): number {
+    const c = MercatorCoordinate.fromLngLat(lngLat, 0);
+    return new THREE.Vector3((c.x - this.origin.x) / this.metre, -(c.y - this.origin.y) / this.metre, altitude).applyMatrix4(this.pickMatrix).z;
   }
 
   clear() {
@@ -172,6 +231,8 @@ export class BarriersLayer implements CustomLayerInterface {
     for (const mesh of this.meshes) { mesh.geometry.dispose(); this.scene.remove(mesh); }
     this.meshes = [];
     this.colours = [];
+    this.tris = [];
+    this.ways = [];
     this.drawnWays = 0;
   }
 }

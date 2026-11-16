@@ -1596,5 +1596,8 @@
   "Арки": "Arches",
   "Лишние вершины — углы соседних объектов: убрать их нельзя, не испортив соседей.": "The extra vertices are corners of neighbouring objects: they cannot be removed without breaking the neighbours.",
   "Показывать ограждения": "Show walls and fences",
-  "Отдельностоящие стены, заборы и живые изгороди (barrier=wall/fence/hedge): высота — height, толщина — width": "Freestanding walls, fences and hedges (barrier=wall/fence/hedge): height from height, thickness from width"
+  "Отдельностоящие стены, заборы и живые изгороди (barrier=wall/fence/hedge): высота — height, толщина — width": "Freestanding walls, fences and hedges (barrier=wall/fence/hedge): height from height, thickness from width",
+  "Живая изгородь": "Hedge",
+  "Забор": "Fence",
+  "Высота {h} м, толщина {w} м.": "Height {h} m, thickness {w} m."
 }

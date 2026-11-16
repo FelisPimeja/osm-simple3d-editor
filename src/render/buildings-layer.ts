@@ -8736,6 +8736,8 @@ let focusSceneOn = false;
 const WINDOW_WIDTH = 1, WINDOW_HEIGHT = 0.5, WINDOW_BREAST = 0.3, WINDOW_DEPTH = 0.15;
 /** Сгенерированное окно — накладное стекло на таком расстоянии перед стеной, м (3 см тонули в стене при приближении — точности глубины не хватало). */
 const PANE_OFFSET = 0.1;
+/** Вход соседней части (часто — на нависающем контуре над отступившей стеной): окна не ставятся в пределах стольких м от его плоскости. */
+const NEIGHBOUR_DOOR_REACH = 3;
 
 /** Унаследованные частью теги (цвета, форма крыши, материалы контура/отношения) — задаёт main. */
 let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;
@@ -9095,7 +9097,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       const blocked = (p: Pt, z: number) => solids.some((s) => z >= s.z && z <= s.top && s.polys.some((q) =>
         pointInLocalRing(p, q.outer) && !q.inners.some((h) => pointInLocalRing(p, h))));
       const places = generateWindows(polys.map((q) => [q.outer, ...q.inners]), { min: heights.min, top: heights.wallTop, levels,
-        width: windowTuning.width, step: windowTuning.step, corner: windowTuning.corner, alignDoors: windowTuning.alignDoors, height: windowTuning.height, breast: windowTuning.breast, doors: [...doorPlaces, ...(g.contacts?.doors ?? []).filter((d) => d.key !== f.key).map((d) => ({ p: d.p, t: [1, 0] as Pt, n: [0, 1] as Pt, z: d.z, width: d.width }))],
+        width: windowTuning.width, step: windowTuning.step, corner: windowTuning.corner, alignDoors: windowTuning.alignDoors, height: windowTuning.height, breast: windowTuning.breast, doors: [...doorPlaces, ...(g.contacts?.doors ?? []).filter((d) => d.key !== f.key).map((d) => ({ p: d.p, t: [1, 0] as Pt, n: [0, 1] as Pt, z: d.z, width: d.width, reach: NEIGHBOUR_DOOR_REACH }))],
         doorWidth: ENTRANCE_WIDTH, doorHeight: ENTRANCE_HEIGHT, blocked,
         // Проём арки: окно, задевающее его по высоте, не ставим (полоса арки — с запасом окна в ширину)
         hole: passage && ((p, t, z0, z1) => passage.ways.some((w) => z0 < w.z && z1 > (w.min ?? heights.min) && w.opening.some((q) =>

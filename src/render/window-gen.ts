@@ -40,7 +40,7 @@ export interface WindowGenOpts {
   height: number;
   breast: number;
   /** Входы части: окно, перекрывающее вход, не ставится. */
-  doors: RecessPlace[];
+  doors: (RecessPlace & { reach?: number })[];
   doorWidth: number;
   doorHeight: number;
   /** За стеной в точке p на высоте z — другой объём (глухая стена к соседу). */
@@ -80,7 +80,7 @@ export function generateWindows(polygons: Pt[][][], o: WindowGenOpts): RecessPla
       // Оси входов на этом фасаде (вдоль, м); близкие — одна ось
       const axes: number[] = [];
       if (o.alignDoors) for (const d of o.doors.map((d) => (d.p[0] - a[0]) * t[0] + (d.p[1] - a[1]) * t[1]).filter((v, i) =>
-        Math.abs((o.doors[i].p[0] - a[0]) * nrm[0] + (o.doors[i].p[1] - a[1]) * nrm[1]) < 0.5 && v >= lo && v <= hi).sort((x, y) => x - y))
+        Math.abs((o.doors[i].p[0] - a[0]) * nrm[0] + (o.doors[i].p[1] - a[1]) * nrm[1]) < (o.doors[i].reach ?? 0.5) && v >= lo && v <= hi).sort((x, y) => x - y))
         if (!axes.length || d - axes[axes.length - 1] > o.step / 2) axes.push(d);
       const cols: number[] = [];
       if (!axes.length) {
@@ -112,7 +112,7 @@ export function generateWindows(polygons: Pt[][][], o: WindowGenOpts): RecessPla
             const along = (d.p[0] - p[0]) * t[0] + (d.p[1] - p[1]) * t[1];
             const off = Math.abs((d.p[0] - p[0]) * nrm[0] + (d.p[1] - p[1]) * nrm[1]);
             const dh = d.height ?? o.doorHeight, dw = d.width ?? o.doorWidth;
-            return off < 0.5 && Math.abs(along) < (o.width + dw) / 2 + DOOR_GAP && z < d.z + dh + 0.2 && z + h > d.z;
+            return off < (d.reach ?? 0.5) && Math.abs(along) < (o.width + dw) / 2 + DOOR_GAP && z < d.z + dh + 0.2 && z + h > d.z;
           });
           if (!door) out.push({ p, t, n: nrm, z, width: o.width, height: h });
         }

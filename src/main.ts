@@ -45,7 +45,7 @@ import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFi
 import { panoramax } from './view/panoramax';
 import { mapillary } from './view/mapillary';
 import { fotoshi, fotoshiRequest } from './view/fotoshi';
-import { centroid, entranceOf, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointInRingFast, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
+import { centroid, entranceOf, facadeEntranceOf, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointInRingFast, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { ScaleTool } from './edit/scale-tool';
 import { featureRings, glueMoves, levelApart, ON_SIDE_M } from './edit/glue-plan';
@@ -14817,7 +14817,7 @@ function renderOutliner() {
       <span class="ol-icon">${ICON_DOOR}</span>
       <span class="ol-label">${esc(label)}<span class="ol-key">${doors.size}</span></span></li>`);
     if (!collapsed) for (const [id, t] of doors) {
-      const name = t.ref ?? t.name ?? (entranceOf(t) === 'yes' ? tr('Вход') : entranceOf(t)!);
+      const name = t.ref ?? t.name ?? (facadeEntranceOf(t) === 'yes' ? tr('Вход') : facadeEntranceOf(t)!);
       html.push(`<li class="ol-child${selectedEntrances().includes(id) ? ' selected' : ''}" data-entrance="${id}" title="node/${id}">
         <span class="ol-icon">${ICON_DOOR}</span><span class="ol-label">${esc(name)}<span class="ol-key">node/${id}</span></span></li>`);
     }

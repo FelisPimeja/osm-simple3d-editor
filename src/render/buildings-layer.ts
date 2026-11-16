@@ -28,7 +28,7 @@ import { trimInWorker, trimSync, trimWorkersAvailable, type TrimJob, type TrimRe
 import { areaLedgeTriangles } from './area-ledge';
 import { dropJitter } from './jitter';
 import { floatingParts } from '../osm/floating';
-import { entranceOf, isWallWindow, pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
+import { entranceOf, facadeEntranceOf, isWallWindow, pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
 import { dropPartSeams } from './part-seams';
 import { COUNTER_DEPTH, closedCounterSplit, counterRing, isClosedCounterRing } from './counter-ring';
 import { edgePass } from './edge-pass';
@@ -8988,7 +8988,7 @@ function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Conta
       const at = new Map<number, LonLat>();
       for (const p of f.polygons) [p.outer, ...p.inners].forEach((r, k) => ([p.outerIds, ...(p.innerIds ?? [])][k] ?? []).forEach((id, i) => { if (r[i]) at.set(id, r[i]); }));
       for (const e of f.entrances) {
-        const kind = entranceOf(e.tags);
+        const kind = facadeEntranceOf(e.tags);
         const ll = e.at ?? at.get(e.id);
         if (!kind || kind === 'no' || !ll) continue;
         c.doors.push({ key: f.key, p: g.toLocal(ll), z: entranceZ(e.tags, f.tags), width: tagWidth(e.tags) });
@@ -9174,7 +9174,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // Ниши входов (выключаются флагом localStorage entranceNiches=0)
   if (entranceNiches && !shell && !roofOnly && !flat && !tri.pending && f.entrances?.length) {
     timed('здание: ниши входов', () => {
-      const doors = new Map(f.entrances!.filter((e) => entranceOf(e.tags) && entranceOf(e.tags) !== 'no').map((e) => [e.id, e.tags]));
+      const doors = new Map(f.entrances!.filter((e) => facadeEntranceOf(e.tags) && facadeEntranceOf(e.tags) !== 'no').map((e) => [e.id, e.tags]));
       const places: RecessPlace[] = [];
       // Ниша — на своей высоте (не на низе части): часть выше двери (узел на её контуре над входом) её не получает,
       // а у частей, через которые проходит проём (цоколь и часть над ним), CSG вырежет каждой её долю

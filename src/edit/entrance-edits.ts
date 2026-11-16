@@ -1,6 +1,6 @@
 import type {Feature3D,Entrance} from '../osm/model';
-/** Как entranceOf в osm/model (модуль без импортов — его грузят тесты в node): въезд на парковку — тоже вход. */
-const entranceOf=(t?:Record<string,string>)=>t?.entrance??(t?.amenity==='parking_entrance'?'garage':undefined);
+/** Как facadeEntranceOf в osm/model (модуль без импортов — его грузят тесты в node): въезд на парковку и indoor=door на стене — тоже вход. */
+const entranceOf=(t?:Record<string,string>)=>t?.entrance??(t?.amenity==='parking_entrance'?'garage':t?.indoor==='door'?'yes':undefined);
 /** Session objects need not carry entrance metadata; retain the loaded node tags. */
 export function withEntranceTags(f:Feature3D, nodeTags:Map<number,Record<string,string>>, data:Map<number,Record<string,string>>, fallback:Entrance[]=f.entrances??[]):Feature3D {
  const source=new Map(fallback.map(e=>[e.id,e.tags]));

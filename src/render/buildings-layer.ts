@@ -9216,6 +9216,24 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       doorPlaces.push(...places);
       const cut = recessEntrances(tri.walls, places, { width: ENTRANCE_WIDTH, height: ENTRANCE_HEIGHT, min: heights.min, top: heights.wallTop });
       if (cut) tri.walls = cut;
+      // Проём уходит выше плоского верха части (цоколь под стеклянной частью): верх и плита перекрытия над нишей
+      // перегородили бы её срезом на стыке — вырезаем прямоугольник ниши из них
+      const through = places.filter((e) => e.z + ENTRANCE_HEIGHT > heights.wallTop + 1e-3);
+      if (through.length && hasFlatTop(prep) && tri.roof.length) {
+        const rects: LocalPolygon[] = through.map((e) => {
+          const w = (e.width ?? ENTRANCE_WIDTH) / 2;
+          const at = (sx: number, d: number): Pt => [e.p[0] + e.t[0] * sx - e.n[0] * d, e.p[1] + e.t[1] * sx - e.n[1] * d];
+          return { outer: [at(-w, -0.05), at(w, -0.05), at(w, RECESS_DEPTH), at(-w, RECESS_DEPTH)], inners: [] };
+        });
+        const minus = (ps: LocalPolygon[]) => { try { return fromClip(polygonClipping.difference(toClip(ps), ...rects.map((r) => toClip([r])))); } catch { return undefined; } };
+        const faces = g.contacts ? contactFaces(g.contacts.bottoms, f.key, heights.wallTop, box2) : [];
+        const base = minus(polys);
+        if (base) {
+          const rest = faces.length ? subtractFaces(base, faces) : base, covered = faces.length ? coveredBy(base, faces) : undefined;
+          if (rest) tri.roof = bottomTriangles(rest, heights.wallTop);
+          joint = covered ? bottomTriangles(covered, heights.wallTop) : faces.length ? joint : [];
+        }
+      }
     });
   }
   // Окна по тегам (флаг графики): ниша на своём этаже, подоконник и размеры — window:* или от высоты этажа

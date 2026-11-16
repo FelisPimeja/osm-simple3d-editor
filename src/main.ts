@@ -1203,7 +1203,7 @@ function applyMonochrome() {
 }
 applyMonochrome();
 
-// Временная панель подбора параметров генерации окон (видна при «Генерировать окна»)
+// Панель подбора параметров генерации окон — только в dev (видна при «Генерировать окна»); в проде — значения по умолчанию
 const windowTuner = (() => {
   const box = document.createElement('div');
   box.className = 'window-tuner';
@@ -1215,7 +1215,7 @@ const windowTuner = (() => {
     ['corner', 'Простенок у угла, м', 0, 5, 0.1, (v) => v.toFixed(1)],
   ];
   const TUNE_KEY = 'osm3d.windowTuning';
-  try { Object.assign(windowTuning, JSON.parse(localStorage.getItem(TUNE_KEY) ?? '{}')); } catch { /* нет хранилища */ }
+  if (import.meta.env.DEV) try { Object.assign(windowTuning, JSON.parse(localStorage.getItem(TUNE_KEY) ?? '{}')); } catch { /* нет хранилища */ }
   const pier = document.createElement('div');
   const showPier = () => { pier.textContent = `Простенок между окнами ≈ ${(windowTuning.step - windowTuning.width).toFixed(2)} м`; };
   let timer = 0;
@@ -1331,7 +1331,7 @@ function syncGraphicsInputs() {
 
 /** Зависимые галки графики: сезонные деревья — только при включённых деревьях. */
 function syncGraphicsDeps() {
-  windowTuner.hidden = !gfx.windowsAuto;
+  windowTuner.hidden = !import.meta.env.DEV || !gfx.windowsAuto;
   const seasons = document.querySelector<HTMLInputElement>('[data-gfx="seasons"]');
   if (seasons) seasons.disabled = !gfx.trees;
 }

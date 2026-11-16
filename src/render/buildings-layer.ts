@@ -363,6 +363,8 @@ const EDGE_ANGLE = 25;
 /** Пунктир подземной части здания: виден только не закрытый зданием участок (земля карты глубину не пишет). */
 const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, dashSize: 0.25, gapSize: 0.15, depthWrite: false, transparent: true, opacity: 0.85 });
 /** Тот же пунктир у соседей в окружении плана этажа (абрис сечения, коробки нижних этажей) — бледнее. */
+/** Обводка сгенерированных окон у выделенной части: бледно-синяя, тонкая. */
+const GEN_PANE_SELECTED_MATERIAL = new THREE.LineBasicMaterial({ color: 0x9db8e8, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 });
 const PALE_OUTLINE_MATERIAL = new THREE.LineDashedMaterial({ color: 0xa8a8a8, dashSize: 0.25, gapSize: 0.15, depthWrite: false, transparent: true, opacity: 0.85 });
 /** Выбранный контур подземной части — целиком, сквозь здание. */
 const UNDERGROUND_SELECTED = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.25, gapSize: 0.15, depthTest: false, depthWrite: false, transparent: true });
@@ -603,6 +605,8 @@ interface Item {
   floorVertices: number;
   /** Стёкла окон — последние из floorVertices (идут вместе с плитами, красятся WINDOW_PANE). */
   paneVertices?: number;
+  /** Из них — сгенерированные окна (идут первыми): не объекты OSM, в выделении не синие. */
+  genPaneVertices?: number;
   wall: THREE.Color;
   roof: THREE.Color;
   top: number;
@@ -5376,7 +5380,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const dashed = inFocus && this.wireframe ? pick([...this.selected, ...(this.hovered ? [this.hovered] : [])]) : selected;
     const out: (THREE.LineSegments | LineSegments2 | THREE.Mesh)[] = [];
     if ((this.wireframe || inFocus) && dashed.length) {
-      const hidden = edgeLines(dashed, inFocus ? HIDDEN_EDGE_MATERIAL : MAP_HIDDEN_EDGE_MATERIAL);
+      const hidden = edgeLines(dashed, inFocus ? HIDDEN_EDGE_MATERIAL : MAP_HIDDEN_EDGE_MATERIAL, false, 'skipGen');
       hidden.computeLineDistances();
       hidden.renderOrder = 999; // после зданий: глубина уже записана
       out.push(hidden);
@@ -5390,7 +5394,11 @@ export class BuildingsLayer implements CustomLayerInterface {
       const canvas = this.map.getCanvas();
       const dpr = canvas.width / Math.max(1, canvas.clientWidth);
       const geo = new LineSegmentsGeometry();
-      geo.setPositions(edgeLines(selected, EDGE_MATERIAL).geometry.getAttribute('position').array as Float32Array);
+      geo.setPositions(edgeLines(selected, EDGE_MATERIAL, false, 'skipGen').geometry.getAttribute('position').array as Float32Array);
+      // Сгенерированные окна — не объекты: бледной тонкой обводкой поверх заливки выделения
+      GEN_PANE_SELECTED_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
+      const gen = edgeLines(selected, GEN_PANE_SELECTED_MATERIAL, false, 'onlyGen');
+      if (gen.geometry.getAttribute('position').count) { gen.renderOrder = 998; out.push(gen); } else gen.geometry.dispose();
       const mat = new LineMaterial({ color: SELECTED_EDGE_COLOUR, linewidth: (this.wireframe ? SELECTED_EDGE_WIDTH_PX : SELECTED_EDGE_WIDTH_SOLID_PX) * dpr, depthWrite: false,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 });
       mat.clippingPlanes = MATERIAL.clippingPlanes;
@@ -7454,9 +7462,22 @@ export class BuildingsLayer implements CustomLayerInterface {
 }
 
 /** Рёбра нескольких объектов одним LineSegments. */
-function edgeLines(items: Item[], material: THREE.LineBasicMaterial, seams = false): THREE.LineSegments {
+/** Обводки сгенерированных окон в рёбрах объекта: [начало, конец) во floats (за телом, перед окнами по тегам). */
+function genPaneRange(it: Item): [number, number] {
+  const e = it.edges!, all = ((it.paneVertices ?? 0) / 6) * 24, gen = ((it.genPaneVertices ?? 0) / 6) * 24;
+  return [e.length - all, e.length - all + gen];
+}
+
+function edgeLines(items: Item[], material: THREE.LineBasicMaterial, seams = false, panes?: 'skipGen' | 'onlyGen'): THREE.LineSegments {
   for (const it of items) it.edges ??= itemEdges(it);
-  const parts = seams ? timed('рёбра: стыки частей', () => dropPartSeams(items as (Item & { edges: Float32Array })[], EDGE_ANGLE, PLANAR_ROOF_EDGE_ANGLE), () => `${items.length} объектов`) : items.map((it) => it.edges!);
+  const parts = panes ? items.map((it) => {
+    const [a, b] = genPaneRange(it), e = it.edges!;
+    if (panes === 'onlyGen') return e.subarray(a, b);
+    if (a === b) return e;
+    const out = new Float32Array(e.length - (b - a));
+    out.set(e.subarray(0, a)); out.set(e.subarray(b), a);
+    return out;
+  }) : seams ? timed('рёбра: стыки частей', () => dropPartSeams(items as (Item & { edges: Float32Array })[], EDGE_ANGLE, PLANAR_ROOF_EDGE_ANGLE), () => `${items.length} объектов`) : items.map((it) => it.edges!);
   const lines = new Float32Array(parts.reduce((n, e) => n + e.length, 0));
   let o = 0;
   for (const e of parts) { lines.set(e, o); o += e.length; }
@@ -9119,6 +9140,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       }
     });
   }
+  const genPanes = panes.length;
   if (windowsEnabled && winHere && !shell && !roofOnly && !flat && !tri.pending && f.windows?.length) {
     timed('здание: ниши окон', () => {
       // Фильтр и здесь: в кеше тайлов признаки, собранные до правил (window=yes на входе — дверь со стеклом)
@@ -9165,6 +9187,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     wallVertices: tri.walls.length / 3,
     floorVertices: floors.length / 3,
     paneVertices: panes.length / 3,
+    genPaneVertices: genPanes / 3,
     wall: parseColour(wall),
     roof: parseColour(roof),
     top: heights.top,

@@ -1,6 +1,6 @@
 # OSM Simple 3D: building passages and first windows
 
-Hey everyone! Two new things in [OSM Simple 3D](https://felispimeja.github.io/osm-simple3d-editor/), my browser-based 3D building editor for OSM: building passages that you can draw and edit, and an early, experimental take on windows.
+Hey everyone! Two new things: building passages that you can draw and edit, and an early, experimental take on windows.
 
 ![Screenshot 1](passage-1.png)
 
@@ -25,7 +25,3 @@ Windows are behind two test options in the settings, both off by default. You ca
 ![Screenshot 3](windows-1.png)
 
 Both are still rough. Generated windows are a visual hint, not data: they don't touch your tags and aren't a guess at what's really there.
-
-## Give it a spin
-
-Open the [editor](https://felispimeja.github.io/osm-simple3d-editor/) and find a building with a passage, or draw one yourself. For windows, switch on the options in the settings. I'd love to hear what you think, especially where passages come out wrong or the windows look odd. Leave a comment here or open a [GitHub issue](https://github.com/FelisPimeja/osm-simple3d-editor/issues).

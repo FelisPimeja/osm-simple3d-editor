@@ -23,7 +23,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
-import { entranceIndoorIssue, ROOM_PAIRED_AMENITY, setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, selfIntersects, validateIndoor, validateSolidWallDoors, validateRepeatedRooms, validateWallPerimeters, validateStackedEscalators, validateEscalators, validateTags, OUTLINE_GROW_SHARE, partGround, type Issue } from './edit/validate';
+import { entranceIndoorIssue, ROOM_PAIRED_AMENITY, setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, jitterEverywhere, selfIntersects, validateIndoor, validateSolidWallDoors, validateRepeatedRooms, validateWallPerimeters, validateStackedEscalators, validateEscalators, validateTags, OUTLINE_GROW_SHARE, partGround, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids, voidCaps } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchElementRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
@@ -7832,7 +7832,9 @@ function removeShapeVertex(t: ShapeTarget, merged: boolean) {
  * стене), — как Del на вершине со склейкой; иначе соседние контуры разошлись бы. Узлы с тегами (входы) остаются.
  */
 function removeJitterNodes(all: Set<number>) {
-  const ids = new Set([...all].filter((id) => !Object.keys(session.get(`node/${id}`)?.tags ?? sessionNodeTags.get(id) ?? dataEntrances.get(id) ?? entranceTags(id) ?? {}).length));
+  const safe = jitterEverywhere(all, liveFeatures());
+  if (!safe.size) return setStatus(tr('Лишние вершины — углы соседних объектов: убрать их нельзя, не испортив соседей.'), true);
+  const ids = new Set([...safe].filter((id) => !Object.keys(session.get(`node/${id}`)?.tags ?? sessionNodeTags.get(id) ?? dataEntrances.get(id) ?? entranceTags(id) ?? {}).length));
   if (!ids.size) return setStatus(tr('Лишние вершины — узлы с тегами: их убирают вручную.'), true);
   const removal = wayEndsAt(ids) ? removalRewrites(ids) : undefined;
   if (typeof removal === 'string') return setStatus(removal, true);

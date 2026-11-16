@@ -1593,5 +1593,6 @@
   "Окна у соседей": "Windows on neighbours",
   "Вход {node} на стене, но не узел контура: у объекта его не будет.": "Entrance {node} lies on the wall but is not a node of the outline: the object will not get it.",
   "Добавить вход в контур": "Add the entrance to the outline",
-  "Арки": "Arches"
+  "Арки": "Arches",
+  "Лишние вершины — углы соседних объектов: убрать их нельзя, не испортив соседей.": "The extra vertices are corners of neighbouring objects: they cannot be removed without breaking the neighbours."
 }

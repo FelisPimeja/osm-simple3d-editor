@@ -601,6 +601,26 @@ function crossingPoints(r: [number, number][]): [number, number][] {
   return out;
 }
 
+/**
+ * Из узлов ids — те, что лишние (дрожание) во всех кольцах features, где встречаются. Узел, который в соседнем
+ * пути — настоящий угол (общий узел на стыке зданий), не трогаем: удаление «со склейкой» срезало бы угол соседу.
+ */
+export function jitterEverywhere(ids: Set<number>, features: Feature3D[]): Set<number> {
+  const bad = new Set<number>(), seen = new Set<number>();
+  for (const f of features) for (const poly of f.polygons ?? []) {
+    for (const [i, ring] of [poly.outer, ...poly.inners].entries()) {
+      const rid = i ? poly.innerIds?.[i - 1] : poly.outerIds;
+      if (!rid || !rid.some((id) => ids.has(id))) continue;
+      const p = projector(ring[0]);
+      const closed = rid.length > 1 && rid[0] === rid[rid.length - 1];
+      const pts = (closed ? ring.slice(0, -1) : ring).map(p) as [number, number][];
+      const gone = new Set(jitterVertices(pts).map((k) => rid[k]));
+      for (const id of rid) if (ids.has(id)) { seen.add(id); if (!gone.has(id)) bad.add(id); }
+    }
+  }
+  return new Set([...ids].filter((id) => !bad.has(id)));
+}
+
 /** Проблемы геометрии одного объекта. */
 export function validateGeometry(f: Feature3D): Issue[] {
   // Открытая линия (линейная стена) и узел (дверь в сессии — «полигон» из одной точки) — не контуры: площади у них нет

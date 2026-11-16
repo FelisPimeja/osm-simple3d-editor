@@ -426,16 +426,24 @@ async function brokenRings(payload: Payload, fresh: Map<string, OsmWay | OsmRela
   // Пути с сервера: не входящие в пакет (для «после») и все прежние (для «до»)
   const need = new Set<string>();
   for (const { rel, before } of rels) {
-    for (const m of rel.members) if (m.type === 'way' && m.ref > 0 && !ways.has(m.ref)) need.add(`way/${m.ref}`);
+    // Удалённый пакетом путь, который ещё в отношении, останется (удаление if-unused) — нужны его узлы с сервера
+    for (const m of rel.members) if (m.type === 'way' && m.ref > 0 && !ways.get(m.ref)) need.add(`way/${m.ref}`);
     for (const m of before?.members ?? []) if (m.type === 'way' && m.ref > 0) need.add(`way/${m.ref}`);
   }
   const server = need.size ? await fetchElements([...need], api()) : new Map();
+  // Отправка в JOSM: его слой отдаёт только скачанное — неполные члены отношений (пути, которых в слое нет) берём
+  // с сервера OSM: мы их не меняли
+  const lacking = [...need].filter((k) => !server.has(k));
+  if (target && lacking.length) {
+    try { for (const [k, e] of await fetchElements(lacking)) server.set(k, e); } catch { /* без сети — не проверим */ }
+  }
   const serverNodes = (ref: number) => { const w = server.get(`way/${ref}`); return w?.type === 'way' ? w.nodes : undefined; };
   const out: { key: string; nodes: number[] }[] = [];
   for (const { rel, before } of rels) {
-    const after = ringGaps(rel.members, (ref) => (ways.has(ref) ? ways.get(ref) ?? undefined : serverNodes(ref)));
+    const after = ringGaps(rel.members, (ref) => ways.get(ref) ?? serverNodes(ref));
     if (after && !after.length) continue;
-    if (before && ringGaps(before.members, serverNodes)?.length) continue; // было сломано и до нас
+    // Было сломано и до нас — или прежние пути неизвестны (нет на сервере, не отдал JOSM): судить не по чему
+    if (before && ringGaps(before.members, serverNodes)?.length !== 0) continue;
     out.push({ key: `relation/${rel.id}`, nodes: after ?? [] });
   }
   return out;

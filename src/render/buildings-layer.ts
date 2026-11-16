@@ -8854,7 +8854,10 @@ function dropCollinear(ps: LocalPolygon[]): LocalPolygon[] {
  * над полосой — потолок арки. undefined — арки нет или она не задевает объект по высоте.
  */
 function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heights, tags: Record<string, string>): { lower: LocalPolygon[]; ceiling: LocalPolygon[]; z: number; ways: PassagePiece[] } | undefined {
-  const cuts = passagesFor(f);
+  // Часть над землёй (min_height) режется, только если в неё заходит maxheight арки; без maxheight арка —
+  // в первом этаже стоящих на земле частей, поднятым частям её не дублируем
+  const raised = h.min > 0.5;
+  const cuts = passagesFor(f).filter((c) => !raised || (c.height !== undefined && c.height > h.min + 1));
   if (!cuts.length) return;
   // Без maxheight — до верха первого этажа (по building:levels), но не выше PASSAGE_HEIGHT
   const levels = Number.parseFloat(tags['building:levels'] ?? '');

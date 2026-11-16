@@ -7,7 +7,7 @@ const NO_WINDOWS = new Set(['garage', 'garages', 'carport', 'roof', 'greenhouse'
   'parking', 'transformer_tower', 'water_tower', 'silo', 'storage_tank', 'bunker', 'ruins', 'construction']);
 
 /** Подбор параметров генерации (временная панель): шаг, м; ширина, м; высота и подоконник — доли этажа; простенок у угла, м. */
-export const windowTuning = { step: 2, width: 1, height: 0.5, breast: 0.3, corner: 0.5 };
+export const windowTuning = { step: 2, width: 1, height: 0.5, breast: 0.3, corner: 0.5, alignDoors: true };
 /** Поворот контура меньше этого (рад) — не угол: узел входа посреди стены не делит фасад. */
 const STRAIGHT = 0.05;
 /** Зазор между окном и входом по горизонтали, м. */
@@ -34,6 +34,8 @@ export interface WindowGenOpts {
   step: number;
   /** От угла до края окна — не меньше, м. */
   corner: number;
+  /** Ставить ось окон над каждым входом фасада, остальные — равномерно между входами и углами. */
+  alignDoors?: boolean;
   /** Доли высоты этажа. */
   height: number;
   breast: number;
@@ -75,9 +77,28 @@ export function generateWindows(polygons: Pt[][][], o: WindowGenOpts): RecessPla
       if (n < 1 || len < o.width + 2 * o.corner) continue;
       const t: Pt = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
       const nrm: Pt = right ? [t[1], -t[0]] : [-t[1], t[0]];
-      const step = len / n;
-      for (let k = 0; k < n; k++) {
-        const s = Math.min(Math.max((k + 0.5) * step, o.corner + o.width / 2), len - o.corner - o.width / 2);
+      const lo = o.corner + o.width / 2, hi = len - o.corner - o.width / 2;
+      // Оси входов на этом фасаде (вдоль, м); близкие — одна ось
+      const axes: number[] = [];
+      if (o.alignDoors) for (const d of o.doors.map((d) => (d.p[0] - a[0]) * t[0] + (d.p[1] - a[1]) * t[1]).filter((v, i) =>
+        Math.abs((o.doors[i].p[0] - a[0]) * nrm[0] + (o.doors[i].p[1] - a[1]) * nrm[1]) < 0.5 && v >= lo && v <= hi).sort((x, y) => x - y))
+        if (!axes.length || d - axes[axes.length - 1] > o.step / 2) axes.push(d);
+      const cols: number[] = [];
+      if (!axes.length) {
+        const step = len / n;
+        for (let k = 0; k < n; k++) cols.push(Math.min(Math.max((k + 0.5) * step, lo), hi));
+      } else {
+        // Между угловым окном (lo/hi) и входом и между входами — равный шаг, ближайший к заданному
+        const span = (from: number, to: number, withFrom: boolean, withTo: boolean) => {
+          const k = Math.max(1, Math.round((to - from) / o.step));
+          for (let j = withFrom ? 0 : 1; j <= (withTo ? k : k - 1); j++) cols.push(from + (to - from) * j / k);
+        };
+        if (axes[0] - lo >= o.step / 2) span(lo, axes[0], true, false);
+        axes.forEach((x, i) => { cols.push(x); if (i + 1 < axes.length) span(x, axes[i + 1], false, false); });
+        const last = axes[axes.length - 1];
+        if (hi - last >= o.step / 2) span(last, hi, false, true);
+      }
+      for (const s of cols) {
         const p: Pt = [a[0] + t[0] * s, a[1] + t[1] * s];
         const probe: Pt = [p[0] + nrm[0] * 0.3, p[1] + nrm[1] * 0.3];
         const inner: Pt = [p[0] - nrm[0] * 0.3, p[1] - nrm[1] * 0.3];

@@ -9083,7 +9083,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       const blocked = (p: Pt, z: number) => solids.some((s) => z >= s.z && z <= s.top && s.polys.some((q) =>
         pointInLocalRing(p, q.outer) && !q.inners.some((h) => pointInLocalRing(p, h))));
       const places = generateWindows(polys.map((q) => [q.outer, ...q.inners]), { min: heights.min, top: heights.wallTop, levels,
-        width: windowTuning.width, step: windowTuning.step, corner: windowTuning.corner, height: windowTuning.height, breast: windowTuning.breast, doors: doorPlaces,
+        width: windowTuning.width, step: windowTuning.step, corner: windowTuning.corner, alignDoors: windowTuning.alignDoors, height: windowTuning.height, breast: windowTuning.breast, doors: doorPlaces,
         doorWidth: ENTRANCE_WIDTH, doorHeight: ENTRANCE_HEIGHT, blocked,
         // Проём арки: окно, задевающее его по высоте, не ставим (полоса арки — с запасом окна в ширину)
         hole: passage && ((p, t, z0, z1) => passage.ways.some((w) => z0 < w.z && z1 > (w.min ?? heights.min) && w.opening.some((q) =>

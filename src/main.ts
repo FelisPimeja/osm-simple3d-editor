@@ -1189,7 +1189,7 @@ applyMonochrome();
 const windowTuner = (() => {
   const box = document.createElement('div');
   box.className = 'window-tuner';
-  const rows: [keyof typeof windowTuning, string, number, number, number, (v: number) => string][] = [
+  const rows: [Exclude<keyof typeof windowTuning, 'alignDoors'>, string, number, number, number, (v: number) => string][] = [
     ['step', 'Шаг, м', 1, 6, 0.1, (v) => v.toFixed(1)],
     ['width', 'Ширина, м', 0.4, 3, 0.05, (v) => v.toFixed(2)],
     ['height', 'Высота, % этажа', 0.1, 0.9, 0.01, (v) => `${Math.round(v * 100)}%`],
@@ -1225,11 +1225,19 @@ const windowTuner = (() => {
   const reset = document.createElement('button');
   reset.textContent = 'Сбросить';
   reset.addEventListener('click', () => {
-    Object.assign(windowTuning, { step: 2, width: 1, height: 0.5, breast: 0.3, corner: 0.5 });
-    box.querySelectorAll<HTMLInputElement>('input').forEach((inp, i) => { inp.value = String(windowTuning[rows[i][0]]); inp.dispatchEvent(new Event('input')); });
+    Object.assign(windowTuning, { step: 2, width: 1, height: 0.5, breast: 0.3, corner: 0.5, alignDoors: true });
+    align.checked = true;
+    box.querySelectorAll<HTMLInputElement>('input[type=range]').forEach((inp, i) => { inp.value = String(windowTuning[rows[i][0]]); inp.dispatchEvent(new Event('input')); });
   });
+  const alignRow = document.createElement('label');
+  const align = document.createElement('input');
+  align.type = 'checkbox';
+  align.checked = windowTuning.alignDoors;
+  align.addEventListener('change', () => { windowTuning.alignDoors = align.checked; apply(); });
+  alignRow.className = 'check';
+  alignRow.append(align, ' Оси окон над входами');
   showPier();
-  box.append(pier, reset);
+  box.append(alignRow, pier, reset);
   document.body.append(box);
   return box;
 })();

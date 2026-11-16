@@ -3803,9 +3803,11 @@ offsetBtn.addEventListener('click', () => (offsetTool.active ? offsetTool.stop()
  */
 function createDrawnMultipolygon(shape: [number, number][][][], z: number, tags: Record<string, string>): string | undefined {
   if (!focus) return tr('Нет здания.');
+  const doors = entrancePoints();
   const ring = (pts: [number, number][]) => {
     const coords = pts.map((p) => overpassLayer.focusToLngLat(p[0], p[1])!);
-    return { ids: coords.map(() => nextNewId--), coords };
+    const r = threadNodeRing(coords.map((p) => ({ p, id: nextNewId-- })), doors);
+    return { ids: r.map((q) => q.id), coords: r.map((q) => q.p) };
   };
   const relId = nextNewId--;
   const key = `relation/${relId}`;
@@ -4389,6 +4391,72 @@ const SHARE_EPS = 0.03;
  * Часть входит в отношение здания (у отдельного здания — в новое, исходный путь — контур). Один шаг истории.
  */
 /** tags — теги новой части (по умолчанию — плоская часть на высоте z в метрах). */
+/** Вход ближе этого к стороне контура, м, — на ней: контур должен пройти через его узел. */
+const ENTRANCE_SNAP = 0.15;
+type DoorPoint = { id: number; c: LonLat; p: [number, number] };
+/** Входы здания режима и соседей (entrance=*, въезды, indoor=door): узлы колец и двери плана этажа, метры сцены. */
+function entrancePoints(level?: number): DoorPoint[] {
+  if (!focus) return [];
+  const out = new Map<number, LonLat>();
+  const ring = (ids: number[] | undefined, cs: LonLat[]) => ids?.forEach((id, i) => {
+    const t = sessionNodeTags.get(id) ?? dataEntrances.get(id);
+    if (t && facadeEntranceOf(t) && cs[i]) out.set(id, cs[i]);
+  });
+  for (const f of [...groupFeatures(focus), ...overpass.allFeatures()]) for (const p of f.polygons ?? []) {
+    ring(p.outerIds, p.outer);
+    p.innerIds?.forEach((r, j) => ring(r, p.inners[j] ?? []));
+  }
+  for (const f of buildingIndoor(focus)) {
+    const m = /^node\/(-?\d+)$/.exec(f.key);
+    if (m && f.point && facadeEntranceOf(f.tags) && (level === undefined || f.levels.includes(level))) out.set(Number(m[1]), f.point);
+  }
+  return [...out].map(([id, c]) => ({ id, c, p: overpassLayer.focusToLocal(c)! })).filter((d) => !!d.p);
+}
+/** Входы на сторонах кольца (не его вершины): кольцо с их узлами по порядку и вставленные (сторона u–v). */
+function threadEntrances(ids: number[], pts: [number, number][], doors: DoorPoint[]): { ids: number[]; added: (DoorPoint & { u: number; v: number })[] } {
+  const own = new Set(ids), out: number[] = [], added: (DoorPoint & { u: number; v: number })[] = [];
+  ids.forEach((id, i) => {
+    out.push(id);
+    const a = pts[i], b = pts[(i + 1) % pts.length], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+    if (!l2) return;
+    const hits = doors.filter((d) => !own.has(d.id)).map((d) => ({ d, t: ((d.p[0] - a[0]) * dx + (d.p[1] - a[1]) * dy) / l2 }))
+      .filter(({ d, t }) => t > 0.02 && t < 0.98 && Math.hypot(a[0] + dx * t - d.p[0], a[1] + dy * t - d.p[1]) <= ENTRANCE_SNAP)
+      .sort((x, y) => x.t - y.t);
+    for (const { d } of hits) {
+      if (own.has(d.id)) continue;
+      own.add(d.id); out.push(d.id); added.push({ ...d, u: id, v: ids[(i + 1) % ids.length] });
+    }
+  });
+  return { ids: out, added };
+}
+
+/** Кольцо узлов {p, id} через входы на его сторонах (узлы входов — в кольцо). */
+function threadNodeRing(r: { p: LonLat; id: number }[], doors: DoorPoint[]): { p: LonLat; id: number }[] {
+  if (!doors.length) return r;
+  const at = new Map(r.map((q) => [q.id, q.p] as const));
+  for (const d of doors) at.set(d.id, d.c);
+  return threadEntrances(r.map((q) => q.id), r.map((q) => overpassLayer.focusToLocal(q.p)!), doors).ids.map((id) => ({ id, p: at.get(id)! }));
+}
+
+/** Вход лежит на стене объекта здания, но не узел его контура: вход объект не получит (проверка с исправлением). */
+function entranceOffContourIssues(g: BuildingGroup): Issue[] {
+  const doors = entrancePoints();
+  if (!doors.length) return [];
+  const out: Issue[] = [];
+  for (const f of groupFeatures(g)) {
+    if (session.isDeleted(f.key)) continue;
+    for (const p of f.polygons) [[p.outer, p.outerIds], ...p.inners.map((r, i) => [r, p.innerIds?.[i]] as const)].forEach(([ring, rid]) => {
+      const ids = rid as number[] | undefined, cs = ring as LonLat[];
+      if (!ids || ids.length !== cs.length) return;
+      for (const d of threadEntrances(ids, cs.map((c) => overpassLayer.focusToLocal(c)!), doors).added)
+        out.push({ key: f.key, other: `node/${d.id}`, level: 'warning', code: 'entrance-off-contour', points: [d.c],
+          text: tr('Вход {node} на стене, но не узел контура: у объекта его не будет.', { node: `node/${d.id}` }),
+          fix: { label: tr('Добавить вход в контур'), tags: {}, threadEntrance: { id: d.id, u: d.u, v: d.v } } });
+    });
+  }
+  return out;
+}
+
 function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<string, string>): string | undefined {
   if (sketching) return createSketched(ring);
   if (drawTool.shape === 'line') return cutPlan(ring);
@@ -4441,6 +4509,10 @@ function createDrawn(ring: [number, number][], z: number, tagsFor?: Record<strin
     return id;
   });
   if (new Set(ids).size !== ids.length) return tr('Две точки контура попали в один узел.');
+  // Контур проходит через входы (в т. ч. indoor=door) — их узлы в контур: часть получит эти двери
+  const threaded = threadEntrances(ids, ids.map((id) => overpassLayer.focusToLocal(coord.get(id)!)!), entrancePoints());
+  for (const d of threaded.added) coord.set(d.id, d.c);
+  ids.splice(0, ids.length, ...threaded.ids);
   const wayId = nextNewId--;
   const key = `way/${wayId}`;
   const neighbours = insertIntoNeighbours(key, fresh, coord);
@@ -5239,6 +5311,11 @@ function cutHoleIn(key: string, polyIndex: number, ring: [number, number][], pen
 
   const coords = ring.map((p, i) => (i === 0 && touchAt ? touchAt : overpassLayer.focusToLngLat(p[0], p[1])!));
   const ids = ring.map((_, i) => (i === 0 && touchId !== undefined ? touchId : nextNewId--));
+  // Кольцо проходит через входы — их узлы в кольцо
+  {
+    const r = threadNodeRing(ids.map((id, i) => ({ id, p: coords[i] })), entrancePoints());
+    if (r.length !== ids.length) { ids.splice(0, ids.length, ...r.map((q) => q.id)); coords.splice(0, coords.length, ...r.map((q) => q.p)); ring = r.map((q) => overpassLayer.focusToLocal(q.p)!); }
+  }
   const innerWay = nextNewId--;
   edits.push({ key: `way/${innerWay}`, create: { key: `way/${innerWay}`, version: 0, tags: {},
     line: { ids: [...ids, ids[0]], coords: [...coords, coords[0]] } } });
@@ -11364,9 +11441,12 @@ function createFromFreeArea(extra: Record<string, string>) {
  * Узлы — через nodeFor (общие с соседями). Правки — в edits; результат — заготовка для indoorCreated.
  */
 function indoorCreateEdits(poly: Polygon, tags: Record<string, string>, nodeFor: (p: LonLat) => { p: LonLat; id: number }, edits: ObjectEdit[]): IndoorFeature | undefined {
-  const outer = nodeRing(poly.outer, nodeFor);
-  if (!outer) return;
-  const inners = poly.inners.map((r) => nodeRing(r, nodeFor)).filter((r): r is NonNullable<typeof r> => !!r);
+  const raw = nodeRing(poly.outer, nodeFor);
+  if (!raw) return;
+  // Контур проходит через входы и двери этажа — их узлы в контур
+  const lv = parseLevels(tags.level), doors = entrancePoints(lv.length === 1 ? lv[0] : undefined);
+  const outer = threadNodeRing(raw, doors);
+  const inners = poly.inners.map((r) => nodeRing(r, nodeFor)).filter((r): r is NonNullable<typeof r> => !!r).map((r) => threadNodeRing(r, doors));
   tags = { ...tags };
   const kind = (['room', 'corridor', 'area', 'level', 'wall', 'column'].includes(tags.indoor) ? tags.indoor : 'area') as IndoorKind;
   // Стена контуром — площадная (area=yes); замкнутый путь без него — линейная стена по оси
@@ -12939,8 +13019,10 @@ function indoorInnerRing(f: IndoorFeature, poly: number, ring: [number, number][
   const p = polygons[poly];
   if (!p.outerIds) return tr('В кеше нет id узлов этого объекта.');
   const { nodeFor } = sharedNodes([...groupFeatures(focus!), ...shownIndoor.filter((x) => !x.point)]);
-  const nodes = nodeRing(ring.map((q) => overpassLayer.focusToLngLat(q[0], q[1])! as LonLat), nodeFor);
-  if (!nodes) return tr('Кольцу нужно не меньше трёх вершин.');
+  const raw = nodeRing(ring.map((q) => overpassLayer.focusToLngLat(q[0], q[1])! as LonLat), nodeFor);
+  if (!raw) return tr('Кольцу нужно не меньше трёх вершин.');
+  // Кольцо проходит через двери этажа — их узлы в кольцо
+  const nodes = threadNodeRing(raw, entrancePoints(f.levels.length === 1 ? f.levels[0] : undefined));
   const edits: ObjectEdit[] = [];
   const innerId = nextNewId--;
   const innerLine = { ids: [...nodes.map((q) => q.id), nodes[0].id], coords: [...nodes.map((q) => q.p), nodes[0].p] };
@@ -14135,7 +14217,7 @@ let issueAnchor: string | undefined;
 function renderIssues() {
   // План этажа — только проблемы indoor, всё здание — только проблемы частей
   const plan = currentLevel !== undefined;
-  const simpleIssues = focus && !plan ? [...buildingIssues(focus), ...focusEntranceIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : strayPartsOf(focus))] : [];
+  const simpleIssues = focus && !plan ? [...buildingIssues(focus), ...focusEntranceIssues(focus), ...entranceOffContourIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : strayPartsOf(focus))] : [];
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding && plan ? buildingIndoor(focusedBuilding) : [];
   const outerDoor = focusedBuilding ? outerDoorTest(focusedBuilding, indoorAll) : undefined;
@@ -14442,6 +14524,17 @@ function applyFixes(list: Issue[]) {
       }
     }catch(err){setStatus((err as Error).message,true);}
     list=list.filter(i=>!i.fix?.mergeIntoEntrance);
+  }
+  const threads = list.filter((i) => i.fix?.threadEntrance);
+  if (threads.length) {
+    const coord = nodeCoordsOf(liveFeatures()), at = new Map(entrancePoints().map((d) => [d.id, d.c]));
+    const i_point = (id: number) => at.get(id);
+    const fresh = threads.map((i) => i.fix!.threadEntrance!).filter((x) => coord.has(x.u) && coord.has(x.v) && i_point(x.id))
+      .map((x) => { coord.set(x.id, i_point(x.id)!); return { id: x.id, p: overpassLayer.focusToLocal(i_point(x.id)!)!, u: x.u, v: x.v }; });
+    const edits = topologyEdits([], freshInserts(fresh, coord), coord);
+    if (typeof edits === 'string') setStatus(edits, true);
+    else if (edits.length) session.editMany(edits);
+    list = list.filter((i) => !i.fix?.threadEntrance);
   }
   const jitter = list.filter((i) => i.fix?.dropNodes);
   if (jitter.length) {

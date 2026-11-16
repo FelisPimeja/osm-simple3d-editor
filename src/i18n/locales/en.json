@@ -1590,5 +1590,7 @@
   "Снято — у окон только обводка": "Off: windows are outlined only",
   "Заливка окон": "Window fill",
   "В режиме здания показывать окна и у соседних зданий": "In building mode, show windows on neighbouring buildings too",
-  "Окна у соседей": "Windows on neighbours"
+  "Окна у соседей": "Windows on neighbours",
+  "Вход {node} на стене, но не узел контура: у объекта его не будет.": "Entrance {node} lies on the wall but is not a node of the outline: the object will not get it.",
+  "Добавить вход в контур": "Add the entrance to the outline"
 }

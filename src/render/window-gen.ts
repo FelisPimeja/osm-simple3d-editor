@@ -73,8 +73,7 @@ export function generateWindows(polygons: Pt[][][], o: WindowGenOpts): RecessPla
     for (let ci = 0; ci < corners.length; ci++) {
       const a = ring[corners[ci]], b = ring[corners[(ci + 1) % corners.length]];
       const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      const n = Math.round(len / o.step);
-      if (n < 1 || len < o.width + 2 * o.corner) continue;
+      if (len < o.width + 2 * o.corner) continue;
       const t: Pt = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
       const nrm: Pt = right ? [t[1], -t[0]] : [-t[1], t[0]];
       const lo = o.corner + o.width / 2, hi = len - o.corner - o.width / 2;
@@ -85,8 +84,10 @@ export function generateWindows(polygons: Pt[][][], o: WindowGenOpts): RecessPla
         if (!axes.length || d - axes[axes.length - 1] > o.step / 2) axes.push(d);
       const cols: number[] = [];
       if (!axes.length) {
-        const step = len / n;
-        for (let k = 0; k < n; k++) cols.push(Math.min(Math.max((k + 0.5) * step, lo), hi));
+        // Оси окон — между крайними (простенок у угла от края окна), шаг ближайший к заданному
+        const k = Math.round((hi - lo) / o.step);
+        if (k < 1) cols.push((lo + hi) / 2);
+        else for (let j = 0; j <= k; j++) cols.push(lo + (hi - lo) * j / k);
       } else {
         // Между угловым окном (lo/hi) и входом и между входами — равный шаг, ближайший к заданному
         const span = (from: number, to: number, withFrom: boolean, withTo: boolean) => {

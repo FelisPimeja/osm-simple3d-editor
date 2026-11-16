@@ -365,6 +365,11 @@ const UNDERGROUND_MATERIAL = new THREE.LineDashedMaterial({ color: 0x111111, das
 /** Тот же пунктир у соседей в окружении плана этажа (абрис сечения, коробки нижних этажей) — бледнее. */
 /** Обводка сгенерированных окон у выделенной части: бледно-синяя, тонкая. */
 const GEN_PANE_SELECTED_MATERIAL = new THREE.LineBasicMaterial({ color: 0x9db8e8, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 });
+/** Стыки изолированной части со скрытыми — пунктир по её граням. */
+const JUNCTION_LIFT = 0.05;
+/** Контуры частей, примкнувших к стене, совпадают неточно: касание — в пределах стольких м. */
+const JUNCTION_TOUCH = 0.3;
+const JUNCTION_MATERIAL = new THREE.LineDashedMaterial({ color: 0x4b5563, dashSize: 0.35, gapSize: 0.2, depthWrite: false });
 const PALE_OUTLINE_MATERIAL = new THREE.LineDashedMaterial({ color: 0xa8a8a8, dashSize: 0.25, gapSize: 0.15, depthWrite: false, transparent: true, opacity: 0.85 });
 /** Выбранный контур подземной части — целиком, сквозь здание. */
 const UNDERGROUND_SELECTED = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.25, gapSize: 0.15, depthTest: false, depthWrite: false, transparent: true });
@@ -5321,8 +5326,28 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
     }
     this.rebuildGeometry(g);
+    this.updateJunctions(g);
     this.updateHiddenEdges();
     this.map?.triggerRepaint();
+  }
+
+  /** Изоляция: пунктир по линиям стыка видимых частей со скрытыми. */
+  private updateJunctions(g: MeshGroup) {
+    const old = g.scene.getObjectByName('part-junctions') as THREE.LineSegments | undefined;
+    if (old) { g.scene.remove(old); old.geometry.dispose(); }
+    if (!g.hidden.size || !g.contacts) return;
+    const lines = timed('здание: стыки частей', () => junctionLines(g.contacts!.solids, g.hidden));
+    if (!lines.length) return;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+    JUNCTION_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
+    const obj = new THREE.LineSegments(geom, JUNCTION_MATERIAL);
+    obj.computeLineDistances();
+    obj.name = 'part-junctions';
+    obj.renderOrder = 997;
+    obj.frustumCulled = false;
+    obj.raycast = () => {};
+    g.scene.add(obj);
   }
 
   private hovered?: string;
@@ -8974,6 +8999,86 @@ function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Conta
     if (bottom) add(c.bottoms, { key: f.key, z: prep.heights.min, polys: prep.polys, box });
   };
   return { contacts: c, step };
+}
+
+/**
+ * Линии стыка видимых объёмов со скрытыми (призмы: низ z, верх top, контур polys):
+ * - на стенах видимой — вертикали там, где её стену пересекает контур скрытой, и горизонтали на низе/верхе скрытой
+ *   вдоль участков стены внутри скрытой;
+ * - на верхе/низе видимой — контур скрытой внутри видимой, если скрытая проходит через эту высоту.
+ * Скаты крыш не учитываются (верх — плоскость top).
+ */
+function junctionLines(solids: Contacts['solids'], hidden: Set<string>): number[] {
+  const out: number[] = [];
+  type Solid = Contacts['solids'][number];
+  const rings = (s: Solid) => s.polys.flatMap((q) => [q.outer, ...q.inners]);
+  const inside = (p: Pt, s: Solid) => s.polys.some((q) => pointInLocalRing(p, q.outer) && !q.inners.some((h) => pointInLocalRing(p, h)));
+  /**
+   * Кольца ra, разрезанные контуром b: участки по порядку обхода и признак «внутри b или вплотную к нему»
+   * (контуры примкнувших частей совпадают неточно — пробы по обе стороны на JUNCTION_TOUCH). lift — сдвиг наружу.
+   */
+  const runs = (ra: Pt[][], b: Solid, lift: number) => ra.map((r) => {
+    let area = 0;
+    for (let k = 0; k < r.length; k++) { const u = r[k], v = r[(k + 1) % r.length]; area += u[0] * v[1] - v[0] * u[1]; }
+    const sgn = area > 0 ? 1 : -1;
+    const rb = rings(b);
+    const pieces: { p: Pt; q: Pt; in: boolean }[] = [];
+    for (let i = 0; i < r.length; i++) {
+      const p = r[i], q = r[(i + 1) % r.length];
+      const dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy);
+      if (l < 1e-6) continue;
+      // Наружу из внешнего кольца (у дыр — внутрь стены: редкий случай)
+      const o: Pt = [dy / l * lift * sgn, -dx / l * lift * sgn];
+      const ts = [0, 1];
+      for (const h of rb) for (let j = 0; j < h.length; j++) {
+        const u = h[j], v = h[(j + 1) % h.length];
+        const ex = v[0] - u[0], ey = v[1] - u[1], den = dx * ey - dy * ex;
+        if (Math.abs(den) > 1e-12) {
+          const t = ((u[0] - p[0]) * ey - (u[1] - p[1]) * ex) / den, w = ((u[0] - p[0]) * dy - (u[1] - p[1]) * dx) / den;
+          if (t > 0 && t < 1 && w >= 0 && w <= 1) ts.push(t);
+        }
+        // Вершина b у отрезка — излом стыка
+        const t = ((u[0] - p[0]) * dx + (u[1] - p[1]) * dy) / (l * l);
+        if (t > 0 && t < 1 && Math.abs((u[0] - p[0]) * dy - (u[1] - p[1]) * dx) / l <= JUNCTION_TOUCH) ts.push(t);
+      }
+      ts.sort((x, y) => x - y);
+      const nx = -dy / l * JUNCTION_TOUCH, ny = dx / l * JUNCTION_TOUCH;
+      for (let k = 0; k + 1 < ts.length; k++) {
+        if ((ts[k + 1] - ts[k]) * l < 0.05) continue;
+        const m = (ts[k] + ts[k + 1]) / 2, c: Pt = [p[0] + dx * m, p[1] + dy * m];
+        const isIn = inside(c, b) || inside([c[0] + nx, c[1] + ny], b) || inside([c[0] - nx, c[1] - ny], b);
+        pieces.push({ p: [p[0] + dx * ts[k] + o[0], p[1] + dy * ts[k] + o[1]], q: [p[0] + dx * ts[k + 1] + o[0], p[1] + dy * ts[k + 1] + o[1]], in: isIn });
+      }
+    }
+    return pieces;
+  });
+  const line = (p: Pt, q: Pt, z0: number, z1: number) => out.push(p[0], p[1], z0, q[0], q[1], z1);
+  for (const a of solids) {
+    if (hidden.has(a.key)) continue;
+    for (const b of solids) {
+      if (!hidden.has(b.key) || !a.box.intersectsBox(b.box)) continue;
+      const lo = Math.max(a.z, b.z), hi = Math.min(a.top, b.top);
+      if (hi - lo < 0.05) continue;
+      // Стены видимой: горизонтали на низе/верхе скрытой вдоль участков стыка, вертикали — на краях этих участков
+      for (const pieces of runs(rings(a), b, JUNCTION_LIFT)) pieces.forEach((pc, k) => {
+        if (pc.in) {
+          if (b.z > a.z + 0.05) line(pc.p, pc.q, b.z, b.z);
+          if (b.top < a.top - 0.05) line(pc.p, pc.q, b.top, b.top);
+        }
+        const next = pieces[(k + 1) % pieces.length];
+        if (pieces.length > 1 && next.in !== pc.in) line(pc.q, pc.q, lo, hi);
+      });
+      // Верх и низ видимой: контур скрытой внутри видимой, если скрытая проходит через эту высоту
+      for (const [z, dz] of [[a.top, JUNCTION_LIFT], [a.z, -JUNCTION_LIFT]]) {
+        if (!(z > b.z + 0.05 && z < b.top - 0.05)) continue;
+        for (const pieces of runs(rings(b), a, 0)) for (const pc of pieces) {
+          const c: Pt = [(pc.p[0] + pc.q[0]) / 2, (pc.p[1] + pc.q[1]) / 2];
+          if (inside(c, a)) line(pc.p, pc.q, z + dz, z + dz);
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /** Грани другого объекта на высоте z, пересекающие рамку box (кроме самого объекта). */

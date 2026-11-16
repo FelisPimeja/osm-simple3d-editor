@@ -9961,6 +9961,7 @@ function renderIndoorSelection(add = false) {
   const partners = indoorSelection.map((x) => stairsPartner(x, all)?.key).filter((k): k is string => !!k && !indoorSelection.some((x) => x.key === k));
   overpassLayer.setIndoorSelection([...indoorSelection.map((x) => x.key), ...partners]);
   syncPassageSelection();
+  syncOutlinerPassages();
   indoorPois.setSelection(indoorSelection.map((x) => x.key));
   renderEscalatorUi();
   syncIssueFilter();
@@ -14857,6 +14858,8 @@ function changeIssues(keys: string[]): Issue[] {
 
 /** Ключ свёрнутой группы «Двери» (рядом с подписями видов частей). */
 const DOORS_GROUP = '\u0000doors';
+const PASSAGES_GROUP = '\u0000passages';
+const ICON_ARCH = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 14.5V3.5h13v11M4.5 14.5V9a3.5 3.5 0 0 1 7 0v5.5"/></svg>';
 const ICON_DOOR = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3.5 14.5V2.5h9v12M1.5 14.5h13"/><circle cx="10" cy="8.5" r="0.6" fill="currentColor"/></svg>';
 
 /**
@@ -14939,8 +14942,45 @@ function renderOutliner() {
         <span class="ol-icon">${ICON_DOOR}</span><span class="ol-label">${esc(name)}<span class="ol-key">node/${id}</span></span></li>`);
     }
   }
+  // Арки — пути tunnel=building_passage через здание: клик выбирает арку (Shift — добавить)
+  const passages = passageFeatures(g);
+  if (passages.length) {
+    const label = tr('Арки'), collapsed = collapsedKinds.has(PASSAGES_GROUP);
+    html.push(`<li class="ol-group${collapsed ? ' collapsed' : ''}" data-passages title="${esc(label)}">
+      <button type="button" class="ol-toggle" data-toggle title="${collapsed ? tr('Развернуть') : tr('Свернуть')}">${ICON_CHEVRON}</button>
+      <span class="ol-icon">${ICON_ARCH}</span>
+      <span class="ol-label">${esc(label)}<span class="ol-key">${passages.length}</span></span></li>`);
+    if (!collapsed) for (const p of passages) {
+      const sel = indoorSelection.some((x) => x.key === p.key);
+      html.push(`<li class="ol-child${sel ? ' selected' : ''}" data-passage="${esc(p.key)}" title="${esc(p.key)}">
+        <span class="ol-icon">${ICON_ARCH}</span><span class="ol-label">${p.tags.name ? `${esc(p.tags.name)}<span class="ol-key">${esc(p.key)}</span>` : `<span class="ol-key bare">${esc(p.key)}</span>`}</span></li>`);
+    }
+  }
   outlinerEl.innerHTML = html.join('');
 }
+
+/** Отметка выбранных арок в списке частей — без перестройки списка. */
+function syncOutlinerPassages() {
+  for (const li of outlinerEl.querySelectorAll<HTMLElement>('li[data-passage]'))
+    li.classList.toggle('selected', indoorSelection.some((x) => x.key === li.dataset.passage));
+}
+
+// Арки: стрелка группы — свернуть, клик по арке — выбрать (Shift — добавить или снять)
+outlinerEl.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest('li[data-passages]')) {
+    e.stopImmediatePropagation();
+    if (collapsedKinds.has(PASSAGES_GROUP)) collapsedKinds.delete(PASSAGES_GROUP); else collapsedKinds.add(PASSAGES_GROUP);
+    try { localStorage.setItem('outliner-collapsed', JSON.stringify([...collapsedKinds])); } catch { /* только до перезагрузки */ }
+    renderOutliner();
+    return;
+  }
+  const li = t.closest<HTMLElement>('li[data-passage]');
+  if (!li || !focus) return;
+  e.stopImmediatePropagation();
+  const f = passageFeatures(focus).find((x) => x.key === li.dataset.passage);
+  if (f) selectIndoor(f, e.shiftKey);
+}, { capture: true });
 
 // Двери: стрелка — свернуть, клик по двери — выбрать вход
 outlinerEl.addEventListener('click', (e) => {

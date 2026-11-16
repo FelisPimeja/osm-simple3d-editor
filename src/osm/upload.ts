@@ -323,15 +323,35 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
     hashtags: '#simple3d',
     ...extraTags,
   })}</changeset></osm>`;
-  const changeset = Number(await call('PUT', '/changeset/create', changesetXml));
+  const changeset = (await reusableChangeset(changesetXml)) ?? Number(await call('PUT', '/changeset/create', changesetXml));
+  let uploaded = false;
   try {
     onStatus(trn(payload.length, 'Загружаем {n} объект в changeset {changeset}…|Загружаем {n} объекта в changeset {changeset}…|Загружаем {n} объектов в changeset {changeset}…', { changeset }));
     const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
+    uploaded = true;
     return { changeset, ...diff, written, rebased, geometrySaved, deleted, dropped };
   } finally {
-    // Закрываем и при ошибке, чтобы не висел пустой changeset
-    try { await call('PUT', `/changeset/${changeset}/close`); } catch { /* закроется сам через час */ }
+    // Сервер отклонил пакет — changeset пуст: не закрываем, следующая попытка загрузит в него же (иначе на
+    // каждую попытку оставался пустой changeset). Брошенный закроется сервером сам через час.
+    if (uploaded) { failedChangeset = undefined; try { await call('PUT', `/changeset/${changeset}/close`); } catch { /* закроется сам через час */ } }
+    else failedChangeset = { id: changeset, api: api() };
   }
+}
+
+/** Открытый пустой changeset, оставшийся от отклонённой загрузки (того же сервера). */
+let failedChangeset: { id: number; api: string } | undefined;
+
+/** Пустой changeset прошлой неудачной попытки, если он ещё открыт: теги обновляем, загружаем в него. */
+async function reusableChangeset(xml: string): Promise<number | undefined> {
+  const was = failedChangeset;
+  failedChangeset = undefined;
+  if (!was || was.api !== api()) return;
+  try {
+    const info = await call('GET', `/changeset/${was.id}`);
+    if (!/open="true"/.test(info) || !/changes_count="0"/.test(info)) return;
+    await call('PUT', `/changeset/${was.id}`, xml);
+    return was.id;
+  } catch { return; }
 }
 
 type Payload = Parameters<typeof buildOsmChange>[0];

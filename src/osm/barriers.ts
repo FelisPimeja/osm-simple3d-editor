@@ -32,17 +32,20 @@ export function parseBarriers(elements: OsmElement[]): BarrierWay[] {
 /** Ограждения без сплошного полотна: сетка, решётка, штакетник — полупрозрачные. */
 const SEE_THROUGH = new Set(['chain_link', 'metal_bars', 'railing', 'pole', 'barbed_wire', 'electric', 'wire', 'split_rail', 'post_and_rail', 'hedge_bank', 'net', 'mesh']);
 
+/** width 0 — плоскость без толщины (забор без width). */
 export interface BarrierShape { min: number; top: number; width: number; colour: string; seeThrough: boolean }
 
 /** Высота, толщина и цвет ограждения: теги, без них — типичные для вида. */
 export function barrierShape(tags: Record<string, string>): BarrierShape {
   const kind = tags.barrier, ft = tags.fence_type, mat = tags.material ?? tags.wall;
   const defH = kind === 'wall' ? 2 : ft === 'railing' ? 1 : 1.5;
-  const defW = kind === 'hedge' ? 0.8 : kind === 'wall' ? (mat === 'dry_stone' ? 0.5 : 0.3) : 0.06;
+  // Забор без width — плоскость: толщина сетки или штакетника не видна и не размечена
+  const defW = kind === 'hedge' ? 0.8 : kind === 'wall' ? (mat === 'dry_stone' ? 0.5 : 0.3) : 0;
   const min = parseLength(tags.min_height) ?? 0;
   const h = parseLength(tags.height);
   const top = h !== undefined && h > 0 ? h : min + defH;
-  const width = Math.max(0.03, Math.min(5, parseLength(tags.width) ?? defW));
+  const tagged = parseLength(tags.width);
+  const width = tagged !== undefined && tagged > 0 ? Math.max(0.03, Math.min(5, tagged)) : defW;
   const colour = tags.colour ?? (kind === 'hedge' ? '#55773a'
     : kind === 'wall' ? (mat === 'brick' ? '#a65a43' : mat === 'stone' || mat === 'dry_stone' ? '#a39c8f' : mat === 'concrete' ? '#bdbab3' : '#c8c2b6')
     : ft === 'wood' || mat === 'wood' ? '#9a7650' : ft === 'concrete' || mat === 'concrete' ? '#bdbab3' : ft === 'stone' ? '#a39c8f' : ft === 'brick' ? '#a65a43' : '#8a8f94');

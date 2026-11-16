@@ -466,7 +466,7 @@ function cornersOnly(ring: Pt[]): Pt[] {
   return pts;
 }
 const EDGE_OPACITY = 0.55;
-const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: EDGE_OPACITY });
+export const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x3a3a3a, transparent: true, opacity: EDGE_OPACITY });
 withSideCull(EDGE_MATERIAL);
 /** Сдвиг глубины края к камере, м: грань у края почти вдоль луча, polygonOffset её не отодвигает. */
 const SILHOUETTE_DEPTH = 0.5;
@@ -832,6 +832,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   private lastMain?: THREE.Matrix4;
   /** Глубину не сжимать: рядом рисуются мосты с глубиной MapLibre, иначе здания всегда оказываются ближе них. */
   plainDepth: () => boolean = () => false;
+  /** Свои объекты в проходе зданий (ограждения): main — матрица отрисовки (глубина как у зданий), plain — MapLibre. */
+  drawExtra?: (renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain: THREE.Matrix4, reset: () => void) => number;
   private drawMain(options: CustomRenderMethodInput): THREE.Matrix4 {
     return this.plainDepth() ? new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]) : depthMain(options);
   }
@@ -1061,6 +1063,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       g.camera.projectionMatrix = pick;
       triangles += renderer.info.render.triangles;
     }
+    // Ограждения — в той же глубине, что и здания (честное перекрытие); один раз за кадр
+    if (pass !== 'wire-lines' && this.drawExtra) { this.resetState(); triangles += this.drawExtra(renderer, main, this.lastMain, () => this.resetState()); }
     // Деревья — один раз: во второй половине режима контуров они уже нарисованы
     if (!this.focused && this.graphics.trees !== false && pass !== 'wire-lines') {
       const height = renderer.getContext().drawingBufferHeight;

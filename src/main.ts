@@ -617,7 +617,8 @@ overpassLayer.setOpacity(buildingsView.opacity);
 overpassLayer.setWireframe(buildingsView.wireframe);
 const tileBorders = new TileBorders(map);
 const roadsLayer = new RoadsLayer('osm-roads-3d');
-const barriersLayer = new BarriersLayer('osm-barriers-3d');
+const barriersLayer = new BarriersLayer();
+barriersLayer.attach(map);
 const indoorPois = new IndoorPois(map, overpassLayer, (f, add, point) => {
   if (moveTool.active && (isDoor(f) || isMovablePoi(f))) {
     if (moveTool.state === 'select' || (moveTool.state === 'pick' && !moveTool.keys.has(f.key))) { selectIndoor(f); startMove(); }
@@ -646,9 +647,9 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
 roadsLayer.onBuilt = () => overpass.setTreeCuts(roadsLayer.treeCuts);
 // В режиме здания карта вокруг убрана — мосты и тоннели тоже
 roadsLayer.hidden = () => focusScene();
-// Ограждения — отдельные объекты карты: в режиме здания (карта вокруг убрана) их тоже нет
-barriersLayer.hidden = () => focusScene();
-barriersLayer.plainDepth = () => roadsLayer.isEnabled && !roadsLayer.hidden();
+// Ограждения — отдельные объекты карты: в режиме здания — как окружение (с ним видны, без него — нет)
+barriersLayer.hidden = () => focusScene() && !overpassLayer.contextShown;
+overpassLayer.drawExtra = (renderer, main, plain) => barriersLayer.draw(renderer, main, plain);
 overpassLayer.plainDepth = () => roadsLayer.isEnabled && !roadsLayer.hidden();
 /**
  * Тайлы поменялись в режиме здания (с окружением они грузятся и при пане): части, этажи и проверки — один раз,
@@ -1150,7 +1151,6 @@ map.on('load', () => {
   });
 
   map.addLayer(roadsLayer);
-  map.addLayer(barriersLayer);
   map.addLayer(overpassLayer);
   tileBorders.addLayer();
   tileBorders.setEnabled(gfx.tileBorders);
@@ -1458,7 +1458,7 @@ map.on('dblclick', (e) => { if (barrierEditTarget() && barrierHandleAt(e.point))
 
 /** Ось ограждения в пределах 6 px от точки экрана (тонкий забор сверху не попасть лучом); глубина — у земли. */
 function barrierNear(pt: { x: number; y: number }): { way: BarrierWay; depth: number } | undefined {
-  if (!barriersLayer.isEnabled || focus) return;
+  if (!barriersLayer.isEnabled || (focus && !overpassLayer.contextShown)) return;
   let best: { way: BarrierWay; d: number; ll: maplibregl.LngLat } | undefined;
   for (const raw of overpass.barriers()) {
     const b = liveBarrier(raw);
@@ -1860,6 +1860,11 @@ map.on('click', (e) => {
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.altKey) {
     const passage = passageAt([e.point.x, e.point.y]);
     if (passage) { selectIndoor(passage, e.originalEvent.shiftKey); return; }
+    // Ограждение окружения (видно с окружением): ближе здания — выбрать, правится «Формой»
+    const fence = overpassLayer.contextShown ? barriersLayer.pick(e.point.x, e.point.y) ?? barrierNear(e.point) : undefined;
+    const own = fence ? overpassLayer.pickHit(e.point) : undefined;
+    const live = fence && (!own || fence.depth < barriersLayer.depthOf(own.lngLat, own.altitude)) ? liveBarrier(fence.way) : undefined;
+    if (live && isBarrierTags(live.tags)) { selectIndoor(barrierFeature(live), e.originalEvent.shiftKey); return; }
   }
   // Вход на фасаде: клик — выбрать (перенос — только инструментом «Переместить»)
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.altKey) {
@@ -3630,6 +3635,8 @@ const shapeSelected = () => indoorSelection.some(editableIndoorGeometry) ? indoo
 function shapeWalls(key: string) {
   // Ось арки — на земле (и на плане этажа над ней)
   if (focus && passageFeatures(focus).some((f) => f.key === key)) return { min: 0, top: 0, roof: 0 };
+  // Ось ограждения — на земле
+  if (indoorSelection.some((f) => f.barrier && f.key === key)) return { min: 0, top: 0, roof: 0 };
   const indoor = shownIndoor.find(f => f.key === key && editableIndoorGeometry(f));
   if (indoor && shownLevel) return { min: shownLevel.floor, top: shownLevel.floor, roof: 0 };
   const f = entity(key) as Feature3D | undefined;
@@ -10407,7 +10414,8 @@ function indoorLegend(onLevel: IndoorFeature[]): string {
 
 /** Indoor-объект здания режима по ключу OSM (с правками сессии); недоступен — undefined. */
 function buildingIndoorFor(key: string): IndoorFeature | undefined {
-  return focus ? buildingIndoor(focus).find((f) => f.key === key) ?? passageFeatures(focus).find((f) => f.key === key) : undefined;
+  return focus ? buildingIndoor(focus).find((f) => f.key === key) ?? passageFeatures(focus).find((f) => f.key === key)
+    ?? (indoorSelection.some((f) => f.barrier && f.key === key) ? barrierFeatureFor(key) : undefined) : undefined;
 }
 
 /** Ключи indoor-объектов, которые правились в сессии (их теги берутся из сессии). */
@@ -10732,7 +10740,8 @@ function indoorMoveOperation(fs: IndoorFeature[], offset: THREE.Vector3): Indoor
   return { type: 'move', vertices, delta: indoorDelta(offset) };
 }
 function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false, pairs = true): ObjectEdit[] {
-  const all = focus ? [...buildingIndoor(focus).filter(f => !f.key.endsWith('#poi')), ...passageFeatures(focus)] : [];
+  // Выбранные ограждения окружения — тоже линии на земле («Форма» в режиме здания)
+  const all = focus ? [...buildingIndoor(focus).filter(f => !f.key.endsWith('#poi')), ...passageFeatures(focus), ...indoorSelection.filter((f) => f.barrier)] : [];
   const building = focus ? groupFeatures(focus) : [];
   // Части и контур здания — «чужой этаж»: их узлы при правке indoor не двигаются, общий узел отцепляется новым.
   // Геометрию Simple 3D в режиме этажа не меняем: срез этажа не даёт увидеть части целиком

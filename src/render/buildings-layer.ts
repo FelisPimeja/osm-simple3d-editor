@@ -8734,8 +8734,8 @@ let focusOnlyWindows = true;
 let focusSceneOn = false;
 /** Окно по умолчанию (как в OSM2World): ширина, м; высота и подоконник — доли высоты этажа; глубина ниши, м. */
 const WINDOW_WIDTH = 1, WINDOW_HEIGHT = 0.5, WINDOW_BREAST = 0.3, WINDOW_DEPTH = 0.15;
-/** Сгенерированное окно — накладное стекло на таком расстоянии перед стеной, м. */
-const PANE_OFFSET = 0.03;
+/** Сгенерированное окно — накладное стекло на таком расстоянии перед стеной, м (3 см тонули в стене при приближении — точности глубины не хватало). */
+const PANE_OFFSET = 0.1;
 
 /** Унаследованные частью теги (цвета, форма крыши, материалы контура/отношения) — задаёт main. */
 let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;

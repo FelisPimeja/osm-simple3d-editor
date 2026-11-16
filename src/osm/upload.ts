@@ -327,6 +327,12 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   let uploaded = false;
   try {
     onStatus(trn(payload.length, 'Загружаем {n} объект в changeset {changeset}…|Загружаем {n} объекта в changeset {changeset}…|Загружаем {n} объектов в changeset {changeset}…', { changeset }));
+    // Объект дважды в пакете — сервер отвечает 500 («Could not update all current ways»): оставляем первую запись
+    const once = new Set<string>();
+    for (let i = 0; i < payload.length; i++) {
+      const k = `${payload[i].element.type}/${payload[i].element.id}`;
+      if (once.has(k)) { console.warn(`[upload] ${k} дважды в пакете — второй раз не отправляем`); payload.splice(i--, 1); } else once.add(k);
+    }
     const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
     uploaded = true;
     return { changeset, ...diff, written, rebased, geometrySaved, deleted, dropped };
@@ -532,7 +538,8 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
   const removedWays = removed.size ? [...(await fetchElements([...removed], api())).values()]
     .filter((w): w is OsmWay => w.type === 'way' && !Object.keys(w.tags ?? {}).length) : [];
   for (const w of removedWays) {
-    if (fresh.has(`way/${w.id}`) && payload.some((p) => p.element.type === 'way' && p.element.id === w.id)) continue;
+    // Уже в пакете (путь удалённого мультиполигона, убранный и из другого нашего отношения) — второй раз не кладём
+    if (payload.some((p) => p.element.type === 'way' && p.element.id === w.id)) continue;
     payload.push({ element: w, tags: {}, deleted: true });
     for (const n of w.nodes) dropNodes.add(n);
   }

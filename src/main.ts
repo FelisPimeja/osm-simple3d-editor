@@ -10411,8 +10411,8 @@ function renderIndoorSelection(add = false) {
     const m = (v: number) => String(Math.round(v * 100) / 100);
     infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
       + `<p class="hint">${esc(tr('Проём {w} м.', { w: m(gateWidth(t)) }))}</p>`
-      + indoorForm([f])
-      + renderOtherTags(key, t, indoorForm([f]), true);
+      + indoorForm([f], barrierPlaceholders([f]))
+      + renderOtherTags(key, t, indoorForm([f], barrierPlaceholders([f])), true);
     bindIndoorForm([f]);
     return;
   }
@@ -10420,8 +10420,8 @@ function renderIndoorSelection(add = false) {
     const sh = barrierShape(t), m = (v: number) => String(Math.round(v * 100) / 100);
     infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
       + `<p class="hint">${esc(tr('Высота {h} м, толщина {w} м.', { h: m(sh.top - sh.min), w: m(sh.width) }))}</p>`
-      + indoorForm([f])
-      + renderOtherTags(key, t, indoorForm([f]), true);
+      + indoorForm([f], barrierPlaceholders([f]))
+      + renderOtherTags(key, t, indoorForm([f], barrierPlaceholders([f])), true);
     bindIndoorForm([f]);
     return;
   }
@@ -10434,6 +10434,26 @@ function renderIndoorSelection(add = false) {
   bindIndoorForm([f]);
 }
 
+/** Значения по умолчанию, по которым строятся ограждения и ворота без тегов, — серым в полях (у нескольких — общие). */
+function barrierPlaceholders(fs: IndoorFeature[]): Record<string, string> {
+  if (!fs.length || !fs.every((f) => f.barrier)) return {};
+  const r = (v: number) => String(Math.round(v * 100) / 100);
+  const one = (f: IndoorFeature): Record<string, string> => {
+    if (!f.gate) {
+      const sh = barrierShape({ ...f.tags, height: '', width: '', min_height: '' });
+      return { height: r(sh.top - sh.min), width: r(sh.width), min_height: '0' };
+    }
+    const b = f.tags.barrier, bar = b === 'lift_gate' || b === 'chain' || b === 'rope';
+    // Высота створки — как при построении: перекладина на 1 м, полотно — по ограждению, но не выше 2 м
+    const id = Number(f.key.slice(5)), way = overpass.barriers().map(liveBarrier).find((x) => x?.nodes.includes(id));
+    const top = way ? barrierShape(way.tags).top : 2;
+    return { width: r(gateWidth({ ...f.tags, width: '', maxwidth: '', 'maxwidth:physical': '' })), height: r(bar ? 1 : b === 'entrance' || b === 'stile' ? top : Math.max(0.8, Math.min(top, 2))) };
+  };
+  const all = fs.map(one), out: Record<string, string> = {};
+  for (const k of Object.keys(all[0])) if (all.every((x) => x[k] === all[0][k])) out[k] = all[0][k];
+  return out;
+}
+
 /** Несколько indoor-объектов: число и виды, общая форма. */
 function renderIndoorMulti(fs: IndoorFeature[]) {
   const kinds = [...new Set(fs.map(indoorTitle))].join(', ');
@@ -10441,8 +10461,8 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
   const keys = fs.slice(0, 12).map((f) => `<a href="#" data-select-indoor="${esc(indoorKey(f.key))}">${esc(indoorKey(f.key))}</a>`).join(', ')
     + (fs.length > 12 ? ' …' : '');
   infoEl.innerHTML = `<h2>${trn(fs.length, 'Выбран {n} объект|Выбрано {n} объекта|Выбрано {n} объектов')}</h2><p class="hint">${esc(kinds)}: ${keys}</p>`
-    + indoorForm(fs)
-    + renderMultiOtherTags(fs.map(f => f.tags), indoorForm(fs), true);
+    + indoorForm(fs, barrierPlaceholders(fs))
+    + renderMultiOtherTags(fs.map(f => f.tags), indoorForm(fs, barrierPlaceholders(fs)), true);
   bindIndoorForm(fs);
 }
 

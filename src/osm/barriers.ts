@@ -63,8 +63,9 @@ export function barrierShape(tags: Record<string, string>): BarrierShape {
   const top = h !== undefined && h > 0 ? h : min + defH;
   const tagged = parseLength(tags.width);
   const width = tagged !== undefined && tagged > 0 ? Math.max(0.03, Math.min(5, tagged)) : defW;
+  // Без colour и material (fence_type) — белый, как здания без цвета; живая изгородь — зелёная
   const colour = tags.colour ?? (kind === 'hedge' ? '#55773a'
-    : kind === 'wall' ? (mat === 'brick' ? '#a65a43' : mat === 'stone' || mat === 'dry_stone' ? '#a39c8f' : mat === 'concrete' ? '#bdbab3' : '#c8c2b6')
-    : ft === 'wood' || mat === 'wood' ? '#9a7650' : ft === 'concrete' || mat === 'concrete' ? '#bdbab3' : ft === 'stone' ? '#a39c8f' : ft === 'brick' ? '#a65a43' : '#8a8f94');
+    : kind === 'wall' ? (mat === 'brick' ? '#a65a43' : mat === 'stone' || mat === 'dry_stone' ? '#a39c8f' : mat === 'concrete' ? '#bdbab3' : '#ffffff')
+    : ft === 'wood' || mat === 'wood' ? '#9a7650' : ft === 'concrete' || mat === 'concrete' ? '#bdbab3' : ft === 'stone' ? '#a39c8f' : ft === 'brick' ? '#a65a43' : '#ffffff');
   return { min, top: Math.max(top, min + 0.1), width, colour, seeThrough: kind === 'fence' && (SEE_THROUGH.has(ft ?? '') || !ft) };
 }

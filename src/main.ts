@@ -1225,7 +1225,7 @@ const windowTuner = (() => {
   const reset = document.createElement('button');
   reset.textContent = 'Сбросить';
   reset.addEventListener('click', () => {
-    Object.assign(windowTuning, { step: 2, width: 1, height: 0.5, breast: 0.3, corner: 0.5, alignDoors: true });
+    Object.assign(windowTuning, { step: 3, width: 1, height: 0.5, breast: 0.27, corner: 2, alignDoors: true });
     align.checked = true;
     box.querySelectorAll<HTMLInputElement>('input[type=range]').forEach((inp, i) => { inp.value = String(windowTuning[rows[i][0]]); inp.dispatchEvent(new Event('input')); });
   });

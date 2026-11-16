@@ -7,7 +7,7 @@ const NO_WINDOWS = new Set(['garage', 'garages', 'carport', 'roof', 'greenhouse'
   'parking', 'transformer_tower', 'water_tower', 'silo', 'storage_tank', 'bunker', 'ruins', 'construction']);
 
 /** Подбор параметров генерации (временная панель): шаг, м; ширина, м; высота и подоконник — доли этажа; простенок у угла, м. */
-export const windowTuning = { step: 2, width: 1, height: 0.5, breast: 0.3, corner: 0.5, alignDoors: true };
+export const windowTuning = { step: 3, width: 1, height: 0.5, breast: 0.27, corner: 2, alignDoors: true };
 /** Поворот контура меньше этого (рад) — не угол: узел входа посреди стены не делит фасад. */
 const STRAIGHT = 0.05;
 /** Зазор между окном и входом по горизонтали, м. */

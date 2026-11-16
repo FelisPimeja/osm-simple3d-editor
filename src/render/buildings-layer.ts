@@ -789,7 +789,7 @@ class MeshGroup {
  * Матрица проекции MapLibre для отрисовки. Дальняя плоскость MapLibre рассчитана на землю: подземные этажи при
  * наклоне камеры срезаются ею. Сжимаем глубину: ближняя плоскость та же, дальняя — втрое дальше (ndc' = (ndc − 1) / 2).
  */
-function depthMain(options: CustomRenderMethodInput): THREE.Matrix4 {
+export function depthMain(options: CustomRenderMethodInput): THREE.Matrix4 {
   const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
   const e = main.elements;
   for (let c = 0; c < 4; c++) e[c * 4 + 2] = 0.5 * e[c * 4 + 2] - 0.5 * e[c * 4 + 3];
@@ -9338,7 +9338,7 @@ const unknownColours = new Set<string>();
  * Опечатки в тегах (lightgre, rgey) — частое дело: исправляем их (normalizeColour), чтобы three.js
  * не писал предупреждение в консоль на каждое здание, и сообщаем о каждом значении один раз.
  */
-function parseColour(colour: string): THREE.Color {
+export function parseColour(colour: string): THREE.Color {
   const value = colour.split(';')[0].trim();
   let color = colourCache.get(value);
   if (!color) {

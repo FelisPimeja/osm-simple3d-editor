@@ -1594,5 +1594,7 @@
   "Вход {node} на стене, но не узел контура: у объекта его не будет.": "Entrance {node} lies on the wall but is not a node of the outline: the object will not get it.",
   "Добавить вход в контур": "Add the entrance to the outline",
   "Арки": "Arches",
-  "Лишние вершины — углы соседних объектов: убрать их нельзя, не испортив соседей.": "The extra vertices are corners of neighbouring objects: they cannot be removed without breaking the neighbours."
+  "Лишние вершины — углы соседних объектов: убрать их нельзя, не испортив соседей.": "The extra vertices are corners of neighbouring objects: they cannot be removed without breaking the neighbours.",
+  "Показывать ограждения": "Show walls and fences",
+  "Отдельностоящие стены, заборы и живые изгороди (barrier=wall/fence/hedge): высота — height, толщина — width": "Freestanding walls, fences and hedges (barrier=wall/fence/hedge): height from height, thickness from width"
 }

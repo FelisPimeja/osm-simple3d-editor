@@ -2,6 +2,7 @@ import { recordMs } from '../perf';
 import type { BuildingGroup, Feature3D, IndoorFeature } from '../osm/model';
 import type { TreeData } from '../osm/trees';
 import type { PassageWay, RoadWay } from '../osm/roads';
+import type { BarrierWay } from '../osm/barriers';
 
 const STORE = 'overpass-tiles';
 /** Версия формата записи: при изменении Feature3D старые записи игнорируются. */
@@ -18,19 +19,20 @@ const STORE = 'overpass-tiles';
 // 15 — входы на стене объекта, не узлы его контура (дверь indoor-стены на фасаде); записи 14 обновляются в фоне
 // 16 — арки (tunnel=building_passage, passages); записи 15 показываются без них и обновляются в фоне
 // 17 — у арок id узлов (правка формы пути); записи 16 обновляются в фоне
-const FORMAT = 17;
+// 18 — ограждения (barrier=wall/fence/hedge, barriers); записи 17 показываются без них и обновляются в фоне
+const FORMAT = 18;
 /** Роль члена, которая неизвестна (кеш старого формата): при отправке сверяемся с сервером только по type/ref. */
 export const UNKNOWN_ROLE = '?';
 /** Сколько тайлов хранить; при превышении удаляются самые старые. */
 const MAX_TILES = 300;
 
-interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[]; groups: BuildingGroup[]; indoor?: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; passages?: PassageWay[]; via?: TileVia }
+interface TileRecord { key: string; format: number; fetchedAt: number; features: Feature3D[]; groups: BuildingGroup[]; indoor?: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; passages?: PassageWay[]; barriers?: BarrierWay[]; via?: TileVia }
 
 /** Откуда пришли данные тайла: OSM API (overpass — старые записи кеша, когда данные брались из Overpass). */
 export type TileVia = 'overpass' | 'api';
 
 /** roads — нет у записей до формата 9. */
-export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; indoor: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; passages?: PassageWay[]; fetchedAt: number; via?: TileVia }
+export interface StoredTile { features: Feature3D[]; groups: BuildingGroup[]; indoor: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; passages?: PassageWay[]; barriers?: BarrierWay[]; fetchedAt: number; via?: TileVia }
 
 /**
  * Постоянный кеш тайлов (данные OSM API) в IndexedDB.
@@ -65,7 +67,8 @@ export class TileStore {
 
   async get(key: string): Promise<StoredTile | undefined> {
     const rec = await this.request<TileRecord | undefined>('readonly', (s) => s.get(key), 'тайлы: запрос к IndexedDB');
-    if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, passages: rec.passages, fetchedAt: rec.fetchedAt, via: rec.via };
+    if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, passages: rec.passages, barriers: rec.barriers, fetchedAt: rec.fetchedAt, via: rec.via };
+    if (rec?.format === 17) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, passages: rec.passages, fetchedAt: 0, via: rec.via };
     if (rec?.format === 16) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
     if (rec?.format === 15) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
     if (rec?.format === 14) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, fetchedAt: 0, via: rec.via };
@@ -85,8 +88,8 @@ export class TileStore {
     return undefined;
   }
 
-  async put(key: string, { features, groups, indoor, trees, roads, passages, fetchedAt, via }: StoredTile) {
-    const rec: TileRecord = { key, format: FORMAT, fetchedAt, features, groups, indoor, trees, roads, passages, via };
+  async put(key: string, { features, groups, indoor, trees, roads, passages, barriers, fetchedAt, via }: StoredTile) {
+    const rec: TileRecord = { key, format: FORMAT, fetchedAt, features, groups, indoor, trees, roads, passages, barriers, via };
     const ok = await this.request('readwrite', (s) => s.put(rec));
     if (ok === undefined) {
       // Скорее всего, квота: освобождаем половину и пробуем ещё раз

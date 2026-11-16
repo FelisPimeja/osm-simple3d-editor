@@ -1334,127 +1334,8 @@ function barrierFeatureFor(key: string): IndoorFeature | undefined {
 }
 function syncBarrierSelection() {
   barriersLayer.select(indoorSelection.filter((f) => f.barrier).map((f) => Number(f.key.slice(4))));
-  syncBarrierHandles();
 }
 
-// Вершины выбранного ограждения на карте: перетаскивание — узел (и он же в соседних путях), середина стороны —
-// новая вершина, двойной клик — убрать вершину (не общую, у пути остаётся не меньше двух)
-const BARRIER_HANDLES = 'barrier-handles';
-const BARRIER_HANDLE_LAYERS = ['barrier-handle-mid', 'barrier-handle-vertex'];
-/** Перетаскиваемая ручка и ось ограждения в превью. */
-let barrierDrag: { key: string; ids: number[]; coords: LonLat[]; index: number; mid: boolean; moved: boolean } | undefined;
-function barrierEditTarget(): IndoorFeature | undefined {
-  return !focus && indoorSelection.length === 1 && indoorSelection[0].barrier ? indoorSelection[0] : undefined;
-}
-function syncBarrierHandles() {
-  if (!mapLoaded) return;
-  if (!map.getSource(BARRIER_HANDLES)) {
-    map.addSource(BARRIER_HANDLES, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-    map.addLayer({ id: 'barrier-handle-mid', type: 'circle', source: BARRIER_HANDLES, filter: ['==', ['get', 'mid'], true],
-      paint: { 'circle-radius': 4, 'circle-color': '#ffffff', 'circle-opacity': 0.6, 'circle-stroke-color': '#3b7bff', 'circle-stroke-width': 1.5, 'circle-pitch-alignment': 'map' } });
-    map.addLayer({ id: 'barrier-handle-vertex', type: 'circle', source: BARRIER_HANDLES, filter: ['!=', ['get', 'mid'], true],
-      paint: { 'circle-radius': 5.5, 'circle-color': '#ffffff', 'circle-stroke-color': '#3b7bff', 'circle-stroke-width': 2, 'circle-pitch-alignment': 'map' } });
-  }
-  const f = barrierEditTarget();
-  const ids = barrierDrag?.ids ?? f?.polygons[0]?.outerIds ?? [], cs = barrierDrag?.coords ?? f?.polygons[0]?.outer ?? [];
-  const closed = ids.length > 2 && ids[0] === ids.at(-1);
-  const feats: GeoJSON.Feature[] = [];
-  cs.forEach((c, i) => {
-    if (!(closed && i === cs.length - 1)) feats.push({ type: 'Feature', properties: { i, mid: false }, geometry: { type: 'Point', coordinates: c } });
-    if (i < cs.length - 1 && !barrierDrag) feats.push({ type: 'Feature', properties: { i, mid: true }, geometry: { type: 'Point', coordinates: [(c[0] + cs[i + 1][0]) / 2, (c[1] + cs[i + 1][1]) / 2] } });
-  });
-  (map.getSource(BARRIER_HANDLES) as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features: f || barrierDrag ? feats : [] });
-}
-function barrierHandleAt(point: { x: number; y: number }): { i: number; mid: boolean } | undefined {
-  if (!mapLoaded || !map.getLayer('barrier-handle-vertex')) return;
-  const hit = map.queryRenderedFeatures([[point.x - 4, point.y - 4], [point.x + 4, point.y + 4]], { layers: BARRIER_HANDLE_LAYERS })
-    .sort((a, b) => Number(a.properties.mid) - Number(b.properties.mid))[0];
-  return hit ? { i: Number(hit.properties.i), mid: hit.properties.mid === true } : undefined;
-}
-/** Узел id есть в другом пути или контуре (кроме ограждения key). */
-function nodeSharedElsewhere(id: number, key: string): boolean {
-  if (liveFeatures().some((g) => g.polygons.some((p) => [p.outerIds, ...(p.innerIds ?? [])].some((r) => r?.includes(id))))) return true;
-  if (session.lineEntities().some((t) => t.key !== key && t.line!.ids.includes(id))) return true;
-  return overpass.barriers().some((b) => `way/${b.id}` !== key && b.nodes.includes(id));
-}
-/** Ограждения с узлами ids — в сессию, чтобы перенос узла поехал и в них. */
-function trackBarriersWith(ids: number[]) {
-  for (const b of overpass.barriers()) if (b.nodes.some((n) => ids.includes(n))) { const f = barrierFeatureFor(`way/${b.id}`); if (f) trackIndoor(f.key, f); }
-}
-function previewBarrierDrag() {
-  if (!barrierDrag) return;
-  const d = barrierDrag;
-  barriersLayer.setBarriers(overpass.barriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags))
-    .map((b) => (`way/${b.id}` === d.key ? { ...b, nodes: d.ids, coords: d.coords } : b)));
-  syncBarrierHandles();
-}
-function finishBarrierDrag() {
-  const d = barrierDrag;
-  barrierDrag = undefined;
-  map.dragPan.enable();
-  map.getCanvas().style.cursor = '';
-  if (!d?.moved) {
-    if (d && !d.mid) lastHandleTap = { key: d.key, i: d.index, t: performance.now() };
-    syncBarrierHandles();
-    return;
-  }
-  const f = barrierEditTarget();
-  if (!f) return;
-  trackBarriersWith(d.ids);
-  trackIndoor(f.key, f);
-  const edits: ObjectEdit[] | string = d.mid ? [{ key: d.key, line: { ids: d.ids, coords: d.coords } }]
-    : nodeMoveEdits(new Map([[d.ids[d.index], d.coords[d.index]]]));
-  if (typeof edits === 'string') { setStatus(edits, true); scheduleBarriers(); syncBarrierHandles(); return; }
-  session.editMany(edits);
-}
-function removeBarrierVertex(index: number) {
-  const f = barrierEditTarget();
-  if (!f) return;
-  const ids = f.polygons[0].outerIds!, cs = f.polygons[0].outer, id = ids[index];
-  const closed = ids.length > 2 && ids[0] === ids.at(-1);
-  if (nodeSharedElsewhere(id, f.key)) { setStatus(tr('Вершина общая с другим объектом — её не убрать отсюда.'), true); return; }
-  const keep = ids.map((n, k) => (n === id ? -1 : k)).filter((k) => k >= 0);
-  let nIds = keep.map((k) => ids[k]), nCs = keep.map((k) => cs[k]);
-  if (closed && index === 0) { nIds = [...nIds, nIds[0]]; nCs = [...nCs, nCs[0]]; }
-  if (new Set(nIds).size < 2 || (closed && new Set(nIds).size < 3)) { setStatus(tr('У ограждения останется слишком мало вершин.'), true); return; }
-  trackIndoor(f.key, f);
-  session.editMany([{ key: f.key, line: { ids: nIds, coords: nCs } }]);
-}
-map.on('mousedown', (e) => {
-  const f = barrierEditTarget();
-  if (!f || e.originalEvent.button !== 0) return;
-  const h = barrierHandleAt(e.point);
-  if (!h) return;
-  e.preventDefault();
-  if (!h.mid && lastHandleTap?.key === f.key && lastHandleTap.i === h.i && performance.now() - lastHandleTap.t < 400) {
-    lastHandleTap = undefined;
-    removeBarrierVertex(h.i);
-    return;
-  }
-  map.dragPan.disable();
-  const ids = [...f.polygons[0].outerIds!], coords = [...f.polygons[0].outer];
-  if (h.mid) {
-    ids.splice(h.i + 1, 0, nextNewId--);
-    coords.splice(h.i + 1, 0, [(coords[h.i][0] + coords[h.i + 1][0]) / 2, (coords[h.i][1] + coords[h.i + 1][1]) / 2]);
-    barrierDrag = { key: f.key, ids, coords, index: h.i + 1, mid: true, moved: false };
-  } else barrierDrag = { key: f.key, ids, coords, index: h.i, mid: false, moved: false };
-});
-map.on('mousemove', (e) => {
-  if (!barrierDrag) {
-    if (barrierEditTarget()) map.getCanvas().style.cursor = barrierHandleAt(e.point) ? 'move' : '';
-    return;
-  }
-  const d = barrierDrag, c: LonLat = [e.lngLat.lng, e.lngLat.lat];
-  d.moved = true;
-  d.coords[d.index] = c;
-  // Замкнутый путь: первая и последняя точка — один узел
-  if (d.ids.length > 2 && d.ids[0] === d.ids.at(-1) && d.index === 0) d.coords[d.coords.length - 1] = c;
-  previewBarrierDrag();
-});
-map.on('mouseup', () => { if (barrierDrag) finishBarrierDrag(); });
-// Двойной клик по вершине: dblclick карты не приходит (mousedown ручки отменён ради перетаскивания) — считаем сами
-let lastHandleTap: { key: string; i: number; t: number } | undefined;
-map.on('dblclick', (e) => { if (barrierEditTarget() && barrierHandleAt(e.point)) e.preventDefault(); });
 
 /** Ось ограждения в пределах 6 px от точки экрана (тонкий забор сверху не попасть лучом); глубина — у земли. */
 function barrierNear(pt: { x: number; y: number }): { way: BarrierWay; depth: number } | undefined {
@@ -1798,8 +1679,6 @@ function highlightKeys(key: string | undefined): string[] {
 map.on('click', (e) => {
   if (e.originalEvent.button !== 0) return;
   if (suppressClick) return;
-  // Ручка вершины выбранного ограждения: клик — не выбор (перетаскивание и двойной клик — свои обработчики)
-  if (barrierEditTarget() && barrierHandleAt(e.point)) return;
   // Этим нажатием пипетка взяла цвет — не выделять и не заливать
   if (performance.now() - eyedropper.pickedAt < 600) return;
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }

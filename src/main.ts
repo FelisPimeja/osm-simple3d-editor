@@ -1207,8 +1207,19 @@ const windowTuner = (() => {
     clearTimeout(timer);
     timer = window.setTimeout(() => overpassLayer.setWindowTuning({}), 250);
   };
-  const title = document.createElement('b');
-  title.textContent = 'Окна (подбор)';
+  // Заголовок — кнопка: сворачивает панель до неё (состояние помнится)
+  const title = document.createElement('button');
+  title.className = 'window-tuner-title';
+  const FOLD_KEY = 'osm3d.windowTunerFolded';
+  const fold = (on: boolean) => {
+    box.classList.toggle('folded', on);
+    title.textContent = on ? 'Окна ▸' : 'Окна (подбор) ▾';
+    try { localStorage.setItem(FOLD_KEY, on ? '1' : ''); } catch { /* приватный режим */ }
+  };
+  title.addEventListener('click', () => fold(!box.classList.contains('folded')));
+  let folded = false;
+  try { folded = !!localStorage.getItem(FOLD_KEY); } catch { /* нет хранилища */ }
+  fold(folded);
   box.append(title);
   for (const [k, label, min, max, st, fmt] of rows) {
     const row = document.createElement('label');

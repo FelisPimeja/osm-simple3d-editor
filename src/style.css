@@ -890,3 +890,6 @@ body.mobile #issues-panel { display: none !important; }
 .window-tuner label { display: grid; grid-template-columns: 120px 1fr 44px; align-items: center; gap: 6px; }
 .window-tuner button { align-self: flex-start; }
 .window-tuner label.check { display: flex; gap: 6px; }
+.window-tuner .window-tuner-title { all: unset; cursor: pointer; font-weight: 600; }
+.window-tuner.folded { width: auto; padding: 6px 10px; }
+.window-tuner.folded > :not(.window-tuner-title) { display: none; }

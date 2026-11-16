@@ -3530,6 +3530,7 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(), shapeSelected
   previewShape, commitShape, removeShapeVertex,
   (hint, error) => {
     shapeBtn.classList.toggle('active', shapeTool.active);
+    queueMicrotask(() => { if (!shapeTool.active) endBarrierSketch(); else syncMapTools(); });
     syncCursor();
     toolHint(hint, error);
   });
@@ -4391,11 +4392,35 @@ function startMapUnderlayTool(tool: 'move' | 'rotate' | 'scale') {
 
 // Инструменты геометрии и подложек на карте прилипают к контурам зданий (запасной вариант без 3D).
 overpassLayer.sketchSnap = (pt) => {
-  if (!underlaySketch && !sketching) return;
+  if (!underlaySketch && !sketching && !barrierSketch) return;
   const s = snapGround(pt), local = s && overpassLayer.focusToLocal([s.lngLat.lng, s.lngLat.lat]);
   if (!s || !local) return;
   return { kind: s.kind as SnapKind, key: '', local: new THREE.Vector3(local[0], local[1], 0), lngLat: s.lngLat, altitude: 0, point: s.point, label: s.label };
 };
+
+/** «Форма» ограждения на карте: сцена наброска с началом в его первой вершине. */
+let barrierSketch = false;
+const mapBShapeBtn = document.querySelector<HTMLButtonElement>('#map-tools [data-tool="bshape"]')!;
+mapBShapeBtn.addEventListener('click', () => (shapeTool.active ? shapeTool.stop() : startMapBarrierShape()));
+function startMapBarrierShape() {
+  const f = !focus && indoorSelection.length === 1 && indoorSelection[0].barrier ? indoorSelection[0] : undefined;
+  if (!f) return;
+  cancelCopyPick();
+  drawTool.stop(); moveTool.stop(); rotateTool.stop(); scaleTool.stop(); measureTool.stop();
+  if (!barrierSketch) { overpassLayer.setSketch(f.polygons[0].outer[0]); barrierSketch = true; }
+  trackIndoor(f.key, f);
+  shapeTool.start();
+  syncMapTools();
+}
+/** «Форма» на карте выключена — закрыть её сцену наброска. */
+function endBarrierSketch() {
+  if (!barrierSketch || shapeTool.active) return;
+  barrierSketch = false;
+  overpassLayer.setSketch(undefined);
+  overpassLayer.setOutline(undefined);
+  updateSnap(undefined);
+  syncMapTools();
+}
 
 /** Инструменты подложек на карте выключены — закрыть их сцену наброска. */
 function endUnderlaySketch() {
@@ -4442,6 +4467,8 @@ function syncMapTools() {
     btn.hidden = !u;
     btn.classList.toggle('active', underlaySketch && on);
   }
+  mapBShapeBtn.hidden = !!focus || !(indoorSelection.length === 1 && indoorSelection[0].barrier);
+  mapBShapeBtn.classList.toggle('active', barrierSketch && shapeTool.active);
   renderHelp();
   mapRectBtn.classList.toggle('active', sketching && drawTool.shape === 'rect');
   mapPolyBtn.classList.toggle('active', sketching && drawTool.shape === 'polygon');
@@ -8567,6 +8594,13 @@ document.addEventListener('keydown', (e) => {
     startSketch(sketchKeys[e.code]);
     return;
   }
+  // На карте с выделенным ограждением V — «Форма»
+  if (!focus && e.code === 'KeyV' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && indoorSelection.length === 1 && indoorSelection[0].barrier) {
+    e.preventDefault();
+    closeCtxMenu();
+    if (shapeTool.active) shapeTool.stop(); else startMapBarrierShape();
+    return;
+  }
   // На карте с выделенной подложкой M / Q / E — её «Переместить», «Повернуть», «Масштаб»
   const underlayKeys: Record<string, 'move' | 'rotate' | 'scale'> = { KeyM: 'move', KeyQ: 'rotate', KeyE: 'scale' };
   if (!focus && underlaySelection.length && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && underlayKeys[e.code]) {
@@ -10045,6 +10079,7 @@ function renderIndoorSelection(add = false) {
   syncPassageSelection();
   syncBarrierSelection();
   syncOutlinerPassages();
+  syncMapTools();
   indoorPois.setSelection(indoorSelection.map((x) => x.key));
   renderEscalatorUi();
   syncIssueFilter();
@@ -10294,7 +10329,9 @@ function indoorLegend(onLevel: IndoorFeature[]): string {
 /** Indoor-объект здания режима по ключу OSM (с правками сессии); недоступен — undefined. */
 function buildingIndoorFor(key: string): IndoorFeature | undefined {
   return focus ? buildingIndoor(focus).find((f) => f.key === key) ?? passageFeatures(focus).find((f) => f.key === key)
-    ?? (indoorSelection.some((f) => f.barrier && f.key === key) ? barrierFeatureFor(key) : undefined) : undefined;
+    ?? (indoorSelection.some((f) => f.barrier && f.key === key) ? barrierFeatureFor(key) : undefined)
+    // На карте — выбранное ограждение («Форма» в сцене наброска)
+    : indoorSelection.some((f) => f.barrier && f.key === key) ? barrierFeatureFor(key) : undefined;
 }
 
 /** Ключи indoor-объектов, которые правились в сессии (их теги берутся из сессии). */
@@ -10620,7 +10657,7 @@ function indoorMoveOperation(fs: IndoorFeature[], offset: THREE.Vector3): Indoor
 }
 function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false, pairs = true): ObjectEdit[] {
   // Выбранные ограждения окружения — тоже линии на земле («Форма» в режиме здания)
-  const all = focus ? [...buildingIndoor(focus).filter(f => !f.key.endsWith('#poi')), ...passageFeatures(focus), ...indoorSelection.filter((f) => f.barrier)] : [];
+  const all = [...(focus ? [...buildingIndoor(focus).filter(f => !f.key.endsWith('#poi')), ...passageFeatures(focus)] : []), ...indoorSelection.filter((f) => f.barrier)];
   const building = focus ? groupFeatures(focus) : [];
   // Части и контур здания — «чужой этаж»: их узлы при правке indoor не двигаются, общий узел отцепляется новым.
   // Геометрию Simple 3D в режиме этажа не меняем: срез этажа не даёт увидеть части целиком

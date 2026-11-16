@@ -32,7 +32,7 @@ import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } fro
 import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, dateSpan, decimalDate, existsIn, isoDay, parseDate, shiftDate } from './osm/dates';
 import { buildingRefreshMembers, refreshBuildingFeatures } from './osm/building-refresh';
-import { BrokenRingsError, ConflictError, uploadEdits } from './osm/upload';
+import { BrokenRingsError, ConflictError, dryRunUpload, uploadEdits } from './osm/upload';
 import { computeHeights, LEVEL_HEIGHT, parseLength } from './osm/heights';
 import { escalatorFloorHoles } from './render/escalator-openings';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indoorCategory, roomValueOf, type IndoorCategory } from './osm/indoor-categories';
@@ -17670,6 +17670,31 @@ function repairNewRelationRings(): string[] {
   return repaired;
 }
 
+/** Правки сессии в виде, который принимает отправка (uploadEdits). */
+function uploadEditList() {
+  return session.changes().map((c) => {
+    const g = editGroups.get(c.key);
+    const created = !c.created ? undefined
+      : g ? { type: 'relation' as const, id: g.id, version: 0, tags: c.after, members: g.relMembers }
+      : c.key.startsWith('node/') ? { type: 'node' as const, id: Number(c.key.split('/')[1]), version: 0, tags: c.after,
+        lon: c.feature.polygons?.[0]?.outer[0]?.[0] ?? 0, lat: c.feature.polygons?.[0]?.outer[0]?.[1] ?? 0 }
+      : c.key.startsWith('relation/') ? { type: 'relation' as const, id: Number(c.key.split('/')[1]), version: 0, tags: c.after, members: c.feature.relMembers ?? [] }
+      : { type: 'way' as const, id: Number(c.key.split('/')[1]), version: 0, tags: c.after, nodes: c.wayNodes?.after ?? [] };
+    return { key: c.key, before: c.before, after: c.after, created, members: c.members, membersBefore: c.membersBefore,
+      nodeMoves: c.nodeMoves, wayNodes: c.wayNodes, newNodes: c.newNodes, deleted: c.deleted, version: c.feature.version, polygons: c.feature.polygons,
+      splitFrom: c.feature.splitFrom };
+  });
+}
+
+// Разработка: пробная отправка в консоли — пакет собирается и проверяется, changeset не открывается, на сервер
+// ничего не уходит (await __dryRunUpload() → { count, problems, osmChange })
+if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRunUpload = async () => {
+  repairNewRelationRings();
+  await collapseLoneOuters();
+  const r = await dryRunUpload(uploadEditList());
+  return { count: r.count, problems: r.problems, osmChange: r.osmChange };
+};
+
 async function doUpload() {
   if (uploading || deletingIndoorWalls) return;
   const s = server();
@@ -17679,19 +17704,7 @@ async function doUpload() {
     const repaired = repairNewRelationRings();
     if (repaired.length) console.warn('[upload] пути колец пересобраны по геометрии:', repaired.join(', '));
     await collapseLoneOuters();
-    const changes = session.changes();
-    const edits = changes.map((c) => {
-      const g = editGroups.get(c.key);
-      const created = !c.created ? undefined
-        : g ? { type: 'relation' as const, id: g.id, version: 0, tags: c.after, members: g.relMembers }
-        : c.key.startsWith('node/') ? { type: 'node' as const, id: Number(c.key.split('/')[1]), version: 0, tags: c.after,
-          lon: c.feature.polygons?.[0]?.outer[0]?.[0] ?? 0, lat: c.feature.polygons?.[0]?.outer[0]?.[1] ?? 0 }
-        : c.key.startsWith('relation/') ? { type: 'relation' as const, id: Number(c.key.split('/')[1]), version: 0, tags: c.after, members: c.feature.relMembers ?? [] }
-        : { type: 'way' as const, id: Number(c.key.split('/')[1]), version: 0, tags: c.after, nodes: c.wayNodes?.after ?? [] };
-      return { key: c.key, before: c.before, after: c.after, created, members: c.members, membersBefore: c.membersBefore,
-        nodeMoves: c.nodeMoves, wayNodes: c.wayNodes, newNodes: c.newNodes, deleted: c.deleted, version: c.feature.version, polygons: c.feature.polygons,
-        splitFrom: c.feature.splitFrom };
-    });
+    const edits = uploadEditList();
     const toJosm = josmApi();
     // В JOSM комментарий — имя команды в его истории: предложенный по правкам
     // Шаги подложек, сделанные вместе с этими правками (и не отменённые), — в ту же команду JOSM

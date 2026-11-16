@@ -316,6 +316,16 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
 
   // Нечего отправлять (всё уже на сервере или правки свелись к нулю) — пустой changeset не открываем
   if (!payload.length) throw new Error(tr('Нет изменений относительно сервера — changeset не создан.'));
+  // Объект дважды в пакете — сервер отвечает 500 («Could not update all current ways»): оставляем первую запись
+  const once = new Set<string>();
+  for (let i = 0; i < payload.length; i++) {
+    const k = `${payload[i].element.type}/${payload[i].element.id}`;
+    if (once.has(k)) { console.warn(`[upload] ${k} дважды в пакете — второй раз не отправляем`); payload.splice(i--, 1); } else once.add(k);
+  }
+  // Пакет, который сервер точно отклонит, — до открытия changeset (иначе остался бы пустой)
+  const problems = payloadProblems(payload);
+  if (dryRun) throw new DryRun(buildOsmChange(payload, 0), problems, payload.length);
+  if (problems.length) throw new Error(tr('Пакет не прошёл проверку перед отправкой (changeset не создан): {list}', { list: problems.slice(0, 5).join('; ') }));
   onStatus(tr('Открываем changeset…'));
   const changesetXml = `<osm><changeset>${tagsXml({
     comment,
@@ -327,12 +337,6 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   let uploaded = false;
   try {
     onStatus(trn(payload.length, 'Загружаем {n} объект в changeset {changeset}…|Загружаем {n} объекта в changeset {changeset}…|Загружаем {n} объектов в changeset {changeset}…', { changeset }));
-    // Объект дважды в пакете — сервер отвечает 500 («Could not update all current ways»): оставляем первую запись
-    const once = new Set<string>();
-    for (let i = 0; i < payload.length; i++) {
-      const k = `${payload[i].element.type}/${payload[i].element.id}`;
-      if (once.has(k)) { console.warn(`[upload] ${k} дважды в пакете — второй раз не отправляем`); payload.splice(i--, 1); } else once.add(k);
-    }
     const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
     uploaded = true;
     return { changeset, ...diff, written, rebased, geometrySaved, deleted, dropped };
@@ -377,6 +381,57 @@ async function reusableChangeset(xml: string): Promise<number | undefined> {
 }
 
 type Payload = Parameters<typeof buildOsmChange>[0];
+
+/**
+ * Что сервер в пакете точно отклонит: путь или отношение ссылается на удаляемый пакетом или нигде не созданный
+ * (отрицательный id) объект, путь короче двух узлов или с одним узлом дважды подряд, объект дважды в пакете.
+ */
+export function payloadProblems(payload: Payload): string[] {
+  const out: string[] = [];
+  const key = (p: Payload[number]) => `${p.element.type}/${p.element.id}`;
+  const seen = new Set<string>(), deleted = new Set<string>(), created = new Set<string>();
+  for (const p of payload) {
+    const k = key(p);
+    if (seen.has(k)) out.push(`${k}: дважды в пакете`);
+    seen.add(k);
+    if (p.deleted) deleted.add(k);
+    if (p.created) created.add(k);
+  }
+  const ref = (owner: string, k: string) => {
+    if (deleted.has(k)) out.push(`${owner} ссылается на удаляемый ${k}`);
+    else if (Number(k.split('/')[1]) < 0 && !created.has(k)) out.push(`${owner} ссылается на несозданный ${k}`);
+  };
+  for (const p of payload) {
+    if (p.deleted) continue;
+    const k = key(p), e = p.element;
+    if (e.type === 'way') {
+      if (e.nodes.length < 2) out.push(`${k}: меньше двух узлов`);
+      e.nodes.forEach((n, i) => { if (i && n === e.nodes[i - 1]) out.push(`${k}: node/${n} дважды подряд`); ref(k, `node/${n}`); });
+    } else if (e.type === 'relation') for (const m of e.members) ref(k, `${m.type}/${m.ref}`);
+  }
+  return [...new Set(out)];
+}
+
+/** Пробная отправка: пакет собран и проверен, changeset не открывался, на сервер ничего не ушло. */
+export class DryRun {
+  constructor(readonly osmChange: string, readonly problems: string[], readonly count: number) {}
+}
+let dryRun = false;
+
+/**
+ * Пробная отправка (разработка): всё как у uploadEdits — свежие версии с сервера, перенос правок, узлы, кольца, —
+ * но без открытия changeset и без загрузки. Возвращает пакет osmChange и его проблемы.
+ */
+export async function dryRunUpload(edits: TagEdit[]): Promise<DryRun> {
+  dryRun = true;
+  try {
+    await uploadInner(edits, 'dry run', () => {}, {});
+    throw new Error('dry run: uploadInner не остановился');
+  } catch (err) {
+    if (err instanceof DryRun) return err;
+    throw err;
+  } finally { dryRun = false; }
+}
 
 /**
  * Путь, который мы удаляем (ушёл с колец наших зданий), но который в составе чужого отношения из пакета

@@ -1618,5 +1618,6 @@
   "Вставлены ворота {key}. Отменить — Ctrl+Z.": "Gate {key} pasted. Undo — Ctrl+Z.",
   "Перенос ворот отменён.": "Gate move cancelled.",
   "Ворота скопированы: Ctrl+V — вставить на забор или стену.": "Gate copied: Ctrl+V — paste onto a fence or wall.",
-  "Удалено: {n}. Отменить — Ctrl+Z.": "Deleted: {n}. Undo — Ctrl+Z."
+  "Удалено: {n}. Отменить — Ctrl+Z.": "Deleted: {n}. Undo — Ctrl+Z.",
+  "Пакет не прошёл проверку перед отправкой (changeset не создан): {list}": "The upload batch failed the pre-upload check (no changeset created): {list}"
 }

@@ -1610,5 +1610,13 @@
   "Перелаз": "Stile",
   "Цепь": "Chain",
   "Верёвка": "Rope",
-  "Проём {w} м.": "Opening {w} m."
+  "Проём {w} м.": "Opening {w} m.",
+  "Ведите курсор вдоль забора или стены — ворота встанут в его линию. Клик — поставить, Esc — отмена.": "Move the cursor along a fence or wall — the gate goes into its line. Click — place, Esc — cancel.",
+  "Ведите курсор вдоль ограждения — ворота едут по его линии. Клик — поставить, Esc — отмена.": "Move the cursor along the barrier — the gate slides along its line. Click — place, Esc — cancel.",
+  "Наведите курсор на забор или стену.": "Point at a fence or wall.",
+  "Ворота {key} перенесены. Отменить — Ctrl+Z.": "Gate {key} moved. Undo — Ctrl+Z.",
+  "Вставлены ворота {key}. Отменить — Ctrl+Z.": "Gate {key} pasted. Undo — Ctrl+Z.",
+  "Перенос ворот отменён.": "Gate move cancelled.",
+  "Ворота скопированы: Ctrl+V — вставить на забор или стену.": "Gate copied: Ctrl+V — paste onto a fence or wall.",
+  "Удалено: {n}. Отменить — Ctrl+Z.": "Deleted: {n}. Undo — Ctrl+Z."
 }

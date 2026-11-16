@@ -1316,6 +1316,8 @@ function applyGraphics() {
 function liveBarrier(b: BarrierWay): BarrierWay | undefined {
   const key = `way/${b.id}`;
   if (session.isDeleted(key)) return;
+  const pre = gateDrag?.target?.key === key ? gateDrag.target : undefined;
+  if (pre) return { ...b, tags: session.get(key)?.tags ?? b.tags, nodes: pre.ids, coords: pre.coords };
   const e = session.get(key);
   if (!e) return b;
   const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
@@ -1323,14 +1325,19 @@ function liveBarrier(b: BarrierWay): BarrierWay | undefined {
 }
 /** Ворота ограждения с правками сессии: теги узла; снят barrier ворот или узел удалён — их нет. */
 function liveGates(b: BarrierWay): BarrierWay {
-  if (!b.gates?.length) return b;
-  const gates = b.gates.flatMap((g) => {
+  const gates = (b.gates ?? []).flatMap((g) => {
     const k = `node/${g.id}`;
     if (session.isDeleted(k)) return [];
     const tags = session.get(k)?.tags ?? g.tags;
     return isGateTags(tags) && b.nodes.includes(g.id) ? [{ id: g.id, tags }] : [];
   });
-  return { ...b, gates };
+  // Ворота, созданные или перенесённые в сессии (вставка из буфера), и превью переноса
+  for (const n of new Set(b.nodes)) {
+    if (gates.some((g) => g.id === n)) continue;
+    const tags = gateDrag?.id === n ? gateDrag.tags : session.get(`node/${n}`)?.tags;
+    if (isGateTags(tags)) gates.push({ id: n, tags: tags! });
+  }
+  return gates.length || b.gates ? { ...b, gates } : b;
 }
 /** Ворота — точечным indoor-объектом: выбор и панель свойств (теги узла). */
 function gateFeature(b: BarrierWay, g: BarrierGate): IndoorFeature {
@@ -1347,8 +1354,9 @@ function barrierFeatureFor(key: string): IndoorFeature | undefined {
   if (key.startsWith('node/')) {
     const id = Number(key.slice(5));
     for (const raw of overpass.barriers()) {
-      if (!raw.gates?.some((g) => g.id === id)) continue;
-      const b = liveBarrier(raw), g = b && liveGates(b).gates?.find((x) => x.id === id);
+      const b = liveBarrier(raw);
+      if (!b?.nodes.includes(id)) continue;
+      const g = liveGates(b).gates?.find((x) => x.id === id);
       if (b && g) return gateFeature(b, g);
     }
     return;
@@ -1424,6 +1432,187 @@ overpassLayer.extraSnap = (pt, radius, opts) => {
   const local = overpassLayer.focusToLocal(hit.ll)!;
   return { kind: hit.kind, key: hit.key, local: new THREE.Vector3(local[0], local[1], hit.z), lngLat: new maplibregl.LngLat(hit.ll[0], hit.ll[1]), altitude: hit.z, point: hit.px };
 };
+
+/**
+ * Перенос ворот («Переместить», M) и вставка скопированных (Ctrl+V): узел едет по оси ограждения за курсором и
+ * встаёт в сторону под ним — от линии не отделяется. Ворота в изломе или на конце оставляют на старом месте вершину
+ * (форма ограждения та же). Вставка — на любое ограждение рядом, перенос — по своему.
+ */
+let gateDrag: { id: number; tags: Record<string, string>; from?: string; target?: { key: string; ids: number[]; coords: LonLat[]; at: LonLat } } | undefined;
+/** Скопированные ворота (теги); вставляются, пока после них не копировали другое. */
+let gateClipboard: Record<string, string> | undefined;
+
+function selectedGate(): IndoorFeature | undefined {
+  return indoorSelection.length === 1 && indoorSelection[0].gate ? indoorSelection[0] : undefined;
+}
+
+function startGateDrag(paste = false): boolean {
+  const f = paste ? undefined : selectedGate();
+  if (!paste && !f) return false;
+  if (paste && !gateClipboard) return false;
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
+  drawTool.stop();
+  const from = f ? overpass.barriers().map(liveBarrier).find((b) => b?.nodes.includes(Number(f.key.slice(5))))?.id : undefined;
+  gateDrag = f ? { id: Number(f.key.slice(5)), tags: f.tags, from: from !== undefined ? `way/${from}` : undefined } : { id: nextNewId--, tags: { ...gateClipboard! } };
+  syncEntranceTool();
+  setStatus(paste ? tr('Ведите курсор вдоль забора или стены — ворота встанут в его линию. Клик — поставить, Esc — отмена.')
+    : tr('Ведите курсор вдоль ограждения — ворота едут по его линии. Клик — поставить, Esc — отмена.'));
+  if (lastPointer) moveGate(lastPointer);
+  return true;
+}
+
+function cancelGateDrag() {
+  if (!gateDrag) return;
+  gateDrag = undefined;
+  scheduleBarriers();
+  syncEntranceTool();
+}
+
+/** Точка на земле под курсором (в режиме здания — по его лучу, на карте — по карте). */
+function groundAt(point: [number, number]): LonLat | undefined {
+  if (focus || overpassLayer.focusAxes) {
+    const hit = overpassLayer.focusRay(point)?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), new THREE.Vector3());
+    return hit ? overpassLayer.focusToLngLat(hit.x, hit.y) : undefined;
+  }
+  const ll = map.unproject(point);
+  return [ll.lng, ll.lat];
+}
+
+function moveGate(point: [number, number]) {
+  const d = gateDrag;
+  if (!d) return;
+  const at = groundAt(point);
+  if (!at) return;
+  const kx = Math.cos((at[1] * Math.PI) / 180) * 111320, ky = 110540;
+  const loc = (c: LonLat): [number, number] => [(c[0] - at[0]) * kx, (c[1] - at[1]) * ky];
+  const half = gateWidth(d.tags) / 2;
+  let best: { key: string; ids: number[]; coords: LonLat[]; j: number; t: number; d: number } | undefined;
+  for (const raw of overpass.barriers()) {
+    const key = `way/${raw.id}`;
+    if (d.from ? key !== d.from : false) continue;
+    const b = gateDrag?.target?.key === key ? { ...raw, ...(session.get(key)?.line ? { nodes: session.get(key)!.line!.ids, coords: session.get(key)!.line!.coords } : {}) } : liveBarrier(raw);
+    if (!b || !isBarrierTags(b.tags)) continue;
+    const closed = b.nodes.length > 3 && b.nodes[0] === b.nodes[b.nodes.length - 1];
+    let ids = closed ? b.nodes.slice(0, -1) : b.nodes.slice(), cs = closed ? b.coords.slice(0, -1) : b.coords.slice();
+    // Старое место ворот: на прямой — узел уходит, в изломе или на конце — остаётся новая вершина
+    const i = ids.indexOf(d.id);
+    if (i >= 0) {
+      const n = ids.length, endpoint = !closed && (i === 0 || i === n - 1);
+      let corner = endpoint;
+      if (!endpoint) {
+        const [a, q, c] = [cs[(i - 1 + n) % n], cs[i], cs[(i + 1) % n]].map(loc);
+        const l = Math.hypot(c[0] - a[0], c[1] - a[1]);
+        const off = l ? Math.abs((c[0] - a[0]) * (a[1] - q[1]) - (a[0] - q[0]) * (c[1] - a[1])) / l : Infinity;
+        corner = off > 0.2;
+      }
+      if (corner) { ids = ids.map((x, k) => (k === i ? (gateKeep ??= nextNewId--) : x)); } else { ids = ids.filter((_, k) => k !== i); cs = cs.filter((_, k) => k !== i); }
+    }
+    const segs = closed ? ids.length : ids.length - 1;
+    for (let j = 0; j < segs; j++) {
+      const a = loc(cs[j]), c = loc(cs[(j + 1) % cs.length]), dx = c[0] - a[0], dy = c[1] - a[1], len = Math.hypot(dx, dy);
+      if (len < 0.05) continue;
+      let t = Math.max(0, Math.min(1, -(a[0] * dx + a[1] * dy) / (len * len)));
+      // Проём целиком на стороне, если она достаточно длинная
+      const m = len > 2 * half ? half / len : 0.5;
+      t = Math.max(m, Math.min(1 - m, t));
+      const dist = Math.hypot(a[0] + dx * t, a[1] + dy * t);
+      if (!best || dist < best.d) best = { key, ids, coords: cs, j, t, d: dist };
+    }
+    if (closed && best?.key === key) best = { ...best, ids: [...best.ids], coords: [...best.coords] };
+  }
+  if (!best || (!d.from && best.d > 5)) { if (d.target) { d.target = undefined; scheduleBarriers(); } return; }
+  const { ids, coords, j, t } = best;
+  const a = coords[j], c = coords[(j + 1) % coords.length];
+  const p: LonLat = [a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t];
+  const nIds = [...ids.slice(0, j + 1), d.id, ...ids.slice(j + 1)], nCs = [...coords.slice(0, j + 1), p, ...coords.slice(j + 1)];
+  const raw = overpass.barriers().find((x) => `way/${x.id}` === best!.key)!;
+  const live = liveBarrier({ ...raw });
+  const wasClosed = !!live && live.nodes.length > 3 && live.nodes[0] === live.nodes[live.nodes.length - 1] && (live.nodes[0] !== d.id || true);
+  if (wasClosed) { nIds.push(nIds[0]); nCs.push(nCs[0]); }
+  d.target = { key: best.key, ids: nIds, coords: nCs, at: p };
+  barriersLayer.setBarriers(overpass.barriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags)).map(liveGates));
+  syncBarrierSelection();
+}
+/**
+ * Удалить выделенные ограждения и ворота одним шагом. Ограждение удаляется (его ворота, кроме общих с другими
+ * путями, — тоже); у ворот снимаются теги, а узел уходит из линии (в изломе или на конце — остаётся вершиной).
+ * Узел без тегов и ссылок отправка удалит (if-unused: дорожка через ворота его сохранит).
+ */
+function deleteBarriers(fs: IndoorFeature[]) {
+  const ways = fs.filter((f) => !f.gate), gates = new Set(fs.filter((f) => f.gate).map((f) => Number(f.key.slice(5))));
+  const lines = new Map<string, { ids: number[]; coords: LonLat[] }>();
+  const edits: ObjectEdit[] = [];
+  for (const w of ways) {
+    trackIndoor(w.key, w);
+    edits.push({ key: w.key, delete: true });
+    const ids = w.polygons[0]?.outerIds ?? [];
+    for (const id of ids) if (overpass.barriers().some((b) => b.gates?.some((g) => g.id === id)) || isGateTags(session.get(`node/${id}`)?.tags))
+      if (!liveFeatures().some((g) => g.polygons.some((p) => p.outerIds?.includes(id))) && !overpass.barriers().some((b) => `way/${b.id}` !== w.key && b.nodes.includes(id))) gates.add(id);
+  }
+  for (const id of gates) {
+    const g = barrierFeatureFor(`node/${id}`);
+    if (g) trackIndoor(g.key, g);
+    edits.push({ key: `node/${id}`, tags: {} });
+    for (const raw of overpass.barriers()) {
+      const key = `way/${raw.id}`;
+      if (ways.some((w) => w.key === key)) continue;
+      const cur = lines.get(key) ?? (() => { const b = liveBarrier(raw); return b && b.nodes.includes(id) ? { ids: b.nodes, coords: b.coords } : undefined; })();
+      if (!cur || !cur.ids.includes(id)) continue;
+      const closed = cur.ids.length > 3 && cur.ids[0] === cur.ids[cur.ids.length - 1];
+      let ids = closed ? cur.ids.slice(0, -1) : cur.ids.slice(), cs = closed ? cur.coords.slice(0, -1) : cur.coords.slice();
+      const i = ids.indexOf(id), n = ids.length;
+      const kx = Math.cos((cs[i][1] * Math.PI) / 180) * 111320, ky = 110540;
+      let keep = !closed && (i === 0 || i === n - 1);
+      if (!keep) {
+        const [a, q, c] = [cs[(i - 1 + n) % n], cs[i], cs[(i + 1) % n]].map((p) => [p[0] * kx, p[1] * ky]);
+        const l = Math.hypot(c[0] - a[0], c[1] - a[1]);
+        keep = !l || Math.abs((c[0] - a[0]) * (a[1] - q[1]) - (a[0] - q[0]) * (c[1] - a[1])) / l > 0.2;
+      }
+      if (keep || n <= 2) continue;
+      ids = ids.filter((_, k) => k !== i); cs = cs.filter((_, k) => k !== i);
+      if (closed) { ids.push(ids[0]); cs.push(cs[0]); }
+      lines.set(key, { ids, coords: cs });
+    }
+  }
+  for (const [key, line] of lines) {
+    const raw = overpass.barriers().find((b) => `way/${b.id}` === key), live = raw && liveBarrier(raw);
+    if (live) { const f = barrierFeature(live); trackIndoor(f.key, f); }
+    edits.push({ key, line });
+  }
+  if (!edits.length) return;
+  selectIndoor(undefined);
+  clearInfo();
+  session.editMany(edits);
+  setStatus(tr('Удалено: {n}. Отменить — Ctrl+Z.', { n: fs.length }));
+}
+
+/** Новая вершина на старом месте ворот (в изломе) — одна на весь перенос. */
+let gateKeep: number | undefined;
+
+function commitGateDrag() {
+  const d = gateDrag;
+  if (!d) return;
+  if (!d.target) return setStatus(tr('Наведите курсор на забор или стену.'), true);
+  const t = d.target;
+  gateDrag = undefined;
+  gateKeep = undefined;
+  syncEntranceTool();
+  const raw = overpass.barriers().find((x) => `way/${x.id}` === t.key);
+  const live = raw && liveBarrier(raw);
+  if (!live) return;
+  const wf = barrierFeature(live);
+  trackIndoor(wf.key, wf);
+  const key = `node/${d.id}`;
+  const edits: ObjectEdit[] = [{ key: t.key, line: { ids: t.ids, coords: t.coords } }];
+  if (!d.from) {
+    edits.push({ key, create: { key, version: 0, tags: d.tags, polygons: [{ outer: [t.at], inners: [], outerIds: [d.id], innerIds: [] }] } });
+    indoorEdited.add(key);
+  }
+  session.editMany(edits);
+  const made = barrierFeatureFor(key);
+  if (made) selectIndoor(made);
+  setStatus(d.from ? tr('Ворота {key} перенесены. Отменить — Ctrl+Z.', { key }) : tr('Вставлены ворота {key}. Отменить — Ctrl+Z.', { key }));
+}
 
 /** Ограждения показанных тайлов; пересборка не чаще раза в 300 мс. */
 let barriersTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1754,6 +1943,7 @@ map.on('click', (e) => {
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
   if (pointPick) { placePoint([e.point.x, e.point.y]); return; }
   if (entranceDrag) { commitEntrance([e.point.x, e.point.y]); return; }
+  if (gateDrag) { commitGateDrag(); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (measureTool.active) { measureTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (rotateTool.active) { rotateTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
@@ -1903,7 +2093,7 @@ map.on('click', (e) => {
     const next = stack[stack.findIndex((f) => f.key === selectedIndoor?.key) + 1];
     if (next) { selectIndoor(next); return; }
   }
-  if (selectedIndoor || selectedRoomWalls.length) selectIndoor(undefined);
+  if ((selectedIndoor || selectedRoomWalls.length) && !(e.originalEvent.shiftKey && indoorSelection.some((f) => f.barrier))) selectIndoor(undefined);
   // Контур подземной части (режим здания, всё здание): только подсветка, объекта OSM за ним нет
   const under = !!focus && !shownLevel && !addingTo && !e.originalEvent.shiftKey && overpassLayer.pickUnderground(e.point);
   overpassLayer.selectUnderground(under);
@@ -1919,6 +2109,20 @@ map.on('click', (e) => {
   if (addingTo) {
     if (e.originalEvent.shiftKey) { if (key) toggleAddPending(key); return; }
     stopAdding(); // обычный клик — выходим из режима добавления
+  }
+  // Забор или стена под курсором ближе здания — выбрать (Shift — добавить к выбранным)
+  const fence = addingTo || focus ? undefined : barriersLayer.pick(e.point.x, e.point.y) ?? barrierNear(e.point);
+  if (fence) {
+    const hit = key ? overpassLayer.pickHit(e.point) : undefined;
+    if (!hit || fence.depth < barriersLayer.depthOf(hit.lngLat, hit.altitude)) {
+      const live = liveBarrier(fence.way);
+      if (live) {
+        const gate = fence.gate && liveGates(live).gates?.find((g) => g.id === fence.gate!.id);
+        const f = gate ? gateFeature(live, gate) : barrierFeature(live);
+        if (reclick && !e.originalEvent.shiftKey && indoorSelection.length === 1 && indoorSelection[0].key === f.key) { selectIndoor(undefined); clearInfo(); return; }
+        selectIndoor(f, e.originalEvent.shiftKey); return;
+      }
+    }
   }
   // Подложка (только Alt+кликом): Shift — добавить к выделению или убрать, вместе с частями здания
   const underlayId = underlayOf(key);
@@ -1943,20 +2147,6 @@ map.on('click', (e) => {
     return { point, distance: Math.hypot(screen.x - e.point.x, screen.y - e.point.y) };
   }).filter((hit) => hit.distance <= 14).sort((a, b) => a.distance - b.distance)[0]?.point : undefined;
   if (tree) { if (reclick && tree.key === selectedTreeKey) { select(undefined); clearInfo(); } else selectTree(tree); return; }
-  // Забор или стена под курсором ближе здания — выбрать (Shift — добавить к выбранным)
-  const fence = addingTo || focus ? undefined : barriersLayer.pick(e.point.x, e.point.y) ?? barrierNear(e.point);
-  if (fence) {
-    const hit = key ? overpassLayer.pickHit(e.point) : undefined;
-    if (!hit || fence.depth < barriersLayer.depthOf(hit.lngLat, hit.altitude)) {
-      const live = liveBarrier(fence.way);
-      if (live) {
-        const gate = fence.gate && liveGates(live).gates?.find((g) => g.id === fence.gate!.id);
-        const f = gate ? gateFeature(live, gate) : barrierFeature(live);
-        if (reclick && !e.originalEvent.shiftKey && indoorSelection.length === 1 && indoorSelection[0].key === f.key) { selectIndoor(undefined); clearInfo(); return; }
-        selectIndoor(f, e.originalEvent.shiftKey); return;
-      }
-    }
-  }
   // Мост или тоннель под курсором ближе здания — его теги (только просмотр)
   const road = addingTo ? undefined : roadsLayer.pick(e.point.x, e.point.y);
   if (road) {
@@ -2962,6 +3152,7 @@ window.addEventListener('blur', () => { overpassLayer.snapsSuspended = false; })
 function updateSnapMarker(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
   if (point && entranceDrag) moveEntrance(point);
+  if (point && gateDrag) moveGate(point);
   if (pointPick && (toolActiveExceptPoint() || !focus)) stopPoint();
   if (point && pointPick) hoverPoint(point);
   if (point && shapeTool.active) shapeTool.move(point);
@@ -4239,7 +4430,7 @@ infoEl.addEventListener('click', (e) => {
 /** Курсор над картой — по включённому инструменту; у заливки — пипетка, пока нет образца или зажат Ctrl/Cmd/Alt. */
 let pickModifier = false;
 function syncCursor() {
-  const tool: ToolCursor | undefined = moveTool.active || entranceDrag ? 'move' : rotateTool.active ? 'rotate' : scaleTool.active ? 'scale' : pushTool.active ? 'push' : shapeTool.active ? 'shape' : splitTool.active ? 'split'
+  const tool: ToolCursor | undefined = moveTool.active || entranceDrag || gateDrag ? 'move' : rotateTool.active ? 'rotate' : scaleTool.active ? 'scale' : pushTool.active ? 'push' : shapeTool.active ? 'shape' : splitTool.active ? 'split'
     : pointPick ? 'measure' : drawTool.active ? (drawTool.shape === 'line' ? 'split' : drawTool.shape) : measureTool.active ? 'measure' : offsetTool.active ? 'offset'
     : paintTool.active ? (pickModifier || !paintTool.sample ? 'pick' : 'paint') : undefined;
   setToolCursor(map.getCanvasContainer(), fieldPick ? 'pick' : tool);
@@ -4268,7 +4459,7 @@ function toolActive(): boolean {
 }
 
 function toolActiveExceptPoint(): boolean {
-  return !!wallSplitKey || moveTool.active || pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || scaleTool.active || paintTool.active || offsetTool.active || !!copyPick || !!entranceDrag;
+  return !!wallSplitKey || moveTool.active || pushTool.active || shapeTool.active || splitTool.active || drawTool.active || measureTool.active || rotateTool.active || scaleTool.active || paintTool.active || offsetTool.active || !!copyPick || !!entranceDrag || !!gateDrag;
 }
 
 // Инструменты «Прямоугольник» (R) и «Полигон» (L): новая часть здания — плоский контур нулевой толщины
@@ -7741,7 +7932,7 @@ function cancelEntranceDrag() {
 
 /** Перенос входа — тот же «Переместить»: кнопка нажата, курсор со значком перемещения. */
 function syncEntranceTool() {
-  moveBtn.classList.toggle('active', moveTool.active || !!entranceDrag);
+  moveBtn.classList.toggle('active', moveTool.active || !!entranceDrag || !!gateDrag);
   syncCursor();
 }
 
@@ -8597,6 +8788,7 @@ document.addEventListener('keydown', (e) => {
     }
     return;
   }
+  if (e.key === 'Escape' && gateDrag) { e.preventDefault(); e.stopImmediatePropagation(); cancelGateDrag(); setStatus(tr('Перенос ворот отменён.')); return; }
   if (e.key === 'Escape' && entranceDrag) { e.preventDefault(); e.stopImmediatePropagation(); cancelEntranceDrag(); setStatus(tr('Перенос входа отменён.')); return; }
   if (e.key === 'Escape' && wallSplitKey) { e.preventDefault(); e.stopImmediatePropagation(); stopWallSplit(); return; }
   if (e.key === 'Escape' && pointPick) { e.preventDefault(); e.stopImmediatePropagation(); stopPoint(); return; }
@@ -8635,6 +8827,28 @@ document.addEventListener('keydown', (e) => {
   // Ctrl/Cmd+C, Ctrl/Cmd+V — копировать и вставить части здания (по физической клавише — и в русской раскладке)
   // Выделен текст на странице (строка состояния, панель) — Ctrl+C копирует его, как обычно
   const textSelected = !!window.getSelection()?.toString();
+  // Ворота: Ctrl+C — копировать (теги), Ctrl+V — вставить на ограждение под курсором; на карте M — перенос
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyC' && !textSelected && !toolActive()) {
+    const g = selectedGate();
+    if (g) {
+      e.preventDefault();
+      gateClipboard = { ...g.tags };
+      setStatus(tr('Ворота скопированы: Ctrl+V — вставить на забор или стену.'));
+      return;
+    }
+    gateClipboard = undefined;
+  }
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyV' && gateClipboard && !toolActive()) {
+    e.preventDefault();
+    closeCtxMenu();
+    startGateDrag(true);
+    return;
+  }
+  if (!focus && e.code === 'KeyM' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && selectedGate() && !toolActive()) {
+    e.preventDefault();
+    startGateDrag();
+    return;
+  }
   if (focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === 'KeyV' || (e.code === 'KeyC' && (selection.length || selectedEntrance !== undefined || (shownLevel && (indoorSelection.length || selectedRoomWalls.length))) && !textSelected)) && !toolActive()) {
     e.preventDefault();
     closeCtxMenu();
@@ -8643,6 +8857,12 @@ document.addEventListener('keydown', (e) => {
   }
   // Del / Backspace — удалить выделенное (на карте — отдельные здания, в режиме здания — части)
   // На Mac клавиша Delete — это Backspace
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && indoorSelection.length && indoorSelection.every((f) => f.barrier)) {
+    e.preventDefault();
+    closeCtxMenu();
+    deleteBarriers(indoorSelection);
+    return;
+  }
   if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && canDeleteIndoorSelection()) {
     e.preventDefault();
     closeCtxMenu();
@@ -8711,7 +8931,7 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   closeCtxMenu();
   cancelCopyPick();
-  if (action === 'move') { if (!startEntranceDrag('pick')) startMove(); } else if (action === 'push') startPush(); else if (action === 'shape') startShape(); else if (action === 'split') startSplit();
+  if (action === 'move') { if (!startGateDrag() && !startEntranceDrag('pick')) startMove(); } else if (action === 'push') startPush(); else if (action === 'shape') startShape(); else if (action === 'split') startSplit();
   else if (action === 'rotate') startRotate(); else if (action === 'scale') startScale(); else if (action === 'square') squareSelected(); else if (action === 'merge') mergeSelected(); else if (action === 'point') { if (pointPick) stopPoint(); else startPoint(); }
   else if (action === 'wall') startWall(); else if (action === 'measure') startMeasure(); else if (action === 'paint') startPaint(); else if (action === 'offset') startOffset();
   else if (action === 'rect' || action === 'polygon' || action === 'circle' || action === 'ngon') startDraw(action);

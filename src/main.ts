@@ -16201,7 +16201,8 @@ function detachedIndoor(bbox: Bbox): Set<string> {
       const pts = [...f.polygons.flatMap((p) => p.outer), indoorAnchor(f)!], need = pts.length / 2;
       let yes = 0, no = 0;
       for (const q of pts) {
-        if (inside(first, q) || keyAt(q) === own) yes++; else no++;
+        // Вершина на стене (контур этажа по контуру здания) — внутри: точка ровно на границе даёт случайный ответ
+        if (inside(first, q) || keyAt(q) === own || ringsOf(first).some(({ r }) => nearRing(q, r, 0.3))) yes++; else no++;
         if (yes >= need) return own;
         if (no > pts.length - need) return undefined;
       }

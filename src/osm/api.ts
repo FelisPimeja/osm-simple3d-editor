@@ -165,6 +165,8 @@ export function onApiWait(f: ((seconds: number) => void) | undefined) { apiWaitL
 /** Текущие узлы (с версиями и тегами) по id. */
 export async function fetchNodes(ids: number[], api = server().api): Promise<Map<number, OsmNode & { version: number }>> {
   const out = new Map<number, OsmNode & { version: number }>();
+  // Только настоящие id: пустой или отрицательный в списке — 400 на весь запрос
+  ids = ids.filter((id) => Number.isInteger(id) && id > 0);
   for (let i = 0; i < ids.length; i += 100) {
     const res = await getJson(`${api}/nodes.json?nodes=${ids.slice(i, i + 100).join(',')}`);
     for (const e of ((await res.json()) as { elements: (OsmNode & { version: number })[] }).elements) out.set(e.id, e);
@@ -180,7 +182,8 @@ export async function fetchElements(keys: string[], api = server().api): Promise
     const ids = keys.filter((k) => k.startsWith(`${type}/`)).map((k) => k.split('/')[1]);
     for (let i = 0; i < ids.length; i += 100) {
       const res = await getJson(`${api}/${type}s.json?${type}s=${ids.slice(i, i + 100).join(',')}`);
-      for (const e of ((await res.json()) as { elements: (OsmWay | OsmRelation | VersionedNode)[] }).elements) out.set(`${e.type}/${e.id}`, e);
+      // Удалённый на сервере (visible: false — без узлов и членов) — как отсутствующий
+      for (const e of ((await res.json()) as { elements: (OsmWay | OsmRelation | VersionedNode & { visible?: boolean })[] }).elements) if ((e as { visible?: boolean }).visible !== false) out.set(`${e.type}/${e.id}`, e);
     }
   }
   return out;

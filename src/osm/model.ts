@@ -135,8 +135,12 @@ export function isIndoorPoi(tags?: Record<string, string>): boolean {
   if (!tags) return false;
   if (tags.room === 'toilet' || tags.room === 'toilets' || tags.room === 'stairs' || tags.room === 'elevator' || tags.room === 'reception' || tags.room === 'security') return true;
   if (tags.indoor === 'door' || tags.highway === 'elevator' || tags.elevator === 'yes' || tags.stairs === 'yes' || tags.highway === 'steps') return true;
+  if (tags.barrier && INDOOR_GATES.has(tags.barrier)) return true;
   return POI_KEYS.some((k) => tags[k] !== undefined && tags[k] !== 'no');
 }
+
+/** Проходы в ограждениях плана этажа (турникеты, калитки): узел с level — как дверь, проём в линии. */
+export const INDOOR_GATES = new Set(['turnstile', 'full-height_turnstile', 'gate', 'wicket_gate', 'swing_gate', 'sliding_gate', 'entrance', 'lift_gate']);
 
 /** Indoor-объект с другими тегами (правка indoor/level в редакторе): вид и этажи — по новым тегам. */
 export function withIndoorTags(f: IndoorFeature, tags: Record<string, string>): IndoorFeature {
@@ -158,7 +162,8 @@ export function transitOf(t?: Record<string, string>): 'platform' | 'rail' | und
 const LINEAR_KEYS = ['highway', 'railway', 'waterway', 'barrier', 'conveying', 'power'];
 
 function indoorKind(tags?: Record<string, string>): IndoorKind | undefined {
-  if (tags?.indoor === 'yes' && tags.barrier === 'fence' && tags.fence_type === 'railing') return 'wall';
+  // Ограждение внутри (indoor=yes или с level без indoor): перила, ряд турникетов — линия-ограждение плана
+  if (tags?.barrier === 'fence' && (tags.indoor === 'yes' || (tags.indoor === undefined && tags.level !== undefined))) return 'wall';
   const k = tags?.indoor;
   // indoor=yes — общее «внутреннее пространство», как площадка. Но на линейном объекте (дорожка, рельсы, ограда)
   // это лишь признак «проходит внутри» (way/1154805379: замкнутый highway=footway + indoor=yes) — не площадь

@@ -21,7 +21,7 @@ import * as maplibregl from 'maplibre-gl';
 import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJSONFeature } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
-import { IndoorPois } from './view/indoor-pois';
+import { IndoorPois, poiSvg } from './view/indoor-pois';
 import { Toasts } from './view/toasts';
 import { entranceIndoorIssue, ROOM_PAIRED_AMENITY, setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, jitterEverywhere, selfIntersects, validateIndoor, validateSolidWallDoors, validateRepeatedRooms, validateWallPerimeters, validateStackedEscalators, validateEscalators, validateTags, OUTLINE_GROW_SHARE, partGround, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
@@ -45,7 +45,7 @@ import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFi
 import { panoramax } from './view/panoramax';
 import { mapillary } from './view/mapillary';
 import { fotoshi, fotoshiRequest } from './view/fotoshi';
-import { centroid, entranceOf, facadeEntranceOf, floorLevels, incompleteIndoorRelations, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointInRingFast, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
+import { centroid, entranceOf, facadeEntranceOf, floorLevels, incompleteIndoorRelations, INDOOR_GATES, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointInRingFast, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { ScaleTool } from './edit/scale-tool';
 import { featureRings, glueMoves, levelApart, ON_SIDE_M } from './edit/glue-plan';
@@ -618,6 +618,7 @@ overpassLayer.setWireframe(buildingsView.wireframe);
 const tileBorders = new TileBorders(map);
 const roadsLayer = new RoadsLayer('osm-roads-3d');
 const barriersLayer = new BarriersLayer();
+barriersLayer.iconFor = (t) => t.amenity === 'ticket_validator' || t.barrier === 'turnstile' || t.barrier === 'full-height_turnstile' ? poiSvg(t) : undefined;
 barriersLayer.attach(map);
 const indoorPois = new IndoorPois(map, overpassLayer, (f, add, point) => {
   if (moveTool.active && (isDoor(f) || isMovablePoi(f))) {
@@ -10355,7 +10356,7 @@ const indoorGeometry = (f: IndoorFeature): PresetGeometry => (indoorKey(f.key).s
  * панель перерисуется.
  */
 function indoorTitle(f: IndoorFeature): string {
-  if(f.tags.barrier==='fence' && f.tags.fence_type==='railing')return tr('Ограждение');
+  if(f.tags.barrier==='fence' && !f.barrier)return tr('Ограждение');
   if(f.tags.wall==='counter')return tr('Прилавок');
   if (f.passage) return tr('Арка');
   if (f.gate) return GATE_NAMES[f.tags.barrier] ?? tr('Ворота');
@@ -10470,7 +10471,7 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
  * Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений
  * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance и номер ref (как у пресета iD «Вход / выход»).
  */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.gate) ? ['barrier', 'width', 'height', 'access', 'locked', 'opening_hours', 'material', 'colour'] : fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && f.tags.fence_type==='railing') ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.gate) ? ['barrier', 'width', 'height', 'access', 'locked', 'opening_hours', 'material', 'colour'] : fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && !f.barrier) ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
   : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : ['width', 'height', 'material'])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
@@ -10541,8 +10542,8 @@ function poiAnchor(f: IndoorFeature): THREE.Vector3 | undefined {
   const p = f.point && overpassLayer.focusToLocal(f.point);
   return p ? new THREE.Vector3(p[0], p[1], shownLevel?.floor ?? 0) : undefined;
 }
-const isDoor = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && !f.key.endsWith('#poi')
-  && !!(f.tags.door || f.tags.indoor === 'door' || f.tags.entrance);
+const isDoor = (f: IndoorFeature) => f.kind === 'poi' && !!f.point && !f.key.endsWith('#poi') && !f.gate
+  && !!(f.tags.door || f.tags.indoor === 'door' || f.tags.entrance || INDOOR_GATES.has(f.tags.barrier));
 /** Все двери — входы: уже с entrance или на наружной стене здания режима. */
 function entranceDoors(fs: IndoorFeature[]): boolean {
   const outer = focus && fs.some((f) => !f.tags.entrance) ? outerDoorTest(focus, buildingIndoor(focus)) : undefined;
@@ -12952,7 +12953,7 @@ function rewriteSolidWalls(walls: IndoorFeature[], pieces: WallPolygon[], edits:
   return result;
 }
 
-function openingDoorWidth(tags:Record<string,string>):number { return Math.max(0.1,parseLength(tags.width)??(tags.door==='revolving'?parseLength(tags.diameter)??2.4:entranceOf(tags)==='garage'?GARAGE_WIDTH:1)); }
+function openingDoorWidth(tags:Record<string,string>):number { if(INDOOR_GATES.has(tags.barrier)&&!tags.door)return gateWidth(tags); return Math.max(0.1,parseLength(tags.width)??(tags.door==='revolving'?parseLength(tags.diameter)??2.4:entranceOf(tags)==='garage'?GARAGE_WIDTH:1)); }
 function placeSolidWallDoor(wall:IndoorFeature,at:LonLat,tags:Record<string,string>,target?:PointTarget){
   const existing=target?.node===undefined?undefined:shownIndoor.find(f=>f.key===`node/${target.node}`);
   if(existing){selectIndoor(existing);return;}
@@ -14059,7 +14060,7 @@ function renderLevelsImpl() {
       doorModels: fs.filter((f) => isDoor(f) && f.tags.door === 'revolving')
         .map((f) => ({ key: f.key, at: f.point!, z: l.floor, tags: f.tags })),
       // Двери этажа — проёмы в стенах
-      doors: fs.filter((f) => f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!),
+      doors: fs.filter(isDoor).map((f) => f.point!),
     };
   };
   const plan = level && planOf(level);
@@ -16371,7 +16372,7 @@ function toggleContext() {
 
 /** Indoor-объект этажа как элемент плана (стены линиями или полигонами, полы по категориям) — здания и соседей. */
 function planItem(f: IndoorFeature, fs: IndoorFeature[], l: Level): IndoorItem {
-  return ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && f.kind !== 'column' && (f.tags.area!=='yes'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), railing:(f.tags.barrier==='fence'&&f.tags.fence_type==='railing')||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
+  return ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && f.kind !== 'column' && (f.tags.area!=='yes'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), railing:f.tags.barrier==='fence'||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
           ...(f.transit === 'platform' ? { colour: PLATFORM_COLOUR, platform: true } : isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
           ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
     ...(isPool(f) ? { pool: poolDepth(f) } : {}) });

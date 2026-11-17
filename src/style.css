@@ -534,6 +534,7 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .indoor-poi.indoor-ref { width: auto; height: auto; margin: 0; padding: 0 4px; border-radius: 3px; font: 11px/15px system-ui, sans-serif;
   white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; background: rgba(255, 255, 255, 0.85); }
 .indoor-ref b { font-weight: 600; }
+.barrier-icons .indoor-poi { pointer-events: none; } /* клик — сквозь значок, по проёму ограждения */
 .indoor-poi svg { width: 100%; height: 100%; display: block; fill: currentColor; }
 
 /* Значки «есть поэтажный план» над зданиями в режиме карты */

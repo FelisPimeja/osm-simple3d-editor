@@ -9,7 +9,7 @@ import type { BuildingsLayer } from '../render/buildings-layer';
  * пола этажа; позиции пересчитываются на каждом кадре.
  */
 const MAKI = import.meta.glob('/node_modules/@mapbox/maki/icons/*.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-const TEMAKI = import.meta.glob('/node_modules/@rapideditor/temaki/icons/{atm,vending_machine,bench,ticket,clothes_hanger,fire_hydrant}.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+const TEMAKI = import.meta.glob('/node_modules/@rapideditor/temaki/icons/{atm,vending_machine,vending_tickets,bench,ticket,clothes_hanger,fire_hydrant,turnstile}.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 
 /** Лестница — своя (в Maki и Temaki нет). */
 const STAIRS = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg"><path d="M1 13h3.5v-3h3V7h3V4H14v2h-2v3H9v3H6v3H1z"/></svg>';
@@ -21,7 +21,11 @@ const EXTINGUISHER = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg
 /** Пожарный кран с рукавом (в Maki и Temaki нет): катушка рукава и ствол. */
 const FIRE_HOSE = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg" style="fill:none;stroke:currentColor;stroke-width:1.4"><circle cx="6" cy="8" r="4.5"/><circle cx="6" cy="8" r="1.6"/><path d="M10.5 8H14v-3"/></svg>';
 
+/** Валидатор билетов (в Maki и Temaki нет): стойка с экраном, к ней прикладывают карту. */
+const VALIDATOR = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg"><path d="M4 1h6a1 1 0 0 1 1 1v12H3V2a1 1 0 0 1 1-1zm.8 1.6v4.2h4.4V2.6z"/><path d="M7.6 8.6l5.2-1.4.9 3.4-5.2 1.4z" fill-opacity=".55"/></svg>';
+
 function icon(name: string): string | undefined {
+  if (name === 'ticket-validator') return VALIDATOR;
   if (name === 'stairs') return STAIRS;
   if (name === 'revolving-door') return REVOLVING;
   if (name === 'fire-extinguisher') return EXTINGUISHER;
@@ -49,6 +53,9 @@ const SHOP: Record<string, string> = {
   ticket: 'ticket', music: 'music', paint: 'paint', garden_centre: 'garden-centre', car: 'car', bicycle: 'bicycle',
 };
 
+/** Svg значка по тегам (undefined — без значка). */
+export const poiSvg = (t: Record<string, string>) => { const n = poiIcon(t); return n ? icon(n) : undefined; };
+
 /** Имя значка Maki/Temaki по тегам; undefined — объект без значка. */
 export function poiIcon(t: Record<string, string>): string | undefined {
   if (t.room === 'elevator' || t.highway === 'elevator' || t.elevator === 'yes') return 'elevator';
@@ -60,7 +67,10 @@ export function poiIcon(t: Record<string, string>): string | undefined {
   if (t.emergency === 'fire_alarm_box' || t.emergency === 'fire_alarm') return 'fire-station';
   if (t.emergency === 'first_aid_kit') return 'hospital';
   if (t.emergency === 'fire_hydrant') return 'fire_hydrant';
+  if (t.amenity === 'ticket_validator') return 'ticket-validator';
+  if (t.amenity === 'vending_machine' && /public_transport_tickets|\btickets\b/.test(t.vending ?? '')) return 'vending_tickets';
   if (t.amenity && AMENITY[t.amenity]) return AMENITY[t.amenity];
+  if (t.barrier === 'turnstile' || t.barrier === 'full-height_turnstile') return 'turnstile';
   if (t.room === 'toilet' || t.room === 'toilets') return 'toilet';
   if (t.room === 'dressing' || t.amenity === 'dressing_room') return 'clothes_hanger';
   if (t.room === 'reception' || t.amenity === 'reception_desk' || t.tourism === 'information') return 'information';

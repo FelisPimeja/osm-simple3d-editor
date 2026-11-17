@@ -92,7 +92,48 @@ export class BarriersLayer {
     this.scene.add(hemi, sun);
   }
 
-  attach(map: MlMap) { this.map = map; }
+  /** Значок узла ворот по тегам (турникет, валидатор) — svg-строка; без него — без значка. */
+  iconFor?: (tags: Record<string, string>) => string | undefined;
+  private iconRoot?: HTMLDivElement;
+  private icons: { el: HTMLElement; at: [number, number] }[] = [];
+
+  attach(map: MlMap) {
+    this.map = map;
+    this.iconRoot = document.createElement('div');
+    this.iconRoot.className = 'indoor-pois barrier-icons';
+    map.getContainer().appendChild(this.iconRoot);
+    map.on('render', () => this.placeIcons());
+  }
+
+  /** Значки турникетов и валидаторов на линии ограждения — HTML поверх карты, в точке узла. */
+  private buildIcons() {
+    if (!this.iconRoot) return;
+    this.iconRoot.innerHTML = '';
+    this.icons = [];
+    if (!this.iconFor) return;
+    for (const w of this.ways) for (const g of w.gates ?? []) {
+      const svg = this.iconFor(g.tags), at = w.coords[w.nodes.indexOf(g.id)];
+      if (!svg || !at) continue;
+      const el = document.createElement('div');
+      el.className = 'indoor-poi';
+      el.innerHTML = svg.replace(/<\?xml[^>]*>/, '');
+      this.iconRoot.appendChild(el);
+      this.icons.push({ el, at });
+    }
+    this.placeIcons();
+  }
+
+  private placeIcons() {
+    const root = this.iconRoot, map = this.map;
+    if (!root || !map) return;
+    const show = this.enabled && this.icons.length > 0 && !this.hidden() && map.getZoom() >= 17.5;
+    root.hidden = !show;
+    if (!show) return;
+    for (const { el, at } of this.icons) {
+      const p = map.project(at);
+      el.style.transform = `translate(${p.x}px, ${p.y}px)`;
+    }
+  }
 
   /** Отрисовка в проходе слоя зданий: main — его матрица (глубина как у зданий), plain — матрица MapLibre. */
   draw(renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain: THREE.Matrix4): number {
@@ -219,6 +260,7 @@ export class BarriersLayer {
     const gateList: { way: number; gate: BarrierGate; at: Pt; z: number }[] = [];
     const lines: number[] = [];
     this.ways = ways;
+    queueMicrotask(() => this.buildIcons());
     for (const [wi, way] of ways.entries()) {
       const sh = barrierShape(way.tags);
       const closedWay = way.nodes.length > 3 && way.nodes[0] === way.nodes[way.nodes.length - 1];
@@ -303,7 +345,7 @@ export class BarriersLayer {
         const b = gp.gate.tags.barrier;
         const gi = gateList.push({ way: wi, gate: gp.gate, at: at((gp.s0 + gp.s1) / 2), z: z0 }) - 1;
         const leaf = slice(gp.s0, gp.s1);
-        if (b === 'entrance' || b === 'stile') {
+        if (b === 'entrance' || b === 'stile' || b === 'turnstile') {
           // Проход — пустой проём, как дверь в стене: плоскость по оси только для выбора и подсветки
           const pq = quadOf(put(openBuf, HIGHLIGHT, gi));
           for (let i = 0; i + 1 < leaf.length; i++) pq([...leaf[i], z0], [...leaf[i + 1], z0], [...leaf[i + 1], z1], [...leaf[i], z1]);
@@ -368,5 +410,6 @@ export class BarriersLayer {
     if (this.openingMesh) { this.openingMesh.geometry.dispose(); this.scene.remove(this.openingMesh); this.openingMesh = undefined; }
     this.ways = [];
     this.drawnWays = 0;
+    if (this.icons.length) this.buildIcons();
   }
 }

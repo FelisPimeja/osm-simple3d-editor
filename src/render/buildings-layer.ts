@@ -54,6 +54,8 @@ export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]
   /** material=glass у стены-линии или ограждения. */ glass?: boolean;
   /** Прилавок: объём с глубиной вправо от пути. */ counter?: boolean;
   railingHeight?: number;
+  /** Забор (barrier=fence без fence_type=railing): полупрозрачный, проходы (турникеты) — проёмами. */
+  fence?: boolean;
   /** Шахта лифта выше нижней остановки: без своего пола, и пол других объектов этажа по её контуру вырезан. */ shaft?: boolean;
   /** Стены многоуровневой комнаты на верхнем этаже, без своего пола. */ noFloor?: boolean;
   /** Только вырез (этаж, где лифт проходит без остановки): ни пола, ни стен. */ cutOnly?: boolean;
@@ -233,6 +235,8 @@ const tallGlass = (it: IndoorItem) => !!it.glass && !it.counter && (it.railingHe
 const INDOOR_GLASS_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xbfe3e6, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
 /** Крыши частей вне плана в пределах этажа (drawOpenRoofs): цвет вершин — цвет крыши части. */
 const OPEN_ROOF_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+/** Забор внутри (barrier=fence, не перила и не стекло) — полупрозрачный, как сетчатые заборы снаружи. */
+const INDOOR_FENCE_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.6, depthWrite: false });
 const INDOOR_SLAB_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 const INDOOR_VOID_EDGE = new THREE.LineBasicMaterial({ color: 0x57534e });
 const ESCALATOR_BELT = new THREE.MeshLambertMaterial({ color: 0xb0b6ba, side: THREE.DoubleSide });
@@ -1972,7 +1976,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const shell = g === this.groups.get(FOCUS_GROUP) ? planShell(g) : undefined;
       const faces: number[] = [], edges: number[] = [];
       // Проёмы этого этажа: те же, что вырезаны в самой стене
-      const openings = it.railing && !tallGlass(it) ? [] : [...(this.level!.doors ?? []).map((at) => {
+      const openings = it.railing && !tallGlass(it) && !it.fence ? [] : [...(this.level!.doors ?? []).map((at) => {
         const [x, y] = g.toLocal(at);
         const door = this.doors.find((d) => Math.abs(d.z - it.z) < 0.1 && Math.hypot(...g.toLocal(this.doorAt(d)).map((v, i) => v - [x, y][i])) < 0.01);
         return { x, y, diameter: revolvingDoorDiameter(door?.tags), width: tagWidth(door?.tags ?? {}) };
@@ -3066,7 +3070,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const doorModels = [...this.doors, ...(this.level?.below ?? []).flatMap((b) => b.doorModels ?? [])]
       .filter((d) => Math.abs(d.z - floor) < 0.1).map((d) => `${d.key}@${this.doorAt(d).join(',')}:${JSON.stringify(d.tags ?? {})}`);
     const key = [objId(g), shell ? objId(shell) : 0, top, +this.graphics.edges, +glassEnabled,
-      items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.noFloor}:${+!!it.cutOnly}:${+!!it.areaLedge}:${+!!it.linearWall}:${+!!it.railing}:${it.railingHeight??1.1}:${+!!it.counter}:${+!!it.glass}`).join(','),
+      items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.noFloor}:${+!!it.cutOnly}:${+!!it.areaLedge}:${+!!it.linearWall}:${+!!it.railing}:${it.railingHeight??1.1}:${+!!it.counter}:${+!!it.glass}:${+!!it.fence}`).join(','),
       doorList.map((d) => d.join(',')).join(';'), doorModels.join(';'),
       JSON.stringify([this.level?.doorCuts,...(this.level?.below??[]).map(b=>b.doorCuts),ownVoids,this.level?.items.map(it=>[it.key,it.noFloor]),g.items.filter(it=>this.openRoofInPlan(g,it)).map(it=>it.feature.key)]),
       escalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.width}:${e.incline}:${e.noHole ? 1 : 0}:${objId(e.line)}`).join(',')].join('|');
@@ -3960,9 +3964,24 @@ export class BuildingsLayer implements CustomLayerInterface {
                 from=hi;
               }
               if(from<len)quad(at(from),b,it.z,railingTop);
+            }else if(!it.counter&&!wallEnds.has(i)){
+              // Ограждение: проходы (турникеты, калитки) — проёмами во всю высоту
+              const len=Math.hypot(b[0]-a[0],b[1]-a[1]),ux=(b[0]-a[0])/len,uy=(b[1]-a[1])/len;
+              const at=(t:number):Pt=>[a[0]+ux*t,a[1]+uy*t];
+              const gaps=doorList.map(c=>g.toLocal(c)).filter(([x,y])=>Math.abs((x-a[0])*uy-(y-a[1])*ux)<0.05)
+                .map(([x,y])=>({t:(x-a[0])*ux+(y-a[1])*uy,meta:metadata.find(d=>Math.abs(d.z-it.z)<0.1&&Math.hypot(d.at[0]-x,d.at[1]-y)<0.01)}))
+                .filter(({t})=>t>=-0.01&&t<=len+0.01).sort((m,n)=>m.t-n.t);
+              let from=0;
+              for(const {t,meta} of gaps){
+                const w=meta?.width??DOOR_WIDTH,lo=Math.max(from,t-w/2),hi=Math.min(len,t+w/2);
+                if(lo>from){quad(at(from),at(lo),it.z,railingTop);positions.push(...at(from),railingTop,...at(lo),railingTop);}
+                for(const e of [lo,hi])if(e>1e-6&&e<len-1e-6)verticals.push(...at(e),it.z,...at(e),railingTop);
+                from=Math.max(from,hi);
+              }
+              if(from<len){quad(at(from),b,it.z,railingTop);positions.push(...at(from),railingTop,...b,railingTop);}
             }else if(!wallEnds.has(i))
               quad(a,b,it.z,railingTop);
-            if(!wallEnds.has(i))positions.push(...a,railingTop,...b,railingTop);
+            if(!wallEnds.has(i)&&(it.counter||tallGlass(it)))positions.push(...a,railingTop,...b,railingTop);
           }
           const count=closed?points.length-1:points.length;
           for(let i=0;i<count;i++){
@@ -3989,7 +4008,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         }
         if(faces.length){
           const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(faces,3));geometry.computeVertexNormals();
-          const mesh=new THREE.Mesh(geometry,it.glass?INDOOR_GLASS_MATERIAL:pale?INDOOR_PALE_WALL:INDOOR_SLAB_MATERIAL);
+          const mesh=new THREE.Mesh(geometry,it.glass?INDOOR_GLASS_MATERIAL:pale?INDOOR_PALE_WALL:it.fence?INDOOR_FENCE_MATERIAL:INDOOR_SLAB_MATERIAL);
           mesh.name='indoor-railing';mesh.userData.key=it.key;mesh.frustumCulled=false;root.add(mesh);
         }
         for(const [edges,widthPx,name] of [[positions,2,'indoor-railing-edges'],[verticals,1,'indoor-railing-verticals']] as const){
@@ -4573,6 +4592,17 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (a.distanceToSquared(b) < 1e-10) continue;
           edges.push({ key: item.key, a, b });
           points.push({ key: item.key, kind: 'midpoint', p: a.clone().add(b).multiplyScalar(0.5) });
+        }
+        // Ограждение (перила, забор с турникетами) — и верх: вершины, середины и рёбра на его высоте
+        if (item.railing && item.line && this.level) {
+          const zt = wallTopOf(item, this.levelCut ?? this.level.cut);
+          const top = pts.map((q) => new THREE.Vector3(q.x, q.y, zt));
+          for (const q of top) points.push({ key: item.key, kind: 'vertex', p: q });
+          for (let i = 0; i + 1 < top.length; i++) {
+            if (top[i].distanceToSquared(top[i + 1]) < 1e-10) continue;
+            edges.push({ key: item.key, a: top[i], b: top[i + 1] });
+            points.push({ key: item.key, kind: 'midpoint', p: top[i].clone().add(top[i + 1]).multiplyScalar(0.5) });
+          }
         }
       }
       // Концы эскалаторов этажа — в плоскости плана, как ручки их вершин

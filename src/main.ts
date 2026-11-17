@@ -10764,6 +10764,11 @@ function passageForm(f: IndoorFeature): string {
 }
 
 function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = {}): string {
+  // Двери и турникеты — ширина проёма, с которой они строятся без width
+  if (fs.length && fs.every(isDoor)) {
+    const ws = new Set(fs.map((f) => String(Math.round(openingDoorWidth({ ...f.tags, width: '' }) * 100) / 100)));
+    if (ws.size === 1) placeholders = { width: [...ws][0], ...placeholders };
+  }
   if (fs.length && fs.every((f) => f.escalator)) placeholders = { width: fs.length === 1 && fs[0].stairs ? stairsWidthHint(fs[0]) : fs.every((f) => f.stairs) ? '1' : '1.2', ...placeholders };
   const closedWalls=fs.every(f=>f.kind==='wall' && !f.tags.barrier && f.key.startsWith('way/') && f.polygons.length===1 && !f.polygons[0].inners.length && !!f.polygons[0].outerIds && (f.line ? f.polygons[0].outerIds!.length>=4 && f.polygons[0].outerIds![0]===f.polygons[0].outerIds!.at(-1) : f.polygons[0].outerIds!.length>=3));
   const plainWalls = fs.every((f) => f.kind === 'wall' && !f.tags.barrier);

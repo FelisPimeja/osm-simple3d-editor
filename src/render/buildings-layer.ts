@@ -3975,11 +3975,11 @@ export class BuildingsLayer implements CustomLayerInterface {
               let from=0;
               for(const {t,meta} of gaps){
                 const w=meta?.width??DOOR_WIDTH,lo=Math.max(from,t-w/2),hi=Math.min(len,t+w/2);
-                if(lo>from){quad(at(from),at(lo),it.z,railingTop);positions.push(...at(from),railingTop,...at(lo),railingTop);}
+                if(lo>from){quad(at(from),at(lo),it.z,railingTop);positions.push(...at(from),railingTop,...at(lo),railingTop);if(it.fence)positions.push(...at(from),it.z,...at(lo),it.z);}
                 for(const e of [lo,hi])if(e>1e-6&&e<len-1e-6)verticals.push(...at(e),it.z,...at(e),railingTop);
                 from=Math.max(from,hi);
               }
-              if(from<len){quad(at(from),b,it.z,railingTop);positions.push(...at(from),railingTop,...b,railingTop);}
+              if(from<len){quad(at(from),b,it.z,railingTop);positions.push(...at(from),railingTop,...b,railingTop);if(it.fence)positions.push(...at(from),it.z,...b,it.z);}
             }else if(!wallEnds.has(i))
               quad(a,b,it.z,railingTop);
             if(!wallEnds.has(i)&&(it.counter||tallGlass(it)))positions.push(...a,railingTop,...b,railingTop);

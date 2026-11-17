@@ -10429,7 +10429,7 @@ function renderIndoorSelection(add = false) {
   const src = indoorCategorySource(f);
   infoEl.innerHTML = objectHeading(`${esc(kind)}${t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : t.ref ? ` ${esc(t.ref)}` : ''}`, `${server().web}/${type}/${id}`, esc(key))
     + `<p class="hint">${esc(levels)}</p>`
-    + indoorForm([f], src && roomValueOf(src.tags) ? { room: ROOM_LABELS[roomValueOf(src.tags)!] ?? roomValueOf(src.tags)! } : {})
+    + indoorForm([f], src && roomValueOf(src.tags) ? { room: ROOM_LABELS[roomValueOf(src.tags)!] ?? roomValueOf(src.tags)! } : barrierPlaceholders([f]))
     + (src ? `<p class="hint">${tr('Назначение взято с точки внутри: {point}', { point: `<a href="#" data-select-indoor="${esc(src.key)}">${esc(src.tags.name ? `«${src.tags.name}»` : src.key)}</a>` })}</p>` : '')
     + renderOtherTags(key, t, indoorForm([f]), true);
   bindIndoorForm([f]);
@@ -10437,6 +10437,11 @@ function renderIndoorSelection(add = false) {
 
 /** Значения по умолчанию, по которым строятся ограждения и ворота без тегов, — серым в полях (у нескольких — общие). */
 function barrierPlaceholders(fs: IndoorFeature[]): Record<string, string> {
+  // Турникет или калитка на индор-ограждении — ширина проёма по умолчанию
+  if (fs.length && fs.every((f) => !f.barrier && isDoor(f) && !f.tags.door && INDOOR_GATES.has(f.tags.barrier))) {
+    const ws = new Set(fs.map((f) => String(gateWidth({ ...f.tags, width: '', maxwidth: '', 'maxwidth:physical': '' }))));
+    return ws.size === 1 ? { width: [...ws][0] } : {};
+  }
   if (!fs.length || !fs.every((f) => f.barrier)) return {};
   const r = (v: number) => String(Math.round(v * 100) / 100);
   const one = (f: IndoorFeature): Record<string, string> => {
@@ -10472,6 +10477,7 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
  * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance и номер ref (как у пресета iD «Вход / выход»).
  */
 const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.gate) ? ['barrier', 'width', 'height', 'access', 'locked', 'opening_hours', 'material', 'colour'] : fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && !f.barrier) ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
+  : fs.length && fs.every((f) => isDoor(f) && !f.tags.door && INDOOR_GATES.has(f.tags.barrier)) ? ['barrier', 'amenity', 'level', 'width', 'access']
   : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : ['width', 'height', 'material'])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет

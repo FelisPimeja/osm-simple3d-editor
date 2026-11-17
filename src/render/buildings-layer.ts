@@ -28,7 +28,8 @@ import { trimInWorker, trimSync, trimWorkersAvailable, type TrimJob, type TrimRe
 import { areaLedgeTriangles } from './area-ledge';
 import { dropJitter } from './jitter';
 import { floatingParts } from '../osm/floating';
-import { entranceOf, facadeEntranceOf, isWallWindow, pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
+import { INDOOR_GATES, entranceOf, facadeEntranceOf, isWallWindow, pointInRing, pointOnSurface, type Feature3D, type IndoorKind, type LonLat, type Polygon } from '../osm/model';
+import { gateWidth } from '../osm/barriers';
 import { dropPartSeams } from './part-seams';
 import { COUNTER_DEPTH, closedCounterSplit, counterRing, isClosedCounterRing } from './counter-ring';
 import { edgePass } from './edge-pass';
@@ -82,7 +83,7 @@ export const GARAGE_WIDTH = 2.5;
 /** Ширина из тега width двери (м), если правдоподобна. */
 const tagWidth = (tags?: Record<string, string>) => {
   const w = looseLength(tags?.width);
-  return w >= 0.5 && w <= 4 ? w : entranceOf(tags) === 'garage' ? GARAGE_WIDTH : undefined;
+  return w >= 0.5 && w <= 4 ? w : entranceOf(tags) === 'garage' ? GARAGE_WIDTH : tags?.barrier && !tags.door && INDOOR_GATES.has(tags.barrier) ? gateWidth(tags) : undefined;
 };
 /** Высота проёма двери из height (1,5–6 м), иначе DOOR_HEIGHT. */
 const doorHeight = (tags?: Record<string, string>) => {

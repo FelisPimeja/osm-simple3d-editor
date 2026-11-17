@@ -18,7 +18,7 @@ export function gateWidth(tags: Record<string, string>): number {
   if (w !== undefined && w > 0.2) return Math.min(w, 30);
   const b = tags.barrier;
   return b === 'gate' || b === 'swing_gate' ? 3.5 : b === 'sliding_gate' ? 4 : b === 'lift_gate' || b === 'chain' || b === 'rope' ? 3.5
-    : b === 'wicket_gate' || b === 'turnstile' || b === 'full-height_turnstile' || b === 'kissing_gate' ? 1 : b === 'stile' ? 0.8 : 1.5;
+    : b === 'turnstile' || b === 'stile' ? 0.8 : b === 'wicket_gate' || b === 'full-height_turnstile' || b === 'kissing_gate' ? 1 : 1.5;
 }
 
 /** Виды barrier, которые рисуем объёмом. city_wall и retaining_wall — позже (зубцы, рельеф). */

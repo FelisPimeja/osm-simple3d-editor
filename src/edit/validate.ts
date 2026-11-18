@@ -1101,7 +1101,7 @@ const OVERLAP_INSIDE = 0.9;
 /** Объёмы должны перекрываться по высоте хотя бы на столько, м. */
 const OVERLAP_MIN_DZ = 0.5;
 /** Вершина ближе этого к стене другого здания, но не на его узле, — стена не склеена, м. */
-const GLUE_GAP = 0.3;
+const GLUE_GAP = 0.15;
 /** Ближе этого — та же точка (общий узел), м. */
 const GLUE_SAME = 0.01;
 const overlapCache = new WeakMap<Feature3D, { cands: Feature3D[]; issues: Issue[] }>();

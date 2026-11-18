@@ -1100,6 +1100,10 @@ const OVERLAP_MIN_THICKNESS = 0.6;
 const OVERLAP_INSIDE = 0.9;
 /** Объёмы должны перекрываться по высоте хотя бы на столько, м. */
 const OVERLAP_MIN_DZ = 0.5;
+/** Вершина ближе этого к стене другого здания, но не на его узле, — стена не склеена, м. */
+const GLUE_GAP = 0.3;
+/** Ближе этого — та же точка (общий узел), м. */
+const GLUE_SAME = 0.01;
 const overlapCache = new WeakMap<Feature3D, { cands: Feature3D[]; issues: Issue[] }>();
 
 /**
@@ -1121,6 +1125,8 @@ function findOverlaps(scope: Feature3D[], all: Feature3D[], building: (key: stri
     }
   }
   const out: Issue[] = [];
+  const inScope = new Set(scope.map((f) => f.key));
+  const M = 1e-5; // запас габарита ≈1 м: соседи с зазором тоже кандидаты на склейку
   for (const f of scope) {
     if (!eligible(f)) continue;
     const b = boxOf(f), h = heightsOf(f), mineB = building(f.key);
@@ -1130,7 +1136,7 @@ function findOverlaps(scope: Feature3D[], all: Feature3D[], building: (key: stri
         if (seen.has(o)) continue; seen.add(o);
         if (o.key === f.key || building(o.key) === mineB) continue;
         const ob = boxOf(o);
-        if (ob[0] >= b[2] || b[0] >= ob[2] || ob[1] >= b[3] || b[1] >= ob[3]) continue;
+        if (ob[0] > b[2] + M || b[0] > ob[2] + M || ob[1] > b[3] + M || b[1] > ob[3] + M) continue;
         const k = heightsOf(o);
         if (Math.min(h.top, k.top) - Math.max(h.min, k.min) < OVERLAP_MIN_DZ) continue;
         cands.push(o);
@@ -1147,7 +1153,14 @@ function findOverlaps(scope: Feature3D[], all: Feature3D[], building: (key: stri
         const theirs = toMulti(o.polygons, p), theirArea = multiArea(theirs);
         const x = polygonClipping.intersection(mine, theirs);
         const common = multiArea(x);
-        if (common < OVERLAP_MIN_AREA) continue;
+        if (common < OVERLAP_MIN_AREA || (2 * common) / x.reduce((s, poly) => s + poly.reduce((t, r) => t + perimeter(r.slice(0, -1) as [number, number][]), 0), 0) < OVERLAP_MIN_THICKNESS) {
+          // Пересечения нет — может, стена общая, но не склеена: о паре сообщаем один раз
+          if (inScope.has(o.key) && o.key < f.key && eligible(o)) continue;
+          const pts = [...unglued(mine, theirs), ...unglued(theirs, mine)];
+          if (pts.length) found.push({ key: f.key, other: o.key, level: 'warning', code: 'unglued-wall', points: pts.map(p.back),
+            text: trn(pts.length, 'Стена вплотную к зданию {other}, но без общих узлов ({n} точка ближе {gap} м) — склейте общую стену: общие узлы на общей стене.|Стена вплотную к зданию {other}, но без общих узлов ({n} точки ближе {gap} м) — склейте общую стену: общие узлы на общей стене.|Стена вплотную к зданию {other}, но без общих узлов ({n} точек ближе {gap} м) — склейте общую стену: общие узлы на общей стене.', { other: o.key, gap: fmt(GLUE_GAP) }) });
+          continue;
+        }
         const per = x.reduce((s, poly) => s + poly.reduce((t, r) => t + perimeter(r.slice(0, -1) as [number, number][]), 0), 0);
         if (!(per > 0) || (2 * common) / per < OVERLAP_MIN_THICKNESS) continue;
         if (common / (mineArea + theirArea - common) >= DUPLICATE_IOU) continue;
@@ -1163,6 +1176,19 @@ function findOverlaps(scope: Feature3D[], all: Feature3D[], building: (key: stri
     }
     overlapCache.set(f, { cands, issues: found });
     out.push(...found);
+  }
+  return out;
+}
+
+/** Вершины a у стены b (ближе GLUE_GAP), не совпадающие с вершинами b. */
+function unglued(a: MultiPolygon, b: MultiPolygon): [number, number][] {
+  const out: [number, number][] = [];
+  const bv = b.flatMap((poly) => poly.flatMap((r) => r.slice(0, -1)));
+  for (const poly of a) for (const r of poly) for (const v of r.slice(0, -1)) {
+    if (bv.some((q) => Math.abs(q[0] - v[0]) < GLUE_SAME && Math.abs(q[1] - v[1]) < GLUE_SAME)) continue;
+    let near = false;
+    for (const poly2 of b) for (const r2 of poly2) for (let i = 1; i < r2.length && !near; i++) if (segDist(v, r2[i - 1], r2[i]) <= GLUE_GAP) near = true;
+    if (near) out.push([v[0], v[1]]);
   }
   return out;
 }

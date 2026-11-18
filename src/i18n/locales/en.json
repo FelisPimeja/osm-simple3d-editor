@@ -1619,5 +1619,7 @@
   "Перенос ворот отменён.": "Gate move cancelled.",
   "Ворота скопированы: Ctrl+V — вставить на забор или стену.": "Gate copied: Ctrl+V — paste onto a fence or wall.",
   "Удалено: {n}. Отменить — Ctrl+Z.": "Deleted: {n}. Undo — Ctrl+Z.",
-  "Пакет не прошёл проверку перед отправкой (changeset не создан): {list}": "The upload batch failed the pre-upload check (no changeset created): {list}"
+  "Пакет не прошёл проверку перед отправкой (changeset не создан): {list}": "The upload batch failed the pre-upload check (no changeset created): {list}",
+  "Здание лежит внутри другого здания {other}. Если это часть того здания — разметьте building:part вместо building; если это два здания — разведите контуры.": "The building lies inside another building {other}. If it is part of that building, tag it building:part instead of building; if these are two buildings, separate the outlines.",
+  "Пересекается с другим зданием {other} на {area} м². Здания не должны накладываться: общую стену проводят по общим точкам.": "Overlaps another building {other} by {area} m². Buildings should not overlap: a shared wall goes through shared nodes."
 }

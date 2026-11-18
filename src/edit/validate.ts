@@ -1013,7 +1013,7 @@ export function validateDuplicates(scope: Feature3D[], all: Feature3D[], buildin
   const buildings = all.map((f) => building(f.key));
   const same = <T>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i]);
   if (lastDuplicates && same(lastDuplicates.scope, scope) && same(lastDuplicates.all, all) && same(lastDuplicates.buildings, buildings)) return lastDuplicates.issues;
-  const issues = findDuplicates(scope, all, building);
+  const issues = [...findDuplicates(scope, all, building), ...findOverlaps(scope, all, building)];
   lastDuplicates = { scope, all, buildings, issues };
   return issues;
 }
@@ -1090,4 +1090,79 @@ export function validateSolidWallDoors(all:IndoorFeature[]):Issue[]{
   }catch{/* A cut that cannot fit is not an unambiguous automatic fix. */}
  }
  return result;
+}
+
+/** Пересечение зданий меньше этой площади, м², — не ошибка (неточная общая стена, разные снимки). */
+const OVERLAP_MIN_AREA = 2;
+/** Средняя толщина пересечения (2·площадь/периметр) меньше этой, м, — полоска вдоль общей стены. */
+const OVERLAP_MIN_THICKNESS = 0.6;
+/** Доля меньшего здания, начиная с которой одно здание лежит внутри другого. */
+const OVERLAP_INSIDE = 0.9;
+/** Объёмы должны перекрываться по высоте хотя бы на столько, м. */
+const OVERLAP_MIN_DZ = 0.5;
+const overlapCache = new WeakMap<Feature3D, { cands: Feature3D[]; issues: Issue[] }>();
+
+/**
+ * Пересечение зданий: контуры двух разных зданий (не частей одного) заметно накладываются в плане и по высоте.
+ * Общую стену, нарисованную неточно, не считаем: пересечение должно быть не меньше OVERLAP_MIN_AREA и не тоньше
+ * OVERLAP_MIN_THICKNESS. Почти совпадающие контуры — копии, их ловит findDuplicates. Навесы (building=roof),
+ * подземные и разнесённые по высоте объёмы (min_height) пропускаем.
+ */
+function findOverlaps(scope: Feature3D[], all: Feature3D[], building: (key: string) => string): Issue[] {
+  const eligible = (f: Feature3D) => !!f.polygons?.length && !!f.tags.building && f.tags.building !== 'roof' && f.tags.building !== 'no'
+    && f.tags.location !== 'underground' && f.tags.building !== 'construction' && !(Number(f.tags.layer) < 0);
+  const CELL = 5e-4;
+  const grid = new Map<string, Feature3D[]>();
+  for (const f of all) {
+    if (!eligible(f)) continue;
+    const b = boxOf(f);
+    for (let i = Math.floor(b[0] / CELL); i <= Math.floor(b[2] / CELL); i++) for (let j = Math.floor(b[1] / CELL); j <= Math.floor(b[3] / CELL); j++) {
+      const k = `${i},${j}`; (grid.get(k) ?? grid.set(k, []).get(k)!).push(f);
+    }
+  }
+  const out: Issue[] = [];
+  for (const f of scope) {
+    if (!eligible(f)) continue;
+    const b = boxOf(f), h = heightsOf(f), mineB = building(f.key);
+    const seen = new Set<Feature3D>(), cands: Feature3D[] = [];
+    for (let i = Math.floor(b[0] / CELL); i <= Math.floor(b[2] / CELL); i++) for (let j = Math.floor(b[1] / CELL); j <= Math.floor(b[3] / CELL); j++) {
+      for (const o of grid.get(`${i},${j}`) ?? []) {
+        if (seen.has(o)) continue; seen.add(o);
+        if (o.key === f.key || building(o.key) === mineB) continue;
+        const ob = boxOf(o);
+        if (ob[0] >= b[2] || b[0] >= ob[2] || ob[1] >= b[3] || b[1] >= ob[3]) continue;
+        const k = heightsOf(o);
+        if (Math.min(h.top, k.top) - Math.max(h.min, k.min) < OVERLAP_MIN_DZ) continue;
+        cands.push(o);
+      }
+    }
+    const hit = overlapCache.get(f);
+    if (hit && hit.cands.length === cands.length && hit.cands.every((o, i) => o === cands[i])) { out.push(...hit.issues); continue; }
+    const found: Issue[] = [];
+    const p = projector([b[0], b[1]]);
+    let mine: MultiPolygon | undefined, mineArea = 0;
+    for (const o of cands) {
+      try {
+        if (!mine) { mine = toMulti(f.polygons, p); mineArea = multiArea(mine); }
+        const theirs = toMulti(o.polygons, p), theirArea = multiArea(theirs);
+        const x = polygonClipping.intersection(mine, theirs);
+        const common = multiArea(x);
+        if (common < OVERLAP_MIN_AREA) continue;
+        const per = x.reduce((s, poly) => s + poly.reduce((t, r) => t + perimeter(r.slice(0, -1) as [number, number][]), 0), 0);
+        if (!(per > 0) || (2 * common) / per < OVERLAP_MIN_THICKNESS) continue;
+        if (common / (mineArea + theirArea - common) >= DUPLICATE_IOU) continue;
+        // Другое здание лежит внутри этого — предупреждение у него, тут не повторяем
+        if (common >= theirArea * OVERLAP_INSIDE && theirArea <= mineArea) continue;
+        const area: Polygon[] = x.map((poly) => ({ outer: poly[0].slice(0, -1).map(p.back), inners: poly.slice(1).map((r) => r.slice(0, -1).map(p.back)) }));
+        const inside = common >= mineArea * OVERLAP_INSIDE && mineArea < theirArea;
+        found.push({ key: f.key, other: o.key, level: 'warning', code: 'building-overlap', area,
+          text: inside
+            ? tr('Здание лежит внутри другого здания {other}. Если это часть того здания — разметьте building:part вместо building; если это два здания — разведите контуры.', { other: o.key })
+            : tr('Пересекается с другим зданием {other} на {area} м². Здания не должны накладываться: общую стену проводят по общим точкам.', { other: o.key, area: fmt(common) }) });
+      } catch { continue; }
+    }
+    overlapCache.set(f, { cands, issues: found });
+    out.push(...found);
+  }
+  return out;
 }

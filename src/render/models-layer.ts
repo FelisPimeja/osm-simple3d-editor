@@ -80,8 +80,7 @@ export const LICENSES = ['CC0 1.0', 'CC BY 4.0'];
 
 /** Что известно о загруженном файле модели: размеры (м, как в файле), треугольники, байты. */
 /** box — рамка в плане (м, как в файле, x — восток, y — север; со смещением 3dmr, до масштаба и поворота). */
-/** bottom — низ модели (м, как в файле): у части моделей начало координат не внизу. */
-export interface ModelStats { size: [number, number, number]; triangles: number; bytes?: number; transform?: ModelTransform; box: [number, number, number, number]; bottom: number }
+export interface ModelStats { size: [number, number, number]; triangles: number; bytes?: number; transform?: ModelTransform; box: [number, number, number, number] }
 
 /**
  * Модели из 3dmr.eu вместо процедурной геометрии объектов с тегом 3dmr. Модель в метрах, ось Y вверх,
@@ -264,7 +263,7 @@ export class ModelsLayer {
           const g = (o as THREE.Mesh).isMesh ? (o as THREE.Mesh).geometry : undefined;
           if (g) triangles += (g.index ? g.index.count : g.attributes.position.count) / 3;
         });
-        const st: ModelStats = { size: [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z], triangles, transform, box: [box.min.x, box.min.y, box.max.x, box.max.y], bottom: box.min.z };
+        const st: ModelStats = { size: [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z], triangles, transform, box: [box.min.x, box.min.y, box.max.x, box.max.y] };
         this.stats.set(ref, st);
         // Размер файла — отдельным HEAD (Content-Length открыт для CORS)
         void fetch(API + ref, { method: 'HEAD' }).then((r) => { const n = Number(r.headers.get('content-length')); if (n) st.bytes = n; }).catch(() => {});
@@ -306,8 +305,8 @@ export class ModelsLayer {
       inst.rotation.z = (-(p.rotation + (tr?.rotation ?? 0)) * Math.PI) / 180;
       const k = this.scaleOf(p);
       if (k !== 1) inst.scale.setScalar(k);
-      // Низ модели — на земле (на min_height объекта), где бы ни было начало координат файла
-      inst.position.set(0, 0, p.z - (st?.bottom ?? 0) * k);
+      // Начало координат файла — уровень земли (на min_height объекта), как задумал автор модели
+      inst.position.set(0, 0, p.z);
       inst.userData.placed = true;
       inst.userData.key = p.key;
       inst.userData.world = new THREE.Matrix4().makeTranslation(c.x, c.y, 0).scale(new THREE.Vector3(m, -m, m));

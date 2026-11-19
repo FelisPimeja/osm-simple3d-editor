@@ -57,7 +57,9 @@ import { inheritedTags, inheritedValue } from './osm/inherit';
 import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
 import { BarriersLayer } from './render/barriers-layer';
-import { modelIdOf, ModelsLayer, type ModelPlacement } from './render/models-layer';
+import { placeCombo } from './edit/combo-place';
+import { ModelPins } from './view/model-pins';
+import { DMR, LICENSES, modelIdOf, ModelsLayer, type ModelPlacement } from './render/models-layer';
 import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, type BarrierWay } from './osm/barriers';
 import type { TreePoint } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
@@ -624,6 +626,12 @@ barriersLayer.iconFor = (t) => t.amenity === 'ticket_validator' || t.barrier ===
 barriersLayer.attach(map);
 const modelsLayer = new ModelsLayer();
 modelsLayer.attach(map);
+// Метки моделей на обзорных зумах — где в мире есть модели 3dmr
+const modelPins = new ModelPins(map);
+map.on('load', () => modelPins.install());
+// Слой «3D-модели 3dmr» — в меню слоёв сразу под 3D-зданиями (хранится вместе с настройками графики)
+basemapCtrl?.addBuildingsOverlay(tr('3D-модели 3dmr'), tr('Объекты с тегом 3dmr=* — готовые модели из репозитория 3dmr.eu вместо собственной геометрии'),
+  gfx.models3dmr, (on) => { gfx.models3dmr = on; saveGraphics(); applyGraphics(); });
 const indoorPois = new IndoorPois(map, overpassLayer, (f, add, point) => {
   if (moveTool.active && (isDoor(f) || isMovablePoi(f))) {
     if (moveTool.state === 'select' || (moveTool.state === 'pick' && !moveTool.keys.has(f.key))) { selectIndoor(f); startMove(); }
@@ -649,15 +657,21 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
   scheduleRoads();
   scheduleBarriers();
   scheduleModels();
-}, (f) => (session.isDeleted(f.key) || modelsLayer.shows(f.key) ? { ...f, polygons: [] } : withEntranceEdits((session.get(f.key) as Feature3D | undefined) ?? f)));
+}, (f) => (session.isDeleted(f.key) ? { ...f, polygons: [] } : withEntranceEdits((session.get(f.key) as Feature3D | undefined) ?? f)));
 roadsLayer.onBuilt = () => overpass.setTreeCuts(roadsLayer.treeCuts);
 // В режиме здания карта вокруг убрана — мосты и тоннели тоже
 roadsLayer.hidden = () => focusScene();
 // Ограждения — отдельные объекты карты: в режиме здания — как окружение (с ним видны, без него — нет)
 barriersLayer.hidden = () => focusScene() && !overpassLayer.contextShown;
 modelsLayer.hidden = () => focusScene() && !overpassLayer.contextShown;
-modelsLayer.onShown = (keys) => overpass.rerenderFeatures(keys);
-overpassLayer.drawExtra = (renderer, main, plain, reset) => { const n = barriersLayer.draw(renderer, main, plain); reset(); return n + modelsLayer.draw(renderer, main); };
+overpass.replaced = (key) => modelsLayer.shows(key);
+modelsLayer.onShown = (keys) => {
+  overpass.rerenderFeatures(keys);
+  updateTileFilter();
+  // Карточка выбранной модели ждала файл (размеры, треугольники) — перерисовать
+  if (selectedModel && keys.includes(selectedModel)) renderSelected();
+};
+overpassLayer.drawExtra = (renderer, main, plain, reset) => { const n = barriersLayer.draw(renderer, main, plain); reset(); return n + modelsLayer.draw(renderer, main, plain); };
 overpassLayer.plainDepth = () => roadsLayer.isEnabled && !roadsLayer.hidden();
 /**
  * Тайлы поменялись в режиме здания (с окружением они грузятся и при пане): части, этажи и проверки — один раз,
@@ -1308,6 +1322,7 @@ function applyGraphics() {
   tileBorders.setTiles(overpass.tiles());
   if (barriersLayer.isEnabled !== gfx.barriers) { barriersLayer.setEnabled(gfx.barriers); scheduleBarriers(); }
   if (modelsLayer.isEnabled !== gfx.models3dmr) { modelsLayer.setEnabled(gfx.models3dmr); scheduleModels(); }
+  modelPins.setShown(gfx.models3dmr);
   const roadsOn = gfx.bridges3d || gfx.tunnels3d;
   roadsLayer.setKinds(gfx.bridges3d, gfx.tunnels3d);
   scheduleRoads();
@@ -1625,6 +1640,19 @@ function commitGateDrag() {
 
 /** Ограждения показанных тайлов; пересборка не чаще раза в 300 мс. */
 let barriersTimer: ReturnType<typeof setTimeout> | undefined;
+/** Диагональ рамки кольца в плане, м. */
+function ringExtent(ring: LonLat[]): number {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const [x, y] of ring) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
+  return Math.hypot((e - w) * 111320 * Math.cos((((s + n) / 2) * Math.PI) / 180), (n - s) * 110540);
+}
+
+/** Поворот модели 3dmr по тегу direction (вики Key:3dmr): градусы по часовой от севера или N/NNE/…; нет — 0. */
+function modelDirection(tags: Record<string, string>): number {
+  const v = (tags.direction ?? '').trim();
+  return CARDINAL_DEG[v.toUpperCase()] ?? (Number.isFinite(Number(v)) ? Number(v) : 0);
+}
+
 /** Объекты с тегом 3dmr: модель — в центр контура на min_height. */
 let modelsTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleModels() {
@@ -1633,7 +1661,11 @@ function scheduleModels() {
   modelsTimer = setTimeout(() => {
     modelsTimer = undefined;
     const list: ModelPlacement[] = [];
-    const all = liveFeatures().filter((f) => !session.isDeleted(f.key)).map((f) => (session.get(f.key) as Feature3D | undefined) ?? f);
+    // Правка только тегов (у отношения) — в сессии без геометрии: контур берём из данных
+    const all = liveFeatures().filter((f) => !session.isDeleted(f.key)).map((f) => {
+      const live = session.get(f.key) as Partial<Feature3D> | undefined;
+      return live ? { ...f, ...live, polygons: live.polygons?.length ? live.polygons : f.polygons } as Feature3D : f;
+    });
     for (const f of all) {
       const id = modelIdOf(f.tags), ring = f.polygons[0]?.outer;
       if (!id || !ring?.length) continue;
@@ -1641,9 +1673,23 @@ function scheduleModels() {
       // Модель на контуре здания заменяет и его части
       const parts = f.kind === 'building' && f.hasParts
         ? all.filter((p) => p.kind === 'part' && p.polygons[0]?.outer.length && pointInRing(centroid(p.polygons[0].outer), ring)).map((p) => p.key) : [];
-      list.push({ key: f.key, id, at, z: Number.parseFloat(f.tags.min_height ?? '') || 0, rotation: Number.parseFloat(f.tags['3dmr:rotation'] ?? '') || 0, hides: [f.key, ...parts] });
+      // В отношении type=building модель заменяет всё здание: отношение и всех его членов
+      const g = groupOf(f.key);
+      const members = g ? [g.key, ...g.members] : [];
+      list.push({ key: f.key, id, at, z: Number.parseFloat(f.tags.min_height ?? '') || 0, rotation: modelDirection(f.tags), hides: [...new Set([f.key, ...parts, ...members])], extent: ringExtent(ring) });
+    }
+    // Узлы: модель — в точку узла (теги — с правками сессии)
+    for (const n of overpass.modelNodes()) {
+      const key = `node/${n.id}`;
+      if (session.isDeleted(key)) continue;
+      const tags = session.get(key)?.tags ?? n.tags, id = modelIdOf(tags);
+      if (!id) continue;
+      list.push({ key, id, at: n.p, z: 0, rotation: modelDirection(tags), hides: [] });
     }
     modelsLayer.setPlacements(list);
+    // Сборка тайла в воркере могла закончиться после того, как модель спрятала здание, — дорисовав его: убрать
+    const stale = list.flatMap((p) => p.hides).filter((k) => modelsLayer.shows(k) && overpassLayer.hasFeature(k));
+    if (stale.length) overpass.rerenderFeatures(stale);
   }, 300);
 }
 
@@ -1867,6 +1913,12 @@ function updateTileFilter() {
   if (!map.getLayer(BUILDINGS_LAYER)) return; // сервер без тайловых зданий
   const notIn = (ids: number[]): ExpressionSpecification => ['!', ['in', ['id'], ['literal', ids]]];
   const hiddenIds = [...userHidden].map(Number).filter(Number.isFinite);
+  // Здания, вместо которых стоят модели 3dmr: их части в тайлах карты могут лежать в соседнем, не загруженном тайле данных
+  const modelKeys = modelsLayer.replacedKeys();
+  const modelIds = modelKeys.flatMap(tileIdsOf);
+  // Склеенные полигоны тайлов (несколько зданий в одной фиче) — по попаданию в контур, замененный моделью
+  const modelRings = modelKeys.map((k) => overpass.findFeature(k)?.polygons[0]?.outer).filter((r): r is LonLat[] => !!r?.length);
+  const modelMerged = modelRings.length ? mergedKeys.filter((m) => modelRings.some((r) => pointInRing([m.lon, m.lat], r))).map((m) => m.key) : [];
   // Тайлы, здания которых уже нарисованы из данных API
   const overpassTiles = overpass.displayed();
   const byAreas = josmMode && josmAreas.length > 0;
@@ -1875,20 +1927,20 @@ function updateTileFilter() {
   // setFilter перестраивает бакеты всех тайлов слоя — вызываем, только если набор скрытого изменился
   const tileSet = new Set(overpassTiles);
   const hiddenMerged = byAreas ? mergedKeys.filter((m) => tileSet.has(m.tile) && inJosmAreas(m.lon, m.lat)).map((m) => m.key) : [];
-  const sig = [replacedIds.length, hiddenIds.join(), overpassTiles.sort().join(), byAreas, hiddenMerged.length].join('|');
+  const sig = [replacedIds.length, hiddenIds.join(), modelIds.join(), modelMerged.join(), overpassTiles.sort().join(), byAreas, hiddenMerged.length].join('|');
   if (sig === lastFilterSig) {
     if (overpassIds.every((id) => filterOverpassIds.has(id))) return;
     for (const id of overpassIds) filterOverpassIds.add(id);
   } else filterOverpassIds = new Set(overpassIds);
   lastFilterSig = sig;
   console.debug(`[perf] setFilter: скрыто ${filterOverpassIds.size} фич тайлов под Overpass`);
-  map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...hiddenIds, ...filterOverpassIds])]);
+  map.setFilter(BUILDINGS_LAYER, ['all', BASE_FILTER, notIn([...replacedIds, ...hiddenIds, ...modelIds, ...filterOverpassIds])]);
   // Выбранное здание тайла заменили данные API: его подсветка осталась бы внутри здания (видна сквозь прозрачные)
   if (highlightedTile !== undefined && [...replacedIds, ...hiddenIds, ...overpassIds].includes(highlightedTile)) clearTileHighlight();
   map.setFilter(REMAINDERS_LAYER, notIn(hiddenIds));
   map.setFilter(MERGED_LAYER, ['all',
     byAreas ? ['!', ['in', ['get', 'key'], ['literal', hiddenMerged]]] : ['!', ['in', ['get', 'tile'], ['literal', overpassTiles]]],
-    ['!', ['in', ['get', 'key'], ['literal', [...userHidden]]]]]);
+    ['!', ['in', ['get', 'key'], ['literal', [...userHidden, ...modelMerged]]]]]);
 }
 
 /** Группа type=building объекта (или сама группа по своему ключу) в текущем режиме. */
@@ -2135,6 +2187,18 @@ map.on('click', (e) => {
     return;
   }
   const picked = e.originalEvent.altKey ? cyclePick(e.point) : overpassLayer.pick(e.point);
+  // Модель 3dmr ближе здания — выбрать её саму (своя карточка, объект OSM — по ссылке из неё)
+  const modelHit = addingTo || focus || e.originalEvent.shiftKey ? undefined : modelsLayer.pick(e.point.x, e.point.y);
+  const buildingHit = modelHit && picked ? overpassLayer.pickHit(e.point) : undefined;
+  if (modelHit && (!buildingHit || modelHit.depth < modelsLayer.depthOf(buildingHit.lngLat, buildingHit.altitude))) {
+    const again = reclick && selectedModel === modelHit.key;
+    select(undefined);
+    if (again) { clearInfo(); return; }
+    selectedModel = modelHit.key;
+    paintSelection();
+    renderSelected();
+    return;
+  }
   // План этажа: оболочка (части Simple 3D) — только опора для привязок, кликом не выделяется (части — «Всё здание» и дерево)
   const key = focus && shownLevel && !addingTo && picked && focus.members.includes(picked) ? undefined : picked;
   if (addingTo) {
@@ -9191,7 +9255,11 @@ function toolHint(hint: string | undefined, error = false) {
 }
 
 /** Выделить объект (или группу); false — выделять нечего. */
+/** Выбранная модель 3dmr — ключ объекта OSM, вместо которого она стоит. */
+let selectedModel: string | undefined;
+
 function select(key: string | undefined): boolean {
+  selectedModel = undefined;
   if (freeArea || freeExtra.length) { freeArea = undefined; freeExtra = []; overpassLayer.setFreeArea(undefined); }
   if (selectedEntrance !== undefined) { cancelEntranceDrag(); selectedEntrance = undefined; entranceExtra = []; overpassLayer.setEntranceSelection(undefined); }
   clearTreeSelection();
@@ -9357,6 +9425,7 @@ let suppressClick = false;
 function paintSelection() {
   syncJosmSelection();
   overpassLayer.select([...selection.flatMap(highlightKeys), ...addPending]);
+  modelsLayer.select(selectedModel);
   overpassLayer.underlays.select(underlaySelection);
   syncMapTools();
   syncIssueFilter();
@@ -17007,6 +17076,7 @@ tagsClip.addEventListener('click', (e) => {
 });
 
 function renderSelectedImpl() {
+  if (selectedModel && !selection.length) return renderModelCard(selectedModel);
   if (freeArea && !selection.length && !indoorSelection.length) return renderFreeArea(freeArea);
   if (selectedEntrance !== undefined) return renderEntrance(selectedEntrance);
   if (addingTo) return renderAdding();
@@ -17020,10 +17090,12 @@ function renderSelectedImpl() {
   const form = selectedKey ? renderTagForm(selectedKey, session, inheritSources(selectedKey), { suggest: dateSources(selectedKey), outline }) : undefined;
   const g = selectedKey ? editGroups.get(selectedKey) : undefined;
   // Отношение type=building — только контейнер: высоты, крыша и прочее живут на контуре и частях
-  if (g) { infoEl.innerHTML = describeGroup(g); return; }
+  if (g) { infoEl.innerHTML = describeGroup(g); modelLink(g.key); return; }
   // Новые объекты (нарисованные, отрезанные) в режиме здания ещё не нарисованы в тайлах карты — берём из сессии
   const own = selectedKey && !overpass.get(selectedKey) ? session.get(selectedKey) as Feature3D | undefined : undefined;
-  const r = selectedKey ? overpass.get(selectedKey) ?? (own?.polygons ? { feature: own, roofApproximated: false } : undefined) : undefined;
+  // Заменённые моделью 3dmr в тайлах не нарисованы — объект из данных
+  const replaced = selectedKey && !own && modelsLayer.shows(selectedKey) ? overpass.findFeature(selectedKey) : undefined;
+  const r = selectedKey ? overpass.get(selectedKey) ?? (own?.polygons ? { feature: own, roofApproximated: false } : replaced ? { feature: replaced, roofApproximated: false } : undefined) : undefined;
   // Соседнее здание целиком (как на карте): отношение — его теги и контур, иначе — сам объект
   const ctxKey = focus && contextKey && !selection.length && overpassLayer.contextShown ? contextKey : undefined;
   if (ctxKey) {
@@ -17052,6 +17124,107 @@ function renderSelectedImpl() {
   // Здание без отношения (контур с частями внутри) — та же шапка, что у отношения
   const header = r && !focus && highlightKeys(r.feature.key).length > 1 ? buildingHeader((session.get(r.feature.key)?.tags ?? r.feature.tags).name, session.get(r.feature.key)?.tags ?? r.feature.tags) : '';
   infoEl.innerHTML = r ? header + (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + (focus ? focusExitButton() : '') + excludeButton() : '';
+  if (r) modelLink(r.feature.key);
+}
+
+/** В свойствах объекта OSM, замененного моделью 3dmr, — ссылка на её карточку. */
+function modelLink(key: string) {
+  const p = modelsLayer.placementOf(key);
+  if (!p) return;
+  const line = document.createElement('p');
+  line.className = 'hint';
+  line.innerHTML = `${tr('Показана модель 3dmr')} <a href="#" data-model>#${p.id}</a>`;
+  line.querySelector('a')!.addEventListener('click', (ev) => { ev.preventDefault(); select(undefined); selectedModel = p.key; paintSelection(); renderSelected(); });
+  infoEl.prepend(line);
+}
+
+/** Ник участника OSM по uid (авторы 3dmr — участники основного OSM); кеш на сессию. */
+const osmNames = new Map<string, Promise<string | undefined>>();
+function osmDisplayName(uid: string): Promise<string | undefined> {
+  let p = osmNames.get(uid);
+  if (!p) {
+    p = fetch(`https://api.openstreetmap.org/api/0.6/user/${encodeURIComponent(uid)}.json`)
+      .then((r) => (r.ok ? r.json() : undefined)).then((j) => j?.user?.display_name as string | undefined).catch(() => undefined);
+    osmNames.set(uid, p);
+  }
+  return p;
+}
+
+/** Единицы, из которых пересчитана модель (по поправке масштаба). */
+const MODEL_UNITS: [number, () => string][] = [[0.001, () => tr('мм')], [0.01, () => tr('см')], [0.0254, () => tr('дюймы')], [0.3048, () => tr('футы')]];
+
+/**
+ * Карточка модели 3dmr — того же вида, что свойства объекта OSM: заголовок, имя, сводка, поле выбора ревизии
+ * (показ только в этом браузере), теги модели, ссылка на объект OSM.
+ */
+function renderModelCard(key: string) {
+  const p = modelsLayer.placementOf(key);
+  if (!p) { selectedModel = undefined; infoEl.innerHTML = ''; return; }
+  // Здание в отношении type=building — ссылка на всё здание
+  const osmKey = groupOf(p.key)?.key ?? p.key;
+  const shownRev = modelsLayer.revisionOf(p.id);
+  const head = (rev?: number) => objectHeading('3dmr', `${DMR}/model/${p.id}${rev ? `/${rev}` : ''}`, `#${p.id}`)
+    .replace('</h2>', rev ? ` <span class="obj-ver">${tr('ревизия {r}', { r: rev })}</span></h2>` : '</h2>');
+  const osmRow = `<p class="model-osm">${tr('Объект OSM')}: <a href="#" data-osm>${esc(osmKey)}</a>
+    <a href="${server().web}/${osmKey}" target="_blank" rel="noopener" title="${tr('на сайте OSM')}">↗</a></p>`;
+  infoEl.innerHTML = `<div class="model-3dmr">${head(shownRev)}<p class="hint">${tr('Загрузка…')}</p>${osmRow}</div>`;
+  const box = infoEl.querySelector<HTMLElement>('.model-3dmr')!;
+  const bind = () => box.querySelector('[data-osm]')?.addEventListener('click', (ev) => { ev.preventDefault(); select(osmKey); });
+  bind();
+  void modelsLayer.info(p.id).then(async (info) => {
+    if (!box.isConnected) return;
+    if (!info) { box.querySelector('.hint')!.textContent = tr('3dmr.eu не ответил.'); return; }
+    const nick = await osmDisplayName(info.author);
+    if (!box.isConnected) return;
+    const rev = shownRev ?? info.revision;
+    const st = modelsLayer.statsOf(p.key);
+    const unit = st && st.scale !== 1 ? MODEL_UNITS.find(([k]) => Math.abs(k / st.scale - 1) < 0.01)?.[1] : undefined;
+    const k = st?.scale ?? 1;
+    const rows: [string, string][] = [];
+    if (st) rows.push([tr('Размеры'), `${st.size.map((v) => fmt(v * k)).join(' × ')} m`]);
+    if (unit) rows.push([tr('Единицы'), tr('{u} → м (масштаб поправлен)', { u: unit() })]);
+    if (st) rows.push([tr('Треугольников'), st.triangles.toLocaleString()]);
+    if (st?.bytes) rows.push([tr('Файл'), `${(st.bytes / 1048576).toFixed(st.bytes < 10485760 ? 1 : 0)} MB`]);
+    if (info.lat != null && info.lon != null) {
+      const d = Math.hypot((info.lon - p.at[0]) * 111320 * Math.cos((p.at[1] * Math.PI) / 180), (info.lat - p.at[1]) * 110540);
+      rows.push([tr('Точка привязки'), d < 0.5 ? tr('в центре контура') : tr('{d} м от центра контура', { d: fmt(d) })]);
+    }
+    rows.push([tr('Лицензия'), LICENSES[info.license] ?? String(info.license)]);
+    rows.push([tr('Загружена'), info.date]);
+    if (info.categories?.length) rows.push([tr('Категории'), info.categories.map((c) => c.trim()).join(', ')]);
+    const revs = Array.from({ length: info.revision }, (_, i) => info.revision - i);
+    const label = (r: number) => (r === info.revision ? tr('{r} (последняя)', { r }) : String(r));
+    const items = revs.map((r) => `<li data-value="${r}"${r === rev ? ' class="current"' : ''}><b>${esc(label(r))}</b></li>`).join('');
+    box.innerHTML = `${head(rev)}
+      <h2 class="group-name">${esc(info.title)}</h2>
+      <p class="hint">${tr('Автор')}: <a href="${DMR}/user/${esc(info.author)}" target="_blank" rel="noopener">${esc(nick ?? info.author)}</a></p>
+      ${info.desc ? `<p class="hint">${esc(info.desc)}</p>` : ''}
+      ${summaryRows(rows)}
+      <form class="tag-form" onsubmit="return false">
+        <label class="tag-row"><span>${tr('Ревизия')}</span><span class="combo-field"><input type="text" readonly value="${esc(label(rev))}" />`
+        + `<button type="button" class="combo-btn" tabindex="-1" title="${tr('Выбрать из списка')}"></button><ul class="combo-list" hidden>${items}</ul></span></label>
+      </form>
+      <p class="hint">${tr('Показ только в этом браузере: в OSM тег 3dmr хранит лишь номер модели.')}</p>
+      ${info.tags && Object.keys(info.tags).length ? `<details class="all-tags" open><summary>${tr('Теги модели')}</summary>${tagTable(info.tags)}</details>` : ''}
+      ${osmRow}`;
+    bind();
+    const field = box.querySelector<HTMLElement>('.combo-field')!, ul = field.querySelector<HTMLElement>('.combo-list')!;
+    const close = (e: MouseEvent) => { if (!field.contains(e.target as Node)) { ul.hidden = true; document.removeEventListener('mousedown', close); } };
+    field.addEventListener('mousedown', (e) => {
+      const t = e.target as HTMLElement, li = t.closest<HTMLElement>('li');
+      e.preventDefault();
+      e.stopPropagation(); // общий обработчик полей тегов на панели записал бы выбор в тег
+      if (li) {
+        ul.hidden = true;
+        const r = Number(li.dataset.value);
+        modelsLayer.setRevision(p.id, r === info.revision ? undefined : r);
+        renderSelected();
+        return;
+      }
+      ul.hidden = !ul.hidden;
+      if (!ul.hidden) { placeCombo(ul); document.addEventListener('mousedown', close); }
+    });
+  });
 }
 
 // Рендер: часть без своих цветов/формы крыши/материалов берёт их у контура, затем у отношения
@@ -18576,6 +18749,13 @@ function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: stri
     ${warn.map((w) => `<p class="warn">${icon('warning', 14)} ${w}</p>`).join('')}
     ${issues.map((i) => `<p class="warn ${i.level}">${icon(i.level === 'error' ? 'error' : 'warning', 14)} ${esc(i.text)}</p>`).join('')}
     ${form ? `${form}${renderOtherTags(f.key, f.tags, form)}` : tagTable(f.tags)}`;
+}
+
+/** id фичи векторных тайлов объекта OSM (way/123, relation/45) — обратное к decodeTileId. */
+function tileIdsOf(key: string): number[] {
+  const [type, raw] = key.split('/'), id = Number(raw);
+  const suffix = OFM_IDS ? { node: 1, way: 2, relation: 3 }[type] : { way: 0, relation: 1 }[type];
+  return suffix === undefined || !Number.isFinite(id) ? [] : [id * 10 + suffix];
 }
 
 /** Planetiler: id = osmId * 10 + (1 — node, 2 — way, 3 — relation); 0 — фича, склеенная из нескольких зданий. */

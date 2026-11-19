@@ -13,6 +13,7 @@ import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type Tree
 import { scatterTreesAsync, TreeGroup } from '../render/trees';
 import { TREE_STRIDE, TreeField } from '../render/tree-scatter';
 import { parseBarriers, type BarrierWay } from '../osm/barriers';
+import { parseModelNodes, type ModelNode } from '../osm/model-nodes';
 import { parsePassages, parseRoads, type PassageWay, type RoadWay } from '../osm/roads';
 import { frameDeadline } from '../render/frame-budget';
 
@@ -35,7 +36,7 @@ type Entry =
   | { state: 'lookup' } // ищем в IndexedDB
   | { state: 'queued' } // в IndexedDB нет, ждёт свободного слота запроса к API
   | { state: 'loading'; abort: AbortController }
-  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; indoor: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; passages?: PassageWay[]; barriers?: BarrierWay[]; fetchedAt: number; via?: TileVia; refreshing?: AbortController; refreshAfter?: number; partial?: boolean }
+  | { state: 'ready'; features: Feature3D[]; groups: BuildingGroup[]; indoor: IndoorFeature[]; trees?: TreeData; roads?: RoadWay[]; passages?: PassageWay[]; barriers?: BarrierWay[]; modelNodes?: ModelNode[]; fetchedAt: number; via?: TileVia; refreshing?: AbortController; refreshAfter?: number; partial?: boolean }
   | { state: 'error'; retryAt: number; attempts: number };
 
 /**
@@ -239,6 +240,13 @@ export class OverpassTiles {
   barriers(): BarrierWay[] {
     const out = new Map<number, BarrierWay>();
     for (const k of this.wanted) { const e = this.cache.get(k); if (e?.state === 'ready' && e.barriers) for (const b of e.barriers) out.set(b.id, b); }
+    return [...out.values()];
+  }
+
+  /** Узлы с моделями 3dmr показанных тайлов. */
+  modelNodes(): ModelNode[] {
+    const out = new Map<number, ModelNode>();
+    for (const k of this.wanted) { const e = this.cache.get(k); if (e?.state === 'ready' && e.modelNodes) for (const m of e.modelNodes) out.set(m.id, m); }
     return [...out.values()];
   }
 
@@ -574,9 +582,9 @@ export class OverpassTiles {
     try {
       if (!this.source) throw new Error('источник данных не задан');
       if (this.source.josm) {
-        const { features, groups, indoor, trees, roads, passages, barriers } = josmTile(await josmParsed(), tileBbox(key));
+        const { features, groups, indoor, trees, roads, passages, barriers, modelNodes } = josmTile(await josmParsed(), tileBbox(key));
         if (abort.signal.aborted) throw new DOMException('aborted', 'AbortError');
-        this.cache.set(key, { state: 'ready', features, groups, indoor, trees, roads, passages, barriers, fetchedAt: Date.now() });
+        this.cache.set(key, { state: 'ready', features, groups, indoor, trees, roads, passages, barriers, modelNodes, fetchedAt: Date.now() });
         this.reloading.delete(key);
         this.reloadFailed.delete(key);
         this.evict();
@@ -642,13 +650,14 @@ export class OverpassTiles {
       const roads = via === 'overpass' && !withRoads ? undefined : timed('тайлы: дороги', () => parseRoads(elements), (r) => `${key}, ${r.length} путей`);
       const passages = parsePassages(elements);
       const barriers = parseBarriers(elements);
+      const modelNodes = parseModelNodes(elements);
       // Запрос ушёл до отправки правок — показываем, но вскоре перезапросим
       const fetchedAt = this.behindUploads(elements) ? 0 : Date.now();
-      this.cache.set(key, { state: 'ready', features, groups, indoor, trees, roads, passages, barriers, fetchedAt, via });
+      this.cache.set(key, { state: 'ready', features, groups, indoor, trees, roads, passages, barriers, modelNodes, fetchedAt, via });
       this.lastApiError = undefined;
       this.reloading.delete(key);
       this.reloadFailed.delete(key);
-      void this.store.put(key, { features, groups, indoor, trees, roads, passages, barriers, fetchedAt, via });
+      void this.store.put(key, { features, groups, indoor, trees, roads, passages, barriers, modelNodes, fetchedAt, via });
       this.stored.add(key);
       this.evict();
       this.tileReady(key);
@@ -958,6 +967,9 @@ export class OverpassTiles {
    * в обоих тайлах — рисуем его только в том, где его центр. Части ищем и в соседних тайлах:
    * иначе контур, чьи части лежат по ту сторону границы, рисуется поверх них.
    */
+  /** Объект заменён чем-то другим (моделью 3dmr): в данных остаётся, но не рисуется. */
+  replaced: (key: string) => boolean = () => false;
+
   private ownedFeatures(key: string): { features: Feature3D[]; hidden: string } {
     const own = this.cache.get(key);
     if (own?.state !== 'ready') return { features: [], hidden: '' };
@@ -975,7 +987,7 @@ export class OverpassTiles {
     const [w, s, e, n] = tileBbox(key);
     const features = ownFeatures.filter((f) => {
       const [x, y] = centroid(f.polygons[0].outer);
-      return x >= w && x < e && y > s && y <= n;
+      return x >= w && x < e && y > s && y <= n && !this.replaced(f.key);
     });
     const hidden = features.filter((f) => f.hasParts).map((f) => f.key).join(',');
     return { features, hidden };
@@ -1084,11 +1096,11 @@ export class OverpassTiles {
 }
 
 /** Разобранный слой JOSM — один на все тайлы (разбор заново, только когда слой перезапрошен). */
-type JosmParsed = ReturnType<typeof parseBuildings> & { trees: TreeData; roads: RoadWay[]; passages: PassageWay[]; barriers: BarrierWay[] };
+type JosmParsed = ReturnType<typeof parseBuildings> & { trees: TreeData; roads: RoadWay[]; passages: PassageWay[]; barriers: BarrierWay[]; modelNodes: ModelNode[] };
 let josmCache: { elements: OsmElement[]; parsed: JosmParsed } | undefined;
 async function josmParsed() {
   const { elements } = await josmLayer();
-  if (josmCache?.elements !== elements) josmCache = { elements, parsed: { ...timed('JOSM: разбор слоя', () => parseBuildings(elements), (r) => `${r.features.length} зданий`), trees: parseTrees(elements), roads: parseRoads(elements), passages: parsePassages(elements), barriers: parseBarriers(elements) } };
+  if (josmCache?.elements !== elements) josmCache = { elements, parsed: { ...timed('JOSM: разбор слоя', () => parseBuildings(elements), (r) => `${r.features.length} зданий`), trees: parseTrees(elements), roads: parseRoads(elements), passages: parsePassages(elements), barriers: parseBarriers(elements), modelNodes: parseModelNodes(elements) } };
   return josmCache.parsed;
 }
 
@@ -1108,6 +1120,7 @@ function josmTile(all: JosmParsed, [w, s, e, n]: Bbox) {
     roads: all.roads.filter((r) => r.coords.some(([x, y]) => x >= w && x <= e && y >= s && y <= n)),
     passages: all.passages.filter((r) => r.coords.some(([x, y]) => x >= w && x <= e && y >= s && y <= n)),
     barriers: all.barriers.filter((r) => r.coords.some(([x, y]) => x >= w && x <= e && y >= s && y <= n)),
+    modelNodes: all.modelNodes.filter(({ p: [x, y] }) => x >= w && x <= e && y >= s && y <= n),
   };
 }
 

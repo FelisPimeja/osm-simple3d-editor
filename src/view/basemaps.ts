@@ -378,6 +378,7 @@ export class BasemapButton {
     bRow.append(bInput, ` ${tr('3D-здания')}`, gear);
     menu.append(bRow, alphaRow);
     this.buildingsRow = bRow;
+    this.buildingsEnd = alphaRow;
     if (!osm && list.length) {
       const note = document.createElement('div');
       note.className = 'basemap-note';
@@ -409,6 +410,22 @@ export class BasemapButton {
 
   /** Строка слоя зданий — перед ней встают секции (addSection). */
   private buildingsRow?: HTMLElement;
+  /** Последняя строка блока зданий — после неё встают слои, связанные со зданиями (addBuildingsOverlay). */
+  private buildingsEnd?: HTMLElement;
+
+  /** Слой сразу под 3D-зданиями (модели 3dmr): своя галка, без шестерёнки. */
+  addBuildingsOverlay(label: string, title: string, on: boolean, onChange: (on: boolean) => void) {
+    const row = document.createElement('label');
+    row.className = 'basemap-overlay-sub';
+    row.title = title;
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = on;
+    input.addEventListener('change', () => onChange(input.checked));
+    row.append(input, ` ${label}`);
+    if (this.buildingsEnd) this.buildingsEnd.after(row); else this.menu.append(row);
+    this.buildingsEnd = row;
+  }
 
   /** Секция меню перед слоем зданий (подложки здания). */
   addSection(el: HTMLElement) {

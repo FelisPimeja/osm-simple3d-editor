@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MercatorCoordinate, type Map as MlMap } from 'maplibre-gl';
 import type { LonLat } from '../osm/model';
+import SNAPSHOT from './3dmr-transforms.json';
 
 /** Репозиторий 3D-моделей OSM: .glb по id (и ревизии), описание модели (CORS открыт). */
 export const DMR = 'https://3dmr.eu';
@@ -21,8 +22,10 @@ const UNITS = [1000, 100, 1 / 0.0254, 1 / 0.3048];
  * (площадка, деревья), и рамка шире контура — допуск в разы, ближайшая по логарифму единица.
  */
 const UNIT_TOLERANCE = 2;
-/** Модель до стольких раз больше контура — считаем метрами (крыльцо, навесы шире контура). */
-const METRES_UP_TO = 1.3;
+/** Модель до стольких раз больше контура — считаем метрами: подиум, крыльцо, навесы, площадка шире контура (Петронас — ×1,55). */
+const METRES_UP_TO = 2.5;
+/** Модель во столько раз больше контура без подходящей единицы — подогнать под контур. */
+const FIT_ABOVE = 10;
 /** Модель во столько раз меньше контура — значит, единицы условные (фотограмметрия в «единичном кубе»): подогнать под контур. */
 const FIT_BELOW = 1 / 20;
 
@@ -36,7 +39,8 @@ export function unitScale(model: number, outline: number | undefined): number {
   if (r >= FIT_BELOW && r < METRES_UP_TO) return 1;
   if (r < FIT_BELOW) return 1 / r;
   const best = UNITS.map((c) => ({ c, d: Math.abs(Math.log(r / c)) })).sort((a, b) => a.d - b.d)[0];
-  return best.d < Math.log(UNIT_TOLERANCE) ? 1 / best.c : 1 / r;
+  if (best.d < Math.log(UNIT_TOLERANCE)) return 1 / best.c;
+  return r > FIT_ABOVE ? 1 / r : 1;
 }
 
 /** id модели из тега 3dmr (бывает «12» или «12;34» — берём первый). */
@@ -47,12 +51,34 @@ export function modelIdOf(tags: Record<string, string>): number | undefined {
 
 /** Описание модели из /api/info: revision — последняя ревизия. */
 export interface ModelInfo { id: number; revision: number; title: string; author: string; license: number; date: string; desc: string;
-  tags?: Record<string, string>; categories?: string[]; lat?: number | null; lon?: number | null }
+  tags?: Record<string, string>; categories?: string[]; lat?: number | null; lon?: number | null;
+  /** Пока /api/info их не отдаёт; когда начнёт — берём отсюда, а не из снимка. */
+  rotation?: number | null; scale?: number | null; translation?: (number | null)[] | null }
+
+/**
+ * Трансформация модели из базы 3dmr (задаётся при загрузке): смещение в координатах файла (x — X, y — Z файла,
+ * z — вверх), затем масштаб, затем поворот по часовой (сверху). Новые ревизии получают её вшитой в .glb
+ * (узел «3DMR transform»), у старых она только в базе — см. scripts/3dmr-snapshot.mjs.
+ */
+export interface ModelTransform { rotation: number; scale: number; translation: [number, number, number]; source: 'api' | 'snapshot' }
+const SNAPSHOT_BY_ID = SNAPSHOT as Record<string, { revision: number; rotation: number; scale: number; translation: number[] }>;
+
+/** Трансформация ревизии rev модели id, если она не вшита в файл: из API, иначе из снимка (только той же ревизии). */
+function transformOf(id: number, rev: number, info: ModelInfo | undefined): ModelTransform | undefined {
+  if (info && (info.rotation != null || info.scale != null || info.translation?.some((v) => v != null))) {
+    if (rev !== info.revision) return; // API знает только последнюю ревизию
+    const t = info.translation ?? [];
+    return { rotation: info.rotation ?? 0, scale: info.scale ?? 1, translation: [t[0] ?? 0, t[1] ?? 0, t[2] ?? 0], source: 'api' };
+  }
+  const s = SNAPSHOT_BY_ID[id];
+  if (!s || s.revision !== rev) return;
+  return { rotation: s.rotation, scale: s.scale, translation: [s.translation[0] ?? 0, s.translation[1] ?? 0, s.translation[2] ?? 0], source: 'snapshot' };
+}
 /** Лицензии 3dmr по номеру. */
 export const LICENSES = ['CC0 1.0', 'CC BY 4.0'];
 
 /** Что известно о загруженном файле модели: размеры (м, как в файле), треугольники, байты. */
-export interface ModelStats { size: [number, number, number]; triangles: number; bytes?: number }
+export interface ModelStats { size: [number, number, number]; triangles: number; bytes?: number; transform?: ModelTransform }
 
 /**
  * Модели из 3dmr.eu вместо процедурной геометрии объектов с тегом 3dmr. Модель в метрах, ось Y вверх,
@@ -136,12 +162,18 @@ export class ModelsLayer {
   statsOf(key: string): (ModelStats & { scale: number }) | undefined {
     const p = this.placementOf(key);
     const st = p && this.stats.get(this.ref(p.id));
-    return p && st ? { ...st, scale: unitScale(this.sizes.get(this.ref(p.id)) ?? 0, p.extent) } : undefined;
+    return p && st ? { ...st, scale: this.scaleOf(p) } : undefined;
   }
 
   /** Что грузится сейчас (для индикатора): файлы с прогрессом и сколько ждут очереди. */
   progress(): { files: { ref: string; loaded: number; total: number }[]; queued: number } {
     return { files: [...this.progressMap].map(([ref, p]) => ({ ref, ...p })), queued: this.queue.length };
+  }
+
+  /** Масштаб модели: заданный в 3dmr (не 1), иначе по эвристике единиц. */
+  private scaleOf(p: ModelPlacement): number {
+    const tr = this.stats.get(this.ref(p.id))?.transform;
+    return tr && tr.scale !== 1 ? tr.scale : unitScale(this.sizes.get(this.ref(p.id)) ?? 0, p.extent);
   }
 
   /** Показанная ревизия модели; undefined — последняя. */
@@ -183,10 +215,23 @@ export class ModelsLayer {
       this.loading++;
       this.progressMap.set(ref, { loaded: 0, total: 0 });
       this.onProgress?.();
-      this.loader.loadAsync(API + ref, (e) => { this.progressMap.set(ref, { loaded: e.loaded, total: e.lengthComputable ? e.total : 0 }); this.onProgress?.(); }).then((gltf) => {
+      const [idPart, revPart] = ref.split('/'), id = Number(idPart);
+      Promise.all([
+        this.loader.loadAsync(API + ref, (e) => { this.progressMap.set(ref, { loaded: e.loaded, total: e.lengthComputable ? e.total : 0 }); this.onProgress?.(); }),
+        this.info(id),
+      ]).then(([gltf, info]) => {
+        // Трансформация 3dmr уже в файле (новые ревизии) — второй раз не применять
+        const baked = (gltf.parser.json.nodes as { name?: string }[] | undefined)?.some((n) => n.name === '3DMR transform');
+        const rev = revPart ? Number(revPart) : info?.revision;
+        const transform = baked || rev === undefined ? undefined : transformOf(id, rev, info);
         const root = new THREE.Group();
-        gltf.scene.rotation.x = Math.PI / 2; // Y вверх → Z вверх, -Z (север) → +Y
-        root.add(gltf.scene);
+        const up = new THREE.Group();
+        up.rotation.x = Math.PI / 2; // Y вверх → Z вверх, -Z (север) → +Y
+        const offset = new THREE.Group();
+        if (transform) { const [tx, ty, tz] = transform.translation; offset.position.set(tx, tz, ty); }
+        offset.add(gltf.scene);
+        up.add(offset);
+        root.add(up);
         // Матрица слоя — проекция MapLibre со сжатой глубиной: отсечение three по ней прячет модели целиком
         root.traverse((o) => { o.frustumCulled = false; });
         const box = new THREE.Box3().setFromObject(root);
@@ -196,7 +241,7 @@ export class ModelsLayer {
           const g = (o as THREE.Mesh).isMesh ? (o as THREE.Mesh).geometry : undefined;
           if (g) triangles += (g.index ? g.index.count : g.attributes.position.count) / 3;
         });
-        const st: ModelStats = { size: [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z], triangles };
+        const st: ModelStats = { size: [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z], triangles, transform };
         this.stats.set(ref, st);
         // Размер файла — отдельным HEAD (Content-Length открыт для CORS)
         void fetch(API + ref, { method: 'HEAD' }).then((r) => { const n = Number(r.headers.get('content-length')); if (n) st.bytes = n; }).catch(() => {});
@@ -234,8 +279,10 @@ export class ModelsLayer {
         const c = MercatorCoordinate.fromLngLat({ lng: p.at[0], lat: p.at[1] }, 0);
         const inst = this.loaded(p)!.clone();
         inst.position.set((c.x - this.origin.x) / m, -(c.y - this.origin.y) / m, p.z);
-        inst.rotation.z = (-p.rotation * Math.PI) / 180; // по часовой от севера
-        const k = unitScale(this.sizes.get(this.ref(p.id)) ?? 0, p.extent);
+        const tr = this.stats.get(this.ref(p.id))?.transform;
+        // direction объекта и поворот из 3dmr — оба по часовой от севера
+        inst.rotation.z = (-(p.rotation + (tr?.rotation ?? 0)) * Math.PI) / 180;
+        const k = this.scaleOf(p);
         if (k !== 1) inst.scale.setScalar(k);
         inst.userData.placed = true;
         inst.userData.key = p.key;

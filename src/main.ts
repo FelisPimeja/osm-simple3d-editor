@@ -1699,6 +1699,8 @@ function scheduleModels() {
       list.push({ key, id, at: n.p, z: 0, rotation: modelDirection(tags), hides: [], extent: n.ring ? ringExtent(n.ring) : undefined });
     }
     modelsLayer.setPlacements(list);
+    // Выбранная модель ушла из загруженных данных (улетели в другое место) — снять выбор
+    if (selectedModel && !modelsLayer.placementOf(selectedModel)) { select(undefined); clearInfo(); }
     // Сборка тайла в воркере могла закончиться после того, как модель спрятала здание, — дорисовав его: убрать
     const stale = list.flatMap((p) => p.hides).filter((k) => modelsLayer.shows(k) && overpassLayer.hasFeature(k));
     if (stale.length) overpass.rerenderFeatures(stale);
@@ -17190,12 +17192,20 @@ function renderModelCard(key: string) {
     if (!box.isConnected) return;
     const rev = shownRev ?? info.revision;
     const st = modelsLayer.statsOf(p.key);
-    const unit = st && st.scale !== 1 ? MODEL_UNITS.find(([k]) => Math.abs(k / st.scale - 1) < 0.01)?.[1] : undefined;
+    const xf = st?.transform;
+    // Масштаб задан в 3dmr — это не догадка об единицах
+    const own = !!xf && xf.scale !== 1;
+    const unit = st && st.scale !== 1 && !own ? MODEL_UNITS.find(([k]) => Math.abs(k / st.scale - 1) < 0.01)?.[1] : undefined;
     const k = st?.scale ?? 1;
     const rows: [string, string][] = [];
     if (st) rows.push([tr('Размеры'), `${st.size.map((v) => fmt(v * k)).join(' × ')} m`]);
+    if (xf) {
+      const parts = [xf.rotation ? tr('поворот {d}°', { d: fmt(xf.rotation) }) : '', own ? tr('масштаб {k}', { k: String(xf.scale) }) : '',
+        xf.translation.some(Boolean) ? tr('смещение {t}', { t: xf.translation.map((v) => fmt(v)).join(', ') }) : ''].filter(Boolean);
+      rows.push([tr('Трансформация'), `${parts.join(', ')} (${xf.source === 'api' ? tr('из 3dmr') : tr('из выгрузки 3dmr')})`]);
+    }
     if (unit) rows.push([tr('Единицы'), tr('{u} → м (масштаб поправлен)', { u: unit() })]);
-    else if (k !== 1) rows.push([tr('Единицы'), tr('условные: размер подогнан под контур (×{k})', { k: k.toPrecision(2) })]);
+    else if (k !== 1 && !own) rows.push([tr('Единицы'), tr('условные: размер подогнан под контур (×{k})', { k: k.toPrecision(2) })]);
     if (st) rows.push([tr('Треугольников'), st.triangles.toLocaleString()]);
     if (st?.bytes) rows.push([tr('Файл'), `${(st.bytes / 1048576).toFixed(st.bytes < 10485760 ? 1 : 0)} MB`]);
     if (info.lat != null && info.lon != null) {

@@ -1659,5 +1659,11 @@
   "{a} из {b} МБ": "{a} of {b} MB",
   "МБ": "MB",
   "Загружаю модели 3dmr: {list}": "Loading 3dmr models: {list}",
-  " (ещё в очереди: {n})": " ({n} more queued)"
+  " (ещё в очереди: {n})": " ({n} more queued)",
+  "поворот {d}°": "rotation {d}°",
+  "масштаб {k}": "scale {k}",
+  "смещение {t}": "offset {t}",
+  "Трансформация": "Transform",
+  "из 3dmr": "from 3dmr",
+  "из выгрузки 3dmr": "from the 3dmr dump"
 }

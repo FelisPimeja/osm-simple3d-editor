@@ -1683,8 +1683,11 @@ function scheduleModels() {
       if (!id || !ring?.length) continue;
       const at: [number, number] = [ring.reduce((a, c) => a + c[0], 0) / ring.length, ring.reduce((a, c) => a + c[1], 0) / ring.length];
       // Модель на контуре здания заменяет и его части
-      const parts = f.kind === 'building' && f.hasParts
-        ? all.filter((p) => p.kind === 'part' && p.polygons[0]?.outer.length && pointInRing(centroid(p.polygons[0].outer), ring)).map((p) => p.key) : [];
+      // Части внутри контура — по центру или большинству вершин: hasParts бывает не выставлен, а у невыпуклого
+      // контура (опоры Эйфелевой башни) центр арки попадает в вырез между опорами
+      const inside = (r: LonLat[]) => pointInRing(centroid(r), ring) || r.filter((c) => pointInRing(c, ring)).length * 2 >= r.length;
+      const parts = f.kind === 'building'
+        ? all.filter((p) => p.kind === 'part' && p.polygons[0]?.outer.length && inside(p.polygons[0].outer)).map((p) => p.key) : [];
       // В отношении type=building модель заменяет всё здание: отношение и всех его членов
       const g = groupOf(f.key);
       const members = g ? [g.key, ...g.members] : [];

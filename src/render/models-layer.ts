@@ -263,34 +263,33 @@ export class ModelsLayer {
     }
   }
 
-  private origin = new MercatorCoordinate(0, 0, 0);
-  private model = new THREE.Matrix4();
-  private pickMatrix = new THREE.Matrix4();
+  /** Матрица MapLibre без сжатия глубины (последний кадр) — для клика и глубины. */
+  private plain?: THREE.Matrix4;
 
+  /**
+   * У каждой модели своя локальная система (метры, x — восток, y — север, z — вверх) с началом в её точке:
+   * общая система с началом в одной из моделей теряет точность float32 на моделях за сотни километров от неё
+   * (после перелёта с обзорного зума) — глубина рябит.
+   */
   private rebuild() {
     for (const c of [...this.scene.children]) if (c.userData.placed) this.scene.remove(c);
-    const shown = this.placements.filter((p) => this.loaded(p));
-    if (shown.length) {
-      const [lng, lat] = shown[0].at;
-      const origin = MercatorCoordinate.fromLngLat({ lng, lat }, 0);
-      const m = origin.meterInMercatorCoordinateUnits();
-      this.origin = origin;
-      // Локальная система в метрах: x — восток, y — север, z — вверх (как у слоя зданий)
-      this.model = new THREE.Matrix4().makeTranslation(origin.x, origin.y, 0).scale(new THREE.Vector3(m, -m, m));
-      for (const p of shown) {
-        const c = MercatorCoordinate.fromLngLat({ lng: p.at[0], lat: p.at[1] }, 0);
-        const inst = this.loaded(p)!.clone();
-        inst.position.set((c.x - this.origin.x) / m, -(c.y - this.origin.y) / m, p.z);
-        const tr = this.stats.get(this.ref(p.id))?.transform;
-        // direction объекта и поворот из 3dmr — оба по часовой от севера
-        inst.rotation.z = (-(p.rotation + (tr?.rotation ?? 0)) * Math.PI) / 180;
-        const k = this.scaleOf(p);
-        if (k !== 1) inst.scale.setScalar(k);
-        inst.userData.placed = true;
-        inst.userData.key = p.key;
-        if (p.key === this.selected) this.tint(inst);
-        this.scene.add(inst);
-      }
+    for (const p of this.placements) {
+      const model = this.loaded(p);
+      if (!model) continue;
+      const c = MercatorCoordinate.fromLngLat({ lng: p.at[0], lat: p.at[1] }, 0);
+      const m = c.meterInMercatorCoordinateUnits();
+      const inst = model.clone();
+      inst.position.set(0, 0, p.z);
+      const tr = this.stats.get(this.ref(p.id))?.transform;
+      // direction объекта и поворот из 3dmr — оба по часовой от севера
+      inst.rotation.z = (-(p.rotation + (tr?.rotation ?? 0)) * Math.PI) / 180;
+      const k = this.scaleOf(p);
+      if (k !== 1) inst.scale.setScalar(k);
+      inst.userData.placed = true;
+      inst.userData.key = p.key;
+      inst.userData.world = new THREE.Matrix4().makeTranslation(c.x, c.y, 0).scale(new THREE.Vector3(m, -m, m));
+      if (p.key === this.selected) this.tint(inst);
+      this.scene.add(inst);
     }
     this.map?.triggerRepaint();
   }
@@ -316,35 +315,45 @@ export class ModelsLayer {
     this.rebuild();
   }
 
+  private placed(): THREE.Object3D[] { return this.scene.children.filter((c) => c.userData.placed); }
+
   /** Модель под курсором: объект, вместо которого она стоит, и глубина попадания в clip space. */
   pick(px: number, py: number): { key: string; depth: number } | undefined {
-    if (!this.enabled || !this.map || this.hidden()) return;
-    const placed = this.scene.children.filter((c) => c.userData.placed);
-    if (!placed.length) return;
+    if (!this.enabled || !this.map || !this.plain || this.hidden()) return;
     const canvas = this.map.getCanvas();
     const x = (px / canvas.clientWidth) * 2 - 1, y = 1 - (py / canvas.clientHeight) * 2;
-    const inv = this.pickMatrix.clone().invert();
-    const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
-    const ray = new THREE.Raycaster(near, far.sub(near).normalize());
-    const hit = ray.intersectObjects(placed, true)[0];
-    if (!hit) return;
-    let o: THREE.Object3D | null = hit.object;
-    while (o && !o.userData.placed) o = o.parent;
-    return o ? { key: o.userData.key as string, depth: hit.point.clone().applyMatrix4(this.pickMatrix).z } : undefined;
+    let best: { key: string; depth: number } | undefined;
+    for (const inst of this.placed()) {
+      const m = this.plain.clone().multiply(inst.userData.world as THREE.Matrix4), inv = m.clone().invert();
+      const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+      const hit = new THREE.Raycaster(near, far.sub(near).normalize()).intersectObject(inst, true)[0];
+      if (!hit) continue;
+      const depth = hit.point.clone().applyMatrix4(m).z;
+      if (!best || depth < best.depth) best = { key: inst.userData.key as string, depth };
+    }
+    return best;
   }
 
   /** Глубина точки (lngLat, высота над землёй) в clip space той же камеры, что у pick. */
   depthOf(lngLat: { lng: number; lat: number }, altitude: number): number {
-    const c = MercatorCoordinate.fromLngLat(lngLat, 0), m = this.origin.meterInMercatorCoordinateUnits();
-    return new THREE.Vector3((c.x - this.origin.x) / m, -(c.y - this.origin.y) / m, altitude).applyMatrix4(this.pickMatrix).z;
+    const c = MercatorCoordinate.fromLngLat(lngLat, 0);
+    return new THREE.Vector3(c.x, c.y, altitude * c.meterInMercatorCoordinateUnits()).applyMatrix4(this.plain ?? new THREE.Matrix4()).z;
   }
 
   draw(renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain?: THREE.Matrix4): number {
-    if (!this.enabled || !this.scene.children.some((c) => c.userData.placed) || this.hidden()) return 0;
+    const placed = this.placed();
+    if (!this.enabled || !placed.length || this.hidden()) return 0;
     // plain (матрица MapLibre без сжатия глубины) бывает ещё не известна в первом кадре
-    if (plain) this.pickMatrix = plain.clone().multiply(this.model);
-    this.camera.projectionMatrix = main.clone().multiply(this.model);
-    renderer.render(this.scene, this.camera);
-    return renderer.info.render.triangles;
+    if (plain) this.plain = plain.clone();
+    // Каждая модель — своей матрицей (своя локальная система); остальные на это время скрыты
+    let triangles = 0;
+    for (const inst of placed) {
+      for (const o of placed) o.visible = o === inst;
+      this.camera.projectionMatrix = main.clone().multiply(inst.userData.world as THREE.Matrix4);
+      renderer.render(this.scene, this.camera);
+      triangles += renderer.info.render.triangles;
+    }
+    for (const o of placed) o.visible = true;
+    return triangles;
   }
 }

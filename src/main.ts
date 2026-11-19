@@ -57,6 +57,7 @@ import { inheritedTags, inheritedValue } from './osm/inherit';
 import { TileBorders } from './view/tile-borders';
 import { RoadsLayer } from './render/roads-layer';
 import { BarriersLayer } from './render/barriers-layer';
+import { modelIdOf, ModelsLayer, type ModelPlacement } from './render/models-layer';
 import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, type BarrierWay } from './osm/barriers';
 import type { TreePoint } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
@@ -141,9 +142,9 @@ let replacedIds: number[] = [];
 const userHidden = new Set<string>();
 
 /** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean }
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, barriers: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -621,6 +622,8 @@ const roadsLayer = new RoadsLayer('osm-roads-3d');
 const barriersLayer = new BarriersLayer();
 barriersLayer.iconFor = (t) => t.amenity === 'ticket_validator' || t.barrier === 'turnstile' || t.barrier === 'full-height_turnstile' ? poiSvg(t) : undefined;
 barriersLayer.attach(map);
+const modelsLayer = new ModelsLayer();
+modelsLayer.attach(map);
 const indoorPois = new IndoorPois(map, overpassLayer, (f, add, point) => {
   if (moveTool.active && (isDoor(f) || isMovablePoi(f))) {
     if (moveTool.state === 'select' || (moveTool.state === 'pick' && !moveTool.keys.has(f.key))) { selectIndoor(f); startMove(); }
@@ -645,13 +648,16 @@ const overpass = new OverpassTiles(map, overpassLayer, () => {
   tileBorders.setTiles(overpass.tiles());
   scheduleRoads();
   scheduleBarriers();
-}, (f) => (session.isDeleted(f.key) ? { ...f, polygons: [] } : withEntranceEdits((session.get(f.key) as Feature3D | undefined) ?? f)));
+  scheduleModels();
+}, (f) => (session.isDeleted(f.key) || modelsLayer.shows(f.key) ? { ...f, polygons: [] } : withEntranceEdits((session.get(f.key) as Feature3D | undefined) ?? f)));
 roadsLayer.onBuilt = () => overpass.setTreeCuts(roadsLayer.treeCuts);
 // В режиме здания карта вокруг убрана — мосты и тоннели тоже
 roadsLayer.hidden = () => focusScene();
 // Ограждения — отдельные объекты карты: в режиме здания — как окружение (с ним видны, без него — нет)
 barriersLayer.hidden = () => focusScene() && !overpassLayer.contextShown;
-overpassLayer.drawExtra = (renderer, main, plain) => barriersLayer.draw(renderer, main, plain);
+modelsLayer.hidden = () => focusScene() && !overpassLayer.contextShown;
+modelsLayer.onShown = (keys) => overpass.rerenderFeatures(keys);
+overpassLayer.drawExtra = (renderer, main, plain, reset) => { const n = barriersLayer.draw(renderer, main, plain); reset(); return n + modelsLayer.draw(renderer, main); };
 overpassLayer.plainDepth = () => roadsLayer.isEnabled && !roadsLayer.hidden();
 /**
  * Тайлы поменялись в режиме здания (с окружением они грузятся и при пане): части, этажи и проверки — один раз,
@@ -1301,6 +1307,7 @@ function applyGraphics() {
   tileBorders.setEnabled(gfx.tileBorders);
   tileBorders.setTiles(overpass.tiles());
   if (barriersLayer.isEnabled !== gfx.barriers) { barriersLayer.setEnabled(gfx.barriers); scheduleBarriers(); }
+  if (modelsLayer.isEnabled !== gfx.models3dmr) { modelsLayer.setEnabled(gfx.models3dmr); scheduleModels(); }
   const roadsOn = gfx.bridges3d || gfx.tunnels3d;
   roadsLayer.setKinds(gfx.bridges3d, gfx.tunnels3d);
   scheduleRoads();
@@ -1618,6 +1625,28 @@ function commitGateDrag() {
 
 /** Ограждения показанных тайлов; пересборка не чаще раза в 300 мс. */
 let barriersTimer: ReturnType<typeof setTimeout> | undefined;
+/** Объекты с тегом 3dmr: модель — в центр контура на min_height. */
+let modelsTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleModels() {
+  if (!modelsLayer.isEnabled) return;
+  clearTimeout(modelsTimer);
+  modelsTimer = setTimeout(() => {
+    modelsTimer = undefined;
+    const list: ModelPlacement[] = [];
+    const all = liveFeatures().filter((f) => !session.isDeleted(f.key)).map((f) => (session.get(f.key) as Feature3D | undefined) ?? f);
+    for (const f of all) {
+      const id = modelIdOf(f.tags), ring = f.polygons[0]?.outer;
+      if (!id || !ring?.length) continue;
+      const at: [number, number] = [ring.reduce((a, c) => a + c[0], 0) / ring.length, ring.reduce((a, c) => a + c[1], 0) / ring.length];
+      // Модель на контуре здания заменяет и его части
+      const parts = f.kind === 'building' && f.hasParts
+        ? all.filter((p) => p.kind === 'part' && p.polygons[0]?.outer.length && pointInRing(centroid(p.polygons[0].outer), ring)).map((p) => p.key) : [];
+      list.push({ key: f.key, id, at, z: Number.parseFloat(f.tags.min_height ?? '') || 0, rotation: Number.parseFloat(f.tags['3dmr:rotation'] ?? '') || 0, hides: [f.key, ...parts] });
+    }
+    modelsLayer.setPlacements(list);
+  }, 300);
+}
+
 function scheduleBarriers() {
   if (!barriersLayer.isEnabled || barriersTimer) return;
   barriersTimer = setTimeout(() => { barriersTimer = undefined; barriersLayer.setBarriers(overpass.barriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags)).map(liveGates)); syncBarrierSelection(); }, 300);
@@ -17278,6 +17307,7 @@ function groupDateForm(g: BuildingGroup): string {
 let sessionRevision = 0;
 function onSessionChange(keys: string[]) {
   sessionRevision++;
+  scheduleModels();
   if (josmApi() && !uploading) scheduleJosmSync();
   scheduleAutosave();
   mapIssuesDirty = true;

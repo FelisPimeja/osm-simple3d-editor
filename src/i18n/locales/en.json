@@ -1627,5 +1627,7 @@
   "Отправляем отчёт разработчику…": "Sending a report to the developer…",
   "Отчёт с этими правками отправлен разработчику.": "A report with these edits was sent to the developer.",
   "Отправлять отчёты об ошибках отправки": "Send reports about upload errors",
-  "Если сервер отклонит отправку правок, редактор сам заведёт issue на GitHub с ответом сервера и отправляемыми изменениями (без имени пользователя), чтобы найти и исправить причину": "If the server rejects an upload, the editor files a GitHub issue with the server's response and the changes being uploaded (without your user name), so the cause can be found and fixed"
+  "Если сервер отклонит отправку правок, редактор сам заведёт issue на GitHub с ответом сервера и отправляемыми изменениями (без имени пользователя), чтобы найти и исправить причину": "If the server rejects an upload, the editor files a GitHub issue with the server's response and the changes being uploaded (without your user name), so the cause can be found and fixed",
+  "Модели 3dmr": "3dmr models",
+  "Объекты с тегом 3dmr=* — готовые модели из репозитория 3dmr.eu вместо собственной геометрии": "Objects tagged 3dmr=* — ready-made models from the 3dmr.eu repository instead of the generated geometry"
 }

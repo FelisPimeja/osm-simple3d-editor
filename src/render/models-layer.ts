@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { MercatorCoordinate, type Map as MlMap } from 'maplibre-gl';
 import type { LonLat } from '../osm/model';
 import SNAPSHOT from './3dmr-transforms.json';
@@ -89,7 +90,8 @@ export class ModelsLayer {
   private map?: MlMap;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.Camera();
-  private readonly loader = new GLTFLoader();
+  /** Meshopt — сжатие геометрии (EXT_meshopt_compression): без декодера такие модели не грузятся. */
+  private readonly loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   /** Загруженные (или не загрузившиеся — null) модели по ref: «id» — последняя ревизия, «id/rev» — выбранная. */
   private readonly models = new Map<string, THREE.Object3D | null>();
   /** Размер модели в плане (диагональ рамки) по ref. */

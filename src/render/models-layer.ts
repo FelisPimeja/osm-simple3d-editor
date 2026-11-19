@@ -79,7 +79,9 @@ function transformOf(id: number, rev: number, info: ModelInfo | undefined): Mode
 export const LICENSES = ['CC0 1.0', 'CC BY 4.0'];
 
 /** Что известно о загруженном файле модели: размеры (м, как в файле), треугольники, байты. */
-export interface ModelStats { size: [number, number, number]; triangles: number; bytes?: number; transform?: ModelTransform }
+/** box — рамка в плане (м, как в файле, x — восток, y — север; со смещением 3dmr, до масштаба и поворота). */
+/** bottom — низ модели (м, как в файле): у части моделей начало координат не внизу. */
+export interface ModelStats { size: [number, number, number]; triangles: number; bytes?: number; transform?: ModelTransform; box: [number, number, number, number]; bottom: number }
 
 /**
  * Модели из 3dmr.eu вместо процедурной геометрии объектов с тегом 3dmr. Модель в метрах, ось Y вверх,
@@ -109,6 +111,8 @@ export class ModelsLayer {
   private readonly progressMap = new Map<string, { loaded: number; total: number }>();
   /** Загрузка моделей продвинулась, началась или закончилась — для индикатора. */
   onProgress?: () => void;
+  /** Файл модели загрузился (или не загрузился): стал известен её отпечаток. */
+  onLoaded?: () => void;
   /** Модель объекта появилась (или пропала) — перерисовать его процедурную геометрию. */
   onShown?: (keys: string[]) => void;
   hidden: () => boolean = () => false;
@@ -178,6 +182,23 @@ export class ModelsLayer {
     return tr && tr.scale !== 1 ? tr.scale : unitScale(this.sizes.get(this.ref(p.id)) ?? 0, p.extent);
   }
 
+  /**
+   * Отпечаток модели в плане (углы рамки, lon/lat) для размещения p — по уже загруженному файлу;
+   * undefined — модель ещё не загружена.
+   */
+  footprint(p: ModelPlacement): LonLat[] | undefined {
+    const st = this.stats.get(this.ref(p.id));
+    if (!st || !this.loaded(p)) return;
+    const k = st.transform && st.transform.scale !== 1 ? st.transform.scale : unitScale(this.sizes.get(this.ref(p.id)) ?? 0, p.extent);
+    const a = (-(p.rotation + (st.transform?.rotation ?? 0)) * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a);
+    const [x0, y0, x1, y1] = st.box;
+    const mx = 111320 * Math.cos((p.at[1] * Math.PI) / 180), my = 110540;
+    return ([[x0, y0], [x1, y0], [x1, y1], [x0, y1]] as [number, number][]).map(([x, y]): LonLat => {
+      const e = (x * cos - y * sin) * k, n = (x * sin + y * cos) * k;
+      return [p.at[0] + e / mx, p.at[1] + n / my];
+    });
+  }
+
   /** Показанная ревизия модели; undefined — последняя. */
   revisionOf(id: number): number | undefined { return this.revisions.get(id); }
 
@@ -243,7 +264,7 @@ export class ModelsLayer {
           const g = (o as THREE.Mesh).isMesh ? (o as THREE.Mesh).geometry : undefined;
           if (g) triangles += (g.index ? g.index.count : g.attributes.position.count) / 3;
         });
-        const st: ModelStats = { size: [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z], triangles, transform };
+        const st: ModelStats = { size: [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z], triangles, transform, box: [box.min.x, box.min.y, box.max.x, box.max.y], bottom: box.min.z };
         this.stats.set(ref, st);
         // Размер файла — отдельным HEAD (Content-Length открыт для CORS)
         void fetch(API + ref, { method: 'HEAD' }).then((r) => { const n = Number(r.headers.get('content-length')); if (n) st.bytes = n; }).catch(() => {});
@@ -258,6 +279,7 @@ export class ModelsLayer {
         const keys = this.placements.filter((p) => this.ref(p.id) === ref).flatMap((p) => p.hides);
         this.rebuild();
         if (keys.length && this.models.get(ref)) this.onShown?.(keys);
+        this.onLoaded?.();
         this.pump();
       });
     }
@@ -279,12 +301,13 @@ export class ModelsLayer {
       const c = MercatorCoordinate.fromLngLat({ lng: p.at[0], lat: p.at[1] }, 0);
       const m = c.meterInMercatorCoordinateUnits();
       const inst = model.clone();
-      inst.position.set(0, 0, p.z);
-      const tr = this.stats.get(this.ref(p.id))?.transform;
+      const st = this.stats.get(this.ref(p.id)), tr = st?.transform;
       // direction объекта и поворот из 3dmr — оба по часовой от севера
       inst.rotation.z = (-(p.rotation + (tr?.rotation ?? 0)) * Math.PI) / 180;
       const k = this.scaleOf(p);
       if (k !== 1) inst.scale.setScalar(k);
+      // Низ модели — на земле (на min_height объекта), где бы ни было начало координат файла
+      inst.position.set(0, 0, p.z - (st?.bottom ?? 0) * k);
       inst.userData.placed = true;
       inst.userData.key = p.key;
       inst.userData.world = new THREE.Matrix4().makeTranslation(c.x, c.y, 0).scale(new THREE.Vector3(m, -m, m));

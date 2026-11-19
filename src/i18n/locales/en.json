@@ -1665,5 +1665,6 @@
   "смещение {t}": "offset {t}",
   "Трансформация": "Transform",
   "из 3dmr": "from 3dmr",
-  "из выгрузки 3dmr": "from the 3dmr dump"
+  "из выгрузки 3dmr": "from the 3dmr dump",
+  "Не привязана к OSM: ни один объект в загруженных данных не ссылается на эту модель. Показана в точке привязки из 3dmr; чтобы связать, поставьте объекту тег 3dmr={id}.": "Not linked to OSM: no object in the loaded data refers to this model. Shown at its 3dmr anchor point; to link it, tag an object with 3dmr={id}."
 }

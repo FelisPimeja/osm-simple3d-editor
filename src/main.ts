@@ -677,6 +677,8 @@ modelsLayer.onProgress = () => {
   modelIndicator.querySelector('.label')!.textContent = tr('Загружаю модели 3dmr: {list}', { list: parts.join(', ') })
     + (queued ? tr(' (ещё в очереди: {n})', { n: queued }) : '');
 };
+// Загрузилась модель без объекта OSM — стал известен её отпечаток, пересчитать, что она перекрывает
+modelsLayer.onLoaded = () => { if (unlinkedSig) scheduleModels(); };
 modelsLayer.onShown = (keys) => {
   overpass.rerenderFeatures(keys);
   updateTileFilter();
@@ -1667,6 +1669,37 @@ function modelDirection(tags: Record<string, string>): number {
 
 /** Объекты с тегом 3dmr: модель — в центр контура на min_height. */
 let modelsTimer: ReturnType<typeof setTimeout> | undefined;
+/**
+ * Модели 3dmr, на которые не ссылается ни один объект загруженных данных, — в их точку привязки из 3dmr
+ * (только в кадре и с зума загрузки данных): ключ 3dmr/<id>, ничего не заменяют.
+ */
+function unlinkedModels(linked: Set<number>, features: Feature3D[] = []): ModelPlacement[] {
+  if (map.getZoom() < OVERPASS_MIN_ZOOM) return [];
+  const view = map.getBounds();
+  return modelPins.list.filter((m) => !linked.has(m.id) && view.contains(m.at)).map((m) => {
+    // Размер для эвристики единиц — по зданию, в которое попадает точка модели
+    const host = features.find((f) => f.kind === 'building' && f.polygons.some((p) => p.outer.length && pointInRing(m.at, p.outer)));
+    const p: ModelPlacement = { key: `3dmr/${m.id}`, id: m.id, at: m.at, z: 0, rotation: 0, hides: [], extent: host ? ringExtent(host.polygons[0].outer) : undefined };
+    // Модель загружена — скрыть то, что она перекрывает: здание под её точкой (с его отношением и частями)
+    // и здания и части, чей центр в её отпечатке
+    const fp = modelsLayer.footprint(p);
+    if (fp) {
+      const g = host && groupOf(host.key);
+      p.hides = [...new Set([...(host ? [host.key] : []), ...(g ? [g.key, ...g.members] : []),
+        ...features.filter((f) => f.polygons[0]?.outer.length && pointInRing(centroid(f.polygons[0].outer), fp)).map((f) => f.key)])];
+    }
+    return p;
+  });
+}
+// Сменился набор непривязанных моделей в кадре (сдвиг карты, пришёл список) — пересчитать модели
+let unlinkedSig = '';
+const recheckUnlinked = () => {
+  const sig = unlinkedModels(new Set()).map((p) => p.id).join();
+  if (sig !== unlinkedSig) { unlinkedSig = sig; scheduleModels(); }
+};
+map.on('moveend', recheckUnlinked);
+modelPins.onList = recheckUnlinked;
+
 function scheduleModels() {
   if (!modelsLayer.isEnabled) return;
   clearTimeout(modelsTimer);
@@ -1701,6 +1734,7 @@ function scheduleModels() {
       if (!id) continue;
       list.push({ key, id, at: n.p, z: 0, rotation: modelDirection(tags), hides: [], extent: n.ring ? ringExtent(n.ring) : undefined });
     }
+    for (const p of unlinkedModels(new Set(list.map((p) => p.id)), all)) list.push(p);
     modelsLayer.setPlacements(list);
     // Выбранная модель ушла из загруженных данных (улетели в другое место) — снять выбор
     if (selectedModel && !modelsLayer.placementOf(selectedModel)) { select(undefined); clearInfo(); }
@@ -17182,7 +17216,11 @@ function renderModelCard(key: string) {
   const shownRev = modelsLayer.revisionOf(p.id);
   const head = (rev?: number) => objectHeading('3dmr', `${DMR}/model/${p.id}${rev ? `/${rev}` : ''}`, `#${p.id}`)
     .replace('</h2>', rev ? ` <span class="obj-ver">${tr('ревизия {r}', { r: rev })}</span></h2>` : '</h2>');
-  const osmRow = `<p class="model-osm">${tr('Объект OSM')}: <a href="#" data-osm>${esc(osmKey)}</a>
+  // Модель без объекта OSM (ключ 3dmr/<id>) — стоит в своей точке из 3dmr
+  const unlinked = p.key.startsWith('3dmr/');
+  const osmRow = unlinked
+    ? `<p class="hint model-osm">${tr('Не привязана к OSM: ни один объект в загруженных данных не ссылается на эту модель. Показана в точке привязки из 3dmr; чтобы связать, поставьте объекту тег 3dmr={id}.', { id: p.id })}</p>`
+    : `<p class="model-osm">${tr('Объект OSM')}: <a href="#" data-osm>${esc(osmKey)}</a>
     <a href="${server().web}/${osmKey}" target="_blank" rel="noopener" title="${tr('на сайте OSM')}">↗</a></p>`;
   infoEl.innerHTML = `<div class="model-3dmr">${head(shownRev)}<p class="hint">${tr('Загрузка…')}</p>${osmRow}</div>`;
   const box = infoEl.querySelector<HTMLElement>('.model-3dmr')!;
@@ -17211,7 +17249,7 @@ function renderModelCard(key: string) {
     else if (k !== 1 && !own) rows.push([tr('Единицы'), tr('условные: размер подогнан под контур (×{k})', { k: k.toPrecision(2) })]);
     if (st) rows.push([tr('Треугольников'), st.triangles.toLocaleString()]);
     if (st?.bytes) rows.push([tr('Файл'), `${(st.bytes / 1048576).toFixed(st.bytes < 10485760 ? 1 : 0)} MB`]);
-    if (info.lat != null && info.lon != null) {
+    if (info.lat != null && info.lon != null && !unlinked) {
       const d = Math.hypot((info.lon - p.at[0]) * 111320 * Math.cos((p.at[1] * Math.PI) / 180), (info.lat - p.at[1]) * 110540);
       rows.push([tr('Точка привязки'), d < 0.5 ? tr('в центре контура') : tr('{d} м от центра контура', { d: fmt(d) })]);
     }

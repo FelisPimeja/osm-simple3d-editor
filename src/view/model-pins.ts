@@ -19,6 +19,10 @@ type Row = [number, string, number | null, number | null];
 export class ModelPins {
   private loaded?: Promise<void>;
   private shown = false;
+  /** Модели с точкой привязки (загруженные к этому моменту). */
+  readonly list: { id: number; title: string; at: [number, number] }[] = [];
+  /** Пришла очередная страница списка. */
+  onList?: () => void;
 
   constructor(private readonly map: MlMap) {}
 
@@ -67,8 +71,10 @@ export class ModelPins {
       for (const [id, title, lat, lon] of rows) {
         if (lat == null || lon == null) continue;
         features.push({ type: 'Feature', id, properties: { id, title: `${title} · 3dmr #${id}` }, geometry: { type: 'Point', coordinates: [lon, lat] } });
+        this.list.push({ id, title, at: [lon, lat] });
       }
       (this.map.getSource(SOURCE) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features });
+      this.onList?.();
     }
   }
 }

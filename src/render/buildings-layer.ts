@@ -839,6 +839,11 @@ export class BuildingsLayer implements CustomLayerInterface {
   plainDepth: () => boolean = () => false;
   /** Свои объекты в проходе зданий (ограждения): main — матрица отрисовки (глубина как у зданий), plain — MapLibre. */
   drawExtra?: (renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain: THREE.Matrix4, reset: () => void) => number;
+  /**
+   * То же после деревьев (модели 3dmr): у моделей бывают полупрозрачные материалы, они не пишут глубину —
+   * нарисованные после деревья легли бы поверх; так деревья перед моделью её закрывают, за ней — просвечивают.
+   */
+  drawLate?: (renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain: THREE.Matrix4) => number;
   private drawMain(options: CustomRenderMethodInput): THREE.Matrix4 {
     return this.plainDepth() ? new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]) : depthMain(options);
   }
@@ -1081,6 +1086,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         triangles += renderer.info.render.triangles;
       }
     }
+    if (pass !== 'wire-lines' && this.drawLate) { this.resetState(); triangles += this.drawLate(renderer, main, this.lastMain); }
     if (pass === 'wire-lines') this.lastTriangles += triangles; else this.lastTriangles = triangles;
   }
 

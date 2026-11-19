@@ -685,7 +685,8 @@ modelsLayer.onShown = (keys) => {
   // Карточка выбранной модели ждала файл (размеры, треугольники) — перерисовать
   if (selectedModel && keys.includes(selectedModel)) renderSelected();
 };
-overpassLayer.drawExtra = (renderer, main, plain, reset) => { const n = barriersLayer.draw(renderer, main, plain); reset(); return n + modelsLayer.draw(renderer, main, plain); };
+overpassLayer.drawExtra = (renderer, main, plain) => barriersLayer.draw(renderer, main, plain);
+overpassLayer.drawLate = (renderer, main, plain) => modelsLayer.draw(renderer, main, plain);
 overpassLayer.plainDepth = () => roadsLayer.isEnabled && !roadsLayer.hidden();
 /**
  * Тайлы поменялись в режиме здания (с окружением они грузятся и при пане): части, этажи и проверки — один раз,

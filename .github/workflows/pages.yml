@@ -38,6 +38,10 @@ jobs:
           VITE_MAPBOX_TOKEN: ${{ vars.VITE_MAPBOX_TOKEN }}
           VITE_MAPILLARY_TOKEN: ${{ vars.VITE_MAPILLARY_TOKEN }}
           VITE_FOTOSHI_TOKEN: ${{ vars.VITE_FOTOSHI_TOKEN }}
+          # Отчёты об ошибках отправки: fine-grained PAT только с Issues: write (секрет; всё равно попадает в JS)
+          VITE_REPORT_TOKEN: ${{ secrets.VITE_REPORT_TOKEN }}
+          VITE_REPORT_REPO: ${{ vars.VITE_REPORT_REPO }}
+          VITE_GIT_SHA: ${{ github.sha }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

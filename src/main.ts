@@ -32,7 +32,8 @@ import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } fro
 import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, dateSpan, decimalDate, existsIn, isoDay, parseDate, shiftDate } from './osm/dates';
 import { buildingRefreshMembers, refreshBuildingFeatures } from './osm/building-refresh';
-import { BrokenRingsError, ConflictError, dryRunUpload, uploadEdits } from './osm/upload';
+import { BrokenRingsError, ConflictError, dryRunUpload, UploadRejectedError, uploadEdits } from './osm/upload';
+import { reportsAvailable, reportsEnabled, reportUploadFailure, setReportsEnabled } from './osm/error-report';
 import { computeHeights, LEVEL_HEIGHT, parseLength } from './osm/heights';
 import { escalatorFloorHoles } from './render/escalator-openings';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indoorCategory, roomValueOf, type IndoorCategory } from './osm/indoor-categories';
@@ -17820,6 +17821,12 @@ async function doUpload() {
       uploadIssueKeys = new Set(err.broken.map((c) => c.key));
       setStatus(err.message, true, err.broken.map((c) =>
         `<a href="#edit-${encodeURIComponent(c.key)}" data-focus-edit="${esc(c.key)}">${esc(c.key)}</a>`).join('; '));
+    } else if (err instanceof UploadRejectedError && !err.local && reportsAvailable() && reportsEnabled()) {
+      const text = tr('Ошибка отправки: {error}', { error: err.message });
+      const off = `<a href="#settings" data-open-settings="error-reports">${esc(tr('Не отправлять отчёты'))}</a>`;
+      setStatus(text + ' ' + tr('Отправляем отчёт разработчику…'), true, off);
+      void reportUploadFailure({ error: err.message, status: err.status, osmChange: err.osmChange, api: err.api, changeset: err.changeset })
+        .then((r) => setStatus(text + (r === 'sent' ? ' ' + tr('Отчёт с этими правками отправлен разработчику.') : ''), true, off));
     } else {
       setStatus(tr('Ошибка отправки: {error}', { error: (err as Error).message }), true);
     }
@@ -17858,6 +17865,19 @@ editsHistory.addEventListener('click', (e) => {
 });
 
 statusEl.addEventListener('click', (e) => {
+  const open = (e.target as HTMLElement).closest<HTMLElement>('[data-open-settings]');
+  if (open) {
+    e.preventDefault();
+    const panel = document.getElementById('panel')!;
+    setCollapsed(panel, false);
+    selectPanelTab('map');
+    const el = document.getElementById(open.dataset.openSettings!) as HTMLInputElement | null;
+    const row = el?.closest<HTMLElement>('label') ?? el;
+    row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el?.focus({ preventScroll: true });
+    row?.animate([{ backgroundColor: '#ffdf80' }, { backgroundColor: 'transparent' }], { duration: 2500 });
+    return;
+  }
   const link = (e.target as HTMLElement).closest<HTMLElement>('[data-focus-edit]');
   if (!link) return;
   e.preventDefault();
@@ -17983,6 +18003,25 @@ unitsSelect.addEventListener('change', () => {
   setUnitSystem(unitsSelect.value as UnitSystem);
   void saveSetting('units');
   renderSelected();
+});
+// Отчёты об ошибках отправки (src/osm/error-report.ts): по умолчанию включены, выключение — в профиль
+const errorReportsToggle = document.getElementById('error-reports') as HTMLInputElement;
+document.getElementById('error-reports-row')!.hidden = !reportsAvailable() || josmMode;
+errorReportsToggle.checked = reportsEnabled();
+registerSetting({
+  key: 'error-reports',
+  local: () => (reportsEnabled() ? undefined : 'off'),
+  apply: (v) => {
+    const on = v !== 'off';
+    if (on === reportsEnabled()) return 'same';
+    setReportsEnabled(on);
+    errorReportsToggle.checked = on;
+    return 'live';
+  },
+});
+errorReportsToggle.addEventListener('change', () => {
+  setReportsEnabled(errorReportsToggle.checked);
+  void saveSetting('error-reports');
 });
 keepGfxToggle.addEventListener('change', () => {
   setKeepGraphics(keepGfxToggle.checked);

@@ -68,6 +68,16 @@ export class OsmApiError extends Error {
   }
 }
 
+/** Пакет не ушёл (сервер отклонил или не прошла проверка перед отправкой): с ним — для отчёта об ошибке. */
+export class UploadRejectedError extends Error {
+  constructor(readonly cause: Error, readonly osmChange: string, readonly api: string, readonly changeset?: number) {
+    super(cause.message);
+  }
+  get status() { return this.cause instanceof OsmApiError ? this.cause.status : undefined; }
+  /** Отправка в JOSM (локальный Remote Control) — отчёт ни к чему. */
+  get local() { return !!target; }
+}
+
 const GENERATOR = 'osm-simple3d-editor';
 
 const xmlEsc = (s: string | number) =>
@@ -325,7 +335,7 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   // Пакет, который сервер точно отклонит, — до открытия changeset (иначе остался бы пустой)
   const problems = payloadProblems(payload);
   if (dryRun) throw new DryRun(buildOsmChange(payload, 0), problems, payload.length);
-  if (problems.length) throw new Error(tr('Пакет не прошёл проверку перед отправкой (changeset не создан): {list}', { list: problems.slice(0, 5).join('; ') }));
+  if (problems.length) throw new UploadRejectedError(new Error(tr('Пакет не прошёл проверку перед отправкой (changeset не создан): {list}', { list: problems.slice(0, 5).join('; ') })), buildOsmChange(payload, 0), api());
   onStatus(tr('Открываем changeset…'));
   const changesetXml = `<osm><changeset>${tagsXml({
     comment,
@@ -337,7 +347,12 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   let uploaded = false;
   try {
     onStatus(trn(payload.length, 'Загружаем {n} объект в changeset {changeset}…|Загружаем {n} объекта в changeset {changeset}…|Загружаем {n} объектов в changeset {changeset}…', { changeset }));
-    const diff = parseDiffResult(await call('POST', `/changeset/${changeset}/upload`, buildOsmChange(payload, changeset), 'application/xml'));
+    const osmChange = buildOsmChange(payload, changeset);
+    let answer: string;
+    try { answer = await call('POST', `/changeset/${changeset}/upload`, osmChange, 'application/xml'); } catch (err) {
+      throw err instanceof OsmApiError ? new UploadRejectedError(err, osmChange, api(), changeset) : err;
+    }
+    const diff = parseDiffResult(answer);
     uploaded = true;
     return { changeset, ...diff, written, rebased, geometrySaved, deleted, dropped };
   } finally {

@@ -13,7 +13,7 @@ import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type Tree
 import { scatterTreesAsync, TreeGroup } from '../render/trees';
 import { TREE_STRIDE, TreeField } from '../render/tree-scatter';
 import { parseBarriers, type BarrierWay } from '../osm/barriers';
-import { parseModelNodes, type ModelNode } from '../osm/model-nodes';
+import { modelObjectKey, parseModelNodes, type ModelNode } from '../osm/model-nodes';
 import { parsePassages, parseRoads, type PassageWay, type RoadWay } from '../osm/roads';
 import { frameDeadline } from '../render/frame-budget';
 
@@ -243,10 +243,10 @@ export class OverpassTiles {
     return [...out.values()];
   }
 
-  /** Узлы с моделями 3dmr показанных тайлов. */
+  /** Объекты с моделями 3dmr (кроме зданий) показанных тайлов. */
   modelNodes(): ModelNode[] {
-    const out = new Map<number, ModelNode>();
-    for (const k of this.wanted) { const e = this.cache.get(k); if (e?.state === 'ready' && e.modelNodes) for (const m of e.modelNodes) out.set(m.id, m); }
+    const out = new Map<string, ModelNode>();
+    for (const k of this.wanted) { const e = this.cache.get(k); if (e?.state === 'ready' && e.modelNodes) for (const m of e.modelNodes) out.set(modelObjectKey(m), m); }
     return [...out.values()];
   }
 

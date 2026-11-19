@@ -154,10 +154,10 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
   width: max-content; max-width: calc(100% - 700px); padding: 6px 14px; border-radius: 8px;
   background: rgba(255,255,255,.96); box-shadow: 0 2px 8px rgba(0,0,0,.18); font-size: 14px; line-height: 1.35; pointer-events: none;
 }
-#statusbar:not(:has(#status:not(:empty), #op-indicator:not([hidden]), #loading-card:not([hidden]))) { display: none; }
+#statusbar:not(:has(#status:not(:empty), #op-indicator:not([hidden]), #model-indicator:not([hidden]), #loading-card:not([hidden]))) { display: none; }
 /* Индикатор загрузки и подробный статус — каждый на своей строке. */
 .statusbar-row { display: flex; flex-direction: column; align-items: center; gap: 2px; max-width: 100%; }
-.statusbar-row:not(:has(#status:not(:empty), #op-indicator:not([hidden]))) { display: none; }
+.statusbar-row:not(:has(#status:not(:empty), #op-indicator:not([hidden]), #model-indicator:not([hidden]))) { display: none; }
 #status { margin: 0; color: #444; text-align: center; }
 #status:empty { display: none; }
 #status a, #status button { pointer-events: auto; }
@@ -209,6 +209,10 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 }
 #op-indicator .label { min-width: 0; overflow-wrap: anywhere; }
 #op-indicator[hidden] { display: none; }
+/* Загрузка моделей 3dmr — как индикатор данных: точка мигает, пока идёт загрузка */
+#model-indicator { display: flex; align-items: center; justify-content: center; gap: 6px; max-width: 100%; padding: 2px 8px; border-radius: 10px; color: #333; text-align: center; }
+#model-indicator[hidden] { display: none; }
+#model-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: #e8590c; animation: op-pulse 1s ease-in-out infinite; }
 #op-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; }
 #op-indicator[data-state="ready"] .dot { background: #16a34a; }
 #op-indicator[data-state="loading"] .dot { background: #2563eb; animation: op-pulse 1s ease-in-out infinite; }

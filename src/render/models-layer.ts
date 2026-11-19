@@ -16,16 +16,27 @@ export interface ModelPlacement { key: string; id: number; at: LonLat; z: number
 
 /** Единицы, в которых модели бывают по ошибке (SketchUp → obj2gltf — дюймы): во сколько раз они мельче метра. */
 const UNITS = [1000, 100, 1 / 0.0254, 1 / 0.3048];
-/** Насколько размер модели может отличаться от контура, чтобы считать единицы угаданными. */
-const UNIT_TOLERANCE = 1.3;
+/**
+ * Насколько размер модели может отличаться от контура при угаданных единицах: в модели бывает окружение
+ * (площадка, деревья), и рамка шире контура — допуск в разы, ближайшая по логарифму единица.
+ */
+const UNIT_TOLERANCE = 2;
+/** Модель до стольких раз больше контура — считаем метрами (крыльцо, навесы шире контура). */
+const METRES_UP_TO = 1.3;
+/** Модель во столько раз меньше контура — значит, единицы условные (фотограмметрия в «единичном кубе»): подогнать под контур. */
+const FIT_BELOW = 1 / 20;
 
-/** Масштаб модели размером model (м, как в файле) на контур размером outline: 1 — если похоже на метры. */
+/**
+ * Масштаб модели размером model (м, как в файле) на контур размером outline: 1 — если похоже на метры;
+ * мм/см/дюймы/футы — ближайшие с допуском; ни то ни другое — подогнать под контур.
+ */
 export function unitScale(model: number, outline: number | undefined): number {
   if (!outline || !model) return 1;
   const r = model / outline;
-  if (r < UNIT_TOLERANCE) return 1;
-  const u = UNITS.find((c) => r / c < UNIT_TOLERANCE && c / r < UNIT_TOLERANCE);
-  return u ? 1 / u : 1;
+  if (r >= FIT_BELOW && r < METRES_UP_TO) return 1;
+  if (r < FIT_BELOW) return 1 / r;
+  const best = UNITS.map((c) => ({ c, d: Math.abs(Math.log(r / c)) })).sort((a, b) => a.d - b.d)[0];
+  return best.d < Math.log(UNIT_TOLERANCE) ? 1 / best.c : 1 / r;
 }
 
 /** id модели из тега 3dmr (бывает «12» или «12;34» — берём первый). */
@@ -66,6 +77,10 @@ export class ModelsLayer {
   private placements: ModelPlacement[] = [];
   private enabled = false;
   private selected?: string;
+  /** Загружаемые сейчас файлы: байты пришли / всего (0 — сервер не сказал). */
+  private readonly progressMap = new Map<string, { loaded: number; total: number }>();
+  /** Загрузка моделей продвинулась, началась или закончилась — для индикатора. */
+  onProgress?: () => void;
   /** Модель объекта появилась (или пропала) — перерисовать его процедурную геометрию. */
   onShown?: (keys: string[]) => void;
   hidden: () => boolean = () => false;
@@ -124,6 +139,11 @@ export class ModelsLayer {
     return p && st ? { ...st, scale: unitScale(this.sizes.get(this.ref(p.id)) ?? 0, p.extent) } : undefined;
   }
 
+  /** Что грузится сейчас (для индикатора): файлы с прогрессом и сколько ждут очереди. */
+  progress(): { files: { ref: string; loaded: number; total: number }[]; queued: number } {
+    return { files: [...this.progressMap].map(([ref, p]) => ({ ref, ...p })), queued: this.queue.length };
+  }
+
   /** Показанная ревизия модели; undefined — последняя. */
   revisionOf(id: number): number | undefined { return this.revisions.get(id); }
 
@@ -140,7 +160,7 @@ export class ModelsLayer {
   setPlacements(list: ModelPlacement[]) {
     const before = this.hiddenKeys();
     this.placements = this.enabled ? list : [];
-    for (const p of this.placements) { const r = this.ref(p.id); if (!this.models.has(r) && !this.queue.includes(r)) this.queue.push(r); }
+    for (const p of this.placements) { const r = this.ref(p.id); if (!this.models.has(r) && !this.progressMap.has(r) && !this.queue.includes(r)) this.queue.push(r); }
     this.pump();
     this.rebuild();
     // Скрытое поменялось без загрузки (модель уже в памяти, объект выпал из данных или вернулся) — перерисовать
@@ -161,7 +181,9 @@ export class ModelsLayer {
     while (this.loading < PARALLEL && this.queue.length) {
       const ref = this.queue.shift()!;
       this.loading++;
-      this.loader.loadAsync(API + ref).then((gltf) => {
+      this.progressMap.set(ref, { loaded: 0, total: 0 });
+      this.onProgress?.();
+      this.loader.loadAsync(API + ref, (e) => { this.progressMap.set(ref, { loaded: e.loaded, total: e.lengthComputable ? e.total : 0 }); this.onProgress?.(); }).then((gltf) => {
         const root = new THREE.Group();
         gltf.scene.rotation.x = Math.PI / 2; // Y вверх → Z вверх, -Z (север) → +Y
         root.add(gltf.scene);
@@ -184,6 +206,8 @@ export class ModelsLayer {
         this.models.set(ref, null);
       }).finally(() => {
         this.loading--;
+        this.progressMap.delete(ref);
+        this.onProgress?.();
         const keys = this.placements.filter((p) => this.ref(p.id) === ref).flatMap((p) => p.hides);
         this.rebuild();
         if (keys.length && this.models.get(ref)) this.onShown?.(keys);

@@ -59,6 +59,7 @@ import { RoadsLayer } from './render/roads-layer';
 import { BarriersLayer } from './render/barriers-layer';
 import { placeCombo } from './edit/combo-place';
 import { ModelPins } from './view/model-pins';
+import { modelObjectKey } from './osm/model-nodes';
 import { DMR, LICENSES, modelIdOf, ModelsLayer, type ModelPlacement } from './render/models-layer';
 import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, type BarrierWay } from './osm/barriers';
 import type { TreePoint } from './osm/trees';
@@ -665,6 +666,17 @@ roadsLayer.hidden = () => focusScene();
 barriersLayer.hidden = () => focusScene() && !overpassLayer.contextShown;
 modelsLayer.hidden = () => focusScene() && !overpassLayer.contextShown;
 overpass.replaced = (key) => modelsLayer.shows(key);
+// Индикатор загрузки моделей: без него при подлёте к модели непонятно, почему её не видно (файлы до десятков МБ)
+const modelIndicator = document.getElementById('model-indicator')!;
+modelsLayer.onProgress = () => {
+  const { files, queued } = modelsLayer.progress();
+  modelIndicator.hidden = !files.length && !queued;
+  if (modelIndicator.hidden) return;
+  const mb = (n: number) => (n / 1048576).toFixed(1);
+  const parts = files.map((f) => `#${f.ref.replace('/', ' r')}` + (f.total ? ` — ${tr('{a} из {b} МБ', { a: mb(f.loaded), b: mb(f.total) })}` : f.loaded ? ` — ${mb(f.loaded)} ${tr('МБ')}` : ''));
+  modelIndicator.querySelector('.label')!.textContent = tr('Загружаю модели 3dmr: {list}', { list: parts.join(', ') })
+    + (queued ? tr(' (ещё в очереди: {n})', { n: queued }) : '');
+};
 modelsLayer.onShown = (keys) => {
   overpass.rerenderFeatures(keys);
   updateTileFilter();
@@ -1680,11 +1692,11 @@ function scheduleModels() {
     }
     // Узлы: модель — в точку узла (теги — с правками сессии)
     for (const n of overpass.modelNodes()) {
-      const key = `node/${n.id}`;
+      const key = modelObjectKey(n);
       if (session.isDeleted(key)) continue;
       const tags = session.get(key)?.tags ?? n.tags, id = modelIdOf(tags);
       if (!id) continue;
-      list.push({ key, id, at: n.p, z: 0, rotation: modelDirection(tags), hides: [] });
+      list.push({ key, id, at: n.p, z: 0, rotation: modelDirection(tags), hides: [], extent: n.ring ? ringExtent(n.ring) : undefined });
     }
     modelsLayer.setPlacements(list);
     // Сборка тайла в воркере могла закончиться после того, как модель спрятала здание, — дорисовав его: убрать
@@ -17183,6 +17195,7 @@ function renderModelCard(key: string) {
     const rows: [string, string][] = [];
     if (st) rows.push([tr('Размеры'), `${st.size.map((v) => fmt(v * k)).join(' × ')} m`]);
     if (unit) rows.push([tr('Единицы'), tr('{u} → м (масштаб поправлен)', { u: unit() })]);
+    else if (k !== 1) rows.push([tr('Единицы'), tr('условные: размер подогнан под контур (×{k})', { k: k.toPrecision(2) })]);
     if (st) rows.push([tr('Треугольников'), st.triangles.toLocaleString()]);
     if (st?.bytes) rows.push([tr('Файл'), `${(st.bytes / 1048576).toFixed(st.bytes < 10485760 ? 1 : 0)} MB`]);
     if (info.lat != null && info.lon != null) {

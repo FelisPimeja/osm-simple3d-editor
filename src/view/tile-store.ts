@@ -23,7 +23,8 @@ const STORE = 'overpass-tiles';
 // 18 — ограждения (barrier=wall/fence/hedge, barriers); записи 17 показываются без них и обновляются в фоне
 // 19 — ворота и проходы на ограждениях (barriers[].gates); записи 18 показываются без них и обновляются в фоне
 // 20 — узлы с моделями 3dmr (modelNodes); записи 19 показываются без них и обновляются в фоне
-const FORMAT = 20;
+// 21 — в modelNodes и пути/отношения с 3dmr, не здания (крепость, мост); записи 20 обновляются в фоне
+const FORMAT = 21;
 /** Роль члена, которая неизвестна (кеш старого формата): при отправке сверяемся с сервером только по type/ref. */
 export const UNKNOWN_ROLE = '?';
 /** Сколько тайлов хранить; при превышении удаляются самые старые. */
@@ -71,6 +72,7 @@ export class TileStore {
   async get(key: string): Promise<StoredTile | undefined> {
     const rec = await this.request<TileRecord | undefined>('readonly', (s) => s.get(key), 'тайлы: запрос к IndexedDB');
     if (rec?.format === FORMAT) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, passages: rec.passages, barriers: rec.barriers, modelNodes: rec.modelNodes, fetchedAt: rec.fetchedAt, via: rec.via };
+    if (rec?.format === 20) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, passages: rec.passages, barriers: rec.barriers, modelNodes: rec.modelNodes, fetchedAt: 0, via: rec.via };
     if (rec?.format === 19) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, passages: rec.passages, barriers: rec.barriers, fetchedAt: 0, via: rec.via };
     if (rec?.format === 18) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, passages: rec.passages, barriers: rec.barriers, fetchedAt: 0, via: rec.via };
     if (rec?.format === 17) return { features: rec.features, groups: rec.groups, indoor: rec.indoor ?? [], trees: rec.trees, roads: rec.roads, passages: rec.passages, fetchedAt: 0, via: rec.via };

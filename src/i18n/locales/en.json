@@ -1654,5 +1654,10 @@
   "Категории": "Categories",
   "Теги модели": "Model tags",
   "Автор": "Author",
-  "ревизия {r}": "revision {r}"
+  "ревизия {r}": "revision {r}",
+  "условные: размер подогнан под контур (×{k})": "arbitrary: size fitted to the outline (×{k})",
+  "{a} из {b} МБ": "{a} of {b} MB",
+  "МБ": "MB",
+  "Загружаю модели 3dmr: {list}": "Loading 3dmr models: {list}",
+  " (ещё в очереди: {n})": " ({n} more queued)"
 }

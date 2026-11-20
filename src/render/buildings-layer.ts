@@ -599,6 +599,8 @@ const MAP_HIDDEN_EDGE_MATERIAL = new THREE.LineDashedMaterial({
 /** Здание внутри группы: треугольники в локальных метрах и всё, что нужно для раскраски и выбора. */
 interface Item {
   feature: Feature3D;
+  /** Отметка основания, с которой собран (рельеф): поменялась — пересобрать. */
+  lift?: number;
   /** Арка: ниже z объём — контур без полосы проезда (локальные метры). */
   passage?: { z: number; lower: LocalPolygon[]; ways: PassagePiece[] };
   /** Ключи объектов, с которыми у него общие грани (крыша–дно): их правка требует пересборки этого. */
@@ -6018,6 +6020,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (this.pending.get(key) !== token) return;
     this.pending.delete(key);
     this.install(key, g);
+    // Пока тайл собирался, пришли тайлы рельефа: здания, собранные без них (на 0 м), — на свою отметку
+    this.rebuildGroundIn(key, g);
     return g.items.map(rendered);
   }
 
@@ -6075,6 +6079,17 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Пересобирает здания, подходящие под условие (например, когда догрузился straight skeleton).
    * Треугольники считаются порциями по кадрам, геометрия группы пересобирается один раз в конце.
    */
+  /** Рельеф: пересобрать здания, у которых отметка основания уже не та, с которой они собраны. */
+  rebuildGround() {
+    for (const [key, g] of [...this.groups]) this.rebuildGroundIn(key, g);
+  }
+
+  private rebuildGroundIn(key: string, g: MeshGroup) {
+    if (g.focusScene || this.groups.get(key) !== g) return;
+    const stale = g.items.filter((it) => Math.abs((it.lift ?? 0) - (groundFor(it.feature) || 0)) > 0.01).map((it) => it.feature);
+    if (stale.length) this.replaceItems(g, stale, true);
+  }
+
   async rebuildWhere(pred: (f: Feature3D) => boolean, onRebuilt: (r: RenderedFeature) => void = () => {}) {
     for (const [key, g] of [...this.groups]) {
       const todo = g.items.map((it) => it.feature).filter(pred);
@@ -9372,6 +9387,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   const box = new THREE.Box3();
   if (positions.length) box.setFromArray(positions);
   return {
+    lift,
     contacts: contactKeys(g, f),
     feature: f,
     passage: passage && !tri.pending ? { z: passage.z + lift, lower: passage.lower, ways: passage.ways } : undefined,

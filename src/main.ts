@@ -1378,7 +1378,7 @@ function syncTerrain() {
 /** Отметки поменялись (пришли тайлы DEM, рельеф включён или снят): пересобрать то, что стоит на земле. */
 function refreshGround() {
   groundCache.clear();
-  void overpassLayer.rebuildWhere(() => true);
+  overpassLayer.rebuildGround();
   overpass.refreshTrees();
   scheduleBarriers();
   scheduleModels();

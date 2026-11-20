@@ -31,15 +31,20 @@ export class Dem {
   }
 
   /** Отметка точки, м над уровнем моря (билинейно); тайла ещё нет или рельеф выключен — 0 (тайл запрашивается). */
-  at([lon, lat]: LonLat): number {
-    if (!this.enabled) return 0;
+  at(p: LonLat): number {
+    return this.sample(p) ?? 0;
+  }
+
+  /** Отметка точки; undefined — рельеф выключен или тайл ещё не пришёл (не загрузился). */
+  private sample([lon, lat]: LonLat): number | undefined {
+    if (!this.enabled) return;
     const n = 2 ** DEM_ZOOM;
     const x = ((lon + 180) / 360) * n;
     const s = Math.sin((lat * Math.PI) / 180);
     const y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n;
     const tx = Math.floor(x), ty = Math.floor(y);
     const t = this.tile(tx, ty);
-    if (!(t instanceof Float32Array)) return 0;
+    if (!(t instanceof Float32Array)) return;
     // Центры пикселей — на половинках: крайние берём по краю тайла (без соседнего тайла)
     const px = Math.min(SIZE - 1, Math.max(0, (x - tx) * SIZE - 0.5)), py = Math.min(SIZE - 1, Math.max(0, (y - ty) * SIZE - 0.5));
     const x0 = Math.floor(px), y0 = Math.floor(py), x1 = Math.min(SIZE - 1, x0 + 1), y1 = Math.min(SIZE - 1, y0 + 1);
@@ -57,18 +62,19 @@ export class Dem {
     let min = Infinity;
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
     for (const r of rings) for (const p of r) {
-      min = Math.min(min, this.at(p));
+      const v = this.sample(p);
+      if (v !== undefined) min = Math.min(min, v);
       w = Math.min(w, p[0]); e = Math.max(e, p[0]); s = Math.min(s, p[1]); n = Math.max(n, p[1]);
     }
-    if (!Number.isFinite(min)) return 0;
     const outer = rings[0];
     const dLat = 10 / 111_320, dLon = dLat / Math.max(0.05, Math.cos((((s + n) / 2) * Math.PI) / 180));
     // Не больше ~400 проб на объект (огромные контуры — реже)
     const k = Math.max(1, Math.sqrt((((e - w) / dLon) * ((n - s) / dLat)) / 400));
     for (let y = s + dLat * k / 2; y < n; y += dLat * k) for (let x = w + dLon * k / 2; x < e; x += dLon * k) {
-      if (outer && inRing([x, y], outer)) min = Math.min(min, this.at([x, y]));
+      const v = outer && inRing([x, y], outer) ? this.sample([x, y]) : undefined;
+      if (v !== undefined) min = Math.min(min, v);
     }
-    return min;
+    return Number.isFinite(min) ? min : 0;
   }
 
   private tile(x: number, y: number): Tile | undefined {

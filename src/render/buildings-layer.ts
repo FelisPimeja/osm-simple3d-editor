@@ -8865,7 +8865,29 @@ const NEIGHBOUR_DOOR_REACH = 3;
 let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;
 /** Отметка основания объекта над уровнем моря (рельеф); 0 — рельеф выключен. */
 let groundFor: (f: Feature3D) => number = () => 0;
-export function setGround(fn: (f: Feature3D) => number) { groundFor = fn; }
+/** Нижняя отметка рельефа под объектом: до неё от основания — фундамент. */
+let footFor: (f: Feature3D) => number = () => 0;
+export function setGround(fn: (f: Feature3D) => number, foot: (f: Feature3D) => number = fn) { groundFor = fn; footFor = foot; }
+
+/**
+ * Фундамент на склоне: стенки по кольцам контура от dz ниже основания до него (z — от основания, локальные метры),
+ * гранями наружу от объёма (у дыр — в дыру).
+ */
+function foundationWalls(polys: LocalPolygon[], dz: number): number[] {
+  const out: number[] = [];
+  for (const p of polys) [p.outer, ...p.inners].forEach((ring, r) => {
+    let area = 0;
+    for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; area += a[0] * b[1] - b[0] * a[1]; }
+    // Нормаль (b − a) × z — вправо от ребра: наружу у внешнего кольца против часовой, у дыры — по часовой
+    const rightOut = (area > 0) === (r === 0);
+    for (let i = 0; i < ring.length; i++) {
+      let a = ring[i], b = ring[(i + 1) % ring.length];
+      if (!rightOut) [a, b] = [b, a];
+      out.push(a[0], a[1], -dz, b[0], b[1], -dz, b[0], b[1], 0, a[0], a[1], -dz, b[0], b[1], 0, a[0], a[1], 0);
+    }
+  });
+  return out;
+}
 export function groundOf(f: Feature3D) { return groundFor(f); }
 export function setInheritance(fn: (f: Feature3D) => Record<string, string> | undefined) { inheritFor = fn; }
 
@@ -9375,14 +9397,16 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // Стеклянный фасад: внутри видны перекрытия — плиты на границах этажей (непрозрачные, после крыши)
   const glassWalls = isGlass(roofPartWallMaterial(tags));
   const floors = [...joint, ...(glassWalls && !flat && !roofOnly ? timed('здание: перекрытия за стеклом', () => floorSlabs(polys, heights, tags, levelGridFor(f)?.map((l) => ({ z: l.z, holes: l.holes.map((p) => p.map((r) => r.map(g.toLocal))) })))) : []), ...panes];
+  // Рельеф (эксперимент): объект — на верхнюю отметку рельефа под зданием; стоящему на земле — фундамент до нижней
+  const lift = g.focusScene ? 0 : groundFor(f);
+  const foot = lift ? lift - footFor(f) : 0;
+  if (foot > 0.05 && !flat && heights.min < 0.01 && !roofOnly) tri.walls = [...foundationWalls(polys, foot), ...tri.walls];
   const positions = new Float32Array(tri.walls.length + tri.roof.length + floors.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);
   positions.set(floors, tri.walls.length + tri.roof.length);
   const wall = tags['building:colour'] ?? tags.colour ?? DEFAULT_WALL;
   const roof = tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
-  // Рельеф (эксперимент): весь объект — на отметку основания (минимум DEM под зданием); сцена режима здания — без него
-  const lift = g.focusScene ? 0 : groundFor(f);
   if (lift) for (let i = 2; i < positions.length; i += 3) positions[i] += lift;
   const box = new THREE.Box3();
   if (positions.length) box.setFromArray(positions);

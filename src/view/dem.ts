@@ -57,16 +57,16 @@ export class Dem {
   }
 
   /**
-   * Минимум отметки под кольцами (вершины и сетка внутри с шагом ~10 м): основание здания на склоне — по нижней
-   * точке, верхняя сторона уходит в землю, а не висит в воздухе.
+   * Наименьшая и наибольшая отметки под кольцами (вершины и сетка внутри с шагом ~10 м): здание стоит на верхней,
+   * до нижней — фундамент. Точки в ещё не пришедших тайлах пропускаются; ничего нет — [0, 0].
    */
-  minUnder(rings: LonLat[][]): number {
-    if (!this.enabled) return 0;
-    let min = Infinity;
+  rangeUnder(rings: LonLat[][]): [number, number] {
+    if (!this.enabled) return [0, 0];
+    let min = Infinity, max = -Infinity;
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
     for (const r of rings) for (const p of r) {
       const v = this.sample(p);
-      if (v !== undefined) min = Math.min(min, v);
+      if (v !== undefined) { min = Math.min(min, v); max = Math.max(max, v); }
       w = Math.min(w, p[0]); e = Math.max(e, p[0]); s = Math.min(s, p[1]); n = Math.max(n, p[1]);
     }
     const outer = rings[0];
@@ -75,9 +75,9 @@ export class Dem {
     const k = Math.max(1, Math.sqrt((((e - w) / dLon) * ((n - s) / dLat)) / 400));
     for (let y = s + dLat * k / 2; y < n; y += dLat * k) for (let x = w + dLon * k / 2; x < e; x += dLon * k) {
       const v = outer && inRing([x, y], outer) ? this.sample([x, y]) : undefined;
-      if (v !== undefined) min = Math.min(min, v);
+      if (v !== undefined) { min = Math.min(min, v); max = Math.max(max, v); }
     }
-    return Number.isFinite(min) ? min : 0;
+    return Number.isFinite(min) ? [min, max] : [0, 0];
   }
 
   private tile(x: number, y: number): Tile | undefined {

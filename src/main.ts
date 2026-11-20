@@ -1423,18 +1423,22 @@ function refreshGround() {
   scheduleModels();
   scheduleIndoorBadges();
 }
-/** Отметка основания здания: минимум DEM под контуром здания (у части — под контуром её здания: части одного здания на одной отметке). */
-const groundCache = new Map<string, number>();
+/** Отметки основания здания: по контуру здания (у части — по контуру её здания: части одного здания на одной отметке). */
+const groundCache = new Map<string, [number, number]>();
 let groundIndex: { rev: number; list: { f: Feature3D; box: Bbox }[] } | undefined;
-function buildingGround(f: Feature3D): number {
-  if (!ground.on) return 0;
+/** Наименьшая и наибольшая отметки рельефа под зданием (у части — под её зданием). */
+function groundRange(f: Feature3D): [number, number] {
+  if (!ground.on) return [0, 0];
   const host = groundHost(f);
   const hit = groundCache.get(host.key);
-  if (hit !== undefined) return hit;
-  const v = dem.minUnder(host.polygons.map((p) => p.outer));
+  if (hit) return hit;
+  const v = dem.rangeUnder(host.polygons.map((p) => p.outer));
   groundCache.set(host.key, v);
   return v;
 }
+/** Здание стоит на верхней отметке рельефа под ним (не тонет в склоне), до нижней — фундамент. */
+const buildingGround = (f: Feature3D) => groundRange(f)[1];
+const buildingFoot = (f: Feature3D) => groundRange(f)[0];
 function groundHost(f: Feature3D): Feature3D {
   const g = groupOf(f.key);
   if (g) {
@@ -1453,7 +1457,7 @@ function groundHost(f: Feature3D): Feature3D {
   const host = groundIndex.list.find(({ f: b, box }) => c[0] >= box[0] && c[0] <= box[2] && c[1] >= box[1] && c[1] <= box[3] && pointInRing(c, b.polygons[0].outer));
   return host?.f ?? f;
 }
-setGround(buildingGround);
+setGround(buildingGround, buildingFoot);
 // Карта могла загрузиться раньше, чем модуль дошёл досюда (top-level await выше): тогда — сразу, иначе — по load
 if (mapLoaded) syncTerrain(); else map.once('load', syncTerrain);
 

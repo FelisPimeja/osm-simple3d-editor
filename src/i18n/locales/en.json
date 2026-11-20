@@ -1678,5 +1678,7 @@
   "Деревья: ряды и леса ({n} объект)|Деревья: ряды и леса ({n} объекта)|Деревья: ряды и леса ({n} объектов)": "Trees: rows and woods ({n} object)|Trees: rows and woods ({n} objects)",
   "M — переместить, Ctrl+C / Ctrl+V — копировать, Delete — удалить.": "M — move, Ctrl+C / Ctrl+V — copy, Delete — delete.",
   "Рельеф": "Terrain",
-  "Эксперимент: объёмный рельеф (Mapterhorn) на карте; здания стоят на минимальной отметке под контуром. В режиме здания рельеф снимается": "Experimental: 3D terrain (Mapterhorn) on the map; buildings stand at the lowest ground elevation under their outline. Terrain is turned off in building mode"
+  "Эксперимент: объёмный рельеф (Mapterhorn) на карте; здания стоят на минимальной отметке под контуром. В режиме здания рельеф снимается": "Experimental: 3D terrain (Mapterhorn) on the map; buildings stand at the lowest ground elevation under their outline. Terrain is turned off in building mode",
+  "Отмывка рельефа": "Hillshade",
+  "Тени рельефа по данным Mapterhorn поверх подложки": "Terrain shading from Mapterhorn data over the basemap"
 }

@@ -246,9 +246,27 @@ export function applyBasemap(map: MlMap, id: string, bounds?: Bounds): boolean {
     ...(bounds && { bounds }),
   });
   // Под GPS-треками, если они включены
-  const before = map.getLayer(GPS_LAYER) ? GPS_LAYER : firstSymbol(map);
+  const before = map.getLayer(GPS_LAYER) ? GPS_LAYER : map.getLayer(HILLSHADE_LAYER) ? HILLSHADE_LAYER : firstSymbol(map);
   map.addLayer({ id: IMAGERY_LAYER, type: 'raster', source: IMAGERY_LAYER, paint: { 'raster-fade-duration': 150, 'raster-opacity': getOpacity(id) } }, before);
   return true;
+}
+
+/** Отмывка рельефа (Mapterhorn) — поверх подложки (и снимков), под GPS-треками и подписями. */
+export const HILLSHADE_LAYER = 'hillshade';
+const HILLSHADE_KEY = 'osm3d.hillshade';
+export function storedHillshade(): boolean {
+  try { return localStorage.getItem(HILLSHADE_KEY) === '1'; } catch { return false; }
+}
+export function storeHillshade(on: boolean) {
+  try { if (on) localStorage.setItem(HILLSHADE_KEY, '1'); else localStorage.removeItem(HILLSHADE_KEY); } catch { /* до перезагрузки */ }
+}
+export function applyHillshade(map: MlMap, on: boolean, tiles: string, attribution: string, maxzoom: number) {
+  if (map.getLayer(HILLSHADE_LAYER)) map.removeLayer(HILLSHADE_LAYER);
+  if (!on) return;
+  // Свой источник, не общий с terrain: MapLibre советует так (разные тайлы для меша и для отмывки)
+  if (!map.getSource(HILLSHADE_LAYER)) map.addSource(HILLSHADE_LAYER, { type: 'raster-dem', tiles: [tiles], tileSize: 512, encoding: 'terrarium', maxzoom, attribution });
+  const before = map.getLayer(GPS_LAYER) ? GPS_LAYER : firstSymbol(map);
+  map.addLayer({ id: HILLSHADE_LAYER, type: 'hillshade', source: HILLSHADE_LAYER, paint: { 'hillshade-exaggeration': 0.4, 'hillshade-shadow-color': '#473b24', 'hillshade-highlight-color': '#ffffff' } }, before);
 }
 
 /** Кнопка со списком подложек — в общем блоке кнопок карты (масштаб, компас). */

@@ -40,7 +40,7 @@ import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indo
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
-import { applyBasemap, applyGpsTraces, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, NO_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
+import { applyBasemap, applyGpsTraces, applyHillshade, storedHillshade, storeHillshade, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, NO_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
@@ -310,6 +310,22 @@ const photoLayers = [
   service, label, title, layer: new PhotoLayer(map, service), on: server().imagery ? storedOn(service) : false,
 }));
 type PhotoLayerState = typeof photoLayers[number];
+// Отмывка рельефа (Mapterhorn): слой подложки, на всех серверах; с рельефом и без
+let hillshade = storedHillshade();
+let hillshadeWaits = false;
+const showHillshade = () => {
+  if (mapLoaded) { applyHillshade(map, hillshade, DEM_TILES, DEM_ATTRIBUTION, DEM_ZOOM); return; }
+  // Карта ещё грузится: показать после load (после обработчика, который выставит mapLoaded)
+  if (hillshadeWaits) return;
+  hillshadeWaits = true;
+  map.once('load', () => queueMicrotask(() => { hillshadeWaits = false; showHillshade(); }));
+};
+basemapCtrl?.addOverlay('hillshade', tr('Отмывка рельефа'), tr('Тени рельефа по данным Mapterhorn поверх подложки'), hillshade, (on) => {
+  hillshade = on;
+  storeHillshade(on);
+  showHillshade();
+});
+if (hillshade) showHillshade();
 basemapCtrl?.addOverlayGroup(tr('Фото и панорамы'), tr('Уличные фото и панорамы 360°, разрешённые для OSM'), {
   title: tr('Фильтр снимков: тип и даты съёмки'),
   filtered: () => isPhotoFiltered(photoFilter),

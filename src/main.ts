@@ -19514,8 +19514,9 @@ function scheduleAutosave() {
 
 // Копировать / вставить правки целиком (JSON) — разбирать правки, которые не уходят на сервер
 function updateEditsClip() {
-  copyEditsBtn.disabled = !session.changes().length && !session.hasDataHistory();
-  clearEditsBtn.disabled = !session.changes().length && !session.hasDataHistory();
+  copyEditsBtn.disabled = !session.changes().length;
+  // Нет правок (одна лишь история отмен — не правки) — очищать нечего
+  clearEditsBtn.disabled = !session.changes().length;
 }
 editsClip.addEventListener('click', (e) => {
   e.stopPropagation(); // не сворачивать панель
@@ -19602,7 +19603,7 @@ function keepView(replace: () => void) {
 /** «Очистить»: все правки прочь одним шагом (с подтверждением; отменить нельзя). */
 function clearEdits() {
   const n = session.changes().length;
-  if (!n && !session.hasDataHistory()) return;
+  if (!n) return;
   // Подтверждение своим окном: встроенные браузеры (панель приложения) молча гасят confirm()
   showPopup(`<h3>${tr('Очистить правки')}</h3><p>${trn(n, 'Отменить все правки ({n} объект)? Вернуть их будет нельзя.|Отменить все правки ({n} объекта)? Вернуть их будет нельзя.|Отменить все правки ({n} объектов)? Вернуть их будет нельзя.')}</p>
     <p class="repeat-actions"><button type="button" data-clear-confirm>${tr('Очистить')}</button><button type="button" data-popup-close>${tr('Отмена')}</button></p>`, null);

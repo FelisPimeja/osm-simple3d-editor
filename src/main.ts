@@ -14490,7 +14490,8 @@ function renderLevelsImpl() {
     syncPlanTools();
     shownIndoor = [];
     selectedIndoor = undefined;
-    indoorSelection = [];
+    // Объекты карты (ограждения, ряды деревьев, леса) — не план этажа: их выбор остаётся
+    indoorSelection = indoorSelection.filter((f) => f.barrier);
     selectedRoomWalls = [];
     overpassLayer.setRoomWallSelection([]);
     indoorPois.setSelection([]);

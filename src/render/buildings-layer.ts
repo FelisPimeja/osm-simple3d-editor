@@ -6412,6 +6412,11 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   pickTree(point: PointLike): string | undefined {
+    return this.pickTreeHit(point)?.key;
+  }
+
+  /** Дерево под точкой экрана: ключ (узла, ряда или леса) и глубина попадания (как у depthAt — для сравнения со зданием). */
+  pickTreeHit(point: PointLike): { key: string; depth: number } | undefined {
     if (!this.visible || this.focused || this.graphics.trees === false || !this.map || !this.lastMain) return undefined;
     const [x, y] = Array.isArray(point) ? point : [point.x, point.y];
     const canvas = this.map.getCanvas();
@@ -6419,9 +6424,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     for (const group of this.trees.values()) {
       const projection = this.lastMain.clone().multiply(group.model);
       const hit = group.pick(x, y, canvas.clientWidth, canvas.clientHeight, projection);
-      if (hit && (!best || hit.depth < best.depth)) best = hit;
+      if (!hit) continue;
+      const clip = hit.point.clone().applyMatrix4(projection);
+      if (!best || clip.z < best.depth) best = { key: hit.key, depth: clip.z };
     }
-    return best?.key;
+    return best;
+  }
+
+  /** Глубина точки (долгота, широта, высота над землёй, м) в той же мере, что pickTreeHit. */
+  depthAt(lngLat: { lng: number; lat: number }, altitude: number): number | undefined {
+    if (!this.lastMain) return;
+    const c = MercatorCoordinate.fromLngLat(lngLat, altitude);
+    return new THREE.Vector3(c.x, c.y, c.z).applyMatrix4(this.lastMain).z;
   }
 
   setVisible(visible: boolean) {

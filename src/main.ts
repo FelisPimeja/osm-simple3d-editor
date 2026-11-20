@@ -2580,16 +2580,30 @@ map.on('click', (e) => {
     if (k) toggleSelection(k);
     return;
   }
-  const treeKey = !focus && gfx.trees ? overpassLayer.pickTree(e.point) : undefined;
+  // Дерево за зданием не выбирается: сравниваем глубину попадания с глубиной здания под курсором
+  const treeHit = !focus && gfx.trees ? overpassLayer.pickTreeHit(e.point) : undefined;
+  const behind = (() => {
+    const b = treeHit && key ? overpassLayer.pickHit(e.point) : undefined, d = b && overpassLayer.depthAt(b.lngLat, b.altitude);
+    return d !== undefined && treeHit!.depth > d;
+  })();
+  const treeKey = treeHit && !behind ? treeHit.key : undefined;
   const tree = treeKey ? overpass.treePoints().find((point) => point.key === treeKey) : !focus && gfx.trees ? overpass.treePoints().map((point) => {
     const screen = map.project({ lng: point.p[0], lat: point.p[1] });
     return { point, distance: Math.hypot(screen.x - e.point.x, screen.y - e.point.y) };
   }).filter((hit) => hit.distance <= 14).sort((a, b) => a.distance - b.distance)[0]?.point : undefined;
+  // Дерево ряда или леса — выбрать сам ряд или лес (по модели видно дерево, а не его геометрию)
+  const treeOf = treeKey && !tree && !addingTo ? floraFeatureFor(treeKey) : undefined;
+  if (treeOf) {
+    if (reclick && !e.originalEvent.shiftKey && indoorSelection.length === 1 && indoorSelection[0].key === treeOf.key) { selectIndoor(undefined); clearInfo(); return; }
+    if (!e.originalEvent.shiftKey) select(undefined);
+    selectIndoor(treeOf, e.originalEvent.shiftKey); return;
+  }
   if (tree) { if (reclick && tree.key === selectedTreeKey) { select(undefined); clearInfo(); } else selectTree(tree); return; }
   // Ряд деревьев или лес (мимо здания) — выбрать: правится «Формой», переносится и поворачивается
   const flora = !key && !focus && !addingTo && gfx.trees && !e.originalEvent.altKey ? floraAt(e.point) : undefined;
   if (flora) {
     if (reclick && !e.originalEvent.shiftKey && indoorSelection.length === 1 && indoorSelection[0].key === flora.key) { selectIndoor(undefined); clearInfo(); return; }
+    if (!e.originalEvent.shiftKey) select(undefined);
     selectIndoor(flora, e.originalEvent.shiftKey); return;
   }
   // Мост или тоннель под курсором ближе здания — его теги (только просмотр)

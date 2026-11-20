@@ -14,11 +14,15 @@ const ROW_STEP = 7;
 const BUILDING_CELL = 40;
 
 /** Дерево в мировых координатах Меркатора: размеры в метрах, seed — для разброса цвета и поворота. */
-interface TreeInstance { mx: number; my: number; needle: boolean; wood?: boolean; height: number; crown: number; trunk: number; seed: number }
+/** src — номер источника + 1: ряд (own.rows), затем лес (woods); 0 — отдельное дерево. */
+interface TreeInstance { mx: number; my: number; needle: boolean; wood?: boolean; height: number; crown: number; trunk: number; seed: number; src?: number }
 
-/** Поля дерева в упакованном массиве; FLAGS: 1 — хвойное, 2 — лесное (ствол под пологом — только вблизи). */
-export const TreeField = { MX: 0, MY: 1, HEIGHT: 2, CROWN: 3, TRUNK: 4, SEED: 5, FLAGS: 6 } as const;
-export const TREE_STRIDE = 7;
+/**
+ * Поля дерева в упакованном массиве; FLAGS: 1 — хвойное, 2 — лесное (ствол под пологом — только вблизи); SRC — номер
+ * ряда (в own.rows) или леса (после рядов, в woods) + 1, 0 — отдельное дерево: клик по модели выбирает её объект.
+ */
+export const TreeField = { MX: 0, MY: 1, HEIGHT: 2, CROWN: 3, TRUNK: 4, SEED: 5, FLAGS: 6, SRC: 7 } as const;
+export const TREE_STRIDE = 8;
 export const NEEDLE_FLAG = 1;
 export const WOOD_FLAG = 2;
 
@@ -73,7 +77,7 @@ export function scatterTrees(own: TreeData, woods: TreeData['woods'], buildings:
 
 function pack(trees: TreeInstance[]): Float64Array {
   const out = new Float64Array(trees.length * TREE_STRIDE);
-  trees.forEach((t, i) => out.set([t.mx, t.my, t.height, t.crown, t.trunk, t.seed, (t.needle ? NEEDLE_FLAG : 0) | (t.wood ? WOOD_FLAG : 0)], i * TREE_STRIDE));
+  trees.forEach((t, i) => out.set([t.mx, t.my, t.height, t.crown, t.trunk, t.seed, (t.needle ? NEEDLE_FLAG : 0) | (t.wood ? WOOD_FLAG : 0), t.src ?? 0], i * TREE_STRIDE));
   return out;
 }
 
@@ -93,7 +97,7 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
     out.push({ mx: x, my: y, needle, seed: r, ...single(needle, hash(Math.round(x * 1e9), 3, 1), t.height, t.crown, t.trunk) });
   }
 
-  for (const row of own.rows) {
+  own.rows.forEach((row, rowIndex) => {
     const pts = row.line.map(merc);
     let next = ROW_STEP / 2, walked = 0; // первое дерево — в полушаге от начала ряда
     for (let i = 1; i < pts.length; i++) {
@@ -105,20 +109,20 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
         if (!inTile(x, y)) continue;
         const r = hash(Math.round(x * 1e9), Math.round(y * 1e9));
         const needle = isNeedle(row.leaf, r, false);
-        out.push({ mx: x, my: y, needle, seed: r, ...single(needle, hash(Math.round(y * 1e9), 5, 2), row.height, row.crown) });
+        out.push({ mx: x, my: y, needle, seed: r, src: rowIndex + 1, ...single(needle, hash(Math.round(y * 1e9), 5, 2), row.height, row.crown) });
       }
       walked += len;
     }
-  }
+  });
 
   // Леса: кольца в Меркаторе, обрезанные bbox тайла
-  const areas = woods.map((wood) => {
+  const areas = woods.map((wood, woodIndex) => {
     const rings = wood.polygons.flatMap((p) => [p.outer, ...p.inners]).map((ring) => ring.flatMap(merc));
     let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
     for (const ring of rings) for (let i = 0; i < ring.length; i += 2) {
       bx0 = Math.min(bx0, ring[i]); bx1 = Math.max(bx1, ring[i]); by0 = Math.min(by0, ring[i + 1]); by1 = Math.max(by1, ring[i + 1]);
     }
-    return { wood, rings, box: [Math.max(bx0, x0), Math.max(by0, y0), Math.min(bx1, x1), Math.min(by1, y1)] };
+    return { wood, src: own.rows.length + woodIndex + 1, rings, box: [Math.max(bx0, x0), Math.max(by0, y0), Math.min(bx1, x1), Math.min(by1, y1)] };
   }).filter((a) => a.box[0] < a.box[2] && a.box[1] < a.box[3]);
   if (!areas.length) return out;
 
@@ -148,7 +152,7 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
   const inBuilding = (x: number, y: number) => !!index.get(cellKey(Math.floor(x / cell), Math.floor(y / cell)))?.some((r) => pointInRings(x, y, [r]));
 
   const taken = new Set<number>(); // ячейки, занятые перекрывающимся лесом
-  for (const { wood, rings, box } of areas) {
+  for (const { wood, src, rings, box } of areas) {
     // Построчно: пересечения строки сетки с рёбрами колец (чёт-нечет — дыры тоже), затем ячейки в промежутках
     for (let j = Math.floor(box[1] / step); j * step <= box[3]; j++) {
       const yc = (j + 0.5) * step;
@@ -174,7 +178,7 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
           const height = (needle ? 19 : 16) * (0.8 + 0.4 * r);
           // Кроны — по шагу сетки: полог почти сомкнут, сколько бы деревьев ни уместилось в тайл
           const crown = needle ? Math.min(height * 0.45, Math.max(height * 0.25, stepM * 0.95)) : Math.min(height * 0.8, Math.max(height * 0.4, stepM * 1.2));
-          out.push({ mx: x, my: y, needle, wood: true, height, crown, trunk: Math.min(0.6, Math.max(0.12, height * 0.022)), seed: hash(i, j, 5) });
+          out.push({ mx: x, my: y, needle, wood: true, height, crown, trunk: Math.min(0.6, Math.max(0.12, height * 0.022)), seed: hash(i, j, 5), src });
         }
       }
     }

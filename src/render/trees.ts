@@ -162,7 +162,8 @@ export class TreeGroup {
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
 
   /** signature — подпись набора лесов и данных тайла: пересобираем, только если она поменялась. */
-  constructor(bbox: [number, number, number, number], trees: Float64Array, readonly signature: string, points: TreePoint[] = []) {
+  /** sources — ключи рядов и лесов по полю SRC (см. TreeField): клик по их дереву выбирает ряд или лес. */
+  constructor(bbox: [number, number, number, number], trees: Float64Array, readonly signature: string, points: TreePoint[] = [], sources: string[] = []) {
     const [w, s, e, n] = bbox;
     const origin = MercatorCoordinate.fromLngLat({ lng: (w + e) / 2, lat: (s + n) / 2 }, 0);
     const unit = origin.meterInMercatorCoordinateUnits();
@@ -208,13 +209,15 @@ export class TreeGroup {
       const isNeedle = (flags & NEEDLE_FLAG) !== 0;
       const x = (trees[o + F.MX] - origin.x) / unit, y = -(trees[o + F.MY] - origin.y) / unit;
       const key = pointKeys.get(coordKey(trees[o + F.MX], trees[o + F.MY]));
+      // Дерево ряда или леса — выбирается его объект (подсветки отдельного экземпляра у него нет)
+      const src = trees[o + F.SRC], pickKey = key ?? (src ? sources[src - 1] : undefined);
       // Крона: у лиственного — верхние 65 % высоты, у хвойного — от 15 % до верха; ствол уходит в крону
       const base = height * (isNeedle ? 0.15 : 0.35);
       q.setFromAxisAngle(zAxis, seed * Math.PI * 2);
       const trunk = trees[o + F.TRUNK];
       if (trunk > 0) {
         m.compose(pos.set(x, y, 0), q, scale.set(trunk, trunk, base + (height - base) * 0.3));
-        if (!(flags & WOOD_FLAG)) { trunks.setMatrixAt(tr, m); this.pointByTrunk[tr] = key; tr++; }
+        if (!(flags & WOOD_FLAG)) { trunks.setMatrixAt(tr, m); this.pointByTrunk[tr] = pickKey; tr++; }
         else woodTrunks.setMatrixAt(wtr++, m);
       }
       m.compose(pos.set(x, y, base), q, scale.set(crown / 2, crown / 2, height - base));
@@ -222,11 +225,11 @@ export class TreeGroup {
       const l = 0.85 + 0.3 * seed, warm = 0.06 * (hash(i, Math.round(seed * 1e6)) - 0.5);
       colour.setRGB(l * (1 + warm), l, l * (1 - warm));
       if (isNeedle) {
-        needle.setMatrixAt(nd, m); needle.setColorAt(nd, colour); needleKeys[nd] = key;
+        needle.setMatrixAt(nd, m); needle.setColorAt(nd, colour); needleKeys[nd] = pickKey;
         if (key) this.selectedInstances.set(key, { crown: needle, crownIndex: nd, trunkIndex: trunk > 0 && !(flags & WOOD_FLAG) ? tr - 1 : undefined, x, y });
         nd++;
       } else {
-        broad.setMatrixAt(b, m); broad.setColorAt(b, colour); broadKeys[b] = key; this.broadSeeds[b] = seed;
+        broad.setMatrixAt(b, m); broad.setColorAt(b, colour); broadKeys[b] = pickKey; this.broadSeeds[b] = seed;
         if (key) this.selectedInstances.set(key, { crown: broad, crownIndex: b, trunkIndex: trunk > 0 && !(flags & WOOD_FLAG) ? tr - 1 : undefined, x, y });
         b++;
       }
@@ -326,20 +329,20 @@ export class TreeGroup {
     for (const mesh of this.far) mesh.visible = far;
   }
 
-  /** Точное попадание в видимую геометрию отдельного OSM-дерева. */
-  pick(x: number, y: number, width: number, height: number, projection: THREE.Matrix4): { key: string; depth: number } | undefined {
+  /** Точное попадание в видимую геометрию дерева: ключ отдельного дерева (узла), ряда или леса. */
+  pick(x: number, y: number, width: number, height: number, projection: THREE.Matrix4): { key: string; depth: number; point: THREE.Vector3 } | undefined {
     const inv = projection.clone().invert();
     const near = new THREE.Vector3(2 * x / width - 1, 1 - 2 * y / height, -1).applyMatrix4(inv);
     const far = new THREE.Vector3(2 * x / width - 1, 1 - 2 * y / height, 1).applyMatrix4(inv);
     const ray = new THREE.Raycaster(near, far.sub(near).normalize());
     this.scene.updateMatrixWorld(true);
-    let best: { key: string; depth: number } | undefined;
+    let best: { key: string; depth: number; point: THREE.Vector3 } | undefined;
     for (const mesh of [this.trunks, ...this.near, ...this.far]) {
       if (!mesh.visible || !mesh.count) continue;
       const keys = mesh === this.trunks ? this.pointByTrunk : this.pointByCrown.get(mesh)!;
       for (const hit of ray.intersectObject(mesh, false)) {
         const key = keys[hit.instanceId ?? -1];
-        if (key && (!best || hit.distance < best.depth)) best = { key, depth: hit.distance };
+        if (key && (!best || hit.distance < best.depth)) best = { key, depth: hit.distance, point: hit.point.clone() };
       }
     }
     return best;

@@ -93,11 +93,12 @@ export class MoveTool {
   }
 
   /** Сразу тянуть keys от точки from (без выбора точки захвата); done — после применения, cancel — Esc/выход. */
-  drag(keys: string[], from: THREE.Vector3, hint: string, done: () => void, cancel: () => void) {
+  /** horizontalOnly — только в плане (indoor-объекты на этаже); части здания — и по высоте. */
+  drag(keys: string[], from: THREE.Vector3, hint: string, done: () => void, cancel: () => void, horizontalOnly = false) {
     this.stop();
     this.keys = new Set(keys);
     this.underlayIds = new Set();
-    this.horizontalOnly = false;
+    this.horizontalOnly = horizontalOnly;
     this.from.copy(from);
     this.offset.set(0, 0, 0);
     this.axis = this.locked = undefined;

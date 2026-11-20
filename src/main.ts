@@ -1637,7 +1637,8 @@ function startMapFloraTool(tool: 'move' | 'rotate'): boolean {
   drawTool.stop(); moveTool.stop(); rotateTool.stop(); scaleTool.stop(); measureTool.stop(); shapeTool.stop();
   if (!underlaySketch) { overpassLayer.setSketch(floraAnchor(fs[0])); underlaySketch = true; }
   const ids = fs.map((f) => FLORA_ID + f.key);
-  if (tool === 'move') moveTool.start([], false, ids); else rotateTool.start([], ids);
+  // Ряды, леса и деревья стоят на земле — только в плане, без оси высоты
+  if (tool === 'move') moveTool.start([], true, ids); else rotateTool.start([], ids);
   syncMapTools();
   return true;
 }
@@ -5825,7 +5826,7 @@ function pasteIndoor(cb: NonNullable<typeof clipboard>) {
       setStatus(tr('Вставлено indoor-объектов: {n} ({level}).', { n: fs.length, level: levelLabel(level) })
         + (typeof joined === 'string' ? ' ' + joined : joined ? ' ' + tr('Общих узлов с соседями: {n}.', { n: joined }) : ''));
     },
-    () => { selectAfterHistory(session.undo()); setStatus(tr('Вставка отменена.')); });
+    () => { selectAfterHistory(session.undo()); setStatus(tr('Вставка отменена.')); }, true);
 }
 
 /** Вершина вставленного объекта ближе этого к узлу соседа, м, — встаёт на этот узел. */

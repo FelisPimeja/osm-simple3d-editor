@@ -1206,7 +1206,6 @@ map.on('load', () => {
     paint: { 'line-color': '#5a5f66', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.85 },
   });
   mapLoaded = true;
-  syncTerrain();
   applyTileBuildingsView();
   syncBasemapLayers();
   overpass.setSource(tileSource());
@@ -1244,8 +1243,11 @@ const orbit = new CursorOrbit(map, (x, y) => {
   }
   // В режиме здания мимо геометрии — вокруг центра здания
   if (!hit && focus) { const c = overpassLayer.focusCenter(); if (c) return c; }
-  // Не попали в 3D-слой (тайловое здание или пусто) — точка на земле
-  return hit ?? { lngLat: map.unproject([x, y]), altitude: 0 };
+  // Не попали в 3D-слой (тайловое здание или пусто) — точка на земле; с рельефом — на его поверхности
+  // (unproject MapLibre тогда даёт точку на рельефе, а высота 0 уводила центр вращения далеко за неё)
+  if (hit) return hit;
+  const lngLat = map.unproject([x, y]);
+  return { lngLat, altitude: terrainShown ? map.queryTerrainElevation(lngLat) ?? 0 : 0 };
 }, (x, y) => overpassLayer.pickHit([x, y]) ?? undefined);
 
 function applyMonochrome() {
@@ -1396,6 +1398,8 @@ function groundHost(f: Feature3D): Feature3D {
   return host?.f ?? f;
 }
 setGround(buildingGround);
+// Карта могла загрузиться раньше, чем модуль дошёл досюда (top-level await выше): тогда — сразу, иначе — по load
+if (mapLoaded) syncTerrain(); else map.once('load', syncTerrain);
 
 function applyGraphics() {
   syncTerrain();

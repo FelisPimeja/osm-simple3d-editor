@@ -251,7 +251,10 @@ export function applyBasemap(map: MlMap, id: string, bounds?: Bounds): boolean {
   return true;
 }
 
-/** Отмывка рельефа (Mapterhorn) — поверх подложки (и снимков), под GPS-треками и подписями. */
+/**
+ * Отмывка рельефа (Mapterhorn) — поверх подложки (и снимков), под GPS-треками и подписями. Свет привязан к карте
+ * (с северо-запада, как на топокартах), а не к экрану: при повороте камеры тени не переезжают.
+ */
 export const HILLSHADE_LAYER = 'hillshade';
 const HILLSHADE_KEY = 'osm3d.hillshade';
 export function storedHillshade(): boolean {
@@ -266,7 +269,7 @@ export function applyHillshade(map: MlMap, on: boolean, tiles: string, attributi
   // Свой источник, не общий с terrain: MapLibre советует так (разные тайлы для меша и для отмывки)
   if (!map.getSource(HILLSHADE_LAYER)) map.addSource(HILLSHADE_LAYER, { type: 'raster-dem', tiles: [tiles], tileSize: 512, encoding: 'terrarium', maxzoom, attribution });
   const before = map.getLayer(GPS_LAYER) ? GPS_LAYER : firstSymbol(map);
-  map.addLayer({ id: HILLSHADE_LAYER, type: 'hillshade', source: HILLSHADE_LAYER, paint: { 'hillshade-exaggeration': 0.4, 'hillshade-shadow-color': '#473b24', 'hillshade-highlight-color': '#ffffff' } }, before);
+  map.addLayer({ id: HILLSHADE_LAYER, type: 'hillshade', source: HILLSHADE_LAYER, paint: { 'hillshade-illumination-anchor': 'map', 'hillshade-exaggeration': 0.4, 'hillshade-shadow-color': '#473b24', 'hillshade-highlight-color': '#ffffff' } }, before);
 }
 
 /** Кнопка со списком подложек — в общем блоке кнопок карты (масштаб, компас). */

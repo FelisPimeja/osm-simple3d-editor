@@ -21,8 +21,8 @@ export function gateWidth(tags: Record<string, string>): number {
     : b === 'turnstile' || b === 'stile' ? 0.8 : b === 'wicket_gate' || b === 'full-height_turnstile' || b === 'kissing_gate' ? 1 : 1.5;
 }
 
-/** Виды barrier, которые рисуем объёмом. city_wall и retaining_wall — позже (зубцы, рельеф). */
-export const BARRIER_KINDS = new Set(['wall', 'fence', 'hedge']);
+/** Виды barrier, которые рисуем объёмом. retaining_wall — позже (рельеф); city_wall — как толстая каменная стена. */
+export const BARRIER_KINDS = new Set(['wall', 'city_wall', 'fence', 'hedge']);
 
 export function isBarrierTags(tags?: Record<string, string>): boolean {
   if (!tags || !BARRIER_KINDS.has(tags.barrier)) return false;
@@ -54,10 +54,10 @@ export interface BarrierShape { min: number; top: number; width: number; colour:
 
 /** Высота, толщина и цвет ограждения: теги, без них — типичные для вида. */
 export function barrierShape(tags: Record<string, string>): BarrierShape {
-  const kind = tags.barrier, ft = tags.fence_type, mat = tags.material ?? tags.wall;
-  const defH = kind === 'wall' ? 3 : kind === 'hedge' ? 1.5 : ft === 'railing' ? 1 : 2.5;
+  const kind = tags.barrier === 'city_wall' ? 'wall' : tags.barrier, city = tags.barrier === 'city_wall', ft = tags.fence_type, mat = tags.material ?? tags.wall;
+  const defH = city ? 8 : kind === 'wall' ? 3 : kind === 'hedge' ? 1.5 : ft === 'railing' ? 1 : 2.5;
   // Забор без width — плоскость: толщина сетки или штакетника не видна и не размечена
-  const defW = kind === 'hedge' ? 0.8 : kind === 'wall' ? (mat === 'dry_stone' ? 0.5 : 0.3) : 0;
+  const defW = city ? 2 : kind === 'hedge' ? 0.8 : kind === 'wall' ? (mat === 'dry_stone' ? 0.5 : 0.3) : 0;
   const min = parseLength(tags.min_height) ?? 0;
   const h = parseLength(tags.height);
   const top = h !== undefined && h > 0 ? h : min + defH;
@@ -65,7 +65,7 @@ export function barrierShape(tags: Record<string, string>): BarrierShape {
   const width = tagged !== undefined && tagged > 0 ? Math.max(0.03, Math.min(5, tagged)) : defW;
   // Без colour и material (fence_type) — белый, как здания без цвета; живая изгородь — зелёная
   const colour = tags.colour ?? (kind === 'hedge' ? '#55773a'
-    : kind === 'wall' ? (mat === 'brick' ? '#a65a43' : mat === 'stone' || mat === 'dry_stone' ? '#a39c8f' : mat === 'concrete' ? '#bdbab3' : '#ffffff')
+    : kind === 'wall' ? (mat === 'brick' ? '#a65a43' : mat === 'stone' || mat === 'dry_stone' || (city && !mat) ? '#a39c8f' : mat === 'concrete' ? '#bdbab3' : '#ffffff')
     : ft === 'wood' || mat === 'wood' ? '#9a7650' : ft === 'concrete' || mat === 'concrete' ? '#bdbab3' : ft === 'stone' ? '#a39c8f' : ft === 'brick' ? '#a65a43' : '#ffffff');
   return { min, top: Math.max(top, min + 0.1), width, colour, seeThrough: kind === 'fence' && (SEE_THROUGH.has(ft ?? '') || !ft) };
 }

@@ -1363,18 +1363,23 @@ function liveBarrier(b: BarrierWay): BarrierWay | undefined {
   return { ...b, tags: e.tags, ...(line ? { nodes: line.ids, coords: line.coords } : {}) };
 }
 /** Ворота ограждения с правками сессии: теги узла; снят barrier ворот или узел удалён — их нет. */
+/** Ограждения для слоя: с правками сессии, только существующие в год слайдера времени (OHM). */
+function shownBarriers(): BarrierWay[] {
+  return overpass.barriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags) && overpass.isVisible(b)).map(liveGates);
+}
+
 function liveGates(b: BarrierWay): BarrierWay {
   const gates = (b.gates ?? []).flatMap((g) => {
     const k = `node/${g.id}`;
     if (session.isDeleted(k)) return [];
     const tags = session.get(k)?.tags ?? g.tags;
-    return isGateTags(tags) && b.nodes.includes(g.id) ? [{ id: g.id, tags }] : [];
+    return isGateTags(tags) && b.nodes.includes(g.id) && overpass.isVisible({ tags }) ? [{ id: g.id, tags }] : [];
   });
   // Ворота, созданные или перенесённые в сессии (вставка из буфера), и превью переноса
   for (const n of new Set(b.nodes)) {
     if (gates.some((g) => g.id === n)) continue;
     const tags = gateDrag?.id === n ? gateDrag.tags : session.get(`node/${n}`)?.tags;
-    if (isGateTags(tags)) gates.push({ id: n, tags: tags! });
+    if (isGateTags(tags) && overpass.isVisible({ tags: tags! })) gates.push({ id: n, tags: tags! });
   }
   return gates.length || b.gates ? { ...b, gates } : b;
 }
@@ -1569,7 +1574,7 @@ function moveGate(point: [number, number]) {
   const wasClosed = !!live && live.nodes.length > 3 && live.nodes[0] === live.nodes[live.nodes.length - 1] && (live.nodes[0] !== d.id || true);
   if (wasClosed) { nIds.push(nIds[0]); nCs.push(nCs[0]); }
   d.target = { key: best.key, ids: nIds, coords: nCs, at: p };
-  barriersLayer.setBarriers(overpass.barriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags)).map(liveGates));
+  barriersLayer.setBarriers(shownBarriers());
   syncBarrierSelection();
 }
 /**
@@ -1714,7 +1719,7 @@ function scheduleModels() {
     });
     for (const f of all) {
       const id = modelIdOf(f.tags), ring = f.polygons[0]?.outer;
-      if (!id || !ring?.length) continue;
+      if (!id || !ring?.length || !overpass.isVisible(f)) continue;
       const at: [number, number] = [ring.reduce((a, c) => a + c[0], 0) / ring.length, ring.reduce((a, c) => a + c[1], 0) / ring.length];
       // Модель на контуре здания заменяет и его части
       // Части внутри контура — по центру или большинству вершин: hasParts бывает не выставлен, а у невыпуклого
@@ -1732,7 +1737,7 @@ function scheduleModels() {
       const key = modelObjectKey(n);
       if (session.isDeleted(key)) continue;
       const tags = session.get(key)?.tags ?? n.tags, id = modelIdOf(tags);
-      if (!id) continue;
+      if (!id || !overpass.isVisible({ tags })) continue;
       list.push({ key, id, at: n.p, z: 0, rotation: modelDirection(tags), hides: [], extent: n.ring ? ringExtent(n.ring) : undefined });
     }
     for (const p of unlinkedModels(new Set(list.map((p) => p.id)), all)) list.push(p);
@@ -1747,7 +1752,7 @@ function scheduleModels() {
 
 function scheduleBarriers() {
   if (!barriersLayer.isEnabled || barriersTimer) return;
-  barriersTimer = setTimeout(() => { barriersTimer = undefined; barriersLayer.setBarriers(overpass.barriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags)).map(liveGates)); syncBarrierSelection(); }, 300);
+  barriersTimer = setTimeout(() => { barriersTimer = undefined; barriersLayer.setBarriers(shownBarriers()); syncBarrierSelection(); }, 300);
 }
 
 /** Мосты и развязки — по дорогам показанных тайлов; пересборка не чаще раза в 300 мс. */
@@ -18453,6 +18458,9 @@ function applyDate() {
   overpass.setFeatureFilter(span === undefined ? () => true : (f) => existsIn(f.tags, span));
   if (on) void syncWayback(span!.to);
   overpass.setTreeFilter(span ? ohm.date : '', span === undefined ? () => true : (d) => existsIn(d as Record<string, string>, span));
+  // Ограждения, ворота и модели 3dmr — по тому же фильтру
+  scheduleBarriers();
+  scheduleModels();
   // В режиме здания сцена — своя, не из тайлов: части не той даты скрываем в ней
   if (focus && syncFocusHidden(true)) {
     outlinerUnhover();

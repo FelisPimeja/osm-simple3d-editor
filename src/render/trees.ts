@@ -1,3 +1,4 @@
+import { ground } from './ground';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MercatorCoordinate } from 'maplibre-gl';
@@ -148,7 +149,7 @@ export class TreeGroup {
   private readonly broad: THREE.InstancedMesh;
   private readonly pointByCrown = new Map<THREE.InstancedMesh, (string | undefined)[]>();
   private readonly pointByTrunk: (string | undefined)[] = [];
-  private readonly selectedInstances = new Map<string, { crown: THREE.InstancedMesh; crownIndex: number; trunkIndex?: number; x: number; y: number }>();
+  private readonly selectedInstances = new Map<string, { crown: THREE.InstancedMesh; crownIndex: number; trunkIndex?: number; x: number; y: number; z?: number }>();
   private selectedOverlay?: THREE.Group;
   private readonly broadSeeds: Float32Array;
   private readonly lat: number;
@@ -156,6 +157,10 @@ export class TreeGroup {
   private readonly far: THREE.InstancedMesh[] = [];
   /** Углы и центр тайла (локальные метры) — по ним выбирается детализация. */
   private readonly probes: THREE.Vector3[];
+  /** Отметки земли под деревьями тайла (рельеф): от них — пробы отсечения. */
+  private zMin = 0;
+  private zMax = 0;
+  private readonly c = new THREE.Vector4();
   private isFar?: boolean;
   // Свет — как у зданий (MeshGroup)
   private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
@@ -208,6 +213,9 @@ export class TreeGroup {
       const height = trees[o + F.HEIGHT], crown = trees[o + F.CROWN], seed = trees[o + F.SEED], flags = trees[o + F.FLAGS];
       const isNeedle = (flags & NEEDLE_FLAG) !== 0;
       const x = (trees[o + F.MX] - origin.x) / unit, y = -(trees[o + F.MY] - origin.y) / unit;
+      // Рельеф (эксперимент): дерево — на отметке земли в своей точке
+      const gz = !ground.on ? 0 : ground.at(new MercatorCoordinate(trees[o + F.MX], trees[o + F.MY], 0).toLngLat().toArray() as [number, number]);
+      if (i === 0) { this.zMin = this.zMax = gz; } else { this.zMin = Math.min(this.zMin, gz); this.zMax = Math.max(this.zMax, gz); }
       const key = pointKeys.get(coordKey(trees[o + F.MX], trees[o + F.MY]));
       // Дерево ряда или леса — выбирается его объект (подсветки отдельного экземпляра у него нет)
       const src = trees[o + F.SRC], pickKey = key ?? (src ? sources[src - 1] : undefined);
@@ -216,21 +224,21 @@ export class TreeGroup {
       q.setFromAxisAngle(zAxis, seed * Math.PI * 2);
       const trunk = trees[o + F.TRUNK];
       if (trunk > 0) {
-        m.compose(pos.set(x, y, 0), q, scale.set(trunk, trunk, base + (height - base) * 0.3));
+        m.compose(pos.set(x, y, gz), q, scale.set(trunk, trunk, base + (height - base) * 0.3));
         if (!(flags & WOOD_FLAG)) { trunks.setMatrixAt(tr, m); this.pointByTrunk[tr] = pickKey; tr++; }
         else woodTrunks.setMatrixAt(wtr++, m);
       }
-      m.compose(pos.set(x, y, base), q, scale.set(crown / 2, crown / 2, height - base));
+      m.compose(pos.set(x, y, gz + base), q, scale.set(crown / 2, crown / 2, height - base));
       // Разброс оттенка: светлее/темнее и чуть теплее/холоднее — множитель к цвету материала
       const l = 0.85 + 0.3 * seed, warm = 0.06 * (hash(i, Math.round(seed * 1e6)) - 0.5);
       colour.setRGB(l * (1 + warm), l, l * (1 - warm));
       if (isNeedle) {
         needle.setMatrixAt(nd, m); needle.setColorAt(nd, colour); needleKeys[nd] = pickKey;
-        if (key) this.selectedInstances.set(key, { crown: needle, crownIndex: nd, trunkIndex: trunk > 0 && !(flags & WOOD_FLAG) ? tr - 1 : undefined, x, y });
+        if (key) this.selectedInstances.set(key, { crown: needle, crownIndex: nd, trunkIndex: trunk > 0 && !(flags & WOOD_FLAG) ? tr - 1 : undefined, x, y, z: gz });
         nd++;
       } else {
         broad.setMatrixAt(b, m); broad.setColorAt(b, colour); broadKeys[b] = pickKey; this.broadSeeds[b] = seed;
-        if (key) this.selectedInstances.set(key, { crown: broad, crownIndex: b, trunkIndex: trunk > 0 && !(flags & WOOD_FLAG) ? tr - 1 : undefined, x, y });
+        if (key) this.selectedInstances.set(key, { crown: broad, crownIndex: b, trunkIndex: trunk > 0 && !(flags & WOOD_FLAG) ? tr - 1 : undefined, x, y, z: gz });
         b++;
       }
     }
@@ -299,9 +307,10 @@ export class TreeGroup {
     // Отсечение: все углы тайла (на земле и на высоте деревьев) по одну сторону одной плоскости кадра
     let left = 0, right = 0, below = 0, above = 0, behind = 0;
     for (const p of this.probes) {
-      this.a.set(p.x, p.y, 0, 1).applyMatrix4(pm);
-      this.b.set(p.x, p.y, PROBE_HEIGHT, 1).applyMatrix4(pm);
-      for (const v of [this.a, this.b]) {
+      this.a.set(p.x, p.y, this.zMin, 1).applyMatrix4(pm);
+      this.b.set(p.x, p.y, this.zMin + PROBE_HEIGHT, 1).applyMatrix4(pm);
+      this.c.set(p.x, p.y, this.zMax + PROBE_HEIGHT, 1).applyMatrix4(pm);
+      for (const v of [this.a, this.b, this.c]) {
         if (v.x < -v.w) left++;
         if (v.x > v.w) right++;
         if (v.y < -v.w) below++;
@@ -315,7 +324,7 @@ export class TreeGroup {
         if (px > WOOD_TRUNK_PX) trunks = true;
       }
     }
-    const all = this.probes.length * 2;
+    const all = this.probes.length * 3;
     if (left === all || right === all || below === all || above === all || behind === all) return false;
     this.setFar(far);
     this.woodTrunks.visible = trunks;
@@ -365,7 +374,7 @@ export class TreeGroup {
     addMesh(selected.crown, selected.crownIndex);
     if (selected.trunkIndex !== undefined) addMesh(this.trunks, selected.trunkIndex);
     const circle = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.48, 32), new THREE.MeshBasicMaterial({ color: 0x2563eb, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
-    circle.position.set(selected.x, selected.y, 0.08);
+    circle.position.set(selected.x, selected.y, (selected.z ?? 0) + 0.08);
     circle.renderOrder = 1001;
     group.add(circle);
     this.scene.add(group);

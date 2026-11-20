@@ -1,3 +1,4 @@
+import { ground } from '../render/ground';
 import type { Map as MlMap } from 'maplibre-gl';
 import { server, SERVERS } from '../osm/servers';
 import { fetchOverpassTile, overpassFree } from '../osm/overpass';
@@ -925,7 +926,7 @@ export class OverpassTiles {
     const live = this.treeOverlay?.(all.rows, this.woodsIn(bbox), bbox, all.points) ?? { rows: all.rows, woods: this.woodsIn(bbox), points: all.points, sig: '' };
     const own = { ...all, points: live.points.filter((p) => ok(p.tags ?? {})), rows: live.rows.filter((r) => ok(r.dates ?? {})) };
     const woods = live.woods.filter((w) => ok(w.dates ?? {}));
-    const signature = `${e.fetchedAt}:${own.points.length}:${own.rows.length}:${e.features.length}:${this.treeCutsVersion}:${this.treeDates.key}:${live.sig}|${woods.map((w) => w.key).sort().join(',')}`;
+    const signature = `${ground.rev}:${e.fetchedAt}:${own.points.length}:${own.rows.length}:${e.features.length}:${this.treeCutsVersion}:${this.treeDates.key}:${live.sig}|${woods.map((w) => w.key).sort().join(',')}`;
     if (this.layer.treeSignature(key) === signature || this.treesPending.get(key) === signature) return;
     if (!own.points.length && !own.rows.length && !woods.length) { this.treesPending.delete(key); this.layer.setTrees(key, undefined); return; }
     const buildings = e.features.flatMap((f) => f.polygons.map((p) => p.outer));

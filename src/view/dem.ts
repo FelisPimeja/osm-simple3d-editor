@@ -1,0 +1,120 @@
+import type { LonLat } from '../osm/model';
+
+/**
+ * Рельеф (эксперимент): тайлы Mapterhorn (terrarium, 512 px). Те же тайлы MapLibre рисует как terrain, а здесь они
+ * декодируются для отметок объектов сцены: основание здания — минимум DEM под контуром, деревья и ограждения —
+ * по точкам. Пока тайла нет, отметка — 0; пришёл — onLoad (сцену пересобрать).
+ */
+export const DEM_TILES = 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp';
+export const DEM_ATTRIBUTION = "<a href='https://mapterhorn.com/attribution' target='_blank'>© Mapterhorn</a>";
+/** Зум тайлов: глобальное покрытие Mapterhorn (Copernicus GLO-30) есть до z12 (~19 м/px на экваторе — мельче 30 м данных). */
+export const DEM_ZOOM = 12;
+const SIZE = 512;
+
+type Tile = Float32Array | 'loading' | 'failed';
+
+export class Dem {
+  private readonly tiles = new Map<string, Tile>();
+  private enabled = false;
+  /** Растёт при каждом пришедшем тайле: по нему слои видят, что отметки поменялись. */
+  revision = 0;
+  private notify?: ReturnType<typeof setTimeout>;
+
+  constructor(private readonly onLoad: () => void) {}
+
+  get active() { return this.enabled; }
+
+  setActive(on: boolean) {
+    if (on === this.enabled) return;
+    this.enabled = on;
+    this.revision++;
+  }
+
+  /** Отметка точки, м над уровнем моря (билинейно); тайла ещё нет или рельеф выключен — 0 (тайл запрашивается). */
+  at([lon, lat]: LonLat): number {
+    if (!this.enabled) return 0;
+    const n = 2 ** DEM_ZOOM;
+    const x = ((lon + 180) / 360) * n;
+    const s = Math.sin((lat * Math.PI) / 180);
+    const y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n;
+    const tx = Math.floor(x), ty = Math.floor(y);
+    const t = this.tile(tx, ty);
+    if (!(t instanceof Float32Array)) return 0;
+    // Центры пикселей — на половинках: крайние берём по краю тайла (без соседнего тайла)
+    const px = Math.min(SIZE - 1, Math.max(0, (x - tx) * SIZE - 0.5)), py = Math.min(SIZE - 1, Math.max(0, (y - ty) * SIZE - 0.5));
+    const x0 = Math.floor(px), y0 = Math.floor(py), x1 = Math.min(SIZE - 1, x0 + 1), y1 = Math.min(SIZE - 1, y0 + 1);
+    const fx = px - x0, fy = py - y0;
+    const v = (xx: number, yy: number) => t[yy * SIZE + xx];
+    return (v(x0, y0) * (1 - fx) + v(x1, y0) * fx) * (1 - fy) + (v(x0, y1) * (1 - fx) + v(x1, y1) * fx) * fy;
+  }
+
+  /**
+   * Минимум отметки под кольцами (вершины и сетка внутри с шагом ~10 м): основание здания на склоне — по нижней
+   * точке, верхняя сторона уходит в землю, а не висит в воздухе.
+   */
+  minUnder(rings: LonLat[][]): number {
+    if (!this.enabled) return 0;
+    let min = Infinity;
+    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+    for (const r of rings) for (const p of r) {
+      min = Math.min(min, this.at(p));
+      w = Math.min(w, p[0]); e = Math.max(e, p[0]); s = Math.min(s, p[1]); n = Math.max(n, p[1]);
+    }
+    if (!Number.isFinite(min)) return 0;
+    const outer = rings[0];
+    const dLat = 10 / 111_320, dLon = dLat / Math.max(0.05, Math.cos((((s + n) / 2) * Math.PI) / 180));
+    // Не больше ~400 проб на объект (огромные контуры — реже)
+    const k = Math.max(1, Math.sqrt((((e - w) / dLon) * ((n - s) / dLat)) / 400));
+    for (let y = s + dLat * k / 2; y < n; y += dLat * k) for (let x = w + dLon * k / 2; x < e; x += dLon * k) {
+      if (outer && inRing([x, y], outer)) min = Math.min(min, this.at([x, y]));
+    }
+    return min;
+  }
+
+  private tile(x: number, y: number): Tile | undefined {
+    const n = 2 ** DEM_ZOOM;
+    if (y < 0 || y >= n) return 'failed';
+    const xx = ((x % n) + n) % n, key = `${xx}/${y}`;
+    const t = this.tiles.get(key);
+    if (t) return t;
+    this.tiles.set(key, 'loading');
+    void this.load(xx, y).then((data) => {
+      this.tiles.set(key, data ?? 'failed');
+      if (!data) return;
+      this.revision++;
+      // Тайлы приходят пачкой: пересборка — одна на пачку
+      clearTimeout(this.notify);
+      this.notify = setTimeout(() => this.onLoad(), 150);
+    });
+    return 'loading';
+  }
+
+  private async load(x: number, y: number): Promise<Float32Array | undefined> {
+    try {
+      const res = await fetch(DEM_TILES.replace('{z}', String(DEM_ZOOM)).replace('{x}', String(x)).replace('{y}', String(y)));
+      if (!res.ok) return;
+      // Без управления цветом и премультипликации: каналы — это биты высоты, не цвет
+      const bmp = await createImageBitmap(await res.blob(), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+      const c = new OffscreenCanvas(bmp.width, bmp.height);
+      const ctx = c.getContext('2d', { willReadFrequently: true })!;
+      ctx.drawImage(bmp, 0, 0);
+      const px = ctx.getImageData(0, 0, bmp.width, bmp.height, { colorSpace: 'srgb' }).data;
+      if (bmp.width !== SIZE || bmp.height !== SIZE) return;
+      const out = new Float32Array(SIZE * SIZE);
+      // terrarium: (R·256 + G + B/256) − 32768
+      for (let i = 0; i < out.length; i++) out[i] = px[i * 4] * 256 + px[i * 4 + 1] + px[i * 4 + 2] / 256 - 32768;
+      return out;
+    } catch {
+      return;
+    }
+  }
+}
+
+function inRing([x, y]: LonLat, ring: LonLat[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}

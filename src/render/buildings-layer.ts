@@ -6290,6 +6290,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Вход — у земли: решает самый низкий низ. Контур под частями (только обводка, а в режиме здания — плоский
       // скрытый след) ниже части-кровли, на которой узел тоже есть, — вход по нему; видимому объёму он уступает лишь
       // на той же высоте
+      // Рельеф: вход — на отметке основания здания (как и его стены)
+      const gz = onMap && !g.focusScene ? groundFor(it.feature) : 0;
       const rank = min + (strokeOnly(g, it) || g.hidden.has(it.feature.key) || thinItem(it) ? 1e-3 : 0);
       for (const p of it.feature.polygons) {
         const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));
@@ -6305,7 +6307,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           // Так же и вход у земли под поднятой видимой частью (узел её контура над входом нижней): при изоляции его нет
           const h = computeHeights(it.tags), z = place?.z ?? floorZ;
           const outside = !!partsHidden && z !== undefined && (z < min - 0.3 || z >= min + h.top - h.min);
-          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, width: tagWidth(tags.get(id)) }, rank });
+          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)) }, rank });
         }));
       }
       // Вход на стене, но не узел контура (дверь indoor-стены на фасаде): на ближайшей стороне, по своей точке
@@ -6332,7 +6334,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const floorZ = !onMap && Number.isFinite(lv) ? this.entranceFloors.get(lv) : undefined;
         const place = { p: near.p, t: near.t, n: nrm, z: floorZ ?? entranceZ(e.tags, it.tags) };
         const h = computeHeights(it.tags), outside = !!partsHidden && (place.z < min - 0.3 || place.z >= min + h.top - h.min);
-        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, width: tagWidth(e.tags) }, rank });
+        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags) }, rank });
       }
     }
     const preview = this.entrancePreview;
@@ -8846,6 +8848,10 @@ const NEIGHBOUR_DOOR_REACH = 3;
 
 /** Унаследованные частью теги (цвета, форма крыши, материалы контура/отношения) — задаёт main. */
 let inheritFor: (f: Feature3D) => Record<string, string> | undefined = () => undefined;
+/** Отметка основания объекта над уровнем моря (рельеф); 0 — рельеф выключен. */
+let groundFor: (f: Feature3D) => number = () => 0;
+export function setGround(fn: (f: Feature3D) => number) { groundFor = fn; }
+export function groundOf(f: Feature3D) { return groundFor(f); }
 export function setInheritance(fn: (f: Feature3D) => Record<string, string> | undefined) { inheritFor = fn; }
 
 /** Арка (tunnel=building_passage) у объекта: ось проезда, ширина и высота, м. */
@@ -9360,12 +9366,15 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   positions.set(floors, tri.walls.length + tri.roof.length);
   const wall = tags['building:colour'] ?? tags.colour ?? DEFAULT_WALL;
   const roof = tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
+  // Рельеф (эксперимент): весь объект — на отметку основания (минимум DEM под зданием); сцена режима здания — без него
+  const lift = g.focusScene ? 0 : groundFor(f);
+  if (lift) for (let i = 2; i < positions.length; i += 3) positions[i] += lift;
   const box = new THREE.Box3();
   if (positions.length) box.setFromArray(positions);
   return {
     contacts: contactKeys(g, f),
     feature: f,
-    passage: passage && !tri.pending ? { z: passage.z, lower: passage.lower, ways: passage.ways } : undefined,
+    passage: passage && !tri.pending ? { z: passage.z + lift, lower: passage.lower, ways: passage.ways } : undefined,
     tags,
     roofApproximated: tri.roofApproximated,
     pending: !!tri.pending,
@@ -9376,7 +9385,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     genPaneVertices: genPanes / 3,
     wall: parseColour(wall),
     roof: parseColour(roof),
-    top: heights.top,
+    top: heights.top + lift,
     box,
     start: 0,
     // material на здании — устаревший вариант building:material: только фасад

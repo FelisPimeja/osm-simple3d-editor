@@ -1,3 +1,4 @@
+import { ground } from './ground';
 import * as THREE from 'three';
 import { MercatorCoordinate, type Map as MlMap } from 'maplibre-gl';
 import { barrierShape, gateColour, gateWidth, type BarrierGate, type BarrierWay } from '../osm/barriers';
@@ -241,7 +242,7 @@ export class BarriersLayer {
     const byId = new Map<number, BarrierWay>();
     for (const w of all) byId.set(w.id, w);
     const ways = [...byId.values()];
-    const signature = ways.map((w) => `${w.id}:${w.coords.map((c) => c.join(',')).join(';')}:${JSON.stringify(w.tags)}:${JSON.stringify(w.gates ?? [])}`).sort().join('|');
+    const signature = `${ground.rev}#` + ways.map((w) => `${w.id}:${w.coords.map((c) => c.join(',')).join(';')}:${JSON.stringify(w.tags)}:${JSON.stringify(w.gates ?? [])}`).sort().join('|');
     if (signature === this.signature) return;
     this.signature = signature;
     this.clearMeshes();
@@ -361,6 +362,21 @@ export class BarriersLayer {
         }
         seg(leaf[0], leaf[0], lo, hi); seg(leaf[leaf.length - 1], leaf[leaf.length - 1], lo, hi);
       }
+    }
+    // Рельеф (эксперимент): каждая вершина — на отметку земли в своей точке (стойки остаются вертикальными)
+    if (ground.on) {
+      const cache = new Map<string, number>();
+      const gz = (x: number, y: number) => {
+        const k = `${x.toFixed(2)},${y.toFixed(2)}`;
+        let v = cache.get(k);
+        if (v === undefined) {
+          const ll = new MercatorCoordinate(origin.x + x * m, origin.y - y * m, 0).toLngLat();
+          cache.set(k, v = ground.at([ll.lng, ll.lat]));
+        }
+        return v;
+      };
+      for (const arr of [buf.solid.p, buf.see.p, gateBuf.p, openBuf.p, lines]) for (let i = 0; i + 2 < arr.length; i += 3) arr[i + 2] += gz(arr[i], arr[i + 1]);
+      for (const g of gateList) g.z += gz(g.at[0], g.at[1]);
     }
     this.gates = gateList;
     // Проёмы проходов: в выборе — как треугольники, на экране — только выбранные (подсветка)

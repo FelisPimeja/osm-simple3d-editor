@@ -65,9 +65,11 @@ import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, t
 import { isWood, ringsFromMembers, rowFromWay, treeFromNode, woodFromRings, woodFromWay, type TreePoint, type TreeRow, type WoodArea, type WoodMember } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
-import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
+import { Dem, DEM_ATTRIBUTION, DEM_TILES, DEM_ZOOM } from './view/dem';
+import { ground, setGroundSampler } from './render/ground';
 import { CursorOrbit, ORBIT_EVENT } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
 import { pushHeightTags, lockedPushUnits, isFreshFlat, roofHeightTags, levelsNote, heightSplitTags } from './edit/push-height';
@@ -145,9 +147,9 @@ let replacedIds: number[] = [];
 const userHidden = new Set<string>();
 
 /** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean }
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean; terrain: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -1204,6 +1206,7 @@ map.on('load', () => {
     paint: { 'line-color': '#5a5f66', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.85 },
   });
   mapLoaded = true;
+  syncTerrain();
   applyTileBuildingsView();
   syncBasemapLayers();
   overpass.setSource(tileSource());
@@ -1334,7 +1337,68 @@ for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
 }
 syncGraphicsDeps();
 
+// Рельеф (эксперимент): terrain MapLibre из тайлов Mapterhorn и отметки объектов сцены по тем же тайлам.
+// Только на карте: в режиме здания рельеф снимается (инструменты работают на плоской земле)
+const dem = new Dem(() => { if (dem.active) { setGroundSampler((p) => dem.at(p), dem.revision); refreshGround(); } });
+const DEM_SOURCE = 'terrain-dem';
+let terrainShown = false;
+function syncTerrain() {
+  const want = gfx.terrain && !focus && mapLoaded;
+  if (want === terrainShown) return;
+  terrainShown = want;
+  dem.setActive(want);
+  if (want) {
+    if (!map.getSource(DEM_SOURCE)) map.addSource(DEM_SOURCE, { type: 'raster-dem', tiles: [DEM_TILES], tileSize: 512, encoding: 'terrarium', maxzoom: DEM_ZOOM, attribution: DEM_ATTRIBUTION });
+    map.setTerrain({ source: DEM_SOURCE, exaggeration: 1 });
+    setGroundSampler((p) => dem.at(p), dem.revision);
+  } else {
+    map.setTerrain(null);
+    setGroundSampler(undefined, dem.revision);
+  }
+  refreshGround();
+}
+/** Отметки поменялись (пришли тайлы DEM, рельеф включён или снят): пересобрать то, что стоит на земле. */
+function refreshGround() {
+  groundCache.clear();
+  void overpassLayer.rebuildWhere(() => true);
+  overpass.refreshTrees();
+  scheduleBarriers();
+  scheduleModels();
+}
+/** Отметка основания здания: минимум DEM под контуром здания (у части — под контуром её здания: части одного здания на одной отметке). */
+const groundCache = new Map<string, number>();
+let groundIndex: { rev: number; list: { f: Feature3D; box: Bbox }[] } | undefined;
+function buildingGround(f: Feature3D): number {
+  if (!ground.on) return 0;
+  const host = groundHost(f);
+  const hit = groundCache.get(host.key);
+  if (hit !== undefined) return hit;
+  const v = dem.minUnder(host.polygons.map((p) => p.outer));
+  groundCache.set(host.key, v);
+  return v;
+}
+function groundHost(f: Feature3D): Feature3D {
+  const g = groupOf(f.key);
+  if (g) {
+    const outline = g.members.find((_, i) => g.roles[i] === 'outline');
+    const o = outline && overpass.findFeature(outline);
+    if (o) return o;
+  }
+  if (f.kind !== 'part') return f;
+  if (groundIndex?.rev !== overpass.revision) groundIndex = { rev: overpass.revision, list: liveFeatures().filter((b) => b.kind === 'building' && b.polygons.length).map((b) => {
+    const r = b.polygons[0].outer, xs = r.map((c) => c[0]), ys = r.map((c) => c[1]);
+    return { f: b, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as Bbox };
+  }) };
+  const p = f.polygons[0]?.outer;
+  if (!p?.length) return f;
+  const c: LonLat = [p.reduce((a, q) => a + q[0], 0) / p.length, p.reduce((a, q) => a + q[1], 0) / p.length];
+  const host = groundIndex.list.find(({ f: b, box }) => c[0] >= box[0] && c[0] <= box[2] && c[1] >= box[1] && c[1] <= box[3] && pointInRing(c, b.polygons[0].outer));
+  return host?.f ?? f;
+}
+setGround(buildingGround);
+
 function applyGraphics() {
+  syncTerrain();
   overpassLayer.setGraphics(gfx);
   tileBorders.setEnabled(gfx.tileBorders);
   tileBorders.setTiles(overpass.tiles());
@@ -2112,6 +2176,8 @@ function scheduleModels() {
       list.push({ key, id, at: n.p, z: 0, rotation: modelDirection(tags), hides: [], extent: n.ring ? ringExtent(n.ring) : undefined });
     }
     for (const p of unlinkedModels(new Set(list.map((p) => p.id)), all)) list.push(p);
+    // Рельеф (эксперимент): модель — на отметке земли в своей точке
+    if (ground.on) for (const p of list) p.z += ground.at(p.at);
     modelsLayer.setPlacements(list);
     // Выбранная модель ушла из загруженных данных (улетели в другое место) — снять выбор
     if (selectedModel && !modelsLayer.placementOf(selectedModel)) { select(undefined); clearInfo(); }
@@ -3413,6 +3479,7 @@ function enterFocus(group: BuildingGroup, flyIn = true) {
   }
   const sameBuilding = focus?.key === g.key;
   drill = focus = g;
+  syncTerrain();
   syncIssuesAllSetting();
   syncBasemapLayers(); // область снимков — вокруг этого здания
   if (!sameBuilding) void loadFocusUnderlays();
@@ -3541,6 +3608,7 @@ const staleKeys = new Set<string>();
 function exitFocus() {
   if (!focus) return;
   focus = undefined;
+  syncTerrain();
   syncIssuesAllSetting();
   mapIssuesDirty = true;
   setEditParam(undefined);

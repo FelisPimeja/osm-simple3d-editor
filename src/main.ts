@@ -483,24 +483,32 @@ function syncBasemapLayers() {
   applyVectorStyle(id !== MAP_BASEMAP);
 }
 
-/** Слои стиля карты (без фона и экструзий) и их видимость в стиле — запоминаются при загрузке. */
-let styleLayers: { id: string; visibility: 'visible' | 'none' }[] = [];
+/** Слои стиля карты (без фона и экструзий) и их прозрачность в стиле — запоминаются при загрузке. */
+let styleLayers: { id: string; opacity: Record<string, unknown> }[] = [];
+/** Свойства прозрачности по типу слоя: ими карта прячется под снимками и при «Без подложки». */
+const OPACITY_PROPS: Record<string, string[]> = {
+  fill: ['fill-opacity'], line: ['line-opacity'], symbol: ['text-opacity', 'icon-opacity'], circle: ['circle-opacity', 'circle-stroke-opacity'],
+  raster: ['raster-opacity'], hillshade: ['hillshade-exaggeration'], heatmap: ['heatmap-opacity'],
+};
 
 /**
  * Под снимками стиль карты не нужен (сквозь прозрачный снимок проглядывал бы): скрыть его заливки, линии и подписи,
- * оставив здания (наши слои). В режиме здания векторную карту можно включить явно.
+ * оставив здания (наши слои). Прячем прозрачностью, не visibility: тайлы, загруженные при скрытых слоях, MapLibre
+ * собирает без них и при показе не пересобирает (воркер держит их разобранными) — после включения карты там, где её
+ * выключали, оставались пустые места. Прозрачность — свойство отрисовки: бакеты есть всегда, показ — мгновенный.
  */
-let vectorStyleHidden = false;
 function applyVectorStyle(hidden: boolean) {
-  for (const l of styleLayers) if (map.getLayer(l.id)) map.setLayoutProperty(l.id, 'visibility', hidden ? 'none' : l.visibility);
-  // Тайлы, загруженные при скрытых слоях, собраны без них (MapLibre не строит бакеты скрытых слоёв) и при показе
-  // не пересобираются — до панорамирования на экране нет подписей и значков. Перезагрузить векторные источники стиля.
-  if (vectorStyleHidden && !hidden) {
-    const tm = (map.style as unknown as { tileManagers?: Record<string, { reload(): void }> }).tileManagers;
-    const sources = new Set(styleLayers.map((l) => (map.getLayer(l.id) as { source?: string } | undefined)?.source));
-    for (const s of sources) if (s && map.getSource(s)?.type === 'vector') tm?.[s]?.reload();
+  for (const l of styleLayers) {
+    if (!map.getLayer(l.id)) continue;
+    for (const [prop, value] of Object.entries(l.opacity)) {
+      // Без плавного перехода: с рельефом карта рисуется в текстуры тайлов рельефа — в них попал бы промежуточный кадр
+      map.setPaintProperty(l.id, `${prop}-transition` as 'fill-opacity-transition', { duration: 0, delay: 0 });
+      map.setPaintProperty(l.id, prop as 'fill-opacity', hidden ? 0 : (value as number | undefined));
+    }
   }
-  vectorStyleHidden = hidden;
+  // Текстуры карты на рельефе (кеш MapLibre) смену paint-свойств не замечают — сбросить
+  (map as unknown as { terrain?: { tileManager?: { releaseAllRTT(): void } } }).terrain?.tileManager?.releaseAllRTT();
+  map.triggerRepaint();
 }
 
 const offsetPanel = new ImageryOffsetPanel(map, {
@@ -1177,8 +1185,8 @@ map.on('load', () => {
   for (const layer of map.getStyle().layers) {
     if (layer.type === 'fill-extrusion') map.removeLayer(layer.id);
   }
-  styleLayers = map.getStyle().layers.filter((l) => l.type !== 'background')
-    .map((l) => ({ id: l.id, visibility: l.layout?.visibility === 'none' ? 'none' as const : 'visible' as const }));
+  styleLayers = map.getStyle().layers.filter((l) => l.type !== 'background' && OPACITY_PROPS[l.type])
+    .map((l) => ({ id: l.id, opacity: Object.fromEntries(OPACITY_PROPS[l.type].map((p) => [p, map.getPaintProperty(l.id, p as 'fill-opacity')])) }));
 
   const extrusion: FillExtrusionLayerSpecification['paint'] = {
     'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 5],

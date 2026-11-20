@@ -10,8 +10,13 @@ export interface TreePoint { key?: string; tags?: Record<string, string>; p: Lon
 /** Ряд деревьев (natural=tree_row) — ломаная. */
 export interface TreeRow { key: string; line: LonLat[]; leaf?: LeafType; height?: number; crown?: number; dates?: LifeDates; nodes?: number[]; tags?: Record<string, string> }
 /** Лес (natural=wood, landuse=forest): кольца без повторённой замыкающей точки. */
-/** У леса-пути — nodes (кольцо без повторённого замыкающего узла) и tags: его можно править. */
-export interface WoodArea { key: string; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; leaf?: LeafType; dates?: LifeDates; nodes?: number[]; tags?: Record<string, string> }
+/** Путь-член мультиполигона леса: узлы и координаты как в OSM (замкнутый — с повторённым первым узлом). */
+export interface WoodMember { key: string; role: 'outer' | 'inner'; nodes: number[]; coords: LonLat[]; tags?: Record<string, string> }
+/**
+ * У леса-пути — nodes (кольцо без повторённого замыкающего узла) и tags, у мультиполигона — members и tags: их можно
+ * править.
+ */
+export interface WoodArea { key: string; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; leaf?: LeafType; dates?: LifeDates; nodes?: number[]; members?: WoodMember[]; tags?: Record<string, string> }
 /** start_date / end_date объекта (OpenHistoricalMap) — для фильтра по дате; нет — существовал всегда. */
 export type LifeDates = { start_date?: string; end_date?: string };
 
@@ -55,6 +60,31 @@ export function rowFromWay(key: string, tags: Record<string, string>, nodes: num
 /** Лес из замкнутого пути: nodes и outer — кольцо без повторённой замыкающей вершины. */
 export function woodFromWay(key: string, tags: Record<string, string>, nodes: number[], outer: LonLat[]): WoodArea {
   return { key, polygons: [{ outer, inners: [] }], leaf: leafOf(tags), dates: lifeDates(tags), nodes, tags };
+}
+
+/** Лес-мультиполигон из колец (правки сессии, вставка). */
+export function woodFromRings(key: string, tags: Record<string, string>, polygons: WoodArea['polygons'], members?: WoodMember[]): WoodArea {
+  return { key, polygons, leaf: leafOf(tags), dates: lifeDates(tags), tags, ...(members ? { members } : {}) };
+}
+
+/**
+ * Кольца мультиполигона из путей-членов (узлы и координаты): внешние — из outer, дыры — в своё внешнее кольцо.
+ * Кольца без повторённой замыкающей точки; не собрались — пусто.
+ */
+export function ringsFromMembers(members: WoodMember[]): WoodArea['polygons'] {
+  const at = new Map<number, LonLat>();
+  for (const m of members) m.nodes.forEach((id, i) => at.set(id, m.coords[i]));
+  const outers = joinRings(members.filter((m) => m.role !== 'inner').map((m) => m.nodes));
+  const inners = joinRings(members.filter((m) => m.role === 'inner').map((m) => m.nodes));
+  if (!outers) return [];
+  const polygons: WoodArea['polygons'] = [];
+  for (const r of outers) if (r.length >= 4) polygons.push({ outer: r.slice(0, -1).map((id) => at.get(id)!), inners: [] });
+  for (const r of inners ?? []) {
+    if (r.length < 4) continue;
+    const inner = r.slice(0, -1).map((id) => at.get(id)!);
+    polygons.find((p) => pointInRing(inner[0], p.outer))?.inners.push(inner);
+  }
+  return polygons;
 }
 
 export function isWood(tags?: Record<string, string>): boolean {
@@ -126,7 +156,15 @@ export function parseTrees(elements: OsmElement[]): TreeData {
       if (!inner || inner.length < 3) continue;
       polygons.find((p) => pointInRing(inner[0], p.outer))?.inners.push(inner);
     }
-    if (polygons.length) woods.push({ key: `relation/${r.id}`, polygons, leaf: leafOf(r.tags), dates: lifeDates(r.tags) });
+    if (!polygons.length) continue;
+    // Пути-члены с узлами — для правки (все узлы есть — иначе мультиполигон только показывается)
+    const members: WoodMember[] = [];
+    for (const m of r.members) {
+      const w = m.type === 'way' ? ways.get(m.ref) : undefined, cs = w && coords(w.nodes);
+      if (!w || !cs) { members.length = 0; break; }
+      members.push({ key: `way/${w.id}`, role: m.role === 'inner' ? 'inner' : 'outer', nodes: w.nodes.slice(), coords: cs, ...(w.tags ? { tags: w.tags } : {}) });
+    }
+    woods.push(woodFromRings(`relation/${r.id}`, r.tags, polygons, members.length ? members : undefined));
   }
   return { points, rows, woods };
 }

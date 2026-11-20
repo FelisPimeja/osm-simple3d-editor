@@ -62,7 +62,7 @@ import { ModelPins } from './view/model-pins';
 import { modelObjectKey } from './osm/model-nodes';
 import { DMR, LICENSES, modelIdOf, ModelsLayer, type ModelPlacement } from './render/models-layer';
 import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, type BarrierWay } from './osm/barriers';
-import { isWood, rowFromWay, woodFromWay, type TreePoint, type TreeRow, type WoodArea } from './osm/trees';
+import { isWood, ringsFromMembers, rowFromWay, woodFromRings, woodFromWay, type TreePoint, type TreeRow, type WoodArea, type WoodMember } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
 import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
@@ -723,7 +723,7 @@ function scheduleFocusTiles() {
  */
 function createdShapes(): Feature3D[] {
   return session.createdAlive().filter((t): t is Feature3D => 'polygons' in t && !!t.polygons?.length
-    && !t.key.startsWith('node/') && !(t.tags.indoor && !t.tags.building && !t.tags['building:part'])).map(withEntranceEdits);
+    && !t.key.startsWith('node/') && !(t.tags.indoor && !t.tags.building && !t.tags['building:part']) && !isFloraTags(t.tags)).map(withEntranceEdits);
 }
 
 /** Теги узлов в сессии (id → теги): входы контуров — по ним, а не по загруженным (см. withEntranceEdits). */
@@ -1398,7 +1398,7 @@ function barrierFeature(b: BarrierWay): IndoorFeature {
 }
 /** Ограждение по ключу (с правками сессии), если оно ещё ограждение. */
 function barrierFeatureFor(key: string): IndoorFeature | undefined {
-  if (key.startsWith('way/')) { const fl = floraFeatureFor(key); if (fl) return fl; }
+  if (!key.startsWith('node/')) { const fl = floraFeatureFor(key); if (fl || isRel(key)) return fl; }
   if (key.startsWith('node/')) {
     const id = Number(key.slice(5));
     for (const raw of overpass.barriers()) {
@@ -1419,68 +1419,130 @@ function syncBarrierSelection() {
   syncFloraHighlight();
 }
 
-/* ── Ряды деревьев и леса-пути: выбор на карте, «Форма», «Переместить», «Повернуть», копирование ── */
+/* ── Ряды деревьев и леса (пути и мультиполигоны): выбор на карте, «Форма», «Переместить», «Повернуть», копирование, удаление ── */
 
-/** Ряд или лес-путь: у леса nodes и coords — кольцо без повторённой замыкающей вершины. */
-interface FloraWay { key: string; kind: 'row' | 'wood'; tags: Record<string, string>; nodes: number[]; coords: LonLat[] }
+/**
+ * Ряд, лес-путь или лес-мультиполигон. У леса-пути nodes и coords — кольцо без повторённой замыкающей вершины;
+ * у мультиполигона — members (пути-члены, их правит «Форма»), nodes и coords пустые.
+ */
+interface FloraWay { key: string; kind: 'row' | 'wood'; tags: Record<string, string>; nodes: number[]; coords: LonLat[]; members?: WoodMember[] }
 /** Вставленные в сессии ряды и леса (их нет в тайлах). */
 const floraCreated = new Map<string, 'row' | 'wood'>();
-const floraValid = (f: FloraWay) => (f.kind === 'row' ? f.tags.natural === 'tree_row' && f.coords.length >= 2 : isWood(f.tags) && f.coords.length >= 3);
+const isRel = (key: string) => key.startsWith('relation/');
+const floraValid = (f: FloraWay) => (f.kind === 'row' ? f.tags.natural === 'tree_row' && f.coords.length >= 2
+  : isWood(f.tags) && (f.members ? ringsFromMembers(f.members).length > 0 : f.coords.length >= 3));
+/** Теги ряда или леса без здания — такие созданные объекты не здания (createdShapes). */
+function isFloraTags(t: Record<string, string>) { return !t.building && !t['building:part'] && (t.natural === 'tree_row' || isWood(t)); }
 
-/** Ряды и леса-пути показанных тайлов и вставленные (без правок сессии). */
+/** Ряды и леса показанных тайлов и вставленные (без правок сессии). */
 function rawFlora(): FloraWay[] {
   const { rows, woods } = overpass.floraWays();
   const out: FloraWay[] = [
     ...rows.map((r) => ({ key: r.key, kind: 'row' as const, tags: r.tags ?? {}, nodes: r.nodes!, coords: r.line })),
-    ...woods.map((w) => ({ key: w.key, kind: 'wood' as const, tags: w.tags ?? {}, nodes: w.nodes!, coords: w.polygons[0].outer })),
+    ...woods.map((w) => ({ key: w.key, kind: 'wood' as const, tags: w.tags ?? {}, nodes: w.nodes ?? [], coords: w.nodes ? w.polygons[0].outer : [], ...(w.members ? { members: w.members } : {}) })),
   ];
   const have = new Set(out.map((f) => f.key));
-  for (const [key, kind] of floraCreated) if (!have.has(key) && session.has(key)) out.push({ key, kind, tags: {}, nodes: [], coords: [] });
+  for (const [key, kind] of floraCreated) if (!have.has(key) && session.has(key)) out.push({ key, kind, tags: {}, nodes: [], coords: [], ...(isRel(key) ? { members: [] } : {}) });
   return out;
 }
 
-/** Ряд или лес с правками сессии; удалённый — нет. */
+/** Путь с правками сессии: узлы и координаты; удалён — нет. */
+function liveLine(key: string, nodes: number[], coords: LonLat[]): { nodes: number[]; coords: LonLat[] } | undefined {
+  if (session.isDeleted(key)) return;
+  const e = session.get(key);
+  const line = e?.line ?? (e?.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
+  return line ? { nodes: line.ids, coords: line.coords } : { nodes, coords };
+}
+
+/** Ряд или лес с правками сессии (у мультиполигона — состав и пути-члены); удалённый — нет. */
 function liveFlora(f: FloraWay): FloraWay | undefined {
   if (session.isDeleted(f.key)) return;
   const e = session.get(f.key);
-  if (!e) return f;
-  const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
-  let nodes = line?.ids ?? f.nodes, coords = line?.coords ?? f.coords;
+  const tags = e?.tags ?? f.tags;
+  if (f.members) {
+    const known = new Map(f.members.map((m) => [m.key, m]));
+    const list = e?.relMembers?.filter((m) => m.type === 'way').map((m) => ({ key: `way/${m.ref}`, role: (m.role === 'inner' ? 'inner' : 'outer') as 'outer' | 'inner' }))
+      ?? f.members.map((m) => ({ key: m.key, role: m.role }));
+    const members: WoodMember[] = [];
+    for (const m of list) {
+      const k = known.get(m.key), l = liveLine(m.key, k?.nodes ?? [], k?.coords ?? []);
+      if (l && l.nodes.length) members.push({ key: m.key, role: m.role, nodes: l.nodes, coords: l.coords, ...(k?.tags ? { tags: k.tags } : {}) });
+    }
+    return { ...f, tags, members };
+  }
+  const l = liveLine(f.key, f.nodes, f.coords);
+  if (!l) return;
+  let { nodes, coords } = l;
   if (f.kind === 'wood' && nodes.length > 1 && nodes[0] === nodes[nodes.length - 1]) { nodes = nodes.slice(0, -1); coords = coords.slice(0, -1); }
-  return { ...f, tags: e.tags ?? f.tags, nodes, coords };
+  return { ...f, tags, nodes, coords };
 }
 
-/** Ряд или лес — объектом-линией, как ограждение (у леса — замкнутая). */
+/** Кольца ряда или леса (у ряда — его линия), без повторённой замыкающей точки. */
+function floraPolygons(f: FloraWay): { outer: LonLat[]; inners: LonLat[][] }[] {
+  return f.members ? ringsFromMembers(f.members) : [{ outer: f.coords, inners: [] }];
+}
+
+/** Ряд или лес — объектом-линией, как ограждение (лес-путь — замкнутая); мультиполигон — кольцами (правятся его пути). */
 function floraFeature(f: FloraWay): IndoorFeature {
+  if (f.members) return { key: f.key, tags: f.tags, kind: 'area', barrier: true, flora: 'wood', levels: [0], polygons: floraPolygons(f).map((p) => ({ outer: p.outer, inners: p.inners })) };
   const closed = f.kind === 'wood';
   const outer = closed ? [...f.coords, f.coords[0]] : f.coords, ids = closed ? [...f.nodes, f.nodes[0]] : f.nodes;
   return { key: f.key, tags: f.tags, kind: 'area', line: true, barrier: true, flora: f.kind, levels: [0], polygons: [{ outer, inners: [], outerIds: ids, innerIds: [] }] };
 }
-function floraFeatureFor(key: string): IndoorFeature | undefined {
-  const raw = rawFlora().find((f) => f.key === key), live = raw && liveFlora(raw);
-  return live && floraValid(live) ? floraFeature(live) : undefined;
+/** Путь-член мультиполигона — линией (как в OSM: замкнутый — с повторённым узлом). */
+function floraMemberFeature(m: WoodMember, tags: Record<string, string>): IndoorFeature {
+  return { key: m.key, tags: session.get(m.key)?.tags ?? m.tags ?? {}, kind: 'area', line: true, barrier: true, flora: 'wood', levels: [0],
+    polygons: [{ outer: m.coords, inners: [], outerIds: m.nodes, innerIds: [] }] };
 }
+/** Ряд, лес или путь-член выбранного (или загруженного) мультиполигона по ключу. */
+function floraFeatureFor(key: string): IndoorFeature | undefined {
+  const all = rawFlora();
+  const raw = all.find((f) => f.key === key), live = raw && liveFlora(raw);
+  if (live) return floraValid(live) ? floraFeature(live) : undefined;
+  if (raw || !key.startsWith('way/')) return;
+  for (const r of all) {
+    if (!r.members) continue;
+    const l = liveFlora(r), m = l?.members?.find((x) => x.key === key);
+    if (m) return floraMemberFeature(m, l!.tags);
+  }
+}
+/** Выделение с путями-членами выбранных мультиполигонов (их правят «Форма» и общие правки геометрии). */
+function expandFlora(fs: IndoorFeature[]): IndoorFeature[] {
+  return fs.flatMap((f) => {
+    if (!f.flora || !isRel(f.key)) return [f];
+    const raw = rawFlora().find((x) => x.key === f.key), l = raw && liveFlora(raw);
+    return [f, ...(l?.members ?? []).map((m) => floraMemberFeature(m, l!.tags))];
+  });
+}
+/** Объекты правки геометрии: выбранные (мультиполигон — его путями-членами, без самого отношения). */
+const floraEditable = (fs: IndoorFeature[]) => expandFlora(fs).filter((f) => !(f.flora && isRel(f.key)));
 
 // Деревья тайлов — по правкам сессии рядов и лесов (и вставленные)
 overpass.treeOverlay = (rows, woods, [w, s, e, n]) => {
   let sig = '';
-  const mark = (f: FloraWay) => { sig += `${f.key}:${JSON.stringify(f.tags)}:${f.coords.map((c) => c[0].toFixed(7) + ',' + c[1].toFixed(7)).join(' ')};`; };
+  const mark = (key: string, tags: Record<string, string>, rings: LonLat[][]) => {
+    sig += `${key}:${JSON.stringify(tags)}:${rings.map((r) => r.map((c) => c[0].toFixed(7) + ',' + c[1].toFixed(7)).join(' ')).join('|')};`;
+  };
+  const touched = (x: { key: string; members?: WoodMember[] }) => session.has(x.key) || !!x.members?.some((m) => session.has(m.key));
   const outRows: TreeRow[] = [], outWoods: WoodArea[] = [];
+  const woodOf = (l: FloraWay): WoodArea => l.members ? woodFromRings(l.key, l.tags, floraPolygons(l), l.members) : woodFromWay(l.key, l.tags, l.nodes, l.coords);
   for (const r of rows) {
     if (!session.has(r.key) || !r.nodes) { outRows.push(r); continue; }
     const l = liveFlora({ key: r.key, kind: 'row', tags: r.tags ?? {}, nodes: r.nodes, coords: r.line });
-    if (l && floraValid(l)) { mark(l); outRows.push(rowFromWay(l.key, l.tags, l.nodes, l.coords)); } else sig += `${r.key}-;`;
+    if (l && floraValid(l)) { mark(l.key, l.tags, [l.coords]); outRows.push(rowFromWay(l.key, l.tags, l.nodes, l.coords)); } else sig += `${r.key}-;`;
   }
   for (const x of woods) {
-    if (!session.has(x.key) || !x.nodes) { outWoods.push(x); continue; }
-    const l = liveFlora({ key: x.key, kind: 'wood', tags: x.tags ?? {}, nodes: x.nodes, coords: x.polygons[0].outer });
-    if (l && floraValid(l)) { mark(l); outWoods.push(woodFromWay(l.key, l.tags, l.nodes, l.coords)); } else sig += `${x.key}-;`;
+    if ((!x.nodes && !x.members) || !touched(x)) { outWoods.push(x); continue; }
+    const l = liveFlora({ key: x.key, kind: 'wood', tags: x.tags ?? {}, nodes: x.nodes ?? [], coords: x.nodes ? x.polygons[0].outer : [], ...(x.members ? { members: x.members } : {}) });
+    if (l && floraValid(l)) { const wd = woodOf(l); mark(l.key, l.tags, wd.polygons.flatMap((p) => [p.outer, ...p.inners])); outWoods.push(wd); } else sig += `${x.key}-;`;
   }
   for (const [key, kind] of floraCreated) {
-    const l = session.has(key) ? liveFlora({ key, kind, tags: {}, nodes: [], coords: [] }) : undefined;
-    if (!l || !floraValid(l) || !l.coords.some((c) => c[0] >= w && c[0] <= e && c[1] >= s && c[1] <= n)) continue;
-    mark(l);
-    if (kind === 'row') outRows.push(rowFromWay(key, l.tags, l.nodes, l.coords)); else outWoods.push(woodFromWay(key, l.tags, l.nodes, l.coords));
+    const l = session.has(key) ? liveFlora({ key, kind, tags: {}, nodes: [], coords: [], ...(isRel(key) ? { members: [] } : {}) }) : undefined;
+    if (!l || !floraValid(l)) continue;
+    const rings = floraPolygons(l).flatMap((p) => [p.outer, ...p.inners]);
+    if (!rings.some((r) => r.some((c) => c[0] >= w && c[0] <= e && c[1] >= s && c[1] <= n))) continue;
+    mark(key, l.tags, rings);
+    if (kind === 'row') outRows.push(rowFromWay(key, l.tags, l.nodes, l.coords)); else outWoods.push(woodOf(l));
   }
   return { rows: outRows, woods: outWoods, sig };
 };
@@ -1502,16 +1564,21 @@ function floraAt(pt: { x: number; y: number }): IndoorFeature | undefined {
   if (row) return floraFeature(row);
   const ll = map.unproject([pt.x, pt.y]), p: LonLat = [ll.lng, ll.lat];
   const area = (r: LonLat[]) => Math.abs(r.reduce((a, c, i) => { const q = r[(i + 1) % r.length]; return a + c[0] * q[1] - q[0] * c[1]; }, 0));
-  const wood = all.filter((f) => f.kind === 'wood' && pointInRing(p, f.coords)).sort((a, b) => area(a.coords) - area(b.coords))[0];
-  return wood && floraFeature(wood);
+  const hits = all.filter((f) => f.kind === 'wood').map((f) => ({ f, poly: floraPolygons(f).find((q) => pointInRing(p, q.outer) && !q.inners.some((r) => pointInRing(p, r))) }))
+    .filter((h) => h.poly).sort((a, b) => area(a.poly!.outer) - area(b.poly!.outer));
+  return hits[0] && floraFeature(hits[0].f);
 }
 
 /** Превью «Переместить» / «Повернуть»: контуры выбранных рядов и лесов, преобразованные матрицей (метры сцены). */
 let floraPreview: { keys: Set<string>; m: THREE.Matrix4 } | undefined;
-function floraCoords(f: IndoorFeature, m?: THREE.Matrix4): LonLat[] {
-  const c = f.polygons[0].outer;
+function moved(c: LonLat[], m?: THREE.Matrix4): LonLat[] {
   if (!m) return c;
   return c.map((q) => { const l = overpassLayer.focusToLocal(q); if (!l) return q; const v = new THREE.Vector3(l[0], l[1], 0).applyMatrix4(m); return overpassLayer.focusToLngLat(v.x, v.y)! as LonLat; });
+}
+/** Линии контура ряда или леса (кольца леса — замкнутые). */
+function floraLines(f: IndoorFeature, m?: THREE.Matrix4): LonLat[][] {
+  if (f.line) return [moved(f.polygons[0].outer, m)];
+  return f.polygons.flatMap((p) => [p.outer, ...p.inners]).map((r) => moved([...r, r[0]], m));
 }
 /** Синий контур выбранных рядов и лесов на земле (с превью преобразования). */
 function syncFloraHighlight() {
@@ -1519,11 +1586,14 @@ function syncFloraHighlight() {
   if (!src) return;
   const fs = indoorSelection.filter((f) => f.flora);
   src.setData({ type: 'FeatureCollection', features: fs.map((f) => ({ type: 'Feature', properties: {},
-    geometry: { type: 'LineString', coordinates: floraCoords(f, floraPreview?.keys.has(f.key) ? floraPreview.m : undefined) } })) });
+    geometry: { type: 'MultiLineString', coordinates: floraLines(f, floraPreview?.keys.has(f.key) ? floraPreview.m : undefined) } })) });
 }
 
 const FLORA_ID = 'flora:';
 const floraTargets = (ids: Iterable<string>) => [...ids].filter((i) => i.startsWith(FLORA_ID)).map((i) => floraFeatureFor(i.slice(FLORA_ID.length))).filter((f): f is IndoorFeature => !!f);
+
+/** Первая точка выбранного ряда или леса — начало сцены наброска. */
+const floraAnchor = (f: IndoorFeature) => f.polygons[0].outer[0];
 
 /** «Переместить» / «Повернуть» рядов и лесов на карте — в сцене наброска, как у подложек. */
 function startMapFloraTool(tool: 'move' | 'rotate'): boolean {
@@ -1531,45 +1601,72 @@ function startMapFloraTool(tool: 'move' | 'rotate'): boolean {
   if (focus || !fs.length) return false;
   cancelCopyPick();
   drawTool.stop(); moveTool.stop(); rotateTool.stop(); scaleTool.stop(); measureTool.stop(); shapeTool.stop();
-  if (!underlaySketch) { overpassLayer.setSketch(fs[0].polygons[0].outer[0]); underlaySketch = true; }
+  if (!underlaySketch) { overpassLayer.setSketch(floraAnchor(fs[0])); underlaySketch = true; }
   const ids = fs.map((f) => FLORA_ID + f.key);
   if (tool === 'move') moveTool.start([], false, ids); else rotateTool.start([], ids);
   syncMapTools();
   return true;
 }
 
-/** Применить преобразование m (метры сцены) к рядам и лесам ids: узлы путей едут вместе (общие с соседями — тоже). */
+/**
+ * Применить преобразование m (метры сцены) к рядам и лесам ids (мультиполигон — всеми путями-членами): узлы путей
+ * едут вместе (общие с соседями — тоже).
+ */
 function commitFlora(ids: string[], m: THREE.Matrix4, what: string) {
   floraPreview = undefined;
   const fs = floraTargets(ids);
   if (!fs.length) return;
-  const edits: ObjectEdit[] = fs.map((f) => { trackIndoor(f.key, f); return { key: f.key, line: { ids: f.polygons[0].outerIds!, coords: floraCoords(f, m) } }; });
+  const ways = new Map(floraEditable(fs).map((f) => [f.key, f]));
+  const edits: ObjectEdit[] = [...ways.values()].map((f) => { trackIndoor(f.key, f); return { key: f.key, line: { ids: f.polygons[0].outerIds!, coords: moved(f.polygons[0].outer, m) } }; });
   session.editMany(edits);
   selectIndoorMany(fs.map((f) => floraFeatureFor(f.key)).filter((f): f is IndoorFeature => !!f));
   setStatus(tr('{what}: {n}. Отменить — Ctrl+Z.', { what, n: fs.length }));
 }
 
-/** Скопированные ряды и леса (теги и геометрия). */
-let floraClipboard: { kind: 'row' | 'wood'; tags: Record<string, string>; coords: LonLat[] }[] | undefined;
+/** Скопированные ряды и леса: теги и кольца (у ряда — его линия). */
+let floraClipboard: { kind: 'row' | 'wood'; tags: Record<string, string>; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; rel: boolean }[] | undefined;
 
-/** Ctrl+V на карте: копии рядов и лесов новыми путями со своими узлами, центром — в точку под курсором. */
+function copyFlora(fs: IndoorFeature[]) {
+  floraClipboard = fs.filter((f) => f.flora).map((f) => ({ kind: f.flora!, tags: { ...f.tags }, rel: isRel(f.key),
+    polygons: f.line ? [{ outer: f.flora === 'wood' ? f.polygons[0].outer.slice(0, -1) : f.polygons[0].outer.slice(), inners: [] }] : f.polygons.map((p) => ({ outer: p.outer, inners: p.inners })) }));
+  setStatus(tr('Скопировано: {n}. Ctrl+V — вставить под курсором.', { n: floraClipboard.length }));
+}
+
+/** Ctrl+V на карте: копии рядов и лесов новыми путями (мультиполигон — новым отношением) со своими узлами, центром — в точку под курсором. */
 function pasteFlora() {
   const cb = floraClipboard;
   const at = cb && lastPointer && groundAt(lastPointer);
   if (!cb || !at) return;
-  const all = cb.flatMap((c) => c.coords);
+  const all = cb.flatMap((c) => c.polygons.flatMap((p) => [p.outer, ...p.inners]).flat());
   const cx = all.reduce((a, c) => a + c[0], 0) / all.length, cy = all.reduce((a, c) => a + c[1], 0) / all.length;
   // Сдвиг в метрах — чтобы форма не искажалась на другой широте
   const k = Math.cos((cy * Math.PI) / 180) / Math.cos((at[1] * Math.PI) / 180);
+  const place = (r: LonLat[]) => r.map((q) => [at[0] + (q[0] - cx) * k, at[1] + (q[1] - cy)] as LonLat);
   const edits: ObjectEdit[] = [], keys: string[] = [];
-  for (const c of cb) {
-    const ring = c.kind === 'wood';
-    const coords = c.coords.map((q) => [at[0] + (q[0] - cx) * k, at[1] + (q[1] - cy)] as LonLat);
+  const way = (coords: LonLat[], closed: boolean, tags: Record<string, string>) => {
     const ids = coords.map(() => nextNewId--);
-    const line = ring ? { ids: [...ids, ids[0]], coords: [...coords, coords[0]] } : { ids, coords };
-    const key = `way/${nextNewId--}`;
-    edits.push({ key, create: { key, version: 0, tags: { ...c.tags }, line, polygons: [{ outer: line.coords, outerIds: line.ids, inners: [] }] } });
-    floraCreated.set(key, c.kind);
+    const line = closed ? { ids: [...ids, ids[0]], coords: [...coords, coords[0]] } : { ids, coords };
+    const id = nextNewId--, key = `way/${id}`;
+    edits.push({ key, create: { key, version: 0, tags, line } });
+    return { id, key, nodes: line.ids };
+  };
+  for (const c of cb) {
+    if (!c.rel) {
+      const w = way(place(c.polygons[0].outer), c.kind === 'wood', { ...c.tags });
+      floraCreated.set(w.key, c.kind);
+      keys.push(w.key);
+      continue;
+    }
+    // Мультиполигон: пути колец без тегов, теги — у отношения
+    const ways: MemberWay[] = [];
+    for (const p of c.polygons) for (const [r, role] of [[p.outer, 'outer'] as const, ...p.inners.map((x) => [x, 'inner'] as const)]) {
+      const w = way(place(r), true, {});
+      ways.push({ id: w.id, role, nodes: w.nodes });
+    }
+    const relId = nextNewId--, key = `relation/${relId}`;
+    edits.push({ key, create: { key, type: 'relation', id: relId, version: 0, tags: { ...c.tags, type: 'multipolygon' }, ways,
+      relMembers: ways.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role })) } as unknown as Feature3D });
+    floraCreated.set(key, 'wood');
     keys.push(key);
   }
   session.editMany(edits);
@@ -1578,6 +1675,32 @@ function pasteFlora() {
   setStatus(tr('Вставлено: {n}. M — переместить, Q — повернуть, Ctrl+Z — отменить.', { n: keys.length }));
 }
 
+/**
+ * Удалить ряды и леса. У мультиполигона — отношение и пути-члены без своих тегов, которые не входят в другие
+ * загруженные мультиполигоны лесов; узлы уходят при отправке, если больше нигде не нужны.
+ */
+function deleteFlora(fs: IndoorFeature[]) {
+  const edits: ObjectEdit[] = [];
+  const gone = new Set(fs.map((f) => f.key));
+  for (const f of fs) {
+    if (!isRel(f.key)) { trackIndoor(f.key, f); edits.push({ key: f.key, delete: true }); continue; }
+    session.track({ key: f.key, version: 0, tags: { ...f.tags } });
+    edits.push({ key: f.key, delete: true });
+    const others = rawFlora().filter((r) => r.members && !gone.has(r.key)).map(liveFlora);
+    // Свои теги пути — по сессии и по загруженным данным: такой путь — отдельный объект, остаётся
+    const dataTags = new Map((rawFlora().find((r) => r.key === f.key)?.members ?? []).map((m) => [m.key, m.tags ?? {}]));
+    for (const m of expandFlora([f]).slice(1)) {
+      if (Object.keys(m.tags).length || Object.keys(dataTags.get(m.key) ?? {}).length || others.some((o) => o?.members?.some((x) => x.key === m.key))) continue;
+      trackIndoor(m.key, m);
+      edits.push({ key: m.key, delete: true });
+    }
+  }
+  if (!edits.length) return;
+  selectIndoor(undefined);
+  clearInfo();
+  session.editMany(edits);
+  setStatus(tr('Удалено: {n}. Отменить — Ctrl+Z.', { n: fs.length }));
+}
 
 /** Ось ограждения в пределах 6 px от точки экрана (тонкий забор сверху не попасть лучом); глубина — у земли. */
 function barrierNear(pt: { x: number; y: number }): { way: BarrierWay; gate?: BarrierGate; depth: number } | undefined {
@@ -4139,13 +4262,13 @@ function startPush() {
 // Инструмент «Форма» (V): вершины контура выделенной части — только в плане
 const shapeBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="shape"]')!;
 /** Части, которые правит «Форма»: выделенные видимые члены здания. */
-const shapeSelected = () => indoorSelection.some(editableIndoorGeometry) ? indoorSelection.filter(editableIndoorGeometry).map(f => f.key) : selection.filter((k) => focus?.members.includes(k) && !hiddenInFocus(k));
+const shapeSelected = () => floraEditable(indoorSelection).some(editableIndoorGeometry) ? floraEditable(indoorSelection).filter(editableIndoorGeometry).map(f => f.key) : selection.filter((k) => focus?.members.includes(k) && !hiddenInFocus(k));
 /** Низ и верх стен части и высота крыши, м сцены (для «Формы»). */
 function shapeWalls(key: string) {
   // Ось арки — на земле (и на плане этажа над ней)
   if (focus && passageFeatures(focus).some((f) => f.key === key)) return { min: 0, top: 0, roof: 0 };
   // Ось ограждения — на земле
-  if (indoorSelection.some((f) => f.barrier && f.key === key)) return { min: 0, top: 0, roof: 0 };
+  if (floraEditable(indoorSelection).some((f) => f.barrier && f.key === key)) return { min: 0, top: 0, roof: 0 };
   const indoor = shownIndoor.find(f => f.key === key && editableIndoorGeometry(f));
   if (indoor && shownLevel) return { min: shownLevel.floor, top: shownLevel.floor, roof: 0 };
   const f = entity(key) as Feature3D | undefined;
@@ -4164,7 +4287,7 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(), shapeSelected
     syncCursor();
     toolHint(hint, error);
   });
-shapeTool.multiObject = () => indoorSelection.some(editableIndoorGeometry);
+shapeTool.multiObject = () => floraEditable(indoorSelection).some(editableIndoorGeometry);
 shapeTool.noInsert = key => !!buildingIndoorFor(key)?.escalator;
 // Ширина марша с полигоном пары: ручки на серединах боковых сторон (на полу этажа)
 shapeTool.widthHandles = (key) => {
@@ -5039,7 +5162,7 @@ function startMapBarrierShape() {
   cancelCopyPick();
   drawTool.stop(); moveTool.stop(); rotateTool.stop(); scaleTool.stop(); measureTool.stop();
   if (!barrierSketch) { overpassLayer.setSketch(f.polygons[0].outer[0]); barrierSketch = true; }
-  trackIndoor(f.key, f);
+  for (const g of floraEditable([f])) trackIndoor(g.key, g);
   shapeTool.start();
   syncMapTools();
 }
@@ -9213,8 +9336,7 @@ document.addEventListener('keydown', (e) => {
   // Ряды и леса на карте: Ctrl+C / Ctrl+V — копия под курсор, M / Q — «Переместить» / «Повернуть»
   if (!focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyC' && !textSelected && !toolActive() && indoorSelection.some((f) => f.flora)) {
     e.preventDefault();
-    floraClipboard = indoorSelection.filter((f) => f.flora).map((f) => ({ kind: f.flora!, tags: { ...f.tags }, coords: f.flora === 'wood' ? f.polygons[0].outer.slice(0, -1) : f.polygons[0].outer.slice() }));
-    setStatus(tr('Скопировано: {n}. Ctrl+V — вставить под курсором.', { n: floraClipboard.length }));
+    copyFlora(indoorSelection);
     return;
   }
   if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyC' && !textSelected) floraClipboard = undefined;
@@ -9243,10 +9365,13 @@ document.addEventListener('keydown', (e) => {
   }
   // Del / Backspace — удалить выделенное (на карте — отдельные здания, в режиме здания — части)
   // На Mac клавиша Delete — это Backspace
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && indoorSelection.length && indoorSelection.every((f) => f.barrier && !f.flora)) {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && indoorSelection.length && indoorSelection.every((f) => f.barrier)) {
     e.preventDefault();
     closeCtxMenu();
-    deleteBarriers(indoorSelection);
+    // Ряды и леса — своим удалением (у мультиполигона — с путями-членами), ограждения и ворота — своим
+    const fl = indoorSelection.filter((f) => f.flora), rest = indoorSelection.filter((f) => !f.flora);
+    if (fl.length) deleteFlora(fl);
+    if (rest.length) deleteBarriers(rest);
     return;
   }
   if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && canDeleteIndoorSelection()) {
@@ -11064,9 +11189,9 @@ function indoorLegend(onLevel: IndoorFeature[]): string {
 /** Indoor-объект здания режима по ключу OSM (с правками сессии); недоступен — undefined. */
 function buildingIndoorFor(key: string): IndoorFeature | undefined {
   return focus ? buildingIndoor(focus).find((f) => f.key === key) ?? passageFeatures(focus).find((f) => f.key === key)
-    ?? (indoorSelection.some((f) => f.barrier && f.key === key) ? barrierFeatureFor(key) : undefined)
-    // На карте — выбранное ограждение («Форма» в сцене наброска)
-    : indoorSelection.some((f) => f.barrier && f.key === key) ? barrierFeatureFor(key) : undefined;
+    ?? (expandFlora(indoorSelection).some((f) => f.barrier && f.key === key) ? barrierFeatureFor(key) : undefined)
+    // На карте — выбранное ограждение, ряд или лес (у мультиполигона — его пути; «Форма» в сцене наброска)
+    : expandFlora(indoorSelection).some((f) => f.barrier && f.key === key) ? barrierFeatureFor(key) : undefined;
 }
 
 /** Ключи indoor-объектов, которые правились в сессии (их теги берутся из сессии). */
@@ -11397,7 +11522,7 @@ function indoorMoveOperation(fs: IndoorFeature[], offset: THREE.Vector3): Indoor
 }
 function indoorGeometryEdits(op: IndoorOperation, glue: boolean, preview = false, pairs = true): ObjectEdit[] {
   // Выбранные ограждения окружения — тоже линии на земле («Форма» в режиме здания)
-  const all = [...(focus ? [...buildingIndoor(focus).filter(f => !f.key.endsWith('#poi')), ...passageFeatures(focus)] : []), ...indoorSelection.filter((f) => f.barrier)];
+  const all = [...(focus ? [...buildingIndoor(focus).filter(f => !f.key.endsWith('#poi')), ...passageFeatures(focus)] : []), ...floraEditable(indoorSelection.filter((f) => f.barrier))];
   const building = focus ? groupFeatures(focus) : [];
   // Части и контур здания — «чужой этаж»: их узлы при правке indoor не двигаются, общий узел отцепляется новым.
   // Геометрию Simple 3D в режиме этажа не меняем: срез этажа не даёт увидеть части целиком

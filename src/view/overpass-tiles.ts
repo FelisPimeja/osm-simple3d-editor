@@ -243,14 +243,14 @@ export class OverpassTiles {
     return [...out.values()];
   }
 
-  /** Ряды деревьев и леса-пути показанных тайлов (без правок сессии), по ключу. */
+  /** Ряды деревьев, леса-пути и леса-мультиполигоны (с путями-членами) показанных тайлов (без правок сессии), по ключу. */
   floraWays(): { rows: TreeRow[]; woods: WoodArea[] } {
     const rows = new Map<string, TreeRow>(), woods = new Map<string, WoodArea>();
     for (const k of this.wanted) {
       const e = this.cache.get(k);
       if (e?.state !== 'ready' || !e.trees) continue;
       for (const r of e.trees.rows) if (r.nodes) rows.set(r.key, r);
-      for (const w of e.trees.woods) if (w.nodes) woods.set(w.key, w);
+      for (const w of e.trees.woods) if (w.nodes || w.members) woods.set(w.key, w);
     }
     return { rows: [...rows.values()], woods: [...woods.values()] };
   }

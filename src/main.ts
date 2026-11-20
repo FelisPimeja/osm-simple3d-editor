@@ -1366,6 +1366,7 @@ function refreshGround() {
   overpass.refreshTrees();
   scheduleBarriers();
   scheduleModels();
+  scheduleIndoorBadges();
 }
 /** Отметка основания здания: минимум DEM под контуром здания (у части — под контуром её здания: части одного здания на одной отметке). */
 const groundCache = new Map<string, number>();
@@ -10722,6 +10723,8 @@ function updateIndoorBadges() {
       if (!f.hasParts && !isHiddenUnderground(f)) top = Math.max(top, computeHeights(f.tags).top);
     }
     if (!Number.isFinite(w)) continue;
+    // Рельеф: здание стоит на отметке основания — значок над ним на столько же выше
+    if (ground.on && feats[0]) top += buildingGround(feats[0]);
     const name = (g && (g.tags.name ?? outlineTags(g)?.name)) ?? feats[0]?.tags.name;
     const title = name
       ? trn(n, '{name} — есть поэтажный план ({n} помещение). Клик — открыть здание|{name} — есть поэтажный план ({n} помещения). Клик — открыть здание|{name} — есть поэтажный план ({n} помещений). Клик — открыть здание', { name })
@@ -10740,7 +10743,7 @@ function updateIndoorBadges() {
     const cx = (bbox[0] + bbox[2]) / 2, cy = (bbox[1] + bbox[3]) / 2;
     const at = c.features.filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length).map((f) => pointOnSurface(f.polygons[0]))
       .reduce<LonLat | undefined>((best, p) => !best || Math.hypot(p[0] - cx, p[1] - cy) < Math.hypot(best[0] - cx, best[1] - cy) ? p : best, undefined)!;
-    badges.push({ key: c.key, at, top: 0, title: name
+    badges.push({ key: c.key, at, top: ground.on ? ground.at(at) : 0, title: name
       ? trn(n, '{name} — план без здания ({n} помещение). Клик — открыть план|{name} — план без здания ({n} помещения). Клик — открыть план|{name} — план без здания ({n} помещений). Клик — открыть план', { name })
       : trn(n, 'План без здания ({n} помещение). Клик — открыть план|План без здания ({n} помещения). Клик — открыть план|План без здания ({n} помещений). Клик — открыть план') });
     complexFocus.set(c.key, { features: c.features, box: c.box });

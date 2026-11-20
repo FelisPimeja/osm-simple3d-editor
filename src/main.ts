@@ -1354,6 +1354,21 @@ function applyGraphics() {
   }
 }
 
+/** Вставленные в сессии ограждения (их нет в тайлах). */
+const barrierCreated = new Set<string>();
+/** Ограждения показанных тайлов и вставленные (без правок сессии). */
+function allBarriers(): BarrierWay[] {
+  const out = overpass.barriers();
+  for (const key of barrierCreated) {
+    const e = session.get(key);
+    if (!e?.line || session.isDeleted(key)) continue;
+    out.push({ id: Number(key.slice(4)), tags: e.tags, nodes: e.line.ids, coords: e.line.coords });
+  }
+  return out;
+}
+/** Объект карты, который переносят, поворачивают и копируют: ряд, лес, дерево или ограждение (не ворота). */
+const mapMovable = (f: IndoorFeature) => !!f.flora || (!!f.barrier && !f.gate);
+
 /** Ограждение с правками сессии (теги, ось); удалённое — нет. */
 function liveBarrier(b: BarrierWay): BarrierWay | undefined {
   const key = `way/${b.id}`;
@@ -1368,7 +1383,7 @@ function liveBarrier(b: BarrierWay): BarrierWay | undefined {
 /** Ворота ограждения с правками сессии: теги узла; снят barrier ворот или узел удалён — их нет. */
 /** Ограждения для слоя: с правками сессии, только существующие в год слайдера времени (OHM). */
 function shownBarriers(): BarrierWay[] {
-  return overpass.barriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags) && overpass.isVisible(b)).map(liveGates);
+  return allBarriers().map(liveBarrier).filter((b): b is BarrierWay => !!b && isBarrierTags(b.tags) && overpass.isVisible(b)).map(liveGates);
 }
 
 function liveGates(b: BarrierWay): BarrierWay {
@@ -1401,7 +1416,7 @@ function barrierFeatureFor(key: string): IndoorFeature | undefined {
   { const fl = floraFeatureFor(key); if (fl || isRel(key)) return fl; }
   if (key.startsWith('node/')) {
     const id = Number(key.slice(5));
-    for (const raw of overpass.barriers()) {
+    for (const raw of allBarriers()) {
       const b = liveBarrier(raw);
       if (!b?.nodes.includes(id)) continue;
       const g = liveGates(b).gates?.find((x) => x.id === id);
@@ -1409,7 +1424,7 @@ function barrierFeatureFor(key: string): IndoorFeature | undefined {
     }
     return;
   }
-  const b = overpass.barriers().find((x) => `way/${x.id}` === key);
+  const b = allBarriers().find((x) => `way/${x.id}` === key);
   const live = b && liveBarrier(b);
   return live && isBarrierTags(live.tags) ? barrierFeature(live) : undefined;
 }
@@ -1616,7 +1631,7 @@ function floraLines(f: IndoorFeature, m?: THREE.Matrix4): LonLat[][] {
 function syncFloraHighlight() {
   const src = map.getSource('flora-selection') as maplibregl.GeoJSONSource | undefined;
   if (!src) return;
-  const fs = indoorSelection.filter((f) => f.flora && f.flora !== 'tree');
+  const fs = indoorSelection.filter((f) => (f.flora && f.flora !== 'tree') || (!f.flora && f.line && floraPreview?.keys.has(f.key)));
   // Отдельное дерево — подсветка его модели и кольцо на земле (у нескольких — первого)
   overpassLayer.setTreeSelection(indoorSelection.find((f) => f.flora === 'tree')?.key);
   src.setData({ type: 'FeatureCollection', features: fs.map((f) => ({ type: 'Feature', properties: {},
@@ -1624,14 +1639,14 @@ function syncFloraHighlight() {
 }
 
 const FLORA_ID = 'flora:';
-const floraTargets = (ids: Iterable<string>) => [...ids].filter((i) => i.startsWith(FLORA_ID)).map((i) => floraFeatureFor(i.slice(FLORA_ID.length))).filter((f): f is IndoorFeature => !!f);
+const floraTargets = (ids: Iterable<string>) => [...ids].filter((i) => i.startsWith(FLORA_ID)).map((i) => barrierFeatureFor(i.slice(FLORA_ID.length))).filter((f): f is IndoorFeature => !!f);
 
 /** Первая точка выбранного ряда или леса — начало сцены наброска. */
 const floraAnchor = (f: IndoorFeature) => f.polygons[0].outer[0];
 
 /** «Переместить» / «Повернуть» рядов и лесов на карте — в сцене наброска, как у подложек. */
 function startMapFloraTool(tool: 'move' | 'rotate'): boolean {
-  const fs = indoorSelection.filter((f) => f.flora);
+  const fs = indoorSelection.filter(mapMovable);
   if (focus || !fs.length) return false;
   cancelCopyPick();
   drawTool.stop(); moveTool.stop(); rotateTool.stop(); scaleTool.stop(); measureTool.stop(); shapeTool.stop();
@@ -1659,7 +1674,7 @@ function commitFlora(ids: string[], m: THREE.Matrix4, what: string) {
     return { key: f.key, line: { ids: f.polygons[0].outerIds!, coords: moved(f.polygons[0].outer, m) } };
   });
   session.editMany(edits);
-  selectIndoorMany(fs.map((f) => floraFeatureFor(f.key)).filter((f): f is IndoorFeature => !!f));
+  selectIndoorMany(fs.map((f) => barrierFeatureFor(f.key)).filter((f): f is IndoorFeature => !!f));
   setStatus(tr('{what}: {n}. Отменить — Ctrl+Z.', { what, n: fs.length }));
 }
 
@@ -1672,11 +1687,18 @@ function floraChangeKeys(): Set<string> {
 }
 
 /** Скопированные ряды и леса: теги и кольца (у ряда — его линия). */
-let floraClipboard: { kind: 'row' | 'wood' | 'tree'; tags: Record<string, string>; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; rel: boolean }[] | undefined;
+let floraClipboard: { kind: 'row' | 'wood' | 'tree' | 'barrier'; tags: Record<string, string>; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; rel: boolean }[] | undefined;
 
 function copyFlora(fs: IndoorFeature[]) {
-  floraClipboard = fs.filter((f) => f.flora).map((f) => ({ kind: f.flora!, tags: { ...f.tags }, rel: isRel(f.key),
-    polygons: f.point ? [{ outer: [f.point], inners: [] }] : f.line ? [{ outer: f.flora === 'wood' ? f.polygons[0].outer.slice(0, -1) : f.polygons[0].outer.slice(), inners: [] }] : f.polygons.map((p) => ({ outer: p.outer, inners: p.inners })) }));
+  floraClipboard = fs.filter(mapMovable).map((f) => {
+    // Ограждение: ось как есть; замкнутое — без повторённой точки (вставится замкнутым)
+    if (!f.flora) {
+      const o = f.polygons[0].outer, ids = f.polygons[0].outerIds ?? [], closed = ids.length > 3 && ids[0] === ids[ids.length - 1];
+      return { kind: 'barrier' as const, tags: { ...f.tags }, rel: closed, polygons: [{ outer: closed ? o.slice(0, -1) : o.slice(), inners: [] }] };
+    }
+    return { kind: f.flora, tags: { ...f.tags }, rel: isRel(f.key),
+      polygons: f.point ? [{ outer: [f.point], inners: [] }] : f.line ? [{ outer: f.flora === 'wood' ? f.polygons[0].outer.slice(0, -1) : f.polygons[0].outer.slice(), inners: [] }] : f.polygons.map((p) => ({ outer: p.outer, inners: p.inners })) };
+  });
   setStatus(tr('Скопировано: {n}. Ctrl+V — вставить под курсором.', { n: floraClipboard.length }));
 }
 
@@ -1699,6 +1721,13 @@ function pasteFlora() {
     return { id, key, nodes: line.ids };
   };
   for (const c of cb) {
+    if (c.kind === 'barrier') {
+      // rel у ограждения — замкнутость оси
+      const w = way(place(c.polygons[0].outer), c.rel, { ...c.tags });
+      barrierCreated.add(w.key);
+      keys.push(w.key);
+      continue;
+    }
     if (c.kind === 'tree') {
       const id = nextNewId--, key = `node/${id}`, p = place(c.polygons[0].outer)[0];
       edits.push({ key, create: { key, version: 0, tags: { ...c.tags }, polygons: [{ outer: [p], inners: [], outerIds: [id], innerIds: [] }] } });
@@ -1726,7 +1755,7 @@ function pasteFlora() {
   }
   session.editMany(edits);
   for (const key of keys) indoorEdited.add(key);
-  selectIndoorMany(keys.map(floraFeatureFor).filter((f): f is IndoorFeature => !!f));
+  selectIndoorMany(keys.map(barrierFeatureFor).filter((f): f is IndoorFeature => !!f));
   setStatus(tr('Вставлено: {n}. M — переместить, Q — повернуть, Ctrl+Z — отменить.', { n: keys.length }));
 }
 
@@ -1761,7 +1790,7 @@ function deleteFlora(fs: IndoorFeature[]) {
 function barrierNear(pt: { x: number; y: number }): { way: BarrierWay; gate?: BarrierGate; depth: number } | undefined {
   if (!barriersLayer.isEnabled || (focus && !overpassLayer.contextShown)) return;
   let best: { way: BarrierWay; d: number; ll: maplibregl.LngLat } | undefined;
-  for (const raw of overpass.barriers()) {
+  for (const raw of allBarriers()) {
     const b = liveBarrier(raw);
     if (!b || !isBarrierTags(b.tags)) continue;
     const ps = b.coords.map((c) => map.project(c));
@@ -1793,7 +1822,7 @@ overpassLayer.extraSnap = (pt, radius, opts) => {
     if (!local || opts.skip?.(new THREE.Vector3(local[0], local[1], z), key, kind)) return;
     best = { kind, key, ll, z, px, d: d + bonus };
   };
-  for (const raw of overpass.barriers()) {
+  for (const raw of allBarriers()) {
     const b = liveBarrier(raw);
     if (!b || !isBarrierTags(b.tags)) continue;
     const key = `way/${b.id}`, sh = barrierShape(b.tags);
@@ -1838,7 +1867,7 @@ function startGateDrag(paste = false): boolean {
   if (paste && !gateClipboard) return false;
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
-  const from = f ? overpass.barriers().map(liveBarrier).find((b) => b?.nodes.includes(Number(f.key.slice(5))))?.id : undefined;
+  const from = f ? allBarriers().map(liveBarrier).find((b) => b?.nodes.includes(Number(f.key.slice(5))))?.id : undefined;
   gateDrag = f ? { id: Number(f.key.slice(5)), tags: f.tags, from: from !== undefined ? `way/${from}` : undefined } : { id: nextNewId--, tags: { ...gateClipboard! } };
   syncEntranceTool();
   setStatus(paste ? tr('Ведите курсор вдоль забора или стены — ворота встанут в его линию. Клик — поставить, Esc — отмена.')
@@ -1873,7 +1902,7 @@ function moveGate(point: [number, number]) {
   const loc = (c: LonLat): [number, number] => [(c[0] - at[0]) * kx, (c[1] - at[1]) * ky];
   const half = gateWidth(d.tags) / 2;
   let best: { key: string; ids: number[]; coords: LonLat[]; j: number; t: number; d: number } | undefined;
-  for (const raw of overpass.barriers()) {
+  for (const raw of allBarriers()) {
     const key = `way/${raw.id}`;
     if (d.from ? key !== d.from : false) continue;
     const b = gateDrag?.target?.key === key ? { ...raw, ...(session.get(key)?.line ? { nodes: session.get(key)!.line!.ids, coords: session.get(key)!.line!.coords } : {}) } : liveBarrier(raw);
@@ -1911,7 +1940,7 @@ function moveGate(point: [number, number]) {
   const a = coords[j], c = coords[(j + 1) % coords.length];
   const p: LonLat = [a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t];
   const nIds = [...ids.slice(0, j + 1), d.id, ...ids.slice(j + 1)], nCs = [...coords.slice(0, j + 1), p, ...coords.slice(j + 1)];
-  const raw = overpass.barriers().find((x) => `way/${x.id}` === best!.key)!;
+  const raw = allBarriers().find((x) => `way/${x.id}` === best!.key)!;
   const live = liveBarrier({ ...raw });
   const wasClosed = !!live && live.nodes.length > 3 && live.nodes[0] === live.nodes[live.nodes.length - 1] && (live.nodes[0] !== d.id || true);
   if (wasClosed) { nIds.push(nIds[0]); nCs.push(nCs[0]); }
@@ -1932,14 +1961,14 @@ function deleteBarriers(fs: IndoorFeature[]) {
     trackIndoor(w.key, w);
     edits.push({ key: w.key, delete: true });
     const ids = w.polygons[0]?.outerIds ?? [];
-    for (const id of ids) if (overpass.barriers().some((b) => b.gates?.some((g) => g.id === id)) || isGateTags(session.get(`node/${id}`)?.tags))
-      if (!liveFeatures().some((g) => g.polygons.some((p) => p.outerIds?.includes(id))) && !overpass.barriers().some((b) => `way/${b.id}` !== w.key && b.nodes.includes(id))) gates.add(id);
+    for (const id of ids) if (allBarriers().some((b) => b.gates?.some((g) => g.id === id)) || isGateTags(session.get(`node/${id}`)?.tags))
+      if (!liveFeatures().some((g) => g.polygons.some((p) => p.outerIds?.includes(id))) && !allBarriers().some((b) => `way/${b.id}` !== w.key && b.nodes.includes(id))) gates.add(id);
   }
   for (const id of gates) {
     const g = barrierFeatureFor(`node/${id}`);
     if (g) trackIndoor(g.key, g);
     edits.push({ key: `node/${id}`, tags: {} });
-    for (const raw of overpass.barriers()) {
+    for (const raw of allBarriers()) {
       const key = `way/${raw.id}`;
       if (ways.some((w) => w.key === key)) continue;
       const cur = lines.get(key) ?? (() => { const b = liveBarrier(raw); return b && b.nodes.includes(id) ? { ids: b.nodes, coords: b.coords } : undefined; })();
@@ -1961,7 +1990,7 @@ function deleteBarriers(fs: IndoorFeature[]) {
     }
   }
   for (const [key, line] of lines) {
-    const raw = overpass.barriers().find((b) => `way/${b.id}` === key), live = raw && liveBarrier(raw);
+    const raw = allBarriers().find((b) => `way/${b.id}` === key), live = raw && liveBarrier(raw);
     if (live) { const f = barrierFeature(live); trackIndoor(f.key, f); }
     edits.push({ key, line });
   }
@@ -1983,7 +2012,7 @@ function commitGateDrag() {
   gateDrag = undefined;
   gateKeep = undefined;
   syncEntranceTool();
-  const raw = overpass.barriers().find((x) => `way/${x.id}` === t.key);
+  const raw = allBarriers().find((x) => `way/${x.id}` === t.key);
   const live = raw && liveBarrier(raw);
   if (!live) return;
   const wf = barrierFeature(live);
@@ -5293,7 +5322,7 @@ function syncMapTools() {
   if (snaps) (focus ? focusToolbar : mapToolbar).querySelector('[data-help]')!.before(snaps);
   // Инструменты подложек на карте — только когда выделена подложка
   const u = !focus && underlaySelection.length > 0;
-  const fl = !focus && !u && indoorSelection.some((f) => f.flora);
+  const fl = !focus && !u && indoorSelection.some(mapMovable);
   for (const [btn, on] of [[mapUMoveBtn, moveTool.active], [mapURotateBtn, rotateTool.active], [mapUScaleBtn, scaleTool.active]] as const) {
     btn.hidden = !u && !(fl && btn !== mapUScaleBtn);
     btn.classList.toggle('active', underlaySketch && on);
@@ -9410,7 +9439,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   // Ряды и леса на карте: Ctrl+C / Ctrl+V — копия под курсор, M / Q — «Переместить» / «Повернуть»
-  if (!focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyC' && !textSelected && !toolActive() && indoorSelection.some((f) => f.flora)) {
+  if (!focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyC' && !textSelected && !toolActive() && indoorSelection.some(mapMovable)) {
     e.preventDefault();
     copyFlora(indoorSelection);
     return;
@@ -9422,7 +9451,7 @@ document.addEventListener('keydown', (e) => {
     pasteFlora();
     return;
   }
-  if (!focus && (e.code === 'KeyM' || e.code === 'KeyQ') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !toolActive() && !underlaySelection.length && indoorSelection.some((f) => f.flora)) {
+  if (!focus && (e.code === 'KeyM' || e.code === 'KeyQ') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !toolActive() && !underlaySelection.length && indoorSelection.some(mapMovable)) {
     e.preventDefault();
     closeCtxMenu();
     startMapFloraTool(e.code === 'KeyM' ? 'move' : 'rotate');
@@ -11051,7 +11080,7 @@ function barrierPlaceholders(fs: IndoorFeature[]): Record<string, string> {
     }
     const b = f.tags.barrier, bar = b === 'lift_gate' || b === 'chain' || b === 'rope';
     // Высота створки — как при построении: перекладина на 1 м, полотно — по ограждению, но не выше 2 м
-    const id = Number(f.key.slice(5)), way = overpass.barriers().map(liveBarrier).find((x) => x?.nodes.includes(id));
+    const id = Number(f.key.slice(5)), way = allBarriers().map(liveBarrier).find((x) => x?.nodes.includes(id));
     const top = way ? barrierShape(way.tags).top : 2;
     return { width: r(gateWidth({ ...f.tags, width: '', maxwidth: '', 'maxwidth:physical': '' })), height: r(bar ? 1 : b === 'entrance' || b === 'stile' ? top : Math.max(0.8, Math.min(top, 2))) };
   };

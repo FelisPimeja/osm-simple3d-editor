@@ -1076,7 +1076,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Ограждения — в той же глубине, что и здания (честное перекрытие); один раз за кадр
     if (pass !== 'wire-lines' && this.drawExtra) { this.resetState(); triangles += this.drawExtra(renderer, main, this.lastMain, () => this.resetState()); }
     // Деревья — один раз: во второй половине режима контуров они уже нарисованы
-    if (!this.focused && this.graphics.trees !== false && pass !== 'wire-lines') {
+    // В сцене наброска на карте (инструменты карты) деревья остаются видны
+    if ((!this.focused || this.sketching) && this.graphics.trees !== false && pass !== 'wire-lines') {
       const height = renderer.getContext().drawingBufferHeight;
       for (const t of this.trees.values()) {
         t.camera.projectionMatrix = main.clone().multiply(t.model);

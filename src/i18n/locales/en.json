@@ -1666,5 +1666,13 @@
   "Трансформация": "Transform",
   "из 3dmr": "from 3dmr",
   "из выгрузки 3dmr": "from the 3dmr dump",
-  "Не привязана к OSM: ни один объект в загруженных данных не ссылается на эту модель. Показана в точке привязки из 3dmr; чтобы связать, поставьте объекту тег 3dmr={id}.": "Not linked to OSM: no object in the loaded data refers to this model. Shown at its 3dmr anchor point; to link it, tag an object with 3dmr={id}."
+  "Не привязана к OSM: ни один объект в загруженных данных не ссылается на эту модель. Показана в точке привязки из 3dmr; чтобы связать, поставьте объекту тег 3dmr={id}.": "Not linked to OSM: no object in the loaded data refers to this model. Shown at its 3dmr anchor point; to link it, tag an object with 3dmr={id}.",
+  "Ряд деревьев": "Tree row",
+  "Лес": "Wood",
+  "V — форма, M — переместить, Q — повернуть, Ctrl+C / Ctrl+V — копировать.": "V — shape, M — move, Q — rotate, Ctrl+C / Ctrl+V — copy.",
+  "{what}: {n}. Отменить — Ctrl+Z.": "{what}: {n}. Undo — Ctrl+Z.",
+  "Перемещено": "Moved",
+  "Повёрнуто": "Rotated",
+  "Скопировано: {n}. Ctrl+V — вставить под курсором.": "Copied: {n}. Ctrl+V — paste under the cursor.",
+  "Вставлено: {n}. M — переместить, Q — повернуть, Ctrl+Z — отменить.": "Pasted: {n}. M — move, Q — rotate, Ctrl+Z — undo."
 }

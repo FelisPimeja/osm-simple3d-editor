@@ -8,9 +8,10 @@ export type LeafType = 'broadleaved' | 'needleleaved' | 'mixed';
 /** Отдельное дерево (natural=tree): размеры — из тегов, если указаны, м. */
 export interface TreePoint { key?: string; tags?: Record<string, string>; p: LonLat; leaf?: LeafType; height?: number; crown?: number; trunk?: number }
 /** Ряд деревьев (natural=tree_row) — ломаная. */
-export interface TreeRow { key: string; line: LonLat[]; leaf?: LeafType; height?: number; crown?: number; dates?: LifeDates }
+export interface TreeRow { key: string; line: LonLat[]; leaf?: LeafType; height?: number; crown?: number; dates?: LifeDates; nodes?: number[]; tags?: Record<string, string> }
 /** Лес (natural=wood, landuse=forest): кольца без повторённой замыкающей точки. */
-export interface WoodArea { key: string; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; leaf?: LeafType; dates?: LifeDates }
+/** У леса-пути — nodes (кольцо без повторённого замыкающего узла) и tags: его можно править. */
+export interface WoodArea { key: string; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; leaf?: LeafType; dates?: LifeDates; nodes?: number[]; tags?: Record<string, string> }
 /** start_date / end_date объекта (OpenHistoricalMap) — для фильтра по дате; нет — существовал всегда. */
 export type LifeDates = { start_date?: string; end_date?: string };
 
@@ -45,6 +46,15 @@ function meters(v: string | undefined, max: number): number | undefined {
   if (!v) return undefined;
   const n = looseLength(v.replace(',', '.').replace(/\s*м$/, ''));
   return Number.isFinite(n) && n > 0 && n <= max ? n : undefined;
+}
+
+/** Ряд деревьев из пути (теги, узлы, ломаная) — и для правок сессии. */
+export function rowFromWay(key: string, tags: Record<string, string>, nodes: number[], line: LonLat[]): TreeRow {
+  return { key, line, leaf: leafOf(tags), height: meters(tags.height, 150), crown: meters(tags.diameter_crown, 60), dates: lifeDates(tags), nodes, tags };
+}
+/** Лес из замкнутого пути: nodes и outer — кольцо без повторённой замыкающей вершины. */
+export function woodFromWay(key: string, tags: Record<string, string>, nodes: number[], outer: LonLat[]): WoodArea {
+  return { key, polygons: [{ outer, inners: [] }], leaf: leafOf(tags), dates: lifeDates(tags), nodes, tags };
 }
 
 export function isWood(tags?: Record<string, string>): boolean {
@@ -86,12 +96,12 @@ export function parseTrees(elements: OsmElement[]): TreeData {
   for (const w of ways.values()) {
     if (w.tags?.natural === 'tree_row') {
       const line = coords(w.nodes);
-      if (line && line.length >= 2) rows.push({ key: `way/${w.id}`, line, leaf: leafOf(w.tags), height: meters(w.tags.height, 150), crown: meters(w.tags.diameter_crown, 60), dates: lifeDates(w.tags) });
+      if (line && line.length >= 2) rows.push(rowFromWay(`way/${w.id}`, w.tags, w.nodes.slice(), line));
       continue;
     }
     if (!isWood(w.tags) || w.nodes.length < 4 || w.nodes[0] !== w.nodes[w.nodes.length - 1]) continue;
     const outer = coords(w.nodes.slice(0, -1));
-    if (outer) woods.push({ key: `way/${w.id}`, polygons: [{ outer, inners: [] }], leaf: leafOf(w.tags!), dates: lifeDates(w.tags!) });
+    if (outer) woods.push(woodFromWay(`way/${w.id}`, w.tags!, w.nodes.slice(0, -1), outer));
   }
   for (const r of relations) {
     if (r.tags?.type !== 'multipolygon' || !isWood(r.tags)) continue;

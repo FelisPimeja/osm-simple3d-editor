@@ -9,7 +9,7 @@ import { GRID_ZOOM } from '../tiles/tile-features';
 import { TileStore, type TileVia } from './tile-store';
 import { timed, timedAsync } from '../perf';
 import { josmLayer } from '../osm/josm';
-import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type TreePoint, type WoodArea } from '../osm/trees';
+import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type TreePoint, type TreeRow, type WoodArea } from '../osm/trees';
 import { scatterTreesAsync, TreeGroup } from '../render/trees';
 import { TREE_STRIDE, TreeField } from '../render/tree-scatter';
 import { parseBarriers, type BarrierWay } from '../osm/barriers';
@@ -242,6 +242,26 @@ export class OverpassTiles {
     for (const k of this.wanted) { const e = this.cache.get(k); if (e?.state === 'ready' && e.barriers) for (const b of e.barriers) out.set(b.id, b); }
     return [...out.values()];
   }
+
+  /** Ряды деревьев и леса-пути показанных тайлов (без правок сессии), по ключу. */
+  floraWays(): { rows: TreeRow[]; woods: WoodArea[] } {
+    const rows = new Map<string, TreeRow>(), woods = new Map<string, WoodArea>();
+    for (const k of this.wanted) {
+      const e = this.cache.get(k);
+      if (e?.state !== 'ready' || !e.trees) continue;
+      for (const r of e.trees.rows) if (r.nodes) rows.set(r.key, r);
+      for (const w of e.trees.woods) if (w.nodes) woods.set(w.key, w);
+    }
+    return { rows: [...rows.values()], woods: [...woods.values()] };
+  }
+
+  /**
+   * Правки сессии рядов и лесов (подключает main.ts): ряды и леса тайла bbox такими, какие они сейчас, и подпись
+   * правленых — по ней деревья тайла пересобираются.
+   */
+  treeOverlay?: (rows: TreeRow[], woods: WoodArea[], bbox: Bbox) => { rows: TreeRow[]; woods: WoodArea[]; sig: string };
+  /** Ряды или леса поменялись в сессии — пересобрать деревья показанных тайлов (у кого подпись сменилась). */
+  refreshTrees() { for (const k of this.wanted) this.showTrees(k); }
 
   /** Объекты с моделями 3dmr (кроме зданий) показанных тайлов. */
   modelNodes(): ModelNode[] {
@@ -901,10 +921,11 @@ export class OverpassTiles {
     if (e?.state !== 'ready') return;
     const ok = this.treeDates.fn;
     const all = e.trees ?? NO_TREES;
-    const own = { ...all, points: all.points.filter((p) => ok(p.tags ?? {})), rows: all.rows.filter((r) => ok(r.dates ?? {})) };
     const bbox = tileBbox(key);
-    const woods = this.woodsIn(bbox).filter((w) => ok(w.dates ?? {}));
-    const signature = `${e.fetchedAt}:${own.points.length}:${own.rows.length}:${e.features.length}:${this.treeCutsVersion}:${this.treeDates.key}|${woods.map((w) => w.key).sort().join(',')}`;
+    const live = this.treeOverlay?.(all.rows, this.woodsIn(bbox), bbox) ?? { rows: all.rows, woods: this.woodsIn(bbox), sig: '' };
+    const own = { ...all, points: all.points.filter((p) => ok(p.tags ?? {})), rows: live.rows.filter((r) => ok(r.dates ?? {})) };
+    const woods = live.woods.filter((w) => ok(w.dates ?? {}));
+    const signature = `${e.fetchedAt}:${own.points.length}:${own.rows.length}:${e.features.length}:${this.treeCutsVersion}:${this.treeDates.key}:${live.sig}|${woods.map((w) => w.key).sort().join(',')}`;
     if (this.layer.treeSignature(key) === signature || this.treesPending.get(key) === signature) return;
     if (!own.points.length && !own.rows.length && !woods.length) { this.treesPending.delete(key); this.layer.setTrees(key, undefined); return; }
     const buildings = e.features.flatMap((f) => f.polygons.map((p) => p.outer));

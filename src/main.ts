@@ -62,7 +62,7 @@ import { ModelPins } from './view/model-pins';
 import { modelObjectKey } from './osm/model-nodes';
 import { DMR, LICENSES, modelIdOf, ModelsLayer, type ModelPlacement } from './render/models-layer';
 import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, type BarrierWay } from './osm/barriers';
-import type { TreePoint } from './osm/trees';
+import { isWood, rowFromWay, woodFromWay, type TreePoint, type TreeRow, type WoodArea } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
 import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
@@ -1151,6 +1151,9 @@ map.on('load', () => {
     },
   });
 
+  // Контур выбранных рядов деревьев и лесов
+  map.addSource('flora-selection', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'flora-selection', type: 'line', source: 'flora-selection', paint: { 'line-color': '#2563eb', 'line-width': 3, 'line-opacity': 0.9 } });
   map.addSource('outline-remainders', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
     id: REMAINDERS_LAYER,
@@ -1395,6 +1398,7 @@ function barrierFeature(b: BarrierWay): IndoorFeature {
 }
 /** Ограждение по ключу (с правками сессии), если оно ещё ограждение. */
 function barrierFeatureFor(key: string): IndoorFeature | undefined {
+  if (key.startsWith('way/')) { const fl = floraFeatureFor(key); if (fl) return fl; }
   if (key.startsWith('node/')) {
     const id = Number(key.slice(5));
     for (const raw of overpass.barriers()) {
@@ -1412,6 +1416,166 @@ function barrierFeatureFor(key: string): IndoorFeature | undefined {
 function syncBarrierSelection() {
   barriersLayer.select(indoorSelection.filter((f) => f.barrier && !f.gate).map((f) => Number(f.key.slice(4))),
     indoorSelection.filter((f) => f.gate).map((f) => Number(f.key.slice(5))));
+  syncFloraHighlight();
+}
+
+/* ── Ряды деревьев и леса-пути: выбор на карте, «Форма», «Переместить», «Повернуть», копирование ── */
+
+/** Ряд или лес-путь: у леса nodes и coords — кольцо без повторённой замыкающей вершины. */
+interface FloraWay { key: string; kind: 'row' | 'wood'; tags: Record<string, string>; nodes: number[]; coords: LonLat[] }
+/** Вставленные в сессии ряды и леса (их нет в тайлах). */
+const floraCreated = new Map<string, 'row' | 'wood'>();
+const floraValid = (f: FloraWay) => (f.kind === 'row' ? f.tags.natural === 'tree_row' && f.coords.length >= 2 : isWood(f.tags) && f.coords.length >= 3);
+
+/** Ряды и леса-пути показанных тайлов и вставленные (без правок сессии). */
+function rawFlora(): FloraWay[] {
+  const { rows, woods } = overpass.floraWays();
+  const out: FloraWay[] = [
+    ...rows.map((r) => ({ key: r.key, kind: 'row' as const, tags: r.tags ?? {}, nodes: r.nodes!, coords: r.line })),
+    ...woods.map((w) => ({ key: w.key, kind: 'wood' as const, tags: w.tags ?? {}, nodes: w.nodes!, coords: w.polygons[0].outer })),
+  ];
+  const have = new Set(out.map((f) => f.key));
+  for (const [key, kind] of floraCreated) if (!have.has(key) && session.has(key)) out.push({ key, kind, tags: {}, nodes: [], coords: [] });
+  return out;
+}
+
+/** Ряд или лес с правками сессии; удалённый — нет. */
+function liveFlora(f: FloraWay): FloraWay | undefined {
+  if (session.isDeleted(f.key)) return;
+  const e = session.get(f.key);
+  if (!e) return f;
+  const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
+  let nodes = line?.ids ?? f.nodes, coords = line?.coords ?? f.coords;
+  if (f.kind === 'wood' && nodes.length > 1 && nodes[0] === nodes[nodes.length - 1]) { nodes = nodes.slice(0, -1); coords = coords.slice(0, -1); }
+  return { ...f, tags: e.tags ?? f.tags, nodes, coords };
+}
+
+/** Ряд или лес — объектом-линией, как ограждение (у леса — замкнутая). */
+function floraFeature(f: FloraWay): IndoorFeature {
+  const closed = f.kind === 'wood';
+  const outer = closed ? [...f.coords, f.coords[0]] : f.coords, ids = closed ? [...f.nodes, f.nodes[0]] : f.nodes;
+  return { key: f.key, tags: f.tags, kind: 'area', line: true, barrier: true, flora: f.kind, levels: [0], polygons: [{ outer, inners: [], outerIds: ids, innerIds: [] }] };
+}
+function floraFeatureFor(key: string): IndoorFeature | undefined {
+  const raw = rawFlora().find((f) => f.key === key), live = raw && liveFlora(raw);
+  return live && floraValid(live) ? floraFeature(live) : undefined;
+}
+
+// Деревья тайлов — по правкам сессии рядов и лесов (и вставленные)
+overpass.treeOverlay = (rows, woods, [w, s, e, n]) => {
+  let sig = '';
+  const mark = (f: FloraWay) => { sig += `${f.key}:${JSON.stringify(f.tags)}:${f.coords.map((c) => c[0].toFixed(7) + ',' + c[1].toFixed(7)).join(' ')};`; };
+  const outRows: TreeRow[] = [], outWoods: WoodArea[] = [];
+  for (const r of rows) {
+    if (!session.has(r.key) || !r.nodes) { outRows.push(r); continue; }
+    const l = liveFlora({ key: r.key, kind: 'row', tags: r.tags ?? {}, nodes: r.nodes, coords: r.line });
+    if (l && floraValid(l)) { mark(l); outRows.push(rowFromWay(l.key, l.tags, l.nodes, l.coords)); } else sig += `${r.key}-;`;
+  }
+  for (const x of woods) {
+    if (!session.has(x.key) || !x.nodes) { outWoods.push(x); continue; }
+    const l = liveFlora({ key: x.key, kind: 'wood', tags: x.tags ?? {}, nodes: x.nodes, coords: x.polygons[0].outer });
+    if (l && floraValid(l)) { mark(l); outWoods.push(woodFromWay(l.key, l.tags, l.nodes, l.coords)); } else sig += `${x.key}-;`;
+  }
+  for (const [key, kind] of floraCreated) {
+    const l = session.has(key) ? liveFlora({ key, kind, tags: {}, nodes: [], coords: [] }) : undefined;
+    if (!l || !floraValid(l) || !l.coords.some((c) => c[0] >= w && c[0] <= e && c[1] >= s && c[1] <= n)) continue;
+    mark(l);
+    if (kind === 'row') outRows.push(rowFromWay(key, l.tags, l.nodes, l.coords)); else outWoods.push(woodFromWay(key, l.tags, l.nodes, l.coords));
+  }
+  return { rows: outRows, woods: outWoods, sig };
+};
+
+/** Ряд (в пределах 8 px от линии) или лес (точка внутри, меньший из нескольких) под точкой экрана. */
+function floraAt(pt: { x: number; y: number }): IndoorFeature | undefined {
+  const all = rawFlora().map(liveFlora).filter((f): f is FloraWay => !!f && floraValid(f) && overpass.isVisible(f));
+  let row: FloraWay | undefined, bestD = 8;
+  for (const f of all) {
+    if (f.kind !== 'row') continue;
+    const px = f.coords.map((c) => map.project({ lng: c[0], lat: c[1] }));
+    for (let i = 1; i < px.length; i++) {
+      const a = px[i - 1], b = px[i], dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+      const t = l2 ? Math.max(0, Math.min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / l2)) : 0;
+      const d = Math.hypot(a.x + dx * t - pt.x, a.y + dy * t - pt.y);
+      if (d < bestD) { bestD = d; row = f; }
+    }
+  }
+  if (row) return floraFeature(row);
+  const ll = map.unproject([pt.x, pt.y]), p: LonLat = [ll.lng, ll.lat];
+  const area = (r: LonLat[]) => Math.abs(r.reduce((a, c, i) => { const q = r[(i + 1) % r.length]; return a + c[0] * q[1] - q[0] * c[1]; }, 0));
+  const wood = all.filter((f) => f.kind === 'wood' && pointInRing(p, f.coords)).sort((a, b) => area(a.coords) - area(b.coords))[0];
+  return wood && floraFeature(wood);
+}
+
+/** Превью «Переместить» / «Повернуть»: контуры выбранных рядов и лесов, преобразованные матрицей (метры сцены). */
+let floraPreview: { keys: Set<string>; m: THREE.Matrix4 } | undefined;
+function floraCoords(f: IndoorFeature, m?: THREE.Matrix4): LonLat[] {
+  const c = f.polygons[0].outer;
+  if (!m) return c;
+  return c.map((q) => { const l = overpassLayer.focusToLocal(q); if (!l) return q; const v = new THREE.Vector3(l[0], l[1], 0).applyMatrix4(m); return overpassLayer.focusToLngLat(v.x, v.y)! as LonLat; });
+}
+/** Синий контур выбранных рядов и лесов на земле (с превью преобразования). */
+function syncFloraHighlight() {
+  const src = map.getSource('flora-selection') as maplibregl.GeoJSONSource | undefined;
+  if (!src) return;
+  const fs = indoorSelection.filter((f) => f.flora);
+  src.setData({ type: 'FeatureCollection', features: fs.map((f) => ({ type: 'Feature', properties: {},
+    geometry: { type: 'LineString', coordinates: floraCoords(f, floraPreview?.keys.has(f.key) ? floraPreview.m : undefined) } })) });
+}
+
+const FLORA_ID = 'flora:';
+const floraTargets = (ids: Iterable<string>) => [...ids].filter((i) => i.startsWith(FLORA_ID)).map((i) => floraFeatureFor(i.slice(FLORA_ID.length))).filter((f): f is IndoorFeature => !!f);
+
+/** «Переместить» / «Повернуть» рядов и лесов на карте — в сцене наброска, как у подложек. */
+function startMapFloraTool(tool: 'move' | 'rotate'): boolean {
+  const fs = indoorSelection.filter((f) => f.flora);
+  if (focus || !fs.length) return false;
+  cancelCopyPick();
+  drawTool.stop(); moveTool.stop(); rotateTool.stop(); scaleTool.stop(); measureTool.stop(); shapeTool.stop();
+  if (!underlaySketch) { overpassLayer.setSketch(fs[0].polygons[0].outer[0]); underlaySketch = true; }
+  const ids = fs.map((f) => FLORA_ID + f.key);
+  if (tool === 'move') moveTool.start([], false, ids); else rotateTool.start([], ids);
+  syncMapTools();
+  return true;
+}
+
+/** Применить преобразование m (метры сцены) к рядам и лесам ids: узлы путей едут вместе (общие с соседями — тоже). */
+function commitFlora(ids: string[], m: THREE.Matrix4, what: string) {
+  floraPreview = undefined;
+  const fs = floraTargets(ids);
+  if (!fs.length) return;
+  const edits: ObjectEdit[] = fs.map((f) => { trackIndoor(f.key, f); return { key: f.key, line: { ids: f.polygons[0].outerIds!, coords: floraCoords(f, m) } }; });
+  session.editMany(edits);
+  selectIndoorMany(fs.map((f) => floraFeatureFor(f.key)).filter((f): f is IndoorFeature => !!f));
+  setStatus(tr('{what}: {n}. Отменить — Ctrl+Z.', { what, n: fs.length }));
+}
+
+/** Скопированные ряды и леса (теги и геометрия). */
+let floraClipboard: { kind: 'row' | 'wood'; tags: Record<string, string>; coords: LonLat[] }[] | undefined;
+
+/** Ctrl+V на карте: копии рядов и лесов новыми путями со своими узлами, центром — в точку под курсором. */
+function pasteFlora() {
+  const cb = floraClipboard;
+  const at = cb && lastPointer && groundAt(lastPointer);
+  if (!cb || !at) return;
+  const all = cb.flatMap((c) => c.coords);
+  const cx = all.reduce((a, c) => a + c[0], 0) / all.length, cy = all.reduce((a, c) => a + c[1], 0) / all.length;
+  // Сдвиг в метрах — чтобы форма не искажалась на другой широте
+  const k = Math.cos((cy * Math.PI) / 180) / Math.cos((at[1] * Math.PI) / 180);
+  const edits: ObjectEdit[] = [], keys: string[] = [];
+  for (const c of cb) {
+    const ring = c.kind === 'wood';
+    const coords = c.coords.map((q) => [at[0] + (q[0] - cx) * k, at[1] + (q[1] - cy)] as LonLat);
+    const ids = coords.map(() => nextNewId--);
+    const line = ring ? { ids: [...ids, ids[0]], coords: [...coords, coords[0]] } : { ids, coords };
+    const key = `way/${nextNewId--}`;
+    edits.push({ key, create: { key, version: 0, tags: { ...c.tags }, line, polygons: [{ outer: line.coords, outerIds: line.ids, inners: [] }] } });
+    floraCreated.set(key, c.kind);
+    keys.push(key);
+  }
+  session.editMany(edits);
+  for (const key of keys) indoorEdited.add(key);
+  selectIndoorMany(keys.map(floraFeatureFor).filter((f): f is IndoorFeature => !!f));
+  setStatus(tr('Вставлено: {n}. M — переместить, Q — повернуть, Ctrl+Z — отменить.', { n: keys.length }));
 }
 
 
@@ -2299,6 +2463,12 @@ map.on('click', (e) => {
     return { point, distance: Math.hypot(screen.x - e.point.x, screen.y - e.point.y) };
   }).filter((hit) => hit.distance <= 14).sort((a, b) => a.distance - b.distance)[0]?.point : undefined;
   if (tree) { if (reclick && tree.key === selectedTreeKey) { select(undefined); clearInfo(); } else selectTree(tree); return; }
+  // Ряд деревьев или лес (мимо здания) — выбрать: правится «Формой», переносится и поворачивается
+  const flora = !key && !focus && !addingTo && gfx.trees && !e.originalEvent.altKey ? floraAt(e.point) : undefined;
+  if (flora) {
+    if (reclick && !e.originalEvent.shiftKey && indoorSelection.length === 1 && indoorSelection[0].key === flora.key) { selectIndoor(undefined); clearInfo(); return; }
+    selectIndoor(flora, e.originalEvent.shiftKey); return;
+  }
   // Мост или тоннель под курсором ближе здания — его теги (только просмотр)
   const road = addingTo ? undefined : roadsLayer.pick(e.point.x, e.point.y);
   if (road) {
@@ -3383,6 +3553,12 @@ const popupEl = document.getElementById('popup')!;
 /** Объект для перемещения выбран первым кликом инструмента (а не заранее). */
 let moveSelectedByClick = false;
 const moveTool = new MoveTool(overpassLayer, map.getContainer(), (keys, offset, glue, underlays) => {
+  const fl = underlays.filter((u) => u.startsWith(FLORA_ID));
+  if (fl.length) {
+    commitFlora(fl, new THREE.Matrix4().makeTranslation(offset.x, offset.y, 0), tr('Перемещено'));
+    underlays = underlays.filter((u) => !u.startsWith(FLORA_ID));
+    if (!underlays.length && !keys.length) return;
+  }
   if (!underlays.length) return commitMove(keys, offset, glue);
   const before = currentUnderlays().filter((u) => underlays.includes(u.id));
   editUnderlays(before, before.map((u) => transformUnderlay(u, new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z))), () => { if (keys.length) commitMove(keys, offset, glue); },
@@ -3405,9 +3581,15 @@ moveBtn.addEventListener('click', () => {
 // Инструмент «Повернуть» (Q): вокруг вертикальной оси на угол (курсором с прилипанием к 15° или числом)
 const rotateBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="rotate"]')!;
 const rotateTool = new RotateTool(overpassLayer, map.getContainer(), (keys, pivot, angle, glue, axis, underlays) => {
-  if (!underlays.length) return commitRotate(keys, pivot, angle, glue);
   const m = new THREE.Matrix4().makeTranslation(pivot.x, pivot.y, pivot.z).multiply(new THREE.Matrix4().makeRotationAxis(axis, angle))
     .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
+  const fl = underlays.filter((u) => u.startsWith(FLORA_ID));
+  if (fl.length) {
+    commitFlora(fl, m, tr('Повёрнуто'));
+    underlays = underlays.filter((u) => !u.startsWith(FLORA_ID));
+    if (!underlays.length && !keys.length) return;
+  }
+  if (!underlays.length) return commitRotate(keys, pivot, angle, glue);
   const before = currentUnderlays().filter((u) => underlays.includes(u.id));
   editUnderlays(before, before.map((u) => transformUnderlay(u, m)), () => { if (keys.length) commitRotate(keys, pivot, angle, glue); },
     tr('поворот подложки'));
@@ -3421,6 +3603,36 @@ const rotateTool = new RotateTool(overpassLayer, map.getContainer(), (keys, pivo
 });
 moveTool.linkPreview = rotateTool.linkPreview = previewGlued;
 moveTool.underlays = rotateTool.underlays = underlayTarget;
+// Ряды и леса («flora:<ключ>») — тоже цели «Переместить» и «Повернуть» на карте, как подложки
+{
+  const base = { ...underlayTarget };
+  const split = (ids: Set<string>) => ({ fl: floraTargets(ids), rest: new Set([...ids].filter((i) => !i.startsWith(FLORA_ID))) });
+  underlayTarget.snap = (point, ids) => {
+    const { fl, rest } = split(ids);
+    if (!fl.length) return base.snap(point, ids);
+    let best: SnapHit | undefined, bestD = 12;
+    for (const c of fl.flatMap((f) => f.polygons[0].outer)) {
+      const l = overpassLayer.focusToLocal(c), p = l && new THREE.Vector3(l[0], l[1], 0), px = p && overpassLayer.focusProject(p);
+      const d = px ? Math.hypot(px[0] - point[0], px[1] - point[1]) : Infinity;
+      if (!p || !px || d >= bestD) continue;
+      bestD = d;
+      best = { kind: 'vertex', key: '', local: p, lngLat: new maplibregl.LngLat(c[0], c[1]), altitude: 0, point: px };
+    }
+    return best ?? (rest.size ? base.snap(point, rest) : undefined);
+  };
+  underlayTarget.hit = (point, ids) => {
+    const { fl, rest } = split(ids);
+    if (!fl.length) return base.hit(point, ids);
+    const p = overpassLayer.focusRay(point)?.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), new THREE.Vector3());
+    return p ? { p, n: new THREE.Vector3(0, 0, 1) } : rest.size ? base.hit(point, rest) : undefined;
+  };
+  underlayTarget.axes = (ids) => { const { fl, rest } = split(ids); return fl.length && !rest.size ? undefined : base.axes(rest); };
+  underlayTarget.preview = (ids, m) => {
+    const { fl, rest } = split(ids);
+    if (fl.length) { floraPreview = m ? { keys: new Set(fl.map((f) => f.key)), m } : undefined; syncFloraHighlight(); }
+    if (rest.size) base.preview(rest, m);
+  };
+}
 rotateBtn.addEventListener('click', () => (rotateTool.active ? rotateTool.stop() : startRotate()));
 
 function startRotate() {
@@ -4793,6 +5005,7 @@ mapUScaleBtn.addEventListener('click', () => (scaleTool.active ? scaleTool.stop(
 
 /** Инструмент для выделенных подложек на карте: сцена наброска с началом в первой из них. */
 function startMapUnderlayTool(tool: 'move' | 'rotate' | 'scale') {
+  if (!underlaySelection.length && tool !== 'scale' && startMapFloraTool(tool)) return;
   const ids = [...underlaySelection];
   const u = currentUnderlays().find((x) => ids.includes(x.id));
   if (focus || !u) return;
@@ -4881,8 +5094,9 @@ function syncMapTools() {
   if (snaps) (focus ? focusToolbar : mapToolbar).querySelector('[data-help]')!.before(snaps);
   // Инструменты подложек на карте — только когда выделена подложка
   const u = !focus && underlaySelection.length > 0;
+  const fl = !focus && !u && indoorSelection.some((f) => f.flora);
   for (const [btn, on] of [[mapUMoveBtn, moveTool.active], [mapURotateBtn, rotateTool.active], [mapUScaleBtn, scaleTool.active]] as const) {
-    btn.hidden = !u;
+    btn.hidden = !u && !(fl && btn !== mapUScaleBtn);
     btn.classList.toggle('active', underlaySketch && on);
   }
   mapBShapeBtn.hidden = !!focus || !(indoorSelection.length === 1 && indoorSelection[0].barrier);
@@ -8996,6 +9210,26 @@ document.addEventListener('keydown', (e) => {
     startGateDrag(true);
     return;
   }
+  // Ряды и леса на карте: Ctrl+C / Ctrl+V — копия под курсор, M / Q — «Переместить» / «Повернуть»
+  if (!focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyC' && !textSelected && !toolActive() && indoorSelection.some((f) => f.flora)) {
+    e.preventDefault();
+    floraClipboard = indoorSelection.filter((f) => f.flora).map((f) => ({ kind: f.flora!, tags: { ...f.tags }, coords: f.flora === 'wood' ? f.polygons[0].outer.slice(0, -1) : f.polygons[0].outer.slice() }));
+    setStatus(tr('Скопировано: {n}. Ctrl+V — вставить под курсором.', { n: floraClipboard.length }));
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyC' && !textSelected) floraClipboard = undefined;
+  if (!focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyV' && floraClipboard && !toolActive()) {
+    e.preventDefault();
+    closeCtxMenu();
+    pasteFlora();
+    return;
+  }
+  if (!focus && (e.code === 'KeyM' || e.code === 'KeyQ') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !toolActive() && !underlaySelection.length && indoorSelection.some((f) => f.flora)) {
+    e.preventDefault();
+    closeCtxMenu();
+    startMapFloraTool(e.code === 'KeyM' ? 'move' : 'rotate');
+    return;
+  }
   if (!focus && e.code === 'KeyM' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && selectedGate() && !toolActive()) {
     e.preventDefault();
     startGateDrag();
@@ -9009,7 +9243,7 @@ document.addEventListener('keydown', (e) => {
   }
   // Del / Backspace — удалить выделенное (на карте — отдельные здания, в режиме здания — части)
   // На Mac клавиша Delete — это Backspace
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && indoorSelection.length && indoorSelection.every((f) => f.barrier)) {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && indoorSelection.length && indoorSelection.every((f) => f.barrier && !f.flora)) {
     e.preventDefault();
     closeCtxMenu();
     deleteBarriers(indoorSelection);
@@ -10516,6 +10750,7 @@ function indoorTitle(f: IndoorFeature): string {
   if(f.tags.wall==='counter')return tr('Прилавок');
   if (f.passage) return tr('Арка');
   if (f.gate) return GATE_NAMES[f.tags.barrier] ?? tr('Ворота');
+  if (f.flora) return f.flora === 'row' ? tr('Ряд деревьев') : tr('Лес');
   if (f.barrier) return f.tags.barrier === 'wall' ? tr('Стена') : f.tags.barrier === 'hedge' ? tr('Живая изгородь') : tr('Забор');
   const own = f.stairs ? tr('Лестница') : f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
   if (f.escalator) return own;
@@ -10573,6 +10808,14 @@ function renderIndoorSelection(add = false) {
     bindIndoorForm([f]);
     return;
   }
+  if (f.flora) {
+    infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
+      + `<p class="hint">${esc(tr('V — форма, M — переместить, Q — повернуть, Ctrl+C / Ctrl+V — копировать.'))}</p>`
+      + indoorForm([f])
+      + renderOtherTags(key, t, indoorForm([f]), true);
+    bindIndoorForm([f]);
+    return;
+  }
   if (f.barrier) {
     const sh = barrierShape(t), m = (v: number) => String(Math.round(v * 100) / 100);
     infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
@@ -10598,7 +10841,7 @@ function barrierPlaceholders(fs: IndoorFeature[]): Record<string, string> {
     const ws = new Set(fs.map((f) => String(gateWidth({ ...f.tags, width: '', maxwidth: '', 'maxwidth:physical': '' }))));
     return ws.size === 1 ? { width: [...ws][0] } : {};
   }
-  if (!fs.length || !fs.every((f) => f.barrier)) return {};
+  if (!fs.length || !fs.every((f) => f.barrier) || fs.some((f) => f.flora)) return {};
   const r = (v: number) => String(Math.round(v * 100) / 100);
   const one = (f: IndoorFeature): Record<string, string> => {
     if (!f.gate) {
@@ -10632,7 +10875,8 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
  * Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений
  * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance и номер ref (как у пресета iD «Вход / выход»).
  */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.gate) ? ['barrier', 'width', 'height', 'access', 'locked', 'opening_hours', 'material', 'colour'] : fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && !f.barrier) ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.flora === 'row') ? ['natural', 'leaf_type', 'leaf_cycle', 'genus', 'species', 'height', 'diameter_crown']
+  : fs.length && fs.every((f) => f.flora) ? ['natural', 'landuse', 'leaf_type', 'leaf_cycle', 'name'] : fs.length && fs.every((f) => f.gate) ? ['barrier', 'width', 'height', 'access', 'locked', 'opening_hours', 'material', 'colour'] : fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && !f.barrier) ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
   : fs.length && fs.every((f) => isDoor(f) && !f.tags.door && INDOOR_GATES.has(f.tags.barrier)) ? ['barrier', 'amenity', 'level', 'width', 'access']
   : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : ['width', 'height', 'material'])]
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
@@ -17559,6 +17803,7 @@ function onSessionChange(keys: string[]) {
   syncEntranceEdits(keys);
   syncPassageEdits(keys);
   if (keys.some((k) => k.startsWith('way/') || k.startsWith('node/'))) scheduleBarriers();
+  if (keys.some((k) => k.startsWith('way/'))) { overpass.refreshTrees(); syncFloraHighlight(); }
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
     if (selectedRoomWalls.length) { selectIndoor(undefined); clearInfo(); }

@@ -601,6 +601,8 @@ interface Item {
   feature: Feature3D;
   /** Отметка основания, с которой собран (рельеф): поменялась — пересобрать. */
   lift?: number;
+  /** Шов стены и фундамента (рельеф): отрезки xyz по кольцам на отметке основания — добавляются к рёбрам. */
+  seam?: Float32Array;
   /** Арка: ниже z объём — контур без полосы проезда (локальные метры). */
   passage?: { z: number; lower: LocalPolygon[]; ways: PassagePiece[] };
   /** Ключи объектов, с которыми у него общие грани (крыша–дно): их правка требует пересборки этого. */
@@ -7672,7 +7674,8 @@ function itemEdges(it: Item): Float32Array {
   // Стёкла окон (хвост вершин) — без рёбер: на тысячах окон сборка рёбер — секунды, а тёмный прямоугольник виден и так
   const panes = it.paneVertices ?? 0;
   const body = computeItemEdges(panes ? { ...it, positions: it.positions.subarray(0, it.positions.length - panes * 3) } : it);
-  const edges = panes ? withPaneOutlines(body, it.positions.subarray(it.positions.length - panes * 3)) : body;
+  let edges = panes ? withPaneOutlines(body, it.positions.subarray(it.positions.length - panes * 3)) : body;
+  if (it.seam) { const all = new Float32Array(edges.length + it.seam.length); all.set(edges); all.set(it.seam, edges.length); edges = all; }
   edgeCache.set(it.positions, { wallVertices: it.wallVertices, roofShape, edges });
   return edges;
 }
@@ -9400,7 +9403,13 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // Рельеф (эксперимент): объект — на верхнюю отметку рельефа под зданием; стоящему на земле — фундамент до нижней
   const lift = g.focusScene ? 0 : groundFor(f);
   const foot = lift ? lift - footFor(f) : 0;
-  if (foot > 0.05 && !flat && heights.min < 0.01 && !roofOnly) tri.walls = [...foundationWalls(polys, foot), ...tri.walls];
+  let seam: Float32Array | undefined;
+  if (foot > 0.05 && !flat && heights.min < 0.01 && !roofOnly) {
+    tri.walls = [...foundationWalls(polys, foot), ...tri.walls];
+    const lines: number[] = [];
+    for (const p of polys) for (const ring of [p.outer, ...p.inners]) ring.forEach((a, i) => { const b = ring[(i + 1) % ring.length]; lines.push(a[0], a[1], lift, b[0], b[1], lift); });
+    seam = new Float32Array(lines);
+  }
   const positions = new Float32Array(tri.walls.length + tri.roof.length + floors.length);
   positions.set(tri.walls, 0);
   positions.set(tri.roof, tri.walls.length);
@@ -9412,6 +9421,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   if (positions.length) box.setFromArray(positions);
   return {
     lift,
+    seam,
     contacts: contactKeys(g, f),
     feature: f,
     passage: passage && !tri.pending ? { z: passage.z + lift, lower: passage.lower, ways: passage.ways } : undefined,

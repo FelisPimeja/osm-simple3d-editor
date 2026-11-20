@@ -29,7 +29,7 @@ function mapTransform(map: MlMap): { fov?: number; getCameraLngLat?(): { lng: nu
   return (m._camera?.transform ?? m.transform) as ReturnType<typeof mapTransform>;
 }
 
-interface TileLines { key: string; model: THREE.Matrix4; group: THREE.Group; used: number }
+interface TileLines { key: string; model: THREE.Matrix4; group: THREE.Group; used: number; labels: Float64Array }
 
 /** Положение камеры в координатах модели по матрице модель→клип: точка, где x, y и w клипа равны нулю. */
 function cameraEye(m: THREE.Matrix4, out: THREE.Vector3): THREE.Vector3 {
@@ -88,6 +88,9 @@ export class ContoursLayer implements CustomLayerInterface {
   private readonly minor = pulledMaterial(0x9a6b3f, 0.55, this.uniforms);
   private readonly major = pulledMaterial(0x9a6b3f, 0.85, this.uniforms);
   private readonly onMove = () => this.update();
+  /** Подписи тайлов кадра изменились: точки (долгота, широта) с отметкой и поворотом — в разрывах линий. */
+  onLabels?: (labels: { lon: number; lat: number; ele: number; angle: number }[]) => void;
+  private labelsSig = '';
 
   constructor(readonly id: string, private readonly thresholds: ContourThresholds, private readonly maxZoom: number) {}
 
@@ -109,7 +112,7 @@ export class ContoursLayer implements CustomLayerInterface {
   setEnabled(on: boolean) {
     if (on === this.enabled) return;
     this.enabled = on;
-    if (!on) this.clear();
+    if (!on) { this.clear(); this.emitLabels([]); }
     else this.update();
     this.map?.triggerRepaint();
   }
@@ -175,6 +178,21 @@ export class ContoursLayer implements CustomLayerInterface {
     if (this.tiles.size > KEEP) {
       for (const t of [...this.tiles.values()].sort((a, b) => a.used - b.used).slice(0, this.tiles.size - KEEP)) this.drop(t.key);
     }
+    this.emitLabels(want);
+  }
+
+  /** Подписи нарисованных тайлов кадра — наружу (слой символов MapLibre), только если набор поменялся. */
+  private emitLabels(want: string[]) {
+    const drawn = want.filter((k) => this.tiles.has(k));
+    const sig = this.enabled ? drawn.join(',') : '';
+    if (sig === this.labelsSig) return;
+    this.labelsSig = sig;
+    const out: { lon: number; lat: number; ele: number; angle: number }[] = [];
+    if (this.enabled) for (const k of drawn) {
+      const l = this.tiles.get(k)!.labels;
+      for (let i = 0; i + 3 < l.length; i += 4) out.push({ lon: l[i], lat: l[i + 1], ele: l[i + 2], angle: l[i + 3] });
+    }
+    this.onLabels?.(out);
   }
 
   private async load(key: string) {
@@ -195,7 +213,7 @@ export class ContoursLayer implements CustomLayerInterface {
       const n = 2 ** z, m = res.metre;
       const model = new THREE.Matrix4().makeTranslation(x / n, y / n, 0).scale(new THREE.Vector3(m, -m, m));
       this.drop(key);
-      this.tiles.set(key, { key, model, group, used: performance.now() });
+      this.tiles.set(key, { key, model, group, used: performance.now(), labels: res.labels });
       this.map?.triggerRepaint();
     } finally {
       this.loading.delete(key);

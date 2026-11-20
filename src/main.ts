@@ -40,7 +40,7 @@ import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indo
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
-import { applyBasemap, applyContours, applyGpsTraces, applyHillshade, storedContours, storeContours, storedHillshade, storeHillshade, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, NO_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
+import { applyBasemap, applyContourLabels3d, applyContours, applyGpsTraces, applyHillshade, storedContours, storeContours, storedHillshade, storeHillshade, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, NO_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
@@ -332,9 +332,13 @@ let contours = storedContours();
 let contoursWait = false;
 // С рельефом линии — 3D-слоем на своей высоте (натянутые текстурой на обрыве размазываются), подписи — из 2D-слоя
 const contours3d = new ContoursLayer('contours-3d', CONTOUR_THRESHOLDS, DEM_MAX_ZOOM);
+contours3d.onLabels = (labels) => { if (mapLoaded) applyContourLabels3d(map, contours && map.getTerrain() ? labels : undefined); };
 function syncContours3d() {
   if (!mapLoaded) return;
   const on = contours && !!map.getTerrain();
+  // Подписи: с рельефом — свои, в разрывах 3D-линий; 2D-подписи (по другой сетке, мимо линий) скрыть
+  if (map.getLayer('contour-labels')) map.setLayoutProperty('contour-labels', 'visibility', on ? 'none' : 'visible');
+  if (!on) applyContourLabels3d(map, undefined);
   // Под подписями горизонталей: их гало закрывает линии (иначе подписи перечёркнуты)
   if (!map.getLayer(contours3d.id)) map.addLayer(contours3d, map.getLayer('contour-labels') ? 'contour-labels' : undefined);
   else if (map.getLayer('contour-labels')) map.moveLayer(contours3d.id, 'contour-labels');

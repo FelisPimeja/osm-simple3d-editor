@@ -71,6 +71,7 @@ import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { Dem, DEM_ATTRIBUTION } from './view/dem';
 import { DEM_MAX_ZOOM, DEM_URL, demTileBlob } from './view/dem-tiles';
 import mlcontour from 'maplibre-contour';
+import { ContoursLayer } from './render/contours-layer';
 import { ground, setGroundSampler } from './render/ground';
 import { CursorOrbit, ORBIT_EVENT } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
@@ -319,17 +320,27 @@ const demSource = new mlcontour.DemSource({ url: DEM_URL, encoding: 'terrarium',
 (demSource.manager as unknown as { getTile: typeof demTileBlob }).getTile = demTileBlob;
 demSource.setupMaplibre(maplibregl);
 const DEM_SHARED = demSource.sharedDemProtocolUrl;
+const CONTOUR_THRESHOLDS: Record<number, [number, number]> = { 10: [200, 1000], 11: [100, 500], 12: [50, 250], 13: [20, 100], 14: [10, 50], 15: [5, 25], 16: [2, 10] };
 const CONTOUR_TILES = demSource.contourProtocolUrl({
   // зум: [шаг, шаг утолщённых], м
-  thresholds: { 10: [200, 1000], 11: [100, 500], 12: [50, 250], 13: [20, 100], 14: [10, 50], 15: [5, 25], 16: [2, 10] },
+  thresholds: CONTOUR_THRESHOLDS,
   contourLayer: 'contours', elevationKey: 'ele', levelKey: 'level',
 });
 
 // Горизонтали: слой подложки, на всех серверах
 let contours = storedContours();
 let contoursWait = false;
+// С рельефом линии — 3D-слоем на своей высоте (натянутые текстурой на обрыве размазываются), подписи — из 2D-слоя
+const contours3d = new ContoursLayer('contours-3d', demSource, CONTOUR_THRESHOLDS, DEM_MAX_ZOOM);
+function syncContours3d() {
+  if (!mapLoaded) return;
+  const on = contours && !!map.getTerrain();
+  if (!map.getLayer(contours3d.id)) map.addLayer(contours3d);
+  contours3d.setEnabled(on);
+  if (map.getLayer('contours')) map.setLayoutProperty('contours', 'visibility', on ? 'none' : 'visible');
+}
 const showContours = () => {
-  if (mapLoaded) { applyContours(map, contours, CONTOUR_TILES, DEM_ATTRIBUTION); return; }
+  if (mapLoaded) { applyContours(map, contours, CONTOUR_TILES, DEM_ATTRIBUTION); syncContours3d(); return; }
   if (contoursWait) return;
   contoursWait = true;
   map.once('load', () => queueMicrotask(() => { contoursWait = false; showContours(); }));
@@ -1412,6 +1423,7 @@ function syncTerrain() {
     map.setTerrain(null);
     setGroundSampler(undefined, dem.revision);
   }
+  syncContours3d();
   refreshGround();
 }
 /** Отметки поменялись (пришли тайлы DEM, рельеф включён или снят): пересобрать то, что стоит на земле. */

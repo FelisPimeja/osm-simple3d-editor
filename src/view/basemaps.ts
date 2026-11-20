@@ -295,7 +295,7 @@ export function applyContours(map: MlMap, on: boolean, tiles: string, attributio
   const font = map.getStyle().layers.map((l) => (l.layout as Record<string, unknown> | undefined)?.['text-font']).find((f) => Array.isArray(f)) as string[] | undefined;
   map.addLayer({ id: CONTOUR_LABELS, type: 'symbol', source: CONTOUR_LAYER, 'source-layer': 'contours', filter: ['>', ['get', 'level'], 0],
     layout: { 'symbol-placement': 'line', 'text-size': 10, 'text-field': ['concat', ['number-format', ['get', 'ele'], {}], ' м'], ...(font ? { 'text-font': font } : {}) },
-    paint: { 'text-color': '#7a5230', 'text-halo-color': 'rgba(255,255,255,0.85)', 'text-halo-width': 1.2 } }, before);
+    paint: { 'text-color': '#7a5230', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 2 } }, before);
 }
 
 /** Кнопка со списком подложек — в общем блоке кнопок карты (масштаб, компас). */

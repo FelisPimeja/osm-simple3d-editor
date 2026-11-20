@@ -331,11 +331,13 @@ const CONTOUR_TILES = demSource.contourProtocolUrl({
 let contours = storedContours();
 let contoursWait = false;
 // С рельефом линии — 3D-слоем на своей высоте (натянутые текстурой на обрыве размазываются), подписи — из 2D-слоя
-const contours3d = new ContoursLayer('contours-3d', demSource, CONTOUR_THRESHOLDS, DEM_MAX_ZOOM);
+const contours3d = new ContoursLayer('contours-3d', CONTOUR_THRESHOLDS, DEM_MAX_ZOOM);
 function syncContours3d() {
   if (!mapLoaded) return;
   const on = contours && !!map.getTerrain();
-  if (!map.getLayer(contours3d.id)) map.addLayer(contours3d);
+  // Под подписями горизонталей: их гало закрывает линии (иначе подписи перечёркнуты)
+  if (!map.getLayer(contours3d.id)) map.addLayer(contours3d, map.getLayer('contour-labels') ? 'contour-labels' : undefined);
+  else if (map.getLayer('contour-labels')) map.moveLayer(contours3d.id, 'contour-labels');
   contours3d.setEnabled(on);
   if (map.getLayer('contours')) map.setLayoutProperty('contours', 'visibility', on ? 'none' : 'visible');
 }

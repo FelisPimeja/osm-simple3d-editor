@@ -735,7 +735,8 @@ modelsLayer.onShown = (keys) => {
 };
 overpassLayer.drawExtra = (renderer, main, plain) => barriersLayer.draw(renderer, main, plain);
 overpassLayer.drawLate = (renderer, main, plain) => modelsLayer.draw(renderer, main, plain);
-overpassLayer.plainDepth = () => roadsLayer.isEnabled && !roadsLayer.hidden();
+// Глубина MapLibre без сжатия: рядом мосты (их глубина — MapLibre) или рельеф (склон перед зданием должен его закрывать)
+overpassLayer.plainDepth = () => (roadsLayer.isEnabled && !roadsLayer.hidden()) || terrainShown;
 /**
  * Тайлы поменялись в режиме здания (с окружением они грузятся и при пане): части, этажи и проверки — один раз,
  * когда камера встала, а не на каждый пришедший тайл посреди движения.

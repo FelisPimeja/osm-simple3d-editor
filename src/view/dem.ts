@@ -89,7 +89,9 @@ export class Dem {
     this.tiles.set(key, 'loading');
     void this.load(xx, y).then((data) => {
       this.tiles.set(key, data ?? 'failed');
-      if (!data) return;
+      // Сбой загрузки (сеть, ответ сервера) — не навсегда: через 10 с тайл запросится снова при следующей выборке,
+      // иначе здания под ним остались бы на 0 м под рельефом
+      if (!data) { setTimeout(() => { if (this.tiles.get(key) === 'failed') this.tiles.delete(key); this.revision++; this.onLoad(); }, 10_000); return; }
       this.revision++;
       // Тайлы приходят пачкой: пересборка — одна на пачку
       clearTimeout(this.notify);

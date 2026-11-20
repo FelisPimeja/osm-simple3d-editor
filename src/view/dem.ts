@@ -1,14 +1,17 @@
 import type { LonLat } from '../osm/model';
+import { demHeights } from './dem-tiles';
 
 /**
  * Рельеф (эксперимент): тайлы Mapterhorn (terrarium, 512 px). Те же тайлы MapLibre рисует как terrain, а здесь они
  * декодируются для отметок объектов сцены: основание здания — минимум DEM под контуром, деревья и ограждения —
  * по точкам. Пока тайла нет, отметка — 0; пришёл — onLoad (сцену пересобрать).
  */
-export const DEM_TILES = 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp';
 export const DEM_ATTRIBUTION = "<a href='https://mapterhorn.com/attribution' target='_blank'>© Mapterhorn</a>";
-/** Зум тайлов: глобальное покрытие Mapterhorn (Copernicus GLO-30) есть до z12 (~19 м/px на экваторе — мельче 30 м данных). */
-export const DEM_ZOOM = 12;
+/**
+ * Зум выборки отметок: z15 (~3 м/px на 512 px) — там, где есть лидар, отметки совпадают с подробным рельефом
+ * MapLibre; где его нет, тайл собирается из z12 (см. dem-tiles).
+ */
+const DEM_ZOOM = 15;
 const SIZE = 512;
 
 type Tile = Float32Array | 'loading' | 'failed';
@@ -96,23 +99,7 @@ export class Dem {
   }
 
   private async load(x: number, y: number): Promise<Float32Array | undefined> {
-    try {
-      const res = await fetch(DEM_TILES.replace('{z}', String(DEM_ZOOM)).replace('{x}', String(x)).replace('{y}', String(y)));
-      if (!res.ok) return;
-      // Без управления цветом и премультипликации: каналы — это биты высоты, не цвет
-      const bmp = await createImageBitmap(await res.blob(), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
-      const c = new OffscreenCanvas(bmp.width, bmp.height);
-      const ctx = c.getContext('2d', { willReadFrequently: true })!;
-      ctx.drawImage(bmp, 0, 0);
-      const px = ctx.getImageData(0, 0, bmp.width, bmp.height, { colorSpace: 'srgb' }).data;
-      if (bmp.width !== SIZE || bmp.height !== SIZE) return;
-      const out = new Float32Array(SIZE * SIZE);
-      // terrarium: (R·256 + G + B/256) − 32768
-      for (let i = 0; i < out.length; i++) out[i] = px[i * 4] * 256 + px[i * 4 + 1] + px[i * 4 + 2] / 256 - 32768;
-      return out;
-    } catch {
-      return;
-    }
+    try { return await demHeights(DEM_ZOOM, x, y); } catch { return; }
   }
 }
 

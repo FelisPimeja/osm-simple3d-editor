@@ -40,7 +40,7 @@ import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indo
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
-import { applyBasemap, applyGpsTraces, applyHillshade, storedHillshade, storeHillshade, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, NO_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
+import { applyBasemap, applyContours, applyGpsTraces, applyHillshade, storedContours, storeContours, storedHillshade, storeHillshade, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, NO_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
@@ -68,7 +68,9 @@ import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVE
 import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
-import { Dem, DEM_ATTRIBUTION, DEM_TILES, DEM_ZOOM } from './view/dem';
+import { Dem, DEM_ATTRIBUTION } from './view/dem';
+import { DEM_MAX_ZOOM, DEM_URL, demTileBlob } from './view/dem-tiles';
+import mlcontour from 'maplibre-contour';
 import { ground, setGroundSampler } from './render/ground';
 import { CursorOrbit, ORBIT_EVENT } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
@@ -310,11 +312,33 @@ const photoLayers = [
   service, label, title, layer: new PhotoLayer(map, service), on: server().imagery ? storedOn(service) : false,
 }));
 type PhotoLayerState = typeof photoLayers[number];
+// Высоты Mapterhorn — один источник для рельефа, отмывки и горизонталей (maplibre-contour): тайлы кешируются
+// один раз; отсутствующие подробные зумы (вне лидара) собираются из родителя (dem-tiles). В основном потоке:
+// подстановка тайлов (getTile) в воркер maplibre-contour не передать
+const demSource = new mlcontour.DemSource({ url: DEM_URL, encoding: 'terrarium', maxzoom: DEM_MAX_ZOOM, worker: false, cacheSize: 100 });
+(demSource.manager as unknown as { getTile: typeof demTileBlob }).getTile = demTileBlob;
+demSource.setupMaplibre(maplibregl);
+const DEM_SHARED = demSource.sharedDemProtocolUrl;
+const CONTOUR_TILES = demSource.contourProtocolUrl({
+  // зум: [шаг, шаг утолщённых], м
+  thresholds: { 10: [200, 1000], 11: [100, 500], 12: [50, 250], 13: [20, 100], 14: [10, 50], 15: [5, 25], 16: [2, 10] },
+  contourLayer: 'contours', elevationKey: 'ele', levelKey: 'level',
+});
+
+// Горизонтали: слой подложки, на всех серверах
+let contours = storedContours();
+let contoursWait = false;
+const showContours = () => {
+  if (mapLoaded) { applyContours(map, contours, CONTOUR_TILES, DEM_ATTRIBUTION); return; }
+  if (contoursWait) return;
+  contoursWait = true;
+  map.once('load', () => queueMicrotask(() => { contoursWait = false; showContours(); }));
+};
 // Отмывка рельефа (Mapterhorn): слой подложки, на всех серверах; с рельефом и без
 let hillshade = storedHillshade();
 let hillshadeWaits = false;
 const showHillshade = () => {
-  if (mapLoaded) { applyHillshade(map, hillshade, DEM_TILES, DEM_ATTRIBUTION, DEM_ZOOM); return; }
+  if (mapLoaded) { applyHillshade(map, hillshade, DEM_SHARED, DEM_ATTRIBUTION, DEM_MAX_ZOOM); return; }
   // Карта ещё грузится: показать после load (после обработчика, который выставит mapLoaded)
   if (hillshadeWaits) return;
   hillshadeWaits = true;
@@ -326,6 +350,12 @@ basemapCtrl?.addOverlay('hillshade', tr('Отмывка рельефа'), tr('Т
   showHillshade();
 });
 if (hillshade) showHillshade();
+basemapCtrl?.addOverlay('contours', tr('Горизонтали'), tr('Линии равных высот по данным Mapterhorn: шаг зависит от масштаба, каждая пятая — толще и с подписью'), contours, (on) => {
+  contours = on;
+  storeContours(on);
+  showContours();
+});
+if (contours) showContours();
 basemapCtrl?.addOverlayGroup(tr('Фото и панорамы'), tr('Уличные фото и панорамы 360°, разрешённые для OSM'), {
   title: tr('Фильтр снимков: тип и даты съёмки'),
   filtered: () => isPhotoFiltered(photoFilter),
@@ -1366,7 +1396,7 @@ function syncTerrain() {
   terrainShown = want;
   dem.setActive(want);
   if (want) {
-    if (!map.getSource(DEM_SOURCE)) map.addSource(DEM_SOURCE, { type: 'raster-dem', tiles: [DEM_TILES], tileSize: 512, encoding: 'terrarium', maxzoom: DEM_ZOOM, attribution: DEM_ATTRIBUTION });
+    if (!map.getSource(DEM_SOURCE)) map.addSource(DEM_SOURCE, { type: 'raster-dem', tiles: [DEM_SHARED], tileSize: 512, encoding: 'terrarium', maxzoom: DEM_MAX_ZOOM, attribution: DEM_ATTRIBUTION });
     map.setTerrain({ source: DEM_SOURCE, exaggeration: 1 });
     setGroundSampler((p) => dem.at(p), dem.revision);
   } else {

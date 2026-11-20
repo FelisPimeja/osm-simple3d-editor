@@ -1680,5 +1680,7 @@
   "Рельеф": "Terrain",
   "Эксперимент: объёмный рельеф (Mapterhorn) на карте; здания стоят на минимальной отметке под контуром. В режиме здания рельеф снимается": "Experimental: 3D terrain (Mapterhorn) on the map; buildings stand at the lowest ground elevation under their outline. Terrain is turned off in building mode",
   "Отмывка рельефа": "Hillshade",
-  "Тени рельефа по данным Mapterhorn поверх подложки": "Terrain shading from Mapterhorn data over the basemap"
+  "Тени рельефа по данным Mapterhorn поверх подложки": "Terrain shading from Mapterhorn data over the basemap",
+  "Горизонтали": "Contour lines",
+  "Линии равных высот по данным Mapterhorn: шаг зависит от масштаба, каждая пятая — толще и с подписью": "Lines of equal elevation from Mapterhorn data: the interval depends on the zoom, every fifth one is thicker and labelled"
 }

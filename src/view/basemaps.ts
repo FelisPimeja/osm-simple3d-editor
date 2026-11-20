@@ -272,6 +272,32 @@ export function applyHillshade(map: MlMap, on: boolean, tiles: string, attributi
   map.addLayer({ id: HILLSHADE_LAYER, type: 'hillshade', source: HILLSHADE_LAYER, paint: { 'hillshade-illumination-anchor': 'map', 'hillshade-exaggeration': 0.4, 'hillshade-shadow-color': '#473b24', 'hillshade-highlight-color': '#ffffff' } }, before);
 }
 
+/** Горизонтали (maplibre-contour из тайлов Mapterhorn) — над отмывкой, под GPS-треками и подписями. */
+export const CONTOUR_LAYER = 'contours';
+const CONTOUR_LABELS = 'contour-labels';
+const CONTOURS_KEY = 'osm3d.contours';
+export function storedContours(): boolean {
+  try { return localStorage.getItem(CONTOURS_KEY) === '1'; } catch { return false; }
+}
+export function storeContours(on: boolean) {
+  try { if (on) localStorage.setItem(CONTOURS_KEY, '1'); else localStorage.removeItem(CONTOURS_KEY); } catch { /* до перезагрузки */ }
+}
+export function applyContours(map: MlMap, on: boolean, tiles: string, attribution: string) {
+  for (const id of [CONTOUR_LABELS, CONTOUR_LAYER]) if (map.getLayer(id)) map.removeLayer(id);
+  if (!on) return;
+  if (!map.getSource(CONTOUR_LAYER)) map.addSource(CONTOUR_LAYER, { type: 'vector', tiles: [tiles], maxzoom: 16, attribution });
+  const before = map.getLayer(GPS_LAYER) ? GPS_LAYER : firstSymbol(map);
+  // level 1 — утолщённая горизонталь (кратна старшему шагу), 0 — основная
+  map.addLayer({ id: CONTOUR_LAYER, type: 'line', source: CONTOUR_LAYER, 'source-layer': 'contours',
+    layout: { 'line-join': 'round' },
+    paint: { 'line-color': '#9a6b3f', 'line-opacity': ['match', ['get', 'level'], 1, 0.7, 0.4], 'line-width': ['match', ['get', 'level'], 1, 1.1, 0.6] } }, before);
+  // Подписи — у утолщённых, шрифтом стиля (свой набор глифов у каждой подложки)
+  const font = map.getStyle().layers.map((l) => (l.layout as Record<string, unknown> | undefined)?.['text-font']).find((f) => Array.isArray(f)) as string[] | undefined;
+  map.addLayer({ id: CONTOUR_LABELS, type: 'symbol', source: CONTOUR_LAYER, 'source-layer': 'contours', filter: ['>', ['get', 'level'], 0],
+    layout: { 'symbol-placement': 'line', 'text-size': 10, 'text-field': ['concat', ['number-format', ['get', 'ele'], {}], ' м'], ...(font ? { 'text-font': font } : {}) },
+    paint: { 'text-color': '#7a5230', 'text-halo-color': 'rgba(255,255,255,0.85)', 'text-halo-width': 1.2 } }, before);
+}
+
 /** Кнопка со списком подложек — в общем блоке кнопок карты (масштаб, компас). */
 const BUILDINGS_KEY = 'osm3d.buildings';
 const BUILDINGS_OPACITY_KEY = 'osm3d.buildings-opacity';

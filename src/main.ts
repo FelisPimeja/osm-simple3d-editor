@@ -62,7 +62,7 @@ import { ModelPins } from './view/model-pins';
 import { modelObjectKey } from './osm/model-nodes';
 import { DMR, LICENSES, modelIdOf, ModelsLayer, type ModelPlacement } from './render/models-layer';
 import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, type BarrierWay } from './osm/barriers';
-import { isWood, ringsFromMembers, rowFromWay, woodFromRings, woodFromWay, type TreePoint, type TreeRow, type WoodArea, type WoodMember } from './osm/trees';
+import { isWood, ringsFromMembers, rowFromWay, treeFromNode, woodFromRings, woodFromWay, type TreePoint, type TreeRow, type WoodArea, type WoodMember } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
 import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
@@ -1398,7 +1398,7 @@ function barrierFeature(b: BarrierWay): IndoorFeature {
 }
 /** Ограждение по ключу (с правками сессии), если оно ещё ограждение. */
 function barrierFeatureFor(key: string): IndoorFeature | undefined {
-  if (!key.startsWith('node/')) { const fl = floraFeatureFor(key); if (fl || isRel(key)) return fl; }
+  { const fl = floraFeatureFor(key); if (fl || isRel(key)) return fl; }
   if (key.startsWith('node/')) {
     const id = Number(key.slice(5));
     for (const raw of overpass.barriers()) {
@@ -1427,12 +1427,12 @@ function syncBarrierSelection() {
  */
 interface FloraWay { key: string; kind: 'row' | 'wood'; tags: Record<string, string>; nodes: number[]; coords: LonLat[]; members?: WoodMember[] }
 /** Вставленные в сессии ряды и леса (их нет в тайлах). */
-const floraCreated = new Map<string, 'row' | 'wood'>();
+const floraCreated = new Map<string, 'row' | 'wood' | 'tree'>();
 const isRel = (key: string) => key.startsWith('relation/');
 const floraValid = (f: FloraWay) => (f.kind === 'row' ? f.tags.natural === 'tree_row' && f.coords.length >= 2
   : isWood(f.tags) && (f.members ? ringsFromMembers(f.members).length > 0 : f.coords.length >= 3));
 /** Теги ряда или леса без здания — такие созданные объекты не здания (createdShapes). */
-function isFloraTags(t: Record<string, string>) { return !t.building && !t['building:part'] && (t.natural === 'tree_row' || isWood(t)); }
+function isFloraTags(t: Record<string, string>) { return !t.building && !t['building:part'] && (t.natural === 'tree_row' || t.natural === 'tree' || isWood(t)); }
 
 /** Ряды и леса показанных тайлов и вставленные (без правок сессии). */
 function rawFlora(): FloraWay[] {
@@ -1442,7 +1442,7 @@ function rawFlora(): FloraWay[] {
     ...woods.map((w) => ({ key: w.key, kind: 'wood' as const, tags: w.tags ?? {}, nodes: w.nodes ?? [], coords: w.nodes ? w.polygons[0].outer : [], ...(w.members ? { members: w.members } : {}) })),
   ];
   const have = new Set(out.map((f) => f.key));
-  for (const [key, kind] of floraCreated) if (!have.has(key) && session.has(key)) out.push({ key, kind, tags: {}, nodes: [], coords: [], ...(isRel(key) ? { members: [] } : {}) });
+  for (const [key, kind] of floraCreated) if (kind !== 'tree' && !have.has(key) && session.has(key)) out.push({ key, kind, tags: {}, nodes: [], coords: [], ...(isRel(key) ? { members: [] } : {}) });
   return out;
 }
 
@@ -1494,8 +1494,28 @@ function floraMemberFeature(m: WoodMember, tags: Record<string, string>): Indoor
   return { key: m.key, tags: session.get(m.key)?.tags ?? m.tags ?? {}, kind: 'area', line: true, barrier: true, flora: 'wood', levels: [0],
     polygons: [{ outer: m.coords, inners: [], outerIds: m.nodes, innerIds: [] }] };
 }
+/** Отдельное дерево (узел natural=tree) с правками сессии: точка и теги; удалённое или уже не дерево — нет. */
+function liveTree(key: string): { key: string; tags: Record<string, string>; p: LonLat } | undefined {
+  if (session.isDeleted(key)) return;
+  const e = session.get(key), raw = e ? undefined : overpass.treePoints().find((t) => t.key === key);
+  const p = e?.polygons?.[0]?.outer?.[0] ?? raw?.p ?? overpass.treePoints().find((t) => t.key === key)?.p;
+  const tags = e?.tags ?? raw?.tags;
+  return p && tags?.natural === 'tree' ? { key, tags, p } : undefined;
+}
+/** Дерево — точечным объектом карты (выбор, карточка, перенос — как у рядов и лесов). */
+function treeFeature(t: { key: string; tags: Record<string, string>; p: LonLat }): IndoorFeature {
+  const id = Number(t.key.slice(5));
+  return { key: t.key, tags: t.tags, kind: 'poi', point: t.p, barrier: true, flora: 'tree', levels: [0], polygons: [{ outer: [t.p], inners: [], outerIds: [id], innerIds: [] }] };
+}
+/** Правленые и вставленные деревья (их точки могли уйти в другой тайл). */
+function editedTrees(): string[] {
+  return [...new Set([...session.changes().filter((c) => c.key.startsWith('node/') && (c.before.natural === 'tree' || c.after.natural === 'tree')).map((c) => c.key),
+    ...[...floraCreated].filter(([k, kind]) => kind === 'tree' && session.has(k)).map(([k]) => k)])];
+}
+
 /** Ряд, лес или путь-член выбранного (или загруженного) мультиполигона по ключу. */
 function floraFeatureFor(key: string): IndoorFeature | undefined {
+  if (key.startsWith('node/')) { const t = liveTree(key); return t && treeFeature(t); }
   const all = rawFlora();
   const raw = all.find((f) => f.key === key), live = raw && liveFlora(raw);
   if (live) return floraValid(live) ? floraFeature(live) : undefined;
@@ -1518,7 +1538,7 @@ function expandFlora(fs: IndoorFeature[]): IndoorFeature[] {
 const floraEditable = (fs: IndoorFeature[]) => expandFlora(fs).filter((f) => !(f.flora && isRel(f.key)));
 
 // Деревья тайлов — по правкам сессии рядов и лесов (и вставленные)
-overpass.treeOverlay = (rows, woods, [w, s, e, n]) => {
+overpass.treeOverlay = (rows, woods, [w, s, e, n], points) => {
   let sig = '';
   const mark = (key: string, tags: Record<string, string>, rings: LonLat[][]) => {
     sig += `${key}:${JSON.stringify(tags)}:${rings.map((r) => r.map((c) => c[0].toFixed(7) + ',' + c[1].toFixed(7)).join(' ')).join('|')};`;
@@ -1537,6 +1557,7 @@ overpass.treeOverlay = (rows, woods, [w, s, e, n]) => {
     if (l && floraValid(l)) { const wd = woodOf(l); mark(l.key, l.tags, wd.polygons.flatMap((p) => [p.outer, ...p.inners])); outWoods.push(wd); } else sig += `${x.key}-;`;
   }
   for (const [key, kind] of floraCreated) {
+    if (kind === 'tree') continue;
     const l = session.has(key) ? liveFlora({ key, kind, tags: {}, nodes: [], coords: [], ...(isRel(key) ? { members: [] } : {}) }) : undefined;
     if (!l || !floraValid(l)) continue;
     const rings = floraPolygons(l).flatMap((p) => [p.outer, ...p.inners]);
@@ -1544,7 +1565,17 @@ overpass.treeOverlay = (rows, woods, [w, s, e, n]) => {
     mark(key, l.tags, rings);
     if (kind === 'row') outRows.push(rowFromWay(key, l.tags, l.nodes, l.coords)); else outWoods.push(woodOf(l));
   }
-  return { rows: outRows, woods: outWoods, sig };
+  // Деревья: правленые и вставленные — по положению из сессии, в тот тайл, где они теперь стоят
+  const edited = new Set(editedTrees());
+  const outPoints = points.filter((t) => !t.key || !edited.has(t.key));
+  for (const key of edited) {
+    const t = liveTree(key);
+    if (!t) { sig += `${key}-;`; continue; }
+    if (t.p[0] < w || t.p[0] > e || t.p[1] < s || t.p[1] > n) continue;
+    mark(key, t.tags, [[t.p]]);
+    outPoints.push(treeFromNode(key, t.tags, t.p));
+  }
+  return { rows: outRows, woods: outWoods, points: outPoints, sig };
 };
 
 /** Ряд (в пределах 8 px от линии) или лес (точка внутри, меньший из нескольких) под точкой экрана. */
@@ -1577,6 +1608,7 @@ function moved(c: LonLat[], m?: THREE.Matrix4): LonLat[] {
 }
 /** Линии контура ряда или леса (кольца леса — замкнутые). */
 function floraLines(f: IndoorFeature, m?: THREE.Matrix4): LonLat[][] {
+  if (f.point) return [];
   if (f.line) return [moved(f.polygons[0].outer, m)];
   return f.polygons.flatMap((p) => [p.outer, ...p.inners]).map((r) => moved([...r, r[0]], m));
 }
@@ -1584,7 +1616,9 @@ function floraLines(f: IndoorFeature, m?: THREE.Matrix4): LonLat[][] {
 function syncFloraHighlight() {
   const src = map.getSource('flora-selection') as maplibregl.GeoJSONSource | undefined;
   if (!src) return;
-  const fs = indoorSelection.filter((f) => f.flora);
+  const fs = indoorSelection.filter((f) => f.flora && f.flora !== 'tree');
+  // Отдельное дерево — подсветка его модели и кольцо на земле (у нескольких — первого)
+  overpassLayer.setTreeSelection(indoorSelection.find((f) => f.flora === 'tree')?.key);
   src.setData({ type: 'FeatureCollection', features: fs.map((f) => ({ type: 'Feature', properties: {},
     geometry: { type: 'MultiLineString', coordinates: floraLines(f, floraPreview?.keys.has(f.key) ? floraPreview.m : undefined) } })) });
 }
@@ -1617,7 +1651,12 @@ function commitFlora(ids: string[], m: THREE.Matrix4, what: string) {
   const fs = floraTargets(ids);
   if (!fs.length) return;
   const ways = new Map(floraEditable(fs).map((f) => [f.key, f]));
-  const edits: ObjectEdit[] = [...ways.values()].map((f) => { trackIndoor(f.key, f); return { key: f.key, line: { ids: f.polygons[0].outerIds!, coords: moved(f.polygons[0].outer, m) } }; });
+  const edits: ObjectEdit[] = [...ways.values()].map((f) => {
+    trackIndoor(f.key, f);
+    // Дерево — узел: новое положение точки
+    if (f.point) return { key: f.key, polygons: [{ outer: moved(f.polygons[0].outer, m), inners: [], outerIds: f.polygons[0].outerIds, innerIds: [] }] };
+    return { key: f.key, line: { ids: f.polygons[0].outerIds!, coords: moved(f.polygons[0].outer, m) } };
+  });
   session.editMany(edits);
   selectIndoorMany(fs.map((f) => floraFeatureFor(f.key)).filter((f): f is IndoorFeature => !!f));
   setStatus(tr('{what}: {n}. Отменить — Ctrl+Z.', { what, n: fs.length }));
@@ -1632,11 +1671,11 @@ function floraChangeKeys(): Set<string> {
 }
 
 /** Скопированные ряды и леса: теги и кольца (у ряда — его линия). */
-let floraClipboard: { kind: 'row' | 'wood'; tags: Record<string, string>; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; rel: boolean }[] | undefined;
+let floraClipboard: { kind: 'row' | 'wood' | 'tree'; tags: Record<string, string>; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; rel: boolean }[] | undefined;
 
 function copyFlora(fs: IndoorFeature[]) {
   floraClipboard = fs.filter((f) => f.flora).map((f) => ({ kind: f.flora!, tags: { ...f.tags }, rel: isRel(f.key),
-    polygons: f.line ? [{ outer: f.flora === 'wood' ? f.polygons[0].outer.slice(0, -1) : f.polygons[0].outer.slice(), inners: [] }] : f.polygons.map((p) => ({ outer: p.outer, inners: p.inners })) }));
+    polygons: f.point ? [{ outer: [f.point], inners: [] }] : f.line ? [{ outer: f.flora === 'wood' ? f.polygons[0].outer.slice(0, -1) : f.polygons[0].outer.slice(), inners: [] }] : f.polygons.map((p) => ({ outer: p.outer, inners: p.inners })) }));
   setStatus(tr('Скопировано: {n}. Ctrl+V — вставить под курсором.', { n: floraClipboard.length }));
 }
 
@@ -1659,6 +1698,13 @@ function pasteFlora() {
     return { id, key, nodes: line.ids };
   };
   for (const c of cb) {
+    if (c.kind === 'tree') {
+      const id = nextNewId--, key = `node/${id}`, p = place(c.polygons[0].outer)[0];
+      edits.push({ key, create: { key, version: 0, tags: { ...c.tags }, polygons: [{ outer: [p], inners: [], outerIds: [id], innerIds: [] }] } });
+      floraCreated.set(key, 'tree');
+      keys.push(key);
+      continue;
+    }
     if (!c.rel) {
       const w = way(place(c.polygons[0].outer), c.kind === 'wood', { ...c.tags });
       floraCreated.set(w.key, c.kind);
@@ -2605,6 +2651,13 @@ map.on('click', (e) => {
     if (reclick && !e.originalEvent.shiftKey && indoorSelection.length === 1 && indoorSelection[0].key === treeOf.key) { selectIndoor(undefined); clearInfo(); return; }
     if (!e.originalEvent.shiftKey) select(undefined);
     selectIndoor(treeOf, e.originalEvent.shiftKey); return;
+  }
+  // Отдельное дерево — объект карты: карточка с тегами, перенос, копирование, удаление
+  const treeF = tree?.key ? floraFeatureFor(tree.key) : undefined;
+  if (treeF) {
+    if (reclick && !e.originalEvent.shiftKey && indoorSelection.length === 1 && indoorSelection[0].key === treeF.key) { selectIndoor(undefined); clearInfo(); return; }
+    if (!e.originalEvent.shiftKey) select(undefined);
+    selectIndoor(treeF, e.originalEvent.shiftKey); return;
   }
   if (tree) { if (reclick && tree.key === selectedTreeKey) { select(undefined); clearInfo(); } else selectTree(tree); return; }
   // Ряд деревьев или лес (мимо здания) — выбрать: правится «Формой», переносится и поворачивается
@@ -5244,7 +5297,7 @@ function syncMapTools() {
     btn.hidden = !u && !(fl && btn !== mapUScaleBtn);
     btn.classList.toggle('active', underlaySketch && on);
   }
-  mapBShapeBtn.hidden = !!focus || !(indoorSelection.length === 1 && indoorSelection[0].barrier);
+  mapBShapeBtn.hidden = !!focus || !(indoorSelection.length === 1 && indoorSelection[0].barrier && indoorSelection[0].flora !== 'tree');
   mapBShapeBtn.classList.toggle('active', barrierSketch && shapeTool.active);
   renderHelp();
   mapRectBtn.classList.toggle('active', sketching && drawTool.shape === 'rect');
@@ -9423,7 +9476,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   // На карте с выделенным ограждением V — «Форма»
-  if (!focus && e.code === 'KeyV' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && indoorSelection.length === 1 && indoorSelection[0].barrier) {
+  if (!focus && e.code === 'KeyV' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && indoorSelection.length === 1 && indoorSelection[0].barrier && indoorSelection[0].flora !== 'tree') {
     e.preventDefault();
     closeCtxMenu();
     if (shapeTool.active) shapeTool.stop(); else startMapBarrierShape();
@@ -10897,7 +10950,7 @@ function indoorTitle(f: IndoorFeature): string {
   if(f.tags.wall==='counter')return tr('Прилавок');
   if (f.passage) return tr('Арка');
   if (f.gate) return GATE_NAMES[f.tags.barrier] ?? tr('Ворота');
-  if (f.flora) return f.flora === 'row' ? tr('Ряд деревьев') : tr('Лес');
+  if (f.flora) return f.flora === 'row' ? tr('Ряд деревьев') : f.flora === 'tree' ? tr('Дерево') : tr('Лес');
   if (f.barrier) return f.tags.barrier === 'wall' ? tr('Стена') : f.tags.barrier === 'hedge' ? tr('Живая изгородь') : tr('Забор');
   const own = f.stairs ? tr('Лестница') : f.escalator ? tr('Эскалатор') : isDoor(f) ? tr('Дверь') : INDOOR_NAMES[f.kind];
   if (f.escalator) return own;
@@ -10957,7 +11010,7 @@ function renderIndoorSelection(add = false) {
   }
   if (f.flora) {
     infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
-      + `<p class="hint">${esc(tr('V — форма, M — переместить, Q — повернуть, Ctrl+C / Ctrl+V — копировать.'))}</p>`
+      + `<p class="hint">${esc(f.flora === 'tree' ? tr('M — переместить, Ctrl+C / Ctrl+V — копировать, Delete — удалить.') : tr('V — форма, M — переместить, Q — повернуть, Ctrl+C / Ctrl+V — копировать.'))}</p>`
       + indoorForm([f])
       + renderOtherTags(key, t, indoorForm([f]), true);
     bindIndoorForm([f]);
@@ -11022,7 +11075,8 @@ function renderIndoorMulti(fs: IndoorFeature[]) {
  * Поля формы: у стен и колонн нет room — среди выбранных есть такие, поля room нет; ref и name — только у помещений
  * и зон. У дверей на наружной стене (и уже входов) — тип входа entrance и номер ref (как у пресета iD «Вход / выход»).
  */
-const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.flora === 'row') ? ['natural', 'leaf_type', 'leaf_cycle', 'genus', 'species', 'height', 'diameter_crown']
+const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.flora === 'tree') ? ['natural', 'leaf_type', 'leaf_cycle', 'genus', 'species', 'height', 'circumference', 'diameter_crown', 'denotation']
+  : fs.length && fs.every((f) => f.flora === 'row') ? ['natural', 'leaf_type', 'leaf_cycle', 'genus', 'species', 'height', 'diameter_crown']
   : fs.length && fs.every((f) => f.flora) ? ['natural', 'landuse', 'leaf_type', 'leaf_cycle', 'name'] : fs.length && fs.every((f) => f.gate) ? ['barrier', 'width', 'height', 'access', 'locked', 'opening_hours', 'material', 'colour'] : fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && !f.barrier) ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
   : fs.length && fs.every((f) => isDoor(f) && !f.tags.door && INDOOR_GATES.has(f.tags.barrier)) ? ['barrier', 'amenity', 'level', 'width', 'access']
   : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : ['width', 'height', 'material'])]
@@ -17951,7 +18005,7 @@ function onSessionChange(keys: string[]) {
   syncEntranceEdits(keys);
   syncPassageEdits(keys);
   if (keys.some((k) => k.startsWith('way/') || k.startsWith('node/'))) scheduleBarriers();
-  if (keys.some((k) => k.startsWith('way/'))) { overpass.refreshTrees(); syncFloraHighlight(); }
+  if (keys.some((k) => k.startsWith('way/') || k.startsWith('node/'))) { overpass.refreshTrees(); syncFloraHighlight(); }
   // Правка тегов помещения (и её отмена) — план этажа и панель свойств по новым тегам
   if (keys.some((k) => indoorEdited.has(k))) {
     if (selectedRoomWalls.length) { selectIndoor(undefined); clearInfo(); }

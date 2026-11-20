@@ -259,7 +259,7 @@ export class OverpassTiles {
    * Правки сессии рядов и лесов (подключает main.ts): ряды и леса тайла bbox такими, какие они сейчас, и подпись
    * правленых — по ней деревья тайла пересобираются.
    */
-  treeOverlay?: (rows: TreeRow[], woods: WoodArea[], bbox: Bbox) => { rows: TreeRow[]; woods: WoodArea[]; sig: string };
+  treeOverlay?: (rows: TreeRow[], woods: WoodArea[], bbox: Bbox, points: TreePoint[]) => { rows: TreeRow[]; woods: WoodArea[]; points: TreePoint[]; sig: string };
   /** Ряды или леса поменялись в сессии — пересобрать деревья показанных тайлов (у кого подпись сменилась). */
   refreshTrees() { for (const k of this.wanted) this.showTrees(k); }
 
@@ -922,8 +922,8 @@ export class OverpassTiles {
     const ok = this.treeDates.fn;
     const all = e.trees ?? NO_TREES;
     const bbox = tileBbox(key);
-    const live = this.treeOverlay?.(all.rows, this.woodsIn(bbox), bbox) ?? { rows: all.rows, woods: this.woodsIn(bbox), sig: '' };
-    const own = { ...all, points: all.points.filter((p) => ok(p.tags ?? {})), rows: live.rows.filter((r) => ok(r.dates ?? {})) };
+    const live = this.treeOverlay?.(all.rows, this.woodsIn(bbox), bbox, all.points) ?? { rows: all.rows, woods: this.woodsIn(bbox), points: all.points, sig: '' };
+    const own = { ...all, points: live.points.filter((p) => ok(p.tags ?? {})), rows: live.rows.filter((r) => ok(r.dates ?? {})) };
     const woods = live.woods.filter((w) => ok(w.dates ?? {}));
     const signature = `${e.fetchedAt}:${own.points.length}:${own.rows.length}:${e.features.length}:${this.treeCutsVersion}:${this.treeDates.key}:${live.sig}|${woods.map((w) => w.key).sort().join(',')}`;
     if (this.layer.treeSignature(key) === signature || this.treesPending.get(key) === signature) return;

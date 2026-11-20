@@ -87,6 +87,12 @@ export function ringsFromMembers(members: WoodMember[]): WoodArea['polygons'] {
   return polygons;
 }
 
+/** Отдельное дерево из узла (теги, точка) — и для правок сессии. */
+export function treeFromNode(key: string, tags: Record<string, string>, p: LonLat): TreePoint {
+  const circ = meters(tags.circumference, 30);
+  return { key, tags, p, leaf: leafOf(tags), height: meters(tags.height ?? tags.est_height, 150), crown: meters(tags.diameter_crown, 60), ...(circ ? { trunk: circ / (2 * Math.PI) } : {}) };
+}
+
 export function isWood(tags?: Record<string, string>): boolean {
   return tags?.natural === 'wood' || tags?.landuse === 'forest';
 }
@@ -114,11 +120,7 @@ export function parseTrees(elements: OsmElement[]): TreeData {
   const points: TreePoint[] = [];
   for (const n of nodes.values()) {
     if (n.tags?.natural !== 'tree') continue;
-    const circ = meters(n.tags.circumference, 30);
-    points.push({
-      key: `node/${n.id}`, tags: n.tags, p: [n.lon, n.lat], leaf: leafOf(n.tags), height: meters(n.tags.height ?? n.tags.est_height, 150),
-      crown: meters(n.tags.diameter_crown, 60), ...(circ ? { trunk: circ / (2 * Math.PI) } : {}),
-    });
+    points.push(treeFromNode(`node/${n.id}`, n.tags, [n.lon, n.lat]));
   }
 
   const rows: TreeRow[] = [];

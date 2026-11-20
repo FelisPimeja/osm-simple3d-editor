@@ -92,7 +92,7 @@ export interface IndoorFeature {
   /** Отдельностоящее ограждение (barrier=wall/fence/hedge вне здания): выбирается на карте, правится панелью свойств. */
   barrier?: boolean;
   /** Ряд деревьев (natural=tree_row) или лес-путь (natural=wood, landuse=forest) на карте; у него — barrier тоже (выбор и «Форма» — как у ограждений). */
-  flora?: 'row' | 'wood';
+  flora?: 'row' | 'wood' | 'tree';
   /** Ворота, калитка или проход на ограждении (узел barrier=gate/entrance/…); у него — barrier тоже. */
   gate?: boolean;
   /** Уровень не размечен (нет level и repeat_on): этаж выбран по умолчанию. */

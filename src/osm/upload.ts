@@ -636,12 +636,16 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
     const now = new Set(e.wayNodes.after);
     for (const n of e.wayNodes.before) if (n > 0 && !now.has(n)) dropNodes.add(n);
   }
-  // Узлы: новые без ссылок не создаём, старые без ссылок и тегов — удаляем (if-unused)
+  // Узлы: новые без ссылок и без тегов не создаём (новый узел с тегами — отдельный объект: дерево, точка),
+  // старые без ссылок и тегов — удаляем (if-unused)
   const used = new Set<number>();
   for (const p of payload) if (p.element.type === 'way' && !p.deleted) for (const n of p.element.nodes) used.add(n);
   for (let i = payload.length - 1; i >= 0; i--) {
     const p = payload[i];
-    if (p.created && p.element.type === 'node' && !used.has(p.element.id)) payload.splice(i, 1);
+    const t = p.tags ?? {};
+    // Вершины (дверь, вход, ворота) без пути смысла не имеют — как и узел без тегов
+    const vertex = !Object.keys(t).length || !!(t.entrance || t.door || t.indoor === 'door' || t.barrier);
+    if (p.created && p.element.type === 'node' && !used.has(p.element.id) && vertex) payload.splice(i, 1);
   }
   // И удалённые, и изменённые (сдвинутые) узлы: вторая копия узла в пакете — 409 «Version mismatch»
   const already = new Set(payload.filter((p) => !p.created && p.element.type === 'node').map((p) => p.element.id));

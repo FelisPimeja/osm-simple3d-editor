@@ -29,6 +29,13 @@ function mapTransform(map: MlMap): { fov?: number; getCameraLngLat?(): { lng: nu
   return (m._camera?.transform ?? m.transform) as ReturnType<typeof mapTransform>;
 }
 
+/** Пересекаются ли тайлы (ключи z/x/y/…) разных зумов. */
+function overlaps(a: string, b: string): boolean {
+  const [za, xa, ya] = a.split('/').map(Number), [zb, xb, yb] = b.split('/').map(Number);
+  const z = Math.min(za, zb);
+  return xa >> (za - z) === xb >> (zb - z) && ya >> (za - z) === yb >> (zb - z);
+}
+
 interface TileLines { key: string; model: THREE.Matrix4; group: THREE.Group; used: number; labels: Float64Array }
 
 /** Положение камеры в координатах модели по матрице модель→клип: точка, где x, y и w клипа равны нулю. */
@@ -41,20 +48,31 @@ function cameraEye(m: THREE.Matrix4, out: THREE.Vector3): THREE.Vector3 {
   return out.set(-x[3], -y[3], -w[3]).applyMatrix3(a.invert());
 }
 
-/** Линии с подтяжкой к камере на долю расстояния до неё (eye, pull — uniforms). */
-function pulledMaterial(colour: number, opacity: number, uniforms: { eye: { value: THREE.Vector3 }; pull: { value: number }; pullM: { value: number } }) {
+/**
+ * Линии с подтяжкой к камере на долю расстояния до неё (eye, pull — uniforms). masked — с маской подписей: атрибут
+ * instanceLabel (точка подписи, радиус в экранных px), фрагменты ближе радиуса к её проекции отбрасываются — разрыв
+ * всегда по размеру подписи, при любом зуме.
+ */
+function pulledMaterial(colour: number, opacity: number, uniforms: { eye: { value: THREE.Vector3 }; pull: { value: number }; pullM: { value: number }; dpr: { value: number } }, masked = false) {
   const m = new LineMaterial({ color: colour, linewidth: 1, worldUnits: false, transparent: true, opacity, depthWrite: false });
   m.onBeforeCompile = (shader) => {
     shader.uniforms.eye = uniforms.eye;
     shader.uniforms.pull = uniforms.pull;
     shader.uniforms.pullM = uniforms.pullM;
+    shader.uniforms.dpr = uniforms.dpr;
     // Доля пути к камере: pull (экранные пиксели) или pullM метров — что больше; локальные единицы — метры
     shader.vertexShader = shader.vertexShader
       .replace('void main() {', 'uniform vec3 eye;\nuniform float pull;\nuniform float pullM;\nvec3 pulled( vec3 p ) { vec3 d = eye - p; return p + d * min( 0.5, max( pull, pullM / max( length( d ), 1.0 ) ) ); }\nvoid main() {')
       .replace('vec4 start = modelViewMatrix * vec4( instanceStart, 1.0 );', 'vec4 start = modelViewMatrix * vec4( pulled( instanceStart ), 1.0 );')
       .replace('vec4 end = modelViewMatrix * vec4( instanceEnd, 1.0 );', 'vec4 end = modelViewMatrix * vec4( pulled( instanceEnd ), 1.0 );');
+    if (!masked) return;
+    shader.vertexShader = shader.vertexShader
+      .replace('uniform vec3 eye;', 'attribute vec4 instanceLabel;\nuniform float dpr;\nvarying vec2 vLabelPx;\nvarying float vLabelR;\nuniform vec3 eye;')
+      .replace('vec4 start = modelViewMatrix', 'vLabelR = 0.0;\n\t\t\tif ( instanceLabel.w > 0.0 ) { vec4 lc = projectionMatrix * modelViewMatrix * vec4( pulled( instanceLabel.xyz ), 1.0 ); if ( lc.w > 0.0 ) { vLabelPx = ( lc.xy / lc.w * 0.5 + 0.5 ) * resolution; vLabelR = instanceLabel.w * dpr; } }\n\t\t\tvec4 start = modelViewMatrix');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('void main() {', 'varying vec2 vLabelPx;\nvarying float vLabelR;\nvoid main() {\n\tif ( vLabelR > 0.0 && distance( gl_FragCoord.xy, vLabelPx ) < vLabelR ) discard;');
   };
-  m.customProgramCacheKey = () => 'contour-pull';
+  m.customProgramCacheKey = () => (masked ? 'contour-pull-masked' : 'contour-pull');
   return m;
 }
 
@@ -84,9 +102,11 @@ export class ContoursLayer implements CustomLayerInterface {
   private readonly tiles = new Map<string, TileLines>();
   private readonly loading = new Set<string>();
   private enabled = false;
-  private readonly uniforms = { eye: { value: new THREE.Vector3() }, pull: { value: 0 }, pullM: { value: PULL_M } };
+  private readonly uniforms = { eye: { value: new THREE.Vector3() }, pull: { value: 0 }, pullM: { value: PULL_M }, dpr: { value: 1 } };
   private readonly minor = pulledMaterial(0x9a6b3f, 0.55, this.uniforms);
-  private readonly major = pulledMaterial(0x9a6b3f, 0.85, this.uniforms);
+  private readonly major = pulledMaterial(0x9a6b3f, 0.85, this.uniforms, true);
+  /** Что нарисовано в прошлый раз: пока новые тайлы не готовы, на их месте остаются старые (без моргания). */
+  private drawn: string[] = [];
   private readonly onMove = () => this.update();
   /** Подписи тайлов кадра изменились: точки (долгота, широта) с отметкой и поворотом — в разрывах линий. */
   onLabels?: (labels: { lon: number; lat: number; ele: number; angle: number }[]) => void;
@@ -124,12 +144,13 @@ export class ContoursLayer implements CustomLayerInterface {
     for (const m of [this.minor, this.major]) m.resolution.set(canvas.width, canvas.height);
     this.minor.linewidth = 1 * dpr;
     this.major.linewidth = 1.6 * dpr;
+    this.uniforms.dpr.value = dpr;
     // Доля расстояния до камеры, равная PULL_PX пикселям экрана (вертикальный угол обзора MapLibre)
     const fov = mapTransform(this.map)?.fov ?? 36.87;
     this.uniforms.pull.value = (PULL_PX * 2 * Math.tan((fov * Math.PI) / 360)) / canvas.clientHeight;
     this.uniforms.pullM.value = PULL_M * 2 ** Math.max(0, 17 - this.map.getZoom());
     this.renderer.resetState();
-    for (const key of this.wanted()) {
+    for (const key of this.drawList(this.wanted())) {
       const t = this.tiles.get(key);
       if (!t) continue;
       const pm = main.clone().multiply(t.model);
@@ -169,7 +190,7 @@ export class ContoursLayer implements CustomLayerInterface {
     if (!this.enabled || !this.map) return;
     const want = this.wanted();
     const now = performance.now();
-    for (const key of want) { const t = this.tiles.get(key); if (t) t.used = now; }
+    for (const key of [...want, ...this.drawn]) { const t = this.tiles.get(key); if (t) t.used = now; }
     // Не больше PARALLEL заданий: воркер не копит очередь из тайлов, мимо которых уже прокрутили
     for (const key of want) {
       if (this.loading.size >= PARALLEL) break;
@@ -181,9 +202,22 @@ export class ContoursLayer implements CustomLayerInterface {
     this.emitLabels(want);
   }
 
+  /**
+   * Что рисовать: готовые тайлы кадра, а там, где новые ещё считаются, — прежние (зум, шаг поменялись). Прежний
+   * тайл остаётся целиком, пока не готовы все новые под ним; новые под ним до того не рисуются (без двойных линий).
+   */
+  private drawList(want: string[]): string[] {
+    const wanted = new Set(want);
+    const missing = want.filter((k) => !this.tiles.has(k));
+    const kept = missing.length ? this.drawn.filter((k) => !wanted.has(k) && this.tiles.has(k) && missing.some((m) => overlaps(k, m))) : [];
+    const list = [...want.filter((k) => this.tiles.has(k) && !kept.some((o) => overlaps(k, o))), ...kept];
+    this.drawn = list;
+    return list;
+  }
+
   /** Подписи нарисованных тайлов кадра — наружу (слой символов MapLibre), только если набор поменялся. */
   private emitLabels(want: string[]) {
-    const drawn = want.filter((k) => this.tiles.has(k));
+    const drawn = this.drawList(want);
     const sig = this.enabled ? drawn.join(',') : '';
     if (sig === this.labelsSig) return;
     this.labelsSig = sig;
@@ -206,6 +240,7 @@ export class ContoursLayer implements CustomLayerInterface {
         if (!pos.length) continue;
         const geo = new LineSegmentsGeometry();
         geo.setPositions(pos);
+        if (mat === this.major) geo.setAttribute('instanceLabel', new THREE.InstancedBufferAttribute(res.majorMask, 4));
         const line = new LineSegments2(geo, mat);
         line.frustumCulled = false;
         group.add(line);

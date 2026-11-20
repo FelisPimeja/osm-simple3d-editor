@@ -1623,6 +1623,14 @@ function commitFlora(ids: string[], m: THREE.Matrix4, what: string) {
   setStatus(tr('{what}: {n}. Отменить — Ctrl+Z.', { what, n: fs.length }));
 }
 
+/** Ключи правленых рядов, лесов и путей-членов лесов-мультиполигонов — их линии показываются в панели правок. */
+function floraChangeKeys(): Set<string> {
+  const out = new Set<string>();
+  for (const c of session.changes()) if (c.feature.tags && isFloraTags(c.feature.tags)) out.add(c.key);
+  for (const r of rawFlora()) if (r.members) for (const m of liveFlora(r)?.members ?? r.members) if (session.has(m.key)) out.add(m.key);
+  return out;
+}
+
 /** Скопированные ряды и леса: теги и кольца (у ряда — его линия). */
 let floraClipboard: { kind: 'row' | 'wood'; tags: Record<string, string>; polygons: { outer: LonLat[]; inners: LonLat[][] }[]; rel: boolean }[] | undefined;
 
@@ -18083,7 +18091,8 @@ function renderChanges() {
   renderAccount();
   if (josmPlugin()) return renderJosmChanges();
   // Пути-члены мультиполигонов (разрезание при правке контуров) — служебные: отправляются, но в списке не видны
-  const changes = session.changes().filter((c) => !c.feature.line || isIndoorChange(c) || c.feature.tags?.tunnel === 'building_passage' || isBarrierTags(c.feature.tags) || uploadIssueKeys.has(c.key));
+  const flora = floraChangeKeys();
+  const changes = session.changes().filter((c) => !c.feature.line || isIndoorChange(c) || c.feature.tags?.tunnel === 'building_passage' || isBarrierTags(c.feature.tags) || flora.has(c.key) || uploadIssueKeys.has(c.key));
   // Раздел появляется после первой правки; остаётся, пока есть что отменить или повторить.
   // Шаги скрытия частей — тоже в истории, но панель ради них не раскрываем
   const show = changes.length > 0 || session.hasDataHistory();
@@ -18186,7 +18195,13 @@ let insertedSuggestion: string | undefined;
 
 function commentSuggestion(): string {
   const groupKey = (key: string) => editGroups.get(key)?.key ?? groupOf(key)?.key;
-  return suggestComment(session.changes().filter((c) => !c.feature.line || isIndoorChange(c) || c.feature.tags?.tunnel === 'building_passage' || isBarrierTags(c.feature.tags)), {
+  const flora = floraChangeKeys();
+  // Ряды деревьев и леса (с путями-членами) — своей строкой: в комментарии о зданиях они были бы «зданиями»
+  const trees = session.changes().filter((c) => flora.has(c.key));
+  const treeLine = trees.length ? trn(trees.length, 'Деревья: ряды и леса ({n} объект)|Деревья: ряды и леса ({n} объекта)|Деревья: ряды и леса ({n} объектов)') : '';
+  const rest = session.changes().filter((c) => !flora.has(c.key) && (!c.feature.line || isIndoorChange(c) || c.feature.tags?.tunnel === 'building_passage' || isBarrierTags(c.feature.tags)));
+  if (!rest.length) return treeLine;
+  const text = suggestComment(rest, {
     groupOf: (key) => { const g = groupKey(key); return g && g !== key ? g : undefined; },
     isGroup: (key) => editGroups.has(key),
     buildingName: (key) => {
@@ -18202,6 +18217,7 @@ function commentSuggestion(): string {
       return validateTags(key, before, 'hasParts' in f && !!f.hasParts).some((i) => !now.has(sig(i)));
     },
   });
+  return treeLine ? `${text}\n${treeLine}` : text;
 }
 
 function renderUpload(count: number): string {

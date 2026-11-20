@@ -1674,5 +1674,6 @@
   "Перемещено": "Moved",
   "Повёрнуто": "Rotated",
   "Скопировано: {n}. Ctrl+V — вставить под курсором.": "Copied: {n}. Ctrl+V — paste under the cursor.",
-  "Вставлено: {n}. M — переместить, Q — повернуть, Ctrl+Z — отменить.": "Pasted: {n}. M — move, Q — rotate, Ctrl+Z — undo."
+  "Вставлено: {n}. M — переместить, Q — повернуть, Ctrl+Z — отменить.": "Pasted: {n}. M — move, Q — rotate, Ctrl+Z — undo.",
+  "Деревья: ряды и леса ({n} объект)|Деревья: ряды и леса ({n} объекта)|Деревья: ряды и леса ({n} объектов)": "Trees: rows and woods ({n} object)|Trees: rows and woods ({n} objects)"
 }

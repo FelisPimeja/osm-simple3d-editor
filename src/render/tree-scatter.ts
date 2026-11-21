@@ -29,8 +29,6 @@ export const CLUSTER_FLAG = 4;
 export const CLUSTER = 3;
 /** Шаг сетки леса, м (модели кластеров строятся под него). */
 export const WOOD_STEP_M = 9;
-/** Раскладки кластеров: 0–2 лиственные, 3–5 хвойные, 6–11 смешанные (CROWN записи кластера — номер раскладки). */
-export const PATTERN_COUNT = 12;
 /** Разброс дерева в ячейке и его размеры — общие для одиночных деревьев леса и моделей кластеров. */
 export function woodTree(needle: boolean, r: number, jx: number, jy: number) {
   const height = (needle ? 19 : 16) * (0.8 + 0.4 * r);
@@ -187,7 +185,7 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
           if (!inTile(x, y) || inBuilding(x, y)) continue;
           taken.add(id);
           const ci = Math.floor(i / CLUSTER), cj = Math.floor(j / CLUSTER);
-          const needle = isNeedle(wood.leaf, hash(i, j, 4), true);
+          const needle = isNeedle(wood.leaf, hash(ci, cj, 4), true);
           const { height, crown, trunk } = woodTree(needle, hash(i, j, 3), 0, 0);
           const t: TreeInstance = { mx: x, my: y, needle, wood: true, height, crown, trunk, seed: hash(i, j, 5), src };
           const g = groups.get(cellKey(ci, cj));
@@ -198,9 +196,7 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
     for (const [k, g] of groups) {
       if (g.length < CLUSTER * CLUSTER) { out.push(...g); continue; }
       const ci = Math.floor(k / 1e8), cj = k - ci * 1e8;
-      const r = hash(ci, cj, 4);
-      const pattern = wood.leaf === 'broadleaved' ? Math.floor(r * 3) : wood.leaf === 'needleleaved' ? 3 + Math.floor(r * 3) : Math.floor(r * PATTERN_COUNT);
-      out.push({ mx: (ci + 0.5) * CLUSTER * step, my: (cj + 0.5) * CLUSTER * step, needle: false, wood: true, cluster: true, height: 0.9 + 0.2 * hash(ci, cj, 6), crown: pattern, trunk: 1, seed: hash(ci, cj, 5), src });
+      out.push({ mx: (ci + 0.5) * CLUSTER * step, my: (cj + 0.5) * CLUSTER * step, needle: g[0].needle, wood: true, cluster: true, height: 0.9 + 0.2 * hash(ci, cj, 6), crown: 0, trunk: 1, seed: hash(ci, cj, 5), src });
     }
   }
   return out;

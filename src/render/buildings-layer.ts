@@ -6291,7 +6291,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           const z = entranceZ(w, it.tags) + breast;
           if (z >= h.wallTop - 1e-3 || z + height <= h.min + 1e-3) return;
           const place = entrancePlace(rings, r, i, z);
-          if (place) out.set(id, { id, ...place, width, window: { height } });
+          if (place) out.set(id, { id, ...place, width, window: { height, outline: windowOutline(w, width, height) } });
         }));
       }
     }
@@ -6401,6 +6401,13 @@ export class BuildingsLayer implements CustomLayerInterface {
         // Окно: нишу рисует объём; выбранное — подсветка проёма чуть перед фасадом
         if (!this.entrancesSelected.includes(e.id)) continue;
         const w = (e.width ?? WINDOW_WIDTH) / 2, ox = e.p[0] + e.n[0] * 0.03, oy = e.p[1] + e.n[1] * 0.03;
+        const o = e.window.outline;
+        if (o) {
+          const at = (q: Pt) => [ox + e.t[0] * q[0], oy + e.t[1] * q[0], e.z + q[1]];
+          for (let k = 1; k + 1 < o.length; k++) selected.push(...at(o[0]), ...at(o[k]), ...at(o[k + 1]));
+          o.forEach((q, k) => lines.push(...at(q), ...at(o[(k + 1) % o.length])));
+          continue;
+        }
         const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w], z0 = e.z, z1 = e.z + e.window.height;
         selected.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z1, a[0], a[1], z0, b[0], b[1], z1, a[0], a[1], z1);
         lines.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z0, b[0], b[1], z1, b[0], b[1], z1, a[0], a[1], z1, a[0], a[1], z1, a[0], a[1], z0);
@@ -8822,7 +8829,41 @@ function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
 }
 /** Вход на стене: точка у основания (м сцены), направление стены t и наружная нормаль n (единичные), низ z. */
-export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number } }
+export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number; outline?: Pt[] } }
+
+/**
+ * Контур проёма окна по window:shape и window:top:shape (выпуклый, против часовой): вдоль стены от середины и вверх
+ * от подоконника, м; прямоугольник (rectangle, square, неизвестное) — undefined.
+ */
+export function windowOutline(w: Record<string, string>, width: number, height: number): Pt[] | undefined {
+  const shape = (w['window:shape'] ?? '').trim().toLowerCase(), top = (w['window:top:shape'] ?? '').trim().toLowerCase();
+  const hw = width / 2, N = 24;
+  if (['circle', 'round', 'oval', 'ellipse'].includes(shape)) {
+    const out: Pt[] = [];
+    for (let k = 0; k < N; k++) { const a = -Math.PI / 2 + (k / N) * Math.PI * 2; out.push([Math.cos(a) * hw, height / 2 + Math.sin(a) * height / 2]); }
+    return out;
+  }
+  const arch = ['semicircle', 'dome', 'round', 'arch'].includes(top) || ['semicircle', 'dome'].includes(shape);
+  const pointed = top === 'pointed' || shape === 'pointed';
+  if (!arch && !pointed) return;
+  // Верх: полукруг радиуса hw или стрельчатая арка (две дуги радиуса width из противоположных пят); низ — прямоугольник
+  const rise = Math.min(height, pointed ? width * Math.sqrt(3) / 2 : hw);
+  const spring = height - rise, out: Pt[] = [[-hw, 0], [hw, 0]];
+  for (let k = 0; k <= N; k++) {
+    const u = k / N; // от правой пяты к левой
+    if (pointed) {
+      // Правая дуга (центр у левой пяты) до вершины, затем левая (центр у правой)
+      const half = u <= 0.5, f = half ? u * 2 : (u - 0.5) * 2;
+      const ang = half ? f * Math.PI / 3 : Math.PI - Math.PI / 3 + f * Math.PI / 3;
+      const cx = half ? -hw : hw, x = cx + Math.cos(ang) * width, y = Math.sin(ang) * width;
+      out.push([x, spring + y * (rise / (width * Math.sqrt(3) / 2))]);
+    } else {
+      const ang = u * Math.PI;
+      out.push([Math.cos(ang) * hw, spring + Math.sin(ang) * rise]);
+    }
+  }
+  return out;
+}
 
 /** Размеры окна по тегам узла: подоконник от пола, высота и ширина проёма, м (window:* или от высоты этажа). */
 export function windowSize(w: Record<string, string>, tags: Record<string, string>): { breast: number; height: number; width: number } {
@@ -9433,7 +9474,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
           const z = entranceZ(w, tags) + breast;
           if (z >= heights.wallTop - 1e-3 || z + height <= heights.min + 1e-3) return;
           const place = entrancePlace(rings, r, i, z);
-          if (place) places.push({ ...place, width, height });
+          if (place) places.push({ ...place, width, height, outline: windowOutline(w, width, height), open: w['window:material'] === 'no' });
         }));
       });
       const cut = recessEntrances(tri.walls, places, { width: WINDOW_WIDTH, height: WINDOW_HEIGHT * levelH, min: heights.min, top: heights.wallTop, depth: WINDOW_DEPTH, panes });

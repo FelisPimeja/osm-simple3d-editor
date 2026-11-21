@@ -8566,7 +8566,13 @@ const ENTRANCE_KEY_PREFIX = '@entrance:', ENTRANCES_KEY = '@entrances';
 const ENTRANCE_FORM_TAGS = ['entrance', 'ref'] as const;
 
 /** Поля карточки окна: вид, размеры проёма и подоконник (м), этаж. */
-const WINDOW_FORM_TAGS = ['window', 'window:width', 'window:height', 'window:breast', 'level'] as const;
+const WINDOW_FORM_TAGS = ['window', 'window:shape', 'window:top:shape', 'window:material', 'window:width', 'window:height', 'window:breast', 'level'] as const;
+/** Значения полей окна (Key:window и taginfo); форма проёма в 3D — circle, semicircle, pointed; material=no — без стекла. */
+const WINDOW_VALUES: Record<string, string[]> = {
+  'window:shape': ['rectangle', 'square', 'circle', 'semicircle', 'pointed', 'oval'],
+  'window:top:shape': ['semicircle', 'pointed'],
+  'window:material': ['glass', 'plastic', 'stained_glass', 'glass_brick', 'no'],
+};
 
 function renderEntrance(id: number) {
   if (isWindowNode(id)) return renderWindow(id);
@@ -8610,12 +8616,12 @@ function renderWindow(id: number) {
   loadPresets(() => { if (selectedEntrance === id) renderSelected(); });
   const title = many ? trn(ids.length, 'Выбрано {n} окно|Выбрано {n} окна|Выбрано {n} окон') : matchPreset(t, 'vertex')?.name ?? tr('Окно');
   const common = (k: string) => all.every((x) => (x[k] ?? '') === (t[k] ?? '')) ? t[k] ?? '' : undefined;
-  const LABELS: Record<string, string> = { window: tr('Окно'), 'window:width': tr('Ширина, м'), 'window:height': tr('Высота, м'), 'window:breast': tr('Подоконник, м'), level: tr('Этаж') };
+  const LABELS: Record<string, string> = { window: tr('Окно'), 'window:shape': tr('Форма'), 'window:top:shape': tr('Форма верха'), 'window:material': tr('Заполнение'), 'window:width': tr('Ширина, м'), 'window:height': tr('Высота, м'), 'window:breast': tr('Подоконник, м'), level: tr('Этаж') };
   const rows = WINDOW_FORM_TAGS.map((k) => {
     const changed = ids.some((x) => session.isChanged(`node/${x}`, k));
     const value = common(k);
-    const hint = value === undefined ? tr('разные значения') : k === 'window' ? 'yes' : k === 'level' ? '0' : tr('по высоте этажа');
-    const input = k === 'window' ? renderValueCombo(idOptions('window') ?? [], `data-window-tag="${k}"`, value ?? '', hint, undefined, k)
+    const hint = value === undefined ? tr('разные значения') : k === 'window' ? 'yes' : k === 'level' ? '0' : k === 'window:shape' ? 'rectangle' : k === 'window:material' ? 'glass' : k === 'window:top:shape' ? '—' : tr('по высоте этажа');
+    const input = k === 'window' || WINDOW_VALUES[k] ? renderValueCombo(k === 'window' ? idOptions('window') ?? [] : WINDOW_VALUES[k], `data-window-tag="${k}"`, value ?? '', hint, undefined, k)
       : `<input type="text" data-window-tag="${k}" value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
     return `<label class="tag-row${changed ? ' changed' : ''}"><span title="${esc(k)}">${esc(LABELS[k])}</span>${input}</label>`;
   }).join('');

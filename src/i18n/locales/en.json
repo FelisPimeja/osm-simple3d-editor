@@ -1695,5 +1695,8 @@
   "Перенести вдоль стен: клик по точке окна под подоконником (или M, затем клик по ней) — окно едет за курсором, клик — поставить, Esc — отмена.": "To move along the walls: click the window point below the sill (or M, then click it); the window follows the cursor, click to place, Esc to cancel.",
   "Del — удалить окно (узел останется вершиной контура).": "Del deletes the window (the node stays an outline vertex).",
   "Удалено {n} окно: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} окна: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} окон: узлы остались вершинами контура. Отменить — Ctrl+Z.": "{n} window deleted; the node stays an outline vertex. Undo: Ctrl+Z.|{n} windows deleted; the nodes stay outline vertices. Undo: Ctrl+Z.",
-  "Окно node/{id} перенесено. Отменить — Ctrl+Z.": "Window node/{id} moved. Undo: Ctrl+Z."
+  "Окно node/{id} перенесено. Отменить — Ctrl+Z.": "Window node/{id} moved. Undo: Ctrl+Z.",
+  "Форма": "Shape",
+  "Форма верха": "Top shape",
+  "Заполнение": "Glazing"
 }

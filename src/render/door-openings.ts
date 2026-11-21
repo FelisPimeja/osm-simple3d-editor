@@ -10,7 +10,11 @@ export function doorOpeningHalfWidth(distance: number, diameter: number | undefi
 }
 
 /** Вырезать проёмы из вертикальных треугольников оболочки, сохранив скаты и перекрытия. */
-export function cutDoorOpenings(positions: Float32Array, doors: { x: number; y: number; z: number; width?: number; diameter?: number; height?: number }[], width = 1, height = 2.2, snap = 0.15): Float32Array {
+/**
+ * outline — фигурный проём (окно: круг, арка): выпуклый контур в координатах проёма — вдоль стены от его середины и
+ * вверх от низа, м; без него проём прямоугольный.
+ */
+export function cutDoorOpenings(positions: Float32Array, doors: { x: number; y: number; z: number; width?: number; diameter?: number; height?: number; outline?: [number, number][] }[], width = 1, height = 2.2, snap = 0.15): Float32Array {
   if (!doors.length) return positions;
   const holes: number[] = [];
   for (let i = 0; i + 8 < positions.length; i += 9) {
@@ -29,6 +33,12 @@ export function cutDoorOpenings(positions: Float32Array, doors: { x: number; y: 
       if (!halfWidth || d.z >= Math.max(...vs.map(p=>p[2])) || d.z+h <= Math.min(...vs.map(p=>p[2]))) continue;
       const t = (d.x-a[0])*dx+(d.y-a[1])*dy;
       if (t+halfWidth <= Math.min(...ts) || t-halfWidth >= Math.max(...ts)) continue;
+      if (d.outline && d.outline.length >= 3) {
+        // Выпуклый контур — веером из первой вершины
+        const o = d.outline, at = (k: number) => [a[0]+dx*(t+o[k][0]), a[1]+dy*(t+o[k][0]), d.z+o[k][1]];
+        for (let k = 1; k + 1 < o.length; k++) holes.push(...at(0), ...at(k), ...at(k+1));
+        continue;
+      }
       const x = a[0]+dx*(t-halfWidth), y = a[1]+dy*(t-halfWidth), X=x+dx*halfWidth*2, Y=y+dy*halfWidth*2, z=d.z, Z=z+h;
       holes.push(x,y,z,X,Y,z,X,Y,Z,x,y,z,X,Y,Z,x,y,Z);
     }

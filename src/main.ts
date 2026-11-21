@@ -18744,8 +18744,9 @@ async function doUpload() {
   } finally {
     uploading = false;
     renderChanges();
-    // Пока шла передача в JOSM, появились новые правки — передать и их
-    if (josmApi() && session.changes().length) scheduleJosmSync();
+    // Пока шла передача в JOSM, появились новые правки — передать и их. Без новых правок не повторяем: передача,
+    // которую отклонили, иначе шла бы по кругу каждые 300 мс
+    if (josmApi() && session.changes().length && sessionRevision !== josmSyncRev) scheduleJosmSync();
   }
 }
 
@@ -18757,11 +18758,13 @@ const josmPluginLink = () => `<a href="https://github.com/FelisPimeja/osm-simple
  * Во время работы инструмента (перетаскивание) ждём: промежуточные состояния в JOSM не нужны.
  */
 let josmSyncTimer: ReturnType<typeof setTimeout> | undefined;
+/** Ревизия сессии, с которой ушла последняя автоматическая передача в JOSM. */
+let josmSyncRev = -1;
 function scheduleJosmSync() {
   clearTimeout(josmSyncTimer);
   josmSyncTimer = setTimeout(() => {
     if (uploading || toolBusy()) return scheduleJosmSync();
-    if (session.changes().length) void doUpload();
+    if (session.changes().length) { josmSyncRev = sessionRevision; void doUpload(); }
   }, 300);
 }
 

@@ -6,8 +6,6 @@ import type { LeafType, TreeData } from '../osm/trees';
 
 /** Шаг разброса деревьев в лесу, м (сетка общая для всех тайлов — на стыках нет повторов и пустот). */
 const WOOD_STEP = 9;
-/** Больше деревьев леса на тайл не ставим: шаг растёт (кроны — шире, чтобы полог оставался сомкнутым). */
-const MAX_WOOD_TREES = 8000;
 /** Шаг деревьев в ряду (natural=tree_row), м. */
 const ROW_STEP = 7;
 /** Ячейка индекса зданий (деревья леса внутри зданий не ставим), м. */
@@ -126,10 +124,10 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
   }).filter((a) => a.box[0] < a.box[2] && a.box[1] < a.box[3]);
   if (!areas.length) return out;
 
-  let step = WOOD_STEP * meter;
-  const estimate = areas.reduce((sum, a) => sum + (a.box[2] - a.box[0]) * (a.box[3] - a.box[1]), 0) / (step * step);
-  if (estimate > MAX_WOOD_TREES) step *= Math.sqrt(estimate / MAX_WOOD_TREES);
-  const stepM = step / meter;
+  // Шаг один на все тайлы (без лимита на тайл): иначе в лесистом тайле шаг рос, и на границе тайлов плотность
+  // менялась скачком. Тайл z14 — не больше ~35 тыс. деревьев (сплошной лес).
+  const step = WOOD_STEP * meter;
+  const stepM = WOOD_STEP;
 
   // Индекс зданий: ячейка → кольца (Меркатор)
   const cell = BUILDING_CELL * meter;

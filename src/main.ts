@@ -18737,7 +18737,7 @@ async function doUpload() {
       const off = `<a href="#settings" data-open-settings="error-reports">${esc(tr('Не отправлять отчёты'))}</a>`;
       setStatus(text + ' ' + tr('Отправляем отчёт разработчику…'), true, off);
       void reportUploadFailure({ error: err.message, status: err.status, osmChange: err.osmChange, api: err.api, changeset: err.changeset,
-        user: osmUser && { name: osmUser.name, url: `${server().web}/user/${encodeURIComponent(osmUser.name)}` } })
+        user: reportUser() })
         .then((r) => setStatus(text + (r === 'sent' ? ' ' + tr('Отчёт с этими правками отправлен разработчику.') : ''), true, off));
     } else {
       setStatus(tr('Ошибка отправки: {error}', { error: (err as Error).message }), true);
@@ -18749,6 +18749,18 @@ async function doUpload() {
     // которую отклонили, иначе шла бы по кругу каждые 300 мс
     if (josmApi() && session.changes().length && sessionRevision !== josmSyncRev) scheduleJosmSync();
   }
+}
+
+/** Кто отправлял (для отчёта об ошибке): с плагином — пользователь JOSM (вход в редакторе там не нужен), иначе — вошедший в OSM. */
+function reportUser(): { name: string; url?: string } | undefined {
+  if (josmPlugin()) {
+    const st = josmStatus(), name = st?.user;
+    if (!name) return;
+    // Профиль — на сайте сервера, куда отправляет JOSM (адрес API без /api/0.6)
+    const web = st?.api?.replace(/\/api(\/0\.6)?\/?$/, '').replace('://api.openstreetmap.org', '://www.openstreetmap.org');
+    return { name: `${name} (JOSM)`, url: web ? `${web}/user/${encodeURIComponent(name)}` : undefined };
+  }
+  return osmUser && { name: osmUser.name, url: `${server().web}/user/${encodeURIComponent(osmUser.name)}` };
 }
 
 /** Ссылка на описание модуля JOSM и его установку. */

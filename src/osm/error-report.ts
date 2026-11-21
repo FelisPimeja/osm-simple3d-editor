@@ -37,7 +37,7 @@ export interface UploadFailure {
   api: string;
   changeset?: number;
   /** Ник участника OSM и ссылка на профиль (если вошёл). */
-  user?: { name: string; url: string };
+  user?: { name: string; url?: string };
 }
 
 async function hash(s: string): Promise<string> {
@@ -76,7 +76,7 @@ export async function reportUploadFailure(f: UploadFailure): Promise<'sent' | 's
       '',
       `- Build: ${BUILD}`,
       `- API: ${f.api}`,
-      `- User: ${f.user ? `[${f.user.name.replace(/[[\]`]/g, '')}](${f.user.url})` : 'not logged in'}`,
+      `- User: ${f.user ? (f.user.url ? `[${f.user.name.replace(/[[\]`]/g, '')}](${f.user.url})` : f.user.name.replace(/`/g, '')) : 'not logged in'}`,
       f.changeset ? `- Changeset (left empty): ${f.changeset}` : '',
       `- UI language: ${lang}`,
       `- Browser: ${navigator.userAgent}`,

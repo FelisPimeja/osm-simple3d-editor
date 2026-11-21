@@ -5,7 +5,7 @@
  * Выбор хранится в localStorage (и в профиле на сервере — настройка simple3d:basemap, см. main.ts).
  */
 import * as maplibregl from 'maplibre-gl';
-import type { GeoJSONSource, Map as MlMap, RasterTileSource } from 'maplibre-gl';
+import type { Map as MlMap, RasterTileSource } from 'maplibre-gl';
 import { tr } from '../i18n';
 
 export interface Imagery {
@@ -296,26 +296,6 @@ export function applyContours(map: MlMap, on: boolean, tiles: string, attributio
   map.addLayer({ id: CONTOUR_LABELS, type: 'symbol', source: CONTOUR_LAYER, 'source-layer': 'contours', filter: ['>', ['get', 'level'], 0],
     layout: { 'symbol-placement': 'line', 'text-size': 10, 'text-field': ['concat', ['number-format', ['get', 'ele'], {}], ' м'], ...(font ? { 'text-font': font } : {}) },
     paint: { 'text-color': '#7a5230', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 2 } }, before);
-}
-
-/** Подписи 3D-горизонталей: точки в разрывах самих линий (без гало), повёрнуты вдоль линии; нет данных — убрать. */
-const CONTOUR_LABELS_3D = 'contour-labels-3d';
-export function applyContourLabels3d(map: MlMap, labels: { lon: number; lat: number; ele: number; angle: number }[] | undefined) {
-  if (!labels) {
-    if (map.getLayer(CONTOUR_LABELS_3D)) map.removeLayer(CONTOUR_LABELS_3D);
-    return;
-  }
-  const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: labels.map((l) => ({ type: 'Feature', properties: { ele: l.ele, angle: l.angle }, geometry: { type: 'Point', coordinates: [l.lon, l.lat] } })) };
-  const src = map.getSource(CONTOUR_LABELS_3D) as GeoJSONSource | undefined;
-  if (src) src.setData(data);
-  else map.addSource(CONTOUR_LABELS_3D, { type: 'geojson', data });
-  if (map.getLayer(CONTOUR_LABELS_3D)) return;
-  const font = map.getStyle().layers.map((l) => (l.layout as Record<string, unknown> | undefined)?.['text-font']).find((f) => Array.isArray(f)) as string[] | undefined;
-  // Подпись — ровно в своём разрыве: без вытеснения другими (иначе разрыв остался бы пустым)
-  map.addLayer({ id: CONTOUR_LABELS_3D, type: 'symbol', source: CONTOUR_LABELS_3D,
-    layout: { 'text-field': ['concat', ['number-format', ['get', 'ele'], {}], ' м'], 'text-size': 10, 'text-rotate': ['get', 'angle'],
-      'text-rotation-alignment': 'map', 'text-pitch-alignment': 'map', 'text-allow-overlap': true, 'text-ignore-placement': true, ...(font ? { 'text-font': font } : {}) },
-    paint: { 'text-color': '#7a5230' } }, firstSymbol(map));
 }
 
 /** Кнопка со списком подложек — в общем блоке кнопок карты (масштаб, компас). */

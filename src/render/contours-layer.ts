@@ -36,7 +36,7 @@ function overlaps(a: string, b: string): boolean {
   return xa >> (za - z) === xb >> (zb - z) && ya >> (za - z) === yb >> (zb - z);
 }
 
-interface TileLines { key: string; model: THREE.Matrix4; group: THREE.Group; used: number; labels: Float64Array }
+interface TileLines { key: string; model: THREE.Matrix4; group: THREE.Group; used: number }
 
 /** Положение камеры в координатах модели по матрице модель→клип: точка, где x, y и w клипа равны нулю. */
 function cameraEye(m: THREE.Matrix4, out: THREE.Vector3): THREE.Vector3 {
@@ -53,7 +53,7 @@ function cameraEye(m: THREE.Matrix4, out: THREE.Vector3): THREE.Vector3 {
  * instanceLabel (точка подписи, радиус в экранных px), фрагменты ближе радиуса к её проекции отбрасываются — разрыв
  * всегда по размеру подписи, при любом зуме.
  */
-function pulledMaterial(colour: number, opacity: number, uniforms: { eye: { value: THREE.Vector3 }; pull: { value: number }; pullM: { value: number }; dpr: { value: number } }, masked = false) {
+function pulledMaterial(colour: number, opacity: number, uniforms: Uniforms, masked = false) {
   const m = new LineMaterial({ color: colour, linewidth: 1, worldUnits: false, transparent: true, opacity, depthWrite: false });
   m.onBeforeCompile = (shader) => {
     shader.uniforms.eye = uniforms.eye;
@@ -74,6 +74,96 @@ function pulledMaterial(colour: number, opacity: number, uniforms: { eye: { valu
   };
   m.customProgramCacheKey = () => (masked ? 'contour-pull-masked' : 'contour-pull');
   return m;
+}
+
+type Uniforms = { eye: { value: THREE.Vector3 }; pull: { value: number }; pullM: { value: number }; dpr: { value: number }; resolution: { value: THREE.Vector2 } };
+
+/** Подпись: шрифт и цвет — как у прежних подписей MapLibre (10 px). */
+const LABEL_FONT_PX = 10;
+const LABEL_COLOUR = '#7a5230';
+const labelText = (ele: number) => `${ele.toLocaleString('en-US')} м`;
+
+/**
+ * Подписи тайла квадами в той же сцене, что и линии: точка — на точной отметке (подписи MapLibre ставятся на его
+ * рельеф и висят над линией), размер — постоянный на экране, текст повёрнут вдоль линии на экране и не вверх ногами;
+ * склон закрывает по глубине. labels — по 4 числа: x, y, отметка, направление линии (градусы в локальных осях).
+ */
+function labelMesh(labels: Float64Array, uniforms: Uniforms): THREE.Mesh | undefined {
+  const count = labels.length / 4;
+  if (!count) return;
+  // Атлас: по строке на каждый текст тайла (отметок в тайле немного)
+  const scale = 3, rowH = Math.ceil(LABEL_FONT_PX * 1.4) * scale;
+  const texts = [...new Set(Array.from({ length: count }, (_, i) => labelText(labels[i * 4 + 2])))];
+  const canvas = document.createElement('canvas');
+  const ctx0 = canvas.getContext('2d')!;
+  const font = `${LABEL_FONT_PX * scale}px "Noto Sans", "Helvetica Neue", Arial, sans-serif`;
+  ctx0.font = font;
+  const widths = texts.map((t) => Math.ceil(ctx0.measureText(t).width) + 2 * scale);
+  canvas.width = Math.max(...widths);
+  canvas.height = rowH * texts.length;
+  const ctx = canvas.getContext('2d')!;
+  ctx.font = font;
+  ctx.fillStyle = LABEL_COLOUR;
+  ctx.textBaseline = 'middle';
+  texts.forEach((t, i) => ctx.fillText(t, scale, rowH * (i + 0.5)));
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  const anchor = new Float32Array(count * 4 * 3), dir = new Float32Array(count * 4 * 3), corner = new Float32Array(count * 4 * 2);
+  const uv = new Float32Array(count * 4 * 2), size = new Float32Array(count * 4 * 2), index: number[] = [];
+  const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+  for (let i = 0; i < count; i++) {
+    const x = labels[i * 4], y = labels[i * 4 + 1], ele = labels[i * 4 + 2], a = (labels[i * 4 + 3] * Math.PI) / 180;
+    const row = texts.indexOf(labelText(ele)), w = widths[row];
+    const u0 = 0, u1 = w / canvas.width, v1 = 1 - (row * rowH) / canvas.height, v0 = 1 - ((row + 1) * rowH) / canvas.height;
+    for (let c = 0; c < 4; c++) {
+      const v = i * 4 + c;
+      anchor.set([x, y, ele], v * 3);
+      dir.set([Math.cos(a) * 10, Math.sin(a) * 10, 0], v * 3);
+      corner.set(corners[c], v * 2);
+      uv.set([corners[c][0] < 0 ? u0 : u1, corners[c][1] < 0 ? v0 : v1], v * 2);
+      size.set([w / scale, rowH / scale], v * 2);
+    }
+    index.push(i * 4, i * 4 + 1, i * 4 + 2, i * 4, i * 4 + 2, i * 4 + 3);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(anchor, 3));
+  geo.setAttribute('dir', new THREE.BufferAttribute(dir, 3));
+  geo.setAttribute('corner', new THREE.BufferAttribute(corner, 2));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setAttribute('sizePx', new THREE.BufferAttribute(size, 2));
+  geo.setIndex(index);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { ...uniforms, map: { value: tex } },
+    transparent: true, depthWrite: false,
+    vertexShader: `
+      attribute vec3 dir; attribute vec2 corner; attribute vec2 sizePx;
+      uniform vec3 eye; uniform float pull; uniform float pullM; uniform float dpr; uniform vec2 resolution;
+      varying vec2 vUv;
+      // Сильнее линий (на ~полподписи): плоский квад на крутом склоне иначе срезается рельефом выше точки
+      vec3 pulled( vec3 p ) { vec3 d = eye - p; return p + d * min( 0.5, max( pull * 6.0, pullM * 2.0 / max( length( d ), 1.0 ) ) ); }
+      void main() {
+        vec4 a = projectionMatrix * modelViewMatrix * vec4( pulled( position ), 1.0 );
+        vec4 b = projectionMatrix * modelViewMatrix * vec4( pulled( position + dir ), 1.0 );
+        vec2 sa = a.xy / a.w * resolution * 0.5, sb = b.xy / b.w * resolution * 0.5;
+        vec2 d = sb - sa;
+        d = length( d ) > 1e-6 ? normalize( d ) : vec2( 1.0, 0.0 );
+        if ( d.x < 0.0 ) d = -d; // не вверх ногами
+        vec2 n = vec2( -d.y, d.x );
+        vec2 off = ( d * corner.x * sizePx.x + n * corner.y * sizePx.y ) * 0.5 * dpr;
+        gl_Position = a;
+        gl_Position.xy += off / ( resolution * 0.5 ) * a.w;
+        vUv = uv;
+      }`,
+    fragmentShader: `
+      uniform sampler2D map; varying vec2 vUv;
+      void main() { vec4 c = texture2D( map, vUv ); if ( c.a < 0.02 ) discard; gl_FragColor = c; }`,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 1;
+  mesh.userData.own = true;
+  return mesh;
 }
 
 let worker: Worker | undefined;
@@ -102,15 +192,12 @@ export class ContoursLayer implements CustomLayerInterface {
   private readonly tiles = new Map<string, TileLines>();
   private readonly loading = new Set<string>();
   private enabled = false;
-  private readonly uniforms = { eye: { value: new THREE.Vector3() }, pull: { value: 0 }, pullM: { value: PULL_M }, dpr: { value: 1 } };
+  private readonly uniforms = { eye: { value: new THREE.Vector3() }, pull: { value: 0 }, pullM: { value: PULL_M }, dpr: { value: 1 }, resolution: { value: new THREE.Vector2(1, 1) } };
   private readonly minor = pulledMaterial(0x9a6b3f, 0.55, this.uniforms);
   private readonly major = pulledMaterial(0x9a6b3f, 0.85, this.uniforms, true);
   /** Что нарисовано в прошлый раз: пока новые тайлы не готовы, на их месте остаются старые (без моргания). */
   private drawn: string[] = [];
   private readonly onMove = () => this.update();
-  /** Подписи тайлов кадра изменились: точки (долгота, широта) с отметкой и поворотом — в разрывах линий. */
-  onLabels?: (labels: { lon: number; lat: number; ele: number; angle: number }[]) => void;
-  private labelsSig = '';
 
   constructor(readonly id: string, private readonly thresholds: ContourThresholds, private readonly maxZoom: number) {}
 
@@ -132,7 +219,7 @@ export class ContoursLayer implements CustomLayerInterface {
   setEnabled(on: boolean) {
     if (on === this.enabled) return;
     this.enabled = on;
-    if (!on) { this.clear(); this.emitLabels([]); }
+    if (!on) this.clear();
     else this.update();
     this.map?.triggerRepaint();
   }
@@ -145,6 +232,7 @@ export class ContoursLayer implements CustomLayerInterface {
     this.minor.linewidth = 1 * dpr;
     this.major.linewidth = 1.6 * dpr;
     this.uniforms.dpr.value = dpr;
+    this.uniforms.resolution.value.set(canvas.width, canvas.height);
     // Доля расстояния до камеры, равная PULL_PX пикселям экрана (вертикальный угол обзора MapLibre)
     const fov = mapTransform(this.map)?.fov ?? 36.87;
     this.uniforms.pull.value = (PULL_PX * 2 * Math.tan((fov * Math.PI) / 360)) / canvas.clientHeight;
@@ -199,7 +287,6 @@ export class ContoursLayer implements CustomLayerInterface {
     if (this.tiles.size > KEEP) {
       for (const t of [...this.tiles.values()].sort((a, b) => a.used - b.used).slice(0, this.tiles.size - KEEP)) this.drop(t.key);
     }
-    this.emitLabels(want);
   }
 
   /**
@@ -213,20 +300,6 @@ export class ContoursLayer implements CustomLayerInterface {
     const list = [...want.filter((k) => this.tiles.has(k) && !kept.some((o) => overlaps(k, o))), ...kept];
     this.drawn = list;
     return list;
-  }
-
-  /** Подписи нарисованных тайлов кадра — наружу (слой символов MapLibre), только если набор поменялся. */
-  private emitLabels(want: string[]) {
-    const drawn = this.drawList(want);
-    const sig = this.enabled ? drawn.join(',') : '';
-    if (sig === this.labelsSig) return;
-    this.labelsSig = sig;
-    const out: { lon: number; lat: number; ele: number; angle: number }[] = [];
-    if (this.enabled) for (const k of drawn) {
-      const l = this.tiles.get(k)!.labels;
-      for (let i = 0; i + 3 < l.length; i += 4) out.push({ lon: l[i], lat: l[i + 1], ele: l[i + 2], angle: l[i + 3] });
-    }
-    this.onLabels?.(out);
   }
 
   private async load(key: string) {
@@ -245,10 +318,12 @@ export class ContoursLayer implements CustomLayerInterface {
         line.frustumCulled = false;
         group.add(line);
       }
+      const labels = labelMesh(res.labels, this.uniforms);
+      if (labels) group.add(labels);
       const n = 2 ** z, m = res.metre;
       const model = new THREE.Matrix4().makeTranslation(x / n, y / n, 0).scale(new THREE.Vector3(m, -m, m));
       this.drop(key);
-      this.tiles.set(key, { key, model, group, used: performance.now(), labels: res.labels });
+      this.tiles.set(key, { key, model, group, used: performance.now() });
       this.map?.triggerRepaint();
     } finally {
       this.loading.delete(key);
@@ -259,7 +334,11 @@ export class ContoursLayer implements CustomLayerInterface {
   private drop(key: string) {
     const t = this.tiles.get(key);
     if (!t) return;
-    for (const o of t.group.children) (o as LineSegments2).geometry.dispose();
+    for (const o of t.group.children) {
+      const mesh = o as THREE.Mesh;
+      mesh.geometry.dispose();
+      if (mesh.userData.own) { const mat = mesh.material as THREE.ShaderMaterial; mat.uniforms.map.value.dispose(); mat.dispose(); }
+    }
     this.tiles.delete(key);
   }
 

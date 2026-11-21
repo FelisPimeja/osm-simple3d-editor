@@ -9,7 +9,8 @@ import { demHeights, DEM_SIZE } from '../view/dem-tiles';
  */
 export interface ContourJob { id: number; z: number; x: number; y: number; minor: number; major: number }
 /**
- * labels — по 4 числа на подпись: долгота, широта, отметка, поворот текста (градусы по часовой от востока).
+ * labels — по 4 числа на подпись: x, y (локальные метры тайла), отметка, направление линии (градусы, против часовой от
+ * востока в локальных осях).
  * majorMask — по 4 числа на отрезок утолщённых: точка подписи (локальные метры, z — отметка) и радиус маски в
  * экранных пикселях (0 — отрезок не у подписи): линия под подписью отбрасывается шейдером.
  */
@@ -117,8 +118,6 @@ self.onmessage = async (ev: MessageEvent<ContourJob>) => {
     const metre = 1 / (40075016.68557849 * Math.cos((lat * Math.PI) / 180));
     const k = 1 / n / EXTENT / metre;
     const out = { minor: [] as number[], major: [] as number[], mask: [] as number[] }, labels: number[] = [];
-    const lon = (px: number) => ((x + px / EXTENT) / n) * 360 - 180;
-    const latOf = (py: number) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + py / EXTENT)) / n))) * 180) / Math.PI;
     for (const [eleStr, list] of Object.entries(lines)) {
       const ele = Number(eleStr), isMajor = ele % major === 0, seg = isMajor ? out.major : out.minor;
       for (const raw of list) {
@@ -131,7 +130,7 @@ self.onmessage = async (ev: MessageEvent<ContourJob>) => {
             const lab = owner[j] >= 0 ? marks[owner[j]] : undefined;
             out.mask.push(lab ? lab[0] * k : 0, lab ? -lab[1] * k : 0, ele, lab ? r : 0);
           }
-          for (const [px, py, ang] of marks) labels.push(lon(px), latOf(py), ele, ang);
+          for (const [px, py, ang] of marks) labels.push(px * k, -py * k, ele, -ang);
           continue;
         }
         for (let i = 0; i + 3 < l.length; i += 2) {

@@ -61,8 +61,6 @@ const broadCrown = (detail: number) => {
   return g.applyMatrix4(Z_UP).scale(1, 1, 0.5).translate(0, 0, 0.5);
 };
 const BROAD_GEO = broadCrown(1);
-/** Дальний план: 20 граней вместо 80. */
-const BROAD_FAR_GEO = broadCrown(0);
 
 /** Хвойная крона — три яруса конусов от z = 0 до z = 1; донья не нужны — снизу (pitch ≤ 85°) их не видно. */
 const NEEDLE_GEO = (() => {
@@ -72,8 +70,86 @@ const NEEDLE_GEO = (() => {
   g.computeVertexNormals();
   return g;
 })();
-/** Дальний план: один конус на всю крону. */
-const NEEDLE_FAR_GEO = new THREE.ConeGeometry(0.85, 1, 6, 1, true).applyMatrix4(Z_UP).translate(0, 0, 0.5);
+
+/**
+ * Дальний план — плоские билборды: квадрат на дерево, всегда повёрнутый к камере вокруг вертикали (не ложится при
+ * наклоне камеры). Картинка кроны со светом нарисована заранее (серая — цвет даёт инстанс или материал), прозрачное
+ * отсекается alpha-тестом. Габарит — как у модели кроны: x в [-1, 1], z в [0, 1].
+ */
+const BILLBOARD_GEO = (() => {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute([-1, 0, 0, 1, 0, 0, 1, 0, 1, -1, 0, 1], 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+  g.setIndex([0, 1, 2, 0, 2, 3]);
+  return g;
+})();
+
+/** Атлас: слева лиственная крона, справа хвойная (оттенки серого, свет сверху слева). */
+const BILLBOARD_TEXTURE = (() => {
+  const W = 128, c = document.createElement('canvas');
+  c.width = W * 2; c.height = W;
+  const ctx = c.getContext('2d')!;
+  // Лиственная: несколько перекрывающихся «шаров» — неровный силуэт, тень снизу справа
+  const blobs: [number, number, number][] = [[0.5, 0.42, 0.3], [0.3, 0.55, 0.22], [0.7, 0.55, 0.22], [0.42, 0.75, 0.2], [0.62, 0.76, 0.2], [0.5, 0.62, 0.3]];
+  for (const [x, y, r] of blobs) {
+    const g = ctx.createRadialGradient((x - r * 0.35) * W, (1 - y - r * 0.1) * W, r * W * 0.1, x * W, (1 - y) * W, r * W);
+    g.addColorStop(0, '#ffffff'); g.addColorStop(0.7, '#d4d4d4'); g.addColorStop(1, '#a8a8a8');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x * W, (1 - y) * W, r * W, 0, Math.PI * 2); ctx.fill();
+  }
+  // Хвойная: три яруса-треугольника, левая грань светлее
+  const tiers: [number, number, number][] = [[1, 0, 0.5], [0.78, 0.28, 0.45], [0.55, 0.55, 0.45]];
+  for (const [r, z, h] of tiers) {
+    const cx = W * 1.5, base = (1 - z) * W, top = (1 - z - h) * W, half = r * W / 2;
+    ctx.fillStyle = '#f6f6f6';
+    ctx.beginPath(); ctx.moveTo(cx - half, base); ctx.lineTo(cx, top); ctx.lineTo(cx, base); ctx.fill();
+    ctx.fillStyle = '#c4c4c4';
+    ctx.beginPath(); ctx.moveTo(cx, base); ctx.lineTo(cx, top); ctx.lineTo(cx + half, base); ctx.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  return t;
+})();
+
+const BILLBOARD_VERTEX = `
+uniform vec3 eye;
+varying vec2 vUv;
+varying vec3 vTint;
+void main() {
+  vUv = uv;
+  vec3 center = (instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+  float sx = length(instanceMatrix[0].xyz), sz = length(instanceMatrix[2].xyz);
+  vec2 to = eye.xy - center.xy;
+  vec2 right = normalize(vec2(-to.y, to.x) + vec2(1e-6, 0.0));
+  vec3 p = center + vec3(right * position.x * sx, position.z * sz);
+  vTint = vec3(1.0);
+  #ifdef USE_INSTANCING_COLOR
+  vTint = instanceColor;
+  #endif
+  gl_Position = projectionMatrix * vec4(p, 1.0);
+}`;
+const BILLBOARD_FRAGMENT = `
+uniform sampler2D map;
+uniform vec3 colour;
+uniform float atlasX;
+varying vec2 vUv;
+varying vec3 vTint;
+void main() {
+  vec4 t = texture2D(map, vec2(atlasX + vUv.x * 0.5, vUv.y));
+  if (t.a < 0.5) discard;
+  // Яркость — как у объёмных крон под светом сцены (рассеянный + солнце)
+  gl_FragColor = vec4(min(t.rgb * colour * vTint * 1.5, vec3(1.0)), 1.0);
+  #include <colorspace_fragment>
+}`;
+/** Материал билбордов тайла (eye — своё у каждого тайла: локальные координаты). atlasX — 0 лиственные, 0.5 хвойные. */
+function billboardMaterial(atlasX: number, colour: THREE.Color) {
+  return new THREE.ShaderMaterial({
+    uniforms: { map: { value: BILLBOARD_TEXTURE }, eye: { value: new THREE.Vector3() }, colour: { value: colour }, atlasX: { value: atlasX } },
+    vertexShader: BILLBOARD_VERTEX, fragmentShader: BILLBOARD_FRAGMENT,
+  });
+}
 
 const COLOURS = { trunk: new THREE.Color('#7a5c43'), broad: new THREE.Color('#79a356'), needle: new THREE.Color('#3f7650') };
 /** «Убрать цвета»: деревья на 25 % бледнее (смешаны с белым), но не белые. */
@@ -154,6 +230,12 @@ export class TreeGroup {
   private readonly broadSeeds: Float32Array;
   private readonly lat: number;
   private readonly near: THREE.InstancedMesh[] = [];
+  /** Материалы билбордов тайла: в каждом кадре — положение камеры в локальных координатах. */
+  private readonly billboards: THREE.ShaderMaterial[] = [];
+  /** Билборд → меш подробных крон с теми же инстансами (клик — по объёмной кроне). */
+  private readonly nearOf = new Map<THREE.InstancedMesh, THREE.InstancedMesh>();
+  private readonly inv = new THREE.Matrix4();
+  private readonly eye = new THREE.Vector4();
   private readonly far: THREE.InstancedMesh[] = [];
   /** Углы и центр тайла (локальные метры) — по ним выбирается детализация. */
   private readonly probes: THREE.Vector3[];
@@ -243,8 +325,10 @@ export class TreeGroup {
       }
     }
     // Дальний план — те же матрицы и цвета (общие буферы), другие модели
-    const farOf = (mesh: THREE.InstancedMesh, geo: THREE.BufferGeometry) => {
-      const f = new THREE.InstancedMesh(geo, mesh.material, mesh.count);
+    const farOf = (mesh: THREE.InstancedMesh, material: THREE.ShaderMaterial) => {
+      const f = new THREE.InstancedMesh(BILLBOARD_GEO, material, mesh.count);
+      this.billboards.push(material);
+      this.nearOf.set(f, mesh);
       f.instanceMatrix = mesh.instanceMatrix;
       f.instanceColor = mesh.instanceColor;
       return f;
@@ -255,7 +339,7 @@ export class TreeGroup {
     this.broad = broad;
     this.recolour();
     this.near.push(broad, needle);
-    this.far.push(farOf(broad, BROAD_FAR_GEO), farOf(needle, NEEDLE_FAR_GEO));
+    this.far.push(farOf(broad, billboardMaterial(0, WHITE)), farOf(needle, billboardMaterial(0.5, NEEDLE_MATERIAL.color)));
     this.pointByCrown.set(broad, broadKeys);
     this.pointByCrown.set(needle, needleKeys);
     this.pointByCrown.set(this.far[0], broadKeys);
@@ -328,6 +412,11 @@ export class TreeGroup {
     if (left === all || right === all || below === all || above === all || behind === all) return false;
     this.setFar(far);
     this.woodTrunks.visible = trunks;
+    if (far) {
+      // Глаз: точка, которая проецируется в (0, 0, ·, 0)
+      this.eye.set(0, 0, 1, 0).applyMatrix4(this.inv.copy(pm).invert());
+      for (const m of this.billboards) (m.uniforms.eye.value as THREE.Vector3).set(this.eye.x / this.eye.w, this.eye.y / this.eye.w, this.eye.z / this.eye.w);
+    }
     return true;
   }
 
@@ -346,8 +435,9 @@ export class TreeGroup {
     const ray = new THREE.Raycaster(near, far.sub(near).normalize());
     this.scene.updateMatrixWorld(true);
     let best: { key: string; depth: number; point: THREE.Vector3 } | undefined;
-    for (const mesh of [this.trunks, ...this.near, ...this.far]) {
-      if (!mesh.visible || !mesh.count) continue;
+    for (const shown of [this.trunks, ...this.near, ...this.far]) {
+      if (!shown.visible || !shown.count) continue;
+      const mesh = this.nearOf.get(shown) ?? shown;
       const keys = mesh === this.trunks ? this.pointByTrunk : this.pointByCrown.get(mesh)!;
       for (const hit of ray.intersectObject(mesh, false)) {
         const key = keys[hit.instanceId ?? -1];
@@ -401,6 +491,7 @@ export class TreeGroup {
     this.woodTrunks.dispose();
     for (const mesh of this.near) mesh.dispose();
     for (const mesh of this.far) mesh.dispose();
+    for (const m of this.billboards) m.dispose();
     this.scene.clear();
   }
 }

@@ -1,6 +1,7 @@
 /**
  * Автоматические отчёты об ошибках отправки: сервер отклонил пакет (или он не прошёл нашу проверку перед
- * отправкой) — заводим issue на GitHub с ответом сервера и osmChange. Без имени пользователя и токенов.
+ * отправкой) — заводим issue на GitHub с ответом сервера и osmChange. С ником участника OSM (если вошёл) — чтобы
+ * сообщить ему об исправлении; токенов в отчёте нет.
  *
  * Токен — fine-grained PAT только с правом Issues: write на один репозиторий (VITE_REPORT_TOKEN, секрет Actions).
  * Он попадает в собранный JS: злоупотребят — отзываем и переходим на прокси (Cloudflare Worker).
@@ -35,6 +36,8 @@ export interface UploadFailure {
   /** Адрес API (какой сервер). */
   api: string;
   changeset?: number;
+  /** Ник участника OSM и ссылка на профиль (если вошёл). */
+  user?: { name: string; url: string };
 }
 
 async function hash(s: string): Promise<string> {
@@ -73,6 +76,7 @@ export async function reportUploadFailure(f: UploadFailure): Promise<'sent' | 's
       '',
       `- Build: ${BUILD}`,
       `- API: ${f.api}`,
+      `- User: ${f.user ? `[${f.user.name.replace(/[[\]`]/g, '')}](${f.user.url})` : 'not logged in'}`,
       f.changeset ? `- Changeset (left empty): ${f.changeset}` : '',
       `- UI language: ${lang}`,
       `- Browser: ${navigator.userAgent}`,

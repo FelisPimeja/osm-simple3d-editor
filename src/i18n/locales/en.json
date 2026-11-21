@@ -1627,7 +1627,6 @@
   "Отправляем отчёт разработчику…": "Sending a report to the developer…",
   "Отчёт с этими правками отправлен разработчику.": "A report with these edits was sent to the developer.",
   "Отправлять отчёты об ошибках отправки": "Send reports about upload errors",
-  "Если сервер отклонит отправку правок, редактор сам заведёт issue на GitHub с ответом сервера и отправляемыми изменениями (без имени пользователя), чтобы найти и исправить причину": "If the server rejects an upload, the editor files a GitHub issue with the server's response and the changes being uploaded (without your user name), so the cause can be found and fixed",
   "Объекты с тегом 3dmr=* — готовые модели из репозитория 3dmr.eu вместо собственной геометрии": "Objects tagged 3dmr=* — ready-made models from the 3dmr.eu repository instead of the generated geometry",
   "3dmr.eu не ответил.": "3dmr.eu did not respond.",
   "{r} (последняя)": "{r} (latest)",
@@ -1682,5 +1681,6 @@
   "Отмывка рельефа": "Hillshade",
   "Тени рельефа по данным Mapterhorn поверх подложки": "Terrain shading from Mapterhorn data over the basemap",
   "Горизонтали": "Contour lines",
-  "Линии равных высот по данным Mapterhorn: шаг зависит от масштаба, каждая пятая — толще и с подписью": "Lines of equal elevation from Mapterhorn data: the interval depends on the zoom, every fifth one is thicker and labelled"
+  "Линии равных высот по данным Mapterhorn: шаг зависит от масштаба, каждая пятая — толще и с подписью": "Lines of equal elevation from Mapterhorn data: the interval depends on the zoom, every fifth one is thicker and labelled",
+  "Если сервер отклонит отправку правок, редактор сам заведёт issue на GitHub с ответом сервера и отправляемыми изменениями и вашим ником OSM, чтобы найти и исправить причину и сообщить вам об исправлении": "If the server rejects an upload, the editor files a GitHub issue with the server's response and the changes being uploaded and your OSM user name, so the cause can be found and fixed and you can be told about the fix"
 }

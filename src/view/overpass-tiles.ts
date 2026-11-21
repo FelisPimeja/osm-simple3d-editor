@@ -2,7 +2,7 @@ import { ground } from '../render/ground';
 import type { Map as MlMap } from 'maplibre-gl';
 import { server, SERVERS } from '../osm/servers';
 import { fetchOverpassTile, overpassFree } from '../osm/overpass';
-import { ApiError, completeRelations, fetchMapSplit, type Bbox, type OsmElement } from '../osm/api';
+import { ApiError, completeRelations, fetchMapSplit, fetchRelationFull, type Bbox, type OsmElement } from '../osm/api';
 import { centroid, incompleteBuildingRelations, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type IndoorFeature, type MemberWay, type Polygon } from '../osm/model';
 import { RequestPool } from '../osm/request-pool';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
@@ -10,7 +10,7 @@ import { GRID_ZOOM } from '../tiles/tile-features';
 import { TileStore, type TileVia } from './tile-store';
 import { timed, timedAsync } from '../perf';
 import { josmLayer } from '../osm/josm';
-import { incompleteWoodRelations, NO_TREES, parseTrees, type TreeData, type TreePoint, type TreeRow, type WoodArea } from '../osm/trees';
+import { incompleteWoodRelations, NO_TREES, parseTrees, WOOD_REL_MAX_MEMBERS, type TreeData, type TreePoint, type TreeRow, type WoodArea } from '../osm/trees';
 import { scatterTreesAsync, TreeGroup } from '../render/trees';
 import { TREE_STRIDE, TreeField } from '../render/tree-scatter';
 import { parseBarriers, type BarrierWay } from '../osm/barriers';
@@ -253,6 +253,14 @@ export class OverpassTiles {
       for (const r of e.trees.rows) if (r.nodes) rows.set(r.key, r);
       for (const w of e.trees.woods) if (w.nodes || w.members) woods.set(w.key, w);
     }
+    // Лес-мультиполигон догружается в одном тайле, а рисуется во всех, которые задевает: тот тайл может быть
+    // уже вне вида — берём его леса, если они попадают в показанные тайлы (иначе лес виден, но не выделяется)
+    const shown = this.wantedWoodKeys();
+    for (const e of this.cache.values()) {
+      if (e.state !== 'ready' || !e.trees) continue;
+      for (const w of e.trees.woods) if ((w.nodes || w.members) && !woods.has(w.key) && shown.has(w.key)) woods.set(w.key, w);
+    }
+    for (const w of this.extraWoods.values()) if (w !== 'loading' && w.members && !woods.has(w.key) && shown.has(w.key)) woods.set(w.key, w);
     return { rows: [...rows.values()], woods: [...woods.values()] };
   }
 
@@ -489,6 +497,7 @@ export class OverpassTiles {
     this.networkWanted = new Set(near);
     this.wanted = this.mode === 'off' ? [] : [...new Set([...near, ...this.cachedVisibleTiles()])];
     const wanted = new Set(this.wanted);
+    this.fetchMissingWoods();
 
     // И показанные, и ещё собирающиеся (их сборку removeGroup отменит)
     for (const key of new Set([...this.layer.groupKeys(), ...this.hiddenOutlines.keys()])) {
@@ -545,8 +554,8 @@ export class OverpassTiles {
 
   private isStale(e: Extract<Entry, { state: 'ready' }>): boolean {
     const now = Date.now();
-    // Тайл из кеша старого формата (без полос дорог и водотоков для леса) — перекачать
-    const old = now - e.fetchedAt > MAX_AGE_MS || (this.roadsWanted && !e.roads && !e.partial) || (!!e.trees && !e.trees.clear);
+    // Тайл из кеша старого формата (без полос дорог и водотоков для леса, без списка чужих лесов) — перекачать
+    const old = now - e.fetchedAt > MAX_AGE_MS || (this.roadsWanted && !e.roads && !e.partial) || (!!e.trees && (!e.trees.clear || !e.trees.woodRels));
     return !e.refreshing && old && now >= (e.refreshAfter ?? 0);
   }
 
@@ -664,10 +673,12 @@ export class OverpassTiles {
       try { elements = await completeRelations(elements, incompleteIndoorRelations, ep.url, abort.signal, key); }
       catch (err) { if (abort.signal.aborted) throw err; console.warn('[tiles] indoor: догрузка не удалась', err); }
       // Леса-мультиполигоны на границе тайла (только небольшие и ещё не собранные): без них просто меньше деревьев
+      const woodRels = incompleteWoodRelations(new Set(), Infinity, WOOD_REL_MAX_MEMBERS)(elements);
       try { elements = await completeRelations(elements, incompleteWoodRelations(this.knownWoods()), ep.url, abort.signal, key); }
       catch (err) { if (abort.signal.aborted) throw err; console.warn('[tiles] леса: догрузка не удалась', err); }
       const { features, groups, indoor } = timed('тайлы: разбор ответа API', () => parseBuildings(elements), (r) => `${key}, ${r.features.length} зданий`);
       const trees = timed('тайлы: разбор деревьев', () => parseTrees(elements), (r) => `${key}, ${r.points.length} деревьев, ${r.woods.length} лесов`);
+      trees.woodRels = woodRels.filter((id) => !trees.woods.some((w) => w.key === `relation/${id}`));
       // Без дорог в запросе — undefined, а не []: при включении галок тайл перекачается (isStale)
       const roads = via === 'overpass' && !withRoads ? undefined : timed('тайлы: дороги', () => parseRoads(elements), (r) => `${key}, ${r.length} путей`);
       const passages = parsePassages(elements);
@@ -880,6 +891,7 @@ export class OverpassTiles {
 
   private tileReady(key: string) {
     this.revision++;
+    this.fetchMissingWoods();
     const e = this.cache.get(key);
     if (e?.state === 'ready') this.indexGroups(e.groups);
     // Показ и перепроверка соседей (части у контуров — десятки мс на плотном тайле) — по очереди в бюджете кадров
@@ -893,7 +905,35 @@ export class OverpassTiles {
   private knownWoods(): Set<string> {
     const out = new Set<string>();
     for (const e of this.cache.values()) if (e.state === 'ready') for (const w of e.trees?.woods ?? []) out.add(w.key);
+    for (const [k, w] of this.extraWoods) if (w !== 'loading') out.add(k);
     return out;
+  }
+
+  /**
+   * Леса-мультиполигоны, догруженные отдельно: показанный тайл их задевает (woodRels), а тайл, где их собрали,
+   * уже вытеснен из кеша или не загружался в этой сессии.
+   */
+  private readonly extraWoods = new Map<string, WoodArea | 'loading'>();
+
+  private fetchMissingWoods() {
+    const have = new Set<string>();
+    for (const e of this.cache.values()) if (e.state === 'ready') for (const w of e.trees?.woods ?? []) have.add(w.key);
+    for (const k of this.wanted) {
+      const e = this.cache.get(k);
+      if (e?.state !== 'ready' || e.partial) continue;
+      for (const id of e.trees?.woodRels ?? []) {
+        const key = `relation/${id}`;
+        if (have.has(key) || this.extraWoods.has(key)) continue;
+        this.extraWoods.set(key, 'loading');
+        void fetchRelationFull(id, undefined, undefined, `${k} wood`).then((els) => {
+          const wood = parseTrees(els).woods.find((w) => w.key === key);
+          if (!wood) return;
+          this.extraWoods.set(key, wood);
+          for (const t of this.wanted) this.showTrees(t);
+          this.onChange();
+        }, (err) => { console.warn('[tiles] лес: догрузка не удалась', key, err); setTimeout(() => this.extraWoods.delete(key), 30_000); });
+      }
+    }
   }
 
   private readonly woodBoxes = new WeakMap<WoodArea, Bbox>();
@@ -901,7 +941,8 @@ export class OverpassTiles {
   /** Леса загруженных тайлов (без повторов), задевающие bbox. */
   private woodsIn([w, s, e, n]: Bbox): WoodArea[] {
     const out = new Map<string, WoodArea>();
-    for (const t of this.cache.values()) {
+    const extra = [...this.extraWoods.values()].filter((w): w is WoodArea => w !== 'loading');
+    for (const t of [...this.cache.values(), { state: 'ready' as const, trees: { woods: extra } }]) {
       if (t.state !== 'ready') continue;
       for (const wood of t.trees?.woods ?? []) {
         if (out.has(wood.key)) continue;
@@ -1073,10 +1114,23 @@ export class OverpassTiles {
   }
 
   private evict() {
+    let keep: Set<string> | undefined;
     for (const [key, e] of this.cache) {
       if (this.cache.size <= CACHE_SIZE) break;
-      if (e.state === 'ready' && !this.wanted.includes(key)) this.cache.delete(key);
+      if (e.state !== 'ready' || this.wanted.includes(key)) continue;
+      // Тайл, где собран мультиполигон леса, который виден в показанных тайлах, не вытесняем: другие тайлы его
+      // не догружают (knownWoods), и лес пропал бы со всех
+      keep ??= this.wantedWoodKeys();
+      if (e.trees?.woods.some((w) => keep!.has(w.key) && !this.wanted.some((k) => { const t = this.cache.get(k); return t?.state === 'ready' && !!t.trees?.woods.some((x) => x.key === w.key); }))) continue;
+      this.cache.delete(key);
     }
+  }
+
+  /** Ключи лесов, задевающих показанные тайлы (из всего кеша). */
+  private wantedWoodKeys(): Set<string> {
+    const out = new Set<string>();
+    for (const k of this.wanted) for (const w of this.woodsIn(tileBbox(k))) out.add(w.key);
+    return out;
   }
 
   /** Видимый кеш на любом масштабе: ближайшие к камере тайлы без сетевых запросов. */

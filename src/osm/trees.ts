@@ -26,7 +26,11 @@ function lifeDates(tags: Record<string, string>): LifeDates | undefined {
 }
 /** Полоса без деревьев леса вдоль дороги, рельсов или водотока: ось и полуширина полосы с отступом, м. */
 export interface Clearance { line: LonLat[]; r: number }
-export interface TreeData { points: TreePoint[]; rows: TreeRow[]; woods: WoodArea[]; clear?: Clearance[] }
+export interface TreeData {
+  points: TreePoint[]; rows: TreeRow[]; woods: WoodArea[]; clear?: Clearance[];
+  /** Леса-мультиполигоны, задевающие тайл, но собранные не в нём (их пути — за границей): догружаются по id, если ни один тайл их не держит. */
+  woodRels?: number[];
+}
 
 export const NO_TREES: TreeData = { points: [], rows: [], woods: [] };
 
@@ -195,11 +199,14 @@ export function parseTrees(elements: OsmElement[]): TreeData {
   return { points, rows, woods, clear };
 }
 
+/** Больше путей — огромный массив, целиком не догружаем. */
+export const WOOD_REL_MAX_MEMBERS = 300;
+
 /**
  * id мультиполигонов-лесов, у которых в выборке не хватает путей: не больше limit и только не слишком большие
  * (огромные лесные массивы целиком не нужны) и ещё не собранные в других тайлах (known).
  */
-export function incompleteWoodRelations(known: Set<string>, limit = 5, maxMembers = 300) {
+export function incompleteWoodRelations(known: Set<string>, limit = 5, maxMembers = WOOD_REL_MAX_MEMBERS) {
   return (elements: OsmElement[]): number[] => {
     const ways = new Set(elements.filter((e) => e.type === 'way').map((e) => e.id));
     return elements

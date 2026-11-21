@@ -1703,5 +1703,13 @@
   "Скопировано окон: {n}. Ctrl+V — вставить: окно едет за курсором по стенам, клик ставит его.|Скопировано окон: {n}. Ctrl+V — вставить: окна едут за курсором по стенам, клик ставит их.": "{n} window copied. Ctrl+V to paste: the window follows the cursor along the walls, click to place it.|{n} windows copied. Ctrl+V to paste: the windows follow the cursor along the walls, click to place them.",
   "Вставка окна: наведите на стену — окно встанет на этаже под курсором. Клик — поставить, Esc — отменить.|Вставка окон ({n}): группа едет по стенам за курсором. Клик — поставить, Esc — отменить.": "Paste window: point at a wall; the window goes on the level under the cursor. Click to place, Esc to cancel.|Paste windows ({n}): the group follows the cursor along the walls. Click to place, Esc to cancel.",
   "Наведите окно на стену здания.": "Point the window at a wall of the building.",
-  "Вставлено окон: {n}. Отменить — Ctrl+Z.|Вставлено окон: {n}. Отменить — Ctrl+Z.": "{n} window pasted. Undo: Ctrl+Z.|{n} windows pasted. Undo: Ctrl+Z."
+  "Вставлено окон: {n}. Отменить — Ctrl+Z.|Вставлено окон: {n}. Отменить — Ctrl+Z.": "{n} window pasted. Undo: Ctrl+Z.|{n} windows pasted. Undo: Ctrl+Z.",
+  "Окно: ширина {w} м, высота {h} м, подоконник {b} м. Клик — применить, Esc — отмена.": "Window: width {w} m, height {h} m, sill {b} m. Click to apply, Esc to cancel.",
+  "Высота окна: ведите курсор вверх или вниз. Клик — применить, Esc — отмена.": "Window height: move the cursor up or down. Click to apply, Esc to cancel.",
+  "Подоконник: ведите курсор вверх или вниз (верх окна стоит). Клик — применить, Esc — отмена.": "Sill: move the cursor up or down (the top of the window stays). Click to apply, Esc to cancel.",
+  "Ширина окна: ведите курсор вдоль стены (симметрично от узла). Клик — применить, Esc — отмена.": "Window width: move the cursor along the wall (symmetric around the node). Click to apply, Esc to cancel.",
+  "Размеры окна node/{id} изменены. Отменить — Ctrl+Z.": "Window node/{id} resized. Undo: Ctrl+Z.",
+  "Синие ручки: по бокам — ширина, снизу — подоконник, сверху — высота окна; клик по ручке — тянуть, клик — применить.": "Blue handles: the sides set the width, the bottom the sill, the top the window height; click a handle to drag it, click again to apply.",
+  "Перенести: M, затем клик по точке в середине окна — окно едет по стене вдоль и по высоте (этаж — по месту), клик — поставить, Esc — отмена.": "To move: M, then click the point in the middle of the window; the window follows the cursor along the wall and up or down (the level follows), click to place, Esc to cancel.",
+  "Окно на {key}: этаж {level}, подоконник {b} м. Клик — поставить, Esc — отмена.": "Window on {key}: level {level}, sill {b} m. Click to place, Esc to cancel."
 }

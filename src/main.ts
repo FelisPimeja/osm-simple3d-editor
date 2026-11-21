@@ -65,7 +65,7 @@ import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, t
 import { isWood, ringsFromMembers, rowFromWay, treeFromNode, woodFromRings, woodFromWay, type TreePoint, type TreeRow, type WoodArea, type WoodMember } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
-import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, levelGrid, windowSize, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, levelGrid, windowOutline, windowSize, type WindowHandle, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { Dem, DEM_ATTRIBUTION } from './view/dem';
@@ -2671,6 +2671,8 @@ map.on('click', (e) => {
       selectIndoor(gate ? gateFeature(live, gate) : barrierFeature(live), e.originalEvent.shiftKey); return;
     }
   }
+  // Ручка выбранного окна: клик — тянуть её
+  if (!toolActive() && !e.originalEvent.shiftKey && startWindowHandle([e.point.x, e.point.y])) return;
   // Вход на фасаде: клик — выбрать (перенос — только инструментом «Переместить»)
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.altKey) {
     const id = overpassLayer.pickEntrance([e.point.x, e.point.y]);
@@ -8614,7 +8616,13 @@ function selectedEntrances(): number[] { return selectedEntrance === undefined ?
 /** Куда встанет переносимый вход: сторона edge кольца ring полигона poly объекта key, точка at. */
 interface EntranceTarget { key: string; poly: number; ring: number; edge: number; at: LonLat; place: Omit<EntrancePlace, 'id'> }
 /** Перенос входа вдоль стен: pick — после M ждём клика по точке входа (как «Переместить» у других объектов), move — едет за курсором. */
-let entranceDrag: { id: number; phase: 'pick' | 'move'; target?: EntranceTarget } | undefined;
+let entranceDrag: {
+  id: number; phase: 'pick' | 'move'; target?: EntranceTarget;
+  /** Окно: ручка размера (бок, низ, верх) и место окна в начале — тянется ручка, а не узел. */
+  handle?: WindowHandle; start?: EntrancePlace;
+  /** Новые теги окна (размеры, а при переносе — этаж и подоконник). */
+  windowTags?: Record<string, string>;
+} | undefined;
 
 function entranceTags(id: number): Record<string, string> | undefined {
   for (const g of liveFeatures()) { const e = g.entrances?.find((x) => x.id === id) ?? g.windows?.find((x) => x.id === id); if (e) return e.tags; }
@@ -8712,7 +8720,7 @@ function renderWindow(id: number) {
   infoEl.innerHTML = (many ? `<h2 class="obj-head"><span class="obj-title">${esc(title)}</span></h2>` : objectHeading(esc(title), `${server().web}/node/${id}`, `node/${id}`))
     + `<div class="tag-form">${rows}</div>`
     + (many ? `<p class="hint">${tr('Shift+клик — добавить или убрать окно. Del — удалить выбранные окна (узлы останутся вершинами контура).')}</p>`
-      : `<p class="hint">${tr('Перенести вдоль стен: клик по точке окна под подоконником (или M, затем клик по ней) — окно едет за курсором, клик — поставить, Esc — отмена.')} ${tr('Del — удалить окно (узел останется вершиной контура).')}</p>`)
+      : `<p class="hint">${tr('Синие ручки: по бокам — ширина, снизу — подоконник, сверху — высота окна; клик по ручке — тянуть, клик — применить.')} ${tr('Перенести: M, затем клик по точке в середине окна — окно едет по стене вдоль и по высоте (этаж — по месту), клик — поставить, Esc — отмена.')} ${tr('Del — удалить окно (узел останется вершиной контура).')}</p>`)
     + (many ? renderMultiOtherTags(all, rows).replace('data-other-key="@selection"', `data-other-key="${ENTRANCES_KEY}"`)
       : renderOtherTags(ENTRANCE_KEY_PREFIX + id, t, rows));
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-window-tag]')) {
@@ -8818,14 +8826,89 @@ function syncEntranceTool() {
   syncCursor();
 }
 
+/** Точка на плоскости стены окна под курсором: вдоль стены от узла и высота, м сцены. */
+function onWindowPlane(point: [number, number], e: EntrancePlace): { s: number; z: number } | undefined {
+  const ray = overpassLayer.focusRay(point);
+  const n = new THREE.Vector3(e.n[0], e.n[1], 0), o = new THREE.Vector3(e.p[0], e.p[1], 0);
+  const hit = ray?.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n, o), new THREE.Vector3());
+  return hit ? { s: (hit.x - e.p[0]) * e.t[0] + (hit.y - e.p[1]) * e.t[1], z: hit.z } : undefined;
+}
+
+const r2 = (v: number) => String(Math.round(v * 100) / 100);
+
 function moveEntrance(point: [number, number]) {
   const d = entranceDrag;
   if (!d || d.phase !== 'move') return;
-  d.target = entranceTargetAt(point);
-  // Окно едет вдоль стены на своей высоте и со своими размерами
-  const cur = overpassLayer.focusEntrance(d.id);
-  if (d.target && cur?.window) d.target.place = { ...d.target.place, z: cur.z, width: cur.width, window: cur.window };
+  const tags = session.get(`node/${d.id}`)?.tags ?? entranceTags(d.id) ?? {};
+  // Ручка окна: ширина — симметрично от узла, верх — высота проёма, низ — подоконник (верх стоит)
+  if (d.handle && d.start?.window) {
+    const e = d.start, q = onWindowPlane(point, e);
+    if (!q) return;
+    const floor = e.window!.floor ?? e.z, h0 = e.window!.height, top = e.z + h0;
+    let width = e.width ?? 1, height = h0, sill = e.z;
+    if (d.handle === 'left' || d.handle === 'right') width = Math.max(0.2, Math.round(Math.abs(q.s) * 2 * 100) / 100);
+    else if (d.handle === 'top') height = Math.max(0.2, Math.round((q.z - e.z) * 100) / 100);
+    else { sill = Math.min(top - 0.2, Math.max(floor, Math.round(q.z * 100) / 100)); height = top - sill; }
+    d.windowTags = { ...tags, 'window:width': r2(width), 'window:height': r2(height), 'window:breast': r2(sill - floor) };
+    overpassLayer.previewEntrance({ id: d.id, place: { ...e, z: sill, width, window: { ...e.window!, height, outline: windowOutline(tags, width, height) } } });
+    toolHint(tr('Окно: ширина {w} м, высота {h} м, подоконник {b} м. Клик — применить, Esc — отмена.', { w: r2(width), h: r2(height), b: r2(sill - floor) }));
+    return;
+  }
+  // Окно: плоскость и размеры — от места в начале переноса (focusEntrance уже отдаёт превью)
+  if (!d.start) d.start = overpassLayer.focusEntrance(d.id);
+  const cur = d.start;
+  d.target = cur?.window ? windowTargetAt(point, cur) : entranceTargetAt(point);
+  if (d.target && cur?.window) {
+    // Окно едет в плоскости стены по двум осям: вдоль стены и по высоте; этаж — по высоте на этой части
+    const pl = { ...d.target.place, id: d.id } as EntrancePlace, q = onWindowPlane(point, pl);
+    const f = entity(d.target.key) as Feature3D | undefined;
+    let z = cur.z, floor = cur.window.floor ?? cur.z;
+    if (q && f) {
+      const { base, levelH, minLevel } = levelGrid(f.tags);
+      const sill = q.z - cur.window.height / 2;
+      const level = Math.max(minLevel, Math.floor((sill - base) / levelH + 1e-6) + minLevel);
+      floor = base + (level - minLevel) * levelH;
+      z = Math.max(floor, Math.round(sill * 100) / 100);
+      d.windowTags = { ...tags, level: String(level), 'window:breast': r2(z - floor) };
+      toolHint(tr('Окно на {key}: этаж {level}, подоконник {b} м. Клик — поставить, Esc — отмена.', { key: d.target.key, level, b: r2(z - floor) }));
+    }
+    d.target.place = { ...d.target.place, z, width: cur.width, window: { ...cur.window, floor } };
+  }
   overpassLayer.previewEntrance(d.target ? { id: d.id, place: d.target.place } : undefined);
+}
+
+/**
+ * Куда встанет переносимое окно: сначала — на плоскости его же стены (луч через сквозной проём попал бы в дальнюю
+ * стену изнутри), мимо неё — стена под курсором, как у входа.
+ */
+function windowTargetAt(point: [number, number], cur: EntrancePlace): EntranceTarget | undefined {
+  const q = onWindowPlane(point, cur);
+  if (q && focus) {
+    const at: [number, number] = [cur.p[0] + cur.t[0] * q.s, cur.p[1] + cur.t[1] * q.s];
+    // Стена на этой высоте: у ярусов с общим контуром (тонкая плита-«крыша» над частью) — та, что её покрывает
+    const z = q.z - (cur.window?.height ?? 0) / 2 + 0.05;
+    const shown = focus.members.filter((k) => !focusHidden.has(k));
+    const covering = shown.filter((k) => { const f = entity(k) as Feature3D | undefined, h = f && computeHeights(f.tags); return !!h && z >= h.min - 0.01 && z < h.wallTop; });
+    // Без прижатия к середине стороны: узел окна — сам вершина, соседняя сторона кончается на нём
+    const t = entranceTargetNear(at, covering.length ? covering : shown, true, false);
+    // Та же плоскость (нормаль та же, точка на стороне) — остаёмся на ней
+    if (t && t.place.n[0] * cur.n[0] + t.place.n[1] * cur.n[1] > 0.99 && Math.hypot(t.place.p[0] - at[0], t.place.p[1] - at[1]) < 0.05) return t;
+  }
+  return entranceTargetAt(point);
+}
+
+/** Ручка выбранного окна под курсором — потянуть её (клик — применить, Esc — отмена). */
+function startWindowHandle(point: [number, number]): boolean {
+  if (!focus || shownLevel || selectedEntrance === undefined || entranceExtra.length) return false;
+  const handle = overpassLayer.pickWindowHandle(point), start = overpassLayer.focusEntrance(selectedEntrance);
+  if (!handle || !start?.window) return false;
+  moveTool.stop(); shapeTool.stop(); pushTool.stop();
+  entranceDrag = { id: selectedEntrance, phase: 'move', handle, start };
+  syncEntranceTool();
+  setStatus(handle === 'top' ? tr('Высота окна: ведите курсор вверх или вниз. Клик — применить, Esc — отмена.')
+    : handle === 'bottom' ? tr('Подоконник: ведите курсор вверх или вниз (верх окна стоит). Клик — применить, Esc — отмена.')
+    : tr('Ширина окна: ведите курсор вдоль стены (симметрично от узла). Клик — применить, Esc — отмена.'));
+  return true;
 }
 
 /** Сторона контура под курсором (стена, а мимо стен — ближайшая к точке на земле не дальше 3 м) и точка на ней. */
@@ -8881,6 +8964,12 @@ function commitEntrance(point: [number, number]) {
     setStatus(tr('Ведите курсор по стене здания — вход едет за ним. Клик — поставить, Esc — отмена.'));
     return;
   }
+  if (d.handle) {
+    const next = d.windowTags;
+    cancelEntranceDrag();
+    if (next) setEntrancesTags([{ id: d.id, tags: next }]);
+    return setStatus(tr('Размеры окна node/{id} изменены. Отменить — Ctrl+Z.', { id: d.id }));
+  }
   if (!d.target) return setStatus(tr('Наведите курсор на стену здания.'), true);
   const edits = entranceMoveEdits(d.id, d.target);
   if (typeof edits === 'string') return setStatus(edits, true);
@@ -8891,6 +8980,13 @@ function commitEntrance(point: [number, number]) {
     try { doorEdits = normalizeSolidDoorEdits(syncDoorwayRooms(batchSolidDoorEdits([door], () => ({ at: d.target!.at })))); }
     catch (err) { return setStatus((err as Error).message, true); }
     for (const e of doorEdits) indoorEdited.add(e.key);
+  }
+  // Окно: этаж и подоконник по новой высоте — тем же шагом истории
+  if (d.windowTags) {
+    const key = `node/${d.id}`;
+    if (!session.has(key)) session.track({ key, version: 0, tags: { ...(entranceTags(d.id) ?? {}) } });
+    if (focus && buildingIndoorFor(key)) indoorEdited.add(key);
+    edits.push({ key, tags: d.windowTags });
   }
   cancelEntranceDrag();
   session.editMany([...doorEdits.filter((e) => !edits.some((x) => x.key === e.key)), ...edits]);

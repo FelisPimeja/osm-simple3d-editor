@@ -8,6 +8,8 @@ import { DOOR_GEO, DOOR_MATERIAL, DOOR_SELECTED_MATERIAL, EDGE_MATERIAL, parseCo
 const SOLID = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 const SEE = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.8, depthWrite: false });
 const MONO = new THREE.Color('#ffffff');
+/** Насколько бледнеет живая изгородь в монохроме (как деревья, PALE в trees.ts). */
+const HEDGE_PALE = 0.25;
 /** Подсветка выбранного прохода — полупрозрачная плоскость проёма. */
 const OPENING = new THREE.MeshBasicMaterial({ color: 0x97beff, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false });
 /** Выделенное — как у зданий. */
@@ -173,9 +175,11 @@ export class BarriersLayer {
       const attr = m.geometry.getAttribute('color') as THREE.BufferAttribute, out = attr.array as Float32Array, src = this.colours[i], { way, gate } = this.tris[i];
       for (let t = 0; t < way.length; t++) {
         const sel = gate[t] >= 0 ? this.selectedGates.has(this.gates[gate[t]].gate.id) : this.selectedIds.has(this.ways[way[t]].id);
-        const c = sel ? HIGHLIGHT : this.monochrome ? MONO : undefined;
+        // Живая изгородь в монохроме — как деревья: свой цвет, чуть бледнее (PALE к белому)
+        const hedge = !sel && this.monochrome && gate[t] < 0 && this.ways[way[t]].tags.barrier === 'hedge';
+        const c = sel ? HIGHLIGHT : this.monochrome && !hedge ? MONO : undefined;
         for (let k = t * 9; k < t * 9 + 9; k += 3) {
-          if (c) { out[k] = c.r; out[k + 1] = c.g; out[k + 2] = c.b; } else { out[k] = src[k]; out[k + 1] = src[k + 1]; out[k + 2] = src[k + 2]; }
+          if (hedge) { for (let j = 0; j < 3; j++) out[k + j] = src[k + j] + (1 - src[k + j]) * HEDGE_PALE; } else if (c) { out[k] = c.r; out[k + 1] = c.g; out[k + 2] = c.b; } else { out[k] = src[k]; out[k + 1] = src[k + 1]; out[k + 2] = src[k + 2]; }
         }
       }
       attr.needsUpdate = true;

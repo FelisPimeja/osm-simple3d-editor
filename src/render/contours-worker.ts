@@ -20,6 +20,40 @@ const EXTENT = 4096;
 /** Допуск упрощения ломаных, единицы тайла: пиксель тайла высот (изолинии идут вершиной на каждый пиксель). */
 const SIMPLIFY = EXTENT / DEM_SIZE;
 
+/**
+ * Ломаная, обрезанная по квадрату тайла [0, EXTENT]: куски внутри с концами ровно на краю. Изолинии считаются с
+ * запасом за край — без обрезки соседние тайлы рисовали один и тот же кусок дважды (нахлёст), а упрощённый каждым
+ * по-своему он расходился на стыке. Обрезка до упрощения: концы на границе у обоих тайлов — одна и та же точка.
+ */
+function clipToTile(l: number[]): number[][] {
+  const out: number[][] = [];
+  let cur: number[] = [];
+  const inside = (x: number, y: number) => x >= 0 && x <= EXTENT && y >= 0 && y <= EXTENT;
+  for (let i = 0; i + 3 < l.length; i += 2) {
+    const x0 = l[i], y0 = l[i + 1], x1 = l[i + 2], y1 = l[i + 3];
+    // Лян — Барски: доля отрезка внутри квадрата
+    let t0 = 0, t1 = 1;
+    const dx = x1 - x0, dy = y1 - y0;
+    const edge = (p: number, q: number) => {
+      if (p === 0) return q >= 0;
+      const r = q / p;
+      if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+      return true;
+    };
+    if (!(edge(-dx, x0) && edge(dx, EXTENT - x0) && edge(-dy, y0) && edge(dy, EXTENT - y0))) {
+      if (cur.length >= 4) out.push(cur);
+      cur = [];
+      continue;
+    }
+    const ax = x0 + dx * t0, ay = y0 + dy * t0, bx = x0 + dx * t1, by = y0 + dy * t1;
+    if (!cur.length || t0 > 0) { if (cur.length >= 4) out.push(cur); cur = [ax, ay]; }
+    cur.push(bx, by);
+    if (t1 < 1 || !inside(x1, y1)) { if (cur.length >= 4) out.push(cur); cur = []; }
+  }
+  if (cur.length >= 4) out.push(cur);
+  return out;
+}
+
 /** Дуглас — Пекер для ломаной [x0, y0, x1, y1, …]: вершины, отклоняющиеся меньше tol, выбрасываются. */
 function simplify(l: number[], tol: number): number[] {
   const n = l.length / 2;
@@ -112,7 +146,16 @@ self.onmessage = async (ev: MessageEvent<ContourJob>) => {
     }
     const combined = mlcontour.HeightTile.combineNeighbors(await Promise.all(near));
     if (!combined) { self.postMessage({ id, minor: new Float32Array(0), major: new Float32Array(0), majorMask: new Float32Array(0), metre: 1, labels: new Float64Array(0) }); return; }
-    const lines = mlcontour.generateIsolines(minor, combined.materialize(2).averagePixelCentersToGrid().materialize(1), EXTENT, 1);
+    // Сглаживание высот (среднее по окну) до изолиний: шум лидара на кромке обрыва давал крошечные петли-шпильки —
+    // сбоку они выглядят как разрыв линии со сдвигом и нахлёстом. Подробные зумы (лидар) — окно 5×5, иначе 3×3
+    const r = z >= 15 ? 2 : 1;
+    const base = combined.materialize(r + 2);
+    const smooth = new mlcontour.HeightTile(base.width, base.height, (px, py) => {
+      let sum = 0, cnt = 0;
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) { const v = base.get(px + dx, py + dy); if (Number.isFinite(v)) { sum += v; cnt++; } }
+      return cnt ? sum / cnt : base.get(px, py);
+    });
+    const lines = mlcontour.generateIsolines(minor, smooth.materialize(2).averagePixelCentersToGrid().materialize(1), EXTENT, 1);
     // Метр в единицах Меркатора у центра тайла (как MercatorCoordinate.meterInMercatorCoordinateUnits)
     const lat = Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / n))) * (180 / Math.PI);
     const metre = 1 / (40075016.68557849 * Math.cos((lat * Math.PI) / 180));
@@ -120,8 +163,7 @@ self.onmessage = async (ev: MessageEvent<ContourJob>) => {
     const out = { minor: [] as number[], major: [] as number[], mask: [] as number[] }, labels: number[] = [];
     for (const [eleStr, list] of Object.entries(lines)) {
       const ele = Number(eleStr), isMajor = ele % major === 0, seg = isMajor ? out.major : out.minor;
-      for (const raw of list) {
-        const l = simplify(raw, SIMPLIFY);
+      for (const l of list.flatMap((raw) => clipToTile(raw).map((piece) => simplify(piece, SIMPLIFY)))) {
         // Утолщённые — с подписями: разрыв в самой линии, подпись — точно в нём
         if (isMajor) {
           const [segs, owner, marks] = labelled(l), r = labelRadius(ele);

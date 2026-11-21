@@ -85,6 +85,12 @@ const tagWidth = (tags?: Record<string, string>) => {
   const w = looseLength(tags?.width ?? tags?.['door:width']);
   return w >= 0.5 && w <= 4 ? w : entranceOf(tags) === 'garage' ? GARAGE_WIDTH : tags?.barrier && !tags.door && INDOOR_GATES.has(tags.barrier) ? gateWidth(tags) : undefined;
 };
+/** Створки двери: door:wings (1–8), у ворот gate:type=double — две; иначе одна. */
+export const doorWings = (tags?: Record<string, string>) => {
+  const n = parseInt(tags?.['door:wings'] ?? '', 10);
+  if (n >= 1 && n <= 8) return n;
+  return tags?.['gate:type'] === 'double' ? 2 : 1;
+};
 /** Высота проёма двери из height (1,5–6 м), иначе DOOR_HEIGHT. */
 const doorHeight = (tags?: Record<string, string>) => {
   const h = looseLength(tags?.height ?? tags?.['door:height']);
@@ -6381,7 +6387,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           // Так же и вход у земли под поднятой видимой частью (узел её контура над входом нижней): при изоляции его нет
           const h = computeHeights(it.tags), z = place?.z ?? floorZ;
           const outside = !!partsHidden && z !== undefined && (z < min - 0.3 || z >= min + h.top - h.min);
-          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: doorHeight(tags.get(id)) }, rank });
+          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: doorHeight(tags.get(id)), wings: doorWings(tags.get(id)) }, rank });
         }));
       }
       // Вход на стене, но не узел контура (дверь indoor-стены на фасаде): на ближайшей стороне, по своей точке
@@ -6408,7 +6414,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const floorZ = !onMap && Number.isFinite(lv) ? this.entranceFloors.get(lv) : undefined;
         const place = { p: near.p, t: near.t, n: nrm, z: floorZ ?? entranceZ(e.tags, it.tags) };
         const h = computeHeights(it.tags), outside = !!partsHidden && (place.z < min - 0.3 || place.z >= min + h.top - h.min);
-        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: doorHeight(e.tags) }, rank });
+        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: doorHeight(e.tags), wings: doorWings(e.tags) }, rank });
       }
     }
     for (const w of windowPlaces) if (!best.has(w.id)) best.set(w.id, { place: w, rank: Infinity });
@@ -6450,6 +6456,11 @@ export class BuildingsLayer implements CustomLayerInterface {
       const z0 = e.z, z1 = e.z + (e.height ?? ENTRANCE_HEIGHT);
       out.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z1, a[0], a[1], z0, b[0], b[1], z1, a[0], a[1], z1);
       lines.push(a[0], a[1], z0, a[0], a[1], z1, a[0], a[1], z1, b[0], b[1], z1, b[0], b[1], z1, b[0], b[1], z0);
+      // Створки: линии стыка между ними (door:wings, двустворчатые ворота)
+      for (let k = 1; k < (e.wings ?? 1); k++) {
+        const f = k / (e.wings ?? 1), x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
+        lines.push(x, y, z0, x, y, z1);
+      }
     }
     for (const [pos, mat] of [[plain, ENTRANCE_MATERIAL], [selected, ENTRANCE_SELECTED_MATERIAL]] as const) {
       if (!pos.length) continue;
@@ -8873,7 +8884,7 @@ function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
 }
 /** Вход на стене: точка у основания (м сцены), направление стены t и наружная нормаль n (единичные), низ z. */
-export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Высота проёма входа (height), м. */ height?: number; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number; outline?: Pt[]; /** Пол этажа окна, м сцены (подоконник — от него). */ floor?: number } }
+export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Высота проёма входа (height), м. */ height?: number; /** Створки входа (door:wings). */ wings?: number; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number; outline?: Pt[]; /** Пол этажа окна, м сцены (подоконник — от него). */ floor?: number } }
 
 /**
  * Контур проёма окна по window:shape и window:top:shape (выпуклый, против часовой): вдоль стены от середины и вверх

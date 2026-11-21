@@ -66,7 +66,7 @@ import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, t
 import { isWood, ringsFromMembers, rowFromWay, treeFromNode, woodFromRings, woodFromWay, type TreePoint, type TreeRow, type WoodArea, type WoodMember } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
-import { BuildingsLayer, ENTRANCE_HEIGHT, ENTRANCE_WIDTH, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entranceZ, entrancePlace, levelGrid, windowOutline, windowSize, type WindowHandle, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, doorWings, ENTRANCE_HEIGHT, ENTRANCE_WIDTH, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entranceZ, entrancePlace, levelGrid, windowOutline, windowSize, type WindowHandle, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { Dem, DEM_ATTRIBUTION } from './view/dem';
@@ -8679,7 +8679,7 @@ function selectEntrance(id: number, add = false) {
 /** Ключи секции «Другие теги» у входов: один вход — префикс и id узла, несколько выбранных — общий ключ. */
 const ENTRANCE_KEY_PREFIX = '@entrance:', ENTRANCES_KEY = '@entrances';
 /** Поля карточки входа: тип входа (варианты схемы iD) и номер. */
-const ENTRANCE_FORM_TAGS = ['entrance', 'ref'] as const;
+const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'door:wings'] as const;
 
 /** Поля карточки окна: вид, размеры проёма и подоконник (м), этаж. */
 const WINDOW_FORM_TAGS = ['window', 'window:shape', 'window:top:shape', 'window:material', 'window:width', 'window:height', 'window:breast', 'level'] as const;
@@ -8705,9 +8705,9 @@ function renderEntrance(id: number) {
   const rows = ENTRANCE_FORM_TAGS.map((k) => {
     const changed = ids.some((x) => session.isChanged(`node/${x}`, k));
     const value = common(k);
-    const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : '—';
-    const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : tr('Номер'))}</span>`;
-    const input = k === 'entrance' ? renderValueCombo(idOptions('entrance') ?? [], `data-entrance-tag="${k}"`, value ?? '', hint, undefined, k)
+    const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : k === 'door:wings' ? String(doorWings(t)) : '—';
+    const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : k === 'door:wings' ? tr('Створок') : tr('Номер'))}</span>`;
+    const input = k === 'entrance' || k === 'door:wings' ? renderValueCombo(k === 'entrance' ? idOptions('entrance') ?? [] : ['1', '2'], `data-entrance-tag="${k}"`, value ?? '', hint, undefined, k)
       : `<input type="text" data-entrance-tag="${k}" value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}${input}</label>`;
   }).join('');

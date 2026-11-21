@@ -17219,6 +17219,10 @@ window.addEventListener('blur', closeCtxMenu);
 // Наведение на строку — подсветка части в сцене (как у списка выделенного); скрытые не подсвечиваем
 // Объём — бледно-голубым, как выделение, плюс пунктир закрытых рёбер
 outlinerEl.addEventListener('mouseover', (e) => {
+  // Окно или вход — подсветить проём в модели
+  const door = (e.target as HTMLElement).closest<HTMLElement>('li[data-entrance]');
+  overpassLayer.setEntranceHover(door ? Number(door.dataset.entrance) : undefined);
+  if (door) { overpassLayer.setHover(undefined); return; }
   const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-key]');
   const key = li?.dataset.key;
   if (key && !hiddenInFocus(key)) {
@@ -17228,6 +17232,7 @@ outlinerEl.addEventListener('mouseover', (e) => {
 outlinerEl.addEventListener('mouseleave', outlinerUnhover);
 function outlinerUnhover() {
   overpassLayer.setHover(undefined);
+  overpassLayer.setEntranceHover(undefined);
 }
 
 /** Почему объект нельзя добавить в группу (undefined — можно). */

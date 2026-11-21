@@ -6240,6 +6240,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  /** Вход или окно под курсором в панели частей — подсвечен, как выбранный (без ручек и точки узла). */
+  private entranceHovered: number | undefined;
+  setEntranceHover(id: number | undefined) {
+    if (id === this.entranceHovered) return;
+    this.entranceHovered = id;
+    const g = this.groups.get(FOCUS_GROUP);
+    if (g) { this.applyEntrances(g); this.map?.triggerRepaint(); }
+  }
+
   previewEntrance(p: { id: number; place: Omit<EntrancePlace, 'id'> } | undefined) {
     this.entrancePreview = p;
     const g = this.groups.get(FOCUS_GROUP);
@@ -6436,7 +6445,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (onPlan(e)) continue;
       if (e.window) {
         // Окно: нишу рисует объём; выбранное — подсветка проёма чуть перед фасадом
-        if (!this.entrancesSelected.includes(e.id)) continue;
+        if (!this.entrancesSelected.includes(e.id) && e.id !== this.entranceHovered) continue;
         const w = (e.width ?? WINDOW_WIDTH) / 2, ox = e.p[0] + e.n[0] * 0.03, oy = e.p[1] + e.n[1] * 0.03;
         const o = e.window.outline;
         if (o) {
@@ -6450,7 +6459,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         lines.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z0, b[0], b[1], z1, b[0], b[1], z1, a[0], a[1], z1, a[0], a[1], z1, a[0], a[1], z0);
         continue;
       }
-      const out = this.entrancesSelected.includes(e.id) || lit.has(e.id) ? selected : plain;
+      const out = this.entrancesSelected.includes(e.id) || lit.has(e.id) || e.id === this.entranceHovered ? selected : plain;
       const w = (e.width ?? ENTRANCE_WIDTH) / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
       const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w];
       const z0 = e.z, z1 = e.z + (e.height ?? ENTRANCE_HEIGHT);

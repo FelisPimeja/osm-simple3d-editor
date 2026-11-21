@@ -8867,8 +8867,7 @@ export function windowOutline(w: Record<string, string>, width: number, height: 
 
 /** Размеры окна по тегам узла: подоконник от пола, высота и ширина проёма, м (window:* или от высоты этажа). */
 export function windowSize(w: Record<string, string>, tags: Record<string, string>): { breast: number; height: number; width: number } {
-  const levels = Number(tags['building:levels']);
-  const levelH = levels > 0 ? computeHeights(tags).wallTop / levels : LEVEL_HEIGHT;
+  const { levelH } = levelGrid(tags);
   const m = (k: string, d: number, zero = false) => { const v = parseFloat(w[k] ?? ''); return Number.isFinite(v) && (v > 0 || (zero && v === 0)) ? v : d; };
   // Подоконник 0 — окно от пола (французское, проём колокольни): это значение, а не «не задано»
   return { breast: m('window:breast', WINDOW_BREAST * levelH, true), height: m('window:height', m('height', WINDOW_HEIGHT * levelH)), width: m('window:width', m('width', WINDOW_WIDTH)) };
@@ -8885,8 +8884,19 @@ export function windowSize(w: Record<string, string>, tags: Record<string, strin
 export function entranceZ(door: Record<string, string>, tags: Record<string, string>): number {
   const level = parseFloat((door.level ?? '').split(';')[0]);
   if (!Number.isFinite(level) || level === 0) return 0;
-  const levels = Number(tags['building:levels']);
-  return level * (levels > 0 ? computeHeights(tags).wallTop / levels : LEVEL_HEIGHT);
+  const { base, levelH, minLevel } = levelGrid(tags);
+  return base + (level - minLevel) * levelH;
+}
+
+/**
+ * Этажи объекта по высоте: часть с building:min_level и min_height (верхний ярус) — её этажи от min_level делят
+ * её стены от min_height до верха; иначе building:levels — от земли, вместе с пропущенными min_level; без этажности — по 3 м.
+ */
+export function levelGrid(tags: Record<string, string>): { base: number; levelH: number; minLevel: number } {
+  const levels = Number(tags['building:levels']), minLevel = Number(tags['building:min_level']) || 0;
+  const h = computeHeights(tags);
+  if (minLevel > 0 && levels > minLevel && h.min > 0) return { base: h.min, levelH: (h.wallTop - h.min) / (levels - minLevel), minLevel };
+  return { base: 0, levelH: levels > 0 ? h.wallTop / levels : LEVEL_HEIGHT, minLevel: 0 };
 }
 
 export function entrancePlace(rings: Pt[][], r: number, i: number, z: number): Omit<EntrancePlace, 'id'> | undefined {
@@ -9463,8 +9473,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     timed('здание: ниши окон', () => {
       // Фильтр и здесь: в кеше тайлов признаки, собранные до правил (window=yes на входе — дверь со стеклом)
       const wins = new Map(f.windows!.filter((w) => isWallWindow(w.tags)).map((w) => [w.id, w.tags]));
-      const levels = Number(tags['building:levels']);
-      const levelH = levels > 0 ? computeHeights(tags).wallTop / levels : LEVEL_HEIGHT;
+      const { levelH } = levelGrid(tags);
       const places: RecessPlace[] = [];
       f.polygons.forEach((p) => {
         const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));

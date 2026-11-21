@@ -3898,7 +3898,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
     return;
   }
   // Перенос окна и его ручки: привязка, к которой прилипло окно
-  if (entranceDrag?.start?.window && entranceDrag.phase === 'move') {
+  if ((entranceDrag?.start?.window || entranceDrag?.handle) && entranceDrag.phase === 'move') {
     currentSnap = point ? entranceDrag.snap : undefined;
     snapEl.hidden = !currentSnap;
     if (currentSnap) {
@@ -8714,7 +8714,7 @@ function renderEntrance(id: number) {
   infoEl.innerHTML = (many ? `<h2 class="obj-head"><span class="obj-title">${esc(title)}</span></h2>` : objectHeading(`${esc(title)}${name}`, `${server().web}/node/${id}`, `node/${id}`))
     + `<div class="tag-form">${rows}</div>`
     + (many ? `<p class="hint">${tr('Shift+клик — добавить или убрать вход. Del — удалить выбранные входы (узлы останутся вершинами контура).')}</p>`
-      : `<p class="hint">${tr('Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.')} ${tr('Del — удалить вход (узел останется вершиной контура).')}</p>`)
+      : `<p class="hint">${tr('Синие ручки: по бокам — ширина (width), сверху — высота проёма (height); клик по ручке — тянуть, клик — применить.')} ${tr('Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.')} ${tr('Del — удалить вход (узел останется вершиной контура).')}</p>`)
     // Прочие теги — тем же редактором, что у частей и indoor-объектов (подстановки из пресетов iD)
     + (many ? renderMultiOtherTags(all, rows).replace('data-other-key="@selection"', `data-other-key="${ENTRANCES_KEY}"`)
       : renderOtherTags(ENTRANCE_KEY_PREFIX + id, t, rows));
@@ -8839,7 +8839,7 @@ function startEntranceDrag(phase: 'pick' | 'move' = 'move'): boolean {
 
 function cancelEntranceDrag() {
   if (!entranceDrag) return;
-  if (entranceDrag.start?.window) overpassLayer.setMoveGuide(undefined);
+  if (entranceDrag.start?.window || entranceDrag.handle) overpassLayer.setMoveGuide(undefined);
   entranceDrag = undefined;
   overpassLayer.previewEntrance(undefined);
   syncEntranceTool();
@@ -8926,6 +8926,21 @@ function moveEntrance(point: [number, number]) {
   if (!d || d.phase !== 'move') return;
   const tags = session.get(`node/${d.id}`)?.tags ?? entranceTags(d.id) ?? {};
   // Ручка окна: ширина — симметрично от узла, верх — высота проёма, низ — подоконник (верх стоит)
+  // Ручки входа: бока — width (симметрично от узла), верх — height; порог стоит
+  if (d.handle && d.start && !d.start.window) {
+    const e = d.start, q = windowDragPoint(point, e);
+    if (!q) return;
+    let width = e.width ?? ENTRANCE_WIDTH, height = e.height ?? ENTRANCE_HEIGHT;
+    if (d.handle === 'left' || d.handle === 'right') width = Math.max(0.5, Math.min(4, Math.round(Math.abs(q.s) * 2 * 100) / 100));
+    else if (d.handle === 'top') height = Math.max(1.5, Math.min(6, Math.round((q.z - e.z) * 100) / 100));
+    // Уже размеченные door:width / door:height — правим их, иначе общие width / height
+    const wk = tags.width === undefined && tags['door:width'] !== undefined ? 'door:width' : 'width';
+    const hk = tags.height === undefined && tags['door:height'] !== undefined ? 'door:height' : 'height';
+    d.windowTags = { ...tags, ...(d.handle === 'top' ? { [hk]: r2(height) } : { [wk]: r2(width) }) };
+    overpassLayer.previewEntrance({ id: d.id, place: { ...e, width, height } });
+    toolHint(tr('Вход: ширина {w} м, высота {h} м. Клик — применить, Esc — отмена.', { w: r2(width), h: r2(height) }));
+    return;
+  }
   if (d.handle && d.start?.window) {
     const e = d.start, q = windowDragPoint(point, e);
     if (!q) return;
@@ -8934,8 +8949,8 @@ function moveEntrance(point: [number, number]) {
     if (d.handle === 'left' || d.handle === 'right') width = Math.max(0.2, Math.round(Math.abs(q.s) * 2 * 100) / 100);
     else if (d.handle === 'top') height = Math.max(0.2, Math.round((q.z - e.z) * 100) / 100);
     else { sill = Math.min(top - 0.2, Math.max(floor, Math.round(q.z * 100) / 100)); height = top - sill; }
-    // Круглое окно: диаметр один — ширина и высота вместе (боковые и верхняя ручки — подоконник стоит, нижняя — верх стоит)
-    if ((tags['window:shape'] ?? '').trim().toLowerCase() === 'circle') {
+    // Круглое и квадратное окно: размер один — ширина и высота вместе (боковые и верхняя ручки — подоконник стоит, нижняя — верх стоит)
+    if (['circle', 'square'].includes((tags['window:shape'] ?? '').trim().toLowerCase())) {
       const dia = Math.max(0.2, d.handle === 'left' || d.handle === 'right' ? width : height);
       width = height = dia;
       if (d.handle === 'bottom') sill = top - dia;
@@ -9001,10 +9016,11 @@ function windowTargetAt(point: [number, number], cur: EntrancePlace): EntranceTa
 function startWindowHandle(point: [number, number]): boolean {
   if (!focus || shownLevel || selectedEntrance === undefined || entranceExtra.length) return false;
   const handle = overpassLayer.pickWindowHandle(point), start = overpassLayer.focusEntrance(selectedEntrance);
-  if (!handle || !start?.window) return false;
+  if (!handle || !start || (handle === 'bottom' && !start.window)) return false;
   moveTool.stop(); shapeTool.stop(); pushTool.stop();
   entranceDrag = { id: selectedEntrance, phase: 'move', handle, start };
   syncEntranceTool();
+  if (!start.window) { setStatus(handle === 'top' ? tr('Высота входа: ведите курсор вверх или вниз. Клик — применить, Esc — отмена.') : tr('Ширина входа: ведите курсор вдоль стены (симметрично от узла). Клик — применить, Esc — отмена.')); return true; }
   setStatus(handle === 'top' ? tr('Высота окна: ведите курсор вверх или вниз. Клик — применить, Esc — отмена.')
     : handle === 'bottom' ? tr('Подоконник: ведите курсор вверх или вниз (верх окна стоит). Клик — применить, Esc — отмена.')
     : tr('Ширина окна: ведите курсор вдоль стены (симметрично от узла). Клик — применить, Esc — отмена.'));
@@ -9068,7 +9084,7 @@ function commitEntrance(point: [number, number]) {
     const next = d.windowTags;
     cancelEntranceDrag();
     if (next) setEntrancesTags([{ id: d.id, tags: next }]);
-    return setStatus(tr('Размеры окна node/{id} изменены. Отменить — Ctrl+Z.', { id: d.id }));
+    return setStatus(d.start?.window ? tr('Размеры окна node/{id} изменены. Отменить — Ctrl+Z.', { id: d.id }) : tr('Размеры входа node/{id} изменены. Отменить — Ctrl+Z.', { id: d.id }));
   }
   if (!d.target) return setStatus(tr('Наведите курсор на стену здания.'), true);
   const edits = entranceMoveEdits(d.id, d.target);
@@ -15605,7 +15621,7 @@ function focusWindowIssues(g: BuildingGroup): Issue[] {
   }
   if (!windows.size) return [];
   const entrances: CheckOpening[] = overpassLayer.focusOpenings().filter((e) => !e.window)
-    .map((e) => ({ id: e.id, kind: 'entrance', p: e.p, t: e.t, n: e.n, z: e.z, width: e.width ?? ENTRANCE_WIDTH, height: ENTRANCE_HEIGHT }));
+    .map((e) => ({ id: e.id, kind: 'entrance', p: e.p, t: e.t, n: e.n, z: e.z, width: e.width ?? ENTRANCE_WIDTH, height: e.height ?? ENTRANCE_HEIGHT }));
   const TEXT: Record<WindowProblem, string> = {
     'window-off-wall': tr('Окно выходит за край стены.'),
     'window-roof': tr('Окно заходит в крышу: его верх выше верха стены.'),

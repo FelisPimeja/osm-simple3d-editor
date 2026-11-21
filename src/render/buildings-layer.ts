@@ -82,12 +82,12 @@ export const TOILET_DOOR_WIDTH = 0.8;
 export const GARAGE_WIDTH = 2.5;
 /** Ширина из тега width двери (м), если правдоподобна. */
 const tagWidth = (tags?: Record<string, string>) => {
-  const w = looseLength(tags?.width);
+  const w = looseLength(tags?.width ?? tags?.['door:width']);
   return w >= 0.5 && w <= 4 ? w : entranceOf(tags) === 'garage' ? GARAGE_WIDTH : tags?.barrier && !tags.door && INDOOR_GATES.has(tags.barrier) ? gateWidth(tags) : undefined;
 };
 /** Высота проёма двери из height (1,5–6 м), иначе DOOR_HEIGHT. */
 const doorHeight = (tags?: Record<string, string>) => {
-  const h = looseLength(tags?.height);
+  const h = looseLength(tags?.height ?? tags?.['door:height']);
   return h >= 1.5 && h <= 6 ? h : DOOR_HEIGHT;
 };
 /** Перемычка во всю толщину — только в просвете размером с дверь (до двустворчатой) в стене толщиной до 0,5 м:
@@ -6262,7 +6262,7 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Ручка выбранного окна под курсором: какая. */
   pickWindowHandle(point: [number, number]): WindowHandle | undefined {
     const e = this.entrancesSelected.length === 1 ? this.focusEntrance(this.entrancesSelected[0]) : undefined;
-    if (!e?.window) return;
+    if (!e) return;
     let best: WindowHandle | undefined, bestD = WINDOW_HANDLE_PX;
     for (const [k, v] of windowHandlePoints(e)) {
       const px = this.focusProject(v);
@@ -6287,7 +6287,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         new THREE.Vector3(lo.x * e.t[0] + lo.y * e.t[1], -(lo.x * e.n[0] + lo.y * e.n[1]), lo.z),
         new THREE.Vector3(dir.x * e.t[0] + dir.y * e.t[1], -(dir.x * e.n[0] + dir.y * e.n[1]), dir.z));
       const w = (e.width ?? ENTRANCE_WIDTH) / 2 + 0.15, depth = e.window ? WINDOW_DEPTH : Math.max(0, -ENTRANCE_OFFSET);
-      const box = new THREE.Box3(new THREE.Vector3(-w, -0.05, -0.15), new THREE.Vector3(w, depth + 0.05, (e.window?.height ?? ENTRANCE_HEIGHT) + 0.15));
+      const box = new THREE.Box3(new THREE.Vector3(-w, -0.05, -0.15), new THREE.Vector3(w, depth + 0.05, (e.window?.height ?? e.height ?? ENTRANCE_HEIGHT) + 0.15));
       if (!local.intersectBox(box, hit)) continue;
       const t = hit.distanceTo(local.origin);
       if (t < bestT) { best = e.id; bestT = t; }
@@ -6381,7 +6381,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           // Так же и вход у земли под поднятой видимой частью (узел её контура над входом нижней): при изоляции его нет
           const h = computeHeights(it.tags), z = place?.z ?? floorZ;
           const outside = !!partsHidden && z !== undefined && (z < min - 0.3 || z >= min + h.top - h.min);
-          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)) }, rank });
+          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: doorHeight(tags.get(id)) }, rank });
         }));
       }
       // Вход на стене, но не узел контура (дверь indoor-стены на фасаде): на ближайшей стороне, по своей точке
@@ -6408,7 +6408,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const floorZ = !onMap && Number.isFinite(lv) ? this.entranceFloors.get(lv) : undefined;
         const place = { p: near.p, t: near.t, n: nrm, z: floorZ ?? entranceZ(e.tags, it.tags) };
         const h = computeHeights(it.tags), outside = !!partsHidden && (place.z < min - 0.3 || place.z >= min + h.top - h.min);
-        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags) }, rank });
+        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: doorHeight(e.tags) }, rank });
       }
     }
     for (const w of windowPlaces) if (!best.has(w.id)) best.set(w.id, { place: w, rank: Infinity });
@@ -6447,7 +6447,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const out = this.entrancesSelected.includes(e.id) || lit.has(e.id) ? selected : plain;
       const w = (e.width ?? ENTRANCE_WIDTH) / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
       const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w];
-      const z0 = e.z, z1 = e.z + ENTRANCE_HEIGHT;
+      const z0 = e.z, z1 = e.z + (e.height ?? ENTRANCE_HEIGHT);
       out.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z1, a[0], a[1], z0, b[0], b[1], z1, a[0], a[1], z1);
       lines.push(a[0], a[1], z0, a[0], a[1], z1, a[0], a[1], z1, b[0], b[1], z1, b[0], b[1], z1, b[0], b[1], z0);
     }
@@ -6472,7 +6472,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       for (const o of [dot, ring]) { o.userData.entrancePoint = true; o.renderOrder = 5; o.frustumCulled = false; root.add(o); }
     }
     // Одно выбранное окно — ручки: по бокам (ширина), снизу (подоконник) и сверху (высота)
-    const win = this.entrancesSelected.length === 1 ? g.entrances.find((e) => e.id === this.entrancesSelected[0] && e.window) : undefined;
+    const win = this.entrancesSelected.length === 1 && g === this.groups.get(FOCUS_GROUP) ? g.entrances.find((e) => e.id === this.entrancesSelected[0] && !onPlan(e)) : undefined;
     if (win) for (const [, v] of windowHandlePoints(win)) {
       const h = new THREE.Mesh(WINDOW_HANDLE_GEO, WINDOW_HANDLE_MATERIAL);
       h.position.copy(v);
@@ -8873,7 +8873,7 @@ function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
 }
 /** Вход на стене: точка у основания (м сцены), направление стены t и наружная нормаль n (единичные), низ z. */
-export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number; outline?: Pt[]; /** Пол этажа окна, м сцены (подоконник — от него). */ floor?: number } }
+export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Высота проёма входа (height), м. */ height?: number; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number; outline?: Pt[]; /** Пол этажа окна, м сцены (подоконник — от него). */ floor?: number } }
 
 /**
  * Контур проёма окна по window:shape и window:top:shape (выпуклый, против часовой): вдоль стены от середины и вверх
@@ -8916,9 +8916,11 @@ const WINDOW_HANDLE_GEO = new THREE.SphereGeometry(0.09, 12, 8);
 const WINDOW_HANDLE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x2563eb, depthTest: false, depthWrite: false });
 /** Ручки окна: середины боков, низа (подоконник) и верха — чуть перед фасадом. */
 export function windowHandlePoints(e: EntrancePlace): [WindowHandle, THREE.Vector3][] {
-  const w = (e.width ?? WINDOW_WIDTH) / 2, h = e.window?.height ?? 1, ox = e.p[0] + e.n[0] * 0.05, oy = e.p[1] + e.n[1] * 0.05;
+  const w = (e.width ?? (e.window ? WINDOW_WIDTH : ENTRANCE_WIDTH)) / 2, h = e.window?.height ?? e.height ?? ENTRANCE_HEIGHT;
+  const ox = e.p[0] + e.n[0] * 0.05, oy = e.p[1] + e.n[1] * 0.05;
   const at = (s: number, z: number) => new THREE.Vector3(ox + e.t[0] * s, oy + e.t[1] * s, e.z + z);
-  return [['left', at(-w, h / 2)], ['right', at(w, h / 2)], ['bottom', at(0, 0)], ['top', at(0, h)]];
+  // У входа низ — порог (за его точку вход переносят), ручки там нет
+  return [['left', at(-w, h / 2)], ['right', at(w, h / 2)], ...(e.window ? [['bottom', at(0, 0)] as [WindowHandle, THREE.Vector3]] : []), ['top', at(0, h)]];
 }
 
 /** Размеры окна по тегам узла: подоконник от пола, высота и ширина проёма, м (window:* или от высоты этажа). */
@@ -9451,7 +9453,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
           const z = entranceZ(door, tags);
           if (!crosses(z)) return;
           const place = entrancePlace(rings, r, i, z);
-          if (place) places.push({ ...place, width: tagWidth(door) });
+          if (place) places.push({ ...place, width: tagWidth(door), height: doorHeight(door) });
         }));
       });
       // Дверь indoor-стены на фасаде (не вершина контура) — на ближайшей стене, как прямоугольник входа
@@ -9472,7 +9474,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
         const probe: Pt = [near.p[0] + n[0] * 0.2, near.p[1] + n[1] * 0.2];
         if (pointInLocalRing(probe, near.rings[0]) && !near.rings.slice(1).some((h) => pointInLocalRing(probe, h))) n = [-n[0], -n[1]];
         const z = entranceZ(door, tags);
-        if (crosses(z)) places.push({ p: near.p, t: near.t, n, z, width: tagWidth(door) });
+        if (crosses(z)) places.push({ p: near.p, t: near.t, n, z, width: tagWidth(door), height: doorHeight(door) });
       }
       doorPlaces.push(...places);
       const cut = recessEntrances(tri.walls, places, { width: ENTRANCE_WIDTH, height: ENTRANCE_HEIGHT, min: heights.min, top: heights.wallTop });

@@ -210,6 +210,27 @@ function seasonColour(out: THREE.Color, day: number, lat: number, seed: number):
   return out.copy(a.colour(r2)).lerp(b.colour(r2), t);
 }
 
+/** Круче этого уклона (тангенс, ≈ 50°) деревья леса не растут: отвесы и скальные стенки. */
+const CLIFF_SLOPE = Math.tan((50 * Math.PI) / 180);
+/** Шаг выборки уклона под деревом, м (по обе стороны). */
+const CLIFF_PROBE = 4;
+
+/** Без деревьев леса на отвесах (рельеф: уклон земли под деревом по четырём точкам вокруг). */
+function withoutCliffs(trees: Float64Array, unit: number): Float64Array {
+  const d = CLIFF_PROBE * unit;
+  const at = (mx: number, my: number) => ground.at(new MercatorCoordinate(mx, my, 0).toLngLat().toArray() as [number, number]);
+  const keep: number[] = [];
+  for (let o = 0; o < trees.length; o += TREE_STRIDE) {
+    if (trees[o + F.FLAGS] & WOOD_FLAG) {
+      const mx = trees[o + F.MX], my = trees[o + F.MY];
+      const gx = (at(mx + d, my) - at(mx - d, my)) / (2 * CLIFF_PROBE), gy = (at(mx, my + d) - at(mx, my - d)) / (2 * CLIFF_PROBE);
+      if (Math.hypot(gx, gy) > CLIFF_SLOPE) continue;
+    }
+    for (let k = 0; k < TREE_STRIDE; k++) keep.push(trees[o + k]);
+  }
+  return keep.length === trees.length ? trees : Float64Array.from(keep);
+}
+
 /**
  * Деревья одного тайла: стволы, лиственные и хвойные кроны — инстансированные меши (по draw call на каждый).
  * Для дальнего плана — те же инстансы с упрощёнными кронами.
@@ -250,7 +271,7 @@ export class TreeGroup {
 
   /** signature — подпись набора лесов и данных тайла: пересобираем, только если она поменялась. */
   /** sources — ключи рядов и лесов по полю SRC (см. TreeField): клик по их дереву выбирает ряд или лес. */
-  constructor(bbox: [number, number, number, number], trees: Float64Array, readonly signature: string, points: TreePoint[] = [], sources: string[] = []) {
+  constructor(bbox: [number, number, number, number], scattered: Float64Array, readonly signature: string, points: TreePoint[] = [], sources: string[] = []) {
     const [w, s, e, n] = bbox;
     const origin = MercatorCoordinate.fromLngLat({ lng: (w + e) / 2, lat: (s + n) / 2 }, 0);
     const unit = origin.meterInMercatorCoordinateUnits();
@@ -260,6 +281,7 @@ export class TreeGroup {
       return new THREE.Vector3((c.x - origin.x) / unit, -(c.y - origin.y) / unit, 0);
     };
     this.probes = [local(w, s), local(e, s), local(w, n), local(e, n), new THREE.Vector3()];
+    const trees = ground.on ? withoutCliffs(scattered, unit) : scattered;
 
     const total = trees.length / TREE_STRIDE;
     this.count = total;

@@ -545,7 +545,8 @@ export class OverpassTiles {
 
   private isStale(e: Extract<Entry, { state: 'ready' }>): boolean {
     const now = Date.now();
-    const old = now - e.fetchedAt > MAX_AGE_MS || (this.roadsWanted && !e.roads && !e.partial);
+    // Тайл из кеша старого формата (без полос дорог и водотоков для леса) — перекачать
+    const old = now - e.fetchedAt > MAX_AGE_MS || (this.roadsWanted && !e.roads && !e.partial) || (!!e.trees && !e.trees.clear);
     return !e.refreshing && old && now >= (e.refreshAfter ?? 0);
   }
 

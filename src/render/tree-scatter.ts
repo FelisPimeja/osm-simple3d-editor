@@ -147,6 +147,29 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
       }
     }
   }
+  // Полосы вдоль дорог, рельсов и водотоков: отрезки (Меркатор: ax, ay, bx, by, радиус) по ячейкам индекса
+  const clearIndex = new Map<number, number[]>();
+  const segs: number[] = [];
+  for (const c of own.clear ?? []) {
+    const pts = c.line.map(merc), r = c.r * meter;
+    for (let k = 1; k < pts.length; k++) {
+      const [ax, ay] = pts[k - 1], [bx, by] = pts[k];
+      if (Math.max(ax, bx) + r < x0 || Math.min(ax, bx) - r > x1 || Math.max(ay, by) + r < y0 || Math.min(ay, by) - r > y1) continue;
+      const id = segs.length;
+      segs.push(ax, ay, bx, by, r);
+      for (let i = Math.floor((Math.min(ax, bx) - r) / cell); i <= Math.floor((Math.max(ax, bx) + r) / cell); i++) {
+        for (let j = Math.floor((Math.min(ay, by) - r) / cell); j <= Math.floor((Math.max(ay, by) + r) / cell); j++) {
+          const kk = cellKey(i, j), list = clearIndex.get(kk);
+          if (list) list.push(id); else clearIndex.set(kk, [id]);
+        }
+      }
+    }
+  }
+  const inClearance = (x: number, y: number) => !!clearIndex.get(cellKey(Math.floor(x / cell), Math.floor(y / cell)))?.some((id) => {
+    const ax = segs[id], ay = segs[id + 1], ex = segs[id + 2] - ax, ey = segs[id + 3] - ay, l2 = ex * ex + ey * ey || 1e-30;
+    const u = Math.max(0, Math.min(1, ((x - ax) * ex + (y - ay) * ey) / l2));
+    return Math.hypot(ax + ex * u - x, ay + ey * u - y) < segs[id + 4];
+  });
   const inBuilding = (x: number, y: number) => !!index.get(cellKey(Math.floor(x / cell), Math.floor(y / cell)))?.some((r) => pointInRings(x, y, [r]));
 
   const taken = new Set<number>(); // ячейки, занятые перекрывающимся лесом
@@ -169,7 +192,7 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
           if (taken.has(id)) continue;
           const x = (i + 0.15 + 0.7 * hash(i, j, 1)) * step;
           const y = (j + 0.15 + 0.7 * hash(i, j, 2)) * step;
-          if (!inTile(x, y) || inBuilding(x, y)) continue;
+          if (!inTile(x, y) || inBuilding(x, y) || inClearance(x, y)) continue;
           taken.add(id);
           const r = hash(i, j, 3);
           const needle = isNeedle(wood.leaf, hash(i, j, 4), true);

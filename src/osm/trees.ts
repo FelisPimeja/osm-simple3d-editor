@@ -24,7 +24,9 @@ function lifeDates(tags: Record<string, string>): LifeDates | undefined {
   if (!tags.start_date && !tags.end_date) return;
   return { ...(tags.start_date ? { start_date: tags.start_date } : {}), ...(tags.end_date ? { end_date: tags.end_date } : {}) };
 }
-export interface TreeData { points: TreePoint[]; rows: TreeRow[]; woods: WoodArea[] }
+/** Полоса без деревьев леса вдоль дороги, рельсов или водотока: ось и полуширина полосы с отступом, м. */
+export interface Clearance { line: LonLat[]; r: number }
+export interface TreeData { points: TreePoint[]; rows: TreeRow[]; woods: WoodArea[]; clear?: Clearance[] }
 
 export const NO_TREES: TreeData = { points: [], rows: [], woods: [] };
 
@@ -97,6 +99,25 @@ export function isWood(tags?: Record<string, string>): boolean {
   return tags?.natural === 'wood' || tags?.landuse === 'forest';
 }
 
+/** Отступ деревьев леса от края дороги, рельсов, водотока, м. */
+const CLEAR_GAP = 3;
+const ROAD_HALF: Record<string, number> = {
+  motorway: 6, trunk: 5.5, primary: 4.5, secondary: 4, tertiary: 3.5, unclassified: 3, residential: 3, living_street: 2.5,
+  motorway_link: 3.5, trunk_link: 3.5, primary_link: 3, secondary_link: 3, tertiary_link: 3, service: 2, track: 1.5,
+  pedestrian: 2, footway: 0.8, path: 0.6, cycleway: 1, bridleway: 0.8, steps: 0.8,
+};
+const RAIL_HALF: Record<string, number> = { rail: 2.5, light_rail: 2, narrow_gauge: 1.5, tram: 1.5, subway: 2.5, preserved: 2 };
+const WATER_HALF: Record<string, number> = { river: 6, canal: 4, stream: 1, drain: 0.8, ditch: 0.6, brook: 0.8, tidal_channel: 3 };
+
+/** Полуширина полосы пути, м (по тегу width, иначе по виду); undefined — не мешает лесу (тоннель, не дорога). */
+function clearHalf(tags: Record<string, string>): number | undefined {
+  if (tags.tunnel && tags.tunnel !== 'no') return;
+  const half = tags.highway ? ROAD_HALF[tags.highway] : tags.railway ? RAIL_HALF[tags.railway] : tags.waterway ? WATER_HALF[tags.waterway] : undefined;
+  if (half === undefined) return;
+  const w = meters(tags.width, 200);
+  return (w ? w / 2 : half) + CLEAR_GAP;
+}
+
 /** Деревья, ряды и леса из ответа OSM API. Неполные мультиполигоны лесов пропускаются. */
 export function parseTrees(elements: OsmElement[]): TreeData {
   const nodes = new Map<number, OsmNode>();
@@ -125,7 +146,10 @@ export function parseTrees(elements: OsmElement[]): TreeData {
 
   const rows: TreeRow[] = [];
   const woods: WoodArea[] = [];
+  const clear: Clearance[] = [];
   for (const w of ways.values()) {
+    const half = w.tags && clearHalf(w.tags);
+    if (half) { const line = coords(w.nodes); if (line && line.length >= 2) clear.push({ line, r: half }); }
     if (w.tags?.natural === 'tree_row') {
       const line = coords(w.nodes);
       if (line && line.length >= 2) rows.push(rowFromWay(`way/${w.id}`, w.tags, w.nodes.slice(), line));
@@ -168,7 +192,7 @@ export function parseTrees(elements: OsmElement[]): TreeData {
     }
     woods.push(woodFromRings(`relation/${r.id}`, r.tags, polygons, members.length ? members : undefined));
   }
-  return { points, rows, woods };
+  return { points, rows, woods, clear };
 }
 
 /**

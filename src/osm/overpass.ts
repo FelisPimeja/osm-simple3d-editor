@@ -21,7 +21,7 @@ export const overpassFree = () => !active && Date.now() >= coolUntil;
 /**
  * Здания, части, помещения, точки этажей, деревья и леса в bbox — в том же виде, что /map (с версиями, узлы путей).
  * Отношения-леса — без членов: большие леса (сотни путей) догружает completeRelations, только небольшие.
- * roads — ещё дороги и рельсовые пути (для объёмных мостов и тоннелей; без галок не качаем — ответ заметно больше).
+ * Водотоки и рельсы — всегда (лес до них не доходит), roads — ещё дороги и рельсовые пути (для объёмных мостов и тоннелей; без галок не качаем — ответ заметно больше).
  */
 export async function fetchOverpassTile([w, s, e, n]: Bbox, signal: AbortSignal, roads = false): Promise<OsmElement[]> {
   const b = `${s},${w},${n},${e}`;
@@ -33,6 +33,7 @@ export async function fetchOverpassTile([w, s, e, n]: Bbox, signal: AbortSignal,
   way["indoor"](${b}); relation["indoor"](${b}); node["level"](${b}); node["repeat_on"](${b}); node["entrance"](${b}); node["window"](${b}); way["tunnel"="building_passage"](${b}); way["barrier"~"^(wall|city_wall|fence|hedge)$"](${b}); node["barrier"~"^(gate|entrance|wicket_gate|swing_gate|sliding_gate|lift_gate|kissing_gate|turnstile|full-height_turnstile|stile|chain|rope)$"](${b});
   node["natural"="tree"](${b}); way["natural"="tree_row"](${b});
   way["natural"="wood"](${b}); way["landuse"="forest"](${b});${roadSets}
+  way["waterway"~"^(river|canal|stream|drain|ditch|brook|tidal_channel)$"](${b}); way["railway"~"^(rail|light_rail|narrow_gauge|tram|subway|preserved)$"](${b});
 )->.a;
 .a out meta;
 .a >;

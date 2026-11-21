@@ -4,7 +4,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { MercatorCoordinate } from 'maplibre-gl';
 import type { LonLat } from '../osm/model';
 import type { TreeData, TreePoint } from '../osm/trees';
-import { CLUSTER, CLUSTER_FLAG, hash, NEEDLE_FLAG, scatterTrees, TREE_STRIDE, TreeField as F, WOOD_FLAG, WOOD_STEP_M, woodTree } from './tree-scatter';
+import { CLUSTER, CLUSTER_FLAG, hash, NEEDLE_FLAG, PATTERN_COUNT, scatterTrees, TREE_STRIDE, TreeField as F, WOOD_FLAG, WOOD_STEP_M, woodTree } from './tree-scatter';
 
 /** Дерево в 15 м ниже этого на экране (во всём тайле) — упрощённые модели, px. */
 const FAR_PX = 30;
@@ -75,43 +75,59 @@ const NEEDLE_GEO = (() => {
 /** Дальний план: один конус на всю крону. */
 const NEEDLE_FAR_GEO = new THREE.ConeGeometry(0.85, 1, 6, 1, true).applyMatrix4(Z_UP).translate(0, 0, 0.5);
 
+/** Дерево раскладки кластера: положение от центра кластера (м), размеры, поворот кроны, оттенок. */
+interface PatternTree { x: number; y: number; needle: boolean; height: number; crown: number; trunk: number; turn: number; seed: number }
 /**
- * Модель кластера леса: CLUSTER×CLUSTER деревьев, слитых в одну геометрию (центр — в 0, земля — z = 0). Одна запись
- * инстанса вместо девяти; у каждого дерева — свой оттенок в цвете вершин. Грани крон, смотрящие вниз, выкинуты:
- * под сомкнутым пологом их не видно.
+ * Раскладки кластеров (CLUSTER×CLUSTER деревьев): 0–2 лиственные, 3–5 хвойные, 6–11 смешанные. Свои положения и
+ * размеры у каждой; с поворотами на 90° соседние кластеры не складываются в повторяющийся узор.
  */
-function clusterGeo(needle: boolean, part: 'crown' | 'far' | 'trunk'): THREE.BufferGeometry {
-  const parts: THREE.BufferGeometry[] = [];
-  const half = (CLUSTER * WOOD_STEP_M) / 2;
+const PATTERNS: PatternTree[][] = Array.from({ length: PATTERN_COUNT }, (_, p) => {
+  const half = (CLUSTER * WOOD_STEP_M) / 2, out: PatternTree[] = [];
   for (let a = 0; a < CLUSTER; a++) for (let b = 0; b < CLUSTER; b++) {
-    const t = woodTree(needle, hash(a, b, 41), hash(a, b, 42), hash(a, b, 43));
-    const x = (a + t.dx) * WOOD_STEP_M - half, y = (b + t.dy) * WOOD_STEP_M - half;
-    const base = t.height * (needle ? 0.15 : 0.35);
-    const turn = new THREE.Matrix4().makeRotationZ(hash(a, b, 44) * Math.PI * 2);
+    const needle = p >= 3 && (p < 6 || hash(a, b, 100 + p) < 0.5);
+    const t = woodTree(needle, hash(a, b, 41 + p * 7), hash(a, b, 42 + p * 7), hash(a, b, 43 + p * 7));
+    out.push({ x: (a + t.dx) * WOOD_STEP_M - half, y: (b + t.dy) * WOOD_STEP_M - half, needle, height: t.height, crown: t.crown, trunk: t.trunk, turn: hash(a, b, 44 + p * 7) * Math.PI * 2, seed: hash(a, b, 45 + p * 7) });
+  }
+  // Смешанная — всегда с обеими породами
+  if (p >= 6 && out.every((t) => t.needle === out[0].needle)) {
+    const t = out[4], nt = woodTree(!t.needle, t.seed, 0, 0);
+    Object.assign(t, { needle: !t.needle, height: nt.height, crown: nt.crown, trunk: nt.trunk });
+  }
+  return out;
+});
+
+/**
+ * Геометрия части раскладки (лиственные или хвойные кроны, дальние кроны, стволы), центр кластера — в 0, земля —
+ * z = 0. Оттенок дерева — в цвете вершин; грани крон, смотрящие вниз, выкинуты (под пологом их не видно).
+ */
+function patternGeo(trees: PatternTree[], part: 'crown' | 'far' | 'trunk'): THREE.BufferGeometry | undefined {
+  if (!trees.length) return;
+  const parts: THREE.BufferGeometry[] = [];
+  for (const t of trees) {
+    const base = t.height * (t.needle ? 0.15 : 0.35);
     let g: THREE.BufferGeometry;
     if (part === 'trunk') {
-      g = TRUNK_GEO.clone().applyMatrix4(new THREE.Matrix4().makeScale(t.trunk, t.trunk, base + (t.height - base) * 0.3)).translate(x, y, 0);
+      g = TRUNK_GEO.clone().applyMatrix4(new THREE.Matrix4().makeScale(t.trunk, t.trunk, base + (t.height - base) * 0.3)).translate(t.x, t.y, 0);
     } else {
-      const src = needle ? (part === 'far' ? NEEDLE_FAR_GEO : NEEDLE_GEO) : (part === 'far' ? BROAD_FAR_GEO : BROAD_GEO);
-      g = src.index ? src.toNonIndexed() : src.clone();
-      g.applyMatrix4(turn).applyMatrix4(new THREE.Matrix4().makeScale(t.crown / 2, t.crown / 2, t.height - base)).translate(x, y, base);
-      const l = 0.9 + 0.2 * hash(a, b, 45), warm = 0.06 * (hash(a, b, 46) - 0.5);
-      const n = g.attributes.position.count, col = new Float32Array(n * 3);
-      for (let i = 0; i < n; i++) col.set([l * (1 + warm), l, l * (1 - warm)], i * 3);
-      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      const src = t.needle ? (part === 'far' ? NEEDLE_FAR_GEO : NEEDLE_GEO) : (part === 'far' ? BROAD_FAR_GEO : BROAD_GEO);
+      g = src.clone().applyMatrix4(new THREE.Matrix4().makeRotationZ(t.turn)).applyMatrix4(new THREE.Matrix4().makeScale(t.crown / 2, t.crown / 2, t.height - base)).translate(t.x, t.y, base);
     }
-    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'color') g.deleteAttribute(k);
-    parts.push(g.index ? g.toNonIndexed() : g);
+    g = g.index ? g.toNonIndexed() : g;
+    for (const k of Object.keys(g.attributes)) if (k !== 'position') g.deleteAttribute(k);
+    const l = 0.9 + 0.2 * t.seed, warm = 0.06 * (hash(Math.round(t.seed * 1e6), 7) - 0.5);
+    const n = g.attributes.position.count, col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) col.set([l * (1 + warm), l, l * (1 - warm)], i * 3);
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    parts.push(g);
   }
   const merged = mergeGeometries(parts)!;
   if (part === 'trunk') { merged.computeVertexNormals(); return merged; }
-  // Без граней, смотрящих вниз
   const pos = merged.attributes.position as THREE.BufferAttribute, col = merged.attributes.color as THREE.BufferAttribute;
   const keepP: number[] = [], keepC: number[] = [];
   const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3(), nrm = new THREE.Vector3();
   for (let i = 0; i < pos.count; i += 3) {
     va.fromBufferAttribute(pos, i); vb.fromBufferAttribute(pos, i + 1); vc.fromBufferAttribute(pos, i + 2);
-    nrm.crossVectors(vb.clone().sub(va), vc.clone().sub(va)).normalize();
+    nrm.crossVectors(vb.sub(va), vc.sub(va)).normalize();
     if (nrm.z < -0.5) continue;
     for (let k = 0; k < 3; k++) { keepP.push(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k)); keepC.push(col.getX(i + k), col.getY(i + k), col.getZ(i + k)); }
   }
@@ -121,10 +137,13 @@ function clusterGeo(needle: boolean, part: 'crown' | 'far' | 'trunk'): THREE.Buf
   out.computeVertexNormals();
   return out;
 }
-const CLUSTER_GEO = {
-  broad: clusterGeo(false, 'crown'), broadFar: clusterGeo(false, 'far'), needle: clusterGeo(true, 'crown'), needleFar: clusterGeo(true, 'far'),
-  broadTrunk: clusterGeo(false, 'trunk'), needleTrunk: clusterGeo(true, 'trunk'),
-};
+/** Части раскладок: [лиственные кроны, дальние, хвойные кроны, дальние, стволы] — пустые части не рисуются. */
+const PATTERN_GEO = PATTERNS.map((ts) => {
+  const broad = ts.filter((t) => !t.needle), needle = ts.filter((t) => t.needle);
+  return { broad: patternGeo(broad, 'crown'), broadFar: patternGeo(broad, 'far'), needle: patternGeo(needle, 'crown'), needleFar: patternGeo(needle, 'far'), trunk: patternGeo(ts, 'trunk')! };
+});
+/** Круче — кластер раскладывается на отдельные деревья на своих отметках (иначе кроны вытягиваются по склону). */
+const CLUSTER_MAX_SLOPE = Math.tan((12 * Math.PI) / 180);
 
 const COLOURS = { trunk: new THREE.Color('#7a5c43'), broad: new THREE.Color('#79a356'), needle: new THREE.Color('#3f7650') };
 /** «Убрать цвета»: деревья на 25 % бледнее (смешаны с белым), но не белые. */
@@ -207,8 +226,8 @@ export class TreeGroup {
   private readonly selectedInstances = new Map<string, { crown: THREE.InstancedMesh; crownIndex: number; trunkIndex?: number; x: number; y: number; z?: number }>();
   private selectedOverlay?: THREE.Group;
   private readonly broadSeeds: Float32Array;
-  private readonly clusterBroad: THREE.InstancedMesh;
-  private readonly clusterSeeds: Float32Array;
+  /** Меши лиственных крон (отдельные деревья и кластеры) и оттенки их инстансов — для сезона и бледности. */
+  private readonly broadSets: [THREE.InstancedMesh, Float32Array][];
   /** Стволы кластеров — как woodTrunks, только вблизи. */
   private readonly clusterTrunks: THREE.InstancedMesh[];
   private readonly lat: number;
@@ -227,7 +246,7 @@ export class TreeGroup {
 
   /** signature — подпись набора лесов и данных тайла: пересобираем, только если она поменялась. */
   /** sources — ключи рядов и лесов по полю SRC (см. TreeField): клик по их дереву выбирает ряд или лес. */
-  constructor(bbox: [number, number, number, number], trees: Float64Array, readonly signature: string, points: TreePoint[] = [], sources: string[] = []) {
+  constructor(bbox: [number, number, number, number], scattered: Float64Array, readonly signature: string, points: TreePoint[] = [], sources: string[] = []) {
     const [w, s, e, n] = bbox;
     const origin = MercatorCoordinate.fromLngLat({ lng: (w + e) / 2, lat: (s + n) / 2 }, 0);
     const unit = origin.meterInMercatorCoordinateUnits();
@@ -238,28 +257,51 @@ export class TreeGroup {
     };
     this.probes = [local(w, s), local(e, s), local(w, n), local(e, n), new THREE.Vector3()];
 
+    // Кластеры леса: отметка и уклон земли в центре; на крутом склоне — раскладка на отдельные деревья
+    const lonLatOf = (mx: number, my: number) => new MercatorCoordinate(mx, my, 0).toLngLat().toArray() as [number, number];
+    const slopes = new Map<number, [number, number, number]>();
+    const list: number[] = [];
+    for (let o = 0; o < scattered.length; o += TREE_STRIDE) {
+      const rec = scattered.subarray(o, o + TREE_STRIDE);
+      if (!(rec[F.FLAGS] & CLUSTER_FLAG)) { list.push(...rec); continue; }
+      const mx = rec[F.MX], my = rec[F.MY], d = 10 * unit;
+      let gz = 0, gx = 0, gy = 0;
+      if (ground.on) {
+        gz = ground.at(lonLatOf(mx, my));
+        gx = (ground.at(lonLatOf(mx + d, my)) - ground.at(lonLatOf(mx - d, my))) / 20;
+        gy = (ground.at(lonLatOf(mx, my - d)) - ground.at(lonLatOf(mx, my + d))) / 20;
+      }
+      if (Math.hypot(gx, gy) <= CLUSTER_MAX_SLOPE) { slopes.set(list.length / TREE_STRIDE, [gz, gx, gy]); list.push(...rec); continue; }
+      const k = Math.floor(rec[F.SEED] * 4), c = [1, 0, -1, 0][k], sn = [0, 1, 0, -1][k];
+      for (const t of PATTERNS[rec[F.CROWN]]) {
+        const lx = t.x * c - t.y * sn, ly = t.x * sn + t.y * c;
+        list.push(mx + lx * unit, my - ly * unit, t.height * rec[F.HEIGHT], t.crown, t.trunk, (t.seed + rec[F.SEED]) % 1, WOOD_FLAG | (t.needle ? NEEDLE_FLAG : 0), rec[F.SRC]);
+      }
+    }
+    const trees = Float64Array.from(list);
     const total = trees.length / TREE_STRIDE;
     this.count = total;
-    let needles = 0, trunked = 0, woodTrunked = 0, cBroad = 0, cNeedle = 0;
+    let needles = 0, trunked = 0, woodTrunked = 0, clusters = 0;
+    const perPattern = new Array<number>(PATTERN_COUNT).fill(0);
     for (let i = 0; i < total; i++) {
       const flags = trees[i * TREE_STRIDE + F.FLAGS];
-      if (flags & CLUSTER_FLAG) { if (flags & NEEDLE_FLAG) cNeedle++; else cBroad++; continue; }
+      if (flags & CLUSTER_FLAG) { perPattern[trees[i * TREE_STRIDE + F.CROWN]]++; clusters++; continue; }
       if (flags & NEEDLE_FLAG) needles++;
       if (!(flags & WOOD_FLAG)) trunked++;
       else if (trees[i * TREE_STRIDE + F.TRUNK] > 0) woodTrunked++;
     }
     const trunks = new THREE.InstancedMesh(TRUNK_GEO, TRUNK_MATERIAL, trunked);
     const woodTrunks = new THREE.InstancedMesh(TRUNK_GEO, TRUNK_MATERIAL, woodTrunked);
-    const singles = total - cBroad - cNeedle;
+    const singles = total - clusters;
     const broad = new THREE.InstancedMesh(BROAD_GEO, BROAD_MATERIAL, singles - needles);
-    const clBroad = new THREE.InstancedMesh(CLUSTER_GEO.broad, CLUSTER_BROAD_MATERIAL, cBroad);
-    const clNeedle = new THREE.InstancedMesh(CLUSTER_GEO.needle, CLUSTER_NEEDLE_MATERIAL, cNeedle);
-    const clBroadTrunks = new THREE.InstancedMesh(CLUSTER_GEO.broadTrunk, TRUNK_MATERIAL, cBroad);
-    const clNeedleTrunks = new THREE.InstancedMesh(CLUSTER_GEO.needleTrunk, TRUNK_MATERIAL, cNeedle);
-    const clBroadKeys: (string | undefined)[] = [], clNeedleKeys: (string | undefined)[] = [];
-    let cb = 0, cn = 0;
+    // Кластеры: по раскладке — меши её частей (лиственные и хвойные кроны, стволы), общие матрицы
+    const groups = PATTERN_GEO.map((geo, p) => {
+      const count = perPattern[p];
+      if (!count) return;
+      const mk = (g: THREE.BufferGeometry | undefined, mat: THREE.Material) => g && new THREE.InstancedMesh(g, mat, count);
+      return { geo, broad: mk(geo.broad, CLUSTER_BROAD_MATERIAL), needle: mk(geo.needle, CLUSTER_NEEDLE_MATERIAL), trunk: mk(geo.trunk, TRUNK_MATERIAL)!, seeds: new Float32Array(count), keys: [] as (string | undefined)[], n: 0 };
+    });
     const shear = new THREE.Matrix4();
-    const lonLatOf = (mx: number, my: number) => new MercatorCoordinate(mx, my, 0).toLngLat().toArray() as [number, number];
     const needle = new THREE.InstancedMesh(NEEDLE_GEO, NEEDLE_MATERIAL, needles);
     const pointKeys = new Map<string, string>();
     const coordKey = (x: number, y: number) => `${Math.round(x * 1e12)}:${Math.round(y * 1e12)}`;
@@ -276,7 +318,6 @@ export class TreeGroup {
     const colour = new THREE.Color();
     let b = 0, nd = 0, tr = 0, wtr = 0;
     this.broadSeeds = new Float32Array(singles - needles);
-    this.clusterSeeds = new Float32Array(cBroad);
     this.lat = (s + n) / 2;
     for (let i = 0; i < total; i++) {
       const o = i * TREE_STRIDE;
@@ -284,22 +325,18 @@ export class TreeGroup {
       const isNeedle = (flags & NEEDLE_FLAG) !== 0;
       const x = (trees[o + F.MX] - origin.x) / unit, y = -(trees[o + F.MY] - origin.y) / unit;
       if (flags & CLUSTER_FLAG) {
-        // Кластер: на земле в центре, наклон склона — сдвигом по высоте (кроны остаются вертикальными)
-        const mx = trees[o + F.MX], my = trees[o + F.MY], d = 10 * unit;
-        let gz = 0, gx = 0, gy = 0;
-        if (ground.on) {
-          gz = ground.at(lonLatOf(mx, my));
-          gx = (ground.at(lonLatOf(mx + d, my)) - ground.at(lonLatOf(mx - d, my))) / 20;
-          gy = (ground.at(lonLatOf(mx, my - d)) - ground.at(lonLatOf(mx, my + d))) / 20;
-        }
-        if (i === 0) { this.zMin = this.zMax = gz; } else { this.zMin = Math.min(this.zMin, gz - 15); this.zMax = Math.max(this.zMax, gz + 15); }
+        // Кластер: на земле в центре, пологий уклон — сдвигом по высоте (кроны остаются вертикальными)
+        const [gz, gx, gy] = slopes.get(i)!;
+        if (i === 0) { this.zMin = this.zMax = gz; } else { this.zMin = Math.min(this.zMin, gz - 5); this.zMax = Math.max(this.zMax, gz + 5); }
         q.setFromAxisAngle(zAxis, Math.floor(seed * 4) * Math.PI / 2);
         m.compose(pos.set(0, 0, 0), q, scale.set(1, 1, height));
         shear.set(1, 0, 0, 0, 0, 1, 0, 0, gx, gy, 1, 0, 0, 0, 0, 1);
         m.premultiply(shear).setPosition(x, y, gz);
-        const src = trees[o + F.SRC], pickKey = src ? sources[src - 1] : undefined;
-        if (flags & NEEDLE_FLAG) { clNeedle.setMatrixAt(cn, m); clNeedleTrunks.setMatrixAt(cn, m); clNeedle.setColorAt(cn, colour.setRGB(1, 1, 1)); clNeedleKeys[cn++] = pickKey; }
-        else { clBroad.setMatrixAt(cb, m); clBroadTrunks.setMatrixAt(cb, m); this.clusterSeeds[cb] = seed; clBroadKeys[cb++] = pickKey; }
+        const g = groups[trees[o + F.CROWN]]!, src = trees[o + F.SRC];
+        for (const mesh of [g.broad, g.needle, g.trunk]) mesh?.setMatrixAt(g.n, m);
+        g.needle?.setColorAt(g.n, colour.setRGB(1, 1, 1));
+        g.seeds[g.n] = seed;
+        g.keys[g.n++] = src ? sources[src - 1] : undefined;
         continue;
       }
       // Рельеф (эксперимент): дерево — на отметке земли в своей точке
@@ -342,16 +379,20 @@ export class TreeGroup {
     this.trunks = trunks;
     this.woodTrunks = woodTrunks;
     this.broad = broad;
-    this.clusterBroad = clBroad;
-    if (!cBroad) clBroad.setColorAt(0, colour); // instanceColor нужен до первого recolour
+    this.broadSets = [[broad, this.broadSeeds]];
+    this.near.push(broad, needle);
+    this.far.push(farOf(broad, BROAD_FAR_GEO), farOf(needle, NEEDLE_FAR_GEO));
+    this.clusterTrunks = [];
+    for (const g of groups) if (g) {
+      if (g.broad) this.broadSets.push([g.broad, g.seeds]);
+      for (const [mesh, farGeo] of [[g.broad, g.geo.broadFar], [g.needle, g.geo.needleFar]] as const) if (mesh) {
+        const f = farOf(mesh, farGeo!);
+        this.near.push(mesh); this.far.push(f);
+        this.pointByCrown.set(mesh, g.keys); this.pointByCrown.set(f, g.keys);
+      }
+      this.clusterTrunks.push(g.trunk);
+    }
     this.recolour();
-    this.near.push(broad, needle, clBroad, clNeedle);
-    this.far.push(farOf(broad, BROAD_FAR_GEO), farOf(needle, NEEDLE_FAR_GEO), farOf(clBroad, CLUSTER_GEO.broadFar), farOf(clNeedle, CLUSTER_GEO.needleFar));
-    this.clusterTrunks = [clBroadTrunks, clNeedleTrunks];
-    this.pointByCrown.set(clBroad, clBroadKeys);
-    this.pointByCrown.set(clNeedle, clNeedleKeys);
-    this.pointByCrown.set(this.far[2], clBroadKeys);
-    this.pointByCrown.set(this.far[3], clNeedleKeys);
     this.pointByCrown.set(broad, broadKeys);
     this.pointByCrown.set(needle, needleKeys);
     this.pointByCrown.set(this.far[0], broadKeys);
@@ -374,7 +415,7 @@ export class TreeGroup {
     const day = dayOf(now.getMonth() + 1, now.getDate());
     const base = new THREE.Color();
     const colour = new THREE.Color();
-    for (const [mesh, seeds] of [[this.broad, this.broadSeeds], [this.clusterBroad, this.clusterSeeds]] as const) {
+    for (const [mesh, seeds] of this.broadSets) {
       seeds.forEach((seed, i) => {
         if (seasonal) seasonColour(base, day, this.lat, seed); else base.copy(SUMMER);
         const l = 0.85 + 0.3 * seed, warm = 0.06 * (hash(Math.round(seed * 1e6), 7) - 0.5);

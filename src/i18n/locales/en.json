@@ -1698,5 +1698,10 @@
   "Окно node/{id} перенесено. Отменить — Ctrl+Z.": "Window node/{id} moved. Undo: Ctrl+Z.",
   "Форма": "Shape",
   "Форма верха": "Top shape",
-  "Заполнение": "Glazing"
+  "Заполнение": "Glazing",
+  "Выберите окна здания, затем Ctrl+C.": "Select windows of the building, then Ctrl+C.",
+  "Скопировано окон: {n}. Ctrl+V — вставить: окно едет за курсором по стенам, клик ставит его.|Скопировано окон: {n}. Ctrl+V — вставить: окна едут за курсором по стенам, клик ставит их.": "{n} window copied. Ctrl+V to paste: the window follows the cursor along the walls, click to place it.|{n} windows copied. Ctrl+V to paste: the windows follow the cursor along the walls, click to place them.",
+  "Вставка окна: наведите на стену — окно встанет на этаже под курсором. Клик — поставить, Esc — отменить.|Вставка окон ({n}): группа едет по стенам за курсором. Клик — поставить, Esc — отменить.": "Paste window: point at a wall; the window goes on the level under the cursor. Click to place, Esc to cancel.|Paste windows ({n}): the group follows the cursor along the walls. Click to place, Esc to cancel.",
+  "Наведите окно на стену здания.": "Point the window at a wall of the building.",
+  "Вставлено окон: {n}. Отменить — Ctrl+Z.|Вставлено окон: {n}. Отменить — Ctrl+Z.": "{n} window pasted. Undo: Ctrl+Z.|{n} windows pasted. Undo: Ctrl+Z."
 }

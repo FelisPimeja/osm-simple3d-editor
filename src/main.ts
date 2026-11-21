@@ -65,7 +65,7 @@ import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, t
 import { isWood, ringsFromMembers, rowFromWay, treeFromNode, woodFromRings, woodFromWay, type TreePoint, type TreeRow, type WoodArea, type WoodMember } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
-import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, levelGrid, windowSize, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { Dem, DEM_ATTRIBUTION } from './view/dem';
@@ -5720,11 +5720,13 @@ let clipboard: { items: { tags: Record<string, string>; polygons: Feature3D['pol
 /** Ctrl+C: части скопированы, ждём клика по базовой точке. */
 let copyPick: { items: NonNullable<typeof clipboard>['items']; indoor?: boolean; entrances?: EntranceCopy[] } | undefined;
 /** Скопированный вход: теги (без этажа) и место. */
-type EntranceCopy = { tags: Record<string, string>; at: LonLat };
+type EntranceCopy = { tags: Record<string, string>; at: LonLat; /** Окно: высота подоконника в сцене, м. */ z?: number };
 /** Скопированные входы группой: вставка в режиме объёмов едет за курсором за базовую точку. */
 let entranceClip: { items: EntranceCopy[]; base: LonLat } | undefined;
 /** Вставка входов группой: смещения от базовой точки (метры сцены). */
 let entranceGroup: { tags: Record<string, string>; d: [number, number] }[] | undefined;
+/** Вставка окон группой: смещения от первого окна (метры сцены, с высотой); ставятся на стену под курсором на любой высоте. */
+let windowGroup: { tags: Record<string, string>; d: [number, number, number] }[] | undefined;
 
 /**
  * Базовая точка по умолчанию (если её не кликнули): вершина выпуклой оболочки всех контуров — на опоясывающем контуре,
@@ -5801,13 +5803,25 @@ function copyDoors() {
 /** Ctrl+C выбранных входов (фасад): теги в буфер дверей — вставка кликами по фасаду или, на плане, по стенам. */
 function copyEntrances() {
   const items: EntranceCopy[] = [];
+  const windows = selectedEntrances().every(isWindowNode);
   for (const id of selectedEntrances()) {
     const pl = overpassLayer.focusEntrance(id), at = pl && overpassLayer.focusToLngLat(pl.p[0], pl.p[1]);
     if (!at) continue;
     const tags = session.get(`node/${id}`)?.tags ?? entranceTags(id) ?? { entrance: 'yes' };
-    items.push({ tags: Object.fromEntries(Object.entries(tags).filter(([k]) => k !== 'level' && k !== 'repeat_on')), at: [...at] as LonLat });
+    // Окно: этаж задаёт место вставки (его пересчитают), остальные теги — как есть
+    items.push({ tags: Object.fromEntries(Object.entries(tags).filter(([k]) => k !== 'level' && k !== 'repeat_on')), at: [...at] as LonLat, ...(windows ? { z: pl.z } : {}) });
   }
-  if (!items.length) return setStatus(tr('Выберите входы здания, затем Ctrl+C.'), true);
+  if (!items.length) return setStatus(windows ? tr('Выберите окна здания, затем Ctrl+C.') : tr('Выберите входы здания, затем Ctrl+C.'), true);
+  // Один объект — базовая точка не нужна: он сам и есть опора
+  if (items.length === 1 || windows) {
+    doorClipboard = windows ? undefined : items.map((e) => ({ ...e.tags }));
+    clipboard = undefined;
+    entranceClip = { items, base: items[0].at };
+    copyPick = undefined;
+    return setStatus(windows
+      ? trn(items.length, 'Скопировано окон: {n}. Ctrl+V — вставить: окно едет за курсором по стенам, клик ставит его.|Скопировано окон: {n}. Ctrl+V — вставить: окна едут за курсором по стенам, клик ставит их.')
+      : tr('Скопировано входов: {n}. Ctrl+V — вставить: группа поедет за курсором, клик по фасаду ставит её.', { n: items.length }));
+  }
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop(); drawTool.stop(); stopPoint();
   // На плане этажа те же входы вставляются дверями по одной
   doorClipboard = items.map((e) => ({ ...e.tags }));
@@ -5816,6 +5830,75 @@ function copyEntrances() {
   copyPick = { items: [], entrances: items };
   setStatus(tr('Копирование входов ({n}): кликните базовую точку — за неё группа будет привязана к курсору при вставке. Без клика — первый вход.', { n: items.length }));
   if (lastPointer) updateSnap(lastPointer);
+}
+
+/** Ctrl+V окон: группа едет за курсором по стенам (на любой высоте), клик ставит её; этаж — по месту. */
+function pasteWindows() {
+  if (!focus || !entranceClip) return;
+  const b = overpassLayer.focusToLocal(entranceClip.base)!, z0 = entranceClip.items[0].z ?? 0;
+  startPoint();
+  windowGroup = entranceClip.items.map((e) => { const q = overpassLayer.focusToLocal(e.at)!; return { tags: { ...e.tags }, d: [q[0] - b[0], q[1] - b[1], (e.z ?? 0) - z0] as [number, number, number] }; });
+  toolHint(trn(windowGroup.length, 'Вставка окна: наведите на стену — окно встанет на этаже под курсором. Клик — поставить, Esc — отменить.|Вставка окон ({n}): группа едет по стенам за курсором. Клик — поставить, Esc — отменить.'));
+  if (lastPointer) hoverPoint(lastPointer);
+}
+
+/** Где встанут вставляемые окна: стена под (курсор + смещение окна), этаж — по высоте точки на стене. */
+function windowGroupTargets(screen: [number, number]) {
+  if (!windowGroup || !focus) return;
+  const members = focus.members.filter((k) => !focusHidden.has(k));
+  const hit = overpassLayer.focusRayHits(screen, (k) => members.includes(k)).find((h) => h.face === 'wall');
+  if (!hit) return;
+  return windowGroup.map((g) => {
+    const z = hit.local.z + g.d[2];
+    const scr = overpassLayer.focusProject(new THREE.Vector3(hit.local.x + g.d[0], hit.local.y + g.d[1], z)) ?? screen;
+    const t = entranceTargetAt(scr);
+    const f = t && (entity(t.key) as Feature3D | undefined);
+    if (!t || !f) return { tags: g.tags };
+    // Этаж под точкой на стене этой части: от её низа по её высоте этажа
+    const { base, levelH, minLevel } = levelGrid(f.tags);
+    const level = Math.max(minLevel, Math.floor((z - base) / levelH + 1e-6) + minLevel);
+    const tags = { ...g.tags, level: String(level) };
+    const sill = base + (level - minLevel) * levelH + windowSize(tags, f.tags).breast;
+    return { tags, t, z: sill, size: windowSize(tags, f.tags) };
+  });
+}
+
+function hoverWindowGroup(screen: [number, number]) {
+  const ts = windowGroupTargets(screen);
+  const pts: THREE.Vector3[] = [];
+  for (const x of ts ?? []) if (x.t && x.size) {
+    const { p, t } = x.t.place, w = x.size.width / 2, z0 = x.z!, z1 = z0 + x.size.height;
+    const c = [[-w, z0], [w, z0], [w, z1], [-w, z1], [-w, z0]];
+    for (let k = 0; k + 1 < c.length; k++) pts.push(...[c[k], c[k + 1]].map(([s, z]) => new THREE.Vector3(p[0] + t[0] * s, p[1] + t[1] * s, z)));
+  }
+  overpassLayer.setDrawPreview(pts.length ? pts : undefined, false, true);
+}
+
+/** Клик при вставке окон: новые узлы с тегами окна на сторонах под ними (по очереди — стороны меняются после каждого). */
+function placeWindowGroup(screen: [number, number]) {
+  const ts = windowGroupTargets(screen);
+  if (!ts?.some((x) => x.t)) return setStatus(tr('Наведите окно на стену здания.'), true);
+  const edits: ObjectEdit[] = [];
+  let n = 0;
+  for (const x of ts) {
+    if (!x.t) continue;
+    const f = entity(x.t.key) as Feature3D | undefined, poly = f?.polygons[x.t.poly];
+    const ring = poly && (x.t.ring ? poly.inners[x.t.ring - 1] : poly.outer), ids = poly && (x.t.ring ? poly.innerIds?.[x.t.ring - 1] : poly.outerIds);
+    if (!ring || !ids) continue;
+    const u = ids[x.t.edge], v = ids[(x.t.edge + 1) % ids.length];
+    const id = nextNewId--, key = `node/${id}`;
+    const local = overpassLayer.focusToLocal(x.t.at)!;
+    edits.push({ key, create: { key, version: 0, tags: x.tags, polygons: [{ outer: [x.t.at], inners: [], outerIds: [id], innerIds: [] }] } });
+    const coord = new Map<number, LonLat>([[id, x.t.at], [u, ring[x.t.edge]], [v, ring[(x.t.edge + 1) % ring.length]]]);
+    const out = insertIntoNeighbours(key, [{ id, p: [local[0], local[1]], u, v }], coord);
+    if (typeof out === 'string') return setStatus(out, true);
+    edits.push(...out);
+    n++;
+  }
+  if (!edits.length) return;
+  session.editMany(edits);
+  stopPoint();
+  setStatus(trn(n, 'Вставлено окон: {n}. Отменить — Ctrl+Z.|Вставлено окон: {n}. Отменить — Ctrl+Z.'));
 }
 
 /** Ctrl+V дверей: режим «Точка», каждый клик по стене — следующая копия; поставлены все или Esc — конец. */
@@ -5906,6 +5989,7 @@ function cancelCopyPick(quiet = false) {
  */
 function pasteClipboard() {
   if (copyPick) cancelCopyPick(true);
+  if (focus && entranceClip?.items.every((e) => e.z !== undefined)) return pasteWindows();
   if (focus && doorClipboard) return pasteDoors();
   if (!focus || !clipboard) return setStatus(tr('Буфер пуст: выберите части, Ctrl+C и клик по базовой точке.'), true);
   if (clipboard.indoor) return pasteIndoor(clipboard);
@@ -13470,6 +13554,7 @@ function stopPoint() {
   pointPick = false;
   doorPaste = undefined;
   entranceGroup = undefined;
+  windowGroup = undefined;
   pointLock = undefined;
   pointBtn.classList.remove('active');
   document.querySelector('.indoor-pois')?.classList.remove('passthrough');
@@ -13626,6 +13711,7 @@ function placeEntranceGroup(screen: [number, number]) {
 }
 
 function hoverPoint(screen: [number, number]) {
+  if (windowGroup) return hoverWindowGroup(screen);
   if (entranceGroup) return hoverEntranceGroup(screen);
   const t = pointTarget(screen);
   // Shift: стена под точкой — зафиксирована, пока клавиша зажата
@@ -13954,6 +14040,7 @@ function solidDoorEditsImpl(door:IndoorFeature,at:LonLat|undefined,tags=door.tag
 
 /** Поставить точку: новый узел (в стороны помещений и, у входа, в пути здания) или теги на готовую вершину. */
 function placePoint(screen: [number, number]) {
+  if (windowGroup) return placeWindowGroup(screen);
   if (entranceGroup) return placeEntranceGroup(screen);
   const rev = indoorEditRev, fRev = facadeEntranceRev;
   placePointAt(screen);

@@ -3421,6 +3421,8 @@ function hideMapLayers() {
   setFocusBackground(true);
   for (const l of map.getStyle().layers) {
     // Снимки и треки в режиме здания — свои (syncBasemapLayers), отметка сдвига — у панели настроек
+    // Слои стиля карты прячет и показывает выбранная подложка (applyVectorStyle, прозрачностью): «Карта» видна и здесь
+    if (styleLayers.some((x) => x.id === l.id)) continue;
     if (l.id === overpassLayer.id || l.type === 'background' || l.id === IMAGERY_LAYER || l.id === GPS_LAYER || l.id.startsWith('imagery-offset') || photoLayers.some((p) => p.layer.isLayer(l.id))) continue;
     const pending = pendingTileLayers.find((p) => p.id === l.id);
     focusHiddenLayers.push(pending ?? { id: l.id, visibility: (map.getLayoutProperty(l.id, 'visibility') as string | undefined) ?? 'visible' });

@@ -71,16 +71,41 @@ export function generateWindows(polygons: Pt[][][], o: WindowGenOpts): RecessPla
     }
     if (corners.length < 2) return;
     for (let ci = 0; ci < corners.length; ci++) {
-      const a = ring[corners[ci]], b = ring[corners[(ci + 1) % corners.length]];
-      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      // Фасад — ломаная между углами (у плавно изогнутой стены — много узлов): окна ставятся по её длине на сам отрезок
+      const i0 = corners[ci], i1 = corners[(ci + 1) % corners.length];
+      const pts: Pt[] = [];
+      for (let i = i0; ; i = (i + 1) % m) { pts.push(ring[i]); if (i === i1 && pts.length > 1) break; }
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+      const len = cum[cum.length - 1];
       if (len < o.width + 2 * o.corner) continue;
-      const t: Pt = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
-      const nrm: Pt = right ? [t[1], -t[0]] : [-t[1], t[0]];
+      const frame = (k: number) => {
+        const a = pts[k], b = pts[k + 1], l = cum[k + 1] - cum[k] || 1;
+        const t: Pt = [(b[0] - a[0]) / l, (b[1] - a[1]) / l];
+        return { a, t, nrm: (right ? [t[1], -t[0]] : [-t[1], t[0]]) as Pt };
+      };
+      /** Точка, направление и нормаль на расстоянии s вдоль фасада. */
+      const at = (s: number) => {
+        let k = 0;
+        while (k < pts.length - 2 && cum[k + 1] < s) k++;
+        const f = frame(k);
+        return { ...f, p: [f.a[0] + f.t[0] * (s - cum[k]), f.a[1] + f.t[1] * (s - cum[k])] as Pt };
+      };
+      /** Проекция точки на фасад: расстояние вдоль и отступ от стены. */
+      const project = (q: Pt) => {
+        let best = { s: 0, off: Infinity };
+        for (let k = 0; k < pts.length - 1; k++) {
+          const f = frame(k), l = cum[k + 1] - cum[k];
+          const along = Math.max(0, Math.min(l, (q[0] - f.a[0]) * f.t[0] + (q[1] - f.a[1]) * f.t[1]));
+          const off = Math.hypot(q[0] - f.a[0] - f.t[0] * along, q[1] - f.a[1] - f.t[1] * along);
+          if (off < best.off) best = { s: cum[k] + along, off };
+        }
+        return best;
+      };
       const lo = o.corner + o.width / 2, hi = len - o.corner - o.width / 2;
       // Оси входов на этом фасаде (вдоль, м); близкие — одна ось
       const axes: number[] = [];
-      if (o.alignDoors) for (const d of o.doors.map((d) => (d.p[0] - a[0]) * t[0] + (d.p[1] - a[1]) * t[1]).filter((v, i) =>
-        Math.abs((o.doors[i].p[0] - a[0]) * nrm[0] + (o.doors[i].p[1] - a[1]) * nrm[1]) < (o.doors[i].reach ?? 0.5) && v >= lo && v <= hi).sort((x, y) => x - y))
+      if (o.alignDoors) for (const d of o.doors.map((d) => ({ d, ...project(d.p) })).filter((x) => x.off < (x.d.reach ?? 0.5) && x.s >= lo && x.s <= hi).map((x) => x.s).sort((x, y) => x - y))
         if (!axes.length || d - axes[axes.length - 1] > o.step / 2) axes.push(d);
       const cols: number[] = [];
       if (!axes.length) {
@@ -100,7 +125,7 @@ export function generateWindows(polygons: Pt[][][], o: WindowGenOpts): RecessPla
         if (hi - last >= o.step / 2) span(last, hi, false, true);
       }
       for (const s of cols) {
-        const p: Pt = [a[0] + t[0] * s, a[1] + t[1] * s];
+        const { p, t, nrm } = at(s);
         const probe: Pt = [p[0] + nrm[0] * 0.3, p[1] + nrm[1] * 0.3];
         const inner: Pt = [p[0] - nrm[0] * 0.3, p[1] - nrm[1] * 0.3];
         for (let l = 0; l < o.levels; l++) {

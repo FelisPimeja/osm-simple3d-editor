@@ -46,7 +46,7 @@ import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFi
 import { panoramax } from './view/panoramax';
 import { mapillary } from './view/mapillary';
 import { fotoshi, fotoshiRequest } from './view/fotoshi';
-import { centroid, entranceOf, facadeEntranceOf, floorLevels, incompleteIndoorRelations, INDOOR_GATES, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointInRingFast, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
+import { centroid, entranceOf, facadeEntranceOf, isWallWindow, floorLevels, incompleteIndoorRelations, INDOOR_GATES, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointInRingFast, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
 import { RotateTool } from './edit/rotate-tool';
 import { ScaleTool } from './edit/scale-tool';
 import { featureRings, glueMoves, levelApart, ON_SIDE_M } from './edit/glue-plan';
@@ -1406,6 +1406,11 @@ for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
     if (key === 'antialias') return location.reload();
     syncGraphicsDeps();
     applyGraphics();
+    // Окна по тегам: раздел «Окна» в панели частей появляется и пропадает вместе с ними; выбранное окно снимается
+    if (key === 'windows') {
+      if (!gfx.windows && selectedEntrance !== undefined && isWindowNode(selectedEntrance)) select(undefined);
+      if (focus) renderOutliner();
+    }
   });
 }
 syncGraphicsDeps();
@@ -8528,7 +8533,12 @@ interface EntranceTarget { key: string; poly: number; ring: number; edge: number
 let entranceDrag: { id: number; phase: 'pick' | 'move'; target?: EntranceTarget } | undefined;
 
 function entranceTags(id: number): Record<string, string> | undefined {
-  for (const g of liveFeatures()) { const e = g.entrances?.find((x) => x.id === id); if (e) return e.tags; }
+  for (const g of liveFeatures()) { const e = g.entrances?.find((x) => x.id === id) ?? g.windows?.find((x) => x.id === id); if (e) return e.tags; }
+}
+
+/** Узел — окно по тегам (window=* на контуре, не вход): выбирается и правится как вход, но со своими полями. */
+function isWindowNode(id: number): boolean {
+  return isWallWindow(session.get(`node/${id}`)?.tags ?? entranceTags(id));
 }
 
 function selectEntrance(id: number, add = false) {
@@ -8555,7 +8565,11 @@ const ENTRANCE_KEY_PREFIX = '@entrance:', ENTRANCES_KEY = '@entrances';
 /** Поля карточки входа: тип входа (варианты схемы iD) и номер. */
 const ENTRANCE_FORM_TAGS = ['entrance', 'ref'] as const;
 
+/** Поля карточки окна: вид, размеры проёма и подоконник (м), этаж. */
+const WINDOW_FORM_TAGS = ['window', 'window:width', 'window:height', 'window:breast', 'level'] as const;
+
 function renderEntrance(id: number) {
+  if (isWindowNode(id)) return renderWindow(id);
   const ids = selectedEntrances().length > 1 ? selectedEntrances() : [id];
   const tagsOf = (x: number) => session.get(`node/${x}`)?.tags ?? entranceTags(x) ?? {};
   const all = ids.map(tagsOf);
@@ -8584,6 +8598,35 @@ function renderEntrance(id: number) {
       : renderOtherTags(ENTRANCE_KEY_PREFIX + id, t, rows));
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-entrance-tag]')) {
     input.addEventListener('change', () => setEntrancesTags(ids.map((x) => ({ id: x, tags: { ...tagsOf(x), [input.dataset.entranceTag!]: input.value } }))));
+  }
+}
+
+function renderWindow(id: number) {
+  const ids = selectedEntrances().length > 1 ? selectedEntrances() : [id];
+  const tagsOf = (x: number) => session.get(`node/${x}`)?.tags ?? entranceTags(x) ?? {};
+  const all = ids.map(tagsOf);
+  const t = all[all.length - 1];
+  const many = ids.length > 1;
+  loadPresets(() => { if (selectedEntrance === id) renderSelected(); });
+  const title = many ? trn(ids.length, 'Выбрано {n} окно|Выбрано {n} окна|Выбрано {n} окон') : matchPreset(t, 'vertex')?.name ?? tr('Окно');
+  const common = (k: string) => all.every((x) => (x[k] ?? '') === (t[k] ?? '')) ? t[k] ?? '' : undefined;
+  const LABELS: Record<string, string> = { window: tr('Окно'), 'window:width': tr('Ширина, м'), 'window:height': tr('Высота, м'), 'window:breast': tr('Подоконник, м'), level: tr('Этаж') };
+  const rows = WINDOW_FORM_TAGS.map((k) => {
+    const changed = ids.some((x) => session.isChanged(`node/${x}`, k));
+    const value = common(k);
+    const hint = value === undefined ? tr('разные значения') : k === 'window' ? 'yes' : k === 'level' ? '0' : tr('по высоте этажа');
+    const input = k === 'window' ? renderValueCombo(idOptions('window') ?? [], `data-window-tag="${k}"`, value ?? '', hint, undefined, k)
+      : `<input type="text" data-window-tag="${k}" value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
+    return `<label class="tag-row${changed ? ' changed' : ''}"><span title="${esc(k)}">${esc(LABELS[k])}</span>${input}</label>`;
+  }).join('');
+  infoEl.innerHTML = (many ? `<h2 class="obj-head"><span class="obj-title">${esc(title)}</span></h2>` : objectHeading(esc(title), `${server().web}/node/${id}`, `node/${id}`))
+    + `<div class="tag-form">${rows}</div>`
+    + (many ? `<p class="hint">${tr('Shift+клик — добавить или убрать окно. Del — удалить выбранные окна (узлы останутся вершинами контура).')}</p>`
+      : `<p class="hint">${tr('Перенести вдоль стен: клик по точке окна под подоконником (или M, затем клик по ней) — окно едет за курсором, клик — поставить, Esc — отмена.')} ${tr('Del — удалить окно (узел останется вершиной контура).')}</p>`)
+    + (many ? renderMultiOtherTags(all, rows).replace('data-other-key="@selection"', `data-other-key="${ENTRANCES_KEY}"`)
+      : renderOtherTags(ENTRANCE_KEY_PREFIX + id, t, rows));
+  for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-window-tag]')) {
+    input.addEventListener('change', () => setEntrancesTags(ids.map((x) => ({ id: x, tags: { ...tagsOf(x), [input.dataset.windowTag!]: input.value } }))));
   }
 }
 
@@ -8619,8 +8662,11 @@ function deleteEntrance(id: number) { deleteEntrances([id]); }
 function deleteEntrances(ids: number[]) {
   const list = ids.map((id) => {
     const t = session.get(`node/${id}`)?.tags ?? entranceTags(id) ?? {};
+    // Окно — снимаются window и window:*; вход — теги двери
+    if (isWallWindow(t)) return { id, tags: Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'window' && !k.startsWith('window:') && k !== 'level' && k !== 'repeat_on')) };
     return { id, tags: Object.fromEntries(Object.entries(t).filter(([k, v]) => !DOOR_TAG_KEYS.includes(k) && !(k === 'indoor' && v === 'door'))) };
   });
+  const windows = ids.every((id) => isWindowNode(id));
   cancelEntranceDrag();
   selectedEntrance = undefined;
   entranceExtra = [];
@@ -8628,7 +8674,8 @@ function deleteEntrances(ids: number[]) {
   setEntrancesTags(list);
   renderSelected();
   renderOutliner();
-  setStatus(ids.length > 1
+  setStatus(windows ? trn(ids.length, 'Удалено {n} окно: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} окна: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} окон: узлы остались вершинами контура. Отменить — Ctrl+Z.')
+    : ids.length > 1
     ? trn(ids.length, 'Удалён {n} вход: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} входа: узлы остались вершинами контура. Отменить — Ctrl+Z.|Удалено {n} входов: узлы остались вершинами контура. Отменить — Ctrl+Z.')
     : tr('Вход {key} удалён: узел остался вершиной контура. Отменить — Ctrl+Z.', { key: `node/${ids[0]}` }));
 }
@@ -8685,6 +8732,9 @@ function moveEntrance(point: [number, number]) {
   const d = entranceDrag;
   if (!d || d.phase !== 'move') return;
   d.target = entranceTargetAt(point);
+  // Окно едет вдоль стены на своей высоте и со своими размерами
+  const cur = overpassLayer.focusEntrance(d.id);
+  if (d.target && cur?.window) d.target.place = { ...d.target.place, z: cur.z, width: cur.width, window: cur.window };
   overpassLayer.previewEntrance(d.target ? { id: d.id, place: d.target.place } : undefined);
 }
 
@@ -8754,7 +8804,7 @@ function commitEntrance(point: [number, number]) {
   }
   cancelEntranceDrag();
   session.editMany([...doorEdits.filter((e) => !edits.some((x) => x.key === e.key)), ...edits]);
-  setStatus(tr('Вход node/{id} перенесён. Отменить — Ctrl+Z.', { id: d.id }));
+  setStatus(isWindowNode(d.id) ? tr('Окно node/{id} перенесено. Отменить — Ctrl+Z.', { id: d.id }) : tr('Вход node/{id} перенесён. Отменить — Ctrl+Z.', { id: d.id }));
 }
 
 /**
@@ -16114,6 +16164,8 @@ function changeIssues(keys: string[]): Issue[] {
 
 /** Ключ свёрнутой группы «Двери» (рядом с подписями видов частей). */
 const DOORS_GROUP = '\u0000doors';
+const WINDOWS_GROUP = '\u0000windows';
+const ICON_WINDOW = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="2.5" width="10" height="11"/><path d="M8 2.5v11M3 8h10"/></svg>';
 const PASSAGES_GROUP = '\u0000passages';
 const ICON_ARCH = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 14.5V3.5h13v11M4.5 14.5V9a3.5 3.5 0 0 1 7 0v5.5"/></svg>';
 const ICON_DOOR = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3.5 14.5V2.5h9v12M1.5 14.5h13"/><circle cx="10" cy="8.5" r="0.6" fill="currentColor"/></svg>';
@@ -16198,6 +16250,21 @@ function renderOutliner() {
         <span class="ol-icon">${ICON_DOOR}</span><span class="ol-label">${esc(name)}<span class="ol-key">node/${id}</span></span></li>`);
     }
   }
+  // Окна по тегам (window=* на узлах контура; при включённых «Окнах по тегам»): клик выбирает окно
+  const wins = new Map<number, Record<string, string>>();
+  if (gfx.windows) for (const f of liveFeatures()) if (g.members.includes(f.key)) for (const w of f.windows ?? []) if (isWallWindow(session.get(`node/${w.id}`)?.tags ?? w.tags) && !doors.has(w.id)) wins.set(w.id, session.get(`node/${w.id}`)?.tags ?? w.tags);
+  if (wins.size) {
+    const label = tr('Окна'), collapsed = collapsedKinds.has(WINDOWS_GROUP);
+    html.push(`<li class="ol-group${collapsed ? ' collapsed' : ''}" data-windows title="${esc(label)}">
+      <button type="button" class="ol-toggle" data-toggle title="${collapsed ? tr('Развернуть') : tr('Свернуть')}">${ICON_CHEVRON}</button>
+      <span class="ol-icon">${ICON_WINDOW}</span>
+      <span class="ol-label">${esc(label)}<span class="ol-key">${wins.size}</span></span></li>`);
+    if (!collapsed) for (const [id, t] of wins) {
+      const name = t.ref ?? t.name ?? (t.level ? tr('Окно, этаж {level}', { level: t.level }) : tr('Окно'));
+      html.push(`<li class="ol-child${selectedEntrances().includes(id) ? ' selected' : ''}" data-entrance="${id}" title="node/${id}">
+        <span class="ol-icon">${ICON_WINDOW}</span><span class="ol-label">${esc(name)}<span class="ol-key">node/${id}</span></span></li>`);
+    }
+  }
   // Арки — пути tunnel=building_passage через здание: клик выбирает арку (Shift — добавить)
   const passages = passageFeatures(g);
   if (passages.length) {
@@ -16241,9 +16308,10 @@ outlinerEl.addEventListener('click', (e) => {
 // Двери: стрелка — свернуть, клик по двери — выбрать вход
 outlinerEl.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
-  if (t.closest('li[data-doors]')) {
+  const group = t.closest('li[data-doors]') ? DOORS_GROUP : t.closest('li[data-windows]') ? WINDOWS_GROUP : undefined;
+  if (group) {
     e.stopImmediatePropagation();
-    if (collapsedKinds.has(DOORS_GROUP)) collapsedKinds.delete(DOORS_GROUP); else collapsedKinds.add(DOORS_GROUP);
+    if (collapsedKinds.has(group)) collapsedKinds.delete(group); else collapsedKinds.add(group);
     try { localStorage.setItem('outliner-collapsed', JSON.stringify([...collapsedKinds])); } catch { /* только до перезагрузки */ }
     renderOutliner();
     return;

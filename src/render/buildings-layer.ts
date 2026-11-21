@@ -6255,8 +6255,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       const local = new THREE.Ray(
         new THREE.Vector3(lo.x * e.t[0] + lo.y * e.t[1], -(lo.x * e.n[0] + lo.y * e.n[1]), lo.z),
         new THREE.Vector3(dir.x * e.t[0] + dir.y * e.t[1], -(dir.x * e.n[0] + dir.y * e.n[1]), dir.z));
-      const w = (e.width ?? ENTRANCE_WIDTH) / 2 + 0.15, depth = Math.max(0, -ENTRANCE_OFFSET);
-      const box = new THREE.Box3(new THREE.Vector3(-w, -0.05, -0.15), new THREE.Vector3(w, depth + 0.05, ENTRANCE_HEIGHT + 0.15));
+      const w = (e.width ?? ENTRANCE_WIDTH) / 2 + 0.15, depth = e.window ? WINDOW_DEPTH : Math.max(0, -ENTRANCE_OFFSET);
+      const box = new THREE.Box3(new THREE.Vector3(-w, -0.05, -0.15), new THREE.Vector3(w, depth + 0.05, (e.window?.height ?? ENTRANCE_HEIGHT) + 0.15));
       if (!local.intersectBox(box, hit)) continue;
       const t = hit.distanceTo(local.origin);
       if (t < bestT) { best = e.id; bestT = t; }
@@ -6274,12 +6274,38 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (g) { this.applyEntrances(g); this.map?.triggerRepaint(); }
   }
 
+  /** Окна по тегам видимых объектов группы (узлы контура с window=*, кроме входов): место — подоконник на стене. */
+  private windowPlaces(g: MeshGroup, entrances: Map<number, Record<string, string>>): EntrancePlace[] {
+    const out = new Map<number, EntrancePlace>();
+    for (const it of g.items) {
+      if (g.hidden.has(it.feature.key) || !it.feature.windows?.length) continue;
+      const wins = new Map(it.feature.windows.filter((w) => isWallWindow(w.tags) && !entrances.has(w.id)).map((w) => [w.id, w.tags]));
+      if (!wins.size) continue;
+      const h = computeHeights(it.tags);
+      for (const p of it.feature.polygons) {
+        const rings = [p.outer, ...p.inners].map((r) => r.map(g.toLocal));
+        [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
+          const w = wins.get(id);
+          if (!w || out.has(id)) return;
+          const { breast, height, width } = windowSize(w, it.tags);
+          const z = entranceZ(w, it.tags) + breast;
+          if (z >= h.wallTop - 1e-3 || z + height <= h.min + 1e-3) return;
+          const place = entrancePlace(rings, r, i, z);
+          if (place) out.set(id, { id, ...place, width, window: { height } });
+        }));
+      }
+    }
+    return [...out.values()];
+  }
+
   private applyEntrances(g: MeshGroup) {
     g.disposeEntrances();
     const tags = new Map<number, Record<string, string>>();
     for (const it of g.items) for (const e of it.feature.entrances ?? []) tags.set(e.id, e.tags);
     g.entrances = [];
-    if (!tags.size) return;
+    // Окна по тегам (ниши рисует сам объём) — в режиме здания выбираются и правятся как входы
+    const windowPlaces = g === this.groups.get(FOCUS_GROUP) && windowsEnabled ? this.windowPlaces(g, tags) : [];
+    if (!tags.size && !windowPlaces.length) return;
     // Режим здания: вход со скрытого объекта (контур скрыт по умолчанию; глазик, изоляция) — только на стене
     // видимого, иначе при изоляции части висели бы входы чужих стен. На карте скрыт голый контур — его входы нужны
     const shown = g === this.groups.get(FOCUS_GROUP)
@@ -6354,6 +6380,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags) }, rank });
       }
     }
+    for (const w of windowPlaces) if (!best.has(w.id)) best.set(w.id, { place: w, rank: Infinity });
     const preview = this.entrancePreview;
     if (preview && g === this.groups.get(FOCUS_GROUP)) best.set(preview.id, { place: { id: preview.id, ...preview.place }, rank: -Infinity });
     if (!best.size) return;
@@ -6370,6 +6397,15 @@ export class BuildingsLayer implements CustomLayerInterface {
       g.entrances.push(e);
       // План этажа рисует проём и маркер двери сам; вход ниже выбранного этажа — на сплошном фасаде, нужен прямоугольник
       if (onPlan(e)) continue;
+      if (e.window) {
+        // Окно: нишу рисует объём; выбранное — подсветка проёма чуть перед фасадом
+        if (!this.entrancesSelected.includes(e.id)) continue;
+        const w = (e.width ?? WINDOW_WIDTH) / 2, ox = e.p[0] + e.n[0] * 0.03, oy = e.p[1] + e.n[1] * 0.03;
+        const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w], z0 = e.z, z1 = e.z + e.window.height;
+        selected.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z1, a[0], a[1], z0, b[0], b[1], z1, a[0], a[1], z1);
+        lines.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z0, b[0], b[1], z1, b[0], b[1], z1, a[0], a[1], z1, a[0], a[1], z1, a[0], a[1], z0);
+        continue;
+      }
       const out = this.entrancesSelected.includes(e.id) || lit.has(e.id) ? selected : plain;
       const w = (e.width ?? ENTRANCE_WIDTH) / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
       const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w];
@@ -8786,7 +8822,15 @@ function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
 }
 /** Вход на стене: точка у основания (м сцены), направление стены t и наружная нормаль n (единичные), низ z. */
-export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number }
+export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number } }
+
+/** Размеры окна по тегам узла: подоконник от пола, высота и ширина проёма, м (window:* или от высоты этажа). */
+export function windowSize(w: Record<string, string>, tags: Record<string, string>): { breast: number; height: number; width: number } {
+  const levels = Number(tags['building:levels']);
+  const levelH = levels > 0 ? computeHeights(tags).wallTop / levels : LEVEL_HEIGHT;
+  const m = (k: string, d: number) => { const v = parseFloat(w[k] ?? ''); return Number.isFinite(v) && v > 0 ? v : d; };
+  return { breast: m('window:breast', WINDOW_BREAST * levelH), height: m('window:height', m('height', WINDOW_HEIGHT * levelH)), width: m('window:width', m('width', WINDOW_WIDTH)) };
+}
 
 /**
  * Место входа у вершины i кольца r (кольца в метрах сцены, 0 — внешнее): стена — по соседним вершинам
@@ -9385,12 +9429,11 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
         [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => ids?.forEach((id, i) => {
           const w = wins.get(id);
           if (!w) return;
-          const m = (k: string, d: number) => { const v = parseFloat(w[k] ?? ''); return Number.isFinite(v) && v > 0 ? v : d; };
-          const breast = m('window:breast', WINDOW_BREAST * levelH), height = m('window:height', m('height', WINDOW_HEIGHT * levelH));
+          const { breast, height, width } = windowSize(w, tags);
           const z = entranceZ(w, tags) + breast;
           if (z >= heights.wallTop - 1e-3 || z + height <= heights.min + 1e-3) return;
           const place = entrancePlace(rings, r, i, z);
-          if (place) places.push({ ...place, width: m('window:width', m('width', WINDOW_WIDTH)), height });
+          if (place) places.push({ ...place, width, height });
         }));
       });
       const cut = recessEntrances(tri.walls, places, { width: WINDOW_WIDTH, height: WINDOW_HEIGHT * levelH, min: heights.min, top: heights.wallTop, depth: WINDOW_DEPTH, panes });

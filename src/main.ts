@@ -18737,7 +18737,7 @@ async function doUpload() {
       const off = `<a href="#settings" data-open-settings="error-reports">${esc(tr('Не отправлять отчёты'))}</a>`;
       setStatus(text + ' ' + tr('Отправляем отчёт разработчику…'), true, off);
       void reportUploadFailure({ error: err.message, status: err.status, osmChange: err.osmChange, api: err.api, changeset: err.changeset,
-        user: reportUser() })
+        user: reportUser(), josm: !!josmApi() && err.api === josmApi() })
         .then((r) => setStatus(text + (r === 'sent' ? ' ' + tr('Отчёт с этими правками отправлен разработчику.') : ''), true, off));
     } else {
       setStatus(tr('Ошибка отправки: {error}', { error: (err as Error).message }), true);

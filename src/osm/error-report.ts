@@ -36,6 +36,8 @@ export interface UploadFailure {
   /** Адрес API (какой сервер). */
   api: string;
   changeset?: number;
+  /** Правки передавались в слой JOSM (плагин simple3d), а не на сервер OSM. */
+  josm?: boolean;
   /** Ник участника OSM и ссылка на профиль (если вошёл). */
   user?: { name: string; url?: string };
 }
@@ -90,11 +92,11 @@ export async function reportUploadFailure(f: UploadFailure): Promise<'sent' | 's
         ? `<details><summary>osmChange, gzip + base64 (${f.osmChange.length} chars before compression)</summary>\n\n\`\`\`\n${z}\n\`\`\`\n</details>\n\nDecode: \`base64 -d dump.txt | gunzip\``
         : `osmChange too large to attach (${f.osmChange.length} chars, ${z.length} compressed).`;
     }
-    const title = `Upload failed: ${f.error.replace(/\s+/g, ' ').slice(0, 120)}`;
+    const title = `${f.josm ? 'Transfer to JOSM failed' : 'Upload failed'}: ${f.error.replace(/\s+/g, ' ').slice(0, 120)}`;
     const res = await fetch(`https://api.github.com/repos/${REPO}/issues`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${TOKEN}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, body: `${head}\n${dump}`, labels: ['upload-error'] }),
+      body: JSON.stringify({ title, body: `${head}\n${dump}`, labels: [f.josm ? 'josm-transfer-error' : 'upload-error'] }),
     });
     if (!res.ok) { console.warn('[report]', res.status, await res.text()); return 'skipped'; }
     try { localStorage.setItem(SENT_KEY, JSON.stringify([...sentLog(), { h, at: Date.now() }])); } catch { /* без хранилища */ }

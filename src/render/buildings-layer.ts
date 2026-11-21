@@ -8869,8 +8869,9 @@ export function windowOutline(w: Record<string, string>, width: number, height: 
 export function windowSize(w: Record<string, string>, tags: Record<string, string>): { breast: number; height: number; width: number } {
   const levels = Number(tags['building:levels']);
   const levelH = levels > 0 ? computeHeights(tags).wallTop / levels : LEVEL_HEIGHT;
-  const m = (k: string, d: number) => { const v = parseFloat(w[k] ?? ''); return Number.isFinite(v) && v > 0 ? v : d; };
-  return { breast: m('window:breast', WINDOW_BREAST * levelH), height: m('window:height', m('height', WINDOW_HEIGHT * levelH)), width: m('window:width', m('width', WINDOW_WIDTH)) };
+  const m = (k: string, d: number, zero = false) => { const v = parseFloat(w[k] ?? ''); return Number.isFinite(v) && (v > 0 || (zero && v === 0)) ? v : d; };
+  // Подоконник 0 — окно от пола (французское, проём колокольни): это значение, а не «не задано»
+  return { breast: m('window:breast', WINDOW_BREAST * levelH, true), height: m('window:height', m('height', WINDOW_HEIGHT * levelH)), width: m('window:width', m('width', WINDOW_WIDTH)) };
 }
 
 /**

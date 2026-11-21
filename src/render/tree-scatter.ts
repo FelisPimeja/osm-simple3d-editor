@@ -5,7 +5,7 @@ import type { LeafType, TreeData } from '../osm/trees';
 // Результат упакован: по TREE_STRIDE чисел на дерево (см. TreeField).
 
 /** Шаг разброса деревьев в лесу, м (сетка общая для всех тайлов — на стыках нет повторов и пустот). */
-const WOOD_STEP = 9; // = WOOD_STEP_M
+const WOOD_STEP = 9;
 /** Шаг деревьев в ряду (natural=tree_row), м. */
 const ROW_STEP = 7;
 /** Ячейка индекса зданий (деревья леса внутри зданий не ставим), м. */
@@ -13,7 +13,7 @@ const BUILDING_CELL = 40;
 
 /** Дерево в мировых координатах Меркатора: размеры в метрах, seed — для разброса цвета и поворота. */
 /** src — номер источника + 1: ряд (own.rows), затем лес (woods); 0 — отдельное дерево. */
-interface TreeInstance { mx: number; my: number; needle: boolean; wood?: boolean; cluster?: boolean; height: number; crown: number; trunk: number; seed: number; src?: number }
+interface TreeInstance { mx: number; my: number; needle: boolean; wood?: boolean; height: number; crown: number; trunk: number; seed: number; src?: number }
 
 /**
  * Поля дерева в упакованном массиве; FLAGS: 1 — хвойное, 2 — лесное (ствол под пологом — только вблизи); SRC — номер
@@ -23,18 +23,6 @@ export const TreeField = { MX: 0, MY: 1, HEIGHT: 2, CROWN: 3, TRUNK: 4, SEED: 5,
 export const TREE_STRIDE = 8;
 export const NEEDLE_FLAG = 1;
 export const WOOD_FLAG = 2;
-/** Кластер леса: одна запись — CLUSTER×CLUSTER деревьев (готовая модель), MX/MY — центр, HEIGHT — множитель высоты. */
-export const CLUSTER_FLAG = 4;
-/** Сторона кластера в ячейках сетки леса. */
-export const CLUSTER = 3;
-/** Шаг сетки леса, м (модели кластеров строятся под него). */
-export const WOOD_STEP_M = 9;
-/** Разброс дерева в ячейке и его размеры — общие для одиночных деревьев леса и моделей кластеров. */
-export function woodTree(needle: boolean, r: number, jx: number, jy: number) {
-  const height = (needle ? 19 : 16) * (0.8 + 0.4 * r);
-  const crown = needle ? Math.min(height * 0.45, Math.max(height * 0.25, WOOD_STEP_M * 0.95)) : Math.min(height * 0.8, Math.max(height * 0.4, WOOD_STEP_M * 1.2));
-  return { dx: 0.15 + 0.7 * jx, dy: 0.15 + 0.7 * jy, height, crown, trunk: Math.min(0.6, Math.max(0.12, height * 0.022)) };
-}
 
 /** Как MercatorCoordinate MapLibre: x, y в [0, 1], метр — в этих единицах. */
 const EARTH_CIRCUMFERENCE = 2 * Math.PI * 6371008.8;
@@ -87,7 +75,7 @@ export function scatterTrees(own: TreeData, woods: TreeData['woods'], buildings:
 
 function pack(trees: TreeInstance[]): Float64Array {
   const out = new Float64Array(trees.length * TREE_STRIDE);
-  trees.forEach((t, i) => out.set([t.mx, t.my, t.height, t.crown, t.trunk, t.seed, (t.needle ? NEEDLE_FLAG : 0) | (t.wood ? WOOD_FLAG : 0) | (t.cluster ? CLUSTER_FLAG : 0), t.src ?? 0], i * TREE_STRIDE));
+  trees.forEach((t, i) => out.set([t.mx, t.my, t.height, t.crown, t.trunk, t.seed, (t.needle ? NEEDLE_FLAG : 0) | (t.wood ? WOOD_FLAG : 0), t.src ?? 0], i * TREE_STRIDE));
   return out;
 }
 
@@ -139,6 +127,7 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
   // Шаг один на все тайлы (без лимита на тайл): иначе в лесистом тайле шаг рос, и на границе тайлов плотность
   // менялась скачком. Тайл z14 — не больше ~35 тыс. деревьев (сплошной лес).
   const step = WOOD_STEP * meter;
+  const stepM = WOOD_STEP;
 
   // Индекс зданий: ячейка → кольца (Меркатор)
   const cell = BUILDING_CELL * meter;
@@ -162,8 +151,6 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
 
   const taken = new Set<number>(); // ячейки, занятые перекрывающимся лесом
   for (const { wood, src, rings, box } of areas) {
-    // Деревья леса по кластерам CLUSTER×CLUSTER ячеек: полный кластер — одна запись, неполный (опушка, здание, край тайла) — по дереву
-    const groups = new Map<number, TreeInstance[]>();
     // Построчно: пересечения строки сетки с рёбрами колец (чёт-нечет — дыры тоже), затем ячейки в промежутках
     for (let j = Math.floor(box[1] / step); j * step <= box[3]; j++) {
       const yc = (j + 0.5) * step;
@@ -184,19 +171,14 @@ function scatter(own: TreeData, woods: TreeData['woods'], buildings: LonLat[][],
           const y = (j + 0.15 + 0.7 * hash(i, j, 2)) * step;
           if (!inTile(x, y) || inBuilding(x, y)) continue;
           taken.add(id);
-          const ci = Math.floor(i / CLUSTER), cj = Math.floor(j / CLUSTER);
-          const needle = isNeedle(wood.leaf, hash(ci, cj, 4), true);
-          const { height, crown, trunk } = woodTree(needle, hash(i, j, 3), 0, 0);
-          const t: TreeInstance = { mx: x, my: y, needle, wood: true, height, crown, trunk, seed: hash(i, j, 5), src };
-          const g = groups.get(cellKey(ci, cj));
-          if (g) g.push(t); else groups.set(cellKey(ci, cj), [t]);
+          const r = hash(i, j, 3);
+          const needle = isNeedle(wood.leaf, hash(i, j, 4), true);
+          const height = (needle ? 19 : 16) * (0.8 + 0.4 * r);
+          // Кроны — по шагу сетки: полог почти сомкнут, сколько бы деревьев ни уместилось в тайл
+          const crown = needle ? Math.min(height * 0.45, Math.max(height * 0.25, stepM * 0.95)) : Math.min(height * 0.8, Math.max(height * 0.4, stepM * 1.2));
+          out.push({ mx: x, my: y, needle, wood: true, height, crown, trunk: Math.min(0.6, Math.max(0.12, height * 0.022)), seed: hash(i, j, 5), src });
         }
       }
-    }
-    for (const [k, g] of groups) {
-      if (g.length < CLUSTER * CLUSTER) { out.push(...g); continue; }
-      const ci = Math.floor(k / 1e8), cj = k - ci * 1e8;
-      out.push({ mx: (ci + 0.5) * CLUSTER * step, my: (cj + 0.5) * CLUSTER * step, needle: g[0].needle, wood: true, cluster: true, height: 0.9 + 0.2 * hash(ci, cj, 6), crown: 0, trunk: 1, seed: hash(ci, cj, 5), src });
     }
   }
   return out;

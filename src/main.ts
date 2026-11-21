@@ -8748,7 +8748,16 @@ function renderWindow(id: number) {
     + (many ? renderMultiOtherTags(all, rows).replace('data-other-key="@selection"', `data-other-key="${ENTRANCES_KEY}"`)
       : renderOtherTags(ENTRANCE_KEY_PREFIX + id, t, rows));
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-window-tag]')) {
-    input.addEventListener('change', () => setEntrancesTags(ids.map((x) => ({ id: x, tags: { ...tagsOf(x), [input.dataset.windowTag!]: input.value } }))));
+    input.addEventListener('change', () => setEntrancesTags(ids.map((x) => {
+      const next = { ...tagsOf(x), [input.dataset.windowTag!]: input.value };
+      // Круг или квадрат: ширина и высота — по большей стороне (подоконник стоит)
+      if (input.dataset.windowTag === 'window:shape' && ['circle', 'square'].includes(input.value.trim().toLowerCase())) {
+        const pl = overpassLayer.focusEntrance(x);
+        const w = parseFloat(next['window:width'] ?? next.width ?? '') || pl?.width, h = parseFloat(next['window:height'] ?? next.height ?? '') || pl?.window?.height;
+        if (w && h) next['window:width'] = next['window:height'] = String(Math.round(Math.max(w, h) * 100) / 100);
+      }
+      return { id: x, tags: next };
+    })));
   }
 }
 

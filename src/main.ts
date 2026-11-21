@@ -8640,6 +8640,8 @@ let entranceDrag: {
   axis?: 0 | 2; locked?: 0 | 2;
   /** Последняя точка окна на плоскости его стены (с осью и привязкой) — для высоты. */
   lastQ?: { s: number; z: number };
+  /** Стена, по которой сейчас едет окно (после перехода на другую — она): плоскость и оси. */
+  plane?: EntrancePlace;
 } | undefined;
 
 /** Ось переноса подхватывается, если курсор идёт к ней под углом не больше этого, °; ближе к началу — свободно, px. */
@@ -8857,7 +8859,7 @@ function windowDragPoint(point: [number, number], e: EntrancePlace, from?: { s: 
   const own = `node/${d.id}`;
   d.snap = overpassLayer.snapAt(point, (k) => k !== own);
   // Привязка — только в плоскости стены окна (точка на ней, не дальше 0,3 м): углы, рёбра, другие окна этой стены
-  if (d.snap && (d.snap.kind === 'center' || Math.abs((d.snap.local.x - e.p[0]) * e.n[0] + (d.snap.local.y - e.p[1]) * e.n[1]) > 0.3)) d.snap = undefined;
+  if (d.snap && ((d.snap.kind === 'center' && !d.snap.key.startsWith('node/')) || Math.abs((d.snap.local.x - e.p[0]) * e.n[0] + (d.snap.local.y - e.p[1]) * e.n[1]) > 0.3)) d.snap = undefined;
   let q: { s: number; z: number } | undefined;
   if (d.snap) {
     const v = d.snap.local;
@@ -8892,7 +8894,7 @@ function windowDragPoint(point: [number, number], e: EntrancePlace, from?: { s: 
   // Направляющая: от опоры к точке, цветом оси
   const p0 = new THREE.Vector3(e.p[0] + e.t[0] * from.s, e.p[1] + e.t[1] * from.s, from.z);
   const p1 = new THREE.Vector3(e.p[0] + e.t[0] * q.s, e.p[1] + e.t[1] * q.s, q.z);
-  overpassLayer.setMoveGuide({ from: p0, to: p1, axis, locked: d.locked, axes: { x: e.t, y: e.n } });
+  overpassLayer.setMoveGuide({ from: p0, to: p1, axis, locked: d.locked, axes: { x: e.t, y: e.n }, only: [0, 2] });
   return q;
 }
 
@@ -8927,10 +8929,10 @@ function moveEntrance(point: [number, number]) {
   // Окно: плоскость и размеры — от места в начале переноса (focusEntrance уже отдаёт превью)
   if (!d.start) d.start = overpassLayer.focusEntrance(d.id);
   const cur = d.start;
-  d.target = cur?.window ? windowTargetAt(point, cur) : entranceTargetAt(point);
+  d.target = cur?.window ? windowTargetAt(point, d.plane ?? cur) : entranceTargetAt(point);
   if (d.target && cur?.window) {
     // Окно едет в плоскости стены по двум осям: вдоль стены и по высоте; этаж — по высоте на этой части
-    const pl = { ...d.target.place, id: d.id } as EntrancePlace, q = d.lastQ && d.target.key && Math.abs(pl.n[0] * cur.n[0] + pl.n[1] * cur.n[1]) > 0.99 ? d.lastQ : onWindowPlane(point, pl);
+    const pl = { ...d.target.place, id: d.id } as EntrancePlace, wall = d.plane ?? cur, q = d.lastQ && Math.abs(pl.n[0] * wall.n[0] + pl.n[1] * wall.n[1]) > 0.99 ? d.lastQ : onWindowPlane(point, pl);
     const f = entity(d.target.key) as Feature3D | undefined;
     let z = cur.z, floor = cur.window.floor ?? cur.z;
     if (q && f) {
@@ -8966,7 +8968,14 @@ function windowTargetAt(point: [number, number], cur: EntrancePlace): EntranceTa
     // Та же плоскость (нормаль та же, точка на стороне) — остаёмся на ней
     if (t && t.place.n[0] * cur.n[0] + t.place.n[1] * cur.n[1] > 0.99 && Math.hypot(t.place.p[0] - at[0], t.place.p[1] - at[1]) < 0.05) return t;
   }
-  return entranceTargetAt(point);
+  // Другая стена: дальше окно едет по её плоскости, оси — по ней
+  const t = entranceTargetAt(point);
+  if (t && entranceDrag) {
+    const plane = { ...t.place, id: cur.id, z: cur.z, width: cur.width, window: cur.window } as EntrancePlace;
+    entranceDrag.plane = plane;
+    entranceDrag.lastQ = windowDragPoint(point, plane, { s: 0, z: cur.z + (cur.window?.height ?? 0) / 2 });
+  }
+  return t;
 }
 
 /** Ручка выбранного окна под курсором — потянуть её (клик — применить, Esc — отмена). */

@@ -4630,11 +4630,21 @@ export class BuildingsLayer implements CustomLayerInterface {
       return [{ kind: 'center' as SnapKind, key: d.key, p }, ...[0, 1, 2, 3].flatMap(i => radius ? [{ kind: 'vertex' as SnapKind, key: d.key,
         p: p.clone().add(new THREE.Vector3(Math.cos(i * Math.PI / 2) * radius, Math.sin(i * Math.PI / 2) * radius, 0)) }] : [])];
     }) : [];
+    // Окна и входы на фасаде (режим здания): углы проёма, середины его сторон и центр — ключ узла
+    const facadePoints: SnapPoint[] = this.level ? [] : (this.groups.get(FOCUS_GROUP)?.entrances ?? []).flatMap((e) => {
+      const w = (e.width ?? (e.window ? WINDOW_WIDTH : ENTRANCE_WIDTH)) / 2, h = e.window?.height ?? ENTRANCE_HEIGHT, key = `node/${e.id}`;
+      const at = (sx: number, z: number) => new THREE.Vector3(e.p[0] + e.t[0] * sx, e.p[1] + e.t[1] * sx, e.z + z);
+      return [
+        ...[[-w, 0], [w, 0], [w, h], [-w, h]].map(([sx, z]) => ({ key, kind: 'vertex' as SnapKind, p: at(sx, z) })),
+        ...[[0, 0], [w, h / 2], [0, h], [-w, h / 2]].map(([sx, z]) => ({ key, kind: 'midpoint' as SnapKind, p: at(sx, z) })),
+        { key, kind: 'center' as SnapKind, p: at(0, h / 2) },
+      ];
+    });
     // Свои точки инструмента (extra) — мимо фильтра объектов: инструмент сам решил, что они нужны
     const extra = new Set(opts.extra ?? []);
     // На плане этажа геометрия выше среза не нарисована — и привязок к ней нет
     const planCut = this.level ? (this.levelCut ?? this.level.cut) + 1e-3 : Infinity;
-    for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...this.belowOutlinePoints, ...doorPoints, ...extra]) {
+    for (const s of [...this.snaps.points, ...this.indoorSnaps.points, ...this.belowOutlinePoints, ...doorPoints, ...facadePoints, ...extra]) {
       if (off.has(s.kind) || (!extra.has(s) && (!filter(s.key) || ((s as SnapPoint).also !== undefined && !filter((s as SnapPoint).also!)))) || opts.skip?.(s.p, s.key, s.kind) || (!extra.has(s) && s.p.z > planCut)) continue;
       v.set(s.p.x, s.p.y, s.p.z, 1).applyMatrix4(m);
       if (v.w <= 0) continue;
@@ -5649,7 +5659,7 @@ export class BuildingsLayer implements CustomLayerInterface {
    * (цветом оси, если движение по оси). undefined — убрать.
    */
   /** Значок осей в точке захвата и пунктир к курсору; axes — свои оси вместо осей здания (например, по ребру); free — доступные оси. */
-  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; path?: THREE.Vector3[]; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2; axes?: { x: Pt; y: Pt }; dashSize?: number; gapSize?: number; gizmoScale?: number; free?: readonly (0 | 1 | 2)[];
+  setMoveGuide(guide: { from: THREE.Vector3; to?: THREE.Vector3; path?: THREE.Vector3[]; axis?: 0 | 1 | 2; locked?: 0 | 1 | 2; axes?: { x: Pt; y: Pt }; dashSize?: number; gapSize?: number; gizmoScale?: number; free?: readonly (0 | 1 | 2)[]; only?: readonly (0 | 1 | 2)[];
     /** Толщина линии, px (по умолчанию — тонкая линия WebGL). */
     widthPx?: number } | undefined) {
     const g = this.groups.get(FOCUS_GROUP);
@@ -5662,7 +5672,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const root = new THREE.Group();
       const frame = { ...this.focusAxes, ...(guide.axes ?? {}), origin: [guide.from.x, guide.from.y] as Pt };
       // Значок на высоте точки захвата; gizmoScale — доля обычного размера (у вершины — меньше), но не мельче половины
-      const gizmo = axesGizmo(frame, { px: TOOL_AXES_PX * Math.max(guide.gizmoScale ?? 1, 0.5), z: guide.from.z, locked: guide.locked, free: guide.free });
+      const gizmo = axesGizmo(frame, { px: TOOL_AXES_PX * Math.max(guide.gizmoScale ?? 1, 0.5), z: guide.from.z, locked: guide.locked, free: guide.free, only: guide.only });
       root.add(this.trackGizmo(gizmo));
       if (guide.to && guide.widthPx && this.map) {
         // Толстая пунктирная линия (Line2): тонкую на светлой крыше почти не видно
@@ -8542,7 +8552,7 @@ function planarFill(rings: THREE.Vector3[][]): THREE.BufferGeometry | undefined 
  * масштабирует scaleGizmos (длина стрелки — px пикселей при любом приближении). Направляющая зафиксированной оси —
  * в метрах, не масштабируется. faint — бледнее (начало координат здания не спорит со значком инструмента).
  */
-function axesGizmo(frame: LocalFrame, opts: { px: number; z?: number; locked?: number; occluded?: boolean; free?: readonly number[]; faint?: boolean }): THREE.Object3D {
+function axesGizmo(frame: LocalFrame, opts: { px: number; z?: number; locked?: number; occluded?: boolean; free?: readonly number[]; faint?: boolean; /** Рисовать только эти оси (окно — две оси плоскости стены). */ only?: readonly number[] }): THREE.Object3D {
   const { locked, occluded = false, free } = opts;
   const len = 1, r = len * 0.012, head = len * 0.12;
   const root = new THREE.Group();
@@ -8558,6 +8568,7 @@ function axesGizmo(frame: LocalFrame, opts: { px: number; z?: number; locked?: n
   const dirs = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
   const up = new THREE.Vector3(0, 1, 0); // цилиндр и конус в three.js вытянуты по y
   dirs.forEach((d, i) => {
+    if (opts.only && !opts.only.includes(i)) return;
     // Ось зафиксирована — остальные серые и бледные; free — по каким осям вообще можно двигать (остальные серые)
     const dim = locked !== undefined ? locked !== i : !!free && !free.includes(i);
     const colour = dim ? AXIS_DIM_COLOUR : AXIS_COLOURS[i];

@@ -4633,7 +4633,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Окна и входы на фасаде (режим здания): углы проёма, середины его сторон и центр — ключ узла
     const facadePoints: SnapPoint[] = this.level ? [] : (this.groups.get(FOCUS_GROUP)?.entrances ?? []).flatMap((e) => {
       const w = (e.width ?? (e.window ? WINDOW_WIDTH : ENTRANCE_WIDTH)) / 2, h = e.window?.height ?? ENTRANCE_HEIGHT, key = `node/${e.id}`;
-      const at = (sx: number, z: number) => new THREE.Vector3(e.p[0] + e.t[0] * sx, e.p[1] + e.t[1] * sx, e.z + z);
+      // Чуть перед фасадом: точка ровно на стене у края проёма считалась бы заслонённой (луч уходит в проём или в стену)
+      const ox = e.p[0] + e.n[0] * 0.03, oy = e.p[1] + e.n[1] * 0.03;
+      const at = (sx: number, z: number) => new THREE.Vector3(ox + e.t[0] * sx, oy + e.t[1] * sx, e.z + z);
       return [
         ...[[-w, 0], [w, 0], [w, h], [-w, h]].map(([sx, z]) => ({ key, kind: 'vertex' as SnapKind, p: at(sx, z) })),
         ...[[0, 0], [w, h / 2], [0, h], [-w, h / 2]].map(([sx, z]) => ({ key, kind: 'midpoint' as SnapKind, p: at(sx, z) })),

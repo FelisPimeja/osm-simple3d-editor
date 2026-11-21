@@ -333,7 +333,8 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
     if (once.has(k)) { console.warn(`[upload] ${k} дважды в пакете — второй раз не отправляем`); payload.splice(i--, 1); } else once.add(k);
   }
   // Пакет, который сервер точно отклонит, — до открытия changeset (иначе остался бы пустой)
-  const problems = payloadProblems(payload);
+  // В JOSM отрицательные id — объекты его слоя (новые, но уже существующие): плагин находит их сам
+  const problems = payloadProblems(payload, !!target);
   if (dryRun) throw new DryRun(buildOsmChange(payload, 0), problems, payload.length);
   if (problems.length) throw new UploadRejectedError(new Error(tr('Пакет не прошёл проверку перед отправкой (changeset не создан): {list}', { list: problems.slice(0, 5).join('; ') })), buildOsmChange(payload, 0), api());
   onStatus(tr('Открываем changeset…'));
@@ -399,9 +400,9 @@ type Payload = Parameters<typeof buildOsmChange>[0];
 
 /**
  * Что сервер в пакете точно отклонит: путь или отношение ссылается на удаляемый пакетом или нигде не созданный
- * (отрицательный id) объект, путь короче двух узлов или с одним узлом дважды подряд, объект дважды в пакете.
+ * (отрицательный id; negativeExist — отправка в слой JOSM, где такие объекты есть) объект, путь короче двух узлов или с одним узлом дважды подряд, объект дважды в пакете.
  */
-export function payloadProblems(payload: Payload): string[] {
+export function payloadProblems(payload: Payload, negativeExist = false): string[] {
   const out: string[] = [];
   const key = (p: Payload[number]) => `${p.element.type}/${p.element.id}`;
   const seen = new Set<string>(), deleted = new Set<string>(), created = new Set<string>();
@@ -414,7 +415,7 @@ export function payloadProblems(payload: Payload): string[] {
   }
   const ref = (owner: string, k: string) => {
     if (deleted.has(k)) out.push(`${owner} ссылается на удаляемый ${k}`);
-    else if (Number(k.split('/')[1]) < 0 && !created.has(k)) out.push(`${owner} ссылается на несозданный ${k}`);
+    else if (!negativeExist && Number(k.split('/')[1]) < 0 && !created.has(k)) out.push(`${owner} ссылается на несозданный ${k}`);
   };
   for (const p of payload) {
     if (p.deleted) continue;

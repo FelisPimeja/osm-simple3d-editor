@@ -55,14 +55,19 @@ function sentLog(): Sent {
   try { return (JSON.parse(localStorage.getItem(SENT_KEY) ?? '[]') as Sent).filter((s) => Date.now() - s.at < 864e5); } catch { return []; }
 }
 
+/** Отчёты, которые сейчас отправляются: повторный вызов до ответа GitHub не должен завести второй issue. */
+const inFlight = new Set<string>();
+
 /** Отправить отчёт (если включены и такой ещё не уходил). Ошибки отправки самого отчёта — только в консоль. */
 export async function reportUploadFailure(f: UploadFailure): Promise<'sent' | 'skipped'> {
   if (!TOKEN || !reportsEnabled()) return 'skipped';
+  let h = '', mine = false;
   try {
     // Одинаковые ошибки (тот же ответ сервера на тот же пакет без номера changeset) — один раз
-    const h = await hash(f.error.replace(/\d{6,}/g, '#') + '\n' + f.osmChange.replace(/changeset="\d+"/g, ''));
+    h = await hash(f.error.replace(/\d{6,}/g, '#') + '\n' + f.osmChange.replace(/changeset="\d+"/g, ''));
     const log = sentLog();
-    if (log.some((s) => s.h === h) || log.length >= PER_DAY) return 'skipped';
+    if (inFlight.has(h) || log.some((s) => s.h === h) || log.length + inFlight.size >= PER_DAY) return 'skipped';
+    inFlight.add(h); mine = true;
     const head = [
       `**Error:** \`${f.error.replace(/`/g, "'").slice(0, 2000)}\``,
       '',
@@ -88,10 +93,12 @@ export async function reportUploadFailure(f: UploadFailure): Promise<'sent' | 's
       body: JSON.stringify({ title, body: `${head}\n${dump}`, labels: ['upload-error'] }),
     });
     if (!res.ok) { console.warn('[report]', res.status, await res.text()); return 'skipped'; }
-    try { localStorage.setItem(SENT_KEY, JSON.stringify([...log, { h, at: Date.now() }])); } catch { /* без хранилища */ }
+    try { localStorage.setItem(SENT_KEY, JSON.stringify([...sentLog(), { h, at: Date.now() }])); } catch { /* без хранилища */ }
     return 'sent';
   } catch (err) {
     console.warn('[report]', err);
     return 'skipped';
+  } finally {
+    if (mine) inFlight.delete(h);
   }
 }

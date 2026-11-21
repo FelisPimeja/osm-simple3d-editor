@@ -8858,13 +8858,25 @@ function windowDragPoint(point: [number, number], e: EntrancePlace, from?: { s: 
   const d = entranceDrag!;
   const own = `node/${d.id}`;
   d.snap = overpassLayer.snapAt(point, (k) => k !== own);
-  // Привязка — только в плоскости стены окна (точка на ней, не дальше 0,3 м): углы, рёбра, другие окна этой стены
-  if (d.snap && ((d.snap.kind === 'center' && !d.snap.key.startsWith('node/')) || Math.abs((d.snap.local.x - e.p[0]) * e.n[0] + (d.snap.local.y - e.p[1]) * e.n[1]) > 0.3)) d.snap = undefined;
+  // Привязка в плоскости стены окна (не дальше 0,3 м: углы, рёбра, окна этой стены) — по обеим осям; окно или вход
+  // на другой стене — только по высоте (положение вдоль своей стены — по курсору); прочее вне плоскости — нет
+  const off = d.snap ? Math.abs((d.snap.local.x - e.p[0]) * e.n[0] + (d.snap.local.y - e.p[1]) * e.n[1]) > 0.3 : false;
+  const facade = !!d.snap?.key.startsWith('node/');
+  // Ширина (боковые ручки) по высоте не привязывается — привязка с другой стены ей не нужна
+  if (d.snap && ((d.snap.kind === 'center' && !facade) || (off && (!facade || d.handle === 'left' || d.handle === 'right')))) d.snap = undefined;
   let q: { s: number; z: number } | undefined;
-  if (d.snap) {
+  if (d.snap && !off) {
     const v = d.snap.local;
     q = { s: (v.x - e.p[0]) * e.t[0] + (v.y - e.p[1]) * e.t[1], z: v.z };
-  } else q = onWindowPlane(point, e);
+  } else {
+    q = onWindowPlane(point, e);
+    if (q && d.snap) {
+      // Вдоль своей стены окно стоит, где было (курсор при этом — над другой стеной)
+      q = { s: d.handle ? q.s : d.lastQ?.s ?? from?.s ?? q.s, z: d.snap.local.z };
+      // Пунктир от привязки к точке на своей стене той же высоты
+      d.snap = { ...d.snap, along: new THREE.Vector3(e.p[0] + e.t[0] * q.s, e.p[1] + e.t[1] * q.s, q.z) };
+    }
+  }
   if (!q || !from) { d.axis = undefined; return q; }
   // Ось: зажатая Shift или подхваченная по направлению курсора на экране
   const at = (s: number, z: number) => overpassLayer.focusProject(new THREE.Vector3(e.p[0] + e.t[0] * s, e.p[1] + e.t[1] * s, z));

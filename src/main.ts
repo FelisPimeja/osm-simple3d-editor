@@ -34,6 +34,7 @@ import { applyBasemapDate, dateSpan, decimalDate, existsIn, isoDay, parseDate, s
 import { buildingRefreshMembers, refreshBuildingFeatures } from './osm/building-refresh';
 import { BrokenRingsError, ConflictError, dryRunUpload, UploadRejectedError, uploadEdits } from './osm/upload';
 import { reportsAvailable, reportsEnabled, reportUploadFailure, setReportsEnabled } from './osm/error-report';
+import { checkWindows, type CheckOpening, type CheckPart, type WindowProblem } from './edit/window-checks';
 import { computeHeights, LEVEL_HEIGHT, parseLength } from './osm/heights';
 import { escalatorFloorHoles } from './render/escalator-openings';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indoorCategory, roomValueOf, type IndoorCategory } from './osm/indoor-categories';
@@ -65,7 +66,7 @@ import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, t
 import { isWood, ringsFromMembers, rowFromWay, treeFromNode, woodFromRings, woodFromWay, type TreePoint, type TreeRow, type WoodArea, type WoodMember } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
-import { BuildingsLayer, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entrancePlace, levelGrid, windowOutline, windowSize, type WindowHandle, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, ENTRANCE_HEIGHT, ENTRANCE_WIDTH, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entranceZ, entrancePlace, levelGrid, windowOutline, windowSize, type WindowHandle, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { Dem, DEM_ATTRIBUTION } from './view/dem';
@@ -15573,6 +15574,61 @@ function focusEntranceIssues(g: BuildingGroup): Issue[] {
   }));
 }
 
+/**
+ * Окна здания (режим здания): окно за краем стены, в крыше или ниже основания, окна друг на друге и на входах, окно в
+ * стену к соседней части, этаж окна вне этажей части. Геометрия — в метрах сцены режима здания.
+ */
+function focusWindowIssues(g: BuildingGroup): Issue[] {
+  const feats = groupSources(g).map(withEntranceEdits).filter((f) => f.polygons?.length && !session.isDeleted(f.key));
+  const local = (p: LonLat) => overpassLayer.focusToLocal(p) as [number, number] | undefined;
+  // Объёмы — части и контур без частей (контур под частями рисуется плоским следом)
+  const parts: CheckPart[] = feats.filter((f) => !f.hasParts).flatMap((f) => {
+    const h = computeHeights(f.tags);
+    return f.polygons.map((p) => ({ key: f.key, rings: [p.outer, ...p.inners].map((r) => r.map((c) => local(c)!)), min: h.min, top: h.wallTop }));
+  });
+  if (parts.some((p) => p.rings.some((r) => r.some((c) => !c)))) return [];
+  const windows = new Map<number, { o: CheckOpening; tags: Record<string, string>; host: Feature3D; at: LonLat }>();
+  for (const f of feats) for (const w of f.windows ?? []) {
+    if (!isWallWindow(w.tags)) continue;
+    const { breast, width, height } = windowSize(w.tags, f.tags), z = entranceZ(w.tags, f.tags) + breast, h = computeHeights(f.tags);
+    // Узел в нескольких объектах — окно у того, чья стена на высоте подоконника
+    const prev = windows.get(w.id);
+    if (prev && !(z >= h.min && z < h.wallTop && !(prev.o.z >= computeHeights(prev.host.tags).min && prev.o.z < computeHeights(prev.host.tags).wallTop))) continue;
+    for (const p of f.polygons) [p.outerIds, ...(p.innerIds ?? [])].forEach((ids, r) => {
+      const ring = r ? p.inners[r - 1] : p.outer;
+      const i = ids?.indexOf(w.id) ?? -1;
+      if (i < 0) return;
+      const rings = [p.outer, ...p.inners].map((rr) => rr.map((c) => local(c)!));
+      const place = entrancePlace(rings, r, i, z);
+      if (place) windows.set(w.id, { o: { id: w.id, kind: 'window', p: place.p, t: place.t, n: place.n, z, width, height }, tags: w.tags, host: f, at: ring[i] });
+    });
+  }
+  if (!windows.size) return [];
+  const entrances: CheckOpening[] = overpassLayer.focusOpenings().filter((e) => !e.window)
+    .map((e) => ({ id: e.id, kind: 'entrance', p: e.p, t: e.t, n: e.n, z: e.z, width: e.width ?? ENTRANCE_WIDTH, height: ENTRANCE_HEIGHT }));
+  const TEXT: Record<WindowProblem, string> = {
+    'window-off-wall': tr('Окно выходит за край стены.'),
+    'window-roof': tr('Окно заходит в крышу: его верх выше верха стены.'),
+    'window-below': tr('Окно ниже основания стены.'),
+    'window-overlap': tr('Окна пересекаются.'),
+    'window-entrance': tr('Окно пересекается со входом.'),
+    'window-blocked': tr('Окно смотрит в соседнюю часть здания: за ним — другой объём.'),
+  };
+  const out: Issue[] = checkWindows([...[...windows.values()].map((w) => w.o), ...entrances], parts).map((x) => ({
+    key: `node/${x.id}`, level: x.code === 'window-blocked' ? 'warning' : 'error', code: x.code, text: TEXT[x.code],
+    ...(x.other !== undefined ? { other: `node/${x.other}` } : {}), points: [windows.get(x.id)!.at],
+  }));
+  // Этаж окна вне этажей его части (building:min_level … building:levels − 1)
+  for (const [id, w] of windows) {
+    const lv = parseFloat((w.tags.level ?? '').split(';')[0]), levels = Number(w.host.tags['building:levels']), minLevel = Number(w.host.tags['building:min_level']) || 0;
+    if (Number.isFinite(lv) && levels > 0 && (lv < minLevel || lv >= levels)) {
+      out.push({ key: `node/${id}`, level: 'warning', code: 'window-level', points: [w.at],
+        text: tr('Этаж окна ({level}) вне этажей части {key} ({from}–{to}).', { level: String(lv), key: w.host.key, from: String(minLevel), to: String(levels - 1) }) });
+    }
+  }
+  return out;
+}
+
 function buildingIssues(g: BuildingGroup): Issue[] {
   // Сверяем исходные объекты: groupFeatures у контуров каждый раз отдаёт новые копии (вид по роли), и кеш промахивался
   // на каждом отношении с контуром; входы — с правками узлов, они меняют объект
@@ -15836,7 +15892,7 @@ let issueAnchor: string | undefined;
 function renderIssues() {
   // План этажа — только проблемы indoor, всё здание — только проблемы частей
   const plan = currentLevel !== undefined;
-  const simpleIssues = focus && !plan ? [...buildingIssues(focus), ...focusEntranceIssues(focus), ...entranceOffContourIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : strayPartsOf(focus))] : [];
+  const simpleIssues = focus && !plan ? [...buildingIssues(focus), ...focusEntranceIssues(focus), ...timed('проверка окон', () => focusWindowIssues(focus!)), ...entranceOffContourIssues(focus), ...(isSolo(focus) ? [...orphanPartIssues(groupFeatures(focus)), ...implicitIssues(groupFeatures(focus).filter((f) => f.kind === 'part').slice(0, 1))] : strayPartsOf(focus))] : [];
   const focusedBuilding = focus;
   const indoorAll = focusedBuilding && plan ? buildingIndoor(focusedBuilding) : [];
   const outerDoor = focusedBuilding ? outerDoorTest(focusedBuilding, indoorAll) : undefined;

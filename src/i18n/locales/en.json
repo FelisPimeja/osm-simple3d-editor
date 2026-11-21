@@ -1711,5 +1711,12 @@
   "Размеры окна node/{id} изменены. Отменить — Ctrl+Z.": "Window node/{id} resized. Undo: Ctrl+Z.",
   "Синие ручки: по бокам — ширина, снизу — подоконник, сверху — высота окна; клик по ручке — тянуть, клик — применить.": "Blue handles: the sides set the width, the bottom the sill, the top the window height; click a handle to drag it, click again to apply.",
   "Перенести: M, затем клик по точке в середине окна — окно едет по стене вдоль и по высоте (этаж — по месту), клик — поставить, Esc — отмена.": "To move: M, then click the point in the middle of the window; the window follows the cursor along the wall and up or down (the level follows), click to place, Esc to cancel.",
-  "Окно на {key}: этаж {level}, подоконник {b} м. Клик — поставить, Esc — отмена.": "Window on {key}: level {level}, sill {b} m. Click to place, Esc to cancel."
+  "Окно на {key}: этаж {level}, подоконник {b} м. Клик — поставить, Esc — отмена.": "Window on {key}: level {level}, sill {b} m. Click to place, Esc to cancel.",
+  "Окно выходит за край стены.": "The window runs past the edge of the wall.",
+  "Окно заходит в крышу: его верх выше верха стены.": "The window runs into the roof: its top is above the top of the wall.",
+  "Окно ниже основания стены.": "The window is below the base of the wall.",
+  "Окна пересекаются.": "The windows overlap.",
+  "Окно пересекается со входом.": "The window overlaps an entrance.",
+  "Окно смотрит в соседнюю часть здания: за ним — другой объём.": "The window faces another part of the building: there is another volume right behind it.",
+  "Этаж окна ({level}) вне этажей части {key} ({from}–{to}).": "The window's level ({level}) is outside the levels of part {key} ({from}–{to})."
 }

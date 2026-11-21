@@ -6241,6 +6241,11 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  /** Входы (и окна, если они включены) сцены режима здания — места на фасаде. */
+  focusOpenings(): EntrancePlace[] {
+    return this.groups.get(FOCUS_GROUP)?.entrances ?? [];
+  }
+
   /** Вход на месте в сцене режима здания: id узла → где стоит. */
   focusEntrance(id: number): EntrancePlace | undefined {
     return this.groups.get(FOCUS_GROUP)?.entrances.find((e) => e.id === id);

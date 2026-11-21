@@ -3896,6 +3896,18 @@ function updateSnapMarker(point: [number, number] | undefined) {
     }
     return;
   }
+  // Перенос окна и его ручки: привязка, к которой прилипло окно
+  if (entranceDrag?.start?.window && entranceDrag.phase === 'move') {
+    currentSnap = point ? entranceDrag.snap : undefined;
+    snapEl.hidden = !currentSnap;
+    if (currentSnap) {
+      snapEl.className = `snap-marker ${currentSnap.kind}`;
+      snapEl.dataset.label = currentSnap.label ?? SNAP_LABELS[currentSnap.kind];
+      snapEl.style.left = `${currentSnap.point[0]}px`;
+      snapEl.style.top = `${currentSnap.point[1]}px`;
+    }
+    return;
+  }
   // Привязки — только при активном инструменте
   currentSnap = !(focus || underlaySketch) || !point || !moveTool.active ? undefined
     : moveTool.state === 'move' ? moveTool.snap
@@ -8622,7 +8634,16 @@ let entranceDrag: {
   handle?: WindowHandle; start?: EntrancePlace;
   /** Новые теги окна (размеры, а при переносе — этаж и подоконник). */
   windowTags?: Record<string, string>;
+  /** Привязка под курсором (точка спроецирована на плоскость стены окна). */
+  snap?: SnapHit;
+  /** Ось, вдоль которой идёт перенос окна: 0 — вдоль стены, 2 — по вертикали; locked — зажат Shift. */
+  axis?: 0 | 2; locked?: 0 | 2;
+  /** Последняя точка окна на плоскости его стены (с осью и привязкой) — для высоты. */
+  lastQ?: { s: number; z: number };
 } | undefined;
+
+/** Ось переноса подхватывается, если курсор идёт к ней под углом не больше этого, °; ближе к началу — свободно, px. */
+const WINDOW_AXIS_DEG = 15, WINDOW_AXIS_MIN_PX = 6;
 
 function entranceTags(id: number): Record<string, string> | undefined {
   for (const g of liveFeatures()) { const e = g.entrances?.find((x) => x.id === id) ?? g.windows?.find((x) => x.id === id); if (e) return e.tags; }
@@ -8815,6 +8836,7 @@ function startEntranceDrag(phase: 'pick' | 'move' = 'move'): boolean {
 
 function cancelEntranceDrag() {
   if (!entranceDrag) return;
+  if (entranceDrag.start?.window) overpassLayer.setMoveGuide(undefined);
   entranceDrag = undefined;
   overpassLayer.previewEntrance(undefined);
   syncEntranceTool();
@@ -8824,6 +8846,54 @@ function cancelEntranceDrag() {
 function syncEntranceTool() {
   moveBtn.classList.toggle('active', moveTool.active || !!entranceDrag || !!gateDrag);
   syncCursor();
+}
+
+/**
+ * Точка в плоскости стены окна для перетаскивания: привязка под курсором (спроецированная на плоскость) или
+ * пересечение луча; from — опора (середина окна) для осей: курсор почти вдоль стены или вертикали — по оси.
+ */
+function windowDragPoint(point: [number, number], e: EntrancePlace, from?: { s: number; z: number }): { s: number; z: number } | undefined {
+  const d = entranceDrag!;
+  const own = `node/${d.id}`;
+  d.snap = overpassLayer.snapAt(point, (k) => k !== own);
+  // Привязка — только в плоскости стены окна (точка на ней, не дальше 0,3 м): углы, рёбра, другие окна этой стены
+  if (d.snap && (d.snap.kind === 'center' || Math.abs((d.snap.local.x - e.p[0]) * e.n[0] + (d.snap.local.y - e.p[1]) * e.n[1]) > 0.3)) d.snap = undefined;
+  let q: { s: number; z: number } | undefined;
+  if (d.snap) {
+    const v = d.snap.local;
+    q = { s: (v.x - e.p[0]) * e.t[0] + (v.y - e.p[1]) * e.t[1], z: v.z };
+  } else q = onWindowPlane(point, e);
+  if (!q || !from) { d.axis = undefined; return q; }
+  // Ось: зажатая Shift или подхваченная по направлению курсора на экране
+  const at = (s: number, z: number) => overpassLayer.focusProject(new THREE.Vector3(e.p[0] + e.t[0] * s, e.p[1] + e.t[1] * s, z));
+  let axis = d.locked;
+  if (axis === undefined) {
+    const s0 = at(from.s, from.z);
+    if (s0) {
+      const cx = point[0] - s0[0], cy = point[1] - s0[1], len = Math.hypot(cx, cy);
+      if (len >= WINDOW_AXIS_MIN_PX) {
+        let best: { a: 0 | 2; angle: number } | undefined;
+        for (const [a, s1] of [[0, at(from.s + 2, from.z)], [2, at(from.s, from.z + 2)]] as const) {
+          if (!s1) continue;
+          const dx = s1[0] - s0[0], dy = s1[1] - s0[1], l = Math.hypot(dx, dy);
+          if (l < 1) continue;
+          const angle = Math.acos(Math.min(1, Math.abs((cx * dx + cy * dy) / (len * l)))) * 180 / Math.PI;
+          if (!best || angle < best.angle) best = { a, angle };
+        }
+        if (best && best.angle < WINDOW_AXIS_DEG && !d.snap) axis = best.a;
+      }
+    }
+  }
+  if (shiftHeld && d.locked === undefined && axis !== undefined) d.locked = axis;
+  if (!shiftHeld) d.locked = undefined;
+  d.axis = axis;
+  if (axis === 0) q = { s: q.s, z: from.z };
+  else if (axis === 2) q = { s: from.s, z: q.z };
+  // Направляющая: от опоры к точке, цветом оси
+  const p0 = new THREE.Vector3(e.p[0] + e.t[0] * from.s, e.p[1] + e.t[1] * from.s, from.z);
+  const p1 = new THREE.Vector3(e.p[0] + e.t[0] * q.s, e.p[1] + e.t[1] * q.s, q.z);
+  overpassLayer.setMoveGuide({ from: p0, to: p1, axis, locked: d.locked, axes: { x: e.t, y: e.n } });
+  return q;
 }
 
 /** Точка на плоскости стены окна под курсором: вдоль стены от узла и высота, м сцены. */
@@ -8842,7 +8912,7 @@ function moveEntrance(point: [number, number]) {
   const tags = session.get(`node/${d.id}`)?.tags ?? entranceTags(d.id) ?? {};
   // Ручка окна: ширина — симметрично от узла, верх — высота проёма, низ — подоконник (верх стоит)
   if (d.handle && d.start?.window) {
-    const e = d.start, q = onWindowPlane(point, e);
+    const e = d.start, q = windowDragPoint(point, e);
     if (!q) return;
     const floor = e.window!.floor ?? e.z, h0 = e.window!.height, top = e.z + h0;
     let width = e.width ?? 1, height = h0, sill = e.z;
@@ -8860,7 +8930,7 @@ function moveEntrance(point: [number, number]) {
   d.target = cur?.window ? windowTargetAt(point, cur) : entranceTargetAt(point);
   if (d.target && cur?.window) {
     // Окно едет в плоскости стены по двум осям: вдоль стены и по высоте; этаж — по высоте на этой части
-    const pl = { ...d.target.place, id: d.id } as EntrancePlace, q = onWindowPlane(point, pl);
+    const pl = { ...d.target.place, id: d.id } as EntrancePlace, q = d.lastQ && d.target.key && Math.abs(pl.n[0] * cur.n[0] + pl.n[1] * cur.n[1]) > 0.99 ? d.lastQ : onWindowPlane(point, pl);
     const f = entity(d.target.key) as Feature3D | undefined;
     let z = cur.z, floor = cur.window.floor ?? cur.z;
     if (q && f) {
@@ -8882,7 +8952,9 @@ function moveEntrance(point: [number, number]) {
  * стену изнутри), мимо неё — стена под курсором, как у входа.
  */
 function windowTargetAt(point: [number, number], cur: EntrancePlace): EntranceTarget | undefined {
-  const q = onWindowPlane(point, cur);
+  // Опора осей — середина окна в начале переноса
+  const q = windowDragPoint(point, cur, { s: 0, z: cur.z + (cur.window?.height ?? 0) / 2 });
+  entranceDrag!.lastQ = q;
   if (q && focus) {
     const at: [number, number] = [cur.p[0] + cur.t[0] * q.s, cur.p[1] + cur.t[1] * q.s];
     // Стена на этой высоте: у ярусов с общим контуром (тонкая плита-«крыша» над частью) — та, что её покрывает

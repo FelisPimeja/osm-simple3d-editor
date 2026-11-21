@@ -8933,6 +8933,12 @@ function moveEntrance(point: [number, number]) {
     if (d.handle === 'left' || d.handle === 'right') width = Math.max(0.2, Math.round(Math.abs(q.s) * 2 * 100) / 100);
     else if (d.handle === 'top') height = Math.max(0.2, Math.round((q.z - e.z) * 100) / 100);
     else { sill = Math.min(top - 0.2, Math.max(floor, Math.round(q.z * 100) / 100)); height = top - sill; }
+    // Круглое окно: диаметр один — ширина и высота вместе (боковые и верхняя ручки — подоконник стоит, нижняя — верх стоит)
+    if ((tags['window:shape'] ?? '').trim().toLowerCase() === 'circle') {
+      const dia = Math.max(0.2, d.handle === 'left' || d.handle === 'right' ? width : height);
+      width = height = dia;
+      if (d.handle === 'bottom') sill = top - dia;
+    }
     d.windowTags = { ...tags, 'window:width': r2(width), 'window:height': r2(height), 'window:breast': r2(sill - floor) };
     overpassLayer.previewEntrance({ id: d.id, place: { ...e, z: sill, width, window: { ...e.window!, height, outline: windowOutline(tags, width, height) } } });
     toolHint(tr('Окно: ширина {w} м, высота {h} м, подоконник {b} м. Клик — применить, Esc — отмена.', { w: r2(width), h: r2(height), b: r2(sill - floor) }));

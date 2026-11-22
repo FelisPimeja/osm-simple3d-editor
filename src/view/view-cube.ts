@@ -26,6 +26,9 @@ const FOV_PERSPECTIVE = 36.87;
 /** Меньше — камера уходит так далеко, что 3D-слою не хватает точности буфера глубины (здания «просвечивают»). */
 const FOV_AXONOMETRIC = 3;
 const PROJECTION_KEY = 'view-projection';
+const FOV_KEY = 'view-fov';
+/** Пределы угла обзора перспективы, градусы по вертикали. */
+const FOV_MIN = 15, FOV_MAX = 90;
 
 /** Куб в сцене: центр, половина ребра и оси здания (метры сцены режима здания, x — восток, y — север). */
 export interface CubeFrame { center: V3; half: number; x: P2; y: P2 }
@@ -46,6 +49,11 @@ export interface ViewCubeOptions {
 export class ViewCube implements maplibregl.IControl {
   private map?: maplibregl.Map;
   private el!: HTMLDivElement;
+  /** Рисунок куба и кнопки — перерисовываются; окно настроек рядом — нет. */
+  private art!: HTMLDivElement;
+  private pop!: HTMLDivElement;
+  /** Угол обзора перспективы (настройка вида). */
+  private fov = FOV_PERSPECTIVE;
   private readonly sync = () => this.update();
   private lastKey = '';
   /** Выбрана аксонометрия — действует только в режиме здания, вне его всегда перспектива. */
@@ -60,6 +68,19 @@ export class ViewCube implements maplibregl.IControl {
     const el = this.el = document.createElement('div');
     el.className = 'maplibregl-ctrl view-cube';
     el.hidden = true;
+    this.art = document.createElement('div');
+    this.pop = document.createElement('div');
+    this.pop.className = 'vc-settings';
+    this.pop.hidden = true;
+    el.append(this.art, this.pop);
+    this.pop.addEventListener('click', (e) => e.stopPropagation());
+    this.pop.addEventListener('pointerdown', (e) => e.stopPropagation());
+    this.pop.addEventListener('input', (e) => {
+      const t = e.target as HTMLInputElement;
+      if (t.name === 'fov') this.setFov(Number(t.value));
+    });
+    document.addEventListener('pointerdown', (e) => { if (!this.pop.hidden && !el.contains(e.target as Node)) this.closeSettings(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !this.pop.hidden) this.closeSettings(); });
     el.addEventListener('click', (e) => this.click(e));
     // Ребро и угол — это 2 и 3 ячейки на соседних гранях с одним направлением (data-v): подсвечиваем все
     el.addEventListener('mouseover', (e) => this.hover((e.target as Element).closest<SVGElement>('.vc-cell')?.dataset.v));
@@ -73,6 +94,7 @@ export class ViewCube implements maplibregl.IControl {
     // Клик после перетаскивания — не переход к виду
     el.addEventListener('click', (e) => { if (this.dragged) { e.stopImmediatePropagation(); this.dragged = false; } }, true);
     try { this.axoChosen = localStorage.getItem(PROJECTION_KEY) === 'axo'; } catch { /* перспектива */ }
+    try { const v = Number(localStorage.getItem(FOV_KEY)); if (v >= FOV_MIN && v <= FOV_MAX) this.fov = v; } catch { /* по умолчанию */ }
     map.on('move', this.sync);
     return el;
   }
@@ -87,7 +109,7 @@ export class ViewCube implements maplibregl.IControl {
   update() {
     const frame = this.map ? this.opts.frame() : undefined;
     // Смена угла шлёт move и снова вызывает update — к этому моменту угол уже нужный, повтора нет
-    const fov = frame && this.axoChosen ? FOV_AXONOMETRIC : FOV_PERSPECTIVE;
+    const fov = frame && this.axoChosen ? FOV_AXONOMETRIC : this.fov;
     if (this.map && Math.abs(this.map.getVerticalFieldOfView() - fov) > 1e-6) this.map.setVerticalFieldOfView(fov);
     // Режим здания: вместо компаса карты — кнопка куба (стили по этому классу)
     this.map?.getContainer().classList.toggle('vc-mode', !!frame);
@@ -100,7 +122,7 @@ export class ViewCube implements maplibregl.IControl {
     if (key === this.lastKey) return;
     this.lastKey = key;
     this.el.hidden = !key;
-    if (!key || !f) { this.el.innerHTML = ''; return; }
+    if (!key || !f) { this.art.innerHTML = ''; this.closeSettings(); return; }
 
     // Все точки рисунка в координатах экрана, затем — общее масштабирование в рамку BOX
     const ring: (P2 | undefined)[] = [];
@@ -160,8 +182,10 @@ export class ViewCube implements maplibregl.IControl {
     }
     const axo = this.axonometric;
     const projTitle = axo ? tr('Аксонометрия — переключить на перспективу') : tr('Перспектива — переключить на аксонометрию');
-    this.el.innerHTML = `<svg viewBox="0 0 ${BOX} ${BOX}" width="${BOX}" height="${BOX}">${svg}</svg>`
-      + `<button type="button" class="vc-proj" title="${projTitle}" aria-label="${projTitle}">${axo ? tr('А') : tr('П')}</button>`;
+    const gearTitle = tr('Настройки вида');
+    this.art.innerHTML = `<svg viewBox="0 0 ${BOX} ${BOX}" width="${BOX}" height="${BOX}">${svg}</svg>`
+      + `<button type="button" class="vc-proj" title="${projTitle}" aria-label="${projTitle}">${axo ? tr('А') : tr('П')}</button>`
+      + `<button type="button" class="vc-gear${this.pop.hidden ? '' : ' active'}" title="${gearTitle}" aria-label="${gearTitle}"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M8.6 2.5h2.8l.4 2.1 1.5.9 2-.8 1.4 2.4-1.6 1.4v1.7l1.6 1.4-1.4 2.4-2-.8-1.5.9-.4 2.1H8.6l-.4-2.1-1.5-.9-2 .8-1.4-2.4 1.6-1.4V8.5L3.3 7.1l1.4-2.4 2 .8 1.5-.9z"/><circle cx="10" cy="10" r="2.4"/></svg></button>`;
     if (this.hovered) this.hover(this.hovered);
   }
 
@@ -178,6 +202,35 @@ export class ViewCube implements maplibregl.IControl {
     this.update();
   }
 
+  /** Окно настроек вида: угол обзора перспективы. */
+  private openSettings() {
+    this.pop.innerHTML = `<div class="vc-set-title">${tr('Настройки вида')}</div>`
+      + `<label class="vc-set-row"><span>${tr('Угол обзора')}</span><output>${Math.round(this.fov)}°</output></label>`
+      + `<input type="range" name="fov" min="${FOV_MIN}" max="${FOV_MAX}" step="1" value="${Math.round(this.fov)}">`
+      + `<div class="vc-set-hint">${tr('Вертикальный угол камеры в перспективе. По умолчанию {n}°.', { n: Math.round(FOV_PERSPECTIVE) })} `
+      + `<button type="button" class="vc-set-reset">${tr('Сбросить')}</button></div>`;
+    this.pop.querySelector('.vc-set-reset')!.addEventListener('click', () => {
+      this.setFov(FOV_PERSPECTIVE);
+      (this.pop.querySelector('input[name=fov]') as HTMLInputElement).value = String(Math.round(FOV_PERSPECTIVE));
+    });
+    this.pop.hidden = false;
+    this.el.querySelector('.vc-gear')?.classList.add('active');
+  }
+
+  private closeSettings() {
+    this.pop.hidden = true;
+    this.el.querySelector('.vc-gear')?.classList.remove('active');
+  }
+
+  private setFov(v: number) {
+    this.fov = Math.min(FOV_MAX, Math.max(FOV_MIN, v));
+    try { localStorage.setItem(FOV_KEY, String(this.fov)); } catch { /* только до перезагрузки */ }
+    const out = this.pop.querySelector('output');
+    if (out) out.textContent = `${Math.round(this.fov)}°`;
+    this.lastKey = '';
+    this.update();
+  }
+
   private hover(v: string | undefined) {
     this.hovered = v;
     for (const c of this.el.querySelectorAll<SVGElement>('.vc-cell')) c.classList.toggle('hover', !!v && c.dataset.v === v);
@@ -186,6 +239,7 @@ export class ViewCube implements maplibregl.IControl {
   private click(e: MouseEvent) {
     const t = e.target as Element;
     if (t.closest('.vc-proj')) { this.toggleProjection(); return; }
+    if (t.closest('.vc-gear')) { if (this.pop.hidden) this.openSettings(); else this.closeSettings(); return; }
     const f = this.opts.frame();
     if (!f || !this.map) return;
     const dir = t.closest<SVGElement>('.vc-dir');

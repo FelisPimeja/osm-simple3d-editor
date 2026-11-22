@@ -1736,5 +1736,8 @@
   "Подписи и иконки карты, закрытые зданием, приглушаются (пересчёт после остановки камеры)": "Map labels and icons hidden behind a building are dimmed (recomputed once the camera stops)",
   "Растровые контурные линии": "Raster contour lines",
   "С рельефом горизонтали натягиваются на него картинкой: появляются быстрее, но на крутых склонах размываются. Без галочки — линиями на своей высоте": "With terrain, contours are draped over it as an image: they appear sooner but blur on steep slopes. Unchecked, they are drawn as lines at their true height",
-  "3D рельеф": "3D terrain"
+  "3D рельеф": "3D terrain",
+  "Настройки вида": "View settings",
+  "Угол обзора": "Field of view",
+  "Вертикальный угол камеры в перспективе. По умолчанию {n}°.": "Vertical camera angle in perspective. Default {n}°."
 }

@@ -912,3 +912,19 @@ body.mobile #issues-panel { display: none !important; }
 .key-cast span { color: #333; text-shadow: 0 0 4px #fff; }
 /* Мобильная версия: куб — справа над нижними панелями (сверху его закрыла бы панель свойств); крутится пальцем */
 body.mobile .maplibregl-ctrl-top-right .view-cube { position: fixed; right: 8px; top: auto; bottom: calc(var(--mobile-bottom, 44px) + 8px); margin: 0; }
+/* Шестерёнка настроек вида — в правом верхнем углу куба, окно — под кубом */
+.view-cube .vc-gear {
+  position: absolute; right: 0; top: 10px; width: 22px; height: 22px; padding: 0; border: none; border-radius: 4px;
+  background: none; color: #374151; display: grid; place-items: center; cursor: pointer;
+}
+.view-cube .vc-gear:hover, .view-cube .vc-gear.active { background: rgba(0, 0, 0, 0.06); }
+.vc-settings { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; width: 220px; box-sizing: border-box; padding: 10px 12px;
+  background: #fff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.2); font-size: 13px; color: #1f2937; cursor: default; }
+.vc-settings[hidden] { display: none; }
+.vc-set-title { font-weight: 600; margin-bottom: 8px; }
+.vc-set-row { display: flex; justify-content: space-between; }
+.vc-settings input[type=range] { width: 100%; margin: 4px 0; accent-color: #2563eb; }
+.vc-set-hint { color: #6b7280; font-size: 11px; line-height: 1.4; }
+.vc-set-reset { padding: 0; border: 0; background: none; color: #2563eb; font: inherit; cursor: pointer; text-decoration: underline; }
+/* Мобильная версия: куб внизу — окно над ним */
+body.mobile .vc-settings { top: auto; bottom: calc(100% + 4px); }

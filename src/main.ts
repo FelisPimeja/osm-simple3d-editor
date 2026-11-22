@@ -1,3 +1,4 @@
+import { LabelOcclusion } from './view/label-occlusion';
 import { withEntranceTags } from './edit/entrance-edits';
 import { windowTuning } from './render/window-gen';
 import { cleanPiece, freeAreaPieces, joinedWalls } from './edit/free-area';
@@ -151,9 +152,9 @@ let replacedIds: number[] = [];
 const userHidden = new Set<string>();
 
 /** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean; terrain: boolean }
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean; terrain: boolean; labelOcclusion: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -694,6 +695,7 @@ overpassLayer.visible = buildingsView.shown;
 overpassLayer.setOpacity(buildingsView.opacity);
 overpassLayer.setWireframe(buildingsView.wireframe);
 const tileBorders = new TileBorders(map);
+const labelOcclusion = new LabelOcclusion(map, (pt) => overpassLayer.pickHit(pt), (ll, h) => overpassLayer.depthAt(ll, h), () => mapLoaded);
 const roadsLayer = new RoadsLayer('osm-roads-3d');
 const barriersLayer = new BarriersLayer();
 barriersLayer.iconFor = (t) => t.amenity === 'ticket_validator' || t.barrier === 'turnstile' || t.barrier === 'full-height_turnstile' ? poiSvg(t) : undefined;
@@ -1491,6 +1493,7 @@ function applyGraphics() {
   overpassLayer.setGraphics(gfx);
   tileBorders.setEnabled(gfx.tileBorders);
   tileBorders.setTiles(overpass.tiles());
+  labelOcclusion.setEnabled(gfx.labelOcclusion);
   if (barriersLayer.isEnabled !== gfx.barriers) { barriersLayer.setEnabled(gfx.barriers); scheduleBarriers(); }
   if (modelsLayer.isEnabled !== gfx.models3dmr) { modelsLayer.setEnabled(gfx.models3dmr); scheduleModels(); }
   modelPins.setShown(gfx.models3dmr);

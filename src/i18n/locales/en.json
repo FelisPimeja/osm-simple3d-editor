@@ -1726,5 +1726,7 @@
   "Синие ручки: по бокам — ширина (width), сверху — высота проёма (height); клик по ручке — тянуть, клик — применить.": "Blue handles: the sides set the width, the top the opening height; click a handle to drag it, click again to apply.",
   "Створок": "Leaves",
   "Дороги": "Roads",
-  "Прочее": "Other"
+  "Прочее": "Other",
+  "Заслонение подписей": "Label occlusion",
+  "Подписи и иконки карты, закрытые зданием, приглушаются (пересчёт после остановки камеры)": "Map labels and icons hidden behind a building are dimmed (recomputed once the camera stops)"
 }

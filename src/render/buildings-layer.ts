@@ -4518,16 +4518,16 @@ export class BuildingsLayer implements CustomLayerInterface {
    * Привязка к зданиям карты в наброске (в 3D — с высотой: углы по верху стен, а не только контур на земле), в метрах
    * сцены наброска. Вершины важнее середин.
    */
-  private mapGroupSnap(point: [number, number], filter: (key: string) => boolean, radius: number, opts: SnapOpts = {}): SnapHit | undefined {
+  private mapGroupSnap(point: [number, number], filter: (key: string) => boolean, radius: number, opts: SnapOpts = {}, frame?: MercatorCoordinate): SnapHit | undefined {
     const f = this.groups.get(FOCUS_GROUP);
-    if (!f || !this.map || !this.lastMain || !this.visible) return;
+    if ((!f && !frame) || !this.map || !this.lastMain || !this.visible) return;
+    const toFocus = f?.model.clone().invert();
     const canvas = this.map.getCanvas();
-    const toFocus = f.model.clone().invert();
     const v = new THREE.Vector4();
     const near: { s: SnapPoint; g: MeshGroup; d: number; px: [number, number] }[] = [];
     const off = this.snapKindsOff;
     for (const [key, g] of this.groups) {
-      if (key === FOCUS_GROUP || (!this.sketching && !this.contextGroups().includes(g))) continue;
+      if (key === FOCUS_GROUP || (!frame && !this.sketching && !this.contextGroups().includes(g))) continue;
       let snaps = this.mapSnaps.get(g);
       if (!snaps) { snaps = collectSnaps(g); this.mapSnaps.set(g, snaps); }
       const m = this.lastMain.clone().multiply(g.model);
@@ -4543,7 +4543,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
       if (!opts.noEdge && !off.has('edge')) {
         // Луч сцены наброска переводим в локальные метры здания карты.
-        const ray = this.focusRay(point)?.clone().applyMatrix4(f.model).applyMatrix4(g.model.clone().invert());
+        const ray = (f ? this.focusRay(point)?.clone().applyMatrix4(f.model) : this.worldRay(point))?.applyMatrix4(g.model.clone().invert());
         const a = new THREE.Vector4(), b = new THREE.Vector4(), p = new THREE.Vector3();
         if (ray) for (const e of snaps.edges) {
           if (!filter(e.key) || g.hidden.has(e.key)) continue;
@@ -4581,7 +4581,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     const best = near.sort((a, b) => a.d - b.d)[0];
     if (!best) return;
-    const local = world(best).applyMatrix4(toFocus);
+    if (frame) {
+      // Режим карты: метры вокруг frame (x — восток, y — север, z — высота)
+      const w = world(best), m = frame.meterInMercatorCoordinateUnits();
+      const local = new THREE.Vector3((w.x - frame.x) / m, -(w.y - frame.y) / m, w.z / m);
+      const ll = new MercatorCoordinate(w.x, w.y, w.z).toLngLat();
+      return { kind: best.s.kind, key: best.s.key, local, lngLat: ll, altitude: local.z, point: best.px };
+    }
+    const local = world(best).applyMatrix4(toFocus!);
     const ll = this.focusToLngLat(local.x, local.y);
     if (!ll) return;
     return { kind: best.s.kind, key: best.s.key, local, lngLat: new LngLat(ll[0], ll[1]), altitude: local.z, point: best.px };
@@ -4911,14 +4918,28 @@ export class BuildingsLayer implements CustomLayerInterface {
    * для инструментов в режиме карты, где сцены здания нет.
    */
   mapRay(point: [number, number], origin: MercatorCoordinate): THREE.Ray | undefined {
+    const r = this.worldRay(point);
+    if (!r) return;
+    const s = origin.meterInMercatorCoordinateUnits();
+    const toLocal = (v: THREE.Vector3) => new THREE.Vector3((v.x - origin.x) / s, -(v.y - origin.y) / s, v.z / s);
+    const near = toLocal(r.origin), far = toLocal(r.at(1, new THREE.Vector3()));
+    return new THREE.Ray(near, far.sub(near).normalize());
+  }
+
+  /** Привязка к зданиям карты в режиме карты (сцены здания нет): local — в метрах вокруг frame, как mapRay. */
+  mapModeSnap(point: [number, number], frame: MercatorCoordinate): SnapHit | undefined {
+    if (!this.snapsEnabled || this.snapsSuspended) return;
+    return this.mapGroupSnap(point, () => true, SNAP_RADIUS_PX, {}, frame);
+  }
+
+  /** Луч из камеры в мировых координатах Меркатора (направление не нормировано). */
+  private worldRay(point: [number, number]): THREE.Ray | undefined {
     if (!this.map || !this.lastMain) return;
     const canvas = this.map.getCanvas();
     const inv = this.lastMain.clone().invert();
     const x = (point[0] / canvas.clientWidth) * 2 - 1, y = 1 - (point[1] / canvas.clientHeight) * 2;
-    const s = origin.meterInMercatorCoordinateUnits();
-    const toLocal = (v: THREE.Vector3) => new THREE.Vector3((v.x - origin.x) / s, -(v.y - origin.y) / s, v.z / s);
-    const near = toLocal(new THREE.Vector3(x, y, -1).applyMatrix4(inv)), far = toLocal(new THREE.Vector3(x, y, 1).applyMatrix4(inv));
-    return new THREE.Ray(near, far.sub(near).normalize());
+    const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+    return new THREE.Ray(near, far.sub(near));
   }
 
   /** Луч из камеры через точку экрана — в метрах сцены режима одного здания. */

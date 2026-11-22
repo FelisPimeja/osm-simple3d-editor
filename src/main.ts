@@ -4874,20 +4874,22 @@ const measureTool = new MeasureTool(overpassLayer, map.getContainer(), (hint) =>
   syncCursor();
   toolHint(hint);
 }, (point, z) => {
-  // Режим карты: метры вокруг центра карты на момент выбора
+  // Режим карты: метры вокруг центра карты на момент выбора; привязки — к зданиям карты
   directionOrigin ??= maplibregl.MercatorCoordinate.fromLngLat(map.getCenter(), 0);
+  const snap = overpassLayer.mapModeSnap(point, directionOrigin);
+  if (snap) return { p: z === undefined ? snap.local.clone() : snap.local.clone().setZ(z), snap };
   const ray = overpassLayer.mapRay(point, directionOrigin);
   if (!ray) return;
   if (z === undefined) {
     const hit = overpassLayer.pickHit(point);
     if (hit) {
       const c = maplibregl.MercatorCoordinate.fromLngLat(hit.lngLat, hit.altitude), s = directionOrigin.meterInMercatorCoordinateUnits();
-      return new THREE.Vector3((c.x - directionOrigin.x) / s, -(c.y - directionOrigin.y) / s, hit.altitude);
+      return { p: new THREE.Vector3((c.x - directionOrigin.x) / s, -(c.y - directionOrigin.y) / s, hit.altitude) };
     }
-    const ll = map.unproject(point);
-    z = map.queryTerrainElevation?.(ll) ?? 0;
+    z = map.queryTerrainElevation?.(map.unproject(point)) ?? 0;
   }
-  return ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3()) ?? undefined;
+  const p = ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+  return p ? { p } : undefined;
 });
 /** Начало отсчёта точек направления в режиме карты (сбрасывается при каждом запуске). */
 let directionOrigin: maplibregl.MercatorCoordinate | undefined;

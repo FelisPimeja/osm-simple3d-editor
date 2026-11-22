@@ -153,9 +153,9 @@ let replacedIds: number[] = [];
 const userHidden = new Set<string>();
 
 /** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean; terrain: boolean; contoursRaster: boolean; labelOcclusion: boolean; windowTuner: boolean }
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean; terrain: boolean; contoursRaster: boolean; labelOcclusion: boolean; windowTuner: boolean; showKeys: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: false, windowTuner: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: false, windowTuner: false, showKeys: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -1408,7 +1408,41 @@ const windowTuner = (() => {
   return document.getElementById('window-tuner-panel')!;
 })();
 
-if (import.meta.env.DEV) document.getElementById('gfx-window-tuner')!.hidden = false;
+if (import.meta.env.DEV) for (const id of ['gfx-window-tuner', 'gfx-show-keys']) document.getElementById(id)!.hidden = false;
+
+// Показ нажатых клавиш (только dev) — для записи демонстраций: крупно под панелью настроек, гаснет через секунду
+const keyCast = (() => {
+  const box = document.createElement('div');
+  box.className = 'key-cast';
+  box.hidden = true;
+  document.body.append(box);
+  let timer = 0;
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+  const NAMES: Record<string, string> = { ' ': 'Space', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Escape: 'Esc', Enter: '⏎ Enter', Backspace: '⌫', Delete: 'Del', Tab: 'Tab' };
+  const show = (e: KeyboardEvent) => {
+    if (!import.meta.env.DEV || !gfx.showKeys) return;
+    const parts: string[] = [];
+    if (e.ctrlKey) parts.push(mac ? '⌃' : 'Ctrl');
+    if (e.altKey) parts.push(mac ? '⌥' : 'Alt');
+    if (e.shiftKey) parts.push(mac ? '⇧' : 'Shift');
+    if (e.metaKey) parts.push(mac ? '⌘' : 'Win');
+    if (!['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
+      // Буква — по физической клавише (с Alt/Shift e.key даёт другой символ)
+      const k = /^Key[A-Z]$/.test(e.code) ? e.code.slice(3) : /^Digit\d$/.test(e.code) ? e.code.slice(5) : NAMES[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+      parts.push(k);
+    }
+    box.innerHTML = parts.map((p) => `<kbd>${esc(p)}</kbd>`).join('<span>+</span>');
+    const panel = document.getElementById('panel')!.getBoundingClientRect();
+    box.style.top = `${panel.bottom + 12}px`;
+    box.style.left = `${panel.left}px`;
+    box.hidden = false;
+    box.classList.remove('fade');
+    clearTimeout(timer);
+    timer = window.setTimeout(() => box.classList.add('fade'), 1000);
+  };
+  window.addEventListener('keydown', show, true);
+  return { off: () => { box.hidden = true; } };
+})();
 
 // Настройки графики: отдельные галки, чтобы сравнивать влияние на производительность
 for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
@@ -1418,6 +1452,7 @@ for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
     gfx[key] = input.checked;
     saveGraphics();
     if (key === 'antialias') return location.reload();
+    if (key === 'showKeys' && !gfx.showKeys) keyCast.off();
     syncGraphicsDeps();
     applyGraphics();
     // Окна по тегам: раздел «Окна» в панели частей появляется и пропадает вместе с ними; выбранное окно снимается

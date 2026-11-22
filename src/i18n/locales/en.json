@@ -34,6 +34,8 @@
   "Помощь": "Help",
   "Части здания": "Building parts",
   "Генерация окон": "Window generation",
+  "Показывать нажатые клавиши": "Show keys pressed",
+  "Только в dev: крупно показывать нажимаемые клавиши под панелью настроек — для записи демонстраций": "Dev only: show pressed keys large under the settings panel — for recording demos",
   "Этажи": "Levels",
   "Проверка": "Validation",
   "Свойства": "Properties",

@@ -16,11 +16,18 @@ const DOOR_GAP = 0.3;
 /** Генерировать ли окна зданию: есть этажи, тип не служебный, нет window=no и стеклянного фасада. */
 export function wantsGeneratedWindows(tags: Record<string, string>): boolean {
   if (tags.window === 'no' || tags.windows === 'no') return false;
-  if (!(Number(tags['building:levels']) > 0)) return false;
+  if (!(Number(tags['building:levels']) > 0) && !partWindowSize(tags)) return false;
   if (tags['building:material'] === 'glass' || tags.material === 'glass') return false;
   if (tags.parking === 'multi-storey') return false;
   const type = tags['building:part'] && tags['building:part'] !== 'yes' ? tags['building:part'] : tags.building;
   return !NO_WINDOWS.has(type ?? '');
+}
+
+/** Размеры окон части из её тегов window:width / window:height / window:breast (м), если задано хоть одно. */
+export function partWindowSize(tags: Record<string, string>): { width?: number; height?: number; breast?: number } | undefined {
+  const m = (k: string, zero = false) => { const v = parseFloat(tags[k] ?? ''); return Number.isFinite(v) && (v > 0 || (zero && v === 0)) ? v : undefined; };
+  const r = { width: m('window:width'), height: m('window:height'), breast: m('window:breast', true) };
+  return r.width === undefined && r.height === undefined && r.breast === undefined ? undefined : r;
 }
 
 export interface WindowGenOpts {

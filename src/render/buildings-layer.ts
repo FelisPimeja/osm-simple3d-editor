@@ -9,7 +9,7 @@ import { trimIndoorBuildingEdges } from './indoor-building-edges';
 import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth, wallDoorwaySpan } from './door-openings';
 import { dropSlivers, RECESS_DEPTH, recessEntrances, type RecessPlace } from './entrance-recess';
-import { generateWindows, wantsGeneratedWindows, windowTuning } from './window-gen';
+import { generateWindows, partWindowSize, wantsGeneratedWindows, windowTuning } from './window-gen';
 /** Ниши входов: по умолчанию включены (localStorage entranceNiches=0 и перезагрузка — выключить). */
 const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') !== '0'; } catch { return true; } })();
 import * as THREE from 'three';
@@ -9526,20 +9526,28 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   const winHere = !focusOnlyWindows || !focusSceneOn || g.focusScene;
   if (windowsAuto && winHere && !tagged && !shell && !roofOnly && !flat && !tri.pending && wantsGeneratedWindows(tags) && !isGlass(roofPartWallMaterial(tags))) {
     timed('здание: сгенерированные окна', () => {
-      const levels = Number(tags['building:levels']) - (Number(tags['building:min_level']) || 0);
+      // Размеры окон из тегов части (window:width/height/breast, м); без этажности — один ярус на всю стену
+      const own = partWindowSize(tags);
+      const tagLevels = Number(tags['building:levels']) - (Number(tags['building:min_level']) || 0);
+      const levels = tagLevels >= 1 ? tagLevels : own ? 1 : 0;
       if (!(levels >= 1)) return;
+      const levelH = (heights.wallTop - heights.min) / levels;
+      const winW = own?.width ?? windowTuning.width;
+      const winH = own?.height !== undefined ? own.height / levelH : windowTuning.height;
+      const winB = own?.breast !== undefined ? own.breast / levelH : windowTuning.breast;
+      // Широкие окна — шаг не меньше ширины с простенком
       const solids = g.contacts?.solids.filter((s) => s.key !== f.key && s.box.intersectsBox(box2)) ?? [];
       const blocked = (p: Pt, z: number) => solids.some((s) => z >= s.z && z <= s.top && s.polys.some((q) =>
         pointInLocalRing(p, q.outer) && !q.inners.some((h) => pointInLocalRing(p, h))));
       const places = generateWindows(polys.map((q) => [q.outer, ...q.inners]), { min: heights.min, top: heights.wallTop, levels,
-        width: windowTuning.width, step: windowTuning.step, corner: windowTuning.corner, alignDoors: windowTuning.alignDoors, height: windowTuning.height, breast: windowTuning.breast, doors: [...doorPlaces, ...(g.contacts?.doors ?? []).filter((d) => d.key !== f.key).map((d) => ({ p: d.p, t: [1, 0] as Pt, n: [0, 1] as Pt, z: d.z, width: d.width, reach: NEIGHBOUR_DOOR_REACH }))],
+        width: winW, step: Math.max(windowTuning.step, winW + 1), corner: own?.width ? Math.min(windowTuning.corner, 1) : windowTuning.corner, alignDoors: windowTuning.alignDoors, height: winH, breast: winB, doors: [...doorPlaces, ...(g.contacts?.doors ?? []).filter((d) => d.key !== f.key).map((d) => ({ p: d.p, t: [1, 0] as Pt, n: [0, 1] as Pt, z: d.z, width: d.width, reach: NEIGHBOUR_DOOR_REACH }))],
         doorWidth: ENTRANCE_WIDTH, doorHeight: ENTRANCE_HEIGHT, blocked,
         // Проём арки: окно, задевающее его по высоте, не ставим (полоса арки — с запасом окна в ширину)
         hole: passage && ((p, t, z0, z1) => passage.ways.some((w) => z0 < w.z && z1 > (w.min ?? heights.min) && w.opening.some((q) =>
-          [0, -1, 1].some((k) => pointInLocalRing([p[0] + t[0] * k * windowTuning.width / 2, p[1] + t[1] * k * windowTuning.width / 2], q.outer))))) || undefined });
+          [0, -1, 1].some((k) => pointInLocalRing([p[0] + t[0] * k * winW / 2, p[1] + t[1] * k * winW / 2], q.outer))))) || undefined });
       // Без вырезания ниш (на сотнях фасадов это секунды): стекло — прямоугольником чуть перед стеной
       for (const w of places) {
-        const hw = (w.width ?? windowTuning.width) / 2, z1 = w.z + (w.height ?? 1);
+        const hw = (w.width ?? winW) / 2, z1 = w.z + (w.height ?? 1);
         const x = w.p[0] + w.n[0] * PANE_OFFSET, y = w.p[1] + w.n[1] * PANE_OFFSET;
         const ax = x - w.t[0] * hw, ay = y - w.t[1] * hw, bx = x + w.t[0] * hw, by = y + w.t[1] * hw;
         panes.push(ax, ay, w.z, bx, by, w.z, bx, by, z1, ax, ay, w.z, bx, by, z1, ax, ay, z1);

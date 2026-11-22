@@ -262,11 +262,9 @@ export class ViewCube implements maplibregl.IControl {
     const map = this.map;
     if (!map) return;
     const b0 = map.getBearing(), p0 = map.getPitch();
-    // На широком экране азимут растёт при драге вправо, в мобильной версии — наоборот (так привычнее на каждой)
-    const sx = document.body.classList.contains('mobile') ? -1 : 1;
     this.drag(e, (ev) => {
       const dx = ev.clientX - e.clientX, dy = ev.clientY - e.clientY;
-      map.jumpTo({ bearing: b0 + sx * dx * CUBE_DEG_PER_PX, pitch: Math.max(0, Math.min(map.getMaxPitch(), p0 - dy * CUBE_DEG_PER_PX)) });
+      map.jumpTo({ bearing: b0 + dx * CUBE_DEG_PER_PX, pitch: Math.max(0, Math.min(map.getMaxPitch(), p0 - dy * CUBE_DEG_PER_PX)) });
     });
   }
 }

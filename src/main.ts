@@ -4615,6 +4615,8 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(), shapeSelected
     syncCursor();
     toolHint(hint, error);
   });
+// Набросок на карте с рельефом: вершины — на земле под собой (сцена наброска стоит на отметке 0)
+shapeTool.groundZ = (x, y) => { if (focus || !ground.on) return 0; const ll = overpassLayer.focusToLngLat(x, y); return ll ? ground.at(ll) : 0; };
 shapeTool.multiObject = () => floraEditable(indoorSelection).some(editableIndoorGeometry);
 shapeTool.noInsert = key => !!buildingIndoorFor(key)?.escalator;
 // Ширина марша с полигоном пары: ручки на серединах боковых сторон (на полу этажа)
@@ -12241,7 +12243,8 @@ function drawIndoorGeometryPreview(edits: ObjectEdit[]) {
     if (!f) continue;
     const polys = e.polygons ?? (e.line ? [{ outer: e.line.coords, inners: [] }] : []);
     for (const p of polys) for (const r of [p.outer, ...p.inners]) {
-      const local = r.map(at => { const [x,y] = overpassLayer.focusToLocal(at)!; return new THREE.Vector3(x,y,(shownLevel?.floor ?? 0) + .03); });
+      // Набросок на карте с рельефом (ограждение): линия — по земле
+      const local = r.map(at => { const [x,y] = overpassLayer.focusToLocal(at)!; return new THREE.Vector3(x,y,(shownLevel?.floor ?? 0) + (!focus && ground.on ? ground.at(at) : 0) + .03); });
       if (!f?.line && local.length > 2) local.push(local[0].clone());
       if (local.length > 1) lines.push(local);
     }

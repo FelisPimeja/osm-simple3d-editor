@@ -220,6 +220,9 @@ export class ShapeTool {
     this.showHandles();
   }
 
+  /** Отметка земли под точкой плана, м сцены (сцена наброска на карте с рельефом); нет — 0. */
+  groundZ?: (x: number, y: number) => number;
+
   /** Объект выбранных вершин, когда выбор — в пределах одной части. */
   private get pickedKey() { return this.picked.values().next().value?.key; }
 
@@ -228,7 +231,10 @@ export class ShapeTool {
     return this.selected().flatMap((key) => {
       const polys = this.layer.focusPolygons(key), w = this.walls(key);
       if (!polys || !w) return [];
-      return polys.flatMap((p, poly) => [p.outer, ...p.inners].flatMap((r, ring) => r.map(([x, y], i) => ({ key, poly, ring, i, x, y, z: w.min, top: w.top }))));
+      return polys.flatMap((p, poly) => [p.outer, ...p.inners].flatMap((r, ring) => r.map(([x, y], i) => {
+        const g = this.groundZ?.(x, y) ?? 0;
+        return { key, poly, ring, i, x, y, z: w.min + g, top: w.top + g };
+      })));
     });
   }
 
@@ -289,7 +295,7 @@ export class ShapeTool {
     // Вершина основания — только в плане: за что бы её ни взяли (ребро стены на любой высоте), движение — в плоскости
     // основания, где маркеры
     const base = !t.roof && !t.eave && !t.width ? this.walls(t.key)?.min : undefined;
-    if (base !== undefined) t.from = t.from.clone().setZ(base);
+    if (base !== undefined) t.from = t.from.clone().setZ(base + (this.groundZ?.(t.from.x, t.from.y) ?? 0));
     // Где луч курсора в момент захвата пересёк плоскость основания: сдвиг — от неё (иначе вершина, взятая за ребро
     // стены выше основания, прыгнула бы под курсор на земле)
     const ray = this.lastPoint && this.layer.focusRay(this.lastPoint);
@@ -643,8 +649,9 @@ export class ShapeTool {
     for (const k of [t.i - 1, t.i + 1]) {
       if (this.isOpen?.(t.key) && (k < 0 || k >= ring.length)) continue;
       const [x, y] = ring[(k + ring.length) % ring.length];
-      const a = this.layer.focusProject(new THREE.Vector3(x, y, w.min));
-      const b = this.layer.focusProject(new THREE.Vector3(x, y, w.top));
+      const g = this.groundZ?.(x, y) ?? 0;
+      const a = this.layer.focusProject(new THREE.Vector3(x, y, w.min + g));
+      const b = this.layer.focusProject(new THREE.Vector3(x, y, w.top + g));
       if (a && b && segDist(point, a, b).d <= GRAB_PX) return [x, y];
     }
   }
@@ -663,7 +670,8 @@ export class ShapeTool {
       const o = moving.has(k) ? this.origin.get(k) : undefined;
       if (o) {
         active.push(pts.length);
-        pts.push(new THREE.Vector3(o[0] + this.offset.x, o[1] + this.offset.y, v.z));
+        const x = o[0] + this.offset.x, y = o[1] + this.offset.y;
+        pts.push(new THREE.Vector3(x, y, v.z - (this.groundZ?.(v.x, v.y) ?? 0) + (this.groundZ?.(x, y) ?? 0)));
         continue;
       }
       if (this.picked.has(k) || (!t && this.hover?.index === pts.length)) active.push(pts.length);
@@ -718,9 +726,10 @@ export class ShapeTool {
     polys.forEach((p, poly) => [p.outer, ...p.inners].forEach((r, ring) => r.forEach(([ax, ay], i) => {
       if (this.isOpen?.(key) && i === r.length - 1) return;
       const [bx, by] = r[(i + 1) % r.length];
-      for (const z of [w.min]) {
-        const a = this.layer.focusProject(new THREE.Vector3(ax, ay, z));
-        const b = this.layer.focusProject(new THREE.Vector3(bx, by, z));
+      const ga = this.groundZ?.(ax, ay) ?? 0, gb = this.groundZ?.(bx, by) ?? 0;
+      for (const z of [w.min + (ga + gb) / 2]) {
+        const a = this.layer.focusProject(new THREE.Vector3(ax, ay, w.min + ga));
+        const b = this.layer.focusProject(new THREE.Vector3(bx, by, w.min + gb));
         if (!a || !b) continue;
         const { d } = segDist(point, a, b);
         if (d > EDGE_PX || (best && d >= best.d)) continue;
@@ -729,7 +738,7 @@ export class ShapeTool {
         if (!hit || l2 < 1e-8) continue;
         const s = ((hit.x - ax) * ex + (hit.y - ay) * ey) / l2;
         if (s < EDGE_END || s > 1 - EDGE_END) continue;
-        best = { target: { key, poly, ring, i, insert: s, from: new THREE.Vector3(ax + s * ex, ay + s * ey, z) }, d };
+        best = { target: { key, poly, ring, i, insert: s, from: new THREE.Vector3(ax + s * ex, ay + s * ey, w.min + ga + (gb - ga) * s) }, d };
       }
     })));
     }
@@ -746,7 +755,7 @@ export class ShapeTool {
       const off = Math.abs((snap.local.x - ax) * ey - (snap.local.y - ay) * ex) / Math.sqrt(l2);
       if (off < 0.05 && s > EDGE_END && s < 1 - EDGE_END) {
         b.target.insert = s;
-        b.target.from.set(ax + s * ex, ay + s * ey, w.min);
+        b.target.from.set(ax + s * ex, ay + s * ey, w.min + (this.groundZ?.(ax + s * ex, ay + s * ey) ?? 0));
         b.snap = snap;
       }
     }

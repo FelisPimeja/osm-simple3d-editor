@@ -718,7 +718,7 @@ overpassLayer.visible = buildingsView.shown;
 overpassLayer.setOpacity(buildingsView.opacity);
 overpassLayer.setWireframe(buildingsView.wireframe);
 const tileBorders = new TileBorders(map);
-const labelOcclusion = new LabelOcclusion(map, (pt, inside) => overpassLayer.pickHit(pt, inside), (ll, h) => overpassLayer.depthAt(ll, h), () => mapLoaded, () => overpass.revision);
+const labelOcclusion = new LabelOcclusion(map, (pt, inside) => overpassLayer.pickHit(pt, inside), (ll, h) => overpassLayer.depthAt(ll, h), () => mapLoaded, () => overpass.revision * 1e6 + overpass.renderRevision);
 const roadsLayer = new RoadsLayer('osm-roads-3d');
 const barriersLayer = new BarriersLayer();
 barriersLayer.iconFor = (t) => t.amenity === 'ticket_validator' || t.barrier === 'turnstile' || t.barrier === 'full-height_turnstile' ? poiSvg(t) : undefined;

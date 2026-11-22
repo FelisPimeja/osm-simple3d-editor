@@ -4901,6 +4901,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const px = this.focusProjector()?.(p);
     if (!px) return false;
     if (this.snapHidden(p, px)) return true;
+    if (this.hiddenByOtherBuildings(p, px)) return true;
     const src = this.indoorEdgeOccluders;
     if (src !== this.occluderSrc || src.length !== this.occluderLen) {
       this.occluderF32 = new Float32Array(src); this.occluderSrc = src; this.occluderLen = src.length;
@@ -4911,6 +4912,33 @@ export class BuildingsLayer implements CustomLayerInterface {
     const d = ray.origin.distanceTo(p);
     // Значок на самой стене (вход, дверь) своей стеной не закрыт
     return occludedByTriangles(this.occluderF32, ray, d - 0.3);
+  }
+
+  /** Точка сцены здания p (на экране px) закрыта зданиями окружения (другие группы на карте). */
+  private hiddenByOtherBuildings(p: THREE.Vector3, px: [number, number]): boolean {
+    const f = this.groups.get(FOCUS_GROUP);
+    if (!f || !this.map) return false;
+    const canvas = this.map.getCanvas();
+    const x = (px[0] / canvas.clientWidth) * 2 - 1, y = 1 - (px[1] / canvas.clientHeight) * 2;
+    const world = p.clone().applyMatrix4(f.model);
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), hit = new THREE.Vector3();
+    for (const g of this.activeGroups()) {
+      if (g === f) continue;
+      const inv = g.camera.projectionMatrix.clone().invert();
+      const near = new THREE.Vector3(x, y, -1).applyMatrix4(inv), far = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+      const ray = new THREE.Ray(near, far.sub(near).normalize());
+      if (!ray.intersectsBox(groupBox(g))) continue;
+      const d = ray.origin.distanceTo(world.clone().applyMatrix4(g.model.clone().invert())) - 0.5;
+      for (const item of g.items) {
+        if (g.hidden.has(item.feature.key) || strokeOnly(g, item) || !ray.intersectsBox(item.box)) continue;
+        const pos = item.positions;
+        for (let i = 0; i < pos.length; i += 9) {
+          a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);
+          if (ray.intersectTriangle(a, b, c, false, hit) && hit.distanceTo(ray.origin) < d && !this.hiddenByCut(g, hit)) return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**

@@ -1211,6 +1211,8 @@ map.on('load', () => {
     'fill-extrusion-opacity': 0.9 * tileOpacity(),
   };
 
+  // Объёмы — под подписями и иконками стиля, чтобы здания их не закрывали
+  const labels = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
   // Здания из тайлов OpenFreeMap — только для серверов OSM; у OGF и OHM здания лишь из данных API
   if (server().tileBuildings) map.addLayer({
     id: BUILDINGS_LAYER,
@@ -1223,7 +1225,7 @@ map.on('load', () => {
       ...extrusion,
       'fill-extrusion-color': TILE_FILL,
     },
-  });
+  }, labels);
 
   // Контур выбранных рядов деревьев и лесов
   map.addSource('flora-selection', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -1235,7 +1237,7 @@ map.on('load', () => {
     source: 'outline-remainders',
     minzoom: 14,
     paint: { ...extrusion, 'fill-extrusion-color': TILE_FILL },
-  });
+  }, labels);
 
   map.addSource('merged-exploded', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
@@ -1244,7 +1246,7 @@ map.on('load', () => {
     source: 'merged-exploded',
     minzoom: 14,
     paint: { ...extrusion, 'fill-extrusion-color': TILE_FILL },
-  });
+  }, labels);
   map.addLayer({
     id: MERGED_HIGHLIGHT_LAYER,
     type: 'fill-extrusion',
@@ -1252,7 +1254,7 @@ map.on('load', () => {
     minzoom: 14,
     filter: ['==', ['get', 'key'], ''],
     paint: { ...extrusion, 'fill-extrusion-color': '#ff7a00' },
-  });
+  }, labels);
 
   if (server().tileBuildings) map.addLayer({
     id: HIGHLIGHT_LAYER,
@@ -1262,10 +1264,10 @@ map.on('load', () => {
     minzoom: 14,
     filter: ['==', ['id'], -1],
     paint: { ...extrusion, 'fill-extrusion-color': '#ff7a00' },
-  });
+  }, labels);
 
-  map.addLayer(roadsLayer);
-  map.addLayer(overpassLayer);
+  map.addLayer(roadsLayer, labels);
+  map.addLayer(overpassLayer, labels);
   tileBorders.addLayer();
   tileBorders.setEnabled(gfx.tileBorders);
   // Подземные здания без объёма — пунктирный контур на поверхности (поверх объёмов не прячется: рисуется после)

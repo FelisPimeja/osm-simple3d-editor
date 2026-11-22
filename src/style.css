@@ -891,11 +891,8 @@ body.mobile #issues-panel { display: none !important; }
 #pane-map .settings-sync { margin-top: 16px; }
 
 /* Временная панель подбора окон */
-.window-tuner { position: fixed; left: 130px; bottom: 40px; z-index: 50; background: var(--panel-bg, #fff); border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.2); padding: 10px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; width: 300px; }
-.window-tuner[hidden] { display: none; }
+#window-tuner-panel[hidden] { display: none; }
+.window-tuner { padding: 4px 12px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
 .window-tuner label { display: grid; grid-template-columns: 120px 1fr 44px; align-items: center; gap: 6px; }
 .window-tuner button { align-self: flex-start; }
 .window-tuner label.check { display: flex; gap: 6px; }
-.window-tuner .window-tuner-title { all: unset; cursor: pointer; font-weight: 600; }
-.window-tuner.folded { width: auto; padding: 6px 10px; }
-.window-tuner.folded > :not(.window-tuner-title) { display: none; }

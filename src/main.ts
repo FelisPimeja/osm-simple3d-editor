@@ -1358,8 +1358,7 @@ applyMonochrome();
 
 // Панель подбора параметров генерации окон — только в dev (видна при «Генерировать окна»); в проде — значения по умолчанию
 const windowTuner = (() => {
-  const box = document.createElement('div');
-  box.className = 'window-tuner';
+  const box = document.getElementById('window-tuner')!;
   const rows: [Exclude<keyof typeof windowTuning, 'alignDoors'>, string, number, number, number, (v: number) => string][] = [
     ['step', 'Шаг, м', 1, 6, 0.1, (v) => v.toFixed(1)],
     ['width', 'Ширина, м', 0.4, 3, 0.05, (v) => v.toFixed(2)],
@@ -1378,20 +1377,6 @@ const windowTuner = (() => {
     clearTimeout(timer);
     timer = window.setTimeout(() => overpassLayer.setWindowTuning({}), 250);
   };
-  // Заголовок — кнопка: сворачивает панель до неё (состояние помнится)
-  const title = document.createElement('button');
-  title.className = 'window-tuner-title';
-  const FOLD_KEY = 'osm3d.windowTunerFolded';
-  const fold = (on: boolean) => {
-    box.classList.toggle('folded', on);
-    title.textContent = on ? 'Окна ▸' : 'Окна (подбор) ▾';
-    try { localStorage.setItem(FOLD_KEY, on ? '1' : ''); } catch { /* приватный режим */ }
-  };
-  title.addEventListener('click', () => fold(!box.classList.contains('folded')));
-  let folded = false;
-  try { folded = !!localStorage.getItem(FOLD_KEY); } catch { /* нет хранилища */ }
-  fold(folded);
-  box.append(title);
   for (const [k, label, min, max, st, fmt] of rows) {
     const row = document.createElement('label');
     const name = document.createElement('span');
@@ -1420,8 +1405,7 @@ const windowTuner = (() => {
   alignRow.append(align, ' Оси окон над входами');
   showPier();
   box.append(alignRow, pier, reset);
-  document.body.append(box);
-  return box;
+  return document.getElementById('window-tuner-panel')!;
 })();
 
 if (import.meta.env.DEV) document.getElementById('gfx-window-tuner')!.hidden = false;

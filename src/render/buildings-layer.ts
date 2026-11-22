@@ -9,6 +9,7 @@ import { trimIndoorBuildingEdges } from './indoor-building-edges';
 import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth, wallDoorwaySpan } from './door-openings';
 import { dropSlivers, RECESS_DEPTH, recessEntrances, type RecessPlace } from './entrance-recess';
+import { parsePanes, windowPane } from './window-panes';
 import { generateWindows, partWindowSize, wantsGeneratedWindows, windowTuning } from './window-gen';
 /** Ниши входов: по умолчанию включены (localStorage entranceNiches=0 и перезагрузка — выключить). */
 const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') !== '0'; } catch { return true; } })();
@@ -627,6 +628,10 @@ interface Item {
   paneVertices?: number;
   /** Из них — сгенерированные окна (идут первыми): не объекты OSM, в выделении не синие. */
   genPaneVertices?: number;
+  /** Обводки стёкол и переплёты (отрезки xyz): сначала сгенерированных окон, потом по тегам. */
+  paneLines?: Float32Array;
+  /** Из них у сгенерированных окон — первые столько чисел. */
+  genPaneLineFloats?: number;
   wall: THREE.Color;
   roof: THREE.Color;
   top: number;
@@ -7673,7 +7678,7 @@ export class BuildingsLayer implements CustomLayerInterface {
 /** Рёбра нескольких объектов одним LineSegments. */
 /** Обводки сгенерированных окон в рёбрах объекта: [начало, конец) во floats (за телом, перед окнами по тегам). */
 function genPaneRange(it: Item): [number, number] {
-  const e = it.edges!, all = ((it.paneVertices ?? 0) / 6) * 24, gen = ((it.genPaneVertices ?? 0) / 6) * 24;
+  const e = it.edges!, all = it.paneLines?.length ?? 0, gen = it.genPaneLineFloats ?? 0;
   return [e.length - all, e.length - all + gen];
 }
 
@@ -7780,8 +7785,9 @@ function itemEdges(it: Item): Float32Array {
   // Стёкла окон (хвост вершин) — без рёбер: на тысячах окон сборка рёбер — секунды, а тёмный прямоугольник виден и так
   const panes = it.paneVertices ?? 0;
   const body = computeItemEdges(panes ? { ...it, positions: it.positions.subarray(0, it.positions.length - panes * 3) } : it);
-  let edges = panes ? withPaneOutlines(body, it.positions.subarray(it.positions.length - panes * 3)) : body;
-  if (it.seam) { const all = new Float32Array(edges.length + it.seam.length); all.set(edges); all.set(it.seam, edges.length); edges = all; }
+  // Стыки с фундаментом — до стёкол: обводки стёкол идут последними (genPaneRange считает от конца)
+  let edges = it.seam ? concatLines(body, it.seam) : body;
+  if (it.paneLines?.length) edges = concatLines(edges, it.paneLines);
   edgeCache.set(it.positions, { wallVertices: it.wallVertices, roofShape, edges });
   return edges;
 }
@@ -7800,20 +7806,7 @@ function fixed2(v: number): string {
   return s;
 }
 
-/** Обводка стёкол окон без сборки рёбер: стекло — два треугольника (a b c, a c d), рамка — a-b, b-c, c-d, d-a. */
-function withPaneOutlines(edges: Float32Array, panes: Float32Array): Float32Array {
-  const out = new Float32Array(edges.length + (panes.length / 18) * 24);
-  out.set(edges);
-  let o = edges.length;
-  for (let i = 0; i + 17 < panes.length; i += 18) {
-    const c = [0, 3, 6, 15].map((k) => i + k);
-    for (let j = 0; j < 4; j++) {
-      const a = c[j], b = c[(j + 1) % 4];
-      out.set(panes.subarray(a, a + 3), o); out.set(panes.subarray(b, b + 3), o + 3); o += 6;
-    }
-  }
-  return out;
-}
+const concatLines = (a: Float32Array, b: Float32Array) => { const out = new Float32Array(a.length + b.length); out.set(a); out.set(b, a.length); return out; };
 
 function computeItemEdges(it: Item): Float32Array {
   if (it.wallVertices * 3 >= it.positions.length) return edgePass(it.positions, [EDGE_ANGLE]).full[0];
@@ -9520,7 +9513,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     });
   }
   // Окна по тегам (флаг графики): ниша на своём этаже, подоконник и размеры — window:* или от высоты этажа
-  const panes: number[] = [];
+  const panes: number[] = [], paneLines: number[] = [];
   const tagged = f.windows?.some((w) => isWallWindow(w.tags));
   // Сгенерированные окна (флаг графики): у части с этажами и без размеченных окон, кроме глухих стен к соседям
   const winHere = !focusOnlyWindows || !focusSceneOn || g.focusScene;
@@ -9534,7 +9527,9 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       const levelH = (heights.wallTop - heights.min) / levels;
       const winW = own?.width ?? windowTuning.width;
       const winH = own?.height !== undefined ? own.height / levelH : windowTuning.height;
-      const winB = own?.breast !== undefined ? own.breast / levelH : windowTuning.breast;
+      // Высота задана, подоконник нет: обычный, если окно влезает под потолок яруса, иначе — по середине яруса
+      const winB = own?.breast !== undefined ? own.breast / levelH
+        : own?.height !== undefined && windowTuning.breast + winH > 0.98 ? Math.max(0, (1 - winH) / 2) : windowTuning.breast;
       // Широкие окна — шаг не меньше ширины с простенком
       const solids = g.contacts?.solids.filter((s) => s.key !== f.key && s.box.intersectsBox(box2)) ?? [];
       const blocked = (p: Pt, z: number) => solids.some((s) => z >= s.z && z <= s.top && s.polys.some((q) =>
@@ -9546,15 +9541,15 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
         hole: passage && ((p, t, z0, z1) => passage.ways.some((w) => z0 < w.z && z1 > (w.min ?? heights.min) && w.opening.some((q) =>
           [0, -1, 1].some((k) => pointInLocalRing([p[0] + t[0] * k * winW / 2, p[1] + t[1] * k * winW / 2], q.outer))))) || undefined });
       // Без вырезания ниш (на сотнях фасадов это секунды): стекло — прямоугольником чуть перед стеной
+      // Форма и переплёт — по тегам части (window:shape, window:top:shape, window:panes)
+      const grid = parsePanes(tags['window:panes']);
       for (const w of places) {
-        const hw = (w.width ?? winW) / 2, z1 = w.z + (w.height ?? 1);
-        const x = w.p[0] + w.n[0] * PANE_OFFSET, y = w.p[1] + w.n[1] * PANE_OFFSET;
-        const ax = x - w.t[0] * hw, ay = y - w.t[1] * hw, bx = x + w.t[0] * hw, by = y + w.t[1] * hw;
-        panes.push(ax, ay, w.z, bx, by, w.z, bx, by, z1, ax, ay, w.z, bx, by, z1, ax, ay, z1);
+        const width = w.width ?? winW, height = w.height ?? 1;
+        windowPane({ ...w, width, height, outline: windowOutline(tags, width, height) }, grid, PANE_OFFSET, panes, paneLines);
       }
     });
   }
-  const genPanes = panes.length;
+  const genPanes = panes.length, genLines = paneLines.length;
   if (windowsEnabled && winHere && !shell && !roofOnly && !flat && !tri.pending && f.windows?.length) {
     timed('здание: ниши окон', () => {
       // Фильтр и здесь: в кеше тайлов признаки, собранные до правил (window=yes на входе — дверь со стеклом)
@@ -9570,7 +9565,12 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
           const z = entranceZ(w, tags) + breast;
           if (z >= heights.wallTop - 1e-3 || z + height <= heights.min + 1e-3) return;
           const place = entrancePlace(rings, r, i, z);
-          if (place) places.push({ ...place, width, height, outline: windowOutline(w, width, height), open: w['window:material'] === 'no' });
+          if (place) {
+            const outline = windowOutline(w, width, height), open = w['window:material'] === 'no';
+            places.push({ ...place, width, height, outline, open });
+            // Обводка и переплёт — на стекле в глубине ниши
+            if (!open) windowPane({ ...place, width, height, outline }, parsePanes(w['window:panes']), -WINDOW_DEPTH, undefined, paneLines);
+          }
         }));
       });
       const cut = recessEntrances(tri.walls, places, { width: WINDOW_WIDTH, height: WINDOW_HEIGHT * levelH, min: heights.min, top: heights.wallTop, depth: WINDOW_DEPTH, panes });
@@ -9597,6 +9597,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   const wall = tags['building:colour'] ?? tags.colour ?? DEFAULT_WALL;
   const roof = tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
   if (lift) for (let i = 2; i < positions.length; i += 3) positions[i] += lift;
+  if (lift) for (let i = 2; i < paneLines.length; i += 3) paneLines[i] += lift;
   const box = new THREE.Box3();
   if (positions.length) box.setFromArray(positions);
   return {
@@ -9613,6 +9614,8 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     floorVertices: floors.length / 3,
     paneVertices: panes.length / 3,
     genPaneVertices: genPanes / 3,
+    paneLines: paneLines.length ? new Float32Array(paneLines) : undefined,
+    genPaneLineFloats: genLines,
     wall: parseColour(wall),
     roof: parseColour(roof),
     top: heights.top + lift,

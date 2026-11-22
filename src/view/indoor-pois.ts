@@ -11,6 +11,9 @@ import type { BuildingsLayer } from '../render/buildings-layer';
 const MAKI = import.meta.glob('/node_modules/@mapbox/maki/icons/*.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 const TEMAKI = import.meta.glob('/node_modules/@rapideditor/temaki/icons/{atm,vending_machine,vending_tickets,bench,ticket,clothes_hanger,fire_hydrant,turnstile}.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 
+/** На сколько выше пола проверять заслонение значка, м (около половины высоты стен этажа). */
+const OCCLUSION_LIFT = 1.2;
+
 /** Лестница — своя (в Maki и Temaki нет). */
 const STAIRS = '<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg"><path d="M1 13h3.5v-3h3V7h3V4H14v2h-2v3H9v3H6v3H1z"/></svg>';
 /** Вращающаяся дверь (в Maki и Temaki нет): круг с крестом створок. */
@@ -103,6 +106,9 @@ export class IndoorPois {
   private issueHighlighted = new Set<string>();
   private signature = '';
   private byEl = new Map<HTMLElement, IndoorFeature>();
+  /** Закрытые стенами от камеры (считаются после остановки камеры). */
+  private occluded = new Set<HTMLElement>();
+  private occlusionRun = 0;
   /** Предпросмотр «Переместить»: значки этих точек сдвинуты на offset (локальные метры). */
   private moving?: { keys: Set<string>; offset: THREE.Vector3 };
 
@@ -138,6 +144,8 @@ export class IndoorPois {
     });
     map.getContainer().appendChild(this.root);
     map.on('render', () => this.place());
+    map.on('idle', () => this.updateOcclusion());
+    map.on('movestart', () => { this.occlusionRun++; });
   }
 
   /** Подписи (номера и названия помещений) — без них в каркасе: значки остаются. */
@@ -238,8 +246,36 @@ export class IndoorPois {
       this.items.push({ key: f.key, el, local: new THREE.Vector3(local[0], local[1], position?.z ?? z + 0.3), shift: 'translate(-50%, 12px)', below: true, prio: 1 });
     }
     this.items.sort((a, b) => b.prio - a.prio);
+    this.occluded.clear();
     this.setSelection([...this.selected]);
     this.place();
+    this.updateOcclusion();
+  }
+
+  /**
+   * Заслонение как у подписей карты: значок или подпись, к которым луч от камеры упирается в стену раньше,
+   * не рисуется поверх неё. Считается после остановки камеры кусками по SLICE мс; движение обрывает проход.
+   */
+  private updateOcclusion() {
+    const run = ++this.occlusionRun;
+    const items = this.items.slice();
+    const next = new Set<HTMLElement>();
+    let i = 0;
+    const step = () => {
+      if (run !== this.occlusionRun) return;
+      const until = performance.now() + 4;
+      for (; i < items.length && performance.now() < until; i++) {
+        const it = items[i];
+        const local = this.moving?.keys.has(it.key) ? it.local.clone().add(this.moving.offset) : it.local;
+        // Проверяем точку на половине высоты стен: значок на полу у стены иначе прятался бы при любом наклоне
+        if (this.layer.focusPointHidden(local.clone().setZ(local.z + OCCLUSION_LIFT))) next.add(it.el);
+      }
+      if (i < items.length) { setTimeout(step, 0); return; }
+      const changed = next.size !== this.occluded.size || [...next].some((e) => !this.occluded.has(e));
+      this.occluded = next;
+      if (changed) this.place();
+    };
+    step();
   }
 
   /**
@@ -275,6 +311,10 @@ export class IndoorPois {
       if (!visible) continue;
       el.style.transform = `translate(${p![0]}px, ${p![1]}px)${shift ? ' ' + shift : ''}`;
       if (shift && !labels) continue; // подписи скрыты (каркас) — места не занимают
+      // Закрыт стеной — не рисуется и места не занимает (выделенный виден всегда)
+      const behind = this.occluded.has(el) && !this.isMarked(it.key);
+      el.classList.toggle('occluded', behind);
+      if (behind) continue;
       if (!it.w) { it.w = el.offsetWidth; it.h = el.offsetHeight; }
       const bw = it.w!, bh = it.h!;
       const x0 = p![0] - bw / 2 - GAP, x1 = p![0] + bw / 2 + GAP;

@@ -4882,6 +4882,30 @@ export class BuildingsLayer implements CustomLayerInterface {
     return false;
   }
 
+  private occluderF32 = new Float32Array();
+  private occluderSrc?: number[];
+  private occluderLen = -1;
+
+  /**
+   * Точка сцены режима здания закрыта от камеры стенами этажа или оболочкой здания (значки и подписи плана:
+   * закрытые не рисуются поверх стен).
+   */
+  focusPointHidden(p: THREE.Vector3): boolean {
+    const px = this.focusProjector()?.(p);
+    if (!px) return false;
+    if (this.snapHidden(p, px)) return true;
+    const src = this.indoorEdgeOccluders;
+    if (src !== this.occluderSrc || src.length !== this.occluderLen) {
+      this.occluderF32 = new Float32Array(src); this.occluderSrc = src; this.occluderLen = src.length;
+    }
+    if (!this.occluderF32.length) return false;
+    const ray = this.focusRay(px);
+    if (!ray) return false;
+    const d = ray.origin.distanceTo(p);
+    // Значок на самой стене (вход, дверь) своей стеной не закрыт
+    return occludedByTriangles(this.occluderF32, ray, d - 0.3);
+  }
+
   /** Луч из камеры через точку экрана — в метрах сцены режима одного здания. */
   focusRay(point: [number, number]): THREE.Ray | undefined {
     const g = this.groups.get(FOCUS_GROUP);

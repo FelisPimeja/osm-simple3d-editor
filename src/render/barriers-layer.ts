@@ -1,5 +1,8 @@
 import { ground } from './ground';
 import * as THREE from 'three';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { MercatorCoordinate, type Map as MlMap } from 'maplibre-gl';
 import { barrierShape, gateColour, gateWidth, type BarrierGate, type BarrierWay } from '../osm/barriers';
 import { parseLength } from '../osm/heights';
@@ -14,6 +17,8 @@ const HEDGE_PALE = 0.25;
 const OPENING = new THREE.MeshBasicMaterial({ color: 0x97beff, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false });
 /** Ограждение под «Формой»: полупрозрачное, чтобы ось и вершины внутри толщины были видны. */
 const GHOST = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.3, depthWrite: false });
+/** Ось ограждения под «Формой» — поверх объёма. */
+const AXIS = new LineMaterial({ color: 0x2f6fe0, linewidth: 3, depthTest: false, transparent: true });
 /** Выделенное — как у зданий. */
 const HIGHLIGHT = new THREE.Color('#97beff');
 /** Излом оси больше этого угла — вертикальное ребро в вершине. */
@@ -85,6 +90,9 @@ export class BarriersLayer {
   /** Полупрозрачные пути (id) и их меш. */
   private ghostIds = new Set<number>();
   private ghostMesh?: THREE.Mesh;
+  private ghostAxis?: LineSegments2;
+  /** Ось каждого пути (по номеру в ways): вершины x, y, z на земле. */
+  private axes: number[][] = [];
   private signature = '';
   private enabled = true;
   private monochrome = false;
@@ -148,6 +156,7 @@ export class BarriersLayer {
     if (!this.enabled || (!this.meshes.length && !this.openingMesh && !this.gateDots.length) || this.hidden()) return 0;
     this.pickMatrix = plain.clone().multiply(this.model);
     this.camera.projectionMatrix = main.clone().multiply(this.model);
+    if (this.ghostAxis) { const c = renderer.domElement; AXIS.resolution.set(c.width, c.height); }
     renderer.render(this.scene, this.camera);
     return renderer.info.render.triangles;
   }
@@ -184,6 +193,20 @@ export class BarriersLayer {
   /** Цвета вершин: исходные, монохром, подсветка выделенного; полупрозрачные пути — отдельным мешем. */
   private paint() {
     if (this.ghostMesh) { this.ghostMesh.geometry.dispose(); this.scene.remove(this.ghostMesh); this.ghostMesh = undefined; }
+    if (this.ghostAxis) { this.ghostAxis.geometry.dispose(); this.scene.remove(this.ghostAxis); this.ghostAxis = undefined; }
+    const ax: number[] = [];
+    this.ways.forEach((w, i) => {
+      const a = this.axes[i];
+      if (!this.ghostIds.has(w.id) || !a) return;
+      for (let k = 0; k + 5 < a.length; k += 3) ax.push(a[k], a[k + 1], a[k + 2], a[k + 3], a[k + 4], a[k + 5]);
+    });
+    if (ax.length) {
+      const g = new LineSegmentsGeometry().setPositions(ax);
+      this.ghostAxis = new LineSegments2(g, AXIS);
+      this.ghostAxis.renderOrder = 4;
+      this.ghostAxis.frustumCulled = false;
+      this.scene.add(this.ghostAxis);
+    }
     const gp: number[] = [], gc: number[] = [];
     this.meshes.forEach((m, i) => {
       const attr = m.geometry.getAttribute('color') as THREE.BufferAttribute, out = attr.array as Float32Array, src = this.colours[i], { way, gate } = this.tris[i];
@@ -298,6 +321,7 @@ export class BarriersLayer {
     const gateList: { way: number; gate: BarrierGate; at: Pt; z: number }[] = [];
     const lines: number[] = [];
     this.ways = ways;
+    const axes: number[][] = this.axes = ways.map(() => []);
     queueMicrotask(() => this.buildIcons());
     for (const [wi, way] of ways.entries()) {
       const sh = barrierShape(way.tags);
@@ -305,6 +329,7 @@ export class BarriersLayer {
       let ids = way.nodes.slice(), pts = way.coords.map(local);
       if (closedWay) { ids = ids.slice(0, -1); pts = pts.slice(0, -1); }
       if (pts.length < 2) continue;
+      for (const q of way.coords.map(local)) axes[wi].push(q[0], q[1], sh.min + 0.03);
       const col = parseColour(sh.colour), out = sh.seeThrough ? buf.see : buf.solid;
       const z0 = sh.min, z1 = sh.top;
       const put = (o: typeof out, c: THREE.Color, gate: number) => (a: number[], b: number[], d: number[]) => { o.p.push(...a, ...b, ...d); o.w.push(wi); o.g.push(gate); for (let k = 0; k < 3; k++) o.c.push(c.r, c.g, c.b); };
@@ -412,7 +437,7 @@ export class BarriersLayer {
         }
         return v;
       };
-      for (const arr of [buf.solid.p, buf.see.p, gateBuf.p, openBuf.p, lines]) for (let i = 0; i + 2 < arr.length; i += 3) arr[i + 2] += gz(arr[i], arr[i + 1]);
+      for (const arr of [buf.solid.p, buf.see.p, gateBuf.p, openBuf.p, lines, ...axes]) for (let i = 0; i + 2 < arr.length; i += 3) arr[i + 2] += gz(arr[i], arr[i + 1]);
       for (const g of gateList) g.z += gz(g.at[0], g.at[1]);
     }
     this.gates = gateList;
@@ -453,6 +478,7 @@ export class BarriersLayer {
   private clearMeshes() {
     for (const mesh of this.meshes) { mesh.geometry.dispose(); this.scene.remove(mesh); }
     if (this.ghostMesh) { this.ghostMesh.geometry.dispose(); this.scene.remove(this.ghostMesh); this.ghostMesh = undefined; }
+    if (this.ghostAxis) { this.ghostAxis.geometry.dispose(); this.scene.remove(this.ghostAxis); this.ghostAxis = undefined; }
     if (this.edges) { this.edges.geometry.dispose(); this.scene.remove(this.edges); this.edges = undefined; }
     this.meshes = [];
     this.colours = [];

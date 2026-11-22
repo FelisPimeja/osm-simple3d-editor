@@ -235,6 +235,9 @@ function withoutCliffs(trees: Float64Array, unit: number): Float64Array {
  * Деревья одного тайла: стволы, лиственные и хвойные кроны — инстансированные меши (по draw call на каждый).
  * Для дальнего плана — те же инстансы с упрощёнными кронами.
  */
+const GHOST_CROWN = new THREE.MeshLambertMaterial({ color: 0x6f9a5a, transparent: true, opacity: 0.25, depthWrite: false });
+const GHOST_TRUNK = new THREE.MeshLambertMaterial({ color: 0x7a5c44, transparent: true, opacity: 0.25, depthWrite: false });
+
 export class TreeGroup {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.Camera();
@@ -246,6 +249,7 @@ export class TreeGroup {
   private readonly broad: THREE.InstancedMesh;
   private readonly pointByCrown = new Map<THREE.InstancedMesh, (string | undefined)[]>();
   private readonly pointByTrunk: (string | undefined)[] = [];
+  private readonly pointByWoodTrunk: (string | undefined)[] = [];
   private readonly selectedInstances = new Map<string, { crown: THREE.InstancedMesh; crownIndex: number; trunkIndex?: number; x: number; y: number; z?: number }>();
   private selectedOverlay?: THREE.Group;
   private readonly broadSeeds: Float32Array;
@@ -330,7 +334,7 @@ export class TreeGroup {
       if (trunk > 0) {
         m.compose(pos.set(x, y, gz), q, scale.set(trunk, trunk, base + (height - base) * 0.3));
         if (!(flags & WOOD_FLAG)) { trunks.setMatrixAt(tr, m); this.pointByTrunk[tr] = pickKey; tr++; }
-        else woodTrunks.setMatrixAt(wtr++, m);
+        else { woodTrunks.setMatrixAt(wtr, m); this.pointByWoodTrunk[wtr] = pickKey; wtr++; }
       }
       m.compose(pos.set(x, y, gz + base), q, scale.set(crown / 2, crown / 2, height - base));
       // Разброс оттенка: светлее/темнее и чуть теплее/холоднее — множитель к цвету материала
@@ -469,6 +473,43 @@ export class TreeGroup {
     return best;
   }
 
+  /** Скрытые экземпляры полупрозрачных объектов (исходные матрицы — вернуть) и их полупрозрачные копии. */
+  private ghostSaved: { mesh: THREE.InstancedMesh; index: number; m: THREE.Matrix4 }[] = [];
+  private ghostMeshes: THREE.InstancedMesh[] = [];
+
+  /** Деревья рядов и лесов keys — полупрозрачные (их правят «Формой»: контур и вершины видны сквозь кроны). */
+  ghost(keys: ReadonlySet<string>) {
+    for (const { mesh, index, m } of this.ghostSaved) { mesh.setMatrixAt(index, m); mesh.instanceMatrix.needsUpdate = true; }
+    this.ghostSaved = [];
+    for (const g of this.ghostMeshes) { this.scene.remove(g); g.dispose(); }
+    this.ghostMeshes = [];
+    if (!keys.size) return;
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    // Билборды дальнего плана делят матрицы с подробными кронами — каждый буфер один раз
+    const done = new Set<THREE.InstancedBufferAttribute>();
+    for (const [mesh, ids] of [[this.trunks, this.pointByTrunk] as const, [this.woodTrunks, this.pointByWoodTrunk] as const, ...this.pointByCrown]) {
+      if (done.has(mesh.instanceMatrix)) continue;
+      done.add(mesh.instanceMatrix);
+      const mats: THREE.Matrix4[] = [];
+      ids.forEach((k, i) => {
+        if (!k || !keys.has(k) || i >= mesh.count) return;
+        const m = new THREE.Matrix4();
+        mesh.getMatrixAt(i, m);
+        this.ghostSaved.push({ mesh, index: i, m });
+        mats.push(m);
+        mesh.setMatrixAt(i, zero);
+      });
+      if (!mats.length) continue;
+      mesh.instanceMatrix.needsUpdate = true;
+      const g = new THREE.InstancedMesh(mesh.geometry, mesh === this.trunks || mesh === this.woodTrunks ? GHOST_TRUNK : GHOST_CROWN, mats.length);
+      mats.forEach((m, i) => g.setMatrixAt(i, m));
+      g.renderOrder = 10;
+      g.frustumCulled = false;
+      this.scene.add(g);
+      this.ghostMeshes.push(g);
+    }
+  }
+
   /** Подсветка кроны и ствола, плюс кружок на земле в исходной точке. */
   select(key: string | undefined) {
     this.clearSelection();
@@ -509,6 +550,7 @@ export class TreeGroup {
 
   dispose() {
     this.clearSelection();
+    for (const g of this.ghostMeshes) g.dispose();
     this.trunks.dispose();
     this.woodTrunks.dispose();
     for (const mesh of this.near) mesh.dispose();

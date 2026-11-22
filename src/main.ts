@@ -1839,6 +1839,8 @@ function syncFloraHighlight() {
   const fs = indoorSelection.filter((f) => (f.flora && f.flora !== 'tree') || (!f.flora && f.line && floraPreview?.keys.has(f.key)));
   // Отдельное дерево — подсветка его модели и кольцо на земле (у нескольких — первого)
   overpassLayer.setTreeSelection(indoorSelection.find((f) => f.flora === 'tree')?.key);
+  // Под «Формой» кроны ряда или леса закрывали бы контур и вершины — полупрозрачные
+  overpassLayer.setTreeGhost(shapeOn ? indoorSelection.filter((f) => f.flora && f.flora !== 'tree').map((f) => f.key) : []);
   src.setData({ type: 'FeatureCollection', features: fs.map((f) => ({ type: 'Feature', properties: {},
     geometry: { type: 'MultiLineString', coordinates: floraLines(f, floraPreview?.keys.has(f.key) ? floraPreview.m : undefined) } })) });
 }

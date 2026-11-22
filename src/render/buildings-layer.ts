@@ -863,6 +863,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     return this.plainDepth() ? new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]) : depthMain(options);
   }
   private selectedTreeKey?: string;
+  private ghostTrees: ReadonlySet<string> = new Set();
   /** Локальная система координат здания в режиме одного здания (в метрах сцены режима). */
   focusAxes?: LocalFrame;
   /** Точки привязки режима одного здания (в метрах сцены режима); undefined — пересчитать. */
@@ -6521,7 +6522,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const old = this.trees.get(key);
     if (old === trees) return;
     old?.dispose();
-    if (trees) { trees.applyLighting(this.graphics.hemisphere); trees.select(this.selectedTreeKey); this.trees.set(key, trees); } else this.trees.delete(key);
+    if (trees) { trees.applyLighting(this.graphics.hemisphere); trees.select(this.selectedTreeKey); trees.ghost(this.ghostTrees); this.trees.set(key, trees); } else this.trees.delete(key);
     this.map?.triggerRepaint();
   }
 
@@ -6532,6 +6533,14 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   treeKeys(): string[] {
     return [...this.trees.keys()];
+  }
+
+  /** Ряды и леса (ключи), деревья которых полупрозрачные — пока их правит «Форма». */
+  setTreeGhost(keys: string[]) {
+    if (keys.length === this.ghostTrees.size && keys.every((k) => this.ghostTrees.has(k))) return;
+    this.ghostTrees = new Set(keys);
+    for (const group of this.trees.values()) group.ghost(this.ghostTrees);
+    this.map?.triggerRepaint();
   }
 
   setTreeSelection(key: string | undefined) {

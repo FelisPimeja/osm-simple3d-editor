@@ -389,7 +389,8 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .maplibregl-ctrl-top-right .maplibregl-ctrl { margin-top: 0; }
 /* Куб выше группы кнопок (88 px) — центр по ней */
 .maplibregl-ctrl-top-right .view-cube { margin-top: -12px; }
-.view-cube { width: 112px; height: 112px; background: none; box-shadow: none !important; user-select: none; }
+.view-cube { width: 112px; height: 112px; background: none; box-shadow: none !important; user-select: none; touch-action: none; }
+.vc-face { cursor: grab; }
 .view-cube[hidden] { display: none; }
 .view-cube svg { display: block; overflow: visible; }
 .vc-ring { fill: none; stroke: rgba(160,170,185,.6); stroke-width: 10; stroke-linejoin: round; cursor: grab; }
@@ -909,3 +910,5 @@ body.mobile #issues-panel { display: none !important; }
 .key-cast.fade { opacity: 0; }
 .key-cast kbd { font: inherit; background: rgba(20,20,20,.82); border-radius: 10px; padding: 10px 16px; box-shadow: 0 2px 10px rgba(0,0,0,.3); min-width: 1.2em; text-align: center; }
 .key-cast span { color: #333; text-shadow: 0 0 4px #fff; }
+/* Мобильная версия: куб — справа над нижними панелями (сверху его закрыла бы панель свойств); крутится пальцем */
+body.mobile .maplibregl-ctrl-top-right .view-cube { position: fixed; right: 8px; top: auto; bottom: calc(var(--mobile-bottom, 44px) + 8px); margin: 0; }

@@ -41,6 +41,7 @@ export interface ViewCubeOptions {
  * View cube как в AutoCAD. Куб по осям здания, своя камера с азимутом и наклоном карты и небольшой перспективой. Клик по центру грани — вид с этой стороны,
  * по краю или углу — промежуточный (45°). Снизу MapLibre смотреть не умеет — нижние ячейки неактивны.
  * Кольцо компаса: клик по букве — вид на север/восток/…, перетаскивание — поворот по азимуту.
+ * Перетаскивание самого куба (мышью или пальцем) — поворот сцены в сторону драга: азимут и наклон.
  */
 export class ViewCube implements maplibregl.IControl {
   private map?: maplibregl.Map;
@@ -63,7 +64,14 @@ export class ViewCube implements maplibregl.IControl {
     // Ребро и угол — это 2 и 3 ячейки на соседних гранях с одним направлением (data-v): подсвечиваем все
     el.addEventListener('mouseover', (e) => this.hover((e.target as Element).closest<SVGElement>('.vc-cell')?.dataset.v));
     el.addEventListener('mouseleave', () => this.hover(undefined));
-    el.addEventListener('mousedown', (e) => { if ((e.target as Element).closest('.vc-ring')) this.dragRing(e); });
+    // Кольцо — поворот по азимуту, куб — по направлению драга (азимут и наклон); мышь и касание
+    el.addEventListener('pointerdown', (e) => {
+      const t = e.target as Element;
+      if (t.closest('.vc-ring')) this.dragRing(e);
+      else if (t.closest('.vc-face')) this.dragCube(e);
+    });
+    // Клик после перетаскивания — не переход к виду
+    el.addEventListener('click', (e) => { if (this.dragged) { e.stopImmediatePropagation(); this.dragged = false; } }, true);
     try { this.axoChosen = localStorage.getItem(PROJECTION_KEY) === 'axo'; } catch { /* перспектива */ }
     map.on('move', this.sync);
     return el;
@@ -181,7 +189,7 @@ export class ViewCube implements maplibregl.IControl {
     const f = this.opts.frame();
     if (!f || !this.map) return;
     const dir = t.closest<SVGElement>('.vc-dir');
-    if (dir && !this.ringDragged) {
+    if (dir) {
       // Буква — смотрим на эту сторону света, наклон прежний
       const [dx, dy] = dir.dataset.dir!.split(',').map(Number);
       return this.go(Math.atan2(dx, dy) * DEG, this.map.getPitch(), false);
@@ -206,32 +214,63 @@ export class ViewCube implements maplibregl.IControl {
     map.easeTo({ bearing: target, pitch: Math.min(pitch, map.getMaxPitch()), center: recenter ? this.opts.center() : undefined, duration: 600 });
   }
 
-  private ringDragged = false;
+  /** Было перетаскивание — следующий click не обрабатывать. */
+  private dragged = false;
+
+  /** Общий драг: move получает смещение от начала, после порога в 3 px. */
+  private drag(e: PointerEvent, move: (ev: PointerEvent) => void) {
+    if (!this.map || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const x0 = e.clientX, y0 = e.clientY, id = e.pointerId;
+    let active = false;
+    this.dragged = false;
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== id) return;
+      if (!active && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return;
+      active = true;
+      move(ev);
+    };
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== id) return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      this.dragged = active;
+      // Касание может не прислать click — сброс, чтобы не съесть следующий
+      setTimeout(() => (this.dragged = false), 300);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  }
 
   /** Перетаскивание кольца — поворот по азимуту вокруг центра элемента. */
-  private dragRing(e: MouseEvent) {
-    if (!this.map || e.button !== 0) return;
-    e.preventDefault();
+  private dragRing(e: PointerEvent) {
     const r = this.el.getBoundingClientRect();
     const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-    const angle = (ev: MouseEvent) => Math.atan2(ev.clientX - cx, cy - ev.clientY) * DEG;
-    const start = angle(e), b0 = this.map.getBearing();
-    this.ringDragged = false;
-    const move = (ev: MouseEvent) => {
-      const d = angle(ev) - start;
-      if (Math.abs(d) > 2) this.ringDragged = true;
-      if (this.ringDragged) this.map?.setBearing(b0 - d);
-    };
-    const up = () => {
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
-      // click после перетаскивания не должен ещё и повернуть к букве
-      setTimeout(() => (this.ringDragged = false), 0);
-    };
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
+    const angle = (ev: PointerEvent) => Math.atan2(ev.clientX - cx, cy - ev.clientY) * DEG;
+    const start = angle(e), b0 = this.map?.getBearing() ?? 0;
+    this.drag(e, (ev) => this.map?.setBearing(b0 - (angle(ev) - start)));
+  }
+
+  /**
+   * Перетаскивание куба — сцена поворачивается вслед за пальцем: по горизонтали — азимут, по вертикали — наклон,
+   * по диагонали — оба сразу (ось поворота перпендикулярна драгу).
+   */
+  private dragCube(e: PointerEvent) {
+    const map = this.map;
+    if (!map) return;
+    const b0 = map.getBearing(), p0 = map.getPitch();
+    this.drag(e, (ev) => {
+      const dx = ev.clientX - e.clientX, dy = ev.clientY - e.clientY;
+      map.jumpTo({ bearing: b0 - dx * CUBE_DEG_PER_PX, pitch: Math.max(0, Math.min(map.getMaxPitch(), p0 - dy * CUBE_DEG_PER_PX)) });
+    });
   }
 }
+
+/** Чувствительность драга куба, градусов на пиксель. */
+const CUBE_DEG_PER_PX = 0.8;
 
 /** n + right·u + up·w. */
 function add(n: V3, right: V3, u: number, up: V3, w: number): V3 {

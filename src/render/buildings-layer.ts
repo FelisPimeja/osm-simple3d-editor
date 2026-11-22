@@ -9535,7 +9535,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       const blocked = (p: Pt, z: number) => solids.some((s) => z >= s.z && z <= s.top && s.polys.some((q) =>
         pointInLocalRing(p, q.outer) && !q.inners.some((h) => pointInLocalRing(p, h))));
       const places = generateWindows(polys.map((q) => [q.outer, ...q.inners]), { min: heights.min, top: heights.wallTop, levels,
-        width: winW, step: Math.max(windowTuning.step, winW + 1), corner: own?.width ? Math.min(windowTuning.corner, 0.3) : windowTuning.corner, alignDoors: windowTuning.alignDoors, height: winH, breast: winB, doors: [...doorPlaces, ...(g.contacts?.doors ?? []).filter((d) => d.key !== f.key).map((d) => ({ p: d.p, t: [1, 0] as Pt, n: [0, 1] as Pt, z: d.z, width: d.width, reach: NEIGHBOUR_DOOR_REACH }))],
+        width: winW, step: Math.max(windowTuning.step, winW + 1), corner: own?.width ? Math.min(windowTuning.corner, 0.3) : windowTuning.corner, alignDoors: windowTuning.alignDoors, even: !!own?.width, height: winH, breast: winB, doors: [...doorPlaces, ...(g.contacts?.doors ?? []).filter((d) => d.key !== f.key).map((d) => ({ p: d.p, t: [1, 0] as Pt, n: [0, 1] as Pt, z: d.z, width: d.width, reach: NEIGHBOUR_DOOR_REACH }))],
         doorWidth: ENTRANCE_WIDTH, doorHeight: ENTRANCE_HEIGHT, blocked,
         // Проём арки: окно, задевающее его по высоте, не ставим (полоса арки — с запасом окна в ширину)
         hole: passage && ((p, t, z0, z1) => passage.ways.some((w) => z0 < w.z && z1 > (w.min ?? heights.min) && w.opening.some((q) =>

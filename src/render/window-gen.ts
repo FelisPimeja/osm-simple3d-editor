@@ -41,6 +41,8 @@ export interface WindowGenOpts {
   step: number;
   /** От угла до края окна — не меньше, м. */
   corner: number;
+  /** Окна поровну по фасаду: сколько влезает с простенком, одно — по середине (размеры окон заданы тегами части). */
+  even?: boolean;
   /** Ставить ось окон над каждым входом фасада, остальные — равномерно между входами и углами. */
   alignDoors?: boolean;
   /** Доли высоты этажа. */
@@ -118,7 +120,11 @@ export function generateWindows(polygons: Pt[][][], o: WindowGenOpts): RecessPla
       if (!axes.length) {
         // Оси окон — между крайними (простенок у угла от края окна), шаг ближайший к заданному
         const k = Math.round((hi - lo) / o.step);
-        if (k < 1) cols.push((lo + hi) / 2);
+        if (o.even) {
+          // Сколько окон влезает с простенком (step − width) между ними — по середине равных долей фасада
+          const n = Math.max(1, Math.floor((len - 2 * o.corner + o.step - o.width) / o.step));
+          for (let j = 0; j < n; j++) cols.push(len * (j + 0.5) / n);
+        } else if (k < 1) cols.push((lo + hi) / 2);
         else for (let j = 0; j <= k; j++) cols.push(lo + (hi - lo) * j / k);
       } else {
         // Между угловым окном (lo/hi) и входом и между входами — равный шаг, ближайший к заданному

@@ -72,14 +72,17 @@
       <label class="toggle"><input type="checkbox" data-gfx="noGlass" /> Выключить стёкла</label>
       <label class="toggle" title="У зданий и частей без height и building:levels — стены 3,5 м по умолчанию; выключено — плоский след (на своём min_height)"><input type="checkbox" data-gfx="defaultHeight" /> Поднимать здания с дефолтной высотой</label>
       <h2 class="panel-sec">Экспериментальное</h2>
+      <h3 class="panel-group">Окна</h3>
       <label class="toggle" title="window=* на узлах контура: ниша на своём этаже (level), размеры — window:width, window:height, window:breast"><input type="checkbox" data-gfx="windows" /> Окна по тегам</label>
       <label class="toggle" title="У зданий с building:levels без размеченных окон: окна по этажам с шагом около 2 м, без окон на глухих стенах к соседям, у входов и у служебных зданий"><input type="checkbox" data-gfx="windowsAuto" /> Генерировать окна</label>
       <label class="toggle" title="Снято — у окон только обводка"><input type="checkbox" data-gfx="windowFill" /> Заливка окон</label>
       <label class="toggle" title="В режиме здания показывать окна и у соседних зданий"><input type="checkbox" data-gfx="windowsNeighbours" /> Окна у соседей</label>
-      <label class="toggle" title="Не рисовать ребро между соседними частями, если их грани у него продолжают друг друга (фасад через две части, часть на части с тем же контуром). Сборка рёбер заметно дольше"><input type="checkbox" data-gfx="partSeams" /> Скрывать стыки частей</label>
+      <h3 class="panel-group">Дороги</h3>
       <label class="toggle" title="Эксперимент: мосты по тегам bridge и layer; подходы к ним плавно поднимаются от земли (уклон дорог 8 %, шаг уровня 6 м)"><input type="checkbox" data-gfx="bridges3d" /> Показывать мосты</label>
-      <label class="toggle" title="Эксперимент: объёмный рельеф (Mapterhorn) на карте; здания стоят на минимальной отметке под контуром. В режиме здания рельеф снимается"><input type="checkbox" data-gfx="terrain" /> Рельеф</label>
       <label class="toggle" title="Эксперимент: тоннели по тегам tunnel и layer; подходы к ним плавно опускаются (уклон дорог 8 %, шаг уровня 6 м)"><input type="checkbox" data-gfx="tunnels3d" /> Показывать тоннели</label>
+      <h3 class="panel-group">Прочее</h3>
+      <label class="toggle" title="Не рисовать ребро между соседними частями, если их грани у него продолжают друг друга (фасад через две части, часть на части с тем же контуром). Сборка рёбер заметно дольше"><input type="checkbox" data-gfx="partSeams" /> Скрывать стыки частей</label>
+      <label class="toggle" title="Эксперимент: объёмный рельеф (Mapterhorn) на карте; здания стоят на минимальной отметке под контуром. В режиме здания рельеф снимается"><input type="checkbox" data-gfx="terrain" /> Рельеф</label>
     </div>
     <div class="panel-tab" id="pane-advanced" role="tabpanel" aria-labelledby="tab-advanced" hidden>
       <h2 class="panel-sec">Данные карты</h2>

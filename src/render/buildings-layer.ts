@@ -6580,8 +6580,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Ближайшее здание под точкой экрана и 3D-точка попадания (lng/lat + высота в метрах). */
-  pickHit(point: PointLike): { key: string; lngLat: LngLat; altitude: number; local: THREE.Vector3 } | undefined {
-    return timed(`${this.id}: выбор под курсором`, () => this.pickHitImpl(point));
+  pickHit(point: PointLike, inside?: LonLat): { key: string; lngLat: LngLat; altitude: number; local: THREE.Vector3 } | undefined {
+    return timed(`${this.id}: выбор под курсором`, () => this.pickHitImpl(point, inside));
   }
 
   /** Все объекты под курсором — от ближнего к дальнему (Alt+клик перебирает их). */
@@ -6623,7 +6623,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     return !!this.level && g === this.groups.get(FOCUS_GROUP) && p.z > (this.levelCut ?? this.level.cut) + 1e-3;
   }
 
-  private pickHitImpl(point: PointLike): { key: string; lngLat: LngLat; altitude: number; local: THREE.Vector3 } | undefined {
+  /** inside — точка на земле: здания и части, в контуре которых она лежит, пропускаются (луч к POI внутри здания). */
+  private pickHitImpl(point: PointLike, inside?: LonLat): { key: string; lngLat: LngLat; altitude: number; local: THREE.Vector3 } | undefined {
     if (!this.visible || !this.map) return;
     const [px, py] = Array.isArray(point) ? point : [point.x, point.y];
     const canvas = this.map.getCanvas();
@@ -6643,6 +6644,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       let groupBest: { item: Item; dist: number; p: THREE.Vector3 } | undefined;
       for (const item of g.items) {
         if (g.hidden.has(item.feature.key) || !ray.intersectsBox(item.box)) continue;
+        if (inside && item.feature.polygons.some((q) => pointInRing(inside, q.outer) && !q.inners.some((r) => pointInRing(inside, r)))) continue;
         const pos = item.positions;
         for (let i = 0; i < pos.length; i += 9) {
           a.fromArray(pos, i); b.fromArray(pos, i + 3); c.fromArray(pos, i + 6);

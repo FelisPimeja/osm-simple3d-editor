@@ -36,7 +36,7 @@ export class LabelOcclusion {
   private marked = new Map<string, { source: string; sourceLayer?: string; id: string | number }>();
   private readonly onIdle = () => this.update();
 
-  constructor(private map: MlMap, private pickHit: (p: [number, number]) => Hit, private depthAt: Depth, private ready: () => boolean) {}
+  constructor(private map: MlMap, private pickHit: (p: [number, number], inside: [number, number]) => Hit, private depthAt: Depth, private ready: () => boolean) {}
 
   setEnabled(on: boolean) {
     if (on === this.enabled) return;
@@ -92,7 +92,7 @@ export class LabelOcclusion {
       const [lng, lat] = f.geometry.coordinates as [number, number];
       const ground = this.map.queryTerrainElevation?.([lng, lat]) ?? 0;
       const pt = this.map.project([lng, lat]);
-      const hit = this.pickHit([pt.x, pt.y]);
+      const hit = this.pickHit([pt.x, pt.y], [lng, lat]);
       if (!hit) continue;
       // Попадание на луче ближе к камере, чем сама точка, и не рядом с ней
       const dHit = this.depthAt(hit.lngLat, hit.altitude), dLabel = this.depthAt({ lng, lat }, ground);

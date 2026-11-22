@@ -10,7 +10,7 @@ import { revolvingDoorDiameter, revolvingDoorModel } from './revolving-door';
 import { cutDoorOpenings, doorOpeningHalfWidth, wallDoorwaySpan } from './door-openings';
 import { dropSlivers, RECESS_DEPTH, recessEntrances, type RecessPlace } from './entrance-recess';
 import { parsePanes, windowPane } from './window-panes';
-import { generateWindows, partWindowSize, wantsGeneratedWindows, windowTuning } from './window-gen';
+import { estimatedPartLevels, generateWindows, partWindowSize, wantsGeneratedWindows, windowTuning } from './window-gen';
 /** Ниши входов: по умолчанию включены (localStorage entranceNiches=0 и перезагрузка — выключить). */
 const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') !== '0'; } catch { return true; } })();
 import * as THREE from 'three';
@@ -9557,7 +9557,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       // Размеры окон из тегов части (window:width/height/breast, м); без этажности — один ярус на всю стену
       const own = partWindowSize(tags);
       const tagLevels = Number(tags['building:levels']) - (Number(tags['building:min_level']) || 0);
-      const levels = tagLevels >= 1 ? tagLevels : own ? 1 : 0;
+      const levels = tagLevels >= 1 ? tagLevels : own ? 1 : estimatedPartLevels(tags, heights.wallTop - heights.min, LEVEL_HEIGHT);
       if (!(levels >= 1)) return;
       const levelH = (heights.wallTop - heights.min) / levels;
       const winW = own?.width ?? windowTuning.width;

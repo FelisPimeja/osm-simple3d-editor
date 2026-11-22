@@ -16,11 +16,18 @@ const DOOR_GAP = 0.3;
 /** Генерировать ли окна зданию: есть этажи, тип не служебный, нет window=no и стеклянного фасада. */
 export function wantsGeneratedWindows(tags: Record<string, string>): boolean {
   if (tags.window === 'no' || tags.windows === 'no') return false;
-  if (!(Number(tags['building:levels']) > 0) && !partWindowSize(tags)) return false;
+  // Часть без этажности (этажность обычно у контура здания) — этажи по высоте стен, см. estimatedPartLevels
+  if (!(Number(tags['building:levels']) > 0) && !partWindowSize(tags) && !tags['building:part']) return false;
   if (tags['building:material'] === 'glass' || tags.material === 'glass') return false;
   if (tags.parking === 'multi-storey') return false;
   const type = tags['building:part'] && tags['building:part'] !== 'yes' ? tags['building:part'] : tags.building;
   return !NO_WINDOWS.has(type ?? '');
+}
+
+/** Этажей у части без building:levels — по высоте её стен и обычной высоте этажа (меньше 2 м — без окон). */
+export function estimatedPartLevels(tags: Record<string, string>, wallHeight: number, levelHeight: number): number {
+  if (!tags['building:part'] || wallHeight < 2) return 0;
+  return Math.max(1, Math.round(wallHeight / levelHeight));
 }
 
 /** Размеры окон части из её тегов window:width / window:height / window:breast (м), если задано хоть одно. */

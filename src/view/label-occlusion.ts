@@ -13,6 +13,8 @@ type Hit = { lngLat: LngLat; altitude: number } | undefined;
 const EPS = 2;
 /** Непрозрачность заслонённой подписи (видно, что за домом что-то есть). */
 const DIM = 0.15;
+/** Бюджет одного куска расчёта, мс. */
+const SLICE = 4;
 const PROPS = ['icon-opacity', 'text-opacity'] as const;
 
 /** Значение свойства с приглушением по feature-state; зум-выражение должно остаться верхним — меняем его выходы. */
@@ -36,13 +38,13 @@ export class LabelOcclusion {
   private marked = new Map<string, { source: string; sourceLayer?: string; id: string | number }>();
   private readonly onIdle = () => this.update();
 
-  constructor(private map: MlMap, private pickHit: (p: [number, number], inside: [number, number]) => Hit, private depthAt: Depth, private ready: () => boolean) {}
+  constructor(private map: MlMap, private pickHit: (p: [number, number], inside: [number, number]) => Hit, private depthAt: Depth, private ready: () => boolean, private rev: () => number = () => 0) {}
 
   setEnabled(on: boolean) {
     if (on === this.enabled) return;
     this.enabled = on;
-    if (on) { this.map.on('idle', this.onIdle); this.update(); }
-    else { this.map.off('idle', this.onIdle); this.clear(); this.restoreLayers(); this.layers = []; }
+    if (on) { this.map.on('idle', this.onIdle); this.map.on('movestart', this.onMove); this.update(); }
+    else { this.map.off('idle', this.onIdle); this.map.off('movestart', this.onMove); this.run++; this.done = ''; this.clear(); this.restoreLayers(); this.layers = []; }
   }
 
   /** Точечные symbol-слои стиля на векторных источниках. */
@@ -78,29 +80,49 @@ export class LabelOcclusion {
     return Math.hypot(ca.x - cb.x, ca.y - cb.y, ca.z - cb.z) / ca.meterInMercatorCoordinateUnits();
   }
 
+  /** Номер прохода: новый проход или движение камеры обрывают текущий. */
+  private run = 0;
+  /** Камера и набор подписей последнего законченного прохода — idle без изменений не пересчитываем. */
+  private done = '';
+  private readonly onMove = () => { this.run++; };
+
+  /** Проход кусками не дольше SLICE мс между кадрами: начатый пан или вращение не ждёт конца расчёта. */
   private update() {
     if (!this.enabled || !this.ready()) return;
     if (!this.layers.length) this.patchLayers();
     if (!this.layers.length) return;
     const ids = this.layers.map((l) => l.id).filter((id) => this.map.getLayer(id));
     const feats: MapGeoJSONFeature[] = this.map.queryRenderedFeatures({ layers: ids });
+    const c = this.map.getCenter();
+    const sig = `${c.lng},${c.lat},${this.map.getZoom()},${this.map.getBearing()},${this.map.getPitch()},${feats.length},${this.rev()}`;
+    if (sig === this.done) return;
+    const run = ++this.run;
     const next = new Map<string, { source: string; sourceLayer?: string; id: string | number }>();
-    for (const f of feats) {
-      if (f.id === undefined || f.geometry.type !== 'Point') continue;
-      const key = `${f.source}/${f.sourceLayer ?? ''}/${f.id}`;
-      if (next.has(key)) continue;
-      const [lng, lat] = f.geometry.coordinates as [number, number];
-      const ground = this.map.queryTerrainElevation?.([lng, lat]) ?? 0;
-      const pt = this.map.project([lng, lat]);
-      const hit = this.pickHit([pt.x, pt.y], [lng, lat]);
-      if (!hit) continue;
-      // Попадание на луче ближе к камере, чем сама точка, и не рядом с ней
-      const dHit = this.depthAt(hit.lngLat, hit.altitude), dLabel = this.depthAt({ lng, lat }, ground);
-      if (dHit === undefined || dLabel === undefined || dHit >= dLabel) continue;
-      if (this.metres(hit.lngLat, hit.altitude, { lng, lat }, ground) > EPS) next.set(key, { source: f.source, sourceLayer: f.sourceLayer, id: f.id });
-    }
-    for (const [k, f] of this.marked) if (!next.has(k)) this.map.setFeatureState(f, { occluded: false });
-    for (const [k, f] of next) if (!this.marked.has(k)) this.map.setFeatureState(f, { occluded: true });
-    this.marked = next;
+    let i = 0;
+    const step = () => {
+      if (run !== this.run || !this.enabled) return;
+      const until = performance.now() + SLICE;
+      for (; i < feats.length && performance.now() < until; i++) {
+        const f = feats[i];
+        if (f.id === undefined || f.geometry.type !== 'Point') continue;
+        const key = `${f.source}/${f.sourceLayer ?? ''}/${f.id}`;
+        if (next.has(key)) continue;
+        const [lng, lat] = f.geometry.coordinates as [number, number];
+        const ground = this.map.queryTerrainElevation?.([lng, lat]) ?? 0;
+        const pt = this.map.project([lng, lat]);
+        const hit = this.pickHit([pt.x, pt.y], [lng, lat]);
+        if (!hit) continue;
+        // Попадание на луче ближе к камере, чем сама точка, и не рядом с ней
+        const dHit = this.depthAt(hit.lngLat, hit.altitude), dLabel = this.depthAt({ lng, lat }, ground);
+        if (dHit === undefined || dLabel === undefined || dHit >= dLabel) continue;
+        if (this.metres(hit.lngLat, hit.altitude, { lng, lat }, ground) > EPS) next.set(key, { source: f.source, sourceLayer: f.sourceLayer, id: f.id });
+      }
+      if (i < feats.length) { setTimeout(step, 0); return; }
+      for (const [k, f] of this.marked) if (!next.has(k)) this.map.setFeatureState(f, { occluded: false });
+      for (const [k, f] of next) if (!this.marked.has(k)) this.map.setFeatureState(f, { occluded: true });
+      this.marked = next;
+      this.done = sig;
+    };
+    step();
   }
 }

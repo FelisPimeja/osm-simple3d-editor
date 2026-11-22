@@ -1729,6 +1729,7 @@
   "Прочее": "Other",
   "Заслонение подписей": "Label occlusion",
   "Подписи и иконки карты, закрытые зданием, приглушаются (пересчёт после остановки камеры)": "Map labels and icons hidden behind a building are dimmed (recomputed once the camera stops)",
-  "Горизонтали на рельефе растром": "Raster contours on terrain",
-  "С рельефом горизонтали натягиваются на него картинкой: появляются быстрее, но на крутых склонах размываются. Без галочки — линиями на своей высоте": "With terrain, contours are draped over it as an image: they appear sooner but blur on steep slopes. Unchecked, they are drawn as lines at their true height"
+  "Растровые контурные линии": "Raster contour lines",
+  "С рельефом горизонтали натягиваются на него картинкой: появляются быстрее, но на крутых склонах размываются. Без галочки — линиями на своей высоте": "With terrain, contours are draped over it as an image: they appear sooner but blur on steep slopes. Unchecked, they are drawn as lines at their true height",
+  "3D рельеф": "3D terrain"
 }

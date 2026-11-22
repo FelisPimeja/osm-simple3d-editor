@@ -28,6 +28,40 @@ export class IndoorBadges {
     });
     map.getCanvasContainer().appendChild(this.root);
     map.on('render', () => this.place());
+    map.on('idle', () => this.updateOcclusion());
+    map.on('movestart', () => { this.occlusionRun++; });
+  }
+
+  private occlusionRun = 0;
+
+  /**
+   * Значки, закрытые другими зданиями (луч от камеры упирается в чужое здание раньше значка), скрываются;
+   * своё здание (в контуре которого точка значка) не заслоняет. Считается после остановки камеры, кусками.
+   */
+  private updateOcclusion() {
+    const run = ++this.occlusionRun;
+    const items = this.items.slice();
+    let i = 0;
+    const step = () => {
+      if (run !== this.occlusionRun) return;
+      const until = performance.now() + 4;
+      const project = this.layer.geoProjector();
+      for (; i < items.length && performance.now() < until; i++) {
+        const { el, b } = items[i];
+        const p = project?.(b.at, b.top);
+        let hidden = false;
+        if (p) {
+          const hit = this.layer.pickHit(p, b.at);
+          if (hit) {
+            const dHit = this.layer.depthAt(hit.lngLat, hit.altitude), dBadge = this.layer.depthAt({ lng: b.at[0], lat: b.at[1] }, b.top);
+            hidden = dHit !== undefined && dBadge !== undefined && dHit < dBadge;
+          }
+        }
+        el.classList.toggle('occluded', hidden);
+      }
+      if (i < items.length) setTimeout(step, 0);
+    };
+    step();
   }
 
   set(badges: IndoorBadge[]) {
@@ -45,6 +79,7 @@ export class IndoorBadges {
       return { el, b };
     });
     this.place();
+    this.updateOcclusion();
   }
 
   private place() {

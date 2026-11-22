@@ -153,9 +153,9 @@ let replacedIds: number[] = [];
 const userHidden = new Set<string>();
 
 /** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean; terrain: boolean; contoursRaster: boolean; labelOcclusion: boolean }
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean; terrain: boolean; contoursRaster: boolean; labelOcclusion: boolean; windowTuner: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: false, windowTuner: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -1424,6 +1424,8 @@ const windowTuner = (() => {
   return box;
 })();
 
+if (import.meta.env.DEV) document.getElementById('gfx-window-tuner')!.hidden = false;
+
 // Настройки графики: отдельные галки, чтобы сравнивать влияние на производительность
 for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
   const key = input.dataset.gfx as keyof GraphicsSettings;
@@ -2337,7 +2339,7 @@ function syncGraphicsInputs() {
 
 /** Зависимые галки графики: сезонные деревья — только при включённых деревьях. */
 function syncGraphicsDeps() {
-  windowTuner.hidden = !import.meta.env.DEV || !gfx.windowsAuto;
+  windowTuner.hidden = !import.meta.env.DEV || !gfx.windowTuner || !gfx.windowsAuto;
   const seasons = document.querySelector<HTMLInputElement>('[data-gfx="seasons"]');
   if (seasons) seasons.disabled = !gfx.trees;
   const raster = document.querySelector<HTMLInputElement>('[data-gfx="contoursRaster"]');

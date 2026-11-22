@@ -809,6 +809,8 @@
   "Перспектива — переключить на аксонометрию": "Perspective — switch to axonometric",
   "Аксонометрия — переключить на перспективу": "Axonometric — switch to perspective",
   "Границы тайлов": "Tile borders",
+  "Панель генерации окон": "Window generation panel",
+  "Только в dev: панель подбора параметров генерации окон (видна при «Генерировать окна»)": "Dev only: panel for tuning window generation parameters (shown with “Generate windows”)",
   "Отладка: границы тайлов данных — розовые полупрозрачные стенки высотой 50 м, к верху тают": "Debug: data tile borders as translucent pink walls, 50 m high, fading upwards",
   "Показывать мосты": "Show bridges",
   "Показывать тоннели": "Show tunnels",

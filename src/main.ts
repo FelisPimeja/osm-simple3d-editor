@@ -20047,7 +20047,7 @@ void openEditLink();
 renderHelp();
 
 // ——— Мобильный режим: только просмотр ———
-// Узкий экран: инструменты, свойства и правки скрыты; панель приложения и (в режиме здания) панель этажей — свёрнуты.
+// Узкий экран: инструменты скрыты, свойства и правки — под панелью приложения; панель приложения и (в режиме здания) панель этажей — свёрнуты.
 // Двойного клика нет (двойной тап приближает карту): здание открывается кнопкой в карточке, которая появляется
 // по тапу на здание; в режиме здания карточка — с кнопкой «К карте».
 const mobileQuery = matchMedia('(max-width: 768px)');
@@ -20059,6 +20059,10 @@ let cardGroup: BuildingGroup | undefined;
 function applyMobile() {
   mobile = mobileQuery.matches;
   document.body.classList.toggle('mobile', mobile);
+  // Свойства и правки: на узком экране — под панелью приложения, на широком — в правой колонке
+  const info = document.getElementById('info-panel')!, edits = document.getElementById('edits-panel')!;
+  if (mobile) document.getElementById('left-col')!.append(info, edits);
+  else document.getElementById('right-col')!.append(info, edits);
   if (mobile) {
     setCollapsed(document.getElementById('panel')!, true);
     setCollapsed(levelsPanel, true);

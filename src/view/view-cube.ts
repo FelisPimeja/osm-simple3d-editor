@@ -185,7 +185,7 @@ export class ViewCube implements maplibregl.IControl {
     const gearTitle = tr('Настройки вида');
     this.art.innerHTML = `<svg viewBox="0 0 ${BOX} ${BOX}" width="${BOX}" height="${BOX}">${svg}</svg>`
       + `<button type="button" class="vc-proj" title="${projTitle}" aria-label="${projTitle}">${axo ? tr('А') : tr('П')}</button>`
-      + `<button type="button" class="vc-gear${this.pop.hidden ? '' : ' active'}" title="${gearTitle}" aria-label="${gearTitle}"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M8.20 4.17L8.65 2.12L11.35 2.12L11.80 4.17L12.85 4.60L14.62 3.47L16.53 5.38L15.40 7.15L15.83 8.20L17.88 8.65L17.88 11.35L15.83 11.80L15.40 12.85L16.53 14.62L14.62 16.53L12.85 15.40L11.80 15.83L11.35 17.88L8.65 17.88L8.20 15.83L7.15 15.40L5.38 16.53L3.47 14.62L4.60 12.85L4.17 11.80L2.12 11.35L2.12 8.65L4.17 8.20L4.60 7.15L3.47 5.38L5.38 3.47L7.15 4.60z"/><circle cx="10" cy="10" r="2.4"/></svg></button>`;
+      + `<button type="button" class="vc-gear${this.pop.hidden ? '' : ' active'}" title="${gearTitle}" aria-label="${gearTitle}"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M8.20 4.17L8.65 2.12L11.35 2.12L11.80 4.17L12.85 4.60L14.62 3.47L16.53 5.38L15.40 7.15L15.83 8.20L17.88 8.65L17.88 11.35L15.83 11.80L15.40 12.85L16.53 14.62L14.62 16.53L12.85 15.40L11.80 15.83L11.35 17.88L8.65 17.88L8.20 15.83L7.15 15.40L5.38 16.53L3.47 14.62L4.60 12.85L4.17 11.80L2.12 11.35L2.12 8.65L4.17 8.20L4.60 7.15L3.47 5.38L5.38 3.47L7.15 4.60z"/><circle cx="10" cy="10" r="2.4"/></svg></button>`;
     if (this.hovered) this.hover(this.hovered);
   }
 

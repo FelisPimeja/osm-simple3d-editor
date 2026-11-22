@@ -1629,9 +1629,13 @@ function barrierFeatureFor(key: string): IndoorFeature | undefined {
   const live = b && liveBarrier(b);
   return live && isBarrierTags(live.tags) ? barrierFeature(live) : undefined;
 }
+/** «Форма» включена (флаг: syncBarrierSelection зовётся и до создания инструмента). */
+let shapeOn = false;
 function syncBarrierSelection() {
   barriersLayer.select(indoorSelection.filter((f) => f.barrier && !f.gate).map((f) => Number(f.key.slice(4))),
     indoorSelection.filter((f) => f.gate).map((f) => Number(f.key.slice(5))));
+  // Под «Формой» стена и изгородь с толщиной закрывали бы ось и вершины — полупрозрачные
+  barriersLayer.ghost(shapeOn ? indoorSelection.filter((f) => f.barrier && !f.gate).map((f) => Number(f.key.slice(4))) : []);
   syncFloraHighlight();
 }
 
@@ -4611,7 +4615,8 @@ const shapeTool = new ShapeTool(overpassLayer, map.getContainer(), shapeSelected
   previewShape, commitShape, removeShapeVertex,
   (hint, error) => {
     shapeBtn.classList.toggle('active', shapeTool.active);
-    queueMicrotask(() => { if (!shapeTool.active) endBarrierSketch(); else syncMapTools(); });
+    shapeOn = shapeTool.active;
+    queueMicrotask(() => { if (!shapeTool.active) endBarrierSketch(); else syncMapTools(); syncBarrierSelection(); });
     syncCursor();
     toolHint(hint, error);
   });

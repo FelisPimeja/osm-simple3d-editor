@@ -12,6 +12,8 @@ const MONO = new THREE.Color('#ffffff');
 const HEDGE_PALE = 0.25;
 /** Подсветка выбранного прохода — полупрозрачная плоскость проёма. */
 const OPENING = new THREE.MeshBasicMaterial({ color: 0x97beff, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false });
+/** Ограждение под «Формой»: полупрозрачное, чтобы ось и вершины внутри толщины были видны. */
+const GHOST = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.3, depthWrite: false });
 /** Выделенное — как у зданий. */
 const HIGHLIGHT = new THREE.Color('#97beff');
 /** Излом оси больше этого угла — вертикальное ребро в вершине. */
@@ -80,6 +82,9 @@ export class BarriersLayer {
   private openingMesh?: THREE.Mesh;
   private ways: BarrierWay[] = [];
   private selectedIds = new Set<number>();
+  /** Полупрозрачные пути (id) и их меш. */
+  private ghostIds = new Set<number>();
+  private ghostMesh?: THREE.Mesh;
   private signature = '';
   private enabled = true;
   private monochrome = false;
@@ -169,8 +174,17 @@ export class BarriersLayer {
     this.paint();
   }
 
-  /** Цвета вершин: исходные, монохром, подсветка выделенного. */
+  /** Сделать пути (id) полупрозрачными — пока их правит «Форма»; пустой список — снять. */
+  ghost(ids: number[]) {
+    if (ids.length === this.ghostIds.size && ids.every((id) => this.ghostIds.has(id))) return;
+    this.ghostIds = new Set(ids);
+    this.paint();
+  }
+
+  /** Цвета вершин: исходные, монохром, подсветка выделенного; полупрозрачные пути — отдельным мешем. */
   private paint() {
+    if (this.ghostMesh) { this.ghostMesh.geometry.dispose(); this.scene.remove(this.ghostMesh); this.ghostMesh = undefined; }
+    const gp: number[] = [], gc: number[] = [];
     this.meshes.forEach((m, i) => {
       const attr = m.geometry.getAttribute('color') as THREE.BufferAttribute, out = attr.array as Float32Array, src = this.colours[i], { way, gate } = this.tris[i];
       for (let t = 0; t < way.length; t++) {
@@ -183,7 +197,26 @@ export class BarriersLayer {
         }
       }
       attr.needsUpdate = true;
+      // Полупрозрачные пути — из своего меша убрать (индексом), перенести в общий полупрозрачный
+      const ghostT = (t: number) => gate[t] < 0 && this.ghostIds.has(this.ways[way[t]].id);
+      if (!this.ghostIds.size || !way.some((_, t) => ghostT(t))) { m.geometry.setIndex(null); return; }
+      const idx: number[] = [], pos = this.tris[i].pos;
+      for (let t = 0; t < way.length; t++) {
+        if (!ghostT(t)) { idx.push(t * 3, t * 3 + 1, t * 3 + 2); continue; }
+        for (let k = t * 9; k < t * 9 + 9; k++) { gp.push(pos[k]); gc.push(out[k]); }
+      }
+      m.geometry.setIndex(idx);
     });
+    if (gp.length) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(gp, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(gc, 3));
+      g.computeVertexNormals();
+      this.ghostMesh = new THREE.Mesh(g, GHOST);
+      this.ghostMesh.renderOrder = 1;
+      this.ghostMesh.frustumCulled = false;
+      this.scene.add(this.ghostMesh);
+    }
     if (this.openingMesh) { this.openingMesh.geometry.dispose(); this.scene.remove(this.openingMesh); this.openingMesh = undefined; }
     for (const d of this.gateDots) { this.scene.remove(d); if (d instanceof THREE.Mesh && d.geometry !== DOOR_GEO) d.geometry.dispose(); }
     this.gateDots = [];
@@ -419,6 +452,7 @@ export class BarriersLayer {
 
   private clearMeshes() {
     for (const mesh of this.meshes) { mesh.geometry.dispose(); this.scene.remove(mesh); }
+    if (this.ghostMesh) { this.ghostMesh.geometry.dispose(); this.scene.remove(this.ghostMesh); this.ghostMesh = undefined; }
     if (this.edges) { this.edges.geometry.dispose(); this.scene.remove(this.edges); this.edges = undefined; }
     this.meshes = [];
     this.colours = [];

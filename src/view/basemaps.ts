@@ -208,8 +208,11 @@ export function refreshImagery(map: MlMap, id: string) {
   if (im?.tiles.length && src) src.setTiles(imageryTiles(im));
 }
 
-/** Слой подписей стиля, под который кладём растры. */
-const firstSymbol = (map: MlMap) => map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+/**
+ * Слой, под который кладём растры и горизонтали: первый слой подписей или наших объёмов (getStyle их не видит, а они под подписями —
+ * без этого отмывка без рельефа легла бы поверх зданий; с рельефом растры драпируются и порядок не виден).
+ */
+const firstSymbol = (map: MlMap) => map.getLayersOrder().find((id) => ['symbol', 'fill-extrusion', 'custom'].includes(map.getLayer(id)?.type ?? ''));
 
 /** Область показа [з, ю, в, с]: снимки грузятся только тайлами, задевающими её (режим здания — вокруг здания). */
 export type Bounds = [number, number, number, number];

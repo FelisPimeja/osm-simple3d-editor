@@ -4906,6 +4906,21 @@ export class BuildingsLayer implements CustomLayerInterface {
     return occludedByTriangles(this.occluderF32, ray, d - 0.3);
   }
 
+  /**
+   * Луч из камеры через точку экрана в метрах вокруг origin (x — восток, y — север, z — высота над уровнем моря),
+   * для инструментов в режиме карты, где сцены здания нет.
+   */
+  mapRay(point: [number, number], origin: MercatorCoordinate): THREE.Ray | undefined {
+    if (!this.map || !this.lastMain) return;
+    const canvas = this.map.getCanvas();
+    const inv = this.lastMain.clone().invert();
+    const x = (point[0] / canvas.clientWidth) * 2 - 1, y = 1 - (point[1] / canvas.clientHeight) * 2;
+    const s = origin.meterInMercatorCoordinateUnits();
+    const toLocal = (v: THREE.Vector3) => new THREE.Vector3((v.x - origin.x) / s, -(v.y - origin.y) / s, v.z / s);
+    const near = toLocal(new THREE.Vector3(x, y, -1).applyMatrix4(inv)), far = toLocal(new THREE.Vector3(x, y, 1).applyMatrix4(inv));
+    return new THREE.Ray(near, far.sub(near).normalize());
+  }
+
   /** Луч из камеры через точку экрана — в метрах сцены режима одного здания. */
   focusRay(point: [number, number]): THREE.Ray | undefined {
     const g = this.groups.get(FOCUS_GROUP);

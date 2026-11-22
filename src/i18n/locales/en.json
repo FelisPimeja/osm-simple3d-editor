@@ -952,7 +952,6 @@
   "Направление ската: кликните, куда смотрит скат. Esc — выйти.": "Roof direction: click where the slope faces. Esc to exit.",
   "Направление": "Direction",
   "Задать направление двумя точками в 3D (D)": "Set direction with two points in 3D (D)",
-  "Направление двумя точками задаётся в режиме здания.": "Two-point direction works in building mode.",
   "roof:direction={value}. Отменить — Ctrl+Z.": "roof:direction={value}. Undo with Ctrl+Z.",
   "roof:levels × {m} м": "roof:levels × {m} m",
   "по умолчанию {m} м": "default {m} m",

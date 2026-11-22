@@ -25,6 +25,8 @@ export class MeasureTool {
     private readonly layer: BuildingsLayer,
     container: HTMLElement,
     private readonly onState: (hint: string) => void,
+    /** Точка под курсором в режиме карты (сцены здания нет): z — на горизонтали этой высоты, иначе — объект или земля. */
+    private readonly mapPoint?: (point: [number, number], z?: number) => THREE.Vector3 | undefined,
   ) {
     this.vcb = document.createElement('div');
     this.vcb.className = 'vcb';
@@ -107,6 +109,7 @@ export class MeasureTool {
   /** Точка под курсором: привязка, поверхность объекта или земля. */
   private pointAt(point: [number, number]): THREE.Vector3 | undefined {
     if (this.locked !== undefined && this.a) return this.onAxis(point, this.axes()[this.locked]);
+    if (this.onPick && !this.layer.focusRay(point)) { this.snap = undefined; return this.mapPoint?.(point, this.a?.z); }
     this.snap = this.layer.snapAt(point, undefined, undefined, { from: this.a });
     if (this.onPick && this.a) {
       // Вторая точка — на горизонтальной плоскости первой: привязку проецируем, иначе луч курсора

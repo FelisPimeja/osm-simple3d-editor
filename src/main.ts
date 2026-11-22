@@ -4873,12 +4873,29 @@ const measureTool = new MeasureTool(overpassLayer, map.getContainer(), (hint) =>
   for (const b of infoEl.querySelectorAll('[data-pick-direction]')) b.classList.toggle('active', measureTool.picking);
   syncCursor();
   toolHint(hint);
+}, (point, z) => {
+  // Режим карты: метры вокруг центра карты на момент выбора
+  directionOrigin ??= maplibregl.MercatorCoordinate.fromLngLat(map.getCenter(), 0);
+  const ray = overpassLayer.mapRay(point, directionOrigin);
+  if (!ray) return;
+  if (z === undefined) {
+    const hit = overpassLayer.pickHit(point);
+    if (hit) {
+      const c = maplibregl.MercatorCoordinate.fromLngLat(hit.lngLat, hit.altitude), s = directionOrigin.meterInMercatorCoordinateUnits();
+      return new THREE.Vector3((c.x - directionOrigin.x) / s, -(c.y - directionOrigin.y) / s, hit.altitude);
+    }
+    const ll = map.unproject(point);
+    z = map.queryTerrainElevation?.(ll) ?? 0;
+  }
+  return ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3()) ?? undefined;
 });
+/** Начало отсчёта точек направления в режиме карты (сбрасывается при каждом запуске). */
+let directionOrigin: maplibregl.MercatorCoordinate | undefined;
 measureBtn.addEventListener('click', () => (measureTool.active ? measureTool.stop() : startMeasure()));
 
 /** Направление ската двумя точками в 3D — для объектов формы, где нажата кнопка у поля roof:direction. */
 function startDirectionPick(keys: string[]) {
-  if (!focus) { setStatus(tr('Направление двумя точками задаётся в режиме здания.')); return; }
+  directionOrigin = undefined;
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop(); paintTool.stop(); offsetTool.stop(); rotateTool.stop(); scaleTool.stop(); measureTool.stop();
   measureTool.startDirection((deg) => {
     const value = String(deg);

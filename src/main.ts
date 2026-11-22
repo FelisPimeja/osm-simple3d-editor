@@ -74,6 +74,7 @@ import { Dem, DEM_ATTRIBUTION } from './view/dem';
 import { DEM_MAX_ZOOM, DEM_URL, demTileBlob } from './view/dem-tiles';
 import mlcontour from 'maplibre-contour';
 import { ContoursLayer } from './render/contours-layer';
+import type { ContourTileJob, ContourTileResult } from './render/contour-tiles-worker';
 import { ground, setGroundSampler } from './render/ground';
 import { CursorOrbit, ORBIT_EVENT } from './view/orbit';
 import { PushTool, type PushTarget } from './edit/push-tool';
@@ -322,6 +323,27 @@ const demSource = new mlcontour.DemSource({ url: DEM_URL, encoding: 'terrarium',
 (demSource.manager as unknown as { getTile: typeof demTileBlob }).getTile = demTileBlob;
 demSource.setupMaplibre(maplibregl);
 const DEM_SHARED = demSource.sharedDemProtocolUrl;
+// Векторные тайлы горизонталей — в своём воркере (изолинии в основном потоке подтормаживали карту)
+{
+  let w: Worker | undefined, next = 1;
+  const pending = new Map<number, (r: ContourTileResult) => void>();
+  demSource.manager.fetchContourTile = (z, x, y, options, abort) => {
+    if (!w) {
+      w = new Worker(new URL('./render/contour-tiles-worker.ts', import.meta.url), { type: 'module' });
+      w.onmessage = (ev: MessageEvent<ContourTileResult>) => { pending.get(ev.data.id)?.(ev.data); pending.delete(ev.data.id); };
+    }
+    const id = next++, worker = w;
+    return new Promise((resolve, reject) => {
+      const onAbort = () => { pending.delete(id); worker.postMessage({ id, abort: true } satisfies ContourTileJob); reject(new DOMException('aborted', 'AbortError')); };
+      abort.signal.addEventListener('abort', onAbort, { once: true });
+      pending.set(id, (r) => {
+        abort.signal.removeEventListener('abort', onAbort);
+        if (r.data) resolve({ arrayBuffer: r.data }); else reject(new Error(r.error));
+      });
+      worker.postMessage({ id, z, x, y, options } satisfies ContourTileJob);
+    });
+  };
+}
 const CONTOUR_THRESHOLDS: Record<number, [number, number]> = { 10: [200, 1000], 11: [100, 500], 12: [50, 250], 13: [20, 100], 14: [10, 50], 15: [5, 25], 16: [2, 10] };
 const CONTOUR_TILES = demSource.contourProtocolUrl({
   // зум: [шаг, шаг утолщённых], м

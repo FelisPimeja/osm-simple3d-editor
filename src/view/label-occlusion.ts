@@ -15,6 +15,8 @@ const EPS = 2;
 const DIM = 0.15;
 /** Бюджет одного куска расчёта, мс. */
 const SLICE = 4;
+/** Сколько точек линии проверять. */
+const LINE_SAMPLES = 8;
 const PROPS = ['icon-opacity', 'text-opacity'] as const;
 
 /** Значение свойства с приглушением по feature-state; зум-выражение должно остаться верхним — меняем его выходы. */
@@ -38,7 +40,7 @@ export class LabelOcclusion {
   private marked = new Map<string, { source: string; sourceLayer?: string; id: string | number }>();
   private readonly onIdle = () => this.update();
 
-  constructor(private map: MlMap, private pickHit: (p: [number, number], inside: [number, number]) => Hit, private depthAt: Depth, private ready: () => boolean, private rev: () => number = () => 0) {}
+  constructor(private map: MlMap, private pickHit: (p: [number, number], inside?: [number, number]) => Hit, private depthAt: Depth, private ready: () => boolean, private rev: () => number = () => 0) {}
 
   setEnabled(on: boolean) {
     if (on === this.enabled) return;
@@ -47,12 +49,11 @@ export class LabelOcclusion {
     else { this.map.off('idle', this.onIdle); this.map.off('movestart', this.onMove); this.run++; this.done = ''; this.clear(); this.restoreLayers(); this.layers = []; }
   }
 
-  /** Точечные symbol-слои стиля на векторных источниках. */
+  /** Symbol-слои стиля на векторных источниках (точечные и вдоль линий — стрелки одностороннего движения, названия улиц). */
   private patchLayers() {
     this.layers = [];
     for (const l of this.map.getStyle().layers) {
       if (l.type !== 'symbol' || !('source' in l) || this.map.getSource(l.source)?.type !== 'vector') continue;
-      if (this.map.getLayoutProperty(l.id, 'symbol-placement') && this.map.getLayoutProperty(l.id, 'symbol-placement') !== 'point') continue;
       this.layers.push({ id: l.id, source: l.source, sourceLayer: l['source-layer'] });
       for (const p of PROPS) {
         const v = this.map.getPaintProperty(l.id, p);
@@ -80,6 +81,31 @@ export class LabelOcclusion {
     return Math.hypot(ca.x - cb.x, ca.y - cb.y, ca.z - cb.z) / ca.meterInMercatorCoordinateUnits();
   }
 
+  /** Точка на земле закрыта зданием (кроме тех, в контуре которых лежит inside). */
+  private hidden(lng: number, lat: number, inside?: [number, number]): boolean {
+    const ground = this.map.queryTerrainElevation?.([lng, lat]) ?? 0;
+    const pt = this.map.project([lng, lat]);
+    const hit = this.pickHit([pt.x, pt.y], inside);
+    if (!hit) return false;
+    // Попадание на луче ближе к камере, чем сама точка, и не рядом с ней
+    const dHit = this.depthAt(hit.lngLat, hit.altitude), dLabel = this.depthAt({ lng, lat }, ground);
+    if (dHit === undefined || dLabel === undefined || dHit >= dLabel) return false;
+    return this.metres(hit.lngLat, hit.altitude, { lng, lat }, ground) > EPS;
+  }
+
+  /** До LINE_SAMPLES точек линии, попадающих на экран: середины отрезков. */
+  private samples(lines: [number, number][][]): [number, number][] {
+    const { clientWidth: w, clientHeight: h } = this.map.getCanvas();
+    const out: [number, number][] = [];
+    for (const l of lines) for (let k = 0; k + 1 < l.length; k++) {
+      const m: [number, number] = [(l[k][0] + l[k + 1][0]) / 2, (l[k][1] + l[k + 1][1]) / 2];
+      const p = this.map.project(m);
+      if (p.x >= 0 && p.y >= 0 && p.x <= w && p.y <= h) out.push(m);
+    }
+    if (out.length <= LINE_SAMPLES) return out;
+    return Array.from({ length: LINE_SAMPLES }, (_, j) => out[Math.floor((j + 0.5) * out.length / LINE_SAMPLES)]);
+  }
+
   /** Номер прохода: новый проход или движение камеры обрывают текущий. */
   private run = 0;
   /** Камера и набор подписей последнего законченного прохода — idle без изменений не пересчитываем. */
@@ -99,23 +125,26 @@ export class LabelOcclusion {
     const run = ++this.run;
     const next = new Map<string, { source: string; sourceLayer?: string; id: string | number }>();
     let i = 0;
+    const seen = new Set<string>();
     const step = () => {
       if (run !== this.run || !this.enabled) return;
       const until = performance.now() + SLICE;
       for (; i < feats.length && performance.now() < until; i++) {
         const f = feats[i];
-        if (f.id === undefined || f.geometry.type !== 'Point') continue;
+        if (f.id === undefined) continue;
         const key = `${f.source}/${f.sourceLayer ?? ''}/${f.id}`;
-        if (next.has(key)) continue;
-        const [lng, lat] = f.geometry.coordinates as [number, number];
-        const ground = this.map.queryTerrainElevation?.([lng, lat]) ?? 0;
-        const pt = this.map.project([lng, lat]);
-        const hit = this.pickHit([pt.x, pt.y], [lng, lat]);
-        if (!hit) continue;
-        // Попадание на луче ближе к камере, чем сама точка, и не рядом с ней
-        const dHit = this.depthAt(hit.lngLat, hit.altitude), dLabel = this.depthAt({ lng, lat }, ground);
-        if (dHit === undefined || dLabel === undefined || dHit >= dLabel) continue;
-        if (this.metres(hit.lngLat, hit.altitude, { lng, lat }, ground) > EPS) next.set(key, { source: f.source, sourceLayer: f.sourceLayer, id: f.id });
+        if (next.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        if (f.geometry.type === 'Point') {
+          const [lng, lat] = f.geometry.coordinates as [number, number];
+          // Здание, внутри которого стоит POI, его не заслоняет
+          if (this.hidden(lng, lat, [lng, lat])) next.set(key, { source: f.source, sourceLayer: f.sourceLayer, id: f.id });
+        } else if (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString') {
+          // Значки вдоль линии — состояние у всей линии: приглушаем, если закрыта большая часть видимых на экране точек
+          const lines = (f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.coordinates) as [number, number][][];
+          const pts = this.samples(lines);
+          if (pts.length && pts.filter(([lng, lat]) => this.hidden(lng, lat)).length * 2 > pts.length) next.set(key, { source: f.source, sourceLayer: f.sourceLayer, id: f.id });
+        }
       }
       if (i < feats.length) { setTimeout(step, 0); return; }
       for (const [k, f] of this.marked) if (!next.has(k)) this.map.setFeatureState(f, { occluded: false });

@@ -152,9 +152,9 @@ let replacedIds: number[] = [];
 const userHidden = new Set<string>();
 
 /** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
-interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean; terrain: boolean; labelOcclusion: boolean }
+interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean; terrain: boolean; contoursRaster: boolean; labelOcclusion: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -336,7 +336,8 @@ let contoursWait = false;
 const contours3d = new ContoursLayer('contours-3d', CONTOUR_THRESHOLDS, DEM_MAX_ZOOM);
 function syncContours3d() {
   if (!mapLoaded) return;
-  const on = contours && !!map.getTerrain();
+  // Растром (по настройке) — 2D-слой, который MapLibre натягивает на рельеф: быстрее, но размыт на обрывах
+  const on = contours && !!map.getTerrain() && !gfx.contoursRaster;
   // Подписи: с рельефом — в самом 3D-слое, в разрывах линий на точной отметке; 2D-подписи (по другой сетке и на
   // рельефе MapLibre — мимо линий) скрыть
   if (map.getLayer('contour-labels')) map.setLayoutProperty('contour-labels', 'visibility', on ? 'none' : 'visible');
@@ -1490,6 +1491,7 @@ if (mapLoaded) syncTerrain(); else map.once('load', syncTerrain);
 
 function applyGraphics() {
   syncTerrain();
+  syncContours3d();
   overpassLayer.setGraphics(gfx);
   tileBorders.setEnabled(gfx.tileBorders);
   tileBorders.setTiles(overpass.tiles());
@@ -2316,6 +2318,8 @@ function syncGraphicsDeps() {
   windowTuner.hidden = !import.meta.env.DEV || !gfx.windowsAuto;
   const seasons = document.querySelector<HTMLInputElement>('[data-gfx="seasons"]');
   if (seasons) seasons.disabled = !gfx.trees;
+  const raster = document.querySelector<HTMLInputElement>('[data-gfx="contoursRaster"]');
+  if (raster) raster.disabled = !gfx.terrain;
 }
 
 // Постоянный кеш тайлов OSM API (IndexedDB)

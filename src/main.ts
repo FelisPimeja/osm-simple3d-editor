@@ -564,6 +564,8 @@ function syncBasemapLayers() {
 
 /** Слои стиля карты (без фона и экструзий) и их прозрачность в стиле — запоминаются при загрузке. */
 let styleLayers: { id: string; opacity: Record<string, unknown> }[] = [];
+/** После смены прозрачности слоёв стиля: заслонение подписей оборачивает их заново (задаётся ниже, где оно создано). */
+let afterVectorStyle: (() => void) | undefined;
 /** Свойства прозрачности по типу слоя: ими карта прячется под снимками и при «Без подложки». */
 const OPACITY_PROPS: Record<string, string[]> = {
   fill: ['fill-opacity'], line: ['line-opacity'], symbol: ['text-opacity', 'icon-opacity'], circle: ['circle-opacity', 'circle-stroke-opacity'],
@@ -587,6 +589,7 @@ function applyVectorStyle(hidden: boolean) {
   }
   // Текстуры карты на рельефе (кеш MapLibre) смену paint-свойств не замечают — сбросить
   (map as unknown as { terrain?: { tileManager?: { releaseAllRTT(): void } } }).terrain?.tileManager?.releaseAllRTT();
+  afterVectorStyle?.();
   map.triggerRepaint();
 }
 
@@ -781,6 +784,7 @@ overpassLayer.setOpacity(buildingsView.opacity);
 overpassLayer.setWireframe(buildingsView.wireframe);
 const tileBorders = new TileBorders(map);
 const labelOcclusion = new LabelOcclusion(map, (pt, inside) => overpassLayer.pickHit(pt, inside), (ll, h) => overpassLayer.depthAt(ll, h), () => mapLoaded, () => overpass.revision * 1e6 + overpass.renderRevision);
+afterVectorStyle = () => labelOcclusion.repatch();
 const roadsLayer = new RoadsLayer('osm-roads-3d');
 const barriersLayer = new BarriersLayer();
 barriersLayer.iconFor = (t) => t.amenity === 'ticket_validator' || t.barrier === 'turnstile' || t.barrier === 'full-height_turnstile' ? poiSvg(t) : undefined;

@@ -49,6 +49,18 @@ export class LabelOcclusion {
     else { this.map.off('idle', this.onIdle); this.map.off('movestart', this.onMove); this.run++; this.done = ''; this.clear(); this.restoreLayers(); this.layers = []; }
   }
 
+  /**
+   * Прозрачность подписей переписали снаружи (смена подложки, выход из режима здания) — обёртка приглушения
+   * пропала: обернуть заново текущие значения и пересчитать.
+   */
+  repatch() {
+    if (!this.enabled) return;
+    this.original.clear();
+    this.layers = [];
+    this.done = '';
+    this.update();
+  }
+
   /** Symbol-слои стиля на векторных источниках (точечные и вдоль линий — стрелки одностороннего движения, названия улиц). */
   private patchLayers() {
     this.layers = [];

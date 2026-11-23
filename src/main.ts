@@ -10202,6 +10202,7 @@ infoEl.addEventListener('click', (e) => {
   if (btn.dataset.merge !== undefined) return mergeIntoBuilding();
   if (btn.dataset.addSelectedParts !== undefined) return addSelectedPartsToGroup();
   if (btn.dataset.focusExit !== undefined) return closeFocus();
+  if (btn.dataset.focusEnter) { const g = groupOf(btn.dataset.focusEnter) ?? soloGroup(btn.dataset.focusEnter); if (g) enterFocus(g); return; }
   if (btn.dataset.focusContext !== undefined) return toggleContext();
   if (btn.dataset.outlineFix !== undefined) return fixOutline();
   if (btn.dataset.implicitRelation !== undefined) return createImplicitRelation();
@@ -18346,7 +18347,7 @@ function renderSelectedImpl() {
   // В режиме здания подсказка о группе не нужна (выход — Esc и панель частей); «Исключить» — под свойствами
   // Здание без отношения (контур с частями внутри) — та же шапка, что у отношения
   const header = r && !focus && highlightKeys(r.feature.key).length > 1 ? buildingHeader((session.get(r.feature.key)?.tags ?? r.feature.tags).name, session.get(r.feature.key)?.tags ?? r.feature.tags) : '';
-  infoEl.innerHTML = r ? header + (focus ? '' : drillHint(r.feature.key)) + describeOsm(r, form) + (focus ? focusExitButton() : '') + excludeButton() : '';
+  infoEl.innerHTML = r ? header + (focus ? '' : drillHint(r.feature.key)) + afterHeading(describeOsm(r, form), focusEnterButton(r.feature.key)) + (focus ? focusExitButton() : '') + excludeButton() : '';
   if (r) modelLink(r.feature.key);
 }
 
@@ -18661,6 +18662,21 @@ function describeFocus(g: BuildingGroup): string {
     ${focusExitButton('Esc')}`;
 }
 
+/**
+ * Кнопка входа в режим здания в карточке на карте — на планшете двойной тап приближает карту, а не открывает здание.
+ * Пусто, если объект не здание (нет группы).
+ */
+function focusEnterButton(key: string): string {
+  if (focus || !(groupOf(key) ?? soloGroup(key))) return '';
+  return `<div class="action-bar"><button type="button" data-focus-enter="${esc(key)}">${tr('Войти в режим здания')}<kbd>${tr('2× клик')}</kbd></button></div>`;
+}
+
+/** Вставить html сразу под заголовок карточки (первый </h2>), без заголовка — в начало. */
+function afterHeading(card: string, html: string): string {
+  const i = card.indexOf('</h2>');
+  return i < 0 ? html + card : card.slice(0, i + 5) + html + card.slice(i + 5);
+}
+
 function focusExitButton(keys = 'Esc ×2'): string {
   const ctx = overpassLayer.contextShown;
   // Кнопки на всю ширину панели, сочетание клавиш — справа на самой кнопке (идея из PR #54)
@@ -18700,6 +18716,7 @@ function describeGroup(g: BuildingGroup): string {
     ${objectHeading('type=building', `${server().web}/${g.key}`, g.key, g.version)}
     <p class="hint">${tr('Членов: {n}. Двойной клик по зданию — режим одного здания.', { n: g.members.length })}
       ${tr('Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.')}</p>
+    ${focusEnterButton(g.key)}
     <p><button type="button" data-add-parts>${tr('Добавить части')}</button></p>
     ${form}
     ${renderOtherTags(g.key, g.tags, form)}`;

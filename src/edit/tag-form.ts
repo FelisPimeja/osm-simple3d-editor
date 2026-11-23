@@ -8,10 +8,17 @@ import { parseDate } from '../osm/dates';
 import { placeCombo } from './combo-place';
 import { icon } from '../view/icons';
 
+import { inputMode, type Keyboard } from './keyboard';
+
+/** Клавиатура по типу поля, если у поля не задана своя. */
+const TYPE_KEYBOARD: Partial<Record<FieldType, Keyboard>> = { int: 'numeric', length: 'decimal' };
+
 type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour' | 'combo' | 'date' | 'edtf';
 
 interface Field {
   tag: string;
+  /** Клавиатура на таче; без неё — по типу (int — цифры, length — с точкой), см. keyboard.ts. */
+  keyboard?: Keyboard;
   /** Нет — название поля из iD (src/osm/presets.ts). */
   label?: string;
   type: FieldType;
@@ -278,7 +285,7 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
     const defShown = def && field.type === 'length' ? lengthNumber(Number(def.value), unit) : def?.value;
     // Умолчание ↵ закрепляет тегом — как подсказку
     const accept = sug?.value ?? (def ? String(defShown) : undefined);
-    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || defHint || sugHint || was || field.tag)}"${
+    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" ${inputMode(field.keyboard ?? TYPE_KEYBOARD[field.type])} title="${esc(hint || defHint || sugHint || was || field.tag)}"${
       accept !== undefined ? ` data-suggest="${esc(accept)}"${def ? ' data-default' : ''}` : ''}`;
     const shown = inherited ?? defShown ?? sug?.value;
     const grey = inherited ? ' class="inherited"' : def ? ' class="inherited defaulted"' : sug ? ' class="suggested"' : '';
@@ -349,12 +356,12 @@ export function renderMultiTagForm(keys: string[], session: EditSession, suggest
     const sug = sugs.length === 1 && sugs[0] && vs.every((v) => !v || v === sugs[0]) ? sugs[0] : undefined;
     if (sug) {
       const tip = tr('Не задано у {n} из {total} — у здания: {value}. Tab — подставить.', { n: empty.length, total: feats.length, value: sug });
-      const control = withBadge(`<input type="text" data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(tip)}" data-suggest="${esc(sug)}" class="suggested" value="" placeholder="${esc(sug)}" />`, tip, ICON_SUGGEST);
+      const control = withBadge(`<input type="text" data-tag="${esc(field.tag)}" data-type="${field.type}" ${inputMode(field.keyboard ?? TYPE_KEYBOARD[field.type])} title="${esc(tip)}" data-suggest="${esc(sug)}" class="suggested" value="" placeholder="${esc(sug)}" />`, tip, ICON_SUGGEST);
       return `<label class="tag-row${changed ? ' changed' : ''}"><span>${esc(field.label)}</span>${control}</label>`;
     }
     const shown = mixed ? tr('разные: {values}', { values: `${vs.map((v) => v || '—').slice(0, 6).join(', ')}${vs.length > 6 ? '…' : ''}` }) : '';
     const tip = mixed ? `${shown}${NUMERIC.has(field.type) ? tr('. Число — всем одно значение; =+1, =-2, =*2, =/8 — к значению каждого') : ''}` : field.tag;
-    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(tip)}"`;
+    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" ${inputMode(field.keyboard ?? TYPE_KEYBOARD[field.type])} title="${esc(tip)}"`;
     const cls = mixed ? ' class="mixed"' : '';
     let control: string;
     if (field.type === 'select') {

@@ -31,6 +31,7 @@ import { buildPlans, findVoids, voidCaps } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchElementRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { pointOnRemovedWall, materializeRoomWalls, roomTouchesWall, roomWallSpan, type RoomWall, type WallSpan } from './edit/indoor-walls';
 import { isStairEntrance, predictEntrance } from './edit/entrance-predict';
+import { inputMode, type Keyboard } from './edit/keyboard';
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, dateSpan, decimalDate, existsIn, isoDay, parseDate, shiftDate } from './osm/dates';
@@ -8903,13 +8904,10 @@ function entranceSuggestion(id: number, tagsOf: (x: number) => Record<string, st
   return {};
 }
 
-/**
- * Клавиатура на таче: номер — цифровая; квартиры — цифры с точкой/запятой (дефиса в цифровых раскладках iOS нет),
- * «12.40» и «12,40» превращаются в диапазон 12-40 (см. normalizeFlats).
- */
-function entranceKeyboard(k: string): string {
-  return k === 'ref' ? 'inputmode="numeric"' : k === 'addr:flats' ? 'inputmode="decimal"' : '';
-}
+/** Клавиатуры полей входа и окна на таче (keyboard.ts); квартиры — с точкой, «12.40» станет 12-40 (normalizeFlats). */
+const FORM_KEYBOARDS: Record<string, Keyboard> = { ref: 'numeric', 'addr:flats': 'decimal', 'door:wings': 'numeric',
+  'window:width': 'decimal', 'window:height': 'decimal', 'window:breast': 'decimal' };
+const entranceKeyboard = (k: string) => inputMode(FORM_KEYBOARDS[k]);
 /** Диапазоны квартир с цифровой клавиатуры: «1.20» / «1,20» → «1-20», пробелы вокруг «;» убираем. */
 function normalizeFlats(v: string): string {
   return v.trim().replace(/^(\d+)\s*[.,]\s*(\d+)$/, '$1-$2');
@@ -8979,7 +8977,7 @@ function renderWindow(id: number) {
     const value = common(k);
     const hint = value === undefined ? tr('разные значения') : k === 'window' ? 'yes' : k === 'level' ? '0' : k === 'window:shape' ? 'rectangle' : k === 'window:material' ? 'glass' : k === 'window:top:shape' ? '—' : tr('по высоте этажа');
     const input = k === 'window' || WINDOW_VALUES[k] ? renderValueCombo(k === 'window' ? idOptions('window') ?? [] : WINDOW_VALUES[k], `data-window-tag="${k}"`, value ?? '', hint, undefined, k)
-      : `<input type="text" data-window-tag="${k}" value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
+      : `<input type="text" data-window-tag="${k}" ${entranceKeyboard(k)} value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
     return `<label class="tag-row${changed ? ' changed' : ''}"><span title="${esc(k)}">${esc(LABELS[k])}</span>${input}</label>`;
   }).join('');
   infoEl.innerHTML = (many ? `<h2 class="obj-head"><span class="obj-title">${esc(title)}</span></h2>` : objectHeading(esc(title), `${server().web}/node/${id}`, `node/${id}`))

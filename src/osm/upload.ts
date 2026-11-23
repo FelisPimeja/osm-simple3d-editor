@@ -322,23 +322,25 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   keepForeignMembers(payload, editKeys);
   dropDanglingMembers(payload);
   keepUsedNodes(payload);
-  // Члены наших отношений, которых нет в пакете: удалённые на сервере после загрузки (в другом редакторе) — конфликт,
-  // а не 412 «Relation requires the ways… not visible» (issue #88)
+  // Объекты, на которые ссылаются наши пути и отношения, но которых нет в пакете (члены отношений, узлы путей):
+  // удалённые на сервере после загрузки (в другом редакторе) — конфликт, а не 412 «… requires the ways/nodes …
+  // not visible» (issue #88)
   const inPayload = new Set(payload.map((p) => `${p.element.type}/${p.element.id}`));
-  const outside = [...new Set(payload.flatMap((p) => p.element.type === 'relation' && !p.deleted
-    ? p.element.members.filter((m) => m.ref > 0).map((m) => `${m.type}/${m.ref}`) : []))].filter((k) => !inPayload.has(k));
+  const refsOf = (p: Payload[number]): string[] => p.deleted ? []
+    : p.element.type === 'relation' ? p.element.members.filter((m) => m.ref > 0).map((m) => `${m.type}/${m.ref}`)
+    : p.element.type === 'way' ? p.element.nodes.filter((n) => n > 0).map((n) => `node/${n}`) : [];
+  const outside = [...new Set(payload.flatMap(refsOf))].filter((k) => !inPayload.has(k));
   if (outside.length) {
     const alive = await fetchElements(outside, api());
     const gone = new Set(outside.filter((k) => !alive.has(k)));
-    // Ссылка — на нашу правку с отношением (её можно откатить), удалённый член — в тексте
+    // Ссылка — на нашу правку (её можно откатить), удалённый объект — в тексте
     const found: { key: string; tags: string[] }[] = [];
     for (const p of payload) {
-      if (p.element.type !== 'relation' || p.deleted) continue;
-      const dead = [...new Set(p.element.members.map((m) => `${m.type}/${m.ref}`).filter((k) => gone.has(k)))];
+      const dead = [...new Set(refsOf(p).filter((k) => gone.has(k)))];
       if (!dead.length) continue;
-      const id = p.element.id;
-      const key = edits.find((e) => e.created?.type === 'relation' && e.created.id === id)?.key ?? `relation/${id}`;
-      found.push({ key, tags: [tr('{members} удалён на сервере после загрузки (другим редактором): откатите эту правку, перезагрузите здание и повторите', { members: dead.join(', ') })] });
+      const { type, id } = p.element;
+      const key = edits.find((e) => e.created?.type === type && e.created.id === id)?.key ?? `${type}/${id}`;
+      found.push({ key, tags: [tr('{members} удалён на сервере после загрузки (другим редактором): откатите эту правку, перезагрузите здание и повторите', { members: dead.slice(0, 3).join(', ') + (dead.length > 3 ? ' …' : '') })] });
     }
     if (found.length) throw new ConflictError(found);
   }

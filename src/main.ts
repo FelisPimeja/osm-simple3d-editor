@@ -19429,6 +19429,13 @@ if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRun
  */
 const BG_CHECK_EVERY = 10;
 const BG_CHECK_PAUSE_MS = 3000;
+/** Без правок — повторная сверка с сервером: чужие изменения появляются, и пока пользователь ничего не делает. */
+const BG_RECHECK_MS = 5 * 60 * 1000;
+let bgLastRun = 0;
+setInterval(() => {
+  if (document.hidden || uploading || bgCheck || !session.changes().length || Date.now() - bgLastRun < BG_RECHECK_MS) return;
+  bgCheck = backgroundCheck().finally(() => { bgCheck = undefined; });
+}, 30_000);
 /** Глубина истории при последней проверке и при последней удачной. */
 let bgCheckedDepth = 0, bgGoodDepth = 0;
 let bgCheckTimer: ReturnType<typeof setTimeout> | undefined;
@@ -19445,6 +19452,7 @@ async function backgroundCheck() {
   // В JOSM отправка идёт своим путём; без правок проверять нечего
   if (josmApi() || !session.changes().length) return;
   const depth = session.editDepth(), rev = sessionRevision;
+  bgLastRun = Date.now();
   let problems: string[] = [], conflicts: { key: string; tags: string[] }[] = [];
   try {
     problems = (await dryRunUpload(uploadEditList())).problems;

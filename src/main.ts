@@ -5420,13 +5420,14 @@ const FLYOUT_MARGIN = 8;
  * ограничивается по высоте с прокруткой внутри (иначе у страницы появляется прокрутка).
  */
 function placeFlyout(fly: HTMLElement, btn: HTMLElement) {
-  const pr = btn.offsetParent!.getBoundingClientRect();
-  const want = btn.getBoundingClientRect().top;
+  // По окну (position: fixed): панель инструментов прокручивается, внутри неё всплывашку обрезало бы
+  const b = btn.getBoundingClientRect(), want = b.top;
+  fly.style.left = `${b.right + 6}px`;
   fly.style.maxHeight = `${innerHeight - 2 * FLYOUT_MARGIN}px`;
   fly.style.overflowY = 'auto';
   const h = fly.getBoundingClientRect().height;
   const top = Math.max(FLYOUT_MARGIN, Math.min(want, innerHeight - FLYOUT_MARGIN - h));
-  fly.style.top = `${top - pr.top}px`;
+  fly.style.top = `${top}px`;
 }
 for (const [btn, start] of [[rectBtn, () => startDraw('rect')], [mapRectBtn, () => startSketch('rect')]] as const) {
   // Стрелка — до обработчика кнопки (capture), чтобы клик по ней не включал инструмент

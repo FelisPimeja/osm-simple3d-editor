@@ -16,6 +16,11 @@ body:not(.mobile) #left-col > #panel { grid-column: 2; grid-row: 1; max-height: 
 body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 #right-col { right: 12px; z-index: 3; } /* выше атрибуции MapLibre (z-index: 2) */
 #toolbars { display: flex; flex-direction: column; gap: 8px; align-self: flex-start; }
+/* Не влезает по высоте (планшет) — прокрутка перетаскиванием без полосы; запас под тени панелей */
+body:not(.mobile) #toolbars { max-height: calc(100% + 12px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+  margin: -6px -8px; padding: 6px 8px; }
+body:not(.mobile) #toolbars::-webkit-scrollbar { display: none; }
+#toolbars > .toolbar { flex-shrink: 0; }
 #toolbars:not(:has(.toolbar:not([hidden]))) { display: none; }
 .toolbar { display: flex; flex-direction: column; gap: 4px; padding: 4px; background: rgba(255,255,255,.95);
   border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
@@ -31,7 +36,7 @@ body:not(.mobile) #toolbars { grid-column: 1; grid-row: 1; }
 .flyout-arrow::after { content: ''; position: absolute; right: 2px; bottom: 2px; border: 3.5px solid transparent;
   border-right-color: #6b7280; border-bottom-color: #6b7280; }
 .flyout-arrow:hover::after { border-right-color: #111; border-bottom-color: #111; }
-.tool-flyout { position: absolute; left: calc(100% + 6px); display: flex; flex-direction: column; gap: 2px; padding: 4px;
+.tool-flyout { position: fixed; display: flex; flex-direction: column; gap: 2px; padding: 4px;
   background: rgba(255,255,255,.98); border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.2); z-index: 5; }
 .tool-flyout button { width: auto; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 7px; font-size: 13px; white-space: nowrap; }
 .flyout-check { display: flex; align-items: center; gap: 8px; padding: 5px 10px 5px 6px; font-size: 13px; white-space: nowrap; cursor: pointer; border-radius: 6px; }

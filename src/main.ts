@@ -676,6 +676,19 @@ for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
     if (!auto) try { localStorage.setItem(storeKey, collapsed ? '1' : '0'); } catch { /* нет хранилища */ }
   });
 }
+// Слои — панель правой колонки (раньше — выпадающее меню у кнопки): кнопка слоёв показывает и скрывает её
+{
+  const panel = document.getElementById('layers-panel')!;
+  const key = 'osm3d.layers-panel';
+  const show = (open: boolean) => {
+    panel.hidden = !open;
+    if (open) setCollapsed(panel, false);
+    try { localStorage.setItem(key, open ? '1' : '0'); localStorage.setItem(`osm3d.collapsed.${panel.id}`, '0'); } catch { /* до перезагрузки */ }
+  };
+  try { panel.hidden = localStorage.getItem(key) !== '1'; } catch { /* скрыта */ }
+  basemapCtrl?.dock(document.getElementById('layers-body')!, show, () => !panel.hidden && !panel.classList.contains('collapsed'));
+  new MutationObserver(() => basemapCtrl?.syncButton()).observe(panel, { attributes: true, attributeFilter: ['hidden', 'class'] });
+}
 const editsPanel = document.getElementById('edits-panel')!;
 const outlinerPanel = document.getElementById('outliner-panel')!;
 const issuesPanel = document.getElementById('issues-panel')!;

@@ -454,7 +454,7 @@ export class BasemapButton {
     group.append(btn, menu);
     this.sync();
     document.addEventListener('click', (e) => {
-      if (!this.menu.hidden && !this.menu.contains(e.target as Node)) this.toggleMenu(false);
+      if (!this.dockShow && !this.menu.hidden && !this.menu.contains(e.target as Node)) this.toggleMenu(false);
     });
   }
 
@@ -632,8 +632,31 @@ export class BasemapButton {
     this.sync();
   }
 
-  /** Закрыть меню (открыли инструмент из него). */
-  closeMenu() { this.toggleMenu(false); }
+  /** Закрыть меню (открыли инструмент из него); в панели — остаётся. */
+  closeMenu() { if (!this.dockShow) this.toggleMenu(false); }
+
+  private dockShow?: (open: boolean) => void;
+  private dockOpen?: () => boolean;
+  /**
+   * Список слоёв — в панели (правая колонка) вместо выпадающего меню: кнопка показывает и скрывает панель.
+   * show(true) — показать и развернуть, isOpen — панель видна и развёрнута.
+   */
+  dock(body: HTMLElement, show: (open: boolean) => void, isOpen: () => boolean) {
+    this.dockShow = show;
+    this.dockOpen = isOpen;
+    this.menu.classList.add('docked');
+    this.menu.hidden = false;
+    body.append(this.menu);
+    this.syncButton();
+  }
+
+  /** Состояние кнопки — по видимости панели (её могли свернуть заголовком). */
+  syncButton() {
+    if (!this.dockOpen) return;
+    const open = this.dockOpen();
+    this.btn.setAttribute('aria-expanded', String(open));
+    this.btn.classList.toggle('panel-open', open);
+  }
 
   /** Открыть меню с раскрытыми настройками выбранного снимка (после инструмента сдвига). */
   openImagery() {
@@ -642,7 +665,8 @@ export class BasemapButton {
     this.toggleMenu(true);
   }
 
-  private toggleMenu(open = this.menu.hidden) {
+  private toggleMenu(open: boolean = this.dockOpen ? !this.dockOpen() : this.menu.hidden !== false) {
+    if (this.dockShow) { this.dockShow(open); this.syncButton(); return; }
     this.menu.hidden = !open;
     this.btn.setAttribute('aria-expanded', String(open));
   }

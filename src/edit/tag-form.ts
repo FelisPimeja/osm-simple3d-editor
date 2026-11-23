@@ -11,7 +11,8 @@ import { icon } from '../view/icons';
 import { inputMode, type Keyboard } from './keyboard';
 
 /** Клавиатура по типу поля, если у поля не задана своя. */
-const TYPE_KEYBOARD: Partial<Record<FieldType, Keyboard>> = { int: 'numeric', length: 'decimal' };
+// Пока выключено: с цифровой клавиатуры iOS не переключиться на буквы (1а, 12 m, -1). Было: { int: 'numeric', length: 'decimal' }
+const TYPE_KEYBOARD: Partial<Record<FieldType, Keyboard>> = {};
 
 type FieldType = 'length' | 'int' | 'select' | 'direction' | 'colour' | 'combo' | 'date' | 'edtf';
 

@@ -8905,8 +8905,8 @@ function entranceSuggestion(id: number, tagsOf: (x: number) => Record<string, st
 }
 
 /** Клавиатуры полей входа и окна на таче (keyboard.ts); квартиры — с точкой, «12.40» станет 12-40 (normalizeFlats). */
-const FORM_KEYBOARDS: Record<string, Keyboard> = { ref: 'numeric', 'addr:flats': 'decimal', 'door:wings': 'numeric',
-  'window:width': 'decimal', 'window:height': 'decimal', 'window:breast': 'decimal' };
+// Пока выключено (см. TYPE_KEYBOARD в tag-form.ts). Было: ref, door:wings — numeric; addr:flats, window:width/height/breast — decimal
+const FORM_KEYBOARDS: Record<string, Keyboard> = {};
 const entranceKeyboard = (k: string) => inputMode(FORM_KEYBOARDS[k]);
 /** Диапазоны квартир с цифровой клавиатуры: «1.20» / «1,20» → «1-20», пробелы вокруг «;» убираем. */
 function normalizeFlats(v: string): string {

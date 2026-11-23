@@ -30,6 +30,7 @@ import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
 import { buildPlans, findVoids, voidCaps } from './view/indoor-voids';
 import { completeRelations, fetchBuildingElements, fetchElements, fetchNodes, fetchWayRelations, fetchElementRelations, fetchMap, fetchMapSplit, type Bbox, type OsmElement, type OsmMember, type OsmNode } from './osm/api';
 import { pointOnRemovedWall, materializeRoomWalls, roomTouchesWall, roomWallSpan, type RoomWall, type WallSpan } from './edit/indoor-walls';
+import { isStairEntrance, predictEntrance } from './edit/entrance-predict';
 import { allowPrefsScope, fetchUser, getToken, login, logout, type OsmUser } from './osm/auth';
 import { SERVERS, SERVER_LIST, server, setServer, type ServerId } from './osm/servers';
 import { applyBasemapDate, dateSpan, decimalDate, existsIn, isoDay, parseDate, shiftDate } from './osm/dates';
@@ -8888,6 +8889,20 @@ const WINDOW_VALUES: Record<string, string[]> = {
   'window:material': ['glass', 'plastic', 'stained_glass', 'glass_brick', 'no'],
 };
 
+/** Подсказки номера подъезда и квартир для входа: по соседним подъездам того же контура (см. entrance-predict). */
+function entranceSuggestion(id: number, tagsOf: (x: number) => Record<string, string>): { ref?: string; flats?: string } {
+  for (const f of liveFeatures()) {
+    if (!f.entrances?.some((e) => e.id === id)) continue;
+    for (const p of f.polygons) for (const ids of [p.outerIds, ...(p.innerIds ?? [])]) {
+      if (!ids?.includes(id)) continue;
+      const ring = [...new Set((ids[0] === ids[ids.length - 1] ? ids.slice(0, -1) : ids).filter((x) => f.entrances!.some((e) => e.id === x) && !session.isDeleted(`node/${x}`) && isStairEntrance(tagsOf(x))))];
+      if (!ring.includes(id)) ring.push(id);
+      return predictEntrance(ring, tagsOf, id);
+    }
+  }
+  return {};
+}
+
 function renderEntrance(id: number) {
   if (isWindowNode(id)) return renderWindow(id);
   const ids = selectedEntrances().length > 1 ? selectedEntrances() : [id];
@@ -8900,9 +8915,15 @@ function renderEntrance(id: number) {
   const title = many ? trn(ids.length, 'Выбран {n} вход|Выбрано {n} входа|Выбрано {n} входов') : matchPreset(t, 'vertex')?.name ?? tr('Вход');
   // Общее значение — в поле; разные — пусто с подсказкой, правка задаёт его всем
   const common = (k: string) => all.every((x) => (x[k] ?? '') === (t[k] ?? '')) ? t[k] ?? '' : undefined;
+  const predicted = many ? {} : entranceSuggestion(id, tagsOf);
   const rows = ENTRANCE_FORM_TAGS.map((k) => {
     const changed = ids.some((x) => session.isChanged(`node/${x}`, k));
     const value = common(k);
+    const sug = k === 'ref' ? predicted.ref : k === 'addr:flats' ? predicted.flats : undefined;
+    if (sug && !value) {
+      const tip = tr('Предположение по соседним подъездам: {value}. Tab или ↵ — подставить.', { value: sug });
+      return `<label class="tag-row"><span title="${esc(k)}">${esc(k === 'ref' ? tr('Номер') : tr('Квартиры'))}</span><span class="inherit-field" title="${esc(tip)}"><input type="text" class="suggested" data-entrance-tag="${k}" data-suggest="${esc(sug)}" value="" placeholder="${esc(sug)}" spellcheck="false" autocomplete="off"><button type="button" class="inherit-badge suggest-accept" data-accept-suggest tabindex="-1" title="${esc(tr('Подставить'))}"><span class="sa-touch">↵</span></button></span></label>`;
+    }
     const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : k === 'door:wings' ? String(doorWings(t)) : k === 'addr:flats' ? tr('например, 1-22') : '—';
     const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : k === 'door:wings' ? tr('Створок') : k === 'addr:flats' ? tr('Квартиры') : tr('Номер'))}</span>`;
     const input = k === 'entrance' || k === 'door:wings' ? renderValueCombo(k === 'entrance' ? idOptions('entrance') ?? [] : ['1', '2'], `data-entrance-tag="${k}"`, value ?? '', hint, undefined, k)
@@ -8918,6 +8939,13 @@ function renderEntrance(id: number) {
       : renderOtherTags(ENTRANCE_KEY_PREFIX + id, t, rows));
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-entrance-tag]')) {
     input.addEventListener('change', () => setEntrancesTags(ids.map((x) => ({ id: x, tags: { ...tagsOf(x), [input.dataset.entranceTag!]: input.value } }))));
+    // Подсказка подъезда: Tab в пустом поле или ↵ — подставить (номер и квартиры принимаются по одному)
+    if (!input.dataset.suggest) continue;
+    const accept = () => { if (input.value) return; input.value = input.dataset.suggest!; input.dispatchEvent(new Event('change')); };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Tab' && !e.shiftKey && !input.value) accept(); });
+    const btn = input.parentElement!.querySelector<HTMLButtonElement>('[data-accept-suggest]')!;
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('click', (e) => { e.preventDefault(); accept(); });
   }
 }
 

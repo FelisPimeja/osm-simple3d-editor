@@ -1753,5 +1753,7 @@
   "Редактор 3D-зданий для OpenStreetMap. Схемы тегов:": "A 3D building editor for OpenStreetMap. Tagging schemes:",
   "Подставить": "Accept",
   "{tag} — ключ окна-точки; у здания правильно {key} (уже задан: {value}).": "{tag} is the key for a window node; on a building it is {key} (already set: {value}).",
-  "{tag} — ключ окна-точки; у здания правильно {key}.": "{tag} is the key for a window node; on a building it is {key}."
+  "{tag} — ключ окна-точки; у здания правильно {key}.": "{tag} is the key for a window node; on a building it is {key}.",
+  "Режим энергосбережения: графика упрощена (деревья, рельеф, окна, модели).": "Power saving mode: graphics simplified (trees, terrain, windows, models).",
+  "Энергосбережение выключено: графика восстановлена.": "Power saving is off: graphics restored."
 }

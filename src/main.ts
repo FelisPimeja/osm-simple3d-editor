@@ -1536,6 +1536,45 @@ for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) {
 }
 syncGraphicsDeps();
 
+// Режим энергосбережения (iOS Low Power Mode): браузеру он не сообщается, но Safari тогда ограничивает
+// requestAnimationFrame 30 кадрами. На таче раз в 20 с, пока карта стоит, меряем частоту пустых кадров:
+// ~30 два раза подряд — графика полегче (без деревьев, рельефа, сгенерированных окон, моделей, с меньшим
+// разрешением холста); снова ~60 — как было. Сохранённые настройки не трогаем.
+const LIGHT: Partial<Record<keyof GraphicsSettings, boolean>> = { trees: false, terrain: false, windowsAuto: false, models3dmr: false };
+let powerSaving = false, lowStreak = 0;
+const lightBefore = new Map<keyof GraphicsSettings, boolean>();
+function setPowerSaving(on: boolean) {
+  if (on === powerSaving) return;
+  powerSaving = on;
+  if (on) {
+    lightBefore.clear();
+    for (const [k, v] of Object.entries(LIGHT) as [keyof GraphicsSettings, boolean][]) if (gfx[k] !== v) { lightBefore.set(k, !!gfx[k]); (gfx as unknown as Record<string, boolean>)[k] = v; }
+    map.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  } else {
+    // Что пользователь успел переключить сам — оставляем
+    for (const [k, v] of lightBefore) if (gfx[k] === LIGHT[k]) (gfx as unknown as Record<string, boolean>)[k] = v;
+    lightBefore.clear();
+    map.setPixelRatio(devicePixelRatio);
+  }
+  for (const input of document.querySelectorAll<HTMLInputElement>('[data-gfx]')) input.checked = !!gfx[input.dataset.gfx as keyof GraphicsSettings];
+  syncGraphicsDeps();
+  applyGraphics();
+  setStatus(on ? tr('Режим энергосбережения: графика упрощена (деревья, рельеф, окна, модели).') : tr('Энергосбережение выключено: графика восстановлена.'));
+}
+function probeFrameRate() {
+  if (document.hidden || !mapLoaded || map.isMoving()) return;
+  let n = 0; const t0 = performance.now();
+  const tick = (t: number) => {
+    if (map.isMoving()) return; // движение карты нагружает кадр — замер не о питании
+    if (t - t0 < 1000) { n++; requestAnimationFrame(tick); return; }
+    const fps = n * 1000 / (t - t0);
+    if (fps >= 24 && fps <= 36) { if (++lowStreak >= 2) setPowerSaving(true); }
+    else if (fps > 50) { lowStreak = 0; setPowerSaving(false); }
+  };
+  requestAnimationFrame(tick);
+}
+if (touchDevice) setInterval(probeFrameRate, 20_000);
+
 // Рельеф (эксперимент): terrain MapLibre из тайлов Mapterhorn и отметки объектов сцены по тем же тайлам.
 // Только на карте: в режиме здания рельеф снимается (инструменты работают на плоской земле)
 const dem = new Dem(() => { if (dem.active) { setGroundSampler((p) => dem.at(p), dem.revision); refreshGround(); } });

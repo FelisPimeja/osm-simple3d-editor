@@ -11221,7 +11221,7 @@ function updateUndergroundOutlines(feats: Feature3D[], orphans: { key: string; r
  */
 let orphanOutlineCache: { sig: string; out: { key: string; rings: LonLat[][] }[] } | undefined;
 function orphanOutlines(bbox: Bbox): { key: string; rings: LonLat[][] }[] {
-  const orphans = orphanIndoor(bbox).filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length);
+  const orphans = orphanIndoor(indoorRegion(bbox)).filter((f) => INDOOR_PLAN_KINDS.has(f.kind) && !f.line && f.polygons.length);
   const sig = orphans.map((f) => f.key).sort().join(',');
   if (orphanOutlineCache?.sig === sig) return orphanOutlineCache.out;
   const levels = orphans.filter((f) => f.kind === 'level');
@@ -11362,16 +11362,28 @@ const COMPLEX_REACH = 0.01;
  * лестницы и эскалаторы между уровнями) и помещения внутри своего indoor=level. Несвязанные вестибюли рядом —
  * разные комплексы; переход и станция под ним — один, если их соединяет лестница или эскалатор.
  */
-let complexCache: { sig: string; out: { key: string; features: IndoorFeature[]; box: Bbox }[] } | undefined;
+/**
+ * Область расчётов indoor без здания: кадр с запасом, округлённый до сетки 0,02° (как у detachedIndoor). Пока камера
+ * в пределах ячейки, набор объектов тот же — комплексы и контуры не пересчитываются при каждом пане (на станции
+ * метро — до секунды).
+ */
+function indoorRegion(bbox: Bbox): Bbox {
+  const q = 0.02, m = 0.01;
+  return [Math.floor((bbox[0] - m) / q) * q, Math.floor((bbox[1] - m) / q) * q, Math.ceil((bbox[2] + m) / q) * q, Math.ceil((bbox[3] + m) / q) * q];
+}
+/** Последние результаты по подписи: вернулись в прежнюю ячейку — без пересчёта. */
+const complexCache = new Map<string, { key: string; features: IndoorFeature[]; box: Bbox }[]>();
 function orphanComplexes(bbox: Bbox): { key: string; features: IndoorFeature[]; box: Bbox }[] {
-  const fs = orphanIndoor(bbox);
+  const fs = orphanIndoor(indoorRegion(bbox));
   // Тот же набор объектов (кадр сдвинулся, пришёл тайл в стороне) — те же комплексы
   let hsh = 0;
   for (const f of fs) { const k = f.key + (f.polygons[0]?.outer.length ?? 0) + f.levels.join(); for (let i = 0; i < k.length; i++) hsh = (Math.imul(hsh, 31) + k.charCodeAt(i)) | 0; }
   const sig = `${fs.length}|${hsh}`;
-  if (complexCache?.sig === sig) return complexCache.out;
+  const hit = complexCache.get(sig);
+  if (hit) return hit;
   const out = orphanComplexesOf(fs);
-  complexCache = { sig, out };
+  complexCache.set(sig, out);
+  if (complexCache.size > 6) complexCache.delete(complexCache.keys().next().value!);
   return out;
 }
 /**

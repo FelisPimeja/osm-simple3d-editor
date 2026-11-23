@@ -11264,9 +11264,14 @@ function updateIndoorBadges() {
   const b = map.getBounds();
   const bbox: Bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
   // Indoor без здания — пунктиром, как подземные здания (вне режима здания: там карта убрана)
-  updateUndergroundOutlines(underground, !focus && map.getZoom() >= 15 ? timed('контуры indoor без здания', () => orphanOutlines([bbox[0] - COMPLEX_REACH, bbox[1] - COMPLEX_REACH, bbox[2] + COMPLEX_REACH, bbox[3] + COMPLEX_REACH])) : []);
+  // Пока здания в кадре не дорисованы, «без здания» оказался бы почти весь indoor: планы мелькали бы раньше
+  // объёмов — ждём (прежние контуры и планы остаются до пересчёта)
+  const settled = overpass.settled();
+  if (focus || map.getZoom() < 15) updateUndergroundOutlines(underground, []);
+  else if (settled) updateUndergroundOutlines(underground, timed('контуры indoor без здания', () => orphanOutlines([bbox[0] - COMPLEX_REACH, bbox[1] - COMPLEX_REACH, bbox[2] + COMPLEX_REACH, bbox[3] + COMPLEX_REACH])));
   // Входы в них (спуски, лестницы, стены на уровне земли) — их план первого этажа прямо на карте
-  overpassLayer.setMapIndoor(!focus && buildingsView.shown && map.getZoom() >= MAP_INDOOR_MIN_ZOOM ? timed('карта: планы indoor без здания', () => mapIndoorPlans(bbox)) : []);
+  if (focus || !buildingsView.shown || map.getZoom() < MAP_INDOOR_MIN_ZOOM) overpassLayer.setMapIndoor([]);
+  else if (settled) overpassLayer.setMapIndoor(timed('карта: планы indoor без здания', () => mapIndoorPlans(bbox)));
   if (focus || !buildingsView.shown || map.getZoom() < BADGE_MIN_ZOOM) return indoorBadges.set([]);
   // С правками: нарисованные и рассечённые помещения — тоже, удалённые — нет
   const indoor = withSessionIndoor(new Map(overpass.indoorIn(bbox).map((f) => [f.key, f])), bbox)

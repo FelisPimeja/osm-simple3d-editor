@@ -888,6 +888,17 @@ export class OverpassTiles {
   revision = 0;
   /** Растёт, когда тайл дорисован (объекты попали в renderedFeatures) — это позже, чем revision. */
   renderRevision = 0;
+  /** Сборок тайлов в работе (setGroupAsync ещё не вернулся). */
+  private building = 0;
+
+  /**
+   * Тайлы в кадре загружены и их здания дорисованы: «вне здания» теперь значит вне здания, а не «здание ещё не
+   * построено» — до этого планы indoor без здания на карте не строим.
+   */
+  settled(): boolean {
+    return !this.showQueue.size && !this.building
+      && this.wanted.every((k) => { const st = this.cache.get(k)?.state; return st === 'ready' || st === 'error'; });
+  }
 
   private tileReady(key: string) {
     this.revision++;
@@ -1100,8 +1111,10 @@ export class OverpassTiles {
     // Голые контуры отношений: в данных и выборе остаются, но не рисуются
     this.layer.hideInView(features.filter((f) => this.bareOutline(f)).map((f) => f.key));
     const [w, s, e, n] = tileBbox(key);
+    this.building++;
     void this.layer.setGroupAsync(key, features, [(w + e) / 2, (s + n) / 2]).then((rendered) => {
-      if (!rendered) return; // сборку отменили — тайл ушёл из вида или пересобирается заново
+      this.building--;
+      if (!rendered) { if (this.settled()) this.onChange(); return; } // сборку отменили — тайл ушёл из вида или пересобирается заново
       for (const r of rendered) this.rendered.set(r.feature.key, r);
       this.renderRevision++;
       this.onChange();

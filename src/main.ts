@@ -786,7 +786,7 @@ overpassLayer.setOpacity(buildingsView.opacity);
 overpassLayer.setWireframe(buildingsView.wireframe);
 const tileBorders = new TileBorders(map);
 const labelOcclusion = new LabelOcclusion(map, (pt, inside) => overpassLayer.pickHit(pt, inside), (ll, h) => overpassLayer.depthAt(ll, h), () => mapLoaded, () => overpass.revision * 1e6 + overpass.renderRevision);
-afterVectorStyle = () => labelOcclusion.repatch();
+afterVectorStyle = () => { labelOcclusion.repatch(); basemapHidden = undefined; }; // новый стиль — слои видимы, на подземном этаже спрячутся заново
 const roadsLayer = new RoadsLayer('osm-roads-3d');
 const barriersLayer = new BarriersLayer();
 barriersLayer.iconFor = (t) => t.amenity === 'ticket_validator' || t.barrier === 'turnstile' || t.barrier === 'full-height_turnstile' ? poiSvg(t) : undefined;
@@ -11187,7 +11187,29 @@ const ICON_PLAN = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" st
 /** Значки «есть поэтажный план» над зданиями — с этого зума и при стольких indoor-полигонах в здании. */
 const BADGE_MIN_ZOOM = 16;
 /** Подписи входов (номер, квартиры) — с этого зума. */
-new EntranceLabels(map, overpassLayer, 17, () => buildingsView.shown, (id) => { if (!toolActive()) selectEntrance(id); }, (id, t) => session.isDeleted(`node/${id}`) ? {} : session.get(`node/${id}`)?.tags ?? t);
+new EntranceLabels(map, overpassLayer, 17, () => buildingsView.shown, (id) => { if (!toolActive()) selectEntrance(id); }, (id, t) => session.isDeleted(`node/${id}`) ? {} : session.get(`node/${id}`)?.tags ?? t,
+  (t) => !undergroundView() || [...parseLevels(t.level), ...parseLevels(t.repeat_on)].includes(currentLevel!));
+
+/** Смотрим подземный этаж здания: подписи входов других этажей и подписи/значки подложки прячем. */
+function undergroundView(): boolean { return !!focus && currentLevel !== undefined && currentLevel < 0; }
+/** Symbol-слои векторной подложки, скрытые на подземном этаже: id → прежняя видимость. */
+let basemapHidden: Map<string, string> | undefined;
+function syncUndergroundBasemap() {
+  const want = undergroundView();
+  if (want === !!basemapHidden || !map.isStyleLoaded()) return;
+  if (want) {
+    basemapHidden = new Map();
+    for (const l of map.getStyle().layers) {
+      if (l.type !== 'symbol' || !('source' in l) || map.getSource(l.source)?.type !== 'vector') continue;
+      basemapHidden.set(l.id, String(map.getLayoutProperty(l.id, 'visibility') ?? 'visible'));
+      map.setLayoutProperty(l.id, 'visibility', 'none');
+    }
+  } else {
+    for (const [id, v] of basemapHidden!) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', v as 'visible' | 'none');
+    basemapHidden = undefined;
+  }
+}
+map.on('render', syncUndergroundBasemap);
 const BADGE_MIN_POLYGONS = 3;
 const INDOOR_PLAN_KINDS = new Set(['room', 'area', 'corridor', 'level']);
 
@@ -17325,7 +17347,10 @@ function toggleGrid() {
   setStatus(on ? tr('Сетка 10 м включена (G).') : tr('Сетка выключена (G) — привязки к ней тоже.'));
   if (lastPointer) updateSnap(lastPointer);
 }
-try { if (localStorage.getItem('grid') === '0') overpassLayer.setGridVisible(false); } catch { /* нет хранилища */ }
+// Сетка по умолчанию выключена; включённая G запоминается
+let gridSaved: string | null = null;
+try { gridSaved = localStorage.getItem('grid'); } catch { /* нет хранилища */ }
+if (gridSaved !== '1') overpassLayer.setGridVisible(false);
 
 function toggleSnaps() {
   overpassLayer.snapsEnabled = !overpassLayer.snapsEnabled;
@@ -20255,8 +20280,10 @@ function applyMobile() {
   // Свойства и правки: на узком экране — под панелью приложения, на широком — в правой колонке
   const info = document.getElementById('info-panel')!, edits = document.getElementById('edits-panel')!;
   placeViewButtons(mobile);
-  if (mobile) document.getElementById('left-col')!.append(info, edits);
-  else document.getElementById('right-col')!.append(info, edits);
+  // Слои на узком экране — над свойствами, на широком — первой панелью правой колонки
+  const layers = document.getElementById('layers-panel')!;
+  if (mobile) document.getElementById('left-col')!.append(layers, info, edits);
+  else { const rc = document.getElementById('right-col')!; rc.prepend(layers); rc.append(info, edits); }
   if (mobile) {
     setCollapsed(document.getElementById('panel')!, true);
     setCollapsed(levelsPanel, true);

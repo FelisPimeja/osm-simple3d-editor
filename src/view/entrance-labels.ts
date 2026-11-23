@@ -21,7 +21,9 @@ export class EntranceLabels {
   constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, private readonly minZoom: number, private readonly shown: () => boolean,
     /** Теги входа с правками сессии (тайлы карты от правки тегов узла не пересобираются). */
     onPick: (id: number) => void,
-    private readonly liveTags: (id: number, tags: Record<string, string>) => Record<string, string> = (_, t) => t) {
+    private readonly liveTags: (id: number, tags: Record<string, string>) => Record<string, string> = (_, t) => t,
+    /** Подписывать ли вход с такими тегами (на подземном этаже — только входы этого этажа). */
+    private readonly visible: (tags: Record<string, string>) => boolean = () => true) {
     this.root = document.createElement('div');
     this.root.className = 'entrance-labels';
     // Клик по подписи — выбрать вход; клик после перетаскивания карты — не выбор (как у значков планов)
@@ -40,7 +42,7 @@ export class EntranceLabels {
 
   private points() {
     if (!this.shown() || this.map.getZoom() < this.minZoom) return [];
-    return this.layer.entranceScreenPoints(() => true).map((p) => ({ ...p, tags: this.liveTags(p.id, p.tags) })).filter((p) => p.dist <= MAX_DIST && labelled(p.tags));
+    return this.layer.entranceScreenPoints(() => true).map((p) => ({ ...p, tags: this.liveTags(p.id, p.tags) })).filter((p) => p.dist <= MAX_DIST && labelled(p.tags) && this.visible(p.tags));
   }
 
   private place() {

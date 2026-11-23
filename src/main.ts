@@ -502,6 +502,21 @@ const syncWireBtn = () => {
 };
 syncWireBtn();
 
+/**
+ * Частые кнопки вида (слои, каркас, куб) — полноразмерной группой «Вид» в левом тулбаре; в блоке у края
+ * остаются редкие (масштаб, компас, геолокация). На мобильном тулбара нет — кнопки возвращаются в блок.
+ */
+const viewTools = document.getElementById('view-tools')!;
+const layersBtn = navGroup?.querySelector<HTMLElement>('.maplibregl-ctrl-basemap:not(.maplibregl-ctrl-wireframe)');
+function placeViewButtons(toMobile: boolean) {
+  const btns = [layersBtn, wireBtn, cubeBtn].filter((b): b is HTMLElement => !!b);
+  if (!toMobile) { viewTools.append(...btns); return; }
+  if (!navGroup) return;
+  const compass = navGroup.querySelector('.maplibregl-ctrl-compass');
+  compass?.after(cubeBtn, ...(layersBtn ? [layersBtn] : []));
+  navGroup.append(wireBtn);
+}
+
 function toggleWireframe() {
   setBuildingsView({ ...buildingsView, wireframe: !buildingsView.wireframe });
   basemapCtrl?.setBuildings({ ...buildingsView });
@@ -20153,6 +20168,7 @@ function applyMobile() {
   document.body.classList.toggle('mobile', mobile);
   // Свойства и правки: на узком экране — под панелью приложения, на широком — в правой колонке
   const info = document.getElementById('info-panel')!, edits = document.getElementById('edits-panel')!;
+  placeViewButtons(mobile);
   if (mobile) document.getElementById('left-col')!.append(info, edits);
   else document.getElementById('right-col')!.append(info, edits);
   if (mobile) {

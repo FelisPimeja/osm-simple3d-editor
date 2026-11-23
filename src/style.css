@@ -961,3 +961,15 @@ body.mobile .edit-hint { display: none; } /* мобильный — только
 .basemap-menu.docked { position: static; width: auto; padding: 0; border-radius: 0; box-shadow: none; background: none; font-size: 14px; }
 .basemap-menu.docked .basemap-note { font-size: 12px; }
 .maplibregl-ctrl-group button.maplibregl-ctrl-basemap.panel-open { color: #2f7cff; }
+
+/* Группа «Вид» в левом тулбаре: кнопки из блока карты — в размер инструментов */
+#view-tools:empty { display: none; }
+#view-tools button { display: flex; align-items: center; justify-content: center; padding: 0; }
+#view-tools button svg { width: 22px; height: 22px; margin: 0; }
+#view-tools button.active, #view-tools button.panel-open { background: #dbeafe; border-color: #93c5fd; color: #333; }
+
+/* Группа «Вид» в левом тулбаре: кнопки из блока карты — в размер инструментов */
+#view-tools:empty { display: none; }
+#view-tools button { display: flex; align-items: center; justify-content: center; padding: 0; }
+#view-tools button svg { width: 22px; height: 22px; margin: 0; }
+#view-tools button.active, #view-tools button.panel-open { background: #dbeafe; border-color: #93c5fd; color: #333; }

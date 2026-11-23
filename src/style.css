@@ -167,6 +167,13 @@ body:not(.mobile) #toolbars::-webkit-scrollbar { display: none; }
 #status:empty { display: none; }
 #status a, #status button { pointer-events: auto; }
 #status.error { color: #b91c1c; }
+/* Длинное сообщение — одна строка с троеточием; стрелка справа раскрывает целиком (как у панелей) */
+#status { min-width: 0; }
+#status:not(.expanded) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-expand { pointer-events: auto; flex: none; width: 20px; height: 20px; margin-top: -1px; }
+.status-expand[hidden], #status:empty ~ .status-expand { display: none; }
+#status:not(.expanded) ~ .status-expand::before {
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 7.500l5 5 5-5'/%3E%3C/svg%3E"); }
 .status-action { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 /* Копировать сообщение: сама строка не ловит мышь (клики проходят на карту), поэтому текст не выделить */
 .status-copy { pointer-events: auto; flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; border: 0; border-radius: 4px;

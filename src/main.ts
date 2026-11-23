@@ -689,6 +689,17 @@ const editsCount = document.getElementById('edits-count')!;
 /** Было ли в панели правок что показать при прошлой отрисовке: раскрываем/сворачиваем только на переходе. */
 let editsHadContent = false;
 const statusEl = document.getElementById('status')!;
+// Длинное сообщение свёрнуто в одну строку; стрелка видна, только если текст не влез. Новое сообщение — снова свёрнуто
+const statusExpand = document.getElementById('status-expand') as HTMLButtonElement;
+const syncStatusExpand = () => { statusExpand.hidden = !statusEl.classList.contains('expanded') && statusEl.scrollWidth <= statusEl.clientWidth + 1; };
+new MutationObserver(() => { statusEl.classList.remove('expanded'); syncStatusExpand(); }).observe(statusEl, { childList: true, characterData: true, subtree: true });
+new ResizeObserver(syncStatusExpand).observe(statusEl);
+statusExpand.addEventListener('click', () => {
+  const on = statusEl.classList.toggle('expanded');
+  statusExpand.title = on ? tr('Свернуть') : tr('Показать целиком');
+  syncStatusExpand();
+});
+statusExpand.title = tr('Показать целиком');
 const statusCopy = document.getElementById('status-copy') as HTMLButtonElement;
 statusCopy.title = tr('Копировать сообщение');
 // Вместе со строкой индикатора загрузки («Не удалось загрузить…»), если она показана

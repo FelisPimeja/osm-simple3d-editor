@@ -8904,14 +8904,10 @@ function entranceSuggestion(id: number, tagsOf: (x: number) => Record<string, st
   return {};
 }
 
-/** Клавиатуры полей входа и окна на таче (keyboard.ts); квартиры — с точкой, «12.40» станет 12-40 (normalizeFlats). */
+/** Клавиатуры полей входа и окна на таче (keyboard.ts); квартиры — с точкой. */
 // Пока выключено (см. TYPE_KEYBOARD в tag-form.ts). Было: ref, door:wings — numeric; addr:flats, window:width/height/breast — decimal
 const FORM_KEYBOARDS: Record<string, Keyboard> = {};
 const entranceKeyboard = (k: string) => inputMode(FORM_KEYBOARDS[k]);
-/** Диапазоны квартир с цифровой клавиатуры: «1.20» / «1,20» → «1-20», пробелы вокруг «;» убираем. */
-function normalizeFlats(v: string): string {
-  return v.trim().replace(/^(\d+)\s*[.,]\s*(\d+)$/, '$1-$2');
-}
 
 function renderEntrance(id: number) {
   if (isWindowNode(id)) return renderWindow(id);
@@ -8949,7 +8945,6 @@ function renderEntrance(id: number) {
       : renderOtherTags(ENTRANCE_KEY_PREFIX + id, t, rows));
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-entrance-tag]')) {
     input.addEventListener('change', () => {
-      if (input.dataset.entranceTag === 'addr:flats') input.value = normalizeFlats(input.value);
       setEntrancesTags(ids.map((x) => ({ id: x, tags: { ...tagsOf(x), [input.dataset.entranceTag!]: input.value } })));
     });
     // Подсказка подъезда: Tab в пустом поле или ↵ — подставить (номер и квартиры принимаются по одному)

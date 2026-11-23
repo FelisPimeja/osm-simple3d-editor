@@ -52,6 +52,9 @@ const SEE_THROUGH = new Set(['chain_link', 'metal_bars', 'railing', 'pole', 'bar
 /** width 0 — плоскость без толщины (забор без width). */
 export interface BarrierShape { min: number; top: number; width: number; colour: string; seeThrough: boolean }
 
+/** Цвета по материалу (кирпич, камень, дерево…) — выключены до проработки материалов; без colour всё белое. */
+const MATERIAL_COLOURS = false;
+
 /** Высота, толщина и цвет ограждения: теги, без них — типичные для вида. */
 export function barrierShape(tags: Record<string, string>): BarrierShape {
   const kind = tags.barrier === 'city_wall' ? 'wall' : tags.barrier, city = tags.barrier === 'city_wall', ft = tags.fence_type, mat = tags.material ?? tags.wall;
@@ -65,7 +68,8 @@ export function barrierShape(tags: Record<string, string>): BarrierShape {
   const width = tagged !== undefined && tagged > 0 ? Math.max(0.03, Math.min(5, tagged)) : defW;
   // Без colour и material (fence_type) — белый, как здания без цвета; живая изгородь — зелёная
   const colour = tags.colour ?? (kind === 'hedge' ? '#55773a'
-    : kind === 'wall' ? (mat === 'brick' ? '#a65a43' : mat === 'stone' || mat === 'dry_stone' || (city && !mat) ? '#a39c8f' : mat === 'concrete' ? '#bdbab3' : '#ffffff')
+    : !MATERIAL_COLOURS ? '#ffffff'
+    : kind === 'wall' ? (mat === 'brick' ? '#a65a43' : mat === 'stone' || mat === 'dry_stone' ? '#a39c8f' : mat === 'concrete' ? '#bdbab3' : '#ffffff')
     : ft === 'wood' || mat === 'wood' ? '#9a7650' : ft === 'concrete' || mat === 'concrete' ? '#bdbab3' : ft === 'stone' ? '#a39c8f' : ft === 'brick' ? '#a65a43' : '#ffffff');
   return { min, top: Math.max(top, min + 0.1), width, colour, seeThrough: kind === 'fence' && (SEE_THROUGH.has(ft ?? '') || !ft) };
 }
@@ -73,5 +77,5 @@ export function barrierShape(tags: Record<string, string>): BarrierShape {
 /** Цвет створки ворот: colour, иначе по material (дерево, металл…), без них — белый. */
 export function gateColour(tags: Record<string, string>): string {
   const m = tags.material;
-  return tags.colour ?? (m === 'wood' ? '#9a7650' : m === 'metal' || m === 'steel' || m === 'iron' ? '#8a8f94' : m === 'concrete' ? '#bdbab3' : '#ffffff');
+  return tags.colour ?? (!MATERIAL_COLOURS ? '#ffffff' : m === 'wood' ? '#9a7650' : m === 'metal' || m === 'steel' || m === 'iron' ? '#8a8f94' : m === 'concrete' ? '#bdbab3' : '#ffffff');
 }

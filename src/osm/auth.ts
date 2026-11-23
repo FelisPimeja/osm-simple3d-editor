@@ -59,6 +59,10 @@ export async function login(s: OsmServer = server()): Promise<string> {
   if (!s.clientId) {
     throw new Error(tr('Не задан client_id для сервера «{server}» ({env} в .env.local).', { server: s.label, env: CLIENT_ID_ENV[s.id] }));
   }
+  // Окно — синхронно в обработчике нажатия: Safari (особенно на iOS) блокирует window.open после await
+  // (здесь — хэш PKCE), считая его уже не ответом на действие пользователя. Адрес задаём, когда он готов.
+  const popup = window.open('', 'osm-oauth', 'width=600,height=700');
+  if (!popup) throw new Error(tr('Браузер заблокировал окно входа — разрешите всплывающие окна для этого сайта.'));
   const verifier = randomString();
   const state = randomString();
   let noPrefs = false;
@@ -70,11 +74,10 @@ export async function login(s: OsmServer = server()): Promise<string> {
     redirect_uri: redirectUri(),
     scope,
     state,
-    code_challenge: await challenge(verifier),
+    code_challenge: await challenge(verifier).catch((e) => { popup.close(); throw e; }),
     code_challenge_method: 'S256',
   });
-  const popup = window.open(`${s.web}/oauth2/authorize?${params}`, 'osm-oauth', 'width=600,height=700');
-  if (!popup) throw new Error(tr('Браузер заблокировал окно входа — разрешите всплывающие окна для этого сайта.'));
+  popup.location.href = `${s.web}/oauth2/authorize?${params}`;
 
   // Сайт OSM отдаёт Cross-Origin-Opener-Policy: после перехода на него связь с окном рвётся
   // (window.opener пуст, popup.closed сразу true). Поэтому code приходит через BroadcastChannel —

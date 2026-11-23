@@ -555,6 +555,28 @@ const GHOST_FADE = 0.5;
 const GHOST_HIDDEN_MATERIAL = new THREE.LineDashedMaterial({ color: 0x555555, dashSize: .25, gapSize: .15, transparent: true, opacity: GHOST_FADE,
   depthFunc: THREE.GreaterDepth, depthWrite: false });
 
+/**
+ * Сгенерированные окна дальше PANE_FAR_M от камеры не рисуются: на дальних домах их сетка забивает объём.
+ * Вершины стёкол и их обводок помечены атрибутом pane = 1; камера — в метрах сцены группы (PANE_EYE задаётся
+ * перед отрисовкой каждой группы: у групп своё начало координат).
+ */
+const PANE_FAR_M = 500;
+const PANE_EYE = { value: new THREE.Vector3(0, 0, 1e9) };
+const PANE_FAR = { value: PANE_FAR_M };
+function paneFarShader(shader: THREE.WebGLProgramParametersWithUniforms) {
+  shader.uniforms.paneEye = PANE_EYE;
+  shader.uniforms.paneFar = PANE_FAR;
+  shader.vertexShader = 'attribute float pane;\nuniform vec3 paneEye;\nuniform float paneFar;\nvarying float vPaneFar;\n'
+    + shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vPaneFar = pane > 0.5 && distance(position, paneEye) > paneFar ? 1.0 : 0.0;');
+  shader.fragmentShader = 'varying float vPaneFar;\n' + shader.fragmentShader.replace('void main() {', 'void main() {\n  if (vPaneFar > 0.5) discard;');
+}
+/**
+ * Перед отрисовкой объекта группы: камера группы — в общий uniform. Залить его успевает: у группы меш и рёбра —
+ * разные материалы, и при смене материала three заново заливает его uniform-ы.
+ */
+function paneEyeHook(obj: THREE.Object3D, eye: { value: THREE.Vector3 }) {
+  obj.onBeforeRender = () => { PANE_EYE.value.copy(eye.value); };
+}
 const MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 /**
  * Плоские контуры нулевой толщины (новая часть на крыше, отступ) лежат в плоскости чужой грани — с общим
@@ -578,6 +600,7 @@ const FLOOR_OBJECT_HEIGHT = 2;
 function withLevelRoofCut<T extends THREE.Material>(material: T): T {
   material.onBeforeCompile = (shader) => {
     shader.uniforms.shellFloor = SHELL_FLOOR;
+    paneFarShader(shader);
     shader.vertexShader = 'varying vec3 vShellPos;\n' + shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vShellPos = position;');
     shader.fragmentShader = 'varying vec3 vShellPos;\nuniform float shellFloor;\n' + shader.fragmentShader.replace('void main() {',
       `void main() {\n  if (vShellPos.z > shellFloor + ${FLOOR_OBJECT_HEIGHT.toFixed(1)} && abs(normalize(cross(dFdx(vShellPos), dFdy(vShellPos))).z) > 0.99) discard;`);
@@ -585,6 +608,7 @@ function withLevelRoofCut<T extends THREE.Material>(material: T): T {
   return material;
 }
 for (const m of [MATERIAL, THIN_MATERIAL, DEPTH_ONLY_MATERIAL]) withLevelRoofCut(m);
+EDGE_MATERIAL.onBeforeCompile = paneFarShader;
 /** Видимые рёбра в режиме контуров — темнее обычных: кроме них от здания может ничего не остаться. */
 const WIRE_EDGE_OPACITY = 0.9;
 /** Рёбра выделенного в режиме контуров: цвет и толщина, px. */
@@ -7128,6 +7152,15 @@ export class BuildingsLayer implements CustomLayerInterface {
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(total * 3), 3));
+    // Стёкла сгенерированных окон — с отметкой pane: дальше PANE_FAR_M от камеры их не рисуем
+    const pane = new Float32Array(total);
+    for (const it of g.items) {
+      const gen = it.genPaneVertices ?? 0;
+      if (!gen) continue;
+      const from = it.start + it.positions.length / 3 - (it.paneVertices ?? 0);
+      pane.fill(1, from, from + gen);
+    }
+    geom.setAttribute('pane', new THREE.BufferAttribute(pane, 1));
     geom.computeVertexNormals(); // без индексов — нормаль на треугольник
     // Плоские контуры — своей группой отрисовки (подряд идущие — одним диапазоном)
     let run: { start: number; thin: boolean } | undefined;
@@ -7141,6 +7174,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (run) geom.addGroup(run.start, total - run.start, run.thin ? 1 : 0);
     g.mesh = new THREE.Mesh(geom, [MATERIAL, THIN_MATERIAL]);
     g.mesh.frustumCulled = false; // своя матрица проекции — штатный culling не годится
+    paneEyeHook(g.mesh, g.silhouetteEye);
     g.scene.add(g.mesh);
     timed('геометрия: стекло', () => this.rebuildGlass(g));
     buildPassageRails(g);
@@ -7565,6 +7599,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!this.graphics.edges || !g.mesh) return;
     const edgeItems = g.items.filter((it) => !exclude?.has(it.feature.key) && !g.hidden.has(it.feature.key) && !strokeOnly(g, it));
     g.edges = edgeLines(edgeItems, EDGE_MATERIAL, !!this.graphics.partSeams);
+    paneEyeHook(g.edges, g.silhouetteEye);
     if (this.level && g === this.groups.get(FOCUS_GROUP)) g.edges.visible = false;
     const silhouettes = silhouetteLines(edgeItems, EDGE_MATERIAL, g.silhouetteEye);
     if (silhouettes) g.edges.add(silhouettes);
@@ -7583,6 +7618,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Откос проёма в фасаде — и ребро оболочки, и толстая линия плана: оставляем только толстую
       const trimmed = dropCoveredSegments(trimIndoorBuildingEdges(positions, this.indoorEdgeOccluders, corners), this.indoorStrokes);
       g.edges.geometry.setAttribute('position', new THREE.BufferAttribute(trimmed, 3));
+      g.edges.geometry.deleteAttribute('pane');
     }
     g.scene.add(g.edges);
     if (this.wireframe && g === this.groups.get(FOCUS_GROUP)) {
@@ -7850,12 +7886,32 @@ function edgeLines(items: Item[], material: THREE.LineBasicMaterial, seams = fal
     const out = new Float32Array(e.length - (b - a));
     out.set(e.subarray(0, a)); out.set(e.subarray(b), a);
     return out;
-  }) : seams ? timed('рёбра: стыки частей', () => dropPartSeams(items as (Item & { edges: Float32Array })[], EDGE_ANGLE, PLANAR_ROOF_EDGE_ANGLE), () => `${items.length} объектов`) : items.map((it) => it.edges!);
-  const lines = new Float32Array(parts.reduce((n, e) => n + e.length, 0));
+  }) : undefined;
+  // Обычные рёбра: обводки сгенерированных окон — в конец, с отметкой pane (вдали их не рисуем)
+  let gens: Float32Array[] = [];
+  let body = parts;
+  if (!body) {
+    gens = items.map((it) => { const [a, b] = genPaneRange(it); return it.edges!.subarray(a, b); });
+    const bare = items.map((it) => {
+      const [a, b] = genPaneRange(it), e = it.edges!;
+      if (a === b) return it;
+      const out = new Float32Array(e.length - (b - a));
+      out.set(e.subarray(0, a)); out.set(e.subarray(b), a);
+      return { ...it, edges: out };
+    });
+    body = seams ? timed('рёбра: стыки частей', () => dropPartSeams(bare as (Item & { edges: Float32Array })[], EDGE_ANGLE, PLANAR_ROOF_EDGE_ANGLE), () => `${items.length} объектов`) : bare.map((it) => it.edges!);
+  }
+  const bodyLen = body.reduce((n, e) => n + e.length, 0);
+  const lines = new Float32Array(bodyLen + gens.reduce((n, e) => n + e.length, 0));
   let o = 0;
-  for (const e of parts) { lines.set(e, o); o += e.length; }
+  for (const e of [...body, ...gens]) { lines.set(e, o); o += e.length; }
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(lines, 3));
+  if (lines.length > bodyLen) {
+    const pane = new Float32Array(lines.length / 3);
+    pane.fill(1, bodyLen / 3);
+    geom.setAttribute('pane', new THREE.BufferAttribute(pane, 1));
+  }
   const out = new THREE.LineSegments(geom, material);
   out.frustumCulled = false;
   return out;

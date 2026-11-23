@@ -42,12 +42,13 @@
   </div>
   <div id="left-col" class="col">
   <aside id="panel" class="panel">
-    <header class="panel-head"><h1>OSM Simple 3D</h1><button type="button" class="collapse-btn" title="Свернуть" aria-expanded="true"></button></header>
+    <header class="panel-head app-head"><svg class="app-menu-icon" aria-hidden="true" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 5h14M3 10h14M3 15h14"/></svg><h1>OSM Simple 3D <span class="app-sub">3D-редактор OpenStreetMap</span></h1><button type="button" class="collapse-btn" title="Свернуть" aria-expanded="true"></button></header>
     <div class="panel-body">
     <div class="panel-tabs" role="tablist">
       <button type="button" role="tab" id="tab-map" aria-controls="pane-map" aria-selected="true" data-tab="map">Основное</button>
       <button type="button" role="tab" id="tab-appearance" aria-controls="pane-appearance" aria-selected="false" data-tab="appearance">Оформление</button>
       <button type="button" role="tab" id="tab-advanced" aria-controls="pane-advanced" aria-selected="false" data-tab="advanced">Ещё</button>
+      <button type="button" role="tab" id="tab-about" aria-controls="pane-about" aria-selected="false" data-tab="about">О редакторе</button>
     </div>
     <div class="panel-tab" id="pane-map" role="tabpanel" aria-labelledby="tab-map">
     <label class="server-line">Источник данных <select id="server-select" title="Откуда загружать данные для редактирования и куда отправлять"></select></label>
@@ -102,6 +103,14 @@
         <label class="toggle" id="gfx-show-keys" hidden title="Только в dev: крупно показывать нажимаемые клавиши под панелью настроек — для записи демонстраций"><input type="checkbox" data-gfx="showKeys" /> Показывать нажатые клавиши</label>
         <p id="perf" class="hint">FPS: — · треугольников: —</p>
       </div>
+    </div>
+    <div class="panel-tab" id="pane-about" role="tabpanel" aria-labelledby="tab-about" hidden>
+      <p class="about-text">Редактор 3D-зданий для OpenStreetMap. Схемы тегов: <a href="https://wiki.openstreetmap.org/wiki/Simple_3D_Buildings" target="_blank" rel="noopener">Simple 3D Buildings</a>, <a href="https://wiki.openstreetmap.org/wiki/Simple_Indoor_Tagging" target="_blank" rel="noopener">Simple Indoor Tagging</a>.</p>
+      <ul class="about-links">
+        <li><a href="https://github.com/FelisPimeja/osm-simple3d-editor" target="_blank" rel="noopener">Исходный код на GitHub</a></li>
+        <li><a href="https://github.com/FelisPimeja/osm-simple3d-editor/issues/new" target="_blank" rel="noopener">Сообщить об ошибке или предложить идею</a></li>
+        <li><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">Данные © участники OpenStreetMap</a></li>
+      </ul>
     </div>
     </div>
   </aside>

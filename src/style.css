@@ -982,3 +982,11 @@ body:not(.mobile) .maplibregl-ctrl-top-right .maplibregl-ctrl { margin-right: 0;
 body:not(.mobile) .vc-settings { top: auto; bottom: calc(100% + 4px); }
 body:not(.mobile) #right-col { bottom: 104px; }
 body:not(.mobile):has(.view-cube:not([hidden])) #right-col { bottom: 158px; }
+
+/* Главное меню: значок меню и подзаголовок — напоминание, что это редактор OpenStreetMap */
+.app-head .app-menu-icon { flex: none; color: #555; }
+.app-head h1 { display: flex; flex-direction: column; line-height: 1.15; }
+.app-sub { font-size: 11px; font-weight: normal; color: #6b7280; }
+.about-text { margin: 0 0 8px; }
+.about-links { margin: 0; padding-left: 18px; }
+.about-links li { margin: 4px 0; }

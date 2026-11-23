@@ -26,6 +26,8 @@ export function predictEntrance(ring: number[], tags: (id: number) => Record<str
   const n = ring.length, i = ring.indexOf(target);
   if (i < 0 || n < 2) return {};
   const own = tags(target);
+  // Номер задан не числом (1а, А…) — ни номер, ни квартиры не угадываем
+  if (own.ref?.trim() && num(own.ref) === undefined) return {};
   const known = ring.map((id, j) => ({ j, ref: num(tags(id).ref), flats: range(tags(id)['addr:flats']) })).filter((k) => k.j !== i && k.ref !== undefined);
   if (!known.length) return {};
   // Смещение по контуру от j к i (по кругу), со знаком: кратчайшее

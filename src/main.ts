@@ -8903,6 +8903,18 @@ function entranceSuggestion(id: number, tagsOf: (x: number) => Record<string, st
   return {};
 }
 
+/**
+ * Клавиатура на таче: номер — цифровая; квартиры — цифры с точкой/запятой (дефиса в цифровых раскладках iOS нет),
+ * «12.40» и «12,40» превращаются в диапазон 12-40 (см. normalizeFlats).
+ */
+function entranceKeyboard(k: string): string {
+  return k === 'ref' ? 'inputmode="numeric"' : k === 'addr:flats' ? 'inputmode="decimal"' : '';
+}
+/** Диапазоны квартир с цифровой клавиатуры: «1.20» / «1,20» → «1-20», пробелы вокруг «;» убираем. */
+function normalizeFlats(v: string): string {
+  return v.trim().replace(/^(\d+)\s*[.,]\s*(\d+)$/, '$1-$2');
+}
+
 function renderEntrance(id: number) {
   if (isWindowNode(id)) return renderWindow(id);
   const ids = selectedEntrances().length > 1 ? selectedEntrances() : [id];
@@ -8922,12 +8934,12 @@ function renderEntrance(id: number) {
     const sug = k === 'ref' ? predicted.ref : k === 'addr:flats' ? predicted.flats : undefined;
     if (sug && !value) {
       const tip = tr('Предположение по соседним подъездам: {value}. Tab или ↵ — подставить.', { value: sug });
-      return `<label class="tag-row"><span title="${esc(k)}">${esc(k === 'ref' ? tr('Номер') : tr('Квартиры'))}</span><span class="inherit-field" title="${esc(tip)}"><input type="text" class="suggested" data-entrance-tag="${k}" data-suggest="${esc(sug)}" value="" placeholder="${esc(sug)}" spellcheck="false" autocomplete="off"><button type="button" class="inherit-badge suggest-accept" data-accept-suggest tabindex="-1" title="${esc(tr('Подставить'))}"><span class="sa-touch">↵</span></button></span></label>`;
+      return `<label class="tag-row"><span title="${esc(k)}">${esc(k === 'ref' ? tr('Номер') : tr('Квартиры'))}</span><span class="inherit-field" title="${esc(tip)}"><input type="text" class="suggested" data-entrance-tag="${k}" ${entranceKeyboard(k)} data-suggest="${esc(sug)}" value="" placeholder="${esc(sug)}" spellcheck="false" autocomplete="off"><button type="button" class="inherit-badge suggest-accept" data-accept-suggest tabindex="-1" title="${esc(tr('Подставить'))}"><span class="sa-touch">↵</span></button></span></label>`;
     }
     const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : k === 'door:wings' ? String(doorWings(t)) : k === 'addr:flats' ? tr('например, 1-22') : '—';
     const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : k === 'door:wings' ? tr('Створок') : k === 'addr:flats' ? tr('Квартиры') : tr('Номер'))}</span>`;
     const input = k === 'entrance' || k === 'door:wings' ? renderValueCombo(k === 'entrance' ? idOptions('entrance') ?? [] : ['1', '2'], `data-entrance-tag="${k}"`, value ?? '', hint, undefined, k)
-      : `<input type="text" data-entrance-tag="${k}" value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
+      : `<input type="text" data-entrance-tag="${k}" ${entranceKeyboard(k)} value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}${input}</label>`;
   }).join('');
   infoEl.innerHTML = (many ? `<h2 class="obj-head"><span class="obj-title">${esc(title)}</span></h2>` : objectHeading(`${esc(title)}${name}`, `${server().web}/node/${id}`, `node/${id}`))
@@ -8938,7 +8950,10 @@ function renderEntrance(id: number) {
     + (many ? renderMultiOtherTags(all, rows).replace('data-other-key="@selection"', `data-other-key="${ENTRANCES_KEY}"`)
       : renderOtherTags(ENTRANCE_KEY_PREFIX + id, t, rows));
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-entrance-tag]')) {
-    input.addEventListener('change', () => setEntrancesTags(ids.map((x) => ({ id: x, tags: { ...tagsOf(x), [input.dataset.entranceTag!]: input.value } }))));
+    input.addEventListener('change', () => {
+      if (input.dataset.entranceTag === 'addr:flats') input.value = normalizeFlats(input.value);
+      setEntrancesTags(ids.map((x) => ({ id: x, tags: { ...tagsOf(x), [input.dataset.entranceTag!]: input.value } })));
+    });
     // Подсказка подъезда: Tab в пустом поле или ↵ — подставить (номер и квартиры принимаются по одному)
     if (!input.dataset.suggest) continue;
     const accept = () => { if (input.value) return; input.value = input.dataset.suggest!; input.dispatchEvent(new Event('change')); };

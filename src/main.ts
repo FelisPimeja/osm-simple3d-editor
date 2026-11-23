@@ -158,6 +158,8 @@ interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochr
 const GFX_KEY = 'osm3d.graphics';
 /** Телефон или планшет: по умолчанию графика полегче (деревья выключены, режим здания без окружения). */
 const touchDevice = matchMedia('(pointer: coarse)').matches;
+/** Радиус попадания по входу пальцем, px экрана. */
+const ENTRANCE_TOUCH_PX = 24;
 const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: !touchDevice, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: true, windowTuner: false, showKeys: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
@@ -2811,7 +2813,7 @@ map.on('click', (e) => {
   }
   // Режим карты: вход здания выбирается сразу, без входа в здание (Shift — добавить к выбранным входам)
   if (!focus && !addingTo && !toolActive() && !e.originalEvent.altKey && buildingsView.shown) {
-    const id = overpassLayer.pickEntrance([e.point.x, e.point.y]);
+    const id = overpassLayer.pickEntrance([e.point.x, e.point.y], touchDevice ? ENTRANCE_TOUCH_PX : 0);
     if (id !== undefined && e.originalEvent.shiftKey) { if (selectedEntrance !== undefined || !selection.length) { selectEntrance(id, true); return; } }
     else if (id !== undefined) { if (id !== selectedEntrance || entranceExtra.length) selectEntrance(id); else if (e.originalEvent.detail < 2) select(undefined); return; }
   }

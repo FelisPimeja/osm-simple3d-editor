@@ -6446,7 +6446,46 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Вход под курсором: в режиме здания — в его сцене, на карте — в тайлах (только двери, не окна). id узла. */
-  pickEntrance(point: [number, number]): number | undefined {
+  pickEntrance(point: [number, number], slopPx = 0): number | undefined {
+    const id = this.pickEntranceExact(point);
+    return id ?? (slopPx > 0 && !this.focused ? this.pickEntranceNear(point, slopPx) : undefined);
+  }
+
+  /**
+   * На таче палец толще двери: вход, середина проёма которого на экране ближе slopPx к точке тапа, на видимой
+   * стене (обращённой к камере) и не за другим зданием.
+   */
+  private pickEntranceNear(point: [number, number], slopPx: number): number | undefined {
+    if (!this.map || !this.lastMain) return;
+    const canvas = this.map.getCanvas(), w = canvas.clientWidth, h = canvas.clientHeight;
+    const world = this.worldRay(point);
+    if (!world) return;
+    const v = new THREE.Vector4();
+    let best: { id: number; px: number; d: number } | undefined;
+    for (const g of this.activeGroups()) {
+      if (!g.entrances.length) continue;
+      const m = this.lastMain.clone().multiply(g.model), eye = g.silhouetteEye.value;
+      for (const e of g.entrances) {
+        if (e.window || (eye.x - e.p[0]) * e.n[0] + (eye.y - e.p[1]) * e.n[1] <= 0) continue;
+        v.set(e.p[0], e.p[1], e.z + (e.height ?? ENTRANCE_HEIGHT) / 2, 1).applyMatrix4(m);
+        if (v.w <= 0) continue;
+        const px = Math.hypot((v.x / v.w + 1) / 2 * w - point[0], (1 - v.y / v.w) / 2 * h - point[1]);
+        if (px > slopPx || (best && px >= best.px)) continue;
+        const at = new THREE.Vector3(e.p[0], e.p[1], e.z + (e.height ?? ENTRANCE_HEIGHT) / 2).applyMatrix4(g.model);
+        best = { id: e.id, px, d: at.distanceTo(world.origin) };
+      }
+    }
+    if (!best) return;
+    // Вход за другим зданием не берём: попадание луча тапа в объём заметно ближе входа
+    const b = this.pickHitImpl(point);
+    if (b) {
+      const c = MercatorCoordinate.fromLngLat(b.lngLat, b.altitude);
+      if (new THREE.Vector3(c.x, c.y, c.z).distanceTo(world.origin) + 3 * c.meterInMercatorCoordinateUnits() < best.d) return;
+    }
+    return best.id;
+  }
+
+  private pickEntranceExact(point: [number, number]): number | undefined {
     if (this.focused) {
       const g = this.groups.get(FOCUS_GROUP), ray = this.focusRay(point);
       return g && ray ? this.pickEntranceIn(g, ray)?.id : undefined;

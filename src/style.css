@@ -950,3 +950,9 @@ body.mobile .maplibregl-ctrl-top-right .view-cube { position: fixed; right: 8px;
 /* Мобильная версия: куб внизу — окно над ним */
 body.mobile .vc-settings { top: auto; bottom: calc(100% + 4px); }
 body.mobile .edit-hint { display: none; } /* мобильный — только просмотр: подсказки правки геометрии ни к чему */
+
+/* Короткая атрибуция OSM рядом со свёрнутой ⓘ (полный список — по ⓘ) */
+.maplibregl-ctrl-bottom-right { display: flex; align-items: flex-end; }
+.maplibregl-ctrl-bottom-right > .osm-credit-ctrl { order: -1; margin: 0 0 10px 10px; float: none; }
+.osm-credit { display: block; padding: 3px 8px; border-radius: 12px; background: rgba(255,255,255,.8); color: #333; font-size: 12px; text-decoration: none; line-height: 18px; }
+.osm-credit:hover { text-decoration: underline; }

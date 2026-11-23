@@ -237,7 +237,25 @@ const map = new maplibregl.Map({
   maxPitch: 175, // хэш из ссылки на здание (наклон до 175°) не должен отбрасываться; потом ограничит orbit
   // Без «прилипания к северу»: после сдвига или зума при азимуте в ±7° MapLibre сам плавно доворачивал камеру на север
   bearingSnap: 0,
+  // Атрибуция всегда компактная (ⓘ раскрывает полный список); короткая ссылка на OSM видна всегда — ниже
+  attributionControl: { compact: true },
 });
+{
+  // MapLibre при загрузке раскрывает компактную атрибуцию сам — сворачиваем: она спорила со строкой состояния
+  // Раскрытой она бывает только по клику на ⓘ
+  const attrib = map.getContainer().querySelector<HTMLElement>('.maplibregl-ctrl-attrib');
+  let byUser = false;
+  attrib?.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('.maplibregl-ctrl-attrib-button')) byUser = true; }, true);
+  if (attrib) new MutationObserver(() => {
+    if (byUser) { byUser = false; return; }
+    if (attrib.classList.contains('maplibregl-compact-show')) { attrib.classList.remove('maplibregl-compact-show'); attrib.removeAttribute('open'); }
+  }).observe(attrib, { attributes: true, attributeFilter: ['class'] });
+  const osm = document.createElement('a');
+  osm.className = 'osm-credit';
+  osm.href = 'https://www.openstreetmap.org/copyright'; osm.target = '_blank'; osm.rel = 'noopener';
+  osm.textContent = '© OpenStreetMap';
+  map.addControl({ onAdd: () => { const c = document.createElement('div'); c.className = 'maplibregl-ctrl osm-credit-ctrl'; c.append(osm); return c; }, onRemove: () => {} }, 'bottom-right');
+}
 // View cube (слева от кнопок масштаба): вид с грани, ребра или угла куба — в режиме здания по осям здания,
 // на карте — по сторонам света
 const viewCube = new ViewCube({
@@ -19870,8 +19888,8 @@ function fitBetweenPanels(el: HTMLElement) {
   const box = (el.offsetParent ?? document.body).getBoundingClientRect(), rect = el.getBoundingClientRect();
   const panels = (id: string) => [...document.getElementById(id)!.children].map((c) => c.getBoundingClientRect())
     .filter((r) => r.width && r.bottom > rect.top && r.top < rect.bottom);
-  // Раскрытая атрибуция (при загрузке MapLibre раскрывает её сам) — такое же препятствие; совсем не оставила места — строка прячется
-  const attrib = document.querySelector('.maplibregl-ctrl-attrib.maplibregl-compact-show')?.getBoundingClientRect();
+  // Атрибуция (короткая ссылка OSM и ⓘ, раскрытая — шире) — такое же препятствие; совсем не оставила места — строка прячется
+  const attrib = map.getContainer().querySelector('.maplibregl-ctrl-bottom-right')?.getBoundingClientRect();
   const blocks = [...panels('right-col'), ...(attrib && attrib.top < rect.bottom ? [attrib] : [])];
   const gap = 12;
   const left = Math.max(0, ...panels('left-col').map((r) => r.right - box.left)) + gap;
@@ -19888,7 +19906,7 @@ const statusbarWatch = new ResizeObserver(() => {
   for (const el of [statusbar, ...vcbs]) fitBetweenPanels(el);
   document.body.style.setProperty('--vcb-h', `${Math.max(0, ...vcbs.filter((v) => !v.classList.contains('vcb-track')).map((v) => v.offsetHeight))}px`);
 });
-for (const el of [statusbar, ...vcbs, map.getContainer(), ...document.querySelectorAll('#left-col > *, #right-col > *, .maplibregl-ctrl-attrib')]) statusbarWatch.observe(el);
+for (const el of [statusbar, ...vcbs, map.getContainer(), ...document.querySelectorAll('#left-col > *, #right-col > *, .maplibregl-ctrl-bottom-right')]) statusbarWatch.observe(el);
 
 /** Источник тайлов для текущего сервера: его /map API (свой кеш; у боевого — прежняя база кеша). */
 function tileSource(): TileSource {

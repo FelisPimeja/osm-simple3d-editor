@@ -273,11 +273,13 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
     // Подсказка (дата здания): не наследуется, а предлагается — Tab подставляет
     const sug = !value && field.suggest ? suggestion(field.tag, opts.suggest ?? []) : undefined;
     const sugHint = sug ? tr('Не задано — у {source}: {value}. Tab — подставить.', { source: sug.from.label, value: sug.value }) : '';
-    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || defHint || sugHint || was || field.tag)}"${
-      sug ? ` data-suggest="${esc(sug.value)}"` : ''}`;
     const unit = lengthUnitOf(value || inherited);
     // Умолчание считается в метрах, поле — в своей единице
     const defShown = def && field.type === 'length' ? lengthNumber(Number(def.value), unit) : def?.value;
+    // Умолчание ↵ закрепляет тегом — как подсказку
+    const accept = sug?.value ?? (def ? String(defShown) : undefined);
+    const common = `data-tag="${esc(field.tag)}" data-type="${field.type}" title="${esc(hint || defHint || sugHint || was || field.tag)}"${
+      accept !== undefined ? ` data-suggest="${esc(accept)}"${def ? ' data-default' : ''}` : ''}`;
     const shown = inherited ?? defShown ?? sug?.value;
     const grey = inherited ? ' class="inherited"' : def ? ' class="inherited defaulted"' : sug ? ' class="suggested"' : '';
     const badge = (input: string) => withBadge(input, hint || defHint || sugHint, def ? ICON_DEFAULT : sug ? ICON_SUGGEST : ICON_INHERIT);
@@ -419,8 +421,8 @@ function directionField(input: string): string {
 /** Поле со значком «унаследовано» справа (только если есть пояснение). */
 function withBadge(input: string, hint: string, icon = ICON_INHERIT): string {
   if (!hint) return input;
-  // Подсказка: значок — ещё и кнопка «подставить» (на таче нет Tab; там вместо значка крупная «↵»)
-  if (icon === ICON_SUGGEST) return `<span class="inherit-field" title="${esc(hint)}">${input}<button type="button" class="inherit-badge suggest-accept" data-accept-suggest tabindex="-1" title="${esc(tr('Подставить'))}"><span class="sa-icon">${icon}</span><span class="sa-touch">↵</span></button></span>`;
+  // Подсказка и умолчание: значок — кнопка «↵» подставить значение тегом (на таче нет Tab)
+  if (icon === ICON_SUGGEST || icon === ICON_DEFAULT) return `<span class="inherit-field" title="${esc(hint)}">${input}<button type="button" class="inherit-badge suggest-accept" data-accept-suggest tabindex="-1" title="${esc(tr('Подставить'))}"><span class="sa-icon">${icon}</span><span class="sa-touch">↵</span></button></span>`;
   return `<span class="inherit-field" title="${esc(hint)}">${input}<span class="inherit-badge">${icon}</span></span>`;
 }
 
@@ -553,7 +555,7 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
   // (перерисовка формы после правки возвращает его в поле с тем же тегом)
   container.addEventListener('keydown', (e) => {
     const input = e.target as HTMLInputElement;
-    if (e.key !== 'Tab' || e.shiftKey || !input.dataset.suggest || input.value) return;
+    if (e.key !== 'Tab' || e.shiftKey || !input.dataset.suggest || input.value || input.dataset.default !== undefined) return;
     input.value = input.dataset.suggest;
     setTimeout(() => commit(input)); // после перехода фокуса: перерисовка вернёт его в следующее поле
   });
@@ -561,7 +563,7 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
   container.addEventListener('mousedown', (e) => { if ((e.target as Element).closest?.('[data-accept-suggest]')) e.preventDefault(); });
   container.addEventListener('click', (e) => {
     const btn = (e.target as Element).closest?.('[data-accept-suggest]');
-    const input = btn?.parentElement?.querySelector<HTMLInputElement>('[data-suggest]');
+    const input = btn?.parentElement?.querySelector<HTMLInputElement>('[data-suggest]:not([type="color"])');
     if (!input?.dataset.suggest || input.value) return;
     e.preventDefault();
     input.value = input.dataset.suggest;

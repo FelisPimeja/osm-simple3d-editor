@@ -767,6 +767,8 @@ class MeshGroup {
   /** Входы на фасадах (entrance=*) и где они стоят — для выбора кликом. */
   entranceObj?: THREE.Group;
   entrances: EntrancePlace[] = [];
+  /** Теги входов группы (id узла → теги) — для подписей номера и квартир. */
+  entranceTags = new Map<number, Record<string, string>>();
 
   disposeEntrances() {
     if (!this.entranceObj) return;
@@ -6361,6 +6363,36 @@ export class BuildingsLayer implements CustomLayerInterface {
     return this.groups.get(FOCUS_GROUP)?.entrances.find((e) => e.id === id);
   }
 
+  /**
+   * Подписи входов на экране по матрице последнего кадра: точка над дверью, теги, смотрит ли фасад на камеру и
+   * точка перед дверью (at, z — для проверки заслонения).
+   * Только входы с keep(tags) и в нарисованных группах (в режиме здания — его сцена).
+   */
+  entranceScreenPoints(keep: (tags: Record<string, string>) => boolean): { id: number; tags: Record<string, string>; x: number; y: number; at: LonLat; z: number; facing: boolean }[] {
+    if (!this.map || !this.lastMain) return [];
+    const canvas = this.map.getCanvas(), w = canvas.clientWidth, h = canvas.clientHeight;
+    const out: { id: number; tags: Record<string, string>; x: number; y: number; at: LonLat; z: number; facing: boolean }[] = [];
+    const seen = new Set<number>(), v = new THREE.Vector4();
+    for (const g of this.activeGroups()) {
+      if (!g.entrances.length) continue;
+      const m = this.lastMain.clone().multiply(g.model), eye = g.silhouetteEye.value;
+      for (const e of g.entrances) {
+        if (e.window || seen.has(e.id)) continue;
+        const tags = g.entranceTags.get(e.id);
+        if (!tags || !keep(tags)) continue;
+        const z = e.z + (e.height ?? ENTRANCE_HEIGHT) + 0.3;
+        v.set(e.p[0], e.p[1], z, 1).applyMatrix4(m);
+        if (v.w <= 0) continue;
+        const x = (v.x / v.w + 1) / 2 * w, y = (1 - v.y / v.w) / 2 * h;
+        if (x < -40 || y < -40 || x > w + 40 || y > h + 40) continue;
+        seen.add(e.id);
+        const facing = (eye.x - e.p[0]) * e.n[0] + (eye.y - e.p[1]) * e.n[1] > 0;
+        out.push({ id: e.id, tags, x, y, at: g.fromLocal([e.p[0] + e.n[0] * 0.3, e.p[1] + e.n[1] * 0.3]), z: e.z + 1, facing });
+      }
+    }
+    return out;
+  }
+
   /** Курсор у точки выбранного входа (узел у основания стены) — за неё вход переносят. */
   pickEntrancePoint(point: [number, number]): boolean {
     const e = this.entranceSelected === undefined ? undefined : this.focusEntrance(this.entranceSelected);
@@ -6382,13 +6414,37 @@ export class BuildingsLayer implements CustomLayerInterface {
     return best;
   }
 
-  /** Вход под курсором в режиме здания: id узла. */
+  /** Вход под курсором: в режиме здания — в его сцене, на карте — в тайлах (только двери, не окна). id узла. */
   pickEntrance(point: [number, number]): number | undefined {
-    const g = this.groups.get(FOCUS_GROUP), ray = this.focusRay(point);
-    if (!g || !ray) return;
-    let best: number | undefined, bestT = Infinity;
+    if (this.focused) {
+      const g = this.groups.get(FOCUS_GROUP), ray = this.focusRay(point);
+      return g && ray ? this.pickEntranceIn(g, ray)?.id : undefined;
+    }
+    const world = this.worldRay(point);
+    if (!world) return;
+    let best: { id: number; d: number } | undefined;
+    for (const g of this.activeGroups()) {
+      if (!g.entrances.length) continue;
+      const hit = this.pickEntranceIn(g, world.clone().applyMatrix4(g.model.clone().invert()), true);
+      if (!hit) continue;
+      const d = hit.at.applyMatrix4(g.model).distanceTo(world.origin);
+      if (!best || d < best.d) best = { id: hit.id, d };
+    }
+    if (!best) return;
+    // Дверь за другим зданием не выбирается: попадание в объём заметно ближе двери
+    const b = this.pickHitImpl(point);
+    if (b) {
+      const c = MercatorCoordinate.fromLngLat(b.lngLat, b.altitude);
+      if (new THREE.Vector3(c.x, c.y, c.z).distanceTo(world.origin) + 1.5 * c.meterInMercatorCoordinateUnits() < best.d) return;
+    }
+    return best.id;
+  }
+
+  private pickEntranceIn(g: MeshGroup, ray: THREE.Ray, doorsOnly = false): { id: number; at: THREE.Vector3 } | undefined {
+    let best: number | undefined, bestT = Infinity, bestAt: THREE.Vector3 | undefined;
     const hit = new THREE.Vector3();
     for (const e of g.entrances) {
+      if (doorsOnly && e.window) continue;
       // Ниша — коробка от фасада вглубь стены: попадание в проём, пол, боковины или заднюю стенку; без ниш — плоский прямоугольник
       // Координаты: u — вдоль стены, d — вглубь (от фасада), v — вверх от порога; с запасом, чтобы попасть было проще
       const o = ray.origin, dir = ray.direction;
@@ -6400,9 +6456,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       const box = new THREE.Box3(new THREE.Vector3(-w, -0.05, -0.15), new THREE.Vector3(w, depth + 0.05, (e.window?.height ?? e.height ?? ENTRANCE_HEIGHT) + 0.15));
       if (!local.intersectBox(box, hit)) continue;
       const t = hit.distanceTo(local.origin);
-      if (t < bestT) { best = e.id; bestT = t; }
+      if (t < bestT) { best = e.id; bestT = t; bestAt = ray.at(t / ray.direction.length(), new THREE.Vector3()); }
     }
-    return best;
+    return best === undefined ? undefined : { id: best, at: bestAt! };
   }
 
   /** Входы группы: у вершин контуров с entrance=* (по текущей геометрии — вершина едет, вход за ней). */
@@ -6444,6 +6500,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const tags = new Map<number, Record<string, string>>();
     for (const it of g.items) for (const e of it.feature.entrances ?? []) tags.set(e.id, e.tags);
     g.entrances = [];
+    g.entranceTags = tags;
     // Окна по тегам (ниши рисует сам объём) — в режиме здания выбираются и правятся как входы
     const windowPlaces = g === this.groups.get(FOCUS_GROUP) && windowsEnabled ? this.windowPlaces(g, tags) : [];
     if (!tags.size && !windowPlaces.length) return;

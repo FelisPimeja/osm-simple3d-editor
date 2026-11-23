@@ -23,6 +23,7 @@ import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJS
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import { IndoorPois, poiSvg } from './view/indoor-pois';
+import { EntranceLabels } from './view/entrance-labels';
 import { Toasts } from './view/toasts';
 import { entranceIndoorIssue, ROOM_PAIRED_AMENITY, setDeprecatedTags, validateBuilding, validateDuplicates, validateOrphanParts, validateGeometry, jitterEverywhere, selfIntersects, validateIndoor, validateSolidWallDoors, validateRepeatedRooms, validateWallPerimeters, validateStackedEscalators, validateEscalators, validateTags, OUTLINE_GROW_SHARE, partGround, type Issue } from './edit/validate';
 import { IndoorBadges, type IndoorBadge } from './view/indoor-badges';
@@ -2736,6 +2737,12 @@ map.on('click', (e) => {
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.altKey) {
     const id = overpassLayer.pickEntrance([e.point.x, e.point.y]);
     // Shift — добавить вход к выбранным или снять; повторный одиночный клик по единственному выбранному — снять выбор
+    if (id !== undefined && e.originalEvent.shiftKey) { if (selectedEntrance !== undefined || !selection.length) { selectEntrance(id, true); return; } }
+    else if (id !== undefined) { if (id !== selectedEntrance || entranceExtra.length) selectEntrance(id); else if (e.originalEvent.detail < 2) select(undefined); return; }
+  }
+  // Режим карты: вход здания выбирается сразу, без входа в здание (Shift — добавить к выбранным входам)
+  if (!focus && !addingTo && !toolActive() && !e.originalEvent.altKey && buildingsView.shown) {
+    const id = overpassLayer.pickEntrance([e.point.x, e.point.y]);
     if (id !== undefined && e.originalEvent.shiftKey) { if (selectedEntrance !== undefined || !selection.length) { selectEntrance(id, true); return; } }
     else if (id !== undefined) { if (id !== selectedEntrance || entranceExtra.length) selectEntrance(id); else if (e.originalEvent.detail < 2) select(undefined); return; }
   }
@@ -11110,6 +11117,8 @@ function levelSources(levels: Level[]): string {
 const ICON_PLAN = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 2h12v12H2z"/><path d="M2 8h5v6M7 2v3M10 8h4M10 8v3"/></svg>';
 /** Значки «есть поэтажный план» над зданиями — с этого зума и при стольких indoor-полигонах в здании. */
 const BADGE_MIN_ZOOM = 16;
+/** Подписи входов (номер, квартиры) — с этого зума. */
+new EntranceLabels(map, overpassLayer, 17, () => buildingsView.shown, (id, t) => session.isDeleted(`node/${id}`) ? {} : session.get(`node/${id}`)?.tags ?? t);
 const BADGE_MIN_POLYGONS = 3;
 const INDOOR_PLAN_KINDS = new Set(['room', 'area', 'corridor', 'level']);
 

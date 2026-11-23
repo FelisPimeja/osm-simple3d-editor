@@ -1,4 +1,4 @@
-import { INHERITABLE, inheritedTags, inheritedValue } from '../osm/inherit';
+import { INHERITABLE, inheritedTags, roofOnlyPart, inheritedValue } from '../osm/inherit';
 import { computeHeights, FOOT, LEVEL_HEIGHT, parseLength, roofHeightOf, roofShapeOf } from '../osm/heights';
 import type { EditSession } from './session';
 import { hasOwnUnit, lengthNumber, lengthUnitOf, withUnit, writeLength, type LengthUnit } from '../osm/units';
@@ -222,9 +222,10 @@ function defaultValues(effective: Record<string, string>): Record<string, { valu
   }
   if (effective['roof:shape'] === undefined) out['roof:shape'] = { value: 'flat', why: tr('без формы крыша плоская') };
   if (effective['roof:orientation'] === undefined && effective['roof:direction'] === undefined) out['roof:orientation'] = { value: 'along', why: tr('конёк вдоль длинной стороны') };
-  if (effective['building:colour'] === undefined && effective.colour === undefined) out['building:colour'] = { value: '#ffffff', why: tr('белый по умолчанию') };
+  const roofOnly = roofOnlyPart(effective);
+  if (!roofOnly && effective['building:colour'] === undefined && effective.colour === undefined) out['building:colour'] = { value: '#ffffff', why: tr('белый по умолчанию') };
   if (effective['roof:colour'] === undefined) {
-    const pitched = h.roofShape !== 'flat';
+    const pitched = h.roofShape !== 'flat' || roofOnly;
     out['roof:colour'] = pitched
       ? { value: '#ffffff', why: tr('белый по умолчанию') }
       : { value: effective['building:colour'] ?? effective.colour ?? '#ffffff', why: tr('у плоской крыши — цвет стен') };

@@ -8,6 +8,13 @@
  */
 export const INHERITABLE = ['building:colour', 'roof:colour', 'building:material', 'roof:material'] as const;
 
+/** Часть-кровля без этажей (навес, крыша над пустотой): стен у неё нет — цвет и материал стен не нужны. */
+export function roofOnlyPart(tags: Record<string, string>): boolean {
+  return (tags['building:part'] === 'roof' || tags.building === 'roof') && tags['building:levels'] === undefined;
+}
+
+const WALL_ONLY = new Set(['building:colour', 'building:material']);
+
 /** Американское написание тоже встречается в данных. */
 const ALIASES: Record<string, string> = { 'building:colour': 'building:color', 'roof:colour': 'roof:color' };
 
@@ -29,8 +36,9 @@ function hasOwn(tags: Record<string, string>, tag: string): boolean {
  */
 export function inheritedTags(tags: Record<string, string>, sources: Record<string, string>[]): Record<string, string> {
   const out: Record<string, string> = {};
+  const roofOnly = roofOnlyPart(tags);
   for (const tag of INHERITABLE) {
-    if (hasOwn(tags, tag)) continue;
+    if (hasOwn(tags, tag) || (roofOnly && WALL_ONLY.has(tag))) continue;
     for (const src of sources) {
       const v = inheritedValue(src, tag);
       if (v !== undefined) { out[tag] = v; break; }

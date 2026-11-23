@@ -1,3 +1,4 @@
+import { roofOnlyPart } from '../osm/inherit';
 import { wireframeEdges } from './wireframe-edges';
 import { openRoofOutline } from './open-roof';
 import { outlineRemainders } from './outline-remainder';
@@ -9694,7 +9695,8 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   positions.set(tri.roof, tri.walls.length);
   positions.set(floors, tri.walls.length + tri.roof.length);
   const wall = tags['building:colour'] ?? tags.colour ?? DEFAULT_WALL;
-  const roof = tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? DEFAULT_ROOF : wall);
+  // У части-кровли без этажей стен нет — плоская крыша не берёт их цвет
+  const roof = tags['roof:colour'] ?? ((tags['roof:shape'] && tags['roof:shape'] !== 'flat') || roofOnlyPart(tags) ? DEFAULT_ROOF : wall);
   if (lift) for (let i = 2; i < positions.length; i += 3) positions[i] += lift;
   if (lift) for (let i = 2; i < paneLines.length; i += 3) paneLines[i] += lift;
   const box = new THREE.Box3();
@@ -9724,7 +9726,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
     glassWalls,
     glassRoof: isGlass(tags['roof:material']),
     glassWallColour: glassTint(tags['building:colour'] ?? tags.colour),
-    glassRoofColour: glassTint(tags['roof:colour'] ?? (tags['roof:shape'] && tags['roof:shape'] !== 'flat' ? undefined : tags['building:colour'] ?? tags.colour)),
+    glassRoofColour: glassTint(tags['roof:colour'] ?? ((tags['roof:shape'] && tags['roof:shape'] !== 'flat') || roofOnlyPart(tags) ? undefined : tags['building:colour'] ?? tags.colour)),
     glassStart: 0,
   };
 }

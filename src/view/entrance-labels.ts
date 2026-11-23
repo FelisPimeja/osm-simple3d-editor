@@ -5,7 +5,7 @@ import type { BuildingsLayer } from '../render/buildings-layer';
 const labelled = (t: Record<string, string>) => !!(t.ref || t['addr:flats']);
 
 /**
- * Подписи над входами: номер (ref) и с новой строки квартиры (addr:flats) — видно, проставлены ли они у подъездов.
+ * Подписи над входами: номер (ref) в рамке и под ним квартиры (addr:flats); клик по подписи выбирает вход — видно, проставлены ли они у подъездов.
  * HTML поверх карты, позиции — на каждом кадре; вход на обратной к камере стене не подписан, закрытый другим
  * зданием (луч от камеры упирается в него раньше двери) — скрыт после остановки камеры.
  */
@@ -17,9 +17,18 @@ export class EntranceLabels {
 
   constructor(private readonly map: MlMap, private readonly layer: BuildingsLayer, private readonly minZoom: number, private readonly shown: () => boolean,
     /** Теги входа с правками сессии (тайлы карты от правки тегов узла не пересобираются). */
+    onPick: (id: number) => void,
     private readonly liveTags: (id: number, tags: Record<string, string>) => Record<string, string> = (_, t) => t) {
     this.root = document.createElement('div');
     this.root.className = 'entrance-labels';
+    // Клик по подписи — выбрать вход; клик после перетаскивания карты — не выбор (как у значков планов)
+    let down: [number, number] | undefined;
+    this.root.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
+    this.root.addEventListener('click', (e) => {
+      const moved = down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4;
+      const el = (e.target as HTMLElement).closest<HTMLElement>('.entrance-label');
+      if (el?.dataset.id && !moved) { e.stopPropagation(); onPick(Number(el.dataset.id)); }
+    });
     map.getCanvasContainer().appendChild(this.root);
     map.on('render', () => this.place());
     map.on('idle', () => this.updateOcclusion());
@@ -38,9 +47,16 @@ export class EntranceLabels {
       if (!p.facing) continue;
       live.add(p.id);
       let el = this.els.get(p.id);
-      const text = [p.tags.ref, p.tags['addr:flats']].filter(Boolean).join('\n');
-      if (!el) { el = document.createElement('div'); el.className = 'entrance-label'; this.root.appendChild(el); this.els.set(p.id, el); }
-      if (el.textContent !== text) el.textContent = text;
+      const ref = p.tags.ref ?? '', flats = p.tags['addr:flats'] ?? '';
+      if (!el) {
+        el = document.createElement('div'); el.className = 'entrance-label'; el.dataset.id = String(p.id);
+        el.append(Object.assign(document.createElement('div'), { className: 'entrance-ref' }), Object.assign(document.createElement('div'), { className: 'entrance-flats' }));
+        this.root.appendChild(el); this.els.set(p.id, el);
+      }
+      // Номер — в рамке, квартиры — строкой под ней без рамки
+      const [r, f] = el.children as unknown as [HTMLElement, HTMLElement];
+      if (r.textContent !== ref) { r.textContent = ref; r.hidden = !ref; }
+      if (f.textContent !== flats) { f.textContent = flats; f.hidden = !flats; }
       el.classList.toggle('occluded', this.occluded.has(p.id));
       el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -100%)`;
     }

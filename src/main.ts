@@ -8765,8 +8765,8 @@ function selectEntrance(id: number, add = false) {
 
 /** Ключи секции «Другие теги» у входов: один вход — префикс и id узла, несколько выбранных — общий ключ. */
 const ENTRANCE_KEY_PREFIX = '@entrance:', ENTRANCES_KEY = '@entrances';
-/** Поля карточки входа: тип входа (варианты схемы iD) и номер. */
-const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'door:wings'] as const;
+/** Поля карточки входа: тип входа (варианты схемы iD), номер, квартиры (addr:flats: диапазон «1-22», через «;» — несколько) и створки. */
+const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'addr:flats', 'door:wings'] as const;
 
 /** Поля карточки окна: вид, размеры проёма и подоконник (м), этаж. */
 const WINDOW_FORM_TAGS = ['window', 'window:shape', 'window:top:shape', 'window:material', 'window:width', 'window:height', 'window:breast', 'level'] as const;
@@ -8792,8 +8792,8 @@ function renderEntrance(id: number) {
   const rows = ENTRANCE_FORM_TAGS.map((k) => {
     const changed = ids.some((x) => session.isChanged(`node/${x}`, k));
     const value = common(k);
-    const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : k === 'door:wings' ? String(doorWings(t)) : '—';
-    const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : k === 'door:wings' ? tr('Створок') : tr('Номер'))}</span>`;
+    const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : k === 'door:wings' ? String(doorWings(t)) : k === 'addr:flats' ? tr('например, 1-22') : '—';
+    const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : k === 'door:wings' ? tr('Створок') : k === 'addr:flats' ? tr('Квартиры') : tr('Номер'))}</span>`;
     const input = k === 'entrance' || k === 'door:wings' ? renderValueCombo(k === 'entrance' ? idOptions('entrance') ?? [] : ['1', '2'], `data-entrance-tag="${k}"`, value ?? '', hint, undefined, k)
       : `<input type="text" data-entrance-tag="${k}" value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}${input}</label>`;
@@ -11118,7 +11118,7 @@ const ICON_PLAN = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" st
 /** Значки «есть поэтажный план» над зданиями — с этого зума и при стольких indoor-полигонах в здании. */
 const BADGE_MIN_ZOOM = 16;
 /** Подписи входов (номер, квартиры) — с этого зума. */
-new EntranceLabels(map, overpassLayer, 17, () => buildingsView.shown, (id, t) => session.isDeleted(`node/${id}`) ? {} : session.get(`node/${id}`)?.tags ?? t);
+new EntranceLabels(map, overpassLayer, 17, () => buildingsView.shown, (id) => { if (!toolActive()) selectEntrance(id); }, (id, t) => session.isDeleted(`node/${id}`) ? {} : session.get(`node/${id}`)?.tags ?? t);
 const BADGE_MIN_POLYGONS = 3;
 const INDOOR_PLAN_KINDS = new Set(['room', 'area', 'corridor', 'level']);
 

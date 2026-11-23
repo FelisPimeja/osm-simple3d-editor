@@ -551,8 +551,12 @@ body.mobile:has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobi
 .indoor-badge.occluded { visibility: hidden; }
 .indoor-badge svg { width: 100%; height: 100%; display: block; }
 .entrance-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-.entrance-label { position: absolute; left: 0; top: 0; padding: 0 4px; white-space: pre; text-align: center; font: 600 11px/1.25 system-ui, sans-serif;
-  color: #111827; background: rgba(255,255,255,.85); border: 1px solid #9ca3af; border-radius: 3px; }
+.entrance-label { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; align-items: center; cursor: pointer; pointer-events: auto;
+  font: 600 11px/1.25 system-ui, sans-serif; color: #111827; white-space: nowrap; }
+.entrance-ref { padding: 0 4px; background: rgba(255,255,255,.9); border: 1px solid #9ca3af; border-radius: 3px; }
+.entrance-label:hover .entrance-ref { border-color: #2563eb; color: #2563eb; }
+.entrance-flats { font-weight: 500; text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff; }
+.entrance-label [hidden] { display: none; }
 .entrance-label.occluded { visibility: hidden; }
 .levels .lv-source { display: block; color: #6b7280; font-size: 11px; line-height: 1.5; cursor: default; border-top: 1px solid #eee; margin-top: 4px; padding-top: 6px; }
 .levels .lv-source:hover { background: transparent; }

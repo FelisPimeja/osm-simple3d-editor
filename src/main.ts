@@ -15573,7 +15573,19 @@ function roomHeights(indoor: IndoorFeature[]): Map<string, number> {
 }
 /** Лестницы, лежащие в основном в проёме верхнего этажа: своих проёмов в перекрытии не режут. */
 const stairsInVoid = new Set<string>();
+/**
+ * Последний ответ buildingVoids по тем же массивам этажей и indoor: подпись ниже — JSON всех объектов (у станции
+ * метро — сотни мс), а план этажа спрашивает пустоты для каждого этажа подряд с одними и теми же массивами.
+ */
+const voidsByRef = new WeakMap<IndoorFeature[], { key: string; levels: Level[]; map: LevelVoids }>();
 function buildingVoids(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
+  const ref = voidsByRef.get(indoor);
+  if (ref && ref.key === g.key && ref.levels === levels) return ref.map;
+  const map = buildingVoidsImpl(g, levels, indoor);
+  voidsByRef.set(indoor, { key: g.key, levels, map });
+  return map;
+}
+function buildingVoidsImpl(g: BuildingGroup, levels: Level[], indoor: IndoorFeature[]): LevelVoids {
   const feats = groupFeatures(g);
   let w = Infinity, s = Infinity, e = -Infinity, nn = -Infinity;
   for (const f of feats) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); nn = Math.max(nn, y); }
@@ -17872,12 +17884,39 @@ const MAP_INDOOR_MAX_FEATURES = 800;
 const mapIndoorCache = new Map<string, { sig: string; plan?: ContextPlan }>();
 let mapIndoorList: ContextPlan[] = [];
 /** Планы комплексов без здания на уровне земли для карты (тот же план, что у соседа на первом этаже). */
+/** Планы комплексов без здания, собираемые в фоне: ключ → подпись и стадии сборки. */
+const mapPlanJobs = new Map<string, { sig: string; steps: Generator<void, ContextPlan | undefined> }>();
+let mapPlanTicking = false;
+function buildMapPlan(key: string, sig: string) {
+  if (mapPlanJobs.get(key)?.sig === sig) return;
+  const g = complexGroup(key)!;
+  // С правками сессии (удалённые стены не рисуются) — как в режиме здания
+  mapPlanJobs.set(key, { sig, steps: contextPlanSteps(g, 0.3, new Set(), () => buildingIndoorImpl(g)) });
+  if (mapPlanTicking) return;
+  mapPlanTicking = true;
+  const tick = () => {
+    const until = performance.now() + 12;
+    timed('карта: планы indoor без здания (порция)', () => {
+      for (const [k, job] of mapPlanJobs) {
+        while (performance.now() < until) {
+          const r = job.steps.next();
+          if (!r.done) continue;
+          mapPlanJobs.delete(k);
+          mapIndoorCache.set(k, { sig: job.sig, plan: r.value && { ...r.value, members: [k] } });
+          scheduleIndoorBadges(); // показать готовый план
+          break;
+        }
+        if (performance.now() >= until) break;
+      }
+    });
+    if (mapPlanJobs.size) requestAnimationFrame(tick); else mapPlanTicking = false;
+  };
+  requestAnimationFrame(tick);
+}
+
 function mapIndoorPlans(bbox: Bbox): ContextPlan[] {
   const cs = orphanComplexes([bbox[0] - COMPLEX_REACH, bbox[1] - COMPLEX_REACH, bbox[2] + COMPLEX_REACH, bbox[3] + COMPLEX_REACH]);
   const list: ContextPlan[] = [];
-  // Не больше ~40 мс за пересчёт: большие станции считаются по одной в следующих пересчётах (без подвисания)
-  const deadline = performance.now() + 40;
-  let more = false;
   for (const c of cs) {
     if (c.box[2] < bbox[0] || c.box[0] > bbox[2] || c.box[3] < bbox[1] || c.box[1] > bbox[3]) continue;
     // Огромные комплексы (станция на тысячи объектов) строятся секунду и больше — на карте только абрисом
@@ -17887,17 +17926,15 @@ function mapIndoorPlans(bbox: Bbox): ContextPlan[] {
     for (const f of c.features) { const k = f.key + (f.polygons[0]?.outer.length ?? 0) + f.levels.join(); for (let i = 0; i < k.length; i++) h = (Math.imul(h, 31) + k.charCodeAt(i)) | 0; }
     const sig = `${indoorEditRev}|${c.features.length}|${h}`;
     let hit = mapIndoorCache.get(c.key);
-    if (hit?.sig !== sig && performance.now() > deadline) { more = true; continue; }
     if (hit?.sig !== sig) {
       complexFocus.set(c.key, { features: c.features, box: c.box });
-      // С правками сессии (удалённые стены не рисуются) — как в режиме здания
-      const plan = contextPlanOf(complexGroup(c.key)!, 0.3, new Set(), buildingIndoorImpl(complexGroup(c.key)!));
-      hit = { sig, plan: plan && { ...plan, members: [c.key] } };
-      mapIndoorCache.set(c.key, hit);
+      // Новый план — в фоне, по кадрам (станция метро — сотни мс разом); пока строится — прежний, если был
+      buildMapPlan(c.key, sig);
+      if (hit?.plan) list.push(hit.plan);
+      continue;
     }
     if (hit.plan) list.push(hit.plan);
   }
-  if (more) scheduleIndoorBadges();
   // Тот же набор — тот же массив: слой не пересобирается
   if (list.length === mapIndoorList.length && list.every((p, i) => p === mapIndoorList[i])) return mapIndoorList;
   return mapIndoorList = list;
@@ -18192,11 +18229,17 @@ function featureBox(f: Feature3D): [number, number, number, number] {
 /** Планы соседей по зданиям: indoor здания и его этажи считаются дорого. */
 const contextPlanCache = new Map<string, { sig: string; plan?: ContextPlan }>();
 
-function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: IndoorFeature[]): ContextPlan | undefined {
+/**
+ * План этажа соседа (или комплекса без здания) на высоте at — стадиями: между ними yield, чтобы большой план
+ * (станция метро — сотни мс) можно было собирать по кадрам. contextPlanOf — то же разом.
+ */
+function* contextPlanSteps(ng: BuildingGroup, at: number, own: Set<string>, data?: () => IndoorFeature[]): Generator<void, ContextPlan | undefined> {
   {
     // Здание режима внутри соседа или вплотную: его indoor сосед тоже «видит» — рисовался бы дважды и мерцал
-    const list = (data ?? timed('окружение: indoor соседа', () => buildingIndoorImpl(ng))).filter((f) => !own.has(f.key));
+    const list = (data?.() ?? timed('окружение: indoor соседа', () => buildingIndoorImpl(ng))).filter((f) => !own.has(f.key));
+    yield;
     const levels = timed('окружение: этажи соседа', () => buildingLevels(ng, list));
+    yield;
     const l = levels.find((x) => x.floor <= at && x.ceil > at);
     if (!l) return;
     const itemsOf = (lv: Level) => {
@@ -18209,14 +18252,21 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
     const doorsOf = (lv: Level) => list.filter((f) => f.levels.includes(lv.n) && f.kind === 'poi' && f.point && (f.tags.door || f.tags.indoor === 'door' || f.tags.entrance)).map((f) => f.point!);
     const items = itemsOf(l);
     const doors = doorsOf(l);
+    yield;
     // Второй свет соседа: этажи под его пустотами — бледно, как нижние этажи здания (пустота — вырез в их полу ниже)
     const voids = timed('окружение: второй свет соседа', () => levelVoids(ng, levels, list, l.n));
-    const below = [...new Set(voids.flatMap((v) => v.through))].sort((a, b) => b - a)
-      .map((n) => levels.find((x) => x.n === n)).filter((x): x is Level => !!x)
+    yield;
+    const belowLevels = [...new Set(voids.flatMap((v) => v.through))].sort((a, b) => b - a)
+      .map((n) => levels.find((x) => x.n === n)).filter((x): x is Level => !!x);
+    const below: { items: ReturnType<typeof itemsOf>; doors: LonLat[]; cut: number; voids: LonLat[][][] }[] = [];
+    // По этажу за стадию: у станции их десятки
+    for (const bl of belowLevels) {
       // Только то, что задевает проёмы над этажом (как в плане здания): остальное закрыто, а за коробкой — торчало бы
-      .map((bl) => { const cover = voids.filter((v) => v.through.includes(bl.n)).flatMap((v) => v.polygon);
-        return { items: itemsOf(bl).filter((it) => touchesVoid(it.polygons, !!it.line, cover)), doors: doorsOf(bl), cut: Math.min(bl.ceil, l.floor - 0.3), voids: levelVoids(ng, levels, list, bl.n).flatMap((v) => v.polygon) }; })
-      .filter((b) => b.items.length);
+      const cover = voids.filter((v) => v.through.includes(bl.n)).flatMap((v) => v.polygon);
+      const b = { items: itemsOf(bl).filter((it) => touchesVoid(it.polygons, !!it.line, cover)), doors: doorsOf(bl), cut: Math.min(bl.ceil, l.floor - 0.3), voids: levelVoids(ng, levels, list, bl.n).flatMap((v) => v.polygon) };
+      if (b.items.length) below.push(b);
+      yield;
+    }
     // Лестницы и эскалаторы этажа: между своими этажами соседа
     const escalators = list.filter((f) => f.escalator && f.polygons[0]?.outer.length >= 2 && f.levels.length >= 2 && f.levels.includes(l.n)).flatMap((f): EscalatorItem[] => {
       const low = levels.find((x) => x.n === Math.min(...f.levels)), high = levels.find((x) => x.n === Math.max(...f.levels));
@@ -18233,6 +18283,7 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
       return low && high ? [{ key: f.key, line: f.polygons[0].outer, bottom: low.floor, top: high.floor, width: pairWidth(f, list) ?? escalatorWidth(f),
         incline: escalatorIncline(f), ...stairsShape(f, list), pale: true }] : [];
     });
+    yield;
     // Срез соседа закрывает этажи под ним плитой: они видны только сквозь пустоты
     const areaRings = (lv: Level) => list.filter((f) => f.levels.includes(lv.n) && !f.line && !f.point && f.polygons.length
       && (f.kind === 'level' || f.kind === 'room' || f.kind === 'area' || f.kind === 'corridor'))
@@ -18245,19 +18296,31 @@ function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: I
       const sec = unite(areaRings(l));
       try { slab = holes.length && sec.length ? polygonClipping.difference(sec as never, ...(holes as never[])) as LonLat[][][] : sec; } catch { slab = undefined; }
     }
+    yield;
     // Этажи ниже — коробками, как у здания режима (renderLevelsImpl): контур indoor=level, иначе объединение
     // помещений (levelBody), иначе рендер берёт сечение по следам частей; подземные под надземным этажом — нет
     // Оболочки у соседа нет (её заменяет план) — подземные этажи тоже коробками: крыша прячет всё, кроме проёмов
-    const boxes = levels.filter((x) => x.n < l.n)
+    const boxes: { bottom: number; top: number; polygons: Polygon[]; seen: boolean; cover: LonLat[][][]; topEdges: boolean }[] = [];
+    // По этажу за стадию: объединение помещений этажа (levelBody) — заметная доля сборки у станции
+    for (const x of levels.filter((y) => y.n < l.n)) {
       // Крыша — на толщину перекрытия ниже пола среза: ближе (вдали точности глубины мало) она закрывала бы пол соседа
-      .map((x) => ({ bottom: x.floor, top: Math.min(x.ceil, l.floor - 0.3),
+      const top = Math.min(x.ceil, l.floor - 0.3);
+      if (top <= x.floor) continue;
+      boxes.push({ bottom: x.floor, top,
         polygons: levelBody(list, x.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon),
-        seen: below.some((b) => b.cut === Math.min(x.ceil, l.floor - 0.3)), cover: voids.filter((v) => v.through.includes(x.n)).flatMap((v) => v.polygon),
-        topEdges: true }))
-      .filter((b) => b.top > b.bottom);
+        seen: below.some((b) => b.cut === top), cover: voids.filter((v) => v.through.includes(x.n)).flatMap((v) => v.polygon),
+        topEdges: true });
+      yield;
+    }
     if (!items.length && !escalators.length && !below.length) return;
     return { members: [...ng.members, ng.key], items, doors, escalators: [...escalators, ...lowerEscalators], cut: l.ceil, below, slab, boxes };
   }
+}
+
+
+function contextPlanOf(ng: BuildingGroup, at: number, own: Set<string>, data?: IndoorFeature[]): ContextPlan | undefined {
+  const it = contextPlanSteps(ng, at, own, data && (() => data));
+  for (;;) { const r = it.next(); if (r.done) return r.value; }
 }
 
 /** Объекты здания режима: их копии в тайлах карты не рисуются поверх сцены здания. */

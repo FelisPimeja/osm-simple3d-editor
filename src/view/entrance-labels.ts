@@ -9,6 +9,9 @@ const labelled = (t: Record<string, string>) => !!(t.ref || t['addr:flats']);
  * HTML поверх карты, позиции — на каждом кадре; вход на обратной к камере стене не подписан, закрытый другим
  * зданием (луч от камеры упирается в него раньше двери) — скрыт после остановки камеры.
  */
+/** Дальше от камеры, м, подписи входов не выводятся: на наклонной камере дальние входы — мелкий шум. */
+const MAX_DIST = 250;
+
 export class EntranceLabels {
   private readonly root: HTMLDivElement;
   private readonly els = new Map<number, HTMLDivElement>();
@@ -37,7 +40,7 @@ export class EntranceLabels {
 
   private points() {
     if (!this.shown() || this.map.getZoom() < this.minZoom) return [];
-    return this.layer.entranceScreenPoints(() => true).map((p) => ({ ...p, tags: this.liveTags(p.id, p.tags) })).filter((p) => labelled(p.tags));
+    return this.layer.entranceScreenPoints(() => true).map((p) => ({ ...p, tags: this.liveTags(p.id, p.tags) })).filter((p) => p.dist <= MAX_DIST && labelled(p.tags));
   }
 
   private place() {

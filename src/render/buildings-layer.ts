@@ -6368,10 +6368,10 @@ export class BuildingsLayer implements CustomLayerInterface {
    * точка перед дверью (at, z — для проверки заслонения).
    * Только входы с keep(tags) и в нарисованных группах (в режиме здания — его сцена).
    */
-  entranceScreenPoints(keep: (tags: Record<string, string>) => boolean): { id: number; tags: Record<string, string>; x: number; y: number; at: LonLat; z: number; facing: boolean }[] {
+  entranceScreenPoints(keep: (tags: Record<string, string>) => boolean): { id: number; tags: Record<string, string>; x: number; y: number; at: LonLat; z: number; facing: boolean; dist: number }[] {
     if (!this.map || !this.lastMain) return [];
     const canvas = this.map.getCanvas(), w = canvas.clientWidth, h = canvas.clientHeight;
-    const out: { id: number; tags: Record<string, string>; x: number; y: number; at: LonLat; z: number; facing: boolean }[] = [];
+    const out: { id: number; tags: Record<string, string>; x: number; y: number; at: LonLat; z: number; facing: boolean; dist: number }[] = [];
     const seen = new Set<number>(), v = new THREE.Vector4();
     for (const g of this.activeGroups()) {
       if (!g.entrances.length) continue;
@@ -6387,7 +6387,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (x < -40 || y < -40 || x > w + 40 || y > h + 40) continue;
         seen.add(e.id);
         const facing = (eye.x - e.p[0]) * e.n[0] + (eye.y - e.p[1]) * e.n[1] > 0;
-        out.push({ id: e.id, tags, x, y, at: g.fromLocal([e.p[0] + e.n[0] * 0.3, e.p[1] + e.n[1] * 0.3]), z: e.z + 1, facing });
+        out.push({ id: e.id, tags, x, y, at: g.fromLocal([e.p[0] + e.n[0] * 0.3, e.p[1] + e.n[1] * 0.3]), z: e.z + 1, facing,
+          // От камеры до подписи, м (в локальных метрах группы)
+          dist: Math.hypot(eye.x - e.p[0], eye.y - e.p[1], eye.z - z) });
       }
     }
     return out;

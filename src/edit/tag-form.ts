@@ -94,6 +94,7 @@ const FIELDS = ([
   { tag: 'min_height', label: tr('Низ'), type: 'length' },
   { tag: 'building:levels', label: tr('Этажей'), type: 'int' },
   { tag: 'building:min_level', label: tr('Нижний этаж'), type: 'int' },
+  { tag: 'windows', label: tr('Окна'), type: 'select', options: ['yes', 'no'] },
   { tag: 'roof:shape', label: tr('Форма крыши'), type: 'combo', options: ROOF_SHAPES, labels: ROOF_SHAPE_LABELS, icons: ROOF_ICONS },
   { tag: 'roof:height', label: tr('Высота крыши'), type: 'length' },
   { tag: 'roof:levels', label: tr('Этажей в крыше'), type: 'int' },
@@ -418,6 +419,8 @@ function directionField(input: string): string {
 /** Поле со значком «унаследовано» справа (только если есть пояснение). */
 function withBadge(input: string, hint: string, icon = ICON_INHERIT): string {
   if (!hint) return input;
+  // Подсказка: значок — ещё и кнопка «подставить» (на таче нет Tab; там вместо значка крупная «↵»)
+  if (icon === ICON_SUGGEST) return `<span class="inherit-field" title="${esc(hint)}">${input}<button type="button" class="inherit-badge suggest-accept" data-accept-suggest tabindex="-1" title="${esc(tr('Подставить'))}"><span class="sa-icon">${icon}</span><span class="sa-touch">↵</span></button></span>`;
   return `<span class="inherit-field" title="${esc(hint)}">${input}<span class="inherit-badge">${icon}</span></span>`;
 }
 
@@ -553,6 +556,16 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     if (e.key !== 'Tab' || e.shiftKey || !input.dataset.suggest || input.value) return;
     input.value = input.dataset.suggest;
     setTimeout(() => commit(input)); // после перехода фокуса: перерисовка вернёт его в следующее поле
+  });
+  // Кнопка у подсказки — то же, что Tab; mousedown не уводит фокус, чтобы не закрыть клавиатуру раньше времени
+  container.addEventListener('mousedown', (e) => { if ((e.target as Element).closest?.('[data-accept-suggest]')) e.preventDefault(); });
+  container.addEventListener('click', (e) => {
+    const btn = (e.target as Element).closest?.('[data-accept-suggest]');
+    const input = btn?.parentElement?.querySelector<HTMLInputElement>('[data-suggest]');
+    if (!input?.dataset.suggest || input.value) return;
+    e.preventDefault();
+    input.value = input.dataset.suggest;
+    commit(input);
   });
   container.addEventListener('keydown', (e) => {
     const field = (e.target as Element).closest('.combo-field');

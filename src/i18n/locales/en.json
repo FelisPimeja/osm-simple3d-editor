@@ -1750,5 +1750,8 @@
   "Исходный код на GitHub": "Source code on GitHub",
   "Сообщить об ошибке или предложить идею": "Report a bug or suggest an idea",
   "Данные © участники OpenStreetMap": "Data © OpenStreetMap contributors",
-  "Редактор 3D-зданий для OpenStreetMap. Схемы тегов:": "A 3D building editor for OpenStreetMap. Tagging schemes:"
+  "Редактор 3D-зданий для OpenStreetMap. Схемы тегов:": "A 3D building editor for OpenStreetMap. Tagging schemes:",
+  "Подставить": "Accept",
+  "{tag} — ключ окна-точки; у здания правильно {key} (уже задан: {value}).": "{tag} is the key for a window node; on a building it is {key} (already set: {value}).",
+  "{tag} — ключ окна-точки; у здания правильно {key}.": "{tag} is the key for a window node; on a building it is {key}."
 }

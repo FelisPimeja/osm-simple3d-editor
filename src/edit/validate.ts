@@ -173,6 +173,14 @@ export function validateTags(key: string, t: Record<string, string>, hasParts = 
       : tr('{tag} — ошибочный ключ, правильно {key}.', { tag, key: right }),
     t[right] === undefined ? { label: tr('переименовать в {key}', { key: right }), tags: { [wrong]: undefined, [right]: t[wrong] } } : undefined);
   }
+  // window=* — ключ точки окна; у здания или части признак окон пишут windows=yes/no
+  if (!key.startsWith('node/') && (t.building !== undefined || t['building:part'] !== undefined) && /^(yes|no)$/.test(t.window ?? '')) {
+    const tag = `window=${t.window}`;
+    add('warning', 'key', t.windows !== undefined
+      ? tr('{tag} — ключ окна-точки; у здания правильно {key} (уже задан: {value}).', { tag, key: 'windows', value: t.windows })
+      : tr('{tag} — ключ окна-точки; у здания правильно {key}.', { tag, key: 'windows' }),
+    t.windows === undefined ? { label: tr('переименовать в {key}', { key: 'windows' }), tags: { window: undefined, windows: t.window } } : undefined);
+  }
   if (t.building === 'part') add('warning', 'key', tr('building=part — ошибка: части размечают building:part=yes.'),
     t['building:part'] === undefined ? set({ building: undefined, 'building:part': 'yes' }) : undefined);
   if (t.building === 'entrance') add('warning', 'key', tr('building=entrance — вход обозначают узлом entrance=* на контуре здания.'));

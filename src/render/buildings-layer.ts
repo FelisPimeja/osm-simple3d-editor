@@ -8035,7 +8035,9 @@ function dropFlatSeams(segs: Float32Array, positions: Float32Array): Float32Arra
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
     const l = Math.hypot(nx, ny, nz);
     // Относительный порог: «щепки» с высотой в миллиметры (подъём фронтона на 1 мм) — тоже вырожденные
-    if (l < 1e-3 * Math.max(ux * ux + uy * uy + uz * uz, vx * vx + vy * vy + vz * vz)) { degenerate[t] = 1; continue; }
+    // Но не узкая длинная полоса (косяк двери в 4 см на всю высоту стены): её высота — сантиметры, она — часть стены
+    const longest = Math.max(ux * ux + uy * uy + uz * uz, vx * vx + vy * vy + vz * vz);
+    if (l < 1e-3 * longest && l / Math.sqrt(longest) < 0.005) { degenerate[t] = 1; continue; }
     normals[t * 3] = nx / l; normals[t * 3 + 1] = ny / l; normals[t * 3 + 2] = nz / l;
     for (let k = 0; k < 3; k++) {
       const key = ekey(vk[t * 3 + k], vk[t * 3 + (k + 1) % 3]);

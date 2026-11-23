@@ -238,9 +238,11 @@ const map = new maplibregl.Map({
   // Без «прилипания к северу»: после сдвига или зума при азимуте в ±7° MapLibre сам плавно доворачивал камеру на север
   bearingSnap: 0,
 });
-// View cube (только в режиме здания, слева от кнопок масштаба): вид с грани, ребра или угла куба по осям здания
+// View cube (слева от кнопок масштаба): вид с грани, ребра или угла куба — в режиме здания по осям здания,
+// на карте — по сторонам света
 const viewCube = new ViewCube({
   frame: () => {
+    if (!focus) return { center: [0, 0, 0], half: 1, x: [1, 0], y: [0, 1], onMap: true };
     const box = focus ? overpassLayer.focusBox() ?? complexBox() : undefined;
     if (!box) return;
     const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
@@ -269,6 +271,8 @@ cubeBtn.addEventListener('click', () => {
   try { localStorage.setItem('view-cube', viewCube.shown ? 'on' : 'off'); } catch { /* только до перезагрузки */ }
   viewCube.update();
 });
+// Куб есть и на карте — нарисовать сразу, не дожидаясь первого движения камеры
+map.once('load', () => viewCube.update());
 
 // Подложка: карта или спутниковые снимки (у OSM — разрешённые для обводки, у OHM — Esri Wayback по дате
 // слайдера, у OGF — нет). Выбор — в localStorage (у OHM — свой) и у OSM в профиле (simple3d:basemap)

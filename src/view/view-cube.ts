@@ -31,7 +31,7 @@ const FOV_KEY = 'view-fov';
 const FOV_MIN = 15, FOV_MAX = 90;
 
 /** Куб в сцене: центр, половина ребра и оси здания (метры сцены режима здания, x — восток, y — север). */
-export interface CubeFrame { center: V3; half: number; x: P2; y: P2 }
+export interface CubeFrame { center: V3; half: number; x: P2; y: P2; /** Режим карты: оси — стороны света, без аксонометрии. */ onMap?: boolean }
 
 export interface ViewCubeOptions {
   /** Где стоит виртуальный куб (на месте здания) — undefined, если режима здания нет. */
@@ -109,16 +109,17 @@ export class ViewCube implements maplibregl.IControl {
   update() {
     const frame = this.map ? this.opts.frame() : undefined;
     // Смена угла шлёт move и снова вызывает update — к этому моменту угол уже нужный, повтора нет
-    const fov = frame && this.axoChosen ? FOV_AXONOMETRIC : this.fov;
+    const fov = frame && !frame.onMap && this.axoChosen ? FOV_AXONOMETRIC : this.fov;
     if (this.map && Math.abs(this.map.getVerticalFieldOfView() - fov) > 1e-6) this.map.setVerticalFieldOfView(fov);
     // Режим здания: вместо компаса карты — кнопка куба (стили по этому классу)
     this.map?.getContainer().classList.toggle('vc-mode', !!frame);
+    this.map?.getContainer().classList.toggle('vc-map', !!frame?.onMap);
     // Своя камера: тот же азимут и наклон, что у карты, но с небольшой перспективой и постоянным размером
     const f = this.shown && frame ? { ...frame, center: [0, 0, 0] as V3, half: 1 } : undefined;
     const cam = this.map ? camera(this.map.getBearing(), this.map.getPitch()) : undefined;
     const project = (p: V3) => (cam ? cam(p) : undefined);
     const pr = (v: V3) => (f ? project(toScene(f, v)) : undefined);
-    const key = f && cam ? [this.map!.getBearing(), this.map!.getPitch(), f.x, f.y].join() : '';
+    const key = f && cam ? [this.map!.getBearing(), this.map!.getPitch(), f.x, f.y, !!frame?.onMap].join() : '';
     if (key === this.lastKey) return;
     this.lastKey = key;
     this.el.hidden = !key;
@@ -184,7 +185,7 @@ export class ViewCube implements maplibregl.IControl {
     const projTitle = axo ? tr('Аксонометрия — переключить на перспективу') : tr('Перспектива — переключить на аксонометрию');
     const gearTitle = tr('Настройки вида');
     this.art.innerHTML = `<svg viewBox="0 0 ${BOX} ${BOX}" width="${BOX}" height="${BOX}">${svg}</svg>`
-      + `<button type="button" class="vc-proj" title="${projTitle}" aria-label="${projTitle}">${axo ? tr('А') : tr('П')}</button>`
+      + (frame?.onMap ? '' : `<button type="button" class="vc-proj" title="${projTitle}" aria-label="${projTitle}">${axo ? tr('А') : tr('П')}</button>`)
       + `<button type="button" class="vc-gear${this.pop.hidden ? '' : ' active'}" title="${gearTitle}" aria-label="${gearTitle}"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M8.20 4.17L8.65 2.12L11.35 2.12L11.80 4.17L12.85 4.60L14.62 3.47L16.53 5.38L15.40 7.15L15.83 8.20L17.88 8.65L17.88 11.35L15.83 11.80L15.40 12.85L16.53 14.62L14.62 16.53L12.85 15.40L11.80 15.83L11.35 17.88L8.65 17.88L8.20 15.83L7.15 15.40L5.38 16.53L3.47 14.62L4.60 12.85L4.17 11.80L2.12 11.35L2.12 8.65L4.17 8.20L4.60 7.15L3.47 5.38L5.38 3.47L7.15 4.60z"/><circle cx="10" cy="10" r="2.4"/></svg></button>`;
     if (this.hovered) this.hover(this.hovered);
   }

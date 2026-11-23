@@ -511,6 +511,8 @@ export class EditSession {
     return step[0].key;
   }
 
+  /** Сколько шагов данных (не вида) можно отменить: глубина истории для фоновой проверки пакета. */
+  editDepth() { return this.undoStack.filter((s) => !isView(s)).length; }
   canUndo() { return this.undoStack.length > 0; }
   canRedo() { return this.redoStack.length > 0; }
 

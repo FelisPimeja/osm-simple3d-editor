@@ -1757,5 +1757,8 @@
   "Режим энергосбережения: графика упрощена (деревья, рельеф, окна, модели).": "Power saving mode: graphics simplified (trees, terrain, windows, models).",
   "Энергосбережение выключено: графика восстановлена.": "Power saving is off: graphics restored.",
   "Предположение по соседним подъездам: {value}. Tab или ↵ — подставить.": "Guessed from neighbouring entrances: {value}. Tab or ↵ to accept.",
-  "{members} удалён на сервере после загрузки (другим редактором): откатите эту правку, перезагрузите здание и повторите": "{members} was deleted on the server after loading (in another editor): revert this edit, reload the building and redo it"
+  "{members} удалён на сервере после загрузки (другим редактором): откатите эту правку, перезагрузите здание и повторите": "{members} was deleted on the server after loading (in another editor): revert this edit, reload the building and redo it",
+  "Откатить {n} последнюю правку|Откатить {n} последние правки|Откатить {n} последних правок": "Revert the last {n} edit|Revert the last {n} edits",
+  "Проверка правок: сервер отклонит отправку. {list}": "Edit check: the server would reject the upload. {list}",
+  "Правки после последней удачной проверки откачены. Перезагрузите изменённые на сервере здания и повторите их.": "Edits since the last successful check were reverted. Reload the buildings changed on the server and redo them."
 }

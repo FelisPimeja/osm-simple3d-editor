@@ -18985,6 +18985,7 @@ function onSessionChange(keys: string[]) {
   if (josmApi() && !uploading) scheduleJosmSync();
   scheduleAutosave();
   mapIssuesDirty = true;
+  scheduleBackgroundCheck();
   // Значки планов над зданиями — по правкам тоже (в режиме здания они скрыты, пересчёт — дёшев)
   if (!focus && keys.some((k) => indoorEdited.has(k) || indoorCreated.has(k))) scheduleIndoorBadges();
   syncEntranceEdits(keys);
@@ -19421,8 +19422,62 @@ if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRun
   return { count: r.count, problems: r.problems, osmChange: r.osmChange };
 };
 
+/**
+ * Фоновая проверка пакета: каждые BG_CHECK_EVERY шагов правок (после паузы) пакет собирается, как при отправке
+ * (свежие версии с сервера, перенос правок, проверка ссылок), но changeset не открывается. Нашлась проблема —
+ * предлагаем откатить шаги после последней удачной проверки, остальное цело.
+ */
+const BG_CHECK_EVERY = 10;
+const BG_CHECK_PAUSE_MS = 3000;
+/** Глубина истории при последней проверке и при последней удачной. */
+let bgCheckedDepth = 0, bgGoodDepth = 0;
+let bgCheckTimer: ReturnType<typeof setTimeout> | undefined;
+let bgCheck: Promise<void> | undefined;
+function scheduleBackgroundCheck() {
+  const depth = session.editDepth();
+  if (depth < bgGoodDepth) bgGoodDepth = depth;
+  if (depth < bgCheckedDepth) bgCheckedDepth = depth;
+  if (depth - bgCheckedDepth < BG_CHECK_EVERY) return;
+  clearTimeout(bgCheckTimer);
+  bgCheckTimer = setTimeout(() => { if (!uploading && !bgCheck) bgCheck = backgroundCheck().finally(() => { bgCheck = undefined; }); }, BG_CHECK_PAUSE_MS);
+}
+async function backgroundCheck() {
+  // В JOSM отправка идёт своим путём; без правок проверять нечего
+  if (josmApi() || !session.changes().length) return;
+  const depth = session.editDepth(), rev = sessionRevision;
+  let problems: string[] = [], conflicts: { key: string; tags: string[] }[] = [];
+  try {
+    problems = (await dryRunUpload(uploadEditList())).problems;
+  } catch (err) {
+    if (err instanceof ConflictError) conflicts = err.conflicts;
+    // Прочее (сеть, разомкнутые кольца новых отношений — их чинит сама отправка) — не повод тревожить
+    else { console.warn('[bg-check]', err); return; }
+  }
+  // Пока проверяли, правки изменились — результат устарел, следующая порция проверит заново
+  if (rev !== sessionRevision) return;
+  bgCheckedDepth = depth;
+  if (!problems.length && !conflicts.length) { bgGoodDepth = depth; return; }
+  const n = depth - bgGoodDepth;
+  const links = conflicts.map((c) => `<a href="#edit-${encodeURIComponent(c.key)}" data-focus-edit="${esc(c.key)}">${esc(c.key)} (${esc(c.tags.join(', '))})</a>`);
+  const rollback = n > 0 ? ` <a href="#" data-bg-rollback="${bgGoodDepth}">${esc(trn(n, 'Откатить {n} последнюю правку|Откатить {n} последние правки|Откатить {n} последних правок'))}</a>` : '';
+  setStatus(tr('Проверка правок: сервер отклонит отправку. {list}', { list: problems.slice(0, 3).join('; ') }), true, links.join('; ') + rollback);
+  if (conflicts.length) uploadIssueKeys = new Set(conflicts.map((c) => c.key));
+}
+document.addEventListener('click', (e) => {
+  const a = (e.target as Element).closest?.('[data-bg-rollback]') as HTMLElement | null;
+  if (!a) return;
+  e.preventDefault();
+  const good = Number(a.dataset.bgRollback);
+  let key: string | undefined;
+  while (session.editDepth() > good && session.canUndo()) key = session.undo() ?? key;
+  bgCheckedDepth = bgGoodDepth = session.editDepth();
+  selectAfterHistory(key ?? selectedKey);
+  setStatus(tr('Правки после последней удачной проверки откачены. Перезагрузите изменённые на сервере здания и повторите их.'));
+});
+
 async function doUpload() {
   if (uploading || deletingIndoorWalls) return;
+  await bgCheck?.catch(() => {});
   const s = server();
   uploading = true;
   renderChanges();

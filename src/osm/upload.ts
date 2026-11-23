@@ -321,6 +321,17 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   const dropped = await settleTopology(edits, payload, fresh, onStatus);
   keepForeignMembers(payload, editKeys);
   dropDanglingMembers(payload);
+  keepUsedNodes(payload);
+  // Члены наших отношений, которых нет в пакете: удалённые на сервере после загрузки (в другом редакторе) — конфликт,
+  // а не 412 «Relation requires the ways… not visible» (issue #88)
+  const inPayload = new Set(payload.map((p) => `${p.element.type}/${p.element.id}`));
+  const outside = [...new Set(payload.flatMap((p) => p.element.type === 'relation' && !p.deleted
+    ? p.element.members.filter((m) => m.ref > 0).map((m) => `${m.type}/${m.ref}`) : []))].filter((k) => !inPayload.has(k));
+  if (outside.length) {
+    const alive = await fetchElements(outside, api());
+    const gone = outside.filter((k) => !alive.has(k));
+    if (gone.length) throw new ConflictError(gone.map((key) => ({ key, tags: [tr('объект удалён на сервере')] })));
+  }
   const broken = await brokenRings(payload, fresh);
   if (broken.length) throw new BrokenRingsError(broken);
 
@@ -653,6 +664,19 @@ async function settleTopology(edits: TagEdit[], payload: Payload, fresh: Map<str
   const ids = [...dropNodes].filter((n) => !used.has(n) && !already.has(n));
   if (ids.length) for (const n of (await fetchNodes(ids, api())).values()) if (!Object.keys(n.tags ?? {}).length) payload.push({ element: n, tags: {}, deleted: true });
   return dropped;
+}
+
+/**
+ * Узел, который в пакете остаётся в каком-то пути, не удаляем: общий узел удалённого пути с соседним, у которого
+ * правились только теги (его список узлов в правках не значится), — сервер отверг бы пакет (issues #86, #87).
+ */
+function keepUsedNodes(payload: Payload) {
+  const used = new Set<number>();
+  for (const p of payload) if (p.element.type === 'way' && !p.deleted) for (const n of p.element.nodes) used.add(n);
+  for (let i = payload.length - 1; i >= 0; i--) {
+    const p = payload[i];
+    if (p.deleted && p.element.type === 'node' && used.has(p.element.id)) payload.splice(i, 1);
+  }
 }
 
 /**

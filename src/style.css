@@ -973,3 +973,12 @@ body.mobile .edit-hint { display: none; } /* мобильный — только
 #view-tools button { display: flex; align-items: center; justify-content: center; padding: 0; }
 #view-tools button svg { width: 22px; height: 22px; margin: 0; }
 #view-tools button.active, #view-tools button.panel-open { background: #dbeafe; border-color: #93c5fd; color: #333; }
+
+/* Десктоп и планшет: куб вида и кнопки масштаба — в правом нижнем углу (под большим пальцем), над атрибуцией;
+   правая колонка панелей заканчивается над ними */
+body:not(.mobile) .maplibregl-ctrl-top-right { top: auto; bottom: 34px; right: 12px; align-items: flex-end; }
+body:not(.mobile) .maplibregl-ctrl-top-right .view-cube { margin-top: 0; }
+body:not(.mobile) .maplibregl-ctrl-top-right .maplibregl-ctrl { margin-right: 0; }
+body:not(.mobile) .vc-settings { top: auto; bottom: calc(100% + 4px); }
+body:not(.mobile) #right-col { bottom: 104px; }
+body:not(.mobile):has(.view-cube:not([hidden])) #right-col { bottom: 158px; }

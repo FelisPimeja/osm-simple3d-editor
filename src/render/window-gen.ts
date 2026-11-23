@@ -13,9 +13,9 @@ const STRAIGHT = 0.05;
 /** Зазор между окном и входом по горизонтали, м. */
 const DOOR_GAP = 0.3;
 
-/** Генерировать ли окна зданию: есть этажи, тип не служебный, нет window=no и стеклянного фасада. */
+/** Генерировать ли окна зданию: есть этажи, тип не служебный, нет windows=no и стеклянного фасада. */
 export function wantsGeneratedWindows(tags: Record<string, string>): boolean {
-  if (tags.window === 'no' || tags.windows === 'no') return false;
+  if (tags.windows === 'no') return false; // window=* — ключ окна-точки, у здания это ошибка (её ловит валидатор)
   // Часть без этажности (этажность обычно у контура здания) — этажи по высоте стен, см. estimatedPartLevels
   if (!(Number(tags['building:levels']) > 0) && !partWindowSize(tags) && !tags['building:part']) return false;
   if (tags['building:material'] === 'glass' || tags.material === 'glass') return false;

@@ -994,11 +994,10 @@ body:not(.mobile):has(.view-cube:not([hidden])) #right-col { bottom: 158px; }
 /* Кнопка «подставить подсказку»: на десктопе — прежний значок (кликабельный), на таче — крупная ↵ */
 .inherit-badge.suggest-accept { pointer-events: auto; cursor: pointer; border: 0; padding: 0; background: none; }
 .suggest-accept:hover { color: #2563eb; }
-.suggest-accept .sa-touch { display: none; }
-body.mobile .suggest-accept { width: 30px; height: 26px; right: 3px; border-radius: 5px; background: #e0e7ff; color: #1d4ed8; font-size: 16px; line-height: 26px; text-align: center; }
-body.mobile .suggest-accept .sa-icon { display: none; }
-body.mobile .suggest-accept .sa-touch { display: inline; }
-body.mobile .inherit-field:has(.suggest-accept) input { padding-right: 38px; }
-body.mobile .inherit-field:has(.combo-btn) .suggest-accept { right: 28px; }
-body.mobile .inherit-field:has(select) .suggest-accept { right: 22px; }
-body.mobile .inherit-field .combo-field:has(~ .suggest-accept) input[type="text"] { padding-right: 64px; }
+.suggest-accept.inherit-badge { width: 30px; height: 26px; right: 3px; border-radius: 5px; background: #e0e7ff; color: #1d4ed8; font-size: 16px; line-height: 26px; text-align: center; }
+.suggest-accept .sa-icon { display: none; }
+.suggest-accept .sa-touch { display: inline; }
+.inherit-field:has(.suggest-accept) input { padding-right: 38px; }
+.inherit-field:has(.combo-btn) .suggest-accept { right: 28px; }
+.inherit-field:has(select) .suggest-accept { right: 22px; }
+.inherit-field .combo-field:has(~ .suggest-accept) input[type="text"] { padding-right: 64px; }

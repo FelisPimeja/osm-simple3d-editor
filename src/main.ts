@@ -156,7 +156,9 @@ const userHidden = new Set<string>();
 /** tileBorders — отладка: границы тайлов данных; bridges3d, tunnels3d — объёмные мосты и тоннели (эксперимент). */
 interface GraphicsSettings extends GraphicsOptions { antialias: boolean; monochrome: boolean; tileBorders: boolean; bridges3d: boolean; tunnels3d: boolean; barriers: boolean; models3dmr: boolean; terrain: boolean; contoursRaster: boolean; labelOcclusion: boolean; windowTuner: boolean; showKeys: boolean }
 const GFX_KEY = 'osm3d.graphics';
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: true, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: true, windowTuner: false, showKeys: false, ...loadGraphics() };
+/** Телефон или планшет: по умолчанию графика полегче (деревья выключены, режим здания без окружения). */
+const touchDevice = matchMedia('(pointer: coarse)').matches;
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: !touchDevice, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: true, windowTuner: false, showKeys: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -17807,7 +17809,8 @@ function renderMulti() {
 /** Окружение в режиме здания: соседи рёбрами без заливки, с привязками; включено ли — запоминается. */
 const CONTEXT_KEY = 'osm3d.focus-context';
 function loadContextShown(): boolean {
-  try { return localStorage.getItem(CONTEXT_KEY) !== '0'; } catch { return true; }
+  // На таче план этажа без окружения открывается в разы быстрее; включённое Shift+N запоминается
+  try { const v = localStorage.getItem(CONTEXT_KEY); return v === null ? !touchDevice : v !== '0'; } catch { return !touchDevice; }
 }
 
 function toggleContext() {

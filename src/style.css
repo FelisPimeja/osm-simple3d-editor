@@ -991,13 +991,17 @@ body:not(.mobile):has(.view-cube:not([hidden])) #right-col { bottom: 158px; }
 .about-links { margin: 0; padding-left: 18px; }
 .about-links li { margin: 4px 0; }
 
-/* Кнопка «подставить подсказку»: на десктопе — прежний значок (кликабельный), на таче — крупная ↵ */
+/* Кнопка «↵» — подставить подсказку или закрепить умолчание */
 .inherit-badge.suggest-accept { pointer-events: auto; cursor: pointer; border: 0; padding: 0; background: none; }
 .suggest-accept:hover { color: #2563eb; }
-.suggest-accept.inherit-badge { width: 30px; height: 26px; right: 3px; border-radius: 5px; background: #e0e7ff; color: #1d4ed8; font-size: 16px; line-height: 26px; text-align: center; }
+.suggest-accept.inherit-badge { top: 3px; bottom: 3px; right: 3px; transform: none; width: 24px; height: auto; border-radius: 4px; background: #e0e7ff; color: #1d4ed8; font-size: 14px; line-height: 1; display: flex; align-items: center; justify-content: center; }
 .suggest-accept .sa-icon { display: none; }
-.suggest-accept .sa-touch { display: inline; }
-.inherit-field:has(.suggest-accept) input { padding-right: 38px; }
-.inherit-field:has(.combo-btn) .suggest-accept { right: 28px; }
-.inherit-field:has(select) .suggest-accept { right: 22px; }
-.inherit-field .combo-field:has(~ .suggest-accept) input[type="text"] { padding-right: 64px; }
+/* Кнопка — у правого края; остальные значки поля (единица, стрелки, раскрытие списка) сдвигаются левее неё */
+.inherit-field:has(.suggest-accept) input[type="text"] { padding-right: 32px; }
+.inherit-field:has(.suggest-accept) .length-unit { right: 32px; }
+.inherit-field:has(.suggest-accept) .length-field input[type="text"] { padding-right: 48px; }
+.inherit-field:has(.suggest-accept) .step-btns { right: 28px; }
+.inherit-field:has(.suggest-accept) .combo-btn { right: 28px; }
+.inherit-field:has(.suggest-accept) .combo-field input[type="text"] { padding-right: 52px; }
+.inherit-field:has(.suggest-accept) select { padding-right: 32px; background-position: right 34px center; }
+.step-field .inherit-field:has(.suggest-accept) input { padding-right: 52px; }

@@ -329,8 +329,18 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
     ? p.element.members.filter((m) => m.ref > 0).map((m) => `${m.type}/${m.ref}`) : []))].filter((k) => !inPayload.has(k));
   if (outside.length) {
     const alive = await fetchElements(outside, api());
-    const gone = outside.filter((k) => !alive.has(k));
-    if (gone.length) throw new ConflictError(gone.map((key) => ({ key, tags: [tr('объект удалён на сервере')] })));
+    const gone = new Set(outside.filter((k) => !alive.has(k)));
+    // Ссылка — на нашу правку с отношением (её можно откатить), удалённый член — в тексте
+    const found: { key: string; tags: string[] }[] = [];
+    for (const p of payload) {
+      if (p.element.type !== 'relation' || p.deleted) continue;
+      const dead = [...new Set(p.element.members.map((m) => `${m.type}/${m.ref}`).filter((k) => gone.has(k)))];
+      if (!dead.length) continue;
+      const id = p.element.id;
+      const key = edits.find((e) => e.created?.type === 'relation' && e.created.id === id)?.key ?? `relation/${id}`;
+      found.push({ key, tags: [tr('{members} удалён на сервере после загрузки (другим редактором): откатите эту правку, перезагрузите здание и повторите', { members: dead.join(', ') })] });
+    }
+    if (found.length) throw new ConflictError(found);
   }
   const broken = await brokenRings(payload, fresh);
   if (broken.length) throw new BrokenRingsError(broken);

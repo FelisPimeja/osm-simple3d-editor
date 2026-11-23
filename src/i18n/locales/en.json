@@ -1756,5 +1756,6 @@
   "{tag} — ключ окна-точки; у здания правильно {key}.": "{tag} is the key for a window node; on a building it is {key}.",
   "Режим энергосбережения: графика упрощена (деревья, рельеф, окна, модели).": "Power saving mode: graphics simplified (trees, terrain, windows, models).",
   "Энергосбережение выключено: графика восстановлена.": "Power saving is off: graphics restored.",
-  "Предположение по соседним подъездам: {value}. Tab или ↵ — подставить.": "Guessed from neighbouring entrances: {value}. Tab or ↵ to accept."
+  "Предположение по соседним подъездам: {value}. Tab или ↵ — подставить.": "Guessed from neighbouring entrances: {value}. Tab or ↵ to accept.",
+  "{members} удалён на сервере после загрузки (другим редактором): откатите эту правку, перезагрузите здание и повторите": "{members} was deleted on the server after loading (in another editor): revert this edit, reload the building and redo it"
 }

@@ -444,7 +444,9 @@ function syncPhotos() {
   // Под зданиями: под объёмами стиля (первый fill-extrusion) или под слоями дорог и зданий редактора
   const under = map.getStyle().layers.find((l) => l.type === 'fill-extrusion' && !photoLayers.some((p) => p.layer.isLayer(l.id)))?.id
     ?? (map.getLayer(roadsLayer.id) ? roadsLayer.id : undefined);
-  for (const p of photoLayers) p.layer.apply(p.on, photoFilter, map.getLayer(UNDERGROUND_LAYER) ? UNDERGROUND_LAYER : undefined, undefined, under);
+  // Поверх зданий — под подписями стиля (первый symbol-слой, не фото)
+  const overLabels = map.getStyle().layers.find((l) => l.type === 'symbol' && !photoLayers.some((p) => p.layer.isLayer(l.id)))?.id;
+  for (const p of photoLayers) p.layer.apply(p.on, photoFilter, overLabels, undefined, under);
   photoViewer.syncCone();
 }
 
@@ -1357,11 +1359,7 @@ map.on('load', () => {
     paint: { ...extrusion, 'fill-extrusion-color': '#ff7a00' },
   }, labels);
 
-  map.addLayer(roadsLayer, labels);
-  map.addLayer(overpassLayer, labels);
-  tileBorders.addLayer();
-  tileBorders.setEnabled(gfx.tileBorders);
-  // Подземные здания без объёма — пунктирный контур на поверхности (поверх объёмов не прячется: рисуется после)
+  // Подземные здания без объёма — пунктирный контур на поверхности; под 3D-слоями: объёмы зданий его закрывают
   map.addSource('underground-outlines', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
     id: UNDERGROUND_LAYER,
@@ -1369,7 +1367,11 @@ map.on('load', () => {
     source: 'underground-outlines',
     minzoom: 15,
     paint: { 'line-color': '#5a5f66', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.85 },
-  });
+  }, labels);
+  map.addLayer(roadsLayer, labels);
+  map.addLayer(overpassLayer, labels);
+  tileBorders.addLayer();
+  tileBorders.setEnabled(gfx.tileBorders);
   mapLoaded = true;
   applyTileBuildingsView();
   syncBasemapLayers();

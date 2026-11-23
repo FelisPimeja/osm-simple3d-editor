@@ -937,3 +937,4 @@ body.mobile .maplibregl-ctrl-top-right .view-cube { position: fixed; right: 8px;
 .vc-set-reset { padding: 0; border: 0; background: none; color: #2563eb; font: inherit; cursor: pointer; text-decoration: underline; }
 /* Мобильная версия: куб внизу — окно над ним */
 body.mobile .vc-settings { top: auto; bottom: calc(100% + 4px); }
+body.mobile .edit-hint { display: none; } /* мобильный — только просмотр: подсказки правки геометрии ни к чему */

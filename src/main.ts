@@ -8804,8 +8804,8 @@ function renderEntrance(id: number) {
   }).join('');
   infoEl.innerHTML = (many ? `<h2 class="obj-head"><span class="obj-title">${esc(title)}</span></h2>` : objectHeading(`${esc(title)}${name}`, `${server().web}/node/${id}`, `node/${id}`))
     + `<div class="tag-form">${rows}</div>`
-    + (many ? `<p class="hint">${tr('Shift+клик — добавить или убрать вход. Del — удалить выбранные входы (узлы останутся вершинами контура).')}</p>`
-      : `<p class="hint">${tr('Синие ручки: по бокам — ширина (width), сверху — высота проёма (height); клик по ручке — тянуть, клик — применить.')} ${tr('Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.')} ${tr('Del — удалить вход (узел останется вершиной контура).')}</p>`)
+    + (many ? `<p class="hint edit-hint">${tr('Shift+клик — добавить или убрать вход. Del — удалить выбранные входы (узлы останутся вершинами контура).')}</p>`
+      : `<p class="hint edit-hint">${tr('Синие ручки: по бокам — ширина (width), сверху — высота проёма (height); клик по ручке — тянуть, клик — применить.')} ${tr('Перенести вдоль стен здания: клик по точке входа у основания стены (или M, затем клик по ней) — вход едет за курсором, клик — поставить, Esc — отмена.')} ${tr('Del — удалить вход (узел останется вершиной контура).')}</p>`)
     // Прочие теги — тем же редактором, что у частей и indoor-объектов (подстановки из пресетов iD)
     + (many ? renderMultiOtherTags(all, rows).replace('data-other-key="@selection"', `data-other-key="${ENTRANCES_KEY}"`)
       : renderOtherTags(ENTRANCE_KEY_PREFIX + id, t, rows));
@@ -8834,8 +8834,8 @@ function renderWindow(id: number) {
   }).join('');
   infoEl.innerHTML = (many ? `<h2 class="obj-head"><span class="obj-title">${esc(title)}</span></h2>` : objectHeading(esc(title), `${server().web}/node/${id}`, `node/${id}`))
     + `<div class="tag-form">${rows}</div>`
-    + (many ? `<p class="hint">${tr('Shift+клик — добавить или убрать окно. Del — удалить выбранные окна (узлы останутся вершинами контура).')}</p>`
-      : `<p class="hint">${tr('Синие ручки: по бокам — ширина, снизу — подоконник, сверху — высота окна; клик по ручке — тянуть, клик — применить.')} ${tr('Перенести: M, затем клик по точке в середине окна — окно едет по стене вдоль и по высоте (этаж — по месту), клик — поставить, Esc — отмена.')} ${tr('Del — удалить окно (узел останется вершиной контура).')}</p>`)
+    + (many ? `<p class="hint edit-hint">${tr('Shift+клик — добавить или убрать окно. Del — удалить выбранные окна (узлы останутся вершинами контура).')}</p>`
+      : `<p class="hint edit-hint">${tr('Синие ручки: по бокам — ширина, снизу — подоконник, сверху — высота окна; клик по ручке — тянуть, клик — применить.')} ${tr('Перенести: M, затем клик по точке в середине окна — окно едет по стене вдоль и по высоте (этаж — по месту), клик — поставить, Esc — отмена.')} ${tr('Del — удалить окно (узел останется вершиной контура).')}</p>`)
     + (many ? renderMultiOtherTags(all, rows).replace('data-other-key="@selection"', `data-other-key="${ENTRANCES_KEY}"`)
       : renderOtherTags(ENTRANCE_KEY_PREFIX + id, t, rows));
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-window-tag]')) {
@@ -11647,7 +11647,7 @@ function renderIndoorSelection(add = false) {
   }
   if (f.flora) {
     infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
-      + `<p class="hint">${esc(f.flora === 'tree' ? tr('M — переместить, Ctrl+C / Ctrl+V — копировать, Delete — удалить.') : tr('V — форма, M — переместить, Q — повернуть, Ctrl+C / Ctrl+V — копировать.'))}</p>`
+      + `<p class="hint edit-hint">${esc(f.flora === 'tree' ? tr('M — переместить, Ctrl+C / Ctrl+V — копировать, Delete — удалить.') : tr('V — форма, M — переместить, Q — повернуть, Ctrl+C / Ctrl+V — копировать.'))}</p>`
       + indoorForm([f])
       + renderOtherTags(key, t, indoorForm([f]), true);
     bindIndoorForm([f]);
@@ -12030,7 +12030,7 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
       + `<input type="text" data-indoor-tag="${k}"${unit ? ` data-unit="${unit}"` : ''} value="${esc(value)}" placeholder="${mixed ? tr('разные значения') : placeholders[k] ?? '—'}" spellcheck="false" autocomplete="off">`
       + (unit ? `<span class="length-unit"${hasOwnUnit(value) ? ' hidden' : ''}>${unit === 'ft' ? 'ft' : tr('м')}</span></span>` : '') + '</label>';
   }).join('');
-  const hint = fs.every(isDoor) ? `<p class="hint">${tr('Для перемещения дверей используйте инструмент «Переместить» (M).')}</p>` : '';
+  const hint = fs.every(isDoor) ? `<p class="hint edit-hint">${tr('Для перемещения дверей используйте инструмент «Переместить» (M).')}</p>` : '';
   return `<div class="tag-form">${rows}</div>${hint}`;
 }
 
@@ -17642,7 +17642,7 @@ function renderUnderlaySelection() {
       ${num('bottom', tr('Низ'), n.bottom, tr('м'), '0.01', tr('Высота нижней точки картинки над землёй (у подложки этажа — над его полом)'))}
       <label class="field"><span>${tr('Прозрачность')}</span><input type="range" data-uprop="opacity" min="0" max="95" value="${Math.round((1 - u.opacity) * 100)}"></label>
       <label class="field-check"><input type="checkbox" data-uprop="mirror"${u.mirror ? ' checked' : ''}> ${tr('Зеркально')}</label>
-      <p class="hint">${tr('Двигать, поворачивать и масштабировать — инструментами «Переместить», «Повернуть», «Масштаб» (M, Q, E).')}</p>
+      <p class="hint edit-hint">${tr('Двигать, поворачивать и масштабировать — инструментами «Переместить», «Повернуть», «Масштаб» (M, Q, E).')}</p>
     </div>` : ''}`;
 }
 
@@ -17682,7 +17682,7 @@ function renderMulti() {
     ${drill ? '' : addPlan ? 'reason' in addPlan ? `<p class="hint">${esc(addPlan.reason)}</p>` : `<p class="hint">${tr('В {key} будут добавлены части: {n}.', { key: esc(addPlan.group.key), n: addPlan.parts.length })}</p>` : 'reason' in plan ? `<p class="hint">${esc(plan.reason)}</p>` : plan.syntheticOutline ? `<p class="hint">${tr('Будет создан общий контур по выбранным зданиям; объёмы станут частями: {n}.', { n: plan.members.length })}</p>` : `<p class="hint">${tr('Будет создано отношение type=building: контур {outline} и частей {n}.', {
       outline: esc(plan.members[0].key), n: plan.members.filter((m) => m.role === 'part').length })}</p>`}
     ${drill || addPlan ? '' : outlineChooser(plan)}
-    <p class="hint">${tr('Shift+клик — добавить или убрать объект.')}</p>`;
+    <p class="hint edit-hint">${tr('Shift+клик — добавить или убрать объект.')}</p>`;
 }
 
 /** Окружение в режиме здания: соседи рёбрами без заливки, с привязками; включено ли — запоминается. */
@@ -18654,7 +18654,7 @@ function describeFocus(g: BuildingGroup): string {
   return `
     <h2 class="obj-head"><span class="obj-title">${tr('Режим здания')}</span> <a href="${server().web}/${ref}" target="_blank" rel="noopener">${ref}</a>${g.members.length > 1 ? ` <span class="obj-ver">${trn(g.members.length, '{n} часть|{n} части|{n} частей')}</span>` : ''}</h2>
     ${name ? `<h2 class="group-name">${esc(name)}</h2>` : ''}
-    <ul class="hint tips"><li>${tr('Клик по части — выделить её, Shift — несколько.')}</li><li>${tr('Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.')}</li></ul>
+    <ul class="hint tips edit-hint"><li>${tr('Клик по части — выделить её, Shift — несколько.')}</li><li>${tr('Двойной клик по части — изолировать её, мимо здания — показать все части или выйти.')}</li></ul>
     ${outlineWarning(g)}
     ${implicitWarning(g)}
     ${focusExitButton('Esc')}`;

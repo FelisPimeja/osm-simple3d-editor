@@ -3738,6 +3738,8 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
       // Входы на стене (узлы не на контуре) знают только тайлы — из ответа /full их нет
       entrances: [...(f.entrances ?? []), ...(overpass.cachedFeature(f.key)?.entrances ?? []).filter((e) => e.at && !f.entrances?.some((x) => x.id === e.id))] }]));
     if (cacheChanged) await overpass.applySaved(saved, isSolo(g) ? [] : [freshGroup], changed);
+    // В режиме здания тайлы карты не пересобираются (их сборка откладывается) — пересобрать эти объекты при выходе
+    if (cacheChanged && focus) { tilesStale = true; for (const f of changed) staleKeys.add(f.key); if (groupChanged) staleKeys.add(freshGroup.key); }
     // Свежие версии запоминаем как отправленные: отстающий Overpass или старая запись IndexedDB не вернут прежнее здание
     overpass.noteUploaded(new Map([...changed, ...(groupChanged ? [freshGroup] : [])].map((f) => [f.key, f.version])));
     const focused = requestId === focusRefreshId && focus?.key === g.key;

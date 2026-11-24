@@ -20824,8 +20824,10 @@ function applyMobile() {
   placeViewButtons(mobile);
   // Слои на узком экране — над свойствами, на широком — первой панелью правой колонки
   const layers = document.getElementById('layers-panel')!;
-  if (mobile) document.getElementById('left-col')!.append(layers, info, edits);
-  else { const rc = document.getElementById('right-col')!; rc.prepend(layers); rc.append(info, edits); }
+  // Узкий экран: наверху (под панелью приложения) — только свойства; слои и правки — внизу экрана, в правой колонке
+  const rc = document.getElementById('right-col')!;
+  if (mobile) { document.getElementById('left-col')!.append(info); rc.append(layers, edits); }
+  else { rc.prepend(layers); rc.append(info, edits); }
   if (mobile) {
     setCollapsed(document.getElementById('panel')!, true);
     setCollapsed(levelsPanel, true);

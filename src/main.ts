@@ -18046,7 +18046,7 @@ function contextComplexBoxes(g: BuildingGroup) {
         const hull = pts.length >= 3 ? convexHull(pts as [number, number][]) : [];
         if (hull.length >= 3) polygons = [{ outer: hull as LonLat[], inners: [] } as Polygon];
       }
-      if (polygons.length) out.push({ bottom: lv.floor, top: lv.ceil, polygons, seen: false, cover: [], topEdges: true });
+      if (polygons.length) out.push({ bottom: lv.floor, top: lv.ceil, polygons, seen: false, cover: [], topEdges: false });
     }
   }
   return out;

@@ -1567,7 +1567,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!g || this.level || !this.contextBoxes.length) { this.map?.triggerRepaint(); return; }
     const grp = new THREE.Group();
     grp.name = 'context-level-boxes';
-    try { this.drawLevelBoxes(grp, g, { boxes: this.contextBoxes, floor: Infinity }); } catch (e) { console.warn('коробки этажей окружения', e); }
+    try { this.drawLevelBoxes(grp, g, { boxes: this.contextBoxes, floor: Infinity, edgesOnly: true }); } catch (e) { console.warn('коробки этажей окружения', e); }
     g.scene.add(grp);
     this.contextBoxObj = grp;
     this.map?.triggerRepaint();
@@ -2762,7 +2762,9 @@ export class BuildingsLayer implements CustomLayerInterface {
   private drawLevelBoxes(root: THREE.Group, g: MeshGroup,
     ctx?: { boxes: NonNullable<IndoorLevel['boxes']>; floor: number; section?: (z: number) => ClipMulti | undefined;
       /** Без объединения контуров: каждая часть окружения — своя коробка (булевы операции на тысяче зданий не дождаться). */
-      raw?: boolean }) {
+      raw?: boolean;
+      /** Только рёбра с проверкой глубины (режим здания: коробки окружения не закрывают само здание). */
+      edgesOnly?: boolean }) {
     const pos: number[] = [], roofPos: number[] = [], lines: number[] = [], solid: number[] = [];
     // Сосед в окружении: его коробки, его пол и сечение по следам частей; пунктир бледнее
     const floorZ = ctx?.floor ?? this.level?.floor ?? Infinity;
@@ -2814,7 +2816,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     const rg = new THREE.BufferGeometry();
     rg.setAttribute('position', new THREE.Float32BufferAttribute(roofPos, 3));
-    for (const [gm, mat, name] of [[geo, LEVEL_BOX_OCCLUDER, 'level-boxes'], [rg, LEVEL_BOX_ROOF, 'level-box-roofs']] as const) {
+    if (!ctx?.edgesOnly) for (const [gm, mat, name] of [[geo, LEVEL_BOX_OCCLUDER, 'level-boxes'], [rg, LEVEL_BOX_ROOF, 'level-box-roofs']] as const) {
       const faces = new THREE.Mesh(gm, mat);
       faces.name = name;
       faces.renderOrder = -50;
@@ -2824,7 +2826,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     const lg = new THREE.BufferGeometry();
     lg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
-    const dashed = new THREE.LineSegments(lg, levelBoxEdgeMaterial(g.silhouetteEye, !!ctx));
+    const dashed = new THREE.LineSegments(lg, ctx?.edgesOnly ? PALE_OUTLINE_MATERIAL : levelBoxEdgeMaterial(g.silhouetteEye, !!ctx));
     dashed.computeLineDistances();
     dashed.name = 'level-box-edges';
     if (solid.length) {

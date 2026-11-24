@@ -19525,7 +19525,7 @@ function renderUpload(count: number): string {
   return `
     <div class="upload">
       <label class="upload-label" for="upload-comment">${tr('Комментарий к пакету правок')}</label>
-      <textarea id="upload-comment" data-comment rows="${rows}" placeholder="${esc(suggestedComment)}" ${uploading ? 'disabled' : ''}>${esc(uploadComment)}</textarea>
+      <span class="comment-field"><textarea id="upload-comment" data-comment rows="${rows}" placeholder="${esc(suggestedComment)}" ${uploading ? 'disabled' : ''}>${esc(uploadComment)}</textarea>${suggestedComment ? `<button type="button" class="inherit-badge suggest-accept comment-accept" data-accept-comment tabindex="-1" title="${esc(tr('Вставить предложенный комментарий'))}"${uploadComment ? ' hidden' : ''}><span class="sa-touch">↵</span></button>` : ''}</span>
       <button type="button" class="upload-btn" data-upload ${canUpload ? '' : 'disabled'}>${uploading ? tr('Отправка…') : tr('Сохранить в {server} ({n})', { server: s.short, n: count })}</button>
       <div class="upload-meta"><span>${osmUser ? commentHint() : tr('для отправки войдите в {server}', { server: s.short })}</span>
         <span class="server-tag${s.id === 'dev' ? '' : ' prod'}" title="${esc(s.label)}">${esc(s.label)}</span></div>
@@ -20001,19 +20001,32 @@ changesEl.addEventListener('keydown', (e) => {
 });
 
 // Tab в пустом поле — вставить предложенный комментарий (дальше его можно править)
+/** Вставить предложенный комментарий в пустое поле (Tab или кнопка ↵); дальше его можно править. */
+function acceptComment(t: HTMLTextAreaElement) {
+  if (t.value || !suggestedComment) return;
+  t.value = insertedSuggestion = suggestedComment;
+  t.rows = Math.min(8, suggestedComment.split('\n').length);
+  t.dispatchEvent(new Event('input', { bubbles: true }));
+}
 changesEl.addEventListener('keydown', (e) => {
   const t = e.target as HTMLTextAreaElement;
   if (e.key !== 'Tab' || e.shiftKey || !t.matches('[data-comment]') || t.value || !suggestedComment) return;
   e.preventDefault();
-  t.value = insertedSuggestion = suggestedComment;
-  t.rows = Math.min(8, suggestedComment.split('\n').length);
-  t.dispatchEvent(new Event('input', { bubbles: true }));
+  acceptComment(t);
+});
+changesEl.addEventListener('mousedown', (e) => { if ((e.target as HTMLElement).closest('[data-accept-comment]')) e.preventDefault(); });
+changesEl.addEventListener('click', (e) => {
+  if (!(e.target as HTMLElement).closest('[data-accept-comment]')) return;
+  const t = changesEl.querySelector<HTMLTextAreaElement>('[data-comment]');
+  if (t) { acceptComment(t); t.focus(); }
 });
 
 changesEl.addEventListener('input', (e) => {
   const t = e.target as HTMLTextAreaElement;
   if (!t.matches('[data-comment]')) return;
   uploadComment = t.value;
+  const accept = changesEl.querySelector<HTMLButtonElement>('[data-accept-comment]');
+  if (accept) accept.hidden = !!t.value;
   const btn = changesEl.querySelector<HTMLButtonElement>('[data-upload]');
   if (btn) btn.disabled = !(osmUser && session.changes().length && uploadComment.trim() && !uploading);
   const hint = changesEl.querySelector('.upload-meta span');

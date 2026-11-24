@@ -1014,3 +1014,9 @@ p.warn.warn-fix { display: flex; align-items: flex-start; gap: 8px; }
 p.warn.warn-fix > svg { flex: none; margin-top: 2px; }
 p.warn.warn-fix .warn-text { flex: 1; min-width: 0; }
 p.warn.warn-fix .issue-fix { flex: none; margin-left: auto; }
+
+/* Кнопка ↵ в поле комментария к пакету правок: вставить предложенный */
+.comment-field { position: relative; display: block; }
+.comment-field textarea { width: 100%; box-sizing: border-box; padding-right: 34px; }
+.comment-field .comment-accept { position: absolute; top: 4px; right: 4px; bottom: auto; height: 24px; }
+.comment-field .comment-accept[hidden] { display: none; }

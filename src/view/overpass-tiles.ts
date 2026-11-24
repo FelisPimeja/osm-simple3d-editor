@@ -3,7 +3,7 @@ import type { Map as MlMap } from 'maplibre-gl';
 import { server, SERVERS } from '../osm/servers';
 import { fetchOverpassTile, overpassFree } from '../osm/overpass';
 import { ApiError, completeRelations, fetchMapSplit, fetchRelationFull, type Bbox, type OsmElement } from '../osm/api';
-import { centroid, incompleteBuildingRelations, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Feature3D, type IndoorFeature, type MemberWay, type Polygon } from '../osm/model';
+import { centroid, incompleteBuildingRelations, incompleteIndoorRelations, isBareOutlineTags, kindOf, markOutlinesWithParts, parseBuildings, type BuildingGroup, type Entrance, type Feature3D, type IndoorFeature, type MemberWay, type Polygon } from '../osm/model';
 import { RequestPool } from '../osm/request-pool';
 import type { BuildingsLayer, RenderedFeature } from '../render/buildings-layer';
 import { GRID_ZOOM } from '../tiles/tile-features';
@@ -746,7 +746,7 @@ export class OverpassTiles {
    * Отправленные правки — сразу в данные тайлов (память и IndexedDB), без перезапроса Overpass:
    * иначе до фонового обновления тайла кеш показывал бы старые теги. fetchedAt не трогаем.
    */
-  async applySaved(saved: Map<string, { version: number; tags: Record<string, string>; polygons?: Polygon[]; ways?: MemberWay[] }>, savedGroups: BuildingGroup[] = [],
+  async applySaved(saved: Map<string, { version: number; tags: Record<string, string>; polygons?: Polygon[]; ways?: MemberWay[]; entrances?: Entrance[] }>, savedGroups: BuildingGroup[] = [],
     createdFeatures: Feature3D[] = [], deleted: string[] = []) {
     const gone = new Set(deleted);
     // Созданные пути (рассечение) — в тайл, где их центр; ниже patch обновит и их
@@ -788,7 +788,7 @@ export class OverpassTiles {
         const group = groups.find((g) => g.members.includes(f.key));
         const role = group?.roles[group.members.indexOf(f.key)];
         const kind = role === 'part' ? 'part' : role === 'outline' ? 'building' : kindOf(s.tags);
-        if (kind) out.push({ ...f, kind, version: s.version, tags: s.tags, polygons: s.polygons ?? f.polygons, hasParts: false, ...(s.ways ? { ways: s.ways } : {}) });
+        if (kind) out.push({ ...f, kind, version: s.version, tags: s.tags, polygons: s.polygons ?? f.polygons, hasParts: false, ...(s.ways ? { ways: s.ways } : {}), ...(s.entrances ? { entrances: s.entrances } : {}) });
       }
       markOutlinesWithParts(out, out, groups);
       return out;

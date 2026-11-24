@@ -3725,14 +3725,18 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     const changed = features.filter((f) => {
       const old = overpass.cachedFeature(f.key);
       return !old || old.version !== f.version || JSON.stringify(old.polygons) !== JSON.stringify(f.polygons) ||
-        JSON.stringify(old.tags) !== JSON.stringify(f.tags) || JSON.stringify(old.ways) !== JSON.stringify(f.ways);
+        JSON.stringify(old.tags) !== JSON.stringify(f.tags) || JSON.stringify(old.ways) !== JSON.stringify(f.ways)
+        // Входы — теги узлов: новая дверь на старом узле контура не меняет ни тегов, ни геометрии пути
+        || JSON.stringify((old.entrances ?? []).filter((e) => !e.at)) !== JSON.stringify((f.entrances ?? []).filter((e) => !e.at));
     });
     const oldGroup = overpass.groupOf(g.key);
     const groupChanged = !isSolo(g) && JSON.stringify(oldGroup) !== JSON.stringify(freshGroup);
     const cacheChanged = changed.length > 0 || groupChanged;
     // Кеш тайлов (память и IndexedDB) хранит данные сервера, а не правки сессии — обновляем его всегда,
     // иначе после выхода в режим карты снова покажется старое здание
-    const saved = new Map(changed.map((f) => [f.key, { version: f.version, tags: f.tags, polygons: f.polygons, ways: f.ways }]));
+    const saved = new Map(changed.map((f) => [f.key, { version: f.version, tags: f.tags, polygons: f.polygons, ways: f.ways,
+      // Входы на стене (узлы не на контуре) знают только тайлы — из ответа /full их нет
+      entrances: [...(f.entrances ?? []), ...(overpass.cachedFeature(f.key)?.entrances ?? []).filter((e) => e.at && !f.entrances?.some((x) => x.id === e.id))] }]));
     if (cacheChanged) await overpass.applySaved(saved, isSolo(g) ? [] : [freshGroup], changed);
     // Свежие версии запоминаем как отправленные: отстающий Overpass или старая запись IndexedDB не вернут прежнее здание
     overpass.noteUploaded(new Map([...changed, ...(groupChanged ? [freshGroup] : [])].map((f) => [f.key, f.version])));
@@ -19780,7 +19784,7 @@ function uploadEditList() {
 
 // Разработка: пробная отправка в консоли — пакет собирается и проверяется, changeset не открывается, на сервер
 // ничего не уходит (await __dryRunUpload() → { count, problems, osmChange })
-if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __mapPassageAt: mapPassageAt, __passages: () => overpass.passages(), __occl: labelOcclusion, __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __pointRaw: (p: [number, number]) => { const l = pointLevel(); return l && pointTargetOn(p, l); }, __pointLevel: () => pointLevel(), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
+if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __mapPassageAt: mapPassageAt, __passages: () => overpass.passages(), __overpass: overpass, __occl: labelOcclusion, __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __pointRaw: (p: [number, number]) => { const l = pointLevel(); return l && pointTargetOn(p, l); }, __pointLevel: () => pointLevel(), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRunUpload = async () => {
   repairNewRelationRings();
   await collapseLoneOuters();

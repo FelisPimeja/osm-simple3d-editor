@@ -85,7 +85,9 @@ export const GARAGE_WIDTH = 2.5;
 /** Ширина из тега width двери (м), если правдоподобна. */
 const tagWidth = (tags?: Record<string, string>) => {
   const w = looseLength(tags?.width ?? tags?.['door:width']);
-  return w >= 0.5 && w <= 4 ? w : entranceOf(tags) === 'garage' ? GARAGE_WIDTH : tags?.barrier && !tags.door && INDOOR_GATES.has(tags.barrier) ? gateWidth(tags) : undefined;
+  // Гаражные ворота и въезд парковки бывают шире обычной двери — до 10 м
+  const garage = entranceOf(tags) === 'garage';
+  return w >= 0.5 && w <= (garage ? 10 : 4) ? w : garage ? GARAGE_WIDTH : tags?.barrier && !tags.door && INDOOR_GATES.has(tags.barrier) ? gateWidth(tags) : undefined;
 };
 /** Створки двери: door:wings (1–8), у ворот gate:type=double — две; иначе одна. */
 export const doorWings = (tags?: Record<string, string>) => {

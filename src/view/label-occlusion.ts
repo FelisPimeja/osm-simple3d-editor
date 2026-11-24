@@ -203,8 +203,15 @@ export class LabelOcclusion {
             const q = this.map.project([lng, lat]);
             return this.map.queryRenderedFeatures([[q.x - 6, q.y - 6], [q.x + 6, q.y + 6]], { layers: [layer] }).some((x) => x.id === f.id);
           }) : [];
-          const pts = drawn.length ? drawn : this.samples(lines);
-          if (pts.length && pts.filter(([lng, lat]) => this.hidden(lng, lat)).length * 2 > pts.length) next.set(key, { source: f.source, sourceLayer: f.sourceLayer, id: f.id });
+          // Подпись, частично лёгшая на дом, рисуется поверх него: гасим, если за зданием хотя бы две её точки или
+          // больше трети; без найденной подписи (значки по всей линии) — по большинству точек линии
+          if (drawn.length) {
+            const h = drawn.filter(([lng, lat]) => this.hidden(lng, lat)).length;
+            if (h >= 2 || h * 3 > drawn.length) next.set(key, { source: f.source, sourceLayer: f.sourceLayer, id: f.id });
+          } else {
+            const pts = this.samples(lines);
+            if (pts.length && pts.filter(([lng, lat]) => this.hidden(lng, lat)).length * 2 > pts.length) next.set(key, { source: f.source, sourceLayer: f.sourceLayer, id: f.id });
+          }
         }
       }
       if (i < feats.length) { setTimeout(step, 0); return; }

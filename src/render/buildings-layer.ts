@@ -1494,21 +1494,27 @@ export class BuildingsLayer implements CustomLayerInterface {
     const q = ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -(this.level.floor + 0.05)), new THREE.Vector3());
     if (!q) return;
     const at: Pt = [q.x, q.y], LINE_REACH = 0.4;
-    // Стены стоят на высоту этажа: клик по их грани — луч на высотах от пола до потолка
-    const H = Math.max(0.5, this.level.cut - this.level.floor - 0.1);
-    const heights = Array.from({ length: 7 }, (_, i) => this.level!.floor + 0.05 + H * i / 6);
-    const rayAt: Pt[] = heights.map((z) => ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3())).filter((v): v is THREE.Vector3 => !!v).map((v) => [v.x, v.y]);
-    let line: { key: string; d: number; raised?: boolean } | undefined, area: { key: string; a: number } | undefined;
+    // Объекты стоят выше пола (стены на высоту этажа, лестница поднимается к земле): луч — на высотах от пола до
+    // верха; задетое на большей высоте ближе к камере. k — номер высоты (больше — ближе), d — промах по горизонтали
+    let top = this.level.cut;
+    for (const p of this.contextIndoor) for (const e of p.escalators) top = Math.max(top, e.top);
+    const H = Math.max(0.5, top - this.level.floor - 0.1), N = 13;
+    const heights = Array.from({ length: N }, (_, i) => this.level!.floor + 0.05 + H * i / (N - 1));
+    const rayAt = heights.map((z) => ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3()))
+      .map((v, i) => v && { p: [v.x, v.y] as Pt, z: heights[i], k: i }).filter((v): v is { p: Pt; z: number; k: number } => !!v);
+    type Hit = { key: string; k: number; d: number };
+    let best: Hit | undefined, area: { key: string; a: number } | undefined;
+    const offer = (h: Hit) => { if (!best || h.k > best.k || (h.k === best.k && h.d < best.d)) best = h; };
+    const wallTop = this.level.cut;
     for (const p of this.contextIndoor) for (const it of p.items) for (const pg of it.polygons) {
       const outer = pg.outer.map(g.toLocal);
       // Стены — и замкнутые (контуром): по расстоянию до сторон, внутрь тонкой стены клик почти не попадает
       if (it.line || it.linearWall || it.kind === 'wall') {
         const closed = !it.line && outer.length > 2;
-        for (let i = 0; i + 1 < outer.length + (closed ? 1 : 0); i++) {
-          const ds = rayAt.map((r) => distToSegment(r, outer[i], outer[(i + 1) % outer.length]));
-          const d = Math.min(...ds);
-          // Задета выше пола — перед полом (и лестницей на нём) по лучу
-          if (d <= LINE_REACH && (!line || d < line.d)) line = { key: it.key, d, raised: ds.slice(1).some((x) => x <= LINE_REACH) };
+        for (let i = 0; i + 1 < outer.length + (closed ? 1 : 0); i++) for (const r of rayAt) {
+          if (r.z > wallTop + 0.05) continue;
+          const d = distToSegment(r.p, outer[i], outer[(i + 1) % outer.length]);
+          if (d <= LINE_REACH) offer({ key: it.key, k: r.k, d });
         }
         continue;
       }
@@ -1518,19 +1524,26 @@ export class BuildingsLayer implements CustomLayerInterface {
       a = Math.abs(a) / 2;
       if (!area || a < area.a) area = { key: it.key, a };
     }
-    // Лестницы и эскалаторы плана — отдельным списком: по их полосе (полширины с запасом)
-    let stair: { key: string; d: number } | undefined;
+    // Лестницы и эскалаторы: точка луча на полосе и на высоте марша в этом месте (от низа к верху вдоль линии)
     for (const p of this.contextIndoor) for (const e of p.escalators) {
       const l = e.line.map(g.toLocal);
-      for (let i = 0; i + 1 < l.length; i++) {
-        const d = distToSegment(at, l[i], l[i + 1]);
-        // Расстояние — от края полосы: стена вплотную к лестнице выбирается, если ближе к ней
-        const edge = Math.max(0, d - e.width / 2);
-        if (d <= e.width / 2 + 0.2 && (!stair || edge < stair.d)) stair = { key: e.key, d: edge };
+      const lens = l.slice(1).map((b, i) => Math.hypot(b[0] - l[i][0], b[1] - l[i][1])), total = lens.reduce((x, y) => x + y, 0) || 1;
+      const down = e.incline === 'down' || e.incline?.startsWith('-');
+      for (const r of rayAt) {
+        let run = 0;
+        for (let i = 0; i + 1 < l.length; i++) {
+          const a = l[i], b = l[i + 1], ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey || 1;
+          const t = Math.max(0, Math.min(1, ((r.p[0] - a[0]) * ex + (r.p[1] - a[1]) * ey) / l2));
+          const d = Math.hypot(r.p[0] - a[0] - t * ex, r.p[1] - a[1] - t * ey);
+          const s = (run + t * lens[i]) / total;
+          run += lens[i];
+          if (d > e.width / 2 + 0.2) continue;
+          const z = e.bottom + (e.top - e.bottom) * (down ? 1 - s : s);
+          if (Math.abs(z - r.z) <= 0.6) offer({ key: e.key, k: r.k, d: Math.max(0, d - e.width / 2) });
+        }
       }
     }
-    if (stair && line) return line.raised || line.d < stair.d ? line.key : stair.key;
-    return stair?.key ?? line?.key ?? area?.key;
+    return best?.key ?? area?.key;
   }
 
   pickContext(point: PointLike): string | undefined {

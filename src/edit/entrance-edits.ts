@@ -8,11 +8,12 @@ export function withEntranceTags(f:Feature3D, nodeTags:Map<number,Record<string,
  const source=new Map(fallback.map(e=>[e.id,e.tags]));
  const out=new Map<number,Record<string,string>>();
  for(const p of f.polygons)for(const id of [...p.outerIds??[],...(p.innerIds??[]).flat()]){
-  const tags=nodeTags.get(id)??data.get(id)??source.get(id);
+  const tags=nodeTags.get(id)??data.get(id)??(id<0?undefined:source.get(id));
   if(tags&&entranceOf(tags))out.set(id,tags);
  }
  // Входы на стене (не узлы контура) — по точке; теги — с правками
- const wall=fallback.filter(e=>e.at&&!out.has(e.id)).flatMap(e=>{const tags=nodeTags.get(e.id)??data.get(e.id)??e.tags;return entranceOf(tags)?[{...e,tags}]:[];});
+ // Новый узел (id < 0), которого в сессии уже нет (вход отменили), — не вход: иначе его ниша оставалась бы в стене
+ const wall=fallback.filter(e=>e.at&&!out.has(e.id)).flatMap(e=>{const tags=nodeTags.get(e.id)??data.get(e.id)??(e.id<0?undefined:e.tags);return tags&&entranceOf(tags)?[{...e,tags}]:[];});
  // Окна по тегам (window=* на узлах контура) — тоже с правками сессии: форма, размеры, снятые и новые окна
  const winSource=new Map((f.windows??[]).map(e=>[e.id,e.tags]));
  const wins=new Map<number,Record<string,string>>();

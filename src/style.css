@@ -1020,3 +1020,6 @@ p.warn.warn-fix .issue-fix { flex: none; margin-left: auto; }
 .comment-field textarea { width: 100%; box-sizing: border-box; padding-right: 34px; }
 .comment-field .comment-accept { position: absolute; top: 4px; right: 4px; bottom: auto; height: 24px; }
 .comment-field .comment-accept[hidden] { display: none; }
+
+/* Правая колонка: раскрытая панель (одна за раз) — на всю доступную высоту */
+body:not(.mobile) #right-col > .panel:not(.collapsed):not([hidden]) { flex: 1 1 auto; }

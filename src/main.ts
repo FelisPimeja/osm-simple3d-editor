@@ -691,6 +691,14 @@ function setCollapsed(panel: HTMLElement, collapsed: boolean) {
   panel.classList.toggle('collapsed', collapsed);
   btn.setAttribute('aria-expanded', String(!collapsed));
   btn.title = collapsed ? tr('Развернуть') : tr('Свернуть');
+  // Правая колонка — одна раскрытая панель за раз: она на всю высоту, остальные свёрнуты в заголовки
+  if (!collapsed && panel.parentElement?.id === 'right-col') {
+    for (const other of panel.parentElement.querySelectorAll<HTMLElement>(':scope > .panel')) {
+      if (other === panel || other.classList.contains('collapsed')) continue;
+      setCollapsed(other, true);
+      if (!other.hasAttribute('data-auto-collapse')) try { localStorage.setItem(`osm3d.collapsed.${other.id}`, '1'); } catch { /* нет хранилища */ }
+    }
+  }
 }
 for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
   // Панель правок сворачивается и раскрывается сама (renderChanges) — состояние не запоминаем
@@ -702,6 +710,12 @@ for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
     setCollapsed(panel, collapsed);
     if (!auto) try { localStorage.setItem(storeKey, collapsed ? '1' : '0'); } catch { /* нет хранилища */ }
   });
+}
+// Правая колонка: из сохранённых раскрытых — только одна (первая видимая)
+{
+  const open = [...document.querySelectorAll<HTMLElement>('#right-col > .panel:not(.collapsed)')];
+  const keep = open.find((p) => !p.hidden) ?? open[0];
+  if (keep) setCollapsed(keep, false);
 }
 // Слои — панель правой колонки (раньше — выпадающее меню у кнопки): кнопка слоёв показывает и скрывает её
 {

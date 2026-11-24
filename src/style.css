@@ -590,7 +590,7 @@ body.mobile #map { -webkit-touch-callout: none; -webkit-user-select: none; user-
 /* Свойства и правки — в левой колонке под панелью приложения: правка тегов без геометрии */
 body.mobile #left-col { display: flex; flex-direction: column; right: 60px; max-height: 55%; }
 /* iOS приближает страницу при фокусе поля со шрифтом мельче 16px */
-body.mobile #left-col :is(input, select, textarea) { font-size: 16px; }
+body.mobile :is(input, select, textarea) { font-size: 16px; }
 body.mobile #left-col > #info-panel { flex-shrink: 1; min-height: 0; }
 body.mobile #edits-panel:not(:has(#changes:not([hidden]))) { display: none; }
 /* Слои и правки — прижаты к низу экрана во всю ширину */

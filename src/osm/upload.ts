@@ -49,7 +49,8 @@ export interface UploadResult {
 
 /** Конфликт, который нельзя разрешить автоматически: кто-то изменил те же теги. */
 export class ConflictError extends Error {
-  constructor(readonly conflicts: { key: string; tags: string[] }[]) {
+  /** gone — объекты, на которые ссылается правка, но которые удалены на сервере (убрать из кеша при обновлении). */
+  constructor(readonly conflicts: { key: string; tags: string[]; gone?: string[] }[]) {
     super(tr('Конфликт правок: {list}', { list: conflicts.map((c) => `${c.key} (${c.tags.join(', ')})`).join('; ') }));
   }
 }
@@ -334,13 +335,13 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
     const alive = await fetchElements(outside, api());
     const gone = new Set(outside.filter((k) => !alive.has(k)));
     // Ссылка — на нашу правку (её можно откатить), удалённый объект — в тексте
-    const found: { key: string; tags: string[] }[] = [];
+    const found: { key: string; tags: string[]; gone?: string[] }[] = [];
     for (const p of payload) {
       const dead = [...new Set(refsOf(p).filter((k) => gone.has(k)))];
       if (!dead.length) continue;
       const { type, id } = p.element;
       const key = edits.find((e) => e.created?.type === type && e.created.id === id)?.key ?? `${type}/${id}`;
-      found.push({ key, tags: [tr('{members} удалён на сервере после загрузки (другим редактором): откатите эту правку, перезагрузите здание и повторите', { members: dead.slice(0, 3).join(', ') + (dead.length > 3 ? ' …' : '') })] });
+      found.push({ key, tags: [tr('{members} удалён на сервере после загрузки (другим редактором): откатите эту правку, перезагрузите здание и повторите', { members: dead.slice(0, 3).join(', ') + (dead.length > 3 ? ' …' : '') })], gone: dead });
     }
     if (found.length) throw new ConflictError(found);
   }

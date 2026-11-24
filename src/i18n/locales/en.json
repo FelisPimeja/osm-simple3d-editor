@@ -1760,5 +1760,9 @@
   "{members} удалён на сервере после загрузки (другим редактором): откатите эту правку, перезагрузите здание и повторите": "{members} was deleted on the server after loading (in another editor): revert this edit, reload the building and redo it",
   "Откатить {n} последнюю правку|Откатить {n} последние правки|Откатить {n} последних правок": "Revert the last {n} edit|Revert the last {n} edits",
   "Проверка правок: сервер отклонит отправку. {list}": "Edit check: the server would reject the upload. {list}",
-  "Правки после последней удачной проверки откачены. Перезагрузите изменённые на сервере здания и повторите их.": "Edits since the last successful check were reverted. Reload the buildings changed on the server and redo them."
+  "Правки после последней удачной проверки откачены.": "Edits since the last successful check were reverted.",
+  "Данные затронутых зданий обновлены с сервера — правки можно повторить.": "The affected buildings were reloaded from the server — you can redo the edits.",
+  "В части зданий остались другие правки — их данные не обновлены: отправьте или отмените их и обновите здание.": "Some buildings still have other edits, so they were not reloaded: upload or undo them and refresh the building.",
+  "Часть зданий обновить не удалось — перезагрузите страницу (правки сохранятся).": "Some buildings could not be reloaded — reload the page (your edits are kept).",
+  "Обновляем данные зданий с сервера…": "Reloading buildings from the server…"
 }

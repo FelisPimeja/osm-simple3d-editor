@@ -3660,7 +3660,11 @@ async function refreshComplex(g: BuildingGroup) {
 }
 
 /** manual — по кнопке «Обновить здание»: сообщить и об актуальных данных. */
-async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manual = false) {
+/**
+ * background — обновление не открытого здания (после отката по фоновой проверке): кеш и чистая сессия обновляются,
+ * сцена и сообщения — только если здание открыто. Возвращает итог для вызывающего.
+ */
+async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manual = false, background = false): Promise<'touched' | 'updated' | 'fresh' | 'error' | undefined> {
   // В слое JOSM есть неопубликованные правки: API сервера не может его обновлять.
   if (josmMode) return;
   if (isComplex(g)) return; // комплекс без здания — не объект OSM, проверять на сервере нечего
@@ -3698,13 +3702,14 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     if (cacheChanged) await overpass.applySaved(saved, isSolo(g) ? [] : [freshGroup], changed);
     // Свежие версии запоминаем как отправленные: отстающий Overpass или старая запись IndexedDB не вернут прежнее здание
     overpass.noteUploaded(new Map([...changed, ...(groupChanged ? [freshGroup] : [])].map((f) => [f.key, f.version])));
-    if (requestId !== focusRefreshId || focus?.key !== g.key) return;
+    const focused = requestId === focusRefreshId && focus?.key === g.key;
+    if (!focused && !background) return;
     // Only edits of this building block the refresh: history of other buildings must not pin stale copies (#47)
     if ([...new Set([...g.members, ...freshGroup.members, g.key])].some((key) => session.touched(key))) {
       // Versions in the session (restored by autosave too) may lag behind the server even when the tile cache is fresh
       const behind = features.some((f) => { const v = (session.tracked(f.key) as { version?: number } | undefined)?.version; return v !== undefined && v < f.version; });
-      if (cacheChanged || behind) setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
-      return;
+      if (focused && (cacheChanged || behind)) setStatus(tr('Данные здания изменились на сервере. Завершите или отмените текущие правки и войдите в здание снова.'), true);
+      return 'touched';
     }
     // A tile reload may already have updated the cache while the session still holds older copies.
     // Refresh the clean session even when the API response matches the tile cache.
@@ -3715,6 +3720,7 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
       if (session.has(g.key)) session.refresh(copy);
       if (editGroups.has(g.key)) { editGroups.set(g.key, copy); rebuildGroupIndex(); }
     }
+    if (!focused) return cacheChanged ? 'updated' : 'fresh';
     drill = focus = withStrayParts(freshGroup);
     setFocusScene(focus);
     syncFocusHidden();
@@ -3727,8 +3733,11 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
       const message = cacheChanged ? tr('Данные здания обновлены до актуальной версии OSM.') : tr('Данные здания актуальны.');
       setStatus(warning ? `${message} ${warning}` : message, !!warning);
     }
+    return cacheChanged ? 'updated' : 'fresh';
   } catch (err) {
     if (requestId === focusRefreshId && focus?.key === g.key) setStatus(tr('Не удалось проверить актуальность здания: {error}', { error: (err as Error).message }), true);
+    else if (background) console.warn('[building refresh]', g.key, err);
+    return 'error';
   }
 }
 
@@ -19470,6 +19479,39 @@ async function backgroundCheck() {
   const rollback = n > 0 ? ` <a href="#" data-bg-rollback="${bgGoodDepth}">${esc(trn(n, 'Откатить {n} последнюю правку|Откатить {n} последние правки|Откатить {n} последних правок'))}</a>` : '';
   setStatus(tr('Проверка правок: сервер отклонит отправку. {list}', { list: problems.slice(0, 3).join('; ') }), true, links.join('; ') + rollback);
   if (conflicts.length) uploadIssueKeys = new Set(conflicts.map((c) => c.key));
+  bgFound = conflicts;
+}
+/** Конфликты последней фоновой проверки: после отката — какие здания обновить с сервера. */
+let bgFound: { key: string; gone?: string[] }[] = [];
+
+/**
+ * После отката: удалённые на сервере объекты — из кеша тайлов (и не принимать их назад из отстающего Overpass),
+ * здания, к которым относились конфликты, — заново из OSM API. Здания с оставшимися правками не трогаем.
+ */
+async function reloadConflictBuildings(found: { key: string; gone?: string[] }[]) {
+  const gone = [...new Set(found.flatMap((c) => c.gone ?? []))];
+  // Здания считаем до удаления из кеша: удалённый путь ещё знает свою группу
+  const groups = new Map<string, BuildingGroup>();
+  for (const key of [...found.map((c) => c.key), ...gone]) {
+    if (Number(key.split('/')[1]) < 0) continue; // созданное в сессии на сервере не обновить
+    const g = groupOf(key) ?? soloGroup(key);
+    if (g && !gone.includes(isSolo(g) ? g.members[0] : g.key)) groups.set(g.key, g);
+  }
+  if (gone.length) {
+    await overpass.applySaved(new Map(), [], [], gone);
+    overpass.noteUploaded(new Map(), gone);
+  }
+  let updated = 0, kept = 0, failed = 0;
+  for (const g of groups.values()) {
+    const r = await refreshFocusedBuilding(g, focus?.key === g.key ? ++focusRefreshId : -1, false, true);
+    if (r === 'updated' || r === 'fresh') updated++; else if (r === 'touched') kept++; else if (r === 'error') failed++;
+  }
+  scheduleModels();
+  const parts = [tr('Правки после последней удачной проверки откачены.')];
+  if (gone.length || updated) parts.push(tr('Данные затронутых зданий обновлены с сервера — правки можно повторить.'));
+  if (kept) parts.push(tr('В части зданий остались другие правки — их данные не обновлены: отправьте или отмените их и обновите здание.'));
+  if (failed) parts.push(tr('Часть зданий обновить не удалось — перезагрузите страницу (правки сохранятся).'));
+  setStatus(parts.join(' '), kept + failed > 0);
 }
 document.addEventListener('click', (e) => {
   const a = (e.target as Element).closest?.('[data-bg-rollback]') as HTMLElement | null;
@@ -19480,7 +19522,11 @@ document.addEventListener('click', (e) => {
   while (session.editDepth() > good && session.canUndo()) key = session.undo() ?? key;
   bgCheckedDepth = bgGoodDepth = session.editDepth();
   selectAfterHistory(key ?? selectedKey);
-  setStatus(tr('Правки после последней удачной проверки откачены. Перезагрузите изменённые на сервере здания и повторите их.'));
+  uploadIssueKeys = new Set();
+  const found = bgFound;
+  bgFound = [];
+  busyStatus(tr('Обновляем данные зданий с сервера…'));
+  void reloadConflictBuildings(found);
 });
 
 async function doUpload() {

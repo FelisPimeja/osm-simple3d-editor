@@ -1023,3 +1023,6 @@ p.warn.warn-fix .issue-fix { flex: none; margin-left: auto; }
 
 /* Правая колонка: раскрытая панель (одна за раз) — на всю доступную высоту */
 body:not(.mobile) #right-col > .panel:not(.collapsed):not([hidden]) { flex: 1 1 auto; max-height: none; }
+
+/* Кнопки масштаба — только вместе с кубом вида */
+body.zoom-hidden .maplibregl-ctrl-zoom-in, body.zoom-hidden .maplibregl-ctrl-zoom-out { display: none; }

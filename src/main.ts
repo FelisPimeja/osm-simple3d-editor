@@ -284,16 +284,20 @@ map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAc
 const cubeBtn = document.createElement('button');
 cubeBtn.type = 'button';
 cubeBtn.className = 'maplibregl-ctrl-cube';
-cubeBtn.title = tr('Куб вида');
+cubeBtn.title = tr('Куб вида и кнопки масштаба');
 // Куб на кольце компаса (как сам view cube) — чтобы не путать со значком части здания
 cubeBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><ellipse cx="10" cy="13.2" rx="8" ry="3.6" stroke-width="1.6" opacity=".55"/><path d="M10 2.2 14.6 4.7v5.4L10 12.6 5.4 10.1V4.7z" fill="#fff"/><path d="M5.4 4.7 10 7.2l4.6-2.5M10 7.2v5.4"/></svg>';
 document.querySelector('.maplibregl-ctrl-compass')?.after(cubeBtn);
-try { viewCube.shown = localStorage.getItem('view-cube') !== 'off'; } catch { /* по умолчанию показан */ }
+// По умолчанию куб скрыт; кнопки масштаба (+/−) — вместе с ним
+try { viewCube.shown = localStorage.getItem('view-cube') === 'on'; } catch { viewCube.shown = false; }
+const syncZoomButtons = () => document.body.classList.toggle('zoom-hidden', !viewCube.shown);
+syncZoomButtons();
 cubeBtn.classList.toggle('active', viewCube.shown);
 cubeBtn.addEventListener('click', () => {
   viewCube.shown = !viewCube.shown;
   cubeBtn.classList.toggle('active', viewCube.shown);
   try { localStorage.setItem('view-cube', viewCube.shown ? 'on' : 'off'); } catch { /* только до перезагрузки */ }
+  syncZoomButtons();
   viewCube.update();
 });
 // Куб есть и на карте — нарисовать сразу, не дожидаясь первого движения камеры

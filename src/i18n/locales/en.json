@@ -1768,5 +1768,6 @@
   "добавить её след в контур отдельным кольцом (мультиполигон, +{pct}% площади)": "add its footprint to the outline as a separate ring (multipolygon, +{pct}% area)",
   "Контур не построить: объединение контура и частей вырождено.": "Cannot build the outline: the union of the outline and parts is degenerate.",
   "Вставить предложенный комментарий": "Insert the suggested comment",
-  "Слои карты": "Map layers"
+  "Слои карты": "Map layers",
+  "Куб вида и кнопки масштаба": "View cube and zoom buttons"
 }

@@ -8947,7 +8947,7 @@ function selectEntrance(id: number, add = false) {
 /** Ключи секции «Другие теги» у входов: один вход — префикс и id узла, несколько выбранных — общий ключ. */
 const ENTRANCE_KEY_PREFIX = '@entrance:', ENTRANCES_KEY = '@entrances';
 /** Поля карточки входа: тип входа (варианты схемы iD), номер, квартиры (addr:flats: диапазон «1-22», через «;» — несколько) и створки. */
-const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'addr:flats', 'door:wings'] as const;
+const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'addr:flats', 'door:wings', 'height'] as const;
 
 /** Поля карточки окна: вид, размеры проёма и подоконник (м), этаж. */
 const WINDOW_FORM_TAGS = ['window', 'window:shape', 'window:top:shape', 'window:material', 'window:width', 'window:height', 'window:breast', 'level'] as const;
@@ -8998,8 +8998,10 @@ function renderEntrance(id: number) {
       const tip = tr('Предположение по соседним подъездам: {value}. Tab или ↵ — подставить.', { value: sug });
       return `<label class="tag-row"><span title="${esc(k)}">${esc(k === 'ref' ? tr('Номер') : tr('Квартиры'))}</span><span class="inherit-field" title="${esc(tip)}"><input type="text" class="suggested" data-entrance-tag="${k}" ${entranceKeyboard(k)} data-suggest="${esc(sug)}" value="" placeholder="${esc(sug)}" spellcheck="false" autocomplete="off"><button type="button" class="inherit-badge suggest-accept" data-accept-suggest tabindex="-1" title="${esc(tr('Подставить'))}"><span class="sa-touch">↵</span></button></span></label>`;
     }
-    const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : k === 'door:wings' ? String(doorWings(t)) : k === 'addr:flats' ? tr('например, 1-22') : '—';
-    const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : k === 'door:wings' ? tr('Створок') : k === 'addr:flats' ? tr('Квартиры') : tr('Номер'))}</span>`;
+    // Высота: по умолчанию — как дверь нарисована (в низкой части — по её верху без 10 см)
+    const shownH = k === 'height' && !many ? overpassLayer.focusEntrance(id)?.height : undefined;
+    const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : k === 'door:wings' ? String(doorWings(t)) : k === 'addr:flats' ? tr('например, 1-22') : k === 'height' ? (shownH !== undefined ? String(Math.round(shownH * 100) / 100) : String(ENTRANCE_HEIGHT)) : '—';
+    const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : k === 'door:wings' ? tr('Створок') : k === 'addr:flats' ? tr('Квартиры') : k === 'height' ? tr('Высота, м') : tr('Номер'))}</span>`;
     const input = k === 'entrance' || k === 'door:wings' ? renderValueCombo(k === 'entrance' ? idOptions('entrance') ?? [] : ['1', '2'], `data-entrance-tag="${k}"`, value ?? '', hint, undefined, k)
       : `<input type="text" data-entrance-tag="${k}" ${entranceKeyboard(k)} value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}${input}</label>`;
@@ -9243,7 +9245,7 @@ function moveEntrance(point: [number, number]) {
     if (!q) return;
     let width = e.width ?? ENTRANCE_WIDTH, height = e.height ?? ENTRANCE_HEIGHT;
     if (d.handle === 'left' || d.handle === 'right') width = Math.max(0.5, Math.min(4, Math.round(Math.abs(q.s) * 2 * 100) / 100));
-    else if (d.handle === 'top') height = Math.max(1.5, Math.min(6, Math.round((q.z - e.z) * 100) / 100));
+    else if (d.handle === 'top') height = Math.max(0.5, Math.min(6, Math.round((q.z - e.z) * 100) / 100));
     // Уже размеченные door:width / door:height — правим их, иначе общие width / height
     const wk = tags.width === undefined && tags['door:width'] !== undefined ? 'door:width' : 'width';
     const hk = tags.height === undefined && tags['door:height'] !== undefined ? 'door:height' : 'height';
@@ -14775,7 +14777,7 @@ function placePointAt(screen: [number, number]) {
 /** Вход в режиме объёмов: узел entrance=yes на фасаде — вершина контура или новый узел в его стороне (и в частях по ней). */
 function placeFacadeEntrance(t: PointTarget, copy = doorPaste?.[0]) {
   // Вход на фасаде — он же дверь плана первого этажа: indoor=door и level=0
-  const tags: Record<string, string> = { ...(copy ?? { entrance: 'yes' }), indoor: 'door', level: '0' };
+  const tags: Record<string, string> = { ...(copy ?? { entrance: 'yes', door: 'yes' }), indoor: 'door', level: '0' };
   const edits: ObjectEdit[] = [];
   let id: number;
   if (t.node !== undefined) {

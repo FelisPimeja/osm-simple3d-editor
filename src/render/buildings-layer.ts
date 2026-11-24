@@ -93,11 +93,20 @@ export const doorWings = (tags?: Record<string, string>) => {
   if (n >= 1 && n <= 8) return n;
   return tags?.['gate:type'] === 'double' ? 2 : 1;
 };
-/** Высота проёма двери из height (1,5–6 м), иначе DOOR_HEIGHT. */
+/** Высота проёма двери из height / door:height (0,5–6 м: и низкая дверь в приямке), иначе DOOR_HEIGHT. */
 const doorHeight = (tags?: Record<string, string>) => {
   const h = looseLength(tags?.height ?? tags?.['door:height']);
-  return h >= 1.5 && h <= 6 ? h : DOOR_HEIGHT;
+  return h >= 0.5 && h <= 6 ? h : DOOR_HEIGHT;
 };
+/**
+ * Высота двери без своего height: обычная, но в низкой части — до её верха (конька) без 10 см, иначе дверь
+ * торчала бы над крышей.
+ */
+export function fittedDoorHeight(tags: Record<string, string> | undefined, partTags: Record<string, string>): number {
+  if (looseLength(tags?.height ?? tags?.['door:height']) >= 0.5) return doorHeight(tags);
+  const h = computeHeights(partTags);
+  return Math.max(0.5, Math.min(DOOR_HEIGHT, h.top - h.min - 0.1));
+}
 /** Перемычка во всю толщину — только в просвете размером с дверь (до двустворчатой) в стене толщиной до 0,5 м:
  * шире или глубже — это проход или узкое место коридора, над ним ничего нет. */
 const LINTEL_MAX_GAP = DOOR_WIDTH * 2 + 0.2;
@@ -6765,7 +6774,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           // Так же и вход у земли под поднятой видимой частью (узел её контура над входом нижней): при изоляции его нет
           const h = computeHeights(it.tags), z = place?.z ?? floorZ;
           const outside = !!partsHidden && z !== undefined && (z < min - 0.3 || z >= min + h.top - h.min);
-          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: doorHeight(tags.get(id)), wings: doorWings(tags.get(id)) }, rank });
+          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: fittedDoorHeight(tags.get(id), it.tags), wings: doorWings(tags.get(id)) }, rank });
         }));
       }
       // Вход на стене, но не узел контура (дверь indoor-стены на фасаде): на ближайшей стороне, по своей точке
@@ -6792,7 +6801,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const floorZ = !onMap && Number.isFinite(lv) ? this.entranceFloors.get(lv) : undefined;
         const place = { p: near.p, t: near.t, n: nrm, z: floorZ ?? entranceZ(e.tags, it.tags) };
         const h = computeHeights(it.tags), outside = !!partsHidden && (place.z < min - 0.3 || place.z >= min + h.top - h.min);
-        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: doorHeight(e.tags), wings: doorWings(e.tags) }, rank });
+        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: fittedDoorHeight(e.tags, it.tags), wings: doorWings(e.tags) }, rank });
       }
     }
     for (const w of windowPlaces) if (!best.has(w.id)) best.set(w.id, { place: w, rank: Infinity });
@@ -9880,7 +9889,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
           const z = entranceZ(door, tags);
           if (!crosses(z)) return;
           const place = entrancePlace(rings, r, i, z);
-          if (place) places.push({ ...place, width: tagWidth(door), height: doorHeight(door) });
+          if (place) places.push({ ...place, width: tagWidth(door), height: fittedDoorHeight(door, tags) });
         }));
       });
       // Дверь indoor-стены на фасаде (не вершина контура) — на ближайшей стене, как прямоугольник входа
@@ -9889,7 +9898,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       for (const e of f.entrances ?? []) {
         const door = doors.get(e.id);
         if (!door || !e.at || onRing.has(e.id)) continue;
-        probes.push({ q: g.toLocal(e.at), z: entranceZ(door, tags), width: tagWidth(door), height: doorHeight(door) });
+        probes.push({ q: g.toLocal(e.at), z: entranceZ(door, tags), width: tagWidth(door), height: fittedDoorHeight(door, tags) });
       }
       // Чужие — только точно на линии стены (не дверь соседней части рядом)
       for (const d of foreignDoors) probes.push({ q: d.p, z: d.z, width: d.width, strict: true });

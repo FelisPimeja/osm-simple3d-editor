@@ -9332,6 +9332,8 @@ function moveEntrance(point: [number, number]) {
     }
     d.target.place = { ...d.target.place, z, width: cur.width, window: { ...cur.window, floor } };
   }
+  // Дверь едет со своими размерами (гаражные ворота — широкие), а не с размерами двери по умолчанию
+  else if (d.target && cur) d.target.place = { ...d.target.place, width: cur.width, height: cur.height };
   overpassLayer.previewEntrance(d.target ? { id: d.id, place: d.target.place } : undefined);
 }
 

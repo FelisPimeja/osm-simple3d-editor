@@ -5962,6 +5962,16 @@ function attachParts(edits: Parameters<typeof session.editMany>[0], wayIds: (num
       const [type, ref] = k.split('/');
       return [{ type: type as 'way' | 'relation', ref: Number(ref), role: i ? 'part' : 'outline' }];
     });
+    // Своих частей у здания не было: контур отношения не рисуется, когда есть части, — его объём пропал бы.
+    // Объём сохраняет новая часть на тех же узлах с 3D-тегами контура (как при разрезе по высоте)
+    const outline = entity(focus.members[0]) as Feature3D | undefined;
+    if (own.length === 1 && outline?.type === 'way' && outline.polygons.length) {
+      const id = nextNewId--, tags: Record<string, string> = { 'building:part': 'yes' };
+      for (const [k, v] of Object.entries(outline.tags)) if (PART_TAGS.test(k)) tags[k] = v;
+      const body: Feature3D = { key: `way/${id}`, type: 'way', id, version: 0, kind: 'part', tags, polygons: structuredClone(outline.polygons), hasParts: false };
+      edits.push({ key: body.key, create: body });
+      own.push({ type: 'way', ref: id, role: 'part' });
+    }
     const relMembers = [...own, ...parts];
     const group: EditGroup = { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, tags: { type: 'building' },
       members: relMembers.map((m) => `${m.type}/${m.ref}`), roles: relMembers.map((m) => m.role), relMembers };

@@ -9507,6 +9507,18 @@ function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Conta
     return i >= features.length;
   };
   const addFeature = (f: Feature3D) => {
+    // Входы — и у нерисуемых: контур под частями сам не рисуется, а дверь на его узле стоит на стене части
+    // (узел на её линии, но не её вершина) — без этого окна первого этажа ложились поверх дверей
+    if (f.entrances?.length) {
+      const at = new Map<number, LonLat>();
+      for (const p of f.polygons) [p.outer, ...p.inners].forEach((r, k) => ([p.outerIds, ...(p.innerIds ?? [])][k] ?? []).forEach((id, i) => { if (r[i]) at.set(id, r[i]); }));
+      for (const e of f.entrances) {
+        const kind = facadeEntranceOf(e.tags);
+        const ll = e.at ?? at.get(e.id);
+        if (!kind || kind === 'no' || !ll) continue;
+        c.doors.push({ key: f.key, p: g.toLocal(ll), z: entranceZ(e.tags, f.tags), width: tagWidth(e.tags) });
+      }
+    }
     // Скрытые (глазик, изоляция) не стоят на крышах: иначе под ними у соседа вместо крыши — плита перекрытия
     if (!shouldRender(f)) return;
     const prep = prepItem(g, f);
@@ -9522,16 +9534,6 @@ function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Conta
     const box = new THREE.Box2();
     for (const p of prep.polys) for (const [x, y] of p.outer) box.expandByPoint(new THREE.Vector2(x, y));
     if (!prep.flat) c.solids.push({ key: f.key, z: prep.heights.min, top: prep.heights.top, polys: prep.polys, box });
-    if (f.entrances?.length) {
-      const at = new Map<number, LonLat>();
-      for (const p of f.polygons) [p.outer, ...p.inners].forEach((r, k) => ([p.outerIds, ...(p.innerIds ?? [])][k] ?? []).forEach((id, i) => { if (r[i]) at.set(id, r[i]); }));
-      for (const e of f.entrances) {
-        const kind = facadeEntranceOf(e.tags);
-        const ll = e.at ?? at.get(e.id);
-        if (!kind || kind === 'no' || !ll) continue;
-        c.doors.push({ key: f.key, p: g.toLocal(ll), z: entranceZ(e.tags, f.tags), width: tagWidth(e.tags) });
-      }
-    }
     if (!top && !bottom) return;
     if (top) add(c.tops, { key: f.key, z: prep.heights.wallTop, polys: prep.polys, box });
     if (bottom) add(c.bottoms, { key: f.key, z: prep.heights.min, polys: prep.polys, box });

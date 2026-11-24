@@ -7723,7 +7723,11 @@ function topologyEdits(items: { f: Feature3D; rewrites: RingRewrite[] }[], inser
     }
     for (const w of g.ways ?? []) if (!ways.has(w.id)) ways.set(w.id, { nodes: w.nodes, tags: w.tags ?? {} });
   }
-  for (const t of session.lineEntities()) ways.set(Number(t.key.split('/')[1]), { nodes: t.line!.ids, tags: t.tags });
+  for (const t of session.lineEntities()) {
+    ways.set(Number(t.key.split('/')[1]), { nodes: t.line!.ids, tags: t.tags });
+    // Узлы путей-членов, которых нет ни в одном кольце (контур пересобран из новых путей), — по самому пути
+    t.line!.ids.forEach((id, i) => { if (!coords.has(id) && t.line!.coords[i]) coords.set(id, t.line!.coords[i]); });
+  }
   const at = (id: number) => newCoords.get(id) ?? coords.get(id)!;
   const mine = new Set(items.map((i) => i.f.key));
   const edits = new Map<string, ObjectEdit>();
@@ -19650,7 +19654,7 @@ function uploadEditList() {
 
 // Разработка: пробная отправка в консоли — пакет собирается и проверяется, changeset не открывается, на сервер
 // ничего не уходит (await __dryRunUpload() → { count, problems, osmChange })
-if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
+if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __pointRaw: (p: [number, number]) => { const l = pointLevel(); return l && pointTargetOn(p, l); }, __pointLevel: () => pointLevel(), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRunUpload = async () => {
   repairNewRelationRings();
   await collapseLoneOuters();

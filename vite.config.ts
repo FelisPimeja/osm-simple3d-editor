@@ -33,6 +33,8 @@ export default defineConfig({
   base: './',
   cacheDir: process.env.HTTPS ? 'node_modules/.vite-https' : 'node_modules/.vite',
   optimizeDeps: { exclude: ['maplibre-gl'] },
+  // Только dev-сервер: разрешить JS Self-Profiling API (new Profiler) для замеров производительности в браузере
+  server: { headers: { 'Document-Policy': 'js-profiling' } },
   build: { rollupOptions: { input: { main: 'index.html', oauth: 'oauth.html' } } },
   plugins: [maplibreWorker(), ...(process.env.HTTPS ? [basicSsl()] : [])],
 });

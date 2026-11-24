@@ -8730,6 +8730,36 @@ function sameItemGeometry(old: Item, item: Item): boolean {
 let nodeExists: ((id: number) => boolean) | undefined;
 export function setNodeExists(fn: (id: number) => boolean) { nodeExists = fn; }
 
+/**
+ * Двери группы для ниш (один раз на проход сборки, а не на каждый объект: на карте в группе тысячи зданий —
+ * пересчёт на каждый объект подвешивал выход из режима здания на секунды): сколько частей у узла и какие двери живы.
+ */
+const doorIndexCache = new Map<MeshGroup, { between: (id: number) => boolean; alive: Set<number> }>();
+function doorIndex(g: MeshGroup): { between: (id: number) => boolean; alive: Set<number> } {
+  const hit = doorIndexCache.get(g);
+  if (hit) return hit;
+  const fresh = pendingFeatures.get(g), cur = (it: Item) => fresh?.get(it.feature.key) ?? it.feature;
+  // Узел → число частей (не контуров под частями), в кольцах которых он есть
+  const parts = new Map<number, number>();
+  for (const it of g.items) {
+    const f = cur(it);
+    if (f.kind !== 'part' || strokeOnly(g, it)) continue;
+    const ids = new Set(f.polygons.flatMap((p) => [p.outerIds, ...(p.innerIds ?? [])].flatMap((r) => r ?? [])));
+    for (const id of ids) parts.set(id, (parts.get(id) ?? 0) + 1);
+  }
+  const between = (id: number) => (parts.get(id) ?? 0) >= 2;
+  // Дверь плана между двумя частями — не фасад; новый узел (id < 0) — дверь, только пока он есть в правках
+  const alive = new Set<number>();
+  for (const it of g.items) for (const e of cur(it).entrances ?? []) {
+    if ((e.id > 0 || (nodeExists?.(e.id) ?? true)) && (entranceOf(e.tags) || !between(e.id))) alive.add(e.id);
+  }
+  const out = { between, alive };
+  doorIndexCache.set(g, out);
+  // Проход сборки синхронный: после него — заново (правки, другие части)
+  queueMicrotask(() => doorIndexCache.delete(g));
+  return out;
+}
+
 /** Объекты, пересобираемые сейчас (replaceItems): их новые версии для дверей соседей. */
 const pendingFeatures = new WeakMap<MeshGroup, Map<string, Feature3D>>();
 
@@ -9880,12 +9910,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // Входы других объектов здания на линии стены этой части (вход — узел контура под частями, а часть его вершиной
   // не берёт): ниша и обход окнами — здесь, иначе дверь оказывалась внутри сплошной стены
   // Список контактов собирается реже правок: дверь, которой уже нет ни у одного объекта (отменили), — не дверь
-  const fresh = pendingFeatures.get(g), cur = (it: Item) => fresh?.get(it.feature.key) ?? it.feature;
-  const between = (id: number) => g.items.filter((it) => cur(it).kind === 'part' && !strokeOnly(g, it)
-    && cur(it).polygons.some((p) => [p.outerIds, ...(p.innerIds ?? [])].some((r) => r?.includes(id)))).length >= 2;
-  // …и дверь плана между двумя частями (не фасад) — тоже не повод для ниши
-  // Новый узел (id < 0) — дверь, только пока он есть в правках (части пересобираются разными проходами)
-  const alive = new Set(g.items.flatMap((it) => (cur(it).entrances ?? []).filter((e) => (e.id > 0 || (nodeExists?.(e.id) ?? true)) && (entranceOf(e.tags) || !between(e.id))).map((e) => e.id)));
+  const { between, alive } = doorIndex(g);
   const foreignDoors = (g.contacts?.doors ?? []).filter((d) => d.key !== f.key && (d.id === undefined || alive.has(d.id)));
   if (entranceNiches && !shell && !roofOnly && !flat && !tri.pending && (f.entrances?.length || foreignDoors.length)) {
     timed('здание: ниши входов', () => {

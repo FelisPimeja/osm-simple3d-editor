@@ -14210,7 +14210,14 @@ function pointTargetOn(screen: [number, number], lvl: Level): PointTarget | unde
   // Стороны частей здания — только по фасаду (граница двух частей внутри — не стена этажа)
   const section = levelSection(lvl) ?? [];
   const sectionLoc = section.flatMap((poly) => poly.map((ring) => ring.map((c) => overpassLayer.focusToLocal(c)!)));
-  const onSection = (q: [number, number]) => sectionLoc.some((loc) => loc.some((c, i) => segDist2(q, c, loc[(i + 1) % loc.length]) < 0.05));
+  // И наружный контур объёмов, проходящих через пол этажа: контур этажа по indoor (indoor=level) не знает о
+  // новых частях — их фасад иначе не находился бы
+  const feetLoc: [number, number][][] = (() => {
+    const polys = groupFeatures(focus).filter(spans).flatMap((f) => f.polygons.map((p) => [p.outer, ...p.inners].map((r) => { const q = r.map((c) => overpassLayer.focusToLocal(c)!); return [...q, q[0]]; })));
+    if (!polys.length) return [];
+    try { return (polygonClipping.union(...(polys as [never, ...never[]])) as [number, number][][][]).flatMap((poly) => poly.map((r) => r.slice(0, -1))); } catch { return []; }
+  })();
+  const onSection = (q: [number, number]) => [...sectionLoc, ...feetLoc].some((loc) => loc.some((c, i) => segDist2(q, c, loc[(i + 1) % loc.length]) < 0.05));
   let best: { r: Ring; edge: number; d: number } | undefined;
   for (const r of rings) for (let i = 0; i < r.edges; i++) {
     if (!r.indoor && !(onSection(r.loc[i]) && onSection(r.loc[(i + 1) % r.loc.length]))) continue;
@@ -19602,7 +19609,7 @@ function uploadEditList() {
 
 // Разработка: пробная отправка в консоли — пакет собирается и проверяется, changeset не открывается, на сервер
 // ничего не уходит (await __dryRunUpload() → { count, problems, osmChange })
-if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus });
+if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRunUpload = async () => {
   repairNewRelationRings();
   await collapseLoneOuters();

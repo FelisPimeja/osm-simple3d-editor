@@ -5229,6 +5229,19 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   private passageHighlight?: THREE.Object3D;
   /** Подсветка выбранных арок: объём проёма — пунктиром, ось пути — сплошной линией (синим). */
+  /** Ключи нарисованных на карте объектов, у которых среди узлов контура или входов есть эти узлы. */
+  featuresWithNodes(ids: Set<number>): string[] {
+    const out = new Set<string>();
+    for (const [key, g] of this.groups) {
+      if (key === FOCUS_GROUP) continue;
+      for (const it of g.items) {
+        const f = it.feature;
+        if (f.entrances?.some((e) => ids.has(e.id)) || f.polygons.some((p) => [...(p.outerIds ?? []), ...(p.innerIds ?? []).flat()].some((id) => ids.has(id)))) out.add(f.key);
+      }
+    }
+    return [...out];
+  }
+
   setPassageSelection(ids: number[]) {
     if (this.passageHighlight) { this.passageHighlight.parent?.remove(this.passageHighlight); disposeTree(this.passageHighlight); this.passageHighlight = undefined; }
     for (const o of this.mapPassageHighlights) { o.parent?.remove(o); disposeTree(o); }

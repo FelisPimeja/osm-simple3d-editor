@@ -45,8 +45,8 @@ export class LabelOcclusion {
   setEnabled(on: boolean) {
     if (on === this.enabled) return;
     this.enabled = on;
-    if (on) { this.map.on('idle', this.onIdle); this.map.on('movestart', this.onMove); this.update(); }
-    else { this.map.off('idle', this.onIdle); this.map.off('movestart', this.onMove); this.run++; this.done = ''; this.clear(); this.restoreLayers(); this.layers = []; }
+    if (on) { this.map.on('idle', this.onIdle); this.map.on('movestart', this.onMove); this.map.on('moveend', this.onMoveEnd); this.update(); }
+    else { this.map.off('idle', this.onIdle); this.map.off('movestart', this.onMove); this.map.off('moveend', this.onMoveEnd); this.run++; this.done = ''; this.concealed = false; this.clear(); this.restoreLayers(); this.layers = []; }
   }
 
   /**
@@ -55,6 +55,7 @@ export class LabelOcclusion {
    */
   repatch() {
     if (!this.enabled) return;
+    this.concealed = false;
     this.original.clear();
     this.layers = [];
     this.done = '';
@@ -122,25 +123,50 @@ export class LabelOcclusion {
   private run = 0;
   /** Камера и набор подписей последнего законченного прохода — idle без изменений не пересчитываем. */
   private done = '';
-  private readonly onMove = () => { this.run++; };
+  private readonly onMove = () => { this.run++; clearTimeout(this.endTimer); this.conceal(); };
+  /** Камера встала — считать сразу (idle после догрузки тайлов бывает через секунды), с короткой паузой на инерцию. */
+  private endTimer?: ReturnType<typeof setTimeout>;
+  private readonly onMoveEnd = () => { clearTimeout(this.endTimer); this.endTimer = setTimeout(() => this.update(), 80); };
+  /** Пока камера движется и идёт пересчёт — подписи и значки слоёв погашены (не мелькают заслонённые). */
+  private concealed = false;
+  private conceal() {
+    if (this.concealed || !this.layers.length) return;
+    this.concealed = true;
+    for (const l of this.layers) for (const p of PROPS) {
+      if (!this.map.getLayer(l.id)) continue;
+      try { this.map.setPaintProperty(l.id, p, 0); } catch { /* слой без свойства */ }
+    }
+  }
+  /** Пересчёт готов — вернуть прозрачность (с приглушением заслонённых). */
+  private reveal() {
+    if (!this.concealed) return;
+    this.concealed = false;
+    for (const l of this.layers) for (const p of PROPS) {
+      if (!this.map.getLayer(l.id)) continue;
+      try { this.map.setPaintProperty(l.id, p, dimmed(this.original.get(`${l.id}|${p}`)) as number); } catch { /* выражение не обернуть */ }
+    }
+  }
 
   /** Проход кусками не дольше SLICE мс между кадрами: начатый пан или вращение не ждёт конца расчёта. */
   private update() {
-    if (!this.enabled || !this.ready()) return;
+    if (!this.enabled) return;
+    // Считать не по чему (здания ещё не готовы) — подписи не держим погашенными
+    if (!this.ready()) { this.reveal(); return; }
     if (!this.layers.length) this.patchLayers();
     if (!this.layers.length) return;
     const ids = this.layers.map((l) => l.id).filter((id) => this.map.getLayer(id));
     const feats: MapGeoJSONFeature[] = this.map.queryRenderedFeatures({ layers: ids });
     const c = this.map.getCenter();
     const sig = `${c.lng},${c.lat},${this.map.getZoom()},${this.map.getBearing()},${this.map.getPitch()},${feats.length},${this.rev()}`;
-    if (sig === this.done) return;
+    if (sig === this.done) { this.reveal(); return; }
     const run = ++this.run;
     const next = new Map<string, { source: string; sourceLayer?: string; id: string | number }>();
     let i = 0;
     const seen = new Set<string>();
     const step = () => {
       if (run !== this.run || !this.enabled) return;
-      const until = performance.now() + SLICE;
+      // Подписи погашены и ждут — кусками крупнее (кадр пожертвовать можно: камера стоит)
+      const until = performance.now() + (this.concealed ? SLICE * 3 : SLICE);
       for (; i < feats.length && performance.now() < until; i++) {
         const f = feats[i];
         if (f.id === undefined) continue;
@@ -163,6 +189,7 @@ export class LabelOcclusion {
       for (const [k, f] of next) if (!this.marked.has(k)) this.map.setFeatureState(f, { occluded: true });
       this.marked = next;
       this.done = sig;
+      this.reveal();
     };
     step();
   }

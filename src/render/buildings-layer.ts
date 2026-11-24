@@ -2014,6 +2014,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     const items = [...this.level?.items ?? [], ...this.level?.highlights ?? [], ...this.level?.outlines ?? []].filter((i) => keys.has(i.key));
     if (this.level && this.wireframe) for (const b of this.level.below ?? []) items.push(...b.items.filter(it => keys.has(it.key) && !items.some(other=>other.key===it.key)));
     if (this.level) items.push(...this.roomWallSelection, ...(this.freeArea ? [this.freeArea] : []));
+    // Выбранный объект плана окружения (сосед, indoor без здания) — подсветка как у своего
+    if (this.level) for (const p of this.contextIndoor) for (const it of p.items) if (keys.has(it.key) && !items.some((o) => o.key === it.key)) items.push(it);
     const tracks = (this.level?.tracks ?? []).filter((t) => keys.has(t.key));
     if (!g || (!items.length && !tracks.length && ![...keys].some((key) => this.doorOpeningEdges.has(key)))) return;
     const root = new THREE.Group();

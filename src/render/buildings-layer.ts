@@ -5231,8 +5231,35 @@ export class BuildingsLayer implements CustomLayerInterface {
   /** Подсветка выбранных арок: объём проёма — пунктиром, ось пути — сплошной линией (синим). */
   setPassageSelection(ids: number[]) {
     if (this.passageHighlight) { this.passageHighlight.parent?.remove(this.passageHighlight); disposeTree(this.passageHighlight); this.passageHighlight = undefined; }
+    for (const o of this.mapPassageHighlights) { o.parent?.remove(o); disposeTree(o); }
+    this.mapPassageHighlights = [];
+    const focusGroup = this.groups.get(FOCUS_GROUP);
+    // На карте — в сцене каждой группы тайла, где у зданий есть куски этой арки (координаты — её локальные)
+    if (!focusGroup && ids.length) {
+      for (const [key, g] of this.groups) {
+        if (key === FOCUS_GROUP) continue;
+        const pieces = g.items.flatMap((it) => it.passage?.ways ?? []).filter((p) => ids.includes(p.id));
+        if (!pieces.length) continue;
+        const root = this.passageHighlightRoot(pieces);
+        g.scene.add(root);
+        this.mapPassageHighlights.push(root);
+      }
+      this.map?.triggerRepaint();
+      return;
+    }
     const pieces = this.focusPassagePieces().filter((p) => ids.includes(p.id));
     if (pieces.length) {
+      const root = this.passageHighlightRoot(pieces);
+      this.toolOverlay.add(root);
+      this.passageHighlight = root;
+    }
+    this.map?.triggerRepaint();
+  }
+  private mapPassageHighlights: THREE.Object3D[] = [];
+
+  /** Объём проёма арок — пунктиром, ось пути — толстой линией (синим), поверх всего. */
+  private passageHighlightRoot(pieces: PassagePiece[]): THREE.Group {
+    {
       const overlay = { depthTest: false, depthWrite: false, transparent: true };
       const dashed = new THREE.LineDashedMaterial({ color: 0x2563eb, dashSize: 0.4, gapSize: 0.25, ...overlay });
       const root = new THREE.Group();
@@ -5265,10 +5292,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         pts.renderOrder = 1004;
         root.add(pts);
       }
-      this.toolOverlay.add(root);
-      this.passageHighlight = root;
+      return root;
     }
-    this.map?.triggerRepaint();
   }
 
   focusRayHits(point: [number, number], allowed: (key: string) => boolean = () => true): FocusHit[] {
@@ -8720,6 +8745,8 @@ function sameItemGeometry(old: Item, item: Item): boolean {
     || !old.wall.equals(item.wall) || !old.roof.equals(item.roof)) return false;
   const src = old.full ?? old;
   if (src.wallVertices !== item.wallVertices) return false;
+  // Арка: высота и куски проезда (подсветка, привязка) — не только треугольники
+  if (JSON.stringify(old.passage?.ways.map((w) => [w.id, w.z, w.width, w.line]) ?? null) !== JSON.stringify(item.passage?.ways.map((w) => [w.id, w.z, w.width, w.line]) ?? null)) return false;
   const a = src.positions, b = item.positions;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
@@ -9582,7 +9609,7 @@ function dropCollinear(ps: LocalPolygon[]): LocalPolygon[] {
  * Объём под аркой: ниже её верха — только стены контура без полосы проезда (стороны проезда — её стены),
  * над полосой — потолок арки. undefined — арки нет или она не задевает объект по высоте.
  */
-function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heights, tags: Record<string, string>): { lower: LocalPolygon[]; ceiling: LocalPolygon[]; z: number; ways: PassagePiece[] } | undefined {
+function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heights, tags: Record<string, string>): { lower: LocalPolygon[]; ceiling: LocalPolygon[]; ceilings: { polys: LocalPolygon[]; z: number }[]; z: number; ways: PassagePiece[] } | undefined {
   // Часть над землёй (min_height) режется, только если в неё заходит maxheight арки; без maxheight арка —
   // в первом этаже стоящих на земле частей, поднятым частям её не дублируем
   const raised = h.min > 0.5;
@@ -9592,23 +9619,38 @@ function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heig
   const levels = Number.parseFloat(tags['building:levels'] ?? '');
   const first = h.min + Math.min(PASSAGE_HEIGHT, levels >= 1 ? (h.wallTop - h.min) / levels : PASSAGE_HEIGHT);
   // Арка выше объекта (габарит железной дороги под невысоким зданием) — до верха его стен, под перекрытием
-  const z = Math.min(Math.max(...cuts.map((c) => c.height ?? first)), h.wallTop - PASSAGE_MIN_ABOVE);
+  // Своя высота у каждой арки; z — наибольшая (под ней — объём проезда для этажей)
+  const top = h.wallTop - PASSAGE_MIN_ABOVE;
+  const zOf = (c: PassageCut) => Math.min(c.height ?? first, top);
+  const z = Math.max(...cuts.map(zOf));
   if (z < h.min + 1) return;
   try {
     const body = toClip(polys);
-    const ways: PassagePiece[] = [], strips: ClipMulti[] = [];
+    const ways: PassagePiece[] = [], strips: ClipMulti[] = [], stripZ: number[] = [];
     for (const c of cuts) {
+      const cz = zOf(c);
+      if (cz < h.min + 1) continue;
       const line = c.line.map(g.toLocal), m = passageStrip(line, c.width);
       const opening = m.length ? polygonClipping.intersection(body, m) : [];
       if (!opening.length) continue;
-      strips.push(m);
-      ways.push({ id: c.id, line, opening: dropCollinear(fromClip(opening)), z, min: h.min, width: c.width, rail: c.rail });
+      strips.push(m); stripZ.push(cz);
+      ways.push({ id: c.id, line, opening: dropCollinear(fromClip(opening)), z: cz, min: h.min, width: c.width, rail: c.rail });
     }
     if (!strips.length) return;
     const strip = polygonClipping.union(strips[0], ...strips.slice(1));
     const ceiling = polygonClipping.intersection(body, strip);
     if (!ceiling.length) return;
-    return { lower: dropCollinear(fromClip(polygonClipping.difference(body, strip))), ceiling: dropCollinear(fromClip(ceiling)), z, ways };
+    // Потолки по высотам: где проезды разной высоты перекрываются — выше
+    const ceilings: { polys: LocalPolygon[]; z: number }[] = [];
+    let taken: ClipMulti = [];
+    for (const cz of [...new Set(stripZ)].sort((a, b) => b - a)) {
+      const ms = strips.filter((_, i) => stripZ[i] === cz);
+      let part = polygonClipping.intersection(body, polygonClipping.union(ms[0], ...ms.slice(1)));
+      if (taken.length) part = polygonClipping.difference(part, taken);
+      if (part.length) ceilings.push({ polys: dropCollinear(fromClip(part)), z: cz });
+      taken = taken.length ? polygonClipping.union(taken, ...ms) : polygonClipping.union(ms[0], ...ms.slice(1));
+    }
+    return { lower: dropCollinear(fromClip(polygonClipping.difference(body, strip))), ceiling: dropCollinear(fromClip(ceiling)), ceilings, z, ways };
   } catch (err) { console.warn('[passage]', f.key, err); return; }
 }
 
@@ -9616,7 +9658,7 @@ function passageSplit(g: MeshGroup, f: Feature3D, polys: LocalPolygon[], h: Heig
  * Стены объекта с аркой: в стенах контура — проёмы там, где проём арки выходит на сторону контура (от низа до z),
  * стороны проёма внутри объекта — стенки проезда, сверху — потолок арки.
  */
-function passageWalls(walls: number[], polys: LocalPolygon[], passage: { ceiling: LocalPolygon[]; z: number }, min: number): number[] {
+function passageWalls(walls: number[], polys: LocalPolygon[], passage: { ceilings: { polys: LocalPolygon[]; z: number }[] }, min: number): number[] {
   const sides = polys.flatMap((p) => [p.outer, ...p.inners]).flatMap((r) => r.map((a, i) => [a, r[(i + 1) % r.length]] as [Pt, Pt]));
   // Сторона проёма на фасаде может проходить через узел контура (конец пути арки — вершина контура): концы и
   // середина — каждая на какой-нибудь стороне контура, не обязательно одной
@@ -9624,22 +9666,26 @@ function passageWalls(walls: number[], polys: LocalPolygon[], passage: { ceiling
   const onOutline = (p: Pt, q: Pt) => near(p) && near(q) && near([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]);
   const doors: { x: number; y: number; z: number; width: number; height: number }[] = [];
   const inner: number[] = [];
-  const h = passage.z - min;
-  for (const q of passage.ceiling) for (const r of [q.outer, ...q.inners]) r.forEach((p, i) => {
+  const caps: number[] = [];
+  for (const c of passage.ceilings) {
+  const h = c.z - min, ceiling = c.polys;
+  for (const q of ceiling) for (const r of [q.outer, ...q.inners]) r.forEach((p, i) => {
     const n = r[(i + 1) % r.length], len = Math.hypot(n[0] - p[0], n[1] - p[1]);
     if (len < 1e-3) return;
     if (onOutline(p, n)) doors.push({ x: (p[0] + n[0]) / 2, y: (p[1] + n[1]) / 2, z: min, width: len, height: h });
     else {
       // Лицом в проезд (освещение — по нормали): правая сторона p→n должна смотреть внутрь проёма
       const mx = (p[0] + n[0]) / 2 + (n[1] - p[1]) / len * 0.05, my = (p[1] + n[1]) / 2 - (n[0] - p[0]) / len * 0.05;
-      const into = passage.ceiling.some((c) => pointInLocalRing([mx, my], c.outer) && !c.inners.some((h) => pointInLocalRing([mx, my], h)));
+      const into = ceiling.some((c) => pointInLocalRing([mx, my], c.outer) && !c.inners.some((h) => pointInLocalRing([mx, my], h)));
       const [a, b] = into ? [p, n] : [n, p];
-      inner.push(a[0], a[1], min, b[0], b[1], min, b[0], b[1], passage.z, a[0], a[1], min, b[0], b[1], passage.z, a[0], a[1], passage.z);
+      inner.push(a[0], a[1], min, b[0], b[1], min, b[0], b[1], c.z, a[0], a[1], min, b[0], b[1], c.z, a[0], a[1], c.z);
     }
   });
+  caps.push(...bottomTriangles(ceiling, c.z));
+  }
   // Без вырожденных треугольников разрезки: их непарные стороны рисовались линиями поперёк проёма
-  const cut = doors.length ? dropSlivers(cutDoorOpenings(Float32Array.from(walls), doors, 1, h, 0.05)) : walls;
-  return [...cut, ...inner, ...bottomTriangles(passage.ceiling, passage.z)];
+  const cut = doors.length ? dropSlivers(cutDoorOpenings(Float32Array.from(walls), doors, 1, 2.2, 0.05)) : walls;
+  return [...cut, ...inner, ...caps];
 }
 
 /** Теги для рисования, контур в локальных метрах и высоты объекта (с поправкой на плоский след). */

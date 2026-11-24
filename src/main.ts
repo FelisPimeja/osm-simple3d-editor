@@ -5677,7 +5677,8 @@ let barrierSketch = false;
 const mapBShapeBtn = document.querySelector<HTMLButtonElement>('#map-tools [data-tool="bshape"]')!;
 mapBShapeBtn.addEventListener('click', () => (shapeTool.active ? shapeTool.stop() : startMapBarrierShape()));
 function startMapBarrierShape() {
-  const f = !focus && indoorSelection.length === 1 && indoorSelection[0].barrier ? indoorSelection[0] : undefined;
+  // Ограждение, ряд деревьев, лес — и арка (ось пути в проёме)
+  const f = !focus && indoorSelection.length === 1 && (indoorSelection[0].barrier || indoorSelection[0].passage) ? indoorSelection[0] : undefined;
   if (!f) return;
   cancelCopyPick();
   drawTool.stop(); moveTool.stop(); rotateTool.stop(); scaleTool.stop(); measureTool.stop();
@@ -5742,7 +5743,7 @@ function syncMapTools() {
     btn.hidden = !u && !(fl && btn !== mapUScaleBtn);
     btn.classList.toggle('active', underlaySketch && on);
   }
-  mapBShapeBtn.hidden = !!focus || !(indoorSelection.length === 1 && indoorSelection[0].barrier && indoorSelection[0].flora !== 'tree');
+  mapBShapeBtn.hidden = !!focus || !(indoorSelection.length === 1 && (indoorSelection[0].passage || (indoorSelection[0].barrier && indoorSelection[0].flora !== 'tree')));
   mapBShapeBtn.classList.toggle('active', barrierSketch && shapeTool.active);
   renderHelp();
   mapRectBtn.classList.toggle('active', sketching && drawTool.shape === 'rect');
@@ -10357,7 +10358,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   // На карте с выделенным ограждением V — «Форма»
-  if (!focus && e.code === 'KeyV' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && indoorSelection.length === 1 && indoorSelection[0].barrier && indoorSelection[0].flora !== 'tree') {
+  if (!focus && e.code === 'KeyV' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && indoorSelection.length === 1 && (indoorSelection[0].passage || (indoorSelection[0].barrier && indoorSelection[0].flora !== 'tree'))) {
     e.preventDefault();
     closeCtxMenu();
     if (shapeTool.active) shapeTool.stop(); else startMapBarrierShape();
@@ -12659,7 +12660,7 @@ function deleteDoors(fs: IndoorFeature[]) {
 /** Одинаковое действие для Del и контекстного меню. */
 function canDeleteIndoorSelection(): boolean {
   return selectedRoomWalls.length > 0 || (indoorSelection.length > 0
-    && (indoorSelection.every((f) => isDoor(f) || isDeletableSpace(f)) || indoorSelection.some((f) => f.kind === 'wall')));
+    && (indoorSelection.every((f) => f.passage) || indoorSelection.every((f) => isDoor(f) || isDeletableSpace(f)) || indoorSelection.some((f) => f.kind === 'wall')));
 }
 
 /** Точечный POI, кроме дверей, лестниц и эскалаторов. */
@@ -12671,8 +12672,28 @@ const isDeletableSpace = (f: IndoorFeature) => f.escalator ? f.key.startsWith('w
 /** Теги этажа у пути, который заодно часть или контур здания: при удалении этажа снимаются только они. */
 const LEVEL_OWN_KEYS = ['indoor', 'level', 'level:ref', 'repeat_on'];
 
+/**
+ * Удалить арки одним шагом: у дороги или рельсов через здание снимается tunnel=building_passage (путь остаётся,
+ * вырез в здании пропадает); нарисованная в редакторе или путь без типа дороги — удаляется целиком.
+ */
+function deletePassages(fs: IndoorFeature[]) {
+  const edits: ObjectEdit[] = [];
+  for (const f of fs) {
+    const id = Number(f.key.slice(4)), p = [...overpass.passages(), ...createdPassages.values()].find((x) => x.id === id);
+    const tags = session.get(f.key)?.tags ?? p?.tags ?? f.tags;
+    trackIndoor(f.key, f);
+    if (id < 0 || !(tags.highway || isRailTags(tags))) edits.push({ key: f.key, delete: true });
+    else { const t = { ...tags }; delete t.tunnel; edits.push({ key: f.key, tags: t }); }
+  }
+  if (!edits.length) return;
+  session.editMany(edits);
+  selectIndoor(undefined);
+  setStatus(tr('Арки удалены: {n}.', { n: edits.length }));
+}
+
 function deleteIndoorSelection() {
   if (uploading || deletingIndoorWalls || !canDeleteIndoorSelection()) return;
+  if (indoorSelection.every((f) => f.passage)) return deletePassages(indoorSelection);
   if (indoorSelection.length && indoorSelection.every(isDoor)) deleteDoors(indoorSelection);
   else if (!selectedRoomWalls.length && indoorSelection.length && indoorSelection.every(isDeletableSpace)) void deleteIndoorSpaces(withPairs(indoorSelection));
   else void deleteIndoorWalls();
@@ -19006,6 +19027,8 @@ function livePassage(p: PassageWay, preview = false): PassageWay | undefined {
   if (pre) { const tags = session.get(key)?.tags ?? p.tags; return { ...p, tags: pre.width ? { ...tags, width: writeLength(pre.width) } : tags, nodes: pre.ids, coords: pre.coords }; }
   const e = session.get(key);
   if (!e) return p.id < 0 ? undefined : p;
+  // Снят tunnel=building_passage — больше не арка
+  if (e.tags.tunnel !== 'building_passage') return;
   const line = e.line ?? (e.polygons?.[0]?.outerIds ? { ids: e.polygons[0].outerIds, coords: e.polygons[0].outer } : undefined);
   return { ...p, tags: e.tags, ...(line ? { nodes: line.ids, coords: line.coords } : {}) };
 }
@@ -19076,45 +19099,8 @@ function passageAt(point: [number, number]): IndoorFeature | undefined {
 /** Подсветка выбранных арок в сцене здания. */
 function syncPassageSelection() {
   overpassLayer.setPassageSelection(indoorSelection.filter((f) => f.passage).map((f) => Number(f.key.slice(4))));
-  syncMapPassageSelection();
 }
 
-/**
- * Подсветка выбранных арок на карте (у режима здания — своя, в его сцене): ось синей линией, проём — пунктиром по
- * ширине. Слой — поверх всего: арка под зданием, крыша закрыла бы её.
- */
-function syncMapPassageSelection() {
-  if (!mapLoaded) return;
-  const sel = focus ? [] : indoorSelection.filter((f) => f.passage);
-  const features: GeoJSON.Feature[] = [];
-  for (const f of sel) {
-    const line = f.polygons[0]?.outer;
-    if (!line || line.length < 2) continue;
-    features.push({ type: 'Feature', properties: { kind: 'axis' }, geometry: { type: 'LineString', coordinates: line } });
-    // Края проёма: ось, сдвинутая на полуширину в обе стороны (по отрезкам)
-    const half = passageWidth(f.tags) / 2, lat = line[0][1], kx = 111320 * Math.cos(lat * Math.PI / 180), ky = 110540;
-    for (const side of [1, -1]) {
-      const edge: LonLat[] = [];
-      for (let i = 0; i < line.length; i++) {
-        const a = line[Math.max(0, i - 1)], b = line[Math.min(line.length - 1, i + 1)];
-        const dx = (b[0] - a[0]) * kx, dy = (b[1] - a[1]) * ky, l = Math.hypot(dx, dy) || 1;
-        edge.push([line[i][0] + (-dy / l) * half * side / kx, line[i][1] + (dx / l) * half * side / ky]);
-      }
-      features.push({ type: 'Feature', properties: { kind: 'edge' }, geometry: { type: 'LineString', coordinates: edge } });
-    }
-  }
-  const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
-  const src = map.getSource('passage-selection') as maplibregl.GeoJSONSource | undefined;
-  if (src) src.setData(data);
-  else if (features.length) {
-    map.addSource('passage-selection', { type: 'geojson', data });
-    map.addLayer({ id: 'passage-selection-edge', type: 'line', source: 'passage-selection', filter: ['==', ['get', 'kind'], 'edge'],
-      paint: { 'line-color': '#2563eb', 'line-width': 2, 'line-dasharray': [2, 1.5] } });
-    map.addLayer({ id: 'passage-selection', type: 'line', source: 'passage-selection', filter: ['==', ['get', 'kind'], 'axis'],
-      paint: { 'line-color': '#2563eb', 'line-width': 3 } });
-  }
-  for (const id of ['passage-selection-edge', 'passage-selection']) if (map.getLayer(id)) map.moveLayer(id);
-}
 
 /** Пересобрать объёмы здания, задетые арками keys (рамка оси с запасом), и подсветку. */
 function rebuildPassageCut(keys: string[]) {
@@ -19179,10 +19165,35 @@ function setPassageWidth(t: ShapeTarget, f: IndoorFeature, w: number): boolean {
 
 /** Правка пути арки: объёмы здания по новой оси (вырез) и подсветка. */
 function syncPassageEdits(keys: string[]) {
-  if (!focus || !keys.some((k) => passageFeatures(focus!).some((f) => f.key === k))) return;
+  if (!focus) { void syncMapPassageEdits(keys); return; }
+  // Арка могла только что перестать быть аркой (удалена, снят tunnel) — по всем известным арки
+  const known = new Set([...overpass.passages().map((p) => `way/${p.id}`), ...createdPassages.keys()]);
+  if (!keys.some((k) => known.has(k))) return;
   passagePreview.clear();
   overpassLayer.previewFocusFeatures(groupFeatures(focus).map((f) => focusFeature(focus!, withEntranceEdits(f))));
   indoorSelection = indoorSelection.map((f) => f.passage ? passageFeatures(focus!).find((x) => x.key === f.key) ?? f : f);
+  syncPassageSelection();
+}
+
+/**
+ * Карта: правка арки (maxheight, width, ось «Формой») — пересобрать здания вокруг неё (вырез по новым размерам)
+ * и подсветку выбранной; рамка — по прежней и новой оси.
+ */
+async function syncMapPassageEdits(keys: string[]) {
+  const ids = new Set(keys.filter((k) => k.startsWith('way/')).map((k) => Number(k.slice(4))));
+  if (!ids.size) return;
+  const found = [...overpass.passages(), ...createdPassages.values()].filter((p) => ids.has(p.id));
+  if (!found.length) return;
+  const pts = found.flatMap((p) => [...p.coords, ...(livePassage(p)?.coords ?? [])]);
+  const pad = 1e-4, xs = pts.map((c) => c[0]), ys = pts.map((c) => c[1]);
+  const [w, s, e, n] = [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad];
+  await overpassLayer.rebuildWhere((f) => { if (!f.polygons?.length) return false; const b = featureBox(f); return b[2] >= w && b[0] <= e && b[3] >= s && b[1] <= n; });
+  // Выбранная арка — с правками (теги, ось) и подсветка по новым кускам
+  indoorSelection = indoorSelection.map((f) => {
+    if (!f.passage) return f;
+    const p = found.find((x) => `way/${x.id}` === f.key), live = p && livePassage(p);
+    return live ? { ...f, tags: live.tags, polygons: [{ outer: live.coords, inners: [], outerIds: live.nodes, innerIds: [] }] } : f;
+  });
   syncPassageSelection();
 }
 

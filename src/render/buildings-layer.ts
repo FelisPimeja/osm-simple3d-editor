@@ -1498,15 +1498,17 @@ export class BuildingsLayer implements CustomLayerInterface {
     const H = Math.max(0.5, this.level.cut - this.level.floor - 0.1);
     const heights = Array.from({ length: 7 }, (_, i) => this.level!.floor + 0.05 + H * i / 6);
     const rayAt: Pt[] = heights.map((z) => ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3())).filter((v): v is THREE.Vector3 => !!v).map((v) => [v.x, v.y]);
-    let line: { key: string; d: number } | undefined, area: { key: string; a: number } | undefined;
+    let line: { key: string; d: number; raised?: boolean } | undefined, area: { key: string; a: number } | undefined;
     for (const p of this.contextIndoor) for (const it of p.items) for (const pg of it.polygons) {
       const outer = pg.outer.map(g.toLocal);
       // Стены — и замкнутые (контуром): по расстоянию до сторон, внутрь тонкой стены клик почти не попадает
       if (it.line || it.linearWall || it.kind === 'wall') {
         const closed = !it.line && outer.length > 2;
         for (let i = 0; i + 1 < outer.length + (closed ? 1 : 0); i++) {
-          const d = Math.min(...rayAt.map((r) => distToSegment(r, outer[i], outer[(i + 1) % outer.length])));
-          if (d <= LINE_REACH && (!line || d < line.d)) line = { key: it.key, d };
+          const ds = rayAt.map((r) => distToSegment(r, outer[i], outer[(i + 1) % outer.length]));
+          const d = Math.min(...ds);
+          // Задета выше пола — перед полом (и лестницей на нём) по лучу
+          if (d <= LINE_REACH && (!line || d < line.d)) line = { key: it.key, d, raised: ds.slice(1).some((x) => x <= LINE_REACH) };
         }
         continue;
       }
@@ -1527,7 +1529,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         if (d <= e.width / 2 + 0.2 && (!stair || edge < stair.d)) stair = { key: e.key, d: edge };
       }
     }
-    if (stair && line) return line.d < stair.d ? line.key : stair.key;
+    if (stair && line) return line.raised || line.d < stair.d ? line.key : stair.key;
     return stair?.key ?? line?.key ?? area?.key;
   }
 

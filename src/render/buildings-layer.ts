@@ -99,13 +99,13 @@ const doorHeight = (tags?: Record<string, string>) => {
   return h >= 0.5 && h <= 6 ? h : DOOR_HEIGHT;
 };
 /**
- * Высота двери без своего height: обычная, но в низкой части — до её верха (конька) без 10 см, иначе дверь
- * торчала бы над крышей.
+ * Высота двери без своего height: обычная, но в низкой части — до низа ската (верха стен) без 10 см, иначе
+ * дверь пробивала бы крышу.
  */
 export function fittedDoorHeight(tags: Record<string, string> | undefined, partTags: Record<string, string>): number {
   if (looseLength(tags?.height ?? tags?.['door:height']) >= 0.5) return doorHeight(tags);
   const h = computeHeights(partTags);
-  return Math.max(0.5, Math.min(DOOR_HEIGHT, h.top - h.min - 0.1));
+  return Math.max(0.5, Math.min(DOOR_HEIGHT, h.wallTop - h.min - 0.1));
 }
 /** Перемычка во всю толщину — только в просвете размером с дверь (до двустворчатой) в стене толщиной до 0,5 м:
  * шире или глубже — это проход или узкое место коридора, над ним ничего нет. */

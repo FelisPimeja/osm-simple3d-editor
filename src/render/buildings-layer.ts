@@ -9712,9 +9712,12 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   }
   const doorPlaces: RecessPlace[] = [];
   // Ниши входов (выключаются флагом localStorage entranceNiches=0)
-  if (entranceNiches && !shell && !roofOnly && !flat && !tri.pending && f.entrances?.length) {
+  // Входы других объектов здания на линии стены этой части (вход — узел контура под частями, а часть его вершиной
+  // не берёт): ниша и обход окнами — здесь, иначе дверь оказывалась внутри сплошной стены
+  const foreignDoors = (g.contacts?.doors ?? []).filter((d) => d.key !== f.key);
+  if (entranceNiches && !shell && !roofOnly && !flat && !tri.pending && (f.entrances?.length || foreignDoors.length)) {
     timed('здание: ниши входов', () => {
-      const doors = new Map(f.entrances!.filter((e) => facadeEntranceOf(e.tags) && facadeEntranceOf(e.tags) !== 'no').map((e) => [e.id, e.tags]));
+      const doors = new Map((f.entrances ?? []).filter((e) => facadeEntranceOf(e.tags) && facadeEntranceOf(e.tags) !== 'no').map((e) => [e.id, e.tags]));
       const places: RecessPlace[] = [];
       // Ниша — на своей высоте (не на низе части): часть выше двери (узел на её контуре над входом) её не получает,
       // а у частей, через которые проходит проём (цоколь и часть над ним), CSG вырежет каждой её долю
@@ -9734,10 +9737,18 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
         }));
       });
       // Дверь indoor-стены на фасаде (не вершина контура) — на ближайшей стене, как прямоугольник входа
-      for (const e of f.entrances!) {
+      type Probe = { q: Pt; z: number; width?: number; height?: number; strict?: boolean };
+      const probes: Probe[] = [];
+      for (const e of f.entrances ?? []) {
         const door = doors.get(e.id);
         if (!door || !e.at || onRing.has(e.id)) continue;
-        const q = g.toLocal(e.at);
+        probes.push({ q: g.toLocal(e.at), z: entranceZ(door, tags), width: tagWidth(door), height: doorHeight(door) });
+      }
+      // Чужие — только точно на линии стены (не дверь соседней части рядом)
+      for (const d of foreignDoors) probes.push({ q: d.p, z: d.z, width: d.width, strict: true });
+      const seen = new Set(places.map((x) => `${x.p[0].toFixed(2)},${x.p[1].toFixed(2)}`));
+      for (const pr of probes) {
+        const q = pr.q;
         let near: { p: Pt; t: Pt; rings: Pt[][]; d: number } | undefined;
         for (const rings of allRings) for (const r of rings) r.forEach((a, i) => {
           const b = r[(i + 1) % r.length], ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey;
@@ -9746,12 +9757,14 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
           const d = Math.hypot(q[0] - a[0] - t * ex, q[1] - a[1] - t * ey);
           if (!near || d < near.d) near = { p: [a[0] + t * ex, a[1] + t * ey], t: [ex / Math.sqrt(l2), ey / Math.sqrt(l2)], rings, d };
         });
-        if (!near || near.d > ENTRANCE_ON_WALL) continue;
+        if (!near || near.d > (pr.strict ? 0.05 : ENTRANCE_ON_WALL)) continue;
+        const key = `${near.p[0].toFixed(2)},${near.p[1].toFixed(2)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
         let n: Pt = [near.t[1], -near.t[0]];
         const probe: Pt = [near.p[0] + n[0] * 0.2, near.p[1] + n[1] * 0.2];
         if (pointInLocalRing(probe, near.rings[0]) && !near.rings.slice(1).some((h) => pointInLocalRing(probe, h))) n = [-n[0], -n[1]];
-        const z = entranceZ(door, tags);
-        if (crosses(z)) places.push({ p: near.p, t: near.t, n, z, width: tagWidth(door), height: doorHeight(door) });
+        if (crosses(pr.z)) places.push({ p: near.p, t: near.t, n, z: pr.z, width: pr.width, height: pr.height });
       }
       doorPlaces.push(...places);
       const cut = recessEntrances(tri.walls, places, { width: ENTRANCE_WIDTH, height: ENTRANCE_HEIGHT, min: heights.min, top: heights.wallTop });

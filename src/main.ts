@@ -16846,6 +16846,15 @@ function zoomToIssue(issue: Issue) {
   if(camera)map.flyTo({center:camera.center,zoom:camera.zoom,duration:700,essential:true});
 }
 
+/** Проблемы с исправлением в карточке выделенного объекта (кнопка «Исправить» — та же, что в панели проверки). */
+let cardFixIssues: Issue[] = [];
+document.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest?.<HTMLElement>('[data-card-fix]');
+  if (!b) return;
+  const issue = cardFixIssues[Number(b.dataset.cardFix)];
+  if (issue) applyFixes([issue]);
+});
+
 issuesEl.addEventListener('click', (e) => {
   // Раскрытие группы одного вида запоминаем сразу: событие toggle приходит позже пересборки списка
   const bundle = (e.target as HTMLElement).closest('summary')?.parentElement as HTMLDetailsElement | undefined;
@@ -20544,6 +20553,7 @@ function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: stri
     levelsAboveOutline(f),
   ].filter(Boolean);
   // Проверка: в режиме здания — вся (с пересечениями частей), иначе — теги и геометрия объекта
+  cardFixIssues = [];
   const issues = (focus ? focusIssues.filter((i) => i.key === f.key || i.other === f.key) : [...validateTags(f.key, f.tags, f.hasParts), ...validateGeometry(f)])
     .filter((i) => i.code !== 'above');
   return `
@@ -20555,7 +20565,7 @@ function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: stri
       [tr('Форма крыши'), h.roofShape],
     ])}
     ${warn.map((w) => `<p class="warn">${icon('warning', 14)} ${w}</p>`).join('')}
-    ${issues.map((i) => `<p class="warn ${i.level}">${icon(i.level === 'error' ? 'error' : 'warning', 14)} ${esc(i.text)}</p>`).join('')}
+    ${issues.map((i) => `<p class="warn ${i.level}">${icon(i.level === 'error' ? 'error' : 'warning', 14)} ${esc(i.text)}${i.fix ? ` <button type="button" class="issue-fix" data-card-fix="${cardFixIssues.push(i) - 1}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</p>`).join('')}
     ${form ? `${form}${renderOtherTags(f.key, f.tags, form)}` : tagTable(f.tags)}`;
 }
 

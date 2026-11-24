@@ -1008,3 +1008,9 @@ body:not(.mobile):has(.view-cube:not([hidden])) #right-col { bottom: 158px; }
 
 /* Вход на карте: место будущего узла на стороне контура */
 .map-entrance-marker { width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 2px solid #1d4ed8; box-shadow: 0 0 0 1px #fff; pointer-events: none; }
+
+/* Предупреждение с исправлением в карточке: текст слева, кнопка справа — по правому краю полей */
+p.warn.warn-fix { display: flex; align-items: flex-start; gap: 8px; }
+p.warn.warn-fix > svg { flex: none; margin-top: 2px; }
+p.warn.warn-fix .warn-text { flex: 1; min-width: 0; }
+p.warn.warn-fix .issue-fix { flex: none; margin-left: auto; }

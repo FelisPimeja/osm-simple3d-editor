@@ -20565,7 +20565,7 @@ function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: stri
       [tr('Форма крыши'), h.roofShape],
     ])}
     ${warn.map((w) => `<p class="warn">${icon('warning', 14)} ${w}</p>`).join('')}
-    ${issues.map((i) => `<p class="warn ${i.level}">${icon(i.level === 'error' ? 'error' : 'warning', 14)} ${esc(i.text)}${i.fix ? ` <button type="button" class="issue-fix" data-card-fix="${cardFixIssues.push(i) - 1}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</p>`).join('')}
+    ${issues.map((i) => `<p class="warn ${i.level}${i.fix ? ' warn-fix' : ''}">${icon(i.level === 'error' ? 'error' : 'warning', 14)} ${i.fix ? `<span class="warn-text">${esc(i.text)}</span>` : esc(i.text)}${i.fix ? `<button type="button" class="issue-fix" data-card-fix="${cardFixIssues.push(i) - 1}" title="${tr('Исправить: {fix}', { fix: esc(i.fix.label) })}">${tr('Исправить')}</button>` : ''}</p>`).join('')}
     ${form ? `${form}${renderOtherTags(f.key, f.tags, form)}` : tagTable(f.tags)}`;
 }
 

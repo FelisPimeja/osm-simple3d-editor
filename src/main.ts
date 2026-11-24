@@ -18087,7 +18087,8 @@ let contextBoxesSig = '';
 const CONTEXT_BOXES_REACH = 0.002; // ~150–200 м вокруг здания, градусы
 function syncContextBoxes(level: Level | undefined) {
   const on = !!focus && !level && overpassLayer.contextShown;
-  const sig = on ? `${focus!.key}|${overpass.revision}|${overpass.renderedFeatures().length}|${indoorEditRev}` : '';
+  // Правка частей меняет, чей indoor (своё здание или окружение) — и по ревизии сессии
+  const sig = on ? `${focus!.key}|${overpass.revision}|${overpass.renderedFeatures().length}|${indoorEditRev}|${sessionRevision}` : '';
   if (sig === contextBoxesSig) return;
   contextBoxesSig = sig;
   overpassLayer.setContextBoxes(on ? timed('окружение: коробки этажей indoor', () => contextComplexBoxes(focus!)) : []);
@@ -18098,9 +18099,18 @@ function contextComplexBoxes(g: BuildingGroup) {
   if (!Number.isFinite(w)) return [];
   const r = CONTEXT_BOXES_REACH;
   const out: NonNullable<Parameters<typeof overpassLayer.setContextBoxes>[0]> = [];
-  for (const c of orphanComplexes([w - r, s - r, e + r, n + r])) {
-    if (c.key === g.key) continue;
-    complexFocus.set(c.key, { features: c.features, box: c.box });
+  // Следы частей своего здания с высотами: где они, коробка окружения не рисуется
+  const feet = groupFeatures(g).filter((f) => f.polygons?.length).map((f) => {
+    const h = computeHeights(f.tags);
+    return { min: h.min, top: h.top, polys: f.polygons.map((p) => [[...p.outer, p.outer[0]], ...p.inners.map((r) => [...r, r[0]])]) };
+  });
+  // Indoor своего здания (части приямка, вошедшие в него новой частью) — уже не окружение
+  const own = new Set(buildingIndoor(g).map((f) => f.key));
+  for (const c0 of orphanComplexes([w - r, s - r, e + r, n + r])) {
+    if (c0.key === g.key) continue;
+    const c = { ...c0, features: c0.features.filter((f) => !own.has(f.key)) };
+    if (!c.features.length) continue;
+    complexFocus.set(c0.key, { features: c0.features, box: c0.box });
     const ng = complexGroup(c.key);
     if (!ng) continue;
     for (const lv of buildingLevels(ng, c.features)) {
@@ -18110,6 +18120,17 @@ function contextComplexBoxes(g: BuildingGroup) {
         const pts = c.features.filter((f) => f.levels.includes(lv.n) && !f.point).flatMap((f) => f.polygons.flatMap((p) => p.outer));
         const hull = pts.length >= 3 ? convexHull(pts as [number, number][]) : [];
         if (hull.length >= 3) polygons = [{ outer: hull as LonLat[], inners: [] } as Polygon];
+      }
+      // Где этаж закрыт частью своего здания (по высоте пересекаются) — объём уже её, коробка там не нужна
+      const cover = feet.filter((x) => x.min < lv.ceil - 0.05 && x.top > lv.floor + 0.05).flatMap((x) => x.polys);
+      if (cover.length && polygons.length) {
+        const close = (r: LonLat[]) => [...r, r[0]] as [number, number][];
+        try {
+          polygons = (polygonClipping.difference(polygons.map((p) => [close(p.outer)]) as never, ...(cover as never[])) as [number, number][][][])
+            .map((poly) => ({ outer: poly[0].slice(0, -1) as LonLat[], inners: poly.slice(1).map((r) => r.slice(0, -1) as LonLat[]) }) as Polygon)
+            // Обрезки вдоль края части (погрешность обрисовки) — меньше 1 м² или уже 0,5 м — не коробка
+            .filter((p) => { if (p.outer.length < 3) return false; const loc = p.outer.map((c) => overpassLayer.focusToLocal(c)!); const a = ringArea(loc); let per = 0; for (let i = 0; i < loc.length; i++) { const u = loc[i], v = loc[(i + 1) % loc.length]; per += Math.hypot(v[0] - u[0], v[1] - u[1]); } return a >= 1 && 2 * a / per >= 0.25; });
+        } catch { /* не вычлось — коробка целиком */ }
       }
       if (polygons.length) out.push({ bottom: lv.floor, top: lv.ceil, polygons, seen: false, cover: [], topEdges: false });
     }

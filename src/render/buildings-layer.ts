@@ -9871,11 +9871,16 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // Входы других объектов здания на линии стены этой части (вход — узел контура под частями, а часть его вершиной
   // не берёт): ниша и обход окнами — здесь, иначе дверь оказывалась внутри сплошной стены
   // Список контактов собирается реже правок: дверь, которой уже нет ни у одного объекта (отменили), — не дверь
-  const alive = new Set(g.items.flatMap((it) => (it.feature.entrances ?? []).map((e) => e.id)));
+  const between = (id: number) => g.items.filter((it) => it.feature.kind === 'part' && !strokeOnly(g, it)
+    && it.feature.polygons.some((p) => [p.outerIds, ...(p.innerIds ?? [])].some((r) => r?.includes(id)))).length >= 2;
+  // …и дверь плана между двумя частями (не фасад) — тоже не повод для ниши
+  const alive = new Set(g.items.flatMap((it) => (it.feature.entrances ?? []).filter((e) => entranceOf(e.tags) || !between(e.id)).map((e) => e.id)));
   const foreignDoors = (g.contacts?.doors ?? []).filter((d) => d.key !== f.key && (d.id === undefined || alive.has(d.id)));
   if (entranceNiches && !shell && !roofOnly && !flat && !tri.pending && (f.entrances?.length || foreignDoors.length)) {
     timed('здание: ниши входов', () => {
-      const doors = new Map((f.entrances ?? []).filter((e) => facadeEntranceOf(e.tags) && facadeEntranceOf(e.tags) !== 'no').map((e) => [e.id, e.tags]));
+      // Дверь плана (indoor=door без entrance) на общей вершине двух частей — между ними, не фасад: ниши нет (как и двери)
+      const doors = new Map((f.entrances ?? []).filter((e) => facadeEntranceOf(e.tags) && facadeEntranceOf(e.tags) !== 'no'
+        && (entranceOf(e.tags) || !between(e.id))).map((e) => [e.id, e.tags]));
       const places: RecessPlace[] = [];
       // Ниша — на своей высоте (не на низе части): часть выше двери (узел на её контуре над входом) её не получает,
       // а у частей, через которые проходит проём (цоколь и часть над ним), CSG вырежет каждой её долю

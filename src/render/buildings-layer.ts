@@ -9632,7 +9632,7 @@ interface Contacts { tops: Map<number, ContactFace[]>; bottoms: Map<number, Cont
   /** Объёмы группы (низ z, верх top): глухие стены к соседям — без сгенерированных окон. */
   solids: (ContactFace & { top: number })[];
   /** Входы всех частей группы (точка, высота низа, ширина): сгенерированные окна обходят и входы соседних частей. */
-  doors: { key: string; p: Pt; z: number; width?: number }[] }
+  doors: { key: string; id?: number; p: Pt; z: number; width?: number }[] }
 
 function hasBottom(prep: ReturnType<typeof prepItem>): boolean {
   const { tags, heights, flat } = prep;
@@ -9672,7 +9672,7 @@ function contactsBuilder(g: MeshGroup, features: Feature3D[]): { contacts: Conta
         const kind = facadeEntranceOf(e.tags);
         const ll = e.at ?? at.get(e.id);
         if (!kind || kind === 'no' || !ll) continue;
-        c.doors.push({ key: f.key, p: g.toLocal(ll), z: entranceZ(e.tags, f.tags), width: tagWidth(e.tags) });
+        c.doors.push({ key: f.key, id: e.id, p: g.toLocal(ll), z: entranceZ(e.tags, f.tags), width: tagWidth(e.tags) });
       }
     }
     // Скрытые (глазик, изоляция) не стоят на крышах: иначе под ними у соседа вместо крыши — плита перекрытия
@@ -9870,7 +9870,9 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // Ниши входов (выключаются флагом localStorage entranceNiches=0)
   // Входы других объектов здания на линии стены этой части (вход — узел контура под частями, а часть его вершиной
   // не берёт): ниша и обход окнами — здесь, иначе дверь оказывалась внутри сплошной стены
-  const foreignDoors = (g.contacts?.doors ?? []).filter((d) => d.key !== f.key);
+  // Список контактов собирается реже правок: дверь, которой уже нет ни у одного объекта (отменили), — не дверь
+  const alive = new Set(g.items.flatMap((it) => (it.feature.entrances ?? []).map((e) => e.id)));
+  const foreignDoors = (g.contacts?.doors ?? []).filter((d) => d.key !== f.key && (d.id === undefined || alive.has(d.id)));
   if (entranceNiches && !shell && !roofOnly && !flat && !tri.pending && (f.entrances?.length || foreignDoors.length)) {
     timed('здание: ниши входов', () => {
       const doors = new Map((f.entrances ?? []).filter((e) => facadeEntranceOf(e.tags) && facadeEntranceOf(e.tags) !== 'no').map((e) => [e.id, e.tags]));
@@ -9968,7 +9970,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       const blocked = (p: Pt, z: number) => solids.some((s) => z >= s.z && z <= s.top && s.polys.some((q) =>
         pointInLocalRing(p, q.outer) && !q.inners.some((h) => pointInLocalRing(p, h))));
       const places = generateWindows(polys.map((q) => [q.outer, ...q.inners]), { min: heights.min, top: heights.wallTop, levels,
-        width: winW, step: Math.max(windowTuning.step, winW + 1), corner: own?.width ? Math.min(windowTuning.corner, 0.3) : windowTuning.corner, alignDoors: windowTuning.alignDoors, even: !!own?.width, height: winH, breast: winB, doors: [...doorPlaces, ...(g.contacts?.doors ?? []).filter((d) => d.key !== f.key).map((d) => ({ p: d.p, t: [1, 0] as Pt, n: [0, 1] as Pt, z: d.z, width: d.width, reach: NEIGHBOUR_DOOR_REACH }))],
+        width: winW, step: Math.max(windowTuning.step, winW + 1), corner: own?.width ? Math.min(windowTuning.corner, 0.3) : windowTuning.corner, alignDoors: windowTuning.alignDoors, even: !!own?.width, height: winH, breast: winB, doors: [...doorPlaces, ...foreignDoors.map((d) => ({ p: d.p, t: [1, 0] as Pt, n: [0, 1] as Pt, z: d.z, width: d.width, reach: NEIGHBOUR_DOOR_REACH }))],
         doorWidth: ENTRANCE_WIDTH, doorHeight: ENTRANCE_HEIGHT, blocked,
         // Проём арки: окно, задевающее его по высоте, не ставим (полоса арки — с запасом окна в ширину)
         hole: passage && ((p, t, z0, z1) => passage.ways.some((w) => z0 < w.z && z1 > (w.min ?? heights.min) && w.opening.some((q) =>

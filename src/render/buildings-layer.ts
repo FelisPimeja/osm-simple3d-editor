@@ -6723,6 +6723,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     const partsHidden = shown && g.items.some((it) => it.feature.kind === 'part' && g.hidden.has(it.feature.key));
     const onShownWall = (q: Pt, z: number) => shown!.some(({ ring, min, top }) => z >= min - 0.3 && z < top && ring.some((a, i) => distToSegment(q, a, ring[(i + 1) % ring.length]) <= ENTRANCE_ON_WALL));
     // Узел в нескольких объектах (контур и часть, соседние части) — на самой низкой видимой стене
+    // Дверь плана (indoor=door без entrance) на общей вершине двух частей — между ними, внутри здания: не фасад
+    const partsAt = new Map<number, number>();
+    for (const it of g.items) {
+      if (it.feature.kind !== 'part' || strokeOnly(g, it)) continue;
+      const ids = new Set(it.feature.polygons.flatMap((p) => [p.outerIds, ...(p.innerIds ?? [])].flatMap((r) => r ?? [])));
+      for (const id of ids) if (tags.has(id)) partsAt.set(id, (partsAt.get(id) ?? 0) + 1);
+    }
+    for (const [id, n] of partsAt) if (n >= 2 && !entranceOf(tags.get(id))) tags.delete(id);
     const best = new Map<number, { place: EntrancePlace; rank: number }>();
     // На карте вход красится вместе с выделенным зданием; в режиме здания выбирают сам вход
     const lit = new Set<number>();

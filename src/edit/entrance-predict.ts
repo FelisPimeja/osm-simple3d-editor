@@ -45,7 +45,10 @@ export function predictEntrance(ring: number[], tags: (id: number) => Record<str
   let ref = num(own.ref);
   const out: { ref?: string; flats?: string } = {};
   if (ref === undefined) {
-    const step = dir ? dir * k : Math.abs(k); // одно известное — нумерация от него вверх
+    // Направление не известно: есть подъезды младше — от них вверх; начали не с первого (младших нет) —
+    // скорее всего с последнего и идут по фасаду к первому: вниз
+    const minRef = Math.min(...known.map((x) => x.ref!));
+    const step = dir ? dir * k : minRef > 1 ? -Math.abs(k) : Math.abs(k);
     if (base.ref! + step < 1) return {};
     ref = base.ref! + step;
     if (!known.some((x) => x.ref === ref)) out.ref = String(ref);
@@ -58,7 +61,9 @@ export function predictEntrance(ring: number[], tags: (id: number) => Record<str
       const near = withFlats.reduce((p, x) => (Math.abs(x.ref! - ref!) < Math.abs(p.ref! - ref!) ? x : p));
       const [a, b] = near.flats!, len = b - a + 1, dr = ref - near.ref!;
       const from = a + dr * len;
-      if (from >= 1 && dr !== 0) out.flats = `${from}-${from + len - 1}`;
+      // Первый подъезд — всегда с первой квартиры, до начала второго
+      if (ref === 1 && dr < 0) out.flats = `1-${Math.max(1, a + (dr + 1) * len - 1)}`;
+      else if (from >= 1 && dr !== 0) out.flats = `${from}-${from + len - 1}`;
     }
   }
   return out;

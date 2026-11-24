@@ -20,3 +20,9 @@ test('non-numeric ref: no flats', () => {
 test('ref typed off the guess: flats follow it', () => {
   assert.deepEqual(predictEntrance([1, 2, 3, 4], T({ 1: { ref: '1', 'addr:flats': '1-20' }, 2: { ref: '3' } }), 2), { flats: '41-60' });
 });
+test('started not from the first: count down toward it', () => {
+  assert.deepEqual(predictEntrance([1, 2, 3, 4], T({ 1: { ref: '3', 'addr:flats': '41-60' } }), 2), { ref: '2', flats: '21-40' });
+});
+test('first entrance: flats from 1 up to the second one', () => {
+  assert.deepEqual(predictEntrance([1, 2, 3], T({ 2: { ref: '2', 'addr:flats': '50-97' }, 3: { ref: '3', 'addr:flats': '98-145' } }), 1), { ref: '1', flats: '1-49' });
+});

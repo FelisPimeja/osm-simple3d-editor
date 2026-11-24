@@ -9017,6 +9017,13 @@ function renderEntrance(id: number) {
   for (const input of infoEl.querySelectorAll<HTMLInputElement>('[data-entrance-tag]')) {
     input.addEventListener('change', () => {
       setEntrancesTags(ids.map((x) => ({ id: x, tags: { ...tagsOf(x), [input.dataset.entranceTag!]: input.value } })));
+      // Номер поменяли — подсказка квартир (и номера) считается заново: карточку перерисовать, фокус — на прежнее поле
+      if (input.dataset.entranceTag === 'ref' || input.dataset.entranceTag === 'addr:flats') setTimeout(() => {
+        if (selectedEntrance !== id) return;
+        const active = (document.activeElement as HTMLElement | null)?.dataset?.entranceTag;
+        renderSelected();
+        if (active) infoEl.querySelector<HTMLInputElement>(`[data-entrance-tag="${active}"]`)?.focus();
+      });
     });
     // Подсказка подъезда: Tab в пустом поле или ↵ — подставить (номер и квартиры принимаются по одному)
     if (!input.dataset.suggest) continue;

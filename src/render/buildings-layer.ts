@@ -4638,7 +4638,46 @@ export class BuildingsLayer implements CustomLayerInterface {
     // Здания карты в 3D — их привязки (с высотой); плоские привязки контуров — только если 3D-зданий нет (низкий зум)
     const map3d = [...this.groups.keys()].some((k) => k !== FOCUS_GROUP);
     const cands = on ? [map3d ? this.mapGroupSnap(point, filter, radius, opts) : this.sketchSnap?.(point), this.extraSnap?.(point, radius, opts)].filter((h): h is SnapHit => !!h && filter(h.key)) : [];
+    if (this.snapsEnabled && !this.snapsSuspended) { const b = this.contextBoxSnap(point, radius, opts); if (b) cands.push(b); }
     return [own, ...cands].filter((h): h is SnapHit => !!h).sort((a, b) => d(a) - d(b))[0];
+  }
+
+  /** Привязки к коробкам этажей окружения (режим здания): углы и середины низа и верха, рёбра. */
+  private contextBoxSnap(point: [number, number], radius: number, opts: SnapOpts = {}): SnapHit | undefined {
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g || this.level || !this.contextBoxObj || !this.contextBoxes.length) return;
+    const off = this.snapKindsOff;
+    let best: { kind: SnapKind; p: THREE.Vector3; px: [number, number]; d: number } | undefined;
+    const offer = (kind: SnapKind, p: THREE.Vector3) => {
+      if (off.has(kind)) return;
+      const px = this.focusProject(p);
+      if (!px) return;
+      const d = Math.hypot(px[0] - point[0], px[1] - point[1]);
+      if (d > radius) return;
+      const score = d + SNAP_PRIORITY[kind] * 6;
+      if (!best || score < best.d) best = { kind, p, px, d: score };
+    };
+    const ray = opts.noEdge || off.has('edge') ? undefined : this.focusRay(point);
+    const q = new THREE.Vector3();
+    for (const b of this.contextBoxes) for (const pg of b.polygons) {
+      const r = pg.outer.map(g.toLocal);
+      if (r.length > 1 && r[0][0] === r.at(-1)![0] && r[0][1] === r.at(-1)![1]) r.pop();
+      for (let i = 0; i < r.length; i++) {
+        const [x0, y0] = r[i], [x1, y1] = r[(i + 1) % r.length];
+        for (const z of [b.bottom, b.top]) {
+          const a = new THREE.Vector3(x0, y0, z), c = new THREE.Vector3(x1, y1, z);
+          offer('vertex', a);
+          offer('midpoint', new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, z));
+          if (ray) { ray.distanceSqToSegment(a, c, undefined, q); offer('edge', q.clone()); }
+        }
+        if (ray) { ray.distanceSqToSegment(new THREE.Vector3(x0, y0, b.bottom), new THREE.Vector3(x0, y0, b.top), undefined, q); offer('edge', q.clone()); }
+      }
+    }
+    const hit = best as { kind: SnapKind; p: THREE.Vector3; px: [number, number] } | undefined;
+    if (!hit) return;
+    const ll = this.focusToLngLat(hit.p.x, hit.p.y);
+    if (!ll) return;
+    return { kind: hit.kind, key: 'context-level', local: hit.p, lngLat: new LngLat(ll[0], ll[1]), altitude: hit.p.z, point: hit.px };
   }
 
   /** Привязки зданий карты (по группе — один раз): точки и рёбра низа и верха стен. */

@@ -1546,6 +1546,33 @@ export class BuildingsLayer implements CustomLayerInterface {
     return best?.key ?? area?.key;
   }
 
+  /**
+   * Режим здания (объёмы, без плана этажа) с окружением: этажи indoor без здания рядом (приямок, переход) — бледными
+   * пунктирными коробками, как этажи в плане: видно, как из них строится объём.
+   */
+  private contextBoxes: NonNullable<IndoorLevel['boxes']> = [];
+  private contextBoxObj?: THREE.Group;
+  setContextBoxes(boxes: NonNullable<IndoorLevel['boxes']>) {
+    if (!boxes.length && !this.contextBoxes.length) return;
+    this.contextBoxes = boxes;
+    this.applyContextBoxes();
+  }
+  private applyContextBoxes() {
+    if (this.contextBoxObj) {
+      this.contextBoxObj.parent?.remove(this.contextBoxObj);
+      this.contextBoxObj.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose(); });
+      this.contextBoxObj = undefined;
+    }
+    const g = this.groups.get(FOCUS_GROUP);
+    if (!g || this.level || !this.contextBoxes.length) { this.map?.triggerRepaint(); return; }
+    const grp = new THREE.Group();
+    grp.name = 'context-level-boxes';
+    try { this.drawLevelBoxes(grp, g, { boxes: this.contextBoxes, floor: Infinity }); } catch (e) { console.warn('коробки этажей окружения', e); }
+    g.scene.add(grp);
+    this.contextBoxObj = grp;
+    this.map?.triggerRepaint();
+  }
+
   pickContext(point: PointLike): string | undefined {
     const groups = this.contextGroups();
     if (!groups.length || !this.map) return;
@@ -7296,7 +7323,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.applyEntrances(g);
     this.paintGroup(g);
     timed('геометрия: рёбра', () => this.applyEdges(g));
-    if (g === this.groups.get(FOCUS_GROUP)) { this.attachUnderground(); this.syncShellShown(); }
+    if (g === this.groups.get(FOCUS_GROUP)) { this.attachUnderground(); this.syncShellShown(); if (this.contextBoxes.length) this.applyContextBoxes(); }
     this.applyStrokes(g);
   }
 

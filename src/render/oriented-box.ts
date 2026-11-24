@@ -15,7 +15,7 @@ export interface LocalFrame {
 }
 
 /** Выпуклая оболочка (монотонная цепочка Эндрю), против часовой стрелки. */
-function convexHull(points: Pt[]): Pt[] {
+export function convexHull(points: Pt[]): Pt[] {
   const p = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   if (p.length < 3) return p;
   const cross = (o: Pt, a: Pt, b: Pt) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);

@@ -76,6 +76,7 @@ import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { Dem, DEM_ATTRIBUTION } from './view/dem';
 import { DEM_MAX_ZOOM, DEM_URL, demTileBlob } from './view/dem-tiles';
 import mlcontour from 'maplibre-contour';
+import { convexHull } from './render/oriented-box';
 import { ContoursLayer } from './render/contours-layer';
 import type { ContourTileJob, ContourTileResult } from './render/contour-tiles-worker';
 import { ground, setGroundSampler } from './render/ground';
@@ -18003,12 +18004,52 @@ function planItem(f: IndoorFeature, fs: IndoorFeature[], l: Level): IndoorItem {
 let contextIndoorSig = '';
 const CONTEXT_INDOOR_REACH = 0.004; // ~300–400 м вокруг здания, градусы
 function syncContextIndoor(level: Level | undefined) {
+  syncContextBoxes(level);
   const on = !!focus && !!level && overpassLayer.contextShown;
   const sig = on ? `${focus!.key}|${level!.n}|${level!.floor}|${overpass.revision}|${overpass.renderedFeatures().length}|${indoorEditRev}` : '';
   if (sig === contextIndoorSig) return;
   contextIndoorSig = sig;
   if (!on) { overpassLayer.setContextIndoor([]); return; }
   overpassLayer.setContextIndoor(timed('окружение: indoor соседей', () => contextIndoorPlans(focus!, level!)));
+}
+
+/**
+ * Режим здания без плана этажа, окружение включено: этажи indoor без здания рядом — коробками (контур indoor=level,
+ * иначе объединение помещений, площадей и коридоров, иначе — выпуклая оболочка всего этажа: стены, лестницы) от пола
+ * до потолка этажа. Как этажи в плане — видно, как строится объём, и что indoor вне контура здания.
+ */
+let contextBoxesSig = '';
+const CONTEXT_BOXES_REACH = 0.002; // ~150–200 м вокруг здания, градусы
+function syncContextBoxes(level: Level | undefined) {
+  const on = !!focus && !level && overpassLayer.contextShown;
+  const sig = on ? `${focus!.key}|${overpass.revision}|${overpass.renderedFeatures().length}|${indoorEditRev}` : '';
+  if (sig === contextBoxesSig) return;
+  contextBoxesSig = sig;
+  overpassLayer.setContextBoxes(on ? timed('окружение: коробки этажей indoor', () => contextComplexBoxes(focus!)) : []);
+}
+function contextComplexBoxes(g: BuildingGroup) {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const f of groupFeatures(g)) for (const p of f.polygons) for (const [x, y] of p.outer) { w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y); }
+  if (!Number.isFinite(w)) return [];
+  const r = CONTEXT_BOXES_REACH;
+  const out: NonNullable<Parameters<typeof overpassLayer.setContextBoxes>[0]> = [];
+  for (const c of orphanComplexes([w - r, s - r, e + r, n + r])) {
+    if (c.key === g.key) continue;
+    complexFocus.set(c.key, { features: c.features, box: c.box });
+    const ng = complexGroup(c.key);
+    if (!ng) continue;
+    for (const lv of buildingLevels(ng, c.features)) {
+      if (lv.ceil <= lv.floor) continue;
+      let polygons = levelBody(c.features, lv.n).map((outer) => ({ outer, inners: [] as LonLat[][] }) as Polygon);
+      if (!polygons.length) {
+        const pts = c.features.filter((f) => f.levels.includes(lv.n) && !f.point).flatMap((f) => f.polygons.flatMap((p) => p.outer));
+        const hull = pts.length >= 3 ? convexHull(pts as [number, number][]) : [];
+        if (hull.length >= 3) polygons = [{ outer: hull as LonLat[], inners: [] } as Polygon];
+      }
+      if (polygons.length) out.push({ bottom: lv.floor, top: lv.ceil, polygons, seen: false, cover: [], topEdges: true });
+    }
+  }
+  return out;
 }
 
 function contextIndoorPlans(g: BuildingGroup, level: Level) {

@@ -1509,7 +1509,16 @@ export class BuildingsLayer implements CustomLayerInterface {
       a = Math.abs(a) / 2;
       if (!area || a < area.a) area = { key: it.key, a };
     }
-    return line?.key ?? area?.key;
+    // Лестницы и эскалаторы плана — отдельным списком: по их полосе (полширины с запасом)
+    let stair: { key: string; d: number } | undefined;
+    for (const p of this.contextIndoor) for (const e of p.escalators) {
+      const l = e.line.map(g.toLocal);
+      for (let i = 0; i + 1 < l.length; i++) {
+        const d = distToSegment(at, l[i], l[i + 1]);
+        if (d <= e.width / 2 + 0.2 && (!stair || d < stair.d)) stair = { key: e.key, d };
+      }
+    }
+    return stair?.key ?? line?.key ?? area?.key;
   }
 
   pickContext(point: PointLike): string | undefined {

@@ -70,7 +70,7 @@ import { barrierShape, gateWidth, isBarrierTags, isGateTags, type BarrierGate, t
 import { isWood, ringsFromMembers, rowFromWay, treeFromNode, woodFromRings, woodFromWay, type TreePoint, type TreeRow, type WoodArea, type WoodMember } from './osm/trees';
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
-import { BuildingsLayer, doorWings, ENTRANCE_HEIGHT, ENTRANCE_WIDTH, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entranceZ, entrancePlace, levelGrid, windowOutline, windowSize, type WindowHandle, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { BuildingsLayer, setNodeExists, doorWings, ENTRANCE_HEIGHT, ENTRANCE_WIDTH, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entranceZ, entrancePlace, levelGrid, windowOutline, windowSize, type WindowHandle, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { Dem, DEM_ATTRIBUTION } from './view/dem';
@@ -965,6 +965,7 @@ function withEntranceEdits(f: Feature3D): Feature3D {
   return withEntranceTags(f, sessionNodeTags, dataEntrances, wall.length ? [...own ?? [], ...wall] : own);
 }
 overpass.setExtras(createdShapes);
+setNodeExists((id) => !!session.get(`node/${id}`));
 let selectedKey: string | undefined;
 /** Все выделенные объекты (Shift+клик добавляет); selectedKey — последний из них. */
 let selection: string[] = [];

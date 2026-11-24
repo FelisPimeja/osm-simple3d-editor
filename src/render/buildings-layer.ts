@@ -7155,7 +7155,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       f.tags['building:part'] === 'column' || g.byKey.get(f.key)?.tags['building:part'] === 'column');
     const changed = new Set(features.filter((f) => g.byKey.has(f.key)).map((f) => f.key));
     this.refreshContacts(g, features, changed);
-    for (const f of features) {
+    // Новые версии объектов этого прохода: части собираются по очереди, а двери соседей нужны уже новые
+    pendingFeatures.set(g, new Map(features.map((f) => [f.key, f])));
+    try { for (const f of features) {
       const old = g.byKey.get(f.key);
       if (!old) continue;
       const item = timed('здание: треугольники', () => buildItem(g, f), () => describeFeature(f));
@@ -7164,7 +7166,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.shapeSigs.set(item, shapeSig(f));
       g.items[g.items.indexOf(old)] = item;
       g.byKey.set(f.key, item);
-    }
+    } } finally { pendingFeatures.delete(g); }
     this.rebuildGeometry(g);
     // Column caps belong to the floor overlay, separate from the updated building mesh.
     if (refreshColumnSections) { this.applyLevel(); this.applyIndoorSelection(); }
@@ -8724,6 +8726,13 @@ function sameItemGeometry(old: Item, item: Item): boolean {
   return true;
 }
 
+/** Есть ли новый узел в правках сессии (подключает main.ts): отменённый вход — не дверь соседа. */
+let nodeExists: ((id: number) => boolean) | undefined;
+export function setNodeExists(fn: (id: number) => boolean) { nodeExists = fn; }
+
+/** Объекты, пересобираемые сейчас (replaceItems): их новые версии для дверей соседей. */
+const pendingFeatures = new WeakMap<MeshGroup, Map<string, Feature3D>>();
+
 /** Подпись версии объекта для рендера: геометрия, теги и роль в здании. */
 function shapeSig(f: Feature3D): string {
   // Входы тоже: по ним в стене режутся ниши (ширина — по типу входа)
@@ -9871,10 +9880,12 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // Входы других объектов здания на линии стены этой части (вход — узел контура под частями, а часть его вершиной
   // не берёт): ниша и обход окнами — здесь, иначе дверь оказывалась внутри сплошной стены
   // Список контактов собирается реже правок: дверь, которой уже нет ни у одного объекта (отменили), — не дверь
-  const between = (id: number) => g.items.filter((it) => it.feature.kind === 'part' && !strokeOnly(g, it)
-    && it.feature.polygons.some((p) => [p.outerIds, ...(p.innerIds ?? [])].some((r) => r?.includes(id)))).length >= 2;
+  const fresh = pendingFeatures.get(g), cur = (it: Item) => fresh?.get(it.feature.key) ?? it.feature;
+  const between = (id: number) => g.items.filter((it) => cur(it).kind === 'part' && !strokeOnly(g, it)
+    && cur(it).polygons.some((p) => [p.outerIds, ...(p.innerIds ?? [])].some((r) => r?.includes(id)))).length >= 2;
   // …и дверь плана между двумя частями (не фасад) — тоже не повод для ниши
-  const alive = new Set(g.items.flatMap((it) => (it.feature.entrances ?? []).filter((e) => entranceOf(e.tags) || !between(e.id)).map((e) => e.id)));
+  // Новый узел (id < 0) — дверь, только пока он есть в правках (части пересобираются разными проходами)
+  const alive = new Set(g.items.flatMap((it) => (cur(it).entrances ?? []).filter((e) => (e.id > 0 || (nodeExists?.(e.id) ?? true)) && (entranceOf(e.tags) || !between(e.id))).map((e) => e.id)));
   const foreignDoors = (g.contacts?.doors ?? []).filter((d) => d.key !== f.key && (d.id === undefined || alive.has(d.id)));
   if (entranceNiches && !shell && !roofOnly && !flat && !tri.pending && (f.entrances?.length || foreignDoors.length)) {
     timed('здание: ниши входов', () => {

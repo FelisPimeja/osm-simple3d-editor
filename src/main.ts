@@ -19672,7 +19672,7 @@ function uploadEditList() {
 
 // Разработка: пробная отправка в консоли — пакет собирается и проверяется, changeset не открывается, на сервер
 // ничего не уходит (await __dryRunUpload() → { count, problems, osmChange })
-if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __pointRaw: (p: [number, number]) => { const l = pointLevel(); return l && pointTargetOn(p, l); }, __pointLevel: () => pointLevel(), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
+if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __occl: labelOcclusion, __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __pointRaw: (p: [number, number]) => { const l = pointLevel(); return l && pointTargetOn(p, l); }, __pointLevel: () => pointLevel(), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRunUpload = async () => {
   repairNewRelationRings();
   await collapseLoneOuters();

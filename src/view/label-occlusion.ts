@@ -107,16 +107,22 @@ export class LabelOcclusion {
   }
 
   /** До LINE_SAMPLES точек линии, попадающих на экран: середины отрезков. */
-  private samples(lines: [number, number][][]): [number, number][] {
+  private samples(lines: [number, number][][], max = LINE_SAMPLES): [number, number][] {
     const { clientWidth: w, clientHeight: h } = this.map.getCanvas();
     const out: [number, number][] = [];
+    // Точки через ~40 px экрана (у длинного отрезка подпись не обязательно на середине)
     for (const l of lines) for (let k = 0; k + 1 < l.length; k++) {
-      const m: [number, number] = [(l[k][0] + l[k + 1][0]) / 2, (l[k][1] + l[k + 1][1]) / 2];
-      const p = this.map.project(m);
-      if (p.x >= 0 && p.y >= 0 && p.x <= w && p.y <= h) out.push(m);
+      const a = this.map.project(l[k]), b = this.map.project(l[k + 1]);
+      const n = Math.max(1, Math.min(50, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 40)));
+      for (let j = 0; j < n; j++) {
+        const t = (j + 0.5) / n;
+        const m: [number, number] = [l[k][0] + (l[k + 1][0] - l[k][0]) * t, l[k][1] + (l[k + 1][1] - l[k][1]) * t];
+        const p = this.map.project(m);
+        if (p.x >= 0 && p.y >= 0 && p.x <= w && p.y <= h) out.push(m);
+      }
     }
-    if (out.length <= LINE_SAMPLES) return out;
-    return Array.from({ length: LINE_SAMPLES }, (_, j) => out[Math.floor((j + 0.5) * out.length / LINE_SAMPLES)]);
+    if (out.length <= max) return out;
+    return Array.from({ length: max }, (_, j) => out[Math.floor((j + 0.5) * out.length / max)]);
   }
 
   /** Номер прохода: новый проход или движение камеры обрывают текущий. */
@@ -156,6 +162,15 @@ export class LabelOcclusion {
     if (!this.layers.length) return;
     const ids = this.layers.map((l) => l.id).filter((id) => this.map.getLayer(id));
     const feats: MapGeoJSONFeature[] = this.map.queryRenderedFeatures({ layers: ids });
+    // Линия, разрезанная тайлами, приходит кусками с одним id: состояние у неё одно — решать по всем кускам вместе
+    const pieces = new Map<string, [number, number][][]>();
+    for (const f of feats) {
+      if (f.id === undefined || (f.geometry.type !== 'LineString' && f.geometry.type !== 'MultiLineString')) continue;
+      const key = `${f.source}/${f.sourceLayer ?? ''}/${f.id}`;
+      const lines = (f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.coordinates) as [number, number][][];
+      const list = pieces.get(key);
+      if (list) list.push(...lines); else pieces.set(key, [...lines]);
+    }
     const c = this.map.getCenter();
     const sig = `${c.lng},${c.lat},${this.map.getZoom()},${this.map.getBearing()},${this.map.getPitch()},${feats.length},${this.rev()}`;
     if (sig === this.done) { this.reveal(); return; }
@@ -179,8 +194,16 @@ export class LabelOcclusion {
           if (this.hidden(lng, lat, [lng, lat])) next.set(key, { source: f.source, sourceLayer: f.sourceLayer, id: f.id });
         } else if (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString') {
           // Значки вдоль линии — состояние у всей линии: приглушаем, если закрыта большая часть видимых на экране точек
-          const lines = (f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.coordinates) as [number, number][][];
-          const pts = this.samples(lines);
+          const lines = pieces.get(key) ?? [];
+          // Судить по местам, где подпись этой линии нарисована (название улицы — одно-два места на всю линию):
+          // по всей линии улица «видна», а подпись легла на её кусок за домом
+          const all = this.samples(lines, LINE_SAMPLES * 3);
+          const layer = (f as MapGeoJSONFeature & { layer?: { id: string } }).layer?.id;
+          const drawn = layer ? all.filter(([lng, lat]) => {
+            const q = this.map.project([lng, lat]);
+            return this.map.queryRenderedFeatures([[q.x - 6, q.y - 6], [q.x + 6, q.y + 6]], { layers: [layer] }).some((x) => x.id === f.id);
+          }) : [];
+          const pts = drawn.length ? drawn : this.samples(lines);
           if (pts.length && pts.filter(([lng, lat]) => this.hidden(lng, lat)).length * 2 > pts.length) next.set(key, { source: f.source, sourceLayer: f.sourceLayer, id: f.id });
         }
       }

@@ -1490,9 +1490,14 @@ export class BuildingsLayer implements CustomLayerInterface {
     const x = (px / canvas.clientWidth) * 2 - 1, y = 1 - (py / canvas.clientHeight) * 2;
     const inv = g.camera.projectionMatrix.clone().invert();
     const n0 = new THREE.Vector3(x, y, -1).applyMatrix4(inv), f0 = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
-    const q = new THREE.Ray(n0, f0.sub(n0).normalize()).intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -(this.level.floor + 0.05)), new THREE.Vector3());
+    const ray = new THREE.Ray(n0, f0.sub(n0).normalize());
+    const q = ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -(this.level.floor + 0.05)), new THREE.Vector3());
     if (!q) return;
     const at: Pt = [q.x, q.y], LINE_REACH = 0.4;
+    // Стены стоят на высоту этажа: клик по их грани — луч на высотах от пола до потолка
+    const H = Math.max(0.5, this.level.cut - this.level.floor - 0.1);
+    const heights = Array.from({ length: 7 }, (_, i) => this.level!.floor + 0.05 + H * i / 6);
+    const rayAt: Pt[] = heights.map((z) => ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3())).filter((v): v is THREE.Vector3 => !!v).map((v) => [v.x, v.y]);
     let line: { key: string; d: number } | undefined, area: { key: string; a: number } | undefined;
     for (const p of this.contextIndoor) for (const it of p.items) for (const pg of it.polygons) {
       const outer = pg.outer.map(g.toLocal);
@@ -1500,7 +1505,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (it.line || it.linearWall || it.kind === 'wall') {
         const closed = !it.line && outer.length > 2;
         for (let i = 0; i + 1 < outer.length + (closed ? 1 : 0); i++) {
-          const d = distToSegment(at, outer[i], outer[(i + 1) % outer.length]);
+          const d = Math.min(...rayAt.map((r) => distToSegment(r, outer[i], outer[(i + 1) % outer.length])));
           if (d <= LINE_REACH && (!line || d < line.d)) line = { key: it.key, d };
         }
         continue;

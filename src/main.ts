@@ -19505,6 +19505,7 @@ function uploadEditList() {
 
 // Разработка: пробная отправка в консоли — пакет собирается и проверяется, changeset не открывается, на сервер
 // ничего не уходит (await __dryRunUpload() → { count, problems, osmChange })
+if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [] });
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRunUpload = async () => {
   repairNewRelationRings();
   await collapseLoneOuters();

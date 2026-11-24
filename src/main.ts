@@ -19076,6 +19076,44 @@ function passageAt(point: [number, number]): IndoorFeature | undefined {
 /** Подсветка выбранных арок в сцене здания. */
 function syncPassageSelection() {
   overpassLayer.setPassageSelection(indoorSelection.filter((f) => f.passage).map((f) => Number(f.key.slice(4))));
+  syncMapPassageSelection();
+}
+
+/**
+ * Подсветка выбранных арок на карте (у режима здания — своя, в его сцене): ось синей линией, проём — пунктиром по
+ * ширине. Слой — поверх всего: арка под зданием, крыша закрыла бы её.
+ */
+function syncMapPassageSelection() {
+  if (!mapLoaded) return;
+  const sel = focus ? [] : indoorSelection.filter((f) => f.passage);
+  const features: GeoJSON.Feature[] = [];
+  for (const f of sel) {
+    const line = f.polygons[0]?.outer;
+    if (!line || line.length < 2) continue;
+    features.push({ type: 'Feature', properties: { kind: 'axis' }, geometry: { type: 'LineString', coordinates: line } });
+    // Края проёма: ось, сдвинутая на полуширину в обе стороны (по отрезкам)
+    const half = passageWidth(f.tags) / 2, lat = line[0][1], kx = 111320 * Math.cos(lat * Math.PI / 180), ky = 110540;
+    for (const side of [1, -1]) {
+      const edge: LonLat[] = [];
+      for (let i = 0; i < line.length; i++) {
+        const a = line[Math.max(0, i - 1)], b = line[Math.min(line.length - 1, i + 1)];
+        const dx = (b[0] - a[0]) * kx, dy = (b[1] - a[1]) * ky, l = Math.hypot(dx, dy) || 1;
+        edge.push([line[i][0] + (-dy / l) * half * side / kx, line[i][1] + (dx / l) * half * side / ky]);
+      }
+      features.push({ type: 'Feature', properties: { kind: 'edge' }, geometry: { type: 'LineString', coordinates: edge } });
+    }
+  }
+  const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
+  const src = map.getSource('passage-selection') as maplibregl.GeoJSONSource | undefined;
+  if (src) src.setData(data);
+  else if (features.length) {
+    map.addSource('passage-selection', { type: 'geojson', data });
+    map.addLayer({ id: 'passage-selection-edge', type: 'line', source: 'passage-selection', filter: ['==', ['get', 'kind'], 'edge'],
+      paint: { 'line-color': '#2563eb', 'line-width': 2, 'line-dasharray': [2, 1.5] } });
+    map.addLayer({ id: 'passage-selection', type: 'line', source: 'passage-selection', filter: ['==', ['get', 'kind'], 'axis'],
+      paint: { 'line-color': '#2563eb', 'line-width': 3 } });
+  }
+  for (const id of ['passage-selection-edge', 'passage-selection']) if (map.getLayer(id)) map.moveLayer(id);
 }
 
 /** Пересобрать объёмы здания, задетые арками keys (рамка оси с запасом), и подсветку. */

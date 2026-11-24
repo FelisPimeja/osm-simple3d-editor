@@ -7341,6 +7341,9 @@ function fixOutline(fit = false) {
   const g = entity(focus.key) as EditGroup | undefined;
   if (!g) return setStatus(tr('Отношение здания не найдено.'), true);
   const outlineTags = { ...r.outline.tags };
+  // Контур, уже закрытый частями, сам не рисуется: его building:levels, крыша, материал — теги здания целиком (по
+  // конвенции), а не свой объём — в новую часть их не переносим (она дублировала бы части)
+  const keepVolume = fit || outlineCoveredByParts(r.outline, r.parts.filter((f) => !r.out.includes(f)));
   /** Новый путь кольца (отдельный кусок следа или его двор) — член мультиполигона контура. */
   const ringWay = (ring: { ids: number[]; coords: LonLat[] }, role: 'outer' | 'inner'): MemberWay => {
     const id = nextNewId--;
@@ -7351,7 +7354,7 @@ function fixOutline(fit = false) {
   const extraWays = () => extras.flatMap((x) => [ringWay(x.outer, 'outer'), ...x.holes.map((h) => ringWay(h, 'inner'))]);
   const extraPolygons = extras.map((x) => ({ outer: x.outer.coords, outerIds: x.outer.ids, inners: x.holes.map((h) => h.coords), innerIds: x.holes.map((h) => h.ids) }));
   if (r.outline.type === 'relation') {
-    const res = relationOutlineEdits(r.outline, outlineTags, { ids, coords }, holes, g, fit);
+    const res = relationOutlineEdits(r.outline, outlineTags, { ids, coords }, holes, g, keepVolume);
     if (typeof res === 'string') return setStatus(res, true);
     edits.push(...res);
     // Отдельно стоящие куски — новыми внешними путями того же мультиполигона
@@ -7361,7 +7364,7 @@ function fixOutline(fit = false) {
       own.members = [...own.members!, ...ws.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }))];
       own.polygons = [...(own.polygons ?? []), ...extraPolygons];
     }
-  } else if (!fit && outlineHasVolume(outlineTags)) {
+  } else if (!keepVolume && outlineHasVolume(outlineTags)) {
     // Объём контура — новой частью прежней формы (на тех же узлах); при подгонке под след — не трогаем
     const id = nextNewId--;
     const tags: Record<string, string> = { 'building:part': 'yes' };
@@ -7406,6 +7409,21 @@ function fixOutline(fit = false) {
     : tr('Контур {key} обновлён: охватывает все части на земле ({n}). Отменить — Ctrl+Z.', { key: r.outline.key, n: r.parts.length }));
 }
 
+
+/** Части покрывают контур почти целиком (≥ 90 % площади): контур под ними не рисуется, его теги — теги здания. */
+function outlineCoveredByParts(outline: Feature3D, parts: Feature3D[]): boolean {
+  if (!parts.length) return false;
+  const local = (r: LonLat[]) => { const q = r.map((c) => overpassLayer.focusToLocal(c)!); return [...q, q[0]]; };
+  const multi = (f: Feature3D) => f.polygons.map((p) => [local(p.outer), ...p.inners.map(local)]);
+  const area = (m: [number, number][][][]) => m.reduce((t, p) => t + ringArea(p[0]) - p.slice(1).reduce((x, h) => x + ringArea(h), 0), 0);
+  try {
+    const o = multi(outline) as [number, number][][][];
+    const total = area(o);
+    if (!(total > 0)) return false;
+    const covered = polygonClipping.intersection(o as never, polygonClipping.union(...parts.map(multi) as [never, ...never[]]) as never) as [number, number][][][];
+    return area(covered) >= total * 0.9;
+  } catch { return false; }
+}
 
 /** Узел id есть в путях, кроме путей контура outline (части, соседи, линии). */
 function nodeInOtherWays(id: number, outline: Feature3D): boolean {

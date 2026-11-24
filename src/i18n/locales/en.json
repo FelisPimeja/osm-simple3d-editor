@@ -1301,6 +1301,8 @@
   "Материал": "Material",
   "Направление изменено: {key}. Отменить — Ctrl+Z.": "Direction reversed: {key}. Undo with Ctrl+Z.",
   "Развернуть направление": "Reverse direction",
+  "Арки удалены: {n}.": "Building passages removed: {n}.",
+  "Удалить (Del)": "Delete (Del)",
   "Объединено в {key}: объектов {n}.": "Merged into {key}: {n} objects.",
   "Разные значения тегов ({k}) — оставлены у {key}.": "Conflicting tag values ({k}) — kept from {key}.",
   "Объединить": "Merge",

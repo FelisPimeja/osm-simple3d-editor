@@ -685,6 +685,7 @@ const tagsClip = document.getElementById('tags-clip')!;
 const copyTagsBtn = tagsClip.querySelector<HTMLButtonElement>('[data-copy-tags]')!;
 const pasteTagsBtn = tagsClip.querySelector<HTMLButtonElement>('[data-paste-tags]')!;
 const reverseBtn = tagsClip.querySelector<HTMLButtonElement>('[data-reverse-way]')!;
+const deleteBtn = tagsClip.querySelector<HTMLButtonElement>('[data-delete-sel]')!;
 reverseBtn.title = tr('Развернуть направление');
 /** Скопированные теги и откуда. */
 let copiedTags: { from: string; tags: Record<string, string> } | undefined;
@@ -10322,31 +10323,10 @@ document.addEventListener('keydown', (e) => {
   }
   // Del / Backspace — удалить выделенное (на карте — отдельные здания, в режиме здания — части)
   // На Mac клавиша Delete — это Backspace
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && indoorSelection.length && indoorSelection.every((f) => f.barrier)) {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && canDeleteCurrent()) {
     e.preventDefault();
     closeCtxMenu();
-    // Ряды и леса — своим удалением (у мультиполигона — с путями-членами), ограждения и ворота — своим
-    const fl = indoorSelection.filter((f) => f.flora), rest = indoorSelection.filter((f) => !f.flora);
-    if (fl.length) deleteFlora(fl);
-    if (rest.length) deleteBarriers(rest);
-    return;
-  }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && canDeleteIndoorSelection()) {
-    e.preventDefault();
-    closeCtxMenu();
-    deleteIndoorSelection();
-    return;
-  }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && selectedEntrance !== undefined) {
-    e.preventDefault();
-    closeCtxMenu();
-    deleteEntrances(selectedEntrances());
-    return;
-  }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !toolActive() && selection.length) {
-    e.preventDefault();
-    closeCtxMenu();
-    deleteSelected();
+    deleteCurrent();
     return;
   }
   // На карте R / L / C / N — новое здание (набросок)
@@ -18797,11 +18777,30 @@ function reverseWay() {
   setStatus(tr('Направление изменено: {key}. Отменить — Ctrl+Z.', { key }));
 }
 
+/** Есть ли что удалить из выделенного (Del и корзина в заголовке «Свойств»). */
+function canDeleteCurrent(): boolean {
+  return (indoorSelection.length > 0 && indoorSelection.every((f) => f.barrier)) || canDeleteIndoorSelection()
+    || selectedEntrance !== undefined || selection.length > 0;
+}
+
+/** Удалить выделенное: ограждения и деревья, indoor и арки, входы, здания и части — каждое своим удалением. */
+function deleteCurrent() {
+  if (indoorSelection.length && indoorSelection.every((f) => f.barrier)) {
+    // Ряды и леса — своим удалением (у мультиполигона — с путями-членами), ограждения и ворота — своим
+    const fl = indoorSelection.filter((f) => f.flora), rest = indoorSelection.filter((f) => !f.flora);
+    if (fl.length) deleteFlora(fl);
+    if (rest.length) deleteBarriers(rest);
+  } else if (canDeleteIndoorSelection()) deleteIndoorSelection();
+  else if (selectedEntrance !== undefined) deleteEntrances(selectedEntrances());
+  else if (selection.length) deleteSelected();
+}
+
 function updateTagsClip() {
   const keys = tagClipTargets().map((t) => t.key);
-  tagsClip.hidden = !keys.length && !copiedTags;
+  tagsClip.hidden = !keys.length && !copiedTags && !canDeleteCurrent();
   copyTagsBtn.disabled = keys.length !== 1 || keys[0] === FREE_AREA_CLIP || keys[0] === ROOM_WALL_CLIP;
   reverseBtn.hidden = !reversibleWay();
+  deleteBtn.hidden = !canDeleteCurrent() || toolActive();
   pasteTagsBtn.disabled = !copiedTags || !keys.length || (keys.length === 1 && keys[0] === copiedTags.from);
   pasteTagsBtn.title = copiedTags ? tr('Вставить теги {key} ({n})', { key: copiedTags.from, n: Object.keys(copiedTags.tags).length }) : tr('Вставить теги');
 }
@@ -18816,6 +18815,8 @@ tagsClip.addEventListener('click', (e) => {
     setStatus(trn(Object.keys(tags).length, 'Скопирован {n} тег {key}.|Скопировано {n} тега {key}.|Скопировано {n} тегов {key}.', { key: targets[0].key }));
   } else if (t.closest('[data-reverse-way]')) {
     reverseWay();
+  } else if (t.closest('[data-delete-sel]')) {
+    if (!toolActive() && canDeleteCurrent()) deleteCurrent();
   } else if (t.closest('[data-paste-tags]') && copiedTags && targets[0]?.key === ROOM_WALL_CLIP) {
     overrideRoomWalls(copiedTags.tags);
   } else if (t.closest('[data-paste-tags]') && copiedTags) {

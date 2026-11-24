@@ -4048,7 +4048,7 @@ function updateSnapMarker(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
   if (point && entranceDrag) moveEntrance(point);
   if (point && gateDrag) moveGate(point);
-  if (pointPick && (toolActiveExceptPoint() || !focus)) stopPoint();
+  if (pointPick && (toolActiveExceptPoint() || !focus !== pointOnMap)) stopPoint();
   if (point && pointPick) hoverPoint(point);
   if (point && shapeTool.active) shapeTool.move(point);
   if (point && pushTool.state === 'push') pushTool.move(point);
@@ -5425,6 +5425,8 @@ function toolBusy(): boolean {
     || offsetTool.state === 'offset' || splitTool.state === 'cut' || drawTool.active || measureTool.state === 'second' || !!copyPick;
 }
 
+/** «Вход» на карте: маркер места под курсором (на карте нет сцены здания для предпросмотра). */
+let mapEntranceMarker: maplibregl.Marker | undefined;
 function toolActive(): boolean {
   return pointPick || toolActiveExceptPoint();
 }
@@ -7225,7 +7227,8 @@ function freshInserts(fresh: FreshNode[], coord: Map<number, LonLat>): Insert[] 
   return fresh.map((x) => {
     const cu = at(x.u), cv = at(x.v);
     if (!cu || !cv) return { id: x.id, u: x.u, v: x.v }; // без положения — вставится по порядку
-    const u = overpassLayer.focusToLocal(cu)!, v = overpassLayer.focusToLocal(cv)!;
+    // На карте (без сцены здания) положение — в градусах, как и x.p
+    const u = focus ? overpassLayer.focusToLocal(cu)! : cu, v = focus ? overpassLayer.focusToLocal(cv)! : cv;
     const dx = v[0] - u[0], dy = v[1] - u[1];
     return { id: x.id, u: x.u, v: x.v, t: ((x.p[0] - u[0]) * dx + (x.p[1] - u[1]) * dy) / (dx * dx + dy * dy || 1) };
   });
@@ -10277,6 +10280,12 @@ document.addEventListener('keydown', (e) => {
   }
   // Шорткаты режима здания — по физической клавише (e.code), чтобы работали и в русской раскладке
   // Работают и посреди другого инструмента: запуск нового выключает текущий
+  if (!focus && e.code === 'KeyX' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    closeCtxMenu();
+    if (pointPick) stopPoint(); else startPoint();
+    return;
+  }
   if (!focus || e.ctrlKey || e.metaKey || e.altKey) return;
   const action = e.code === 'KeyM' && !e.shiftKey ? 'move'
     : e.code === 'KeyP' && !e.shiftKey ? 'push'
@@ -13666,6 +13675,8 @@ function cutPlan(pts: [number, number][]): string | undefined {
 
 /** Инструмент «Точка» (X) на плане этажа: включён ли. */
 let pointPick = false;
+/** «Точка» запущена на карте (только вход на фасад), а не в режиме здания. */
+let pointOnMap = false;
 const pointBtn = focusToolbar.querySelector<HTMLButtonElement>('[data-tool="point"]')!;
 pointBtn.addEventListener('click', () => (pointPick ? stopPoint() : startPoint()));
 /** Точка ближе стольких px к стороне — на стороне (дверь, вход). */
@@ -14045,11 +14056,13 @@ escalatorUi.addEventListener('pointerdown', (e) => {
 });
 
 function startPoint() {
-  if (!focus) return;
+  if (!focus && map.getZoom() < 17) return setStatus(tr('Приблизьте карту (z ≥ 17), чтобы ставить входы.'), true);
+  pointOnMap = !focus;
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); drawTool.stop();
   measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
   pointPick = true;
   pointBtn.classList.add('active');
+  mapEntranceBtn.classList.toggle('active', pointOnMap);
   document.querySelector('.indoor-pois')?.classList.add('passthrough');
   syncCursor();
   toolHint(shownLevel ? tr('Точка: щелчок на стене помещения — дверь, на наружной стене — вход, внутри — объект этажа. Shift — вести точку вдоль стены. Esc — выйти.')
@@ -14064,6 +14077,9 @@ function stopPoint() {
   windowGroup = undefined;
   pointLock = undefined;
   pointBtn.classList.remove('active');
+  mapEntranceBtn.classList.remove('active');
+  mapEntranceMarker?.remove();
+  mapEntranceMarker = undefined;
   document.querySelector('.indoor-pois')?.classList.remove('passthrough');
   overpassLayer.setDrawPreview(undefined);
   syncCursor();
@@ -14100,8 +14116,9 @@ function pointSnapped(screen: [number, number]): [number, number] {
 }
 
 function pointTarget(screen: [number, number]): PointTarget | undefined {
+  if (!focus) return mapPointTarget(screen);
   const lvl = pointLevel();
-  if (!focus || !lvl) return;
+  if (!lvl) return;
   // Режим объёмов: только вход на фасад
   if (!shownLevel) { const t = pointTargetOn(screen, lvl); return t?.kind === 'entrance' ? t : undefined; }
   return pointTargetOn(screen, lvl);
@@ -14220,6 +14237,7 @@ function placeEntranceGroup(screen: [number, number]) {
 function hoverPoint(screen: [number, number]) {
   if (windowGroup) return hoverWindowGroup(screen);
   if (entranceGroup) return hoverEntranceGroup(screen);
+  if (!focus) return hoverMapEntrance(screen);
   const t = pointTarget(screen);
   // Shift: стена под точкой — зафиксирована, пока клавиша зажата
   if (shiftHeld && !pointLock && t?.side) pointLock = t.side;
@@ -14608,8 +14626,8 @@ function detachLevelWall(t: PointTarget, n: number): Map<number, number> | undef
 
 function placePointAt(screen: [number, number]) {
   let t = pointTarget(screen);
-  if (!t || !focus) return;
-  if (!shownLevel) return placeFacadeEntrance(t);
+  if (!t) return;
+  if (!focus || !shownLevel) return placeFacadeEntrance(t);
   const n = shownLevel.n;
   if (!t.indoor.some(s => solidWall(s.f))) {
     const fresh = detachLevelWall(t, n);
@@ -14718,6 +14736,61 @@ function placeFacadeEntrance(t: PointTarget, copy = doorPaste?.[0]) {
   session.editMany(edits);
   facadeEntranceRev++;
   setStatus(tr('Поставлен вход {key}.', { key: `node/${id}` }));
+}
+/**
+ * «Вход» на карте (тот же инструмент, что в режиме здания): место на ближайшей к попаданию стороне контура здания
+ * под курсором; у вершины — сама вершина. Ставит его placeFacadeEntrance, как и в режиме здания.
+ */
+type MapEntranceTarget = { at: LonLat; node?: number; u?: number; v?: number; t?: number };
+/** Дальше от стороны (м) — не вход на неё (попали в крышу посередине). У вершины ближе — вход на неё. */
+const MAP_ENTRANCE_REACH = 1.5, MAP_ENTRANCE_VERTEX = 0.4;
+const mapEntranceBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="mentrance"]')!;
+mapEntranceBtn.addEventListener('click', () => (pointPick ? stopPoint() : startPoint()));
+function mapEntranceTarget(screen: [number, number]): MapEntranceTarget | undefined {
+  const hit = overpassLayer.pickHit(screen);
+  if (!hit) return;
+  const base = entity(hit.key) as Feature3D | undefined;
+  const f = (session.get(hit.key) as Feature3D | undefined) ?? base;
+  if (!f?.polygons?.length) return;
+  const q: LonLat = [hit.lngLat.lng, hit.lngLat.lat];
+  const kx = 111320 * Math.cos(q[1] * Math.PI / 180), ky = 110540;
+  const m = (c: LonLat): [number, number] => [(c[0] - q[0]) * kx, (c[1] - q[1]) * ky];
+  let best: (MapEntranceTarget & { d: number }) | undefined;
+  for (const p of f.polygons) [[p.outer, p.outerIds] as const, ...p.inners.map((r, j) => [r, p.innerIds?.[j]] as const)].forEach(([ring, ids]) => {
+    if (!ids || ids.length !== ring.length) return;
+    const n = ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1] ? ring.length - 1 : ring.length;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, a = m(ring[i]), b = m(ring[j]), ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey;
+      if (l2 < 1e-6) continue;
+      const t = Math.max(0, Math.min(1, -(a[0] * ex + a[1] * ey) / l2));
+      const d = Math.hypot(a[0] + t * ex, a[1] + t * ey);
+      if (best && d >= best.d) continue;
+      const len = Math.sqrt(l2);
+      const at: LonLat = [ring[i][0] + (ring[j][0] - ring[i][0]) * t, ring[i][1] + (ring[j][1] - ring[i][1]) * t];
+      best = t * len < MAP_ENTRANCE_VERTEX ? { at: ring[i], node: ids[i], d } : (1 - t) * len < MAP_ENTRANCE_VERTEX ? { at: ring[j], node: ids[j], d }
+        : { at, u: ids[i], v: ids[j], t, d };
+    }
+  });
+  return best && best.d <= MAP_ENTRANCE_REACH ? best : undefined;
+}
+/** Цель «Входа» на карте в виде цели режима здания: local — те же градусы (вставка считает положение по ним). */
+function mapPointTarget(screen: [number, number]): PointTarget | undefined {
+  const m = mapEntranceTarget(screen);
+  if (!m) return;
+  const at = (id: number) => nodeCoordsOf(liveFeatures()).get(id);
+  const cu = m.u !== undefined ? at(m.u) : undefined, cv = m.v !== undefined ? at(m.v) : undefined;
+  return { at: m.at, local: [m.at[0], m.at[1]], kind: 'entrance', node: m.node, indoor: [],
+    building: m.node === undefined && cu && cv ? [{ u: m.u!, v: m.v!, cu, cv }] : [] };
+}
+function hoverMapEntrance(screen: [number, number]) {
+  const t = mapEntranceTarget(screen);
+  toolHint(t ? tr('Вход: щелчок по фасаду у земли — узел entrance=yes на контуре здания. Shift — вести точку вдоль стены. Esc — выйти.') : tr('Вход: наведите на фасад здания у земли.'));
+  if (!t) { mapEntranceMarker?.remove(); mapEntranceMarker = undefined; return; }
+  if (!mapEntranceMarker) {
+    const el = document.createElement('div');
+    el.className = 'map-entrance-marker';
+    mapEntranceMarker = new maplibregl.Marker({ element: el }).setLngLat(t.at).addTo(map);
+  } else mapEntranceMarker.setLngLat(t.at);
 }
 /** Счётчик входов, поставленных на фасад: по нему вставка входов берёт следующую копию. */
 let facadeEntranceRev = 0;

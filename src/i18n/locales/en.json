@@ -1764,5 +1764,6 @@
   "Данные затронутых зданий обновлены с сервера — правки можно повторить.": "The affected buildings were reloaded from the server — you can redo the edits.",
   "В части зданий остались другие правки — их данные не обновлены: отправьте или отмените их и обновите здание.": "Some buildings still have other edits, so they were not reloaded: upload or undo them and refresh the building.",
   "Часть зданий обновить не удалось — перезагрузите страницу (правки сохранятся).": "Some buildings could not be reloaded — reload the page (your edits are kept).",
-  "Обновляем данные зданий с сервера…": "Reloading buildings from the server…"
+  "Обновляем данные зданий с сервера…": "Reloading buildings from the server…",
+  "Приблизьте карту (z ≥ 17), чтобы ставить входы.": "Zoom in (z ≥ 17) to place entrances."
 }

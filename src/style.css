@@ -1005,3 +1005,6 @@ body:not(.mobile):has(.view-cube:not([hidden])) #right-col { bottom: 158px; }
 .inherit-field:has(.suggest-accept) .combo-field input[type="text"] { padding-right: 52px; }
 .inherit-field:has(.suggest-accept) select { padding-right: 32px; background-position: right 34px center; }
 .step-field .inherit-field:has(.suggest-accept) input { padding-right: 52px; }
+
+/* Вход на карте: место будущего узла на стороне контура */
+.map-entrance-marker { width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 2px solid #1d4ed8; box-shadow: 0 0 0 1px #fff; pointer-events: none; }

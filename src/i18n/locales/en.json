@@ -188,7 +188,6 @@
   "Разрез идёт по стороне контура — делить нечего.": "The cut runs along a side of the outline; nothing to split.",
   "Рассечено: {key} и новая часть {part}, узлы добавлены в соседей: {n}.": "Split: {key} and new part {part}; nodes added to neighbors: {n}.",
   "Рассечено: {key} и новая часть {part}.": "Split: {key} and new part {part}.",
-  "Части не соприкасаются с контуром: контур из нескольких кусков (мультиполигон) пока не поддерживается — соедините части.": "The parts do not touch the outline: an outline of several pieces (multipolygon) is not supported yet. Connect the parts.",
   "Контур здания — не простой путь: обновить его пока нельзя.": "The building outline is not a simple way, so it cannot be updated yet.",
   "Частей за контуром здания: {n}. Контур должен охватывать все части.": "Parts outside the building outline: {n}. The outline must cover all parts.",
   "Обновить контур": "Update outline",
@@ -1765,5 +1764,7 @@
   "В части зданий остались другие правки — их данные не обновлены: отправьте или отмените их и обновите здание.": "Some buildings still have other edits, so they were not reloaded: upload or undo them and refresh the building.",
   "Часть зданий обновить не удалось — перезагрузите страницу (правки сохранятся).": "Some buildings could not be reloaded — reload the page (your edits are kept).",
   "Обновляем данные зданий с сервера…": "Reloading buildings from the server…",
-  "Приблизьте карту (z ≥ 17), чтобы ставить входы.": "Zoom in (z ≥ 17) to place entrances."
+  "Приблизьте карту (z ≥ 17), чтобы ставить входы.": "Zoom in (z ≥ 17) to place entrances.",
+  "добавить её след в контур отдельным кольцом (мультиполигон, +{pct}% площади)": "add its footprint to the outline as a separate ring (multipolygon, +{pct}% area)",
+  "Контур не построить: объединение контура и частей вырождено.": "Cannot build the outline: the union of the outline and parts is degenerate."
 }

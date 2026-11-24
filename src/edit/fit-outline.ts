@@ -45,6 +45,13 @@ export function unitedPolygons(shapes: Pt[][][]): { outer: Pt[]; holes: Pt[][] }
   return outer.length < 3 ? undefined : { outer, holes: u[0].slice(1).map(clean).filter((h) => h.length >= 3) };
 }
 
+/** Объединение многоугольников — по кускам (не соприкасающиеся остаются отдельными): внешнее кольцо и дворы каждого. */
+export function unitedPieces(shapes: Pt[][][]): { outer: Pt[]; holes: Pt[][] }[] {
+  const polys = shapes.map((rings) => rings.map((r) => [...r, r[0]]) as Pt[][]);
+  const u = polygonClipping.union(polys[0], ...polys.slice(1));
+  return u.map((p) => ({ outer: clean(p[0]), holes: p.slice(1).map(clean).filter((h) => h.length >= 3) })).filter((p) => p.outer.length >= 3);
+}
+
 /** Нависающие части, вышедшие хоть одной вершиной за кольцо outer и ещё без положительного layer: им — layer=1. */
 export function raisedOutside(parts: Feature3D[], outer: Pt[], toLocal: (c: LonLat) => Pt): string[] {
   const inside = (c: LonLat) => {

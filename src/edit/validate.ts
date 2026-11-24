@@ -755,13 +755,14 @@ export function validateBuilding(g: BuildingGroup, features: Feature3D[]): Issue
       const ok = parts.filter((f) => !broken.has(f.key) && partGround(f.tags) === 'ground');
       const union = safe(() => polygonClipping.union(o, ...ok.map(multi)));
       const share = union && outlineArea > 0 ? (multiArea(union) - outlineArea) / outlineArea : Infinity;
-      // Объединение из нескольких кусков (мультиполигон) расширением не построить
-      const growable = hasRelation && share <= OUTLINE_GROW_SHARE && union?.length === 1;
+      // Из нескольких кусков (отдельно стоящая часть) — контур станет мультиполигоном с ещё одним внешним кольцом
+      const growable = hasRelation && share <= OUTLINE_GROW_SHARE && !!union?.length;
+      const pieces = union?.length ?? 1;
       for (const { f, rest } of outside) {
         const ground = partGround(f.tags);
         if (ground === 'ground') {
           out.push({ key: f.key, level: 'warning', code: 'outside', text: tr('Часть выходит за контур здания на {area} м² — контур должен охватывать все части.', { area: fmt(rest) }),
-            ...(growable ? { fix: { label: tr('расширить контур до частей (+{pct}% площади)', { pct: fmt(share * 100) }), tags: {}, growOutline: true } } : {}) });
+            ...(growable ? { fix: { label: pieces > 1 ? tr('добавить её след в контур отдельным кольцом (мультиполигон, +{pct}% площади)', { pct: fmt(share * 100) }) : tr('расширить контур до частей (+{pct}% площади)', { pct: fmt(share * 100) }), tags: {}, growOutline: true } } : {}) });
           continue;
         }
         const layer = ground === 'raised' ? '1' : '-1';

@@ -17,7 +17,7 @@ import { escalatorAreaMatches, isStairsAreaTags, stairsOutline, stairsRoomClip, 
 import { fetchRelationRelations } from './osm/api';
 import { loneOuterWay, replaceMember, wayTagsOf } from './edit/lone-outer';
 import polygonClipping from 'polygon-clipping';
-import { keepOutlineEntrances, raisedOutside, unitedPolygons } from './edit/fit-outline';
+import { keepOutlineEntrances, raisedOutside, unitedPieces } from './edit/fit-outline';
 import * as maplibregl from 'maplibre-gl';
 import type { ExpressionSpecification, FillExtrusionLayerSpecification, MapGeoJSONFeature } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -7267,14 +7267,23 @@ function partsOutsideOutline(g: BuildingGroup): { outline: Feature3D; parts: Fea
  * Новый контур: объединение контура и всех частей (метры сцены) — внешнее кольцо и дворы (их сохраняет только
  * контур-мультиполигон, у пути они под контуром); строка — почему нельзя.
  */
-function unitedOutline(outline: Feature3D, parts: Feature3D[], fit = false): { outer: [number, number][]; holes: [number, number][][] } | string {
+function unitedOutline(outline: Feature3D, parts: Feature3D[], fit = false): { outer: [number, number][]; holes: [number, number][][];
+  /** Куски, не соприкасающиеся с основным (отдельно стоящая часть): новые внешние кольца контура-мультиполигона. */
+  extras: { outer: [number, number][]; holes: [number, number][][] }[] } | string {
   // fit — только части: контур подгоняется под их след, а не растёт
   const local = (r: LonLat[]) => r.map((c) => overpassLayer.focusToLocal(c)!);
   // Дыры частей (дворы, атриумы) — дыры и следа; у контура-пути их сохраняет только подгонка (контур станет мультиполигоном)
   const shapes = (fit ? parts : [outline, ...parts]).flatMap((f) => f.polygons.map((p) => [local(p.outer), ...p.inners.map(local)]));
-  const u = unitedPolygons(shapes);
-  if (!u) return tr('Части не соприкасаются с контуром: контур из нескольких кусков (мультиполигон) пока не поддерживается — соедините части.');
-  return { outer: u.outer, holes: outline.type === 'relation' || fit ? u.holes : [] };
+  let pieces: ReturnType<typeof unitedPieces>;
+  try { pieces = unitedPieces(shapes); } catch { pieces = []; }
+  if (!pieces.length) return tr('Контур не построить: объединение контура и частей вырождено.');
+  // Основной кусок — тот, где лежит прежний контур (его первая вершина); остальные — отдельные внешние кольца
+  const anchor = local(outline.polygons[0].outer.slice(0, 1))[0];
+  const mainIdx = Math.max(0, pieces.findIndex((p) => pointInRing(anchor, p.outer) || p.outer.some((a, i) => segDist2(anchor, a, p.outer[(i + 1) % p.outer.length]) < OUTLINE_EPS)));
+  const keepHoles = outline.type === 'relation' || fit || pieces.length > 1;
+  const main = pieces[mainIdx];
+  return { outer: main.outer, holes: keepHoles ? main.holes : [],
+    extras: pieces.filter((_, i) => i !== mainIdx).map((p) => ({ outer: p.outer, holes: p.holes })) };
 }
 
 /**
@@ -7310,10 +7319,12 @@ function fixOutline(fit = false) {
   };
   const { ids, coords } = toNodes(united.outer);
   const holes = united.holes.map(toNodes);
+  const extras = united.extras.map((x) => ({ outer: toNodes(x.outer), holes: x.holes.map(toNodes) }));
   const doorTags = (id: number) => sessionNodeTags.get(id) ?? dataEntrances.get(id) ?? entranceTags(id);
-  const { moved, detached } = fit ? keepOutlineEntrances(r.outline, r.parts, ids, coords, (id) => !!doorTags(id)?.entrance,
+  // Входы прежнего контура — в новое кольцо (на прямых точки выкидываются, узлы входов пропали бы с ним)
+  const { moved, detached } = keepOutlineEntrances(r.outline, r.parts, ids, coords, (id) => !!doorTags(id)?.entrance,
     (c) => overpassLayer.focusToLocal(c)!, (q) => overpassLayer.focusToLngLat(q[0], q[1])!,
-    (id) => nodeInOtherWays(id, r.outline), () => nextNewId--) : { moved: 0, detached: [] };
+    (id) => nodeInOtherWays(id, r.outline), () => nextNewId--);
   const edits: Parameters<typeof session.editMany>[0] = [];
   // Вход с вершины чужого пути — новым узлом на новой стене: теги двери уходят с прежнего узла на новый
   for (const d of detached) {
@@ -7330,10 +7341,26 @@ function fixOutline(fit = false) {
   const g = entity(focus.key) as EditGroup | undefined;
   if (!g) return setStatus(tr('Отношение здания не найдено.'), true);
   const outlineTags = { ...r.outline.tags };
+  /** Новый путь кольца (отдельный кусок следа или его двор) — член мультиполигона контура. */
+  const ringWay = (ring: { ids: number[]; coords: LonLat[] }, role: 'outer' | 'inner'): MemberWay => {
+    const id = nextNewId--;
+    const line = { ids: [...ring.ids, ring.ids[0]], coords: [...ring.coords, ring.coords[0]] };
+    edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line } });
+    return { id, role, nodes: line.ids };
+  };
+  const extraWays = () => extras.flatMap((x) => [ringWay(x.outer, 'outer'), ...x.holes.map((h) => ringWay(h, 'inner'))]);
+  const extraPolygons = extras.map((x) => ({ outer: x.outer.coords, outerIds: x.outer.ids, inners: x.holes.map((h) => h.coords), innerIds: x.holes.map((h) => h.ids) }));
   if (r.outline.type === 'relation') {
     const res = relationOutlineEdits(r.outline, outlineTags, { ids, coords }, holes, g, fit);
     if (typeof res === 'string') return setStatus(res, true);
     edits.push(...res);
+    // Отдельно стоящие куски — новыми внешними путями того же мультиполигона
+    const own = edits.find((e) => e.key === r.outline.key && e.members);
+    if (own && extras.length) {
+      const ws = extraWays();
+      own.members = [...own.members!, ...ws.map((w) => ({ type: 'way' as const, ref: w.id, role: w.role }))];
+      own.polygons = [...(own.polygons ?? []), ...extraPolygons];
+    }
   } else if (!fit && outlineHasVolume(outlineTags)) {
     // Объём контура — новой частью прежней формы (на тех же узлах); при подгонке под след — не трогаем
     const id = nextNewId--;
@@ -7344,7 +7371,7 @@ function fixOutline(fit = false) {
     edits.push({ key: part.key, create: part });
     edits.push({ key: g.key, members: [...g.relMembers, { type: 'way', ref: id, role: 'part' }] });
   }
-  if (r.outline.type !== 'relation' && holes.length) {
+  if (r.outline.type !== 'relation' && (holes.length || extras.length)) {
     // След с дворами, контур — путь: контур становится мультиполигоном (теги — на отношение, путь — его внешнее
     // кольцо, дворы — новые пути), в отношении здания outline — уже отношение
     const way = r.outline;
@@ -7356,11 +7383,13 @@ function fixOutline(fit = false) {
       edits.push({ key: `way/${id}`, create: { key: `way/${id}`, version: 0, tags: {}, line } });
       ways.push({ id, role: 'inner', nodes: line.ids });
     }
+    // Отдельно стоящая часть: её след — вторым внешним кольцом (контур-путь остаётся первым)
+    ways.push(...extraWays());
     const relId = nextNewId--;
     const relMembers: OsmMember[] = ways.map((w) => ({ type: 'way', ref: w.id, role: w.role }));
     edits.push({ key: `relation/${relId}`, create: { key: `relation/${relId}`, type: 'relation', id: relId, version: 0, kind: way.kind,
       tags: { type: 'multipolygon', ...outlineTags }, hasParts: false, ways, relMembers,
-      polygons: [{ outer: coords, inners: holes.map((h) => h.coords), outerIds: ids, innerIds: holes.map((h) => h.ids) }] } as Feature3D });
+      polygons: [{ outer: coords, inners: holes.map((h) => h.coords), outerIds: ids, innerIds: holes.map((h) => h.ids) }, ...extraPolygons] } as Feature3D });
     edits.push({ key: way.key, tags: {}, polygons: [], line: { ids: outerNodes, coords: [...coords, coords[0]] } });
     edits.push(groupMembersEdit(g, g.relMembers.map((m) => (m.type === 'way' && m.ref === way.id && m.role === 'outline'
       ? { type: 'relation' as const, ref: relId, role: 'outline' } : m))));
@@ -7460,7 +7489,7 @@ function outlineGrowth(r: { outline: Feature3D; parts: Feature3D[] }): number | 
   if (typeof u === 'string') return;
   const area = (c: LonLat[]) => ringArea(c.map((x) => overpassLayer.focusToLocal(x)!));
   const was = r.outline.polygons.reduce((s, p) => s + area(p.outer) - p.inners.reduce((t, h) => t + area(h), 0), 0);
-  const now = ringArea(u.outer) - u.holes.reduce((t, h) => t + ringArea(h), 0);
+  const now = [u, ...u.extras].reduce((t, p) => t + ringArea(p.outer) - p.holes.reduce((x, h) => x + ringArea(h), 0), 0);
   return was > 0 ? now / was - 1 : undefined;
 }
 
@@ -19546,7 +19575,7 @@ function uploadEditList() {
 
 // Разработка: пробная отправка в консоли — пакет собирается и проверяется, changeset не открывается, на сервер
 // ничего не уходит (await __dryRunUpload() → { count, problems, osmChange })
-if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [] });
+if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus });
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRunUpload = async () => {
   repairNewRelationRings();
   await collapseLoneOuters();

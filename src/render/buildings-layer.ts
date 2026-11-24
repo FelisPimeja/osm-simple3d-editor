@@ -1477,6 +1477,41 @@ export class BuildingsLayer implements CustomLayerInterface {
   }
 
   /** Здание окружения под курсором (только просмотр: инструменты его не видят). */
+  /**
+   * План этажа с окружением: объект indoor плана соседа или комплекса без здания под курсором (на отметке пола) —
+   * линия (стена, лестница) ближе допуска главнее площади; из площадей — самая маленькая.
+   */
+  pickContextIndoor(point: PointLike): string | undefined {
+    if (!this.level || !this.contextIndoor.length || !this.map) return;
+    const g = this.groups.get(FOCUS_GROUP) ?? this.contextGroups()[0];
+    if (!g) return;
+    const [px, py] = Array.isArray(point) ? point : [point.x, point.y];
+    const canvas = this.map.getCanvas();
+    const x = (px / canvas.clientWidth) * 2 - 1, y = 1 - (py / canvas.clientHeight) * 2;
+    const inv = g.camera.projectionMatrix.clone().invert();
+    const n0 = new THREE.Vector3(x, y, -1).applyMatrix4(inv), f0 = new THREE.Vector3(x, y, 1).applyMatrix4(inv);
+    const q = new THREE.Ray(n0, f0.sub(n0).normalize()).intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -(this.level.floor + 0.05)), new THREE.Vector3());
+    if (!q) return;
+    const at: Pt = [q.x, q.y], LINE_REACH = 0.4;
+    let line: { key: string; d: number } | undefined, area: { key: string; a: number } | undefined;
+    for (const p of this.contextIndoor) for (const it of p.items) for (const pg of it.polygons) {
+      const outer = pg.outer.map(g.toLocal);
+      if (it.line || it.linearWall) {
+        for (let i = 0; i + 1 < outer.length; i++) {
+          const d = distToSegment(at, outer[i], outer[i + 1]);
+          if (d <= LINE_REACH && (!line || d < line.d)) line = { key: it.key, d };
+        }
+        continue;
+      }
+      if (!pointInLocalRing(at, outer) || pg.inners.some((r) => pointInLocalRing(at, r.map(g.toLocal)))) continue;
+      let a = 0;
+      for (let i = 0; i < outer.length; i++) { const u = outer[i], v = outer[(i + 1) % outer.length]; a += u[0] * v[1] - v[0] * u[1]; }
+      a = Math.abs(a) / 2;
+      if (!area || a < area.a) area = { key: it.key, a };
+    }
+    return line?.key ?? area?.key;
+  }
+
   pickContext(point: PointLike): string | undefined {
     const groups = this.contextGroups();
     if (!groups.length || !this.map) return;

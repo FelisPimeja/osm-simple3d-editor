@@ -2825,6 +2825,14 @@ map.on('click', (e) => {
     if (picId) { void photoViewer.open(p.layer, picId); return; }
   }
   // Окружение: клик по соседу (мимо своих частей) — его теги для просмотра
+  // План этажа: объект indoor соседа или комплекса без здания (приямок, переход) — выбрать его самого: id и теги
+  if (focus && shownLevel && overpassLayer.contextShown && !toolActive() && !e.originalEvent.altKey) {
+    const own = overpassLayer.pick(e.point);
+    const ck = own && inFocus(own) ? undefined : overpassLayer.pickContextIndoor(e.point);
+    const ll = ck ? map.unproject(e.point) : undefined;
+    const cf = ck && ll ? overpass.indoorIn([ll.lng - 0.002, ll.lat - 0.002, ll.lng + 0.002, ll.lat + 0.002]).find((f) => f.key === ck) : undefined;
+    if (cf) { contextKey = undefined; selectIndoor(cf, e.originalEvent.shiftKey); return; }
+  }
   if (focus && overpassLayer.contextShown && !toolActive() && !e.originalEvent.shiftKey && !e.originalEvent.altKey) {
     const own = overpassLayer.pick(e.point);
     const near = own && inFocus(own) ? undefined : overpassLayer.pickContext(e.point);

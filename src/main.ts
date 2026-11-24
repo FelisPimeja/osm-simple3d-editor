@@ -15464,7 +15464,11 @@ function touchesVoid(polygons: Polygon[], line: boolean, cover: LonLat[][][]): b
 function levelBody(indoor: IndoorFeature[], n: number): LonLat[][] {
   const flat = (fs: IndoorFeature[]) => fs.filter((f) => !f.line && !f.point && f.levels.includes(n)).flatMap((f) => f.polygons.map((p) => p.outer));
   let rings = flat(indoor.filter((f) => f.kind === 'level'));
-  if (!rings.length) rings = flat(indoor.filter((f) => ['room', 'area', 'corridor'].includes(f.kind)));
+  // Колонны и полигональные стены — тоже тело этажа: без них в общем объёме на их месте вырезы
+  if (!rings.length) {
+    rings = flat(indoor.filter((f) => ['room', 'area', 'corridor'].includes(f.kind)));
+    if (rings.length) rings.push(...flat(indoor.filter((f) => f.kind === 'column' || f.kind === 'wall')));
+  }
   if (!rings.length) return [];
   const close = (r: LonLat[]) => (r[0][0] === r.at(-1)![0] && r[0][1] === r.at(-1)![1] ? r : [...r, r[0]]) as [number, number][];
   try {

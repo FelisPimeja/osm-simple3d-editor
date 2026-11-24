@@ -2858,6 +2858,11 @@ map.on('click', (e) => {
     const near = own && inFocus(own) ? undefined : overpassLayer.pickContext(e.point);
     if (near) { select(undefined); contextKey = buildingKey(near); overpassLayer.select(highlightKeys(contextKey)); renderSelected(); return; }
   }
+  // Арка на карте: клик в проём (по стенке или потолку арки или по земле в нём) — выбрать её путь
+  if (!focus && !toolActive() && !e.originalEvent.altKey) {
+    const passage = mapPassageAt([e.point.x, e.point.y]);
+    if (passage) { selectIndoor(passage, e.originalEvent.shiftKey); return; }
+  }
   // Арка: клик в проём или в её основание — выбрать путь (Shift — добавить к выбранным)
   if (focus && !shownLevel && !toolActive() && !e.originalEvent.altKey) {
     const passage = passageAt([e.point.x, e.point.y]);
@@ -19025,6 +19030,42 @@ function passageFeatures(g: BuildingGroup): IndoorFeature[] {
   return list;
 }
 
+/**
+ * Арка под курсором на карте: точка попадания в здание не выше проёма (стенка, потолок арки) или земля в проёме
+ * (сквозь него зданий не видно) — у оси арки в пределах её полуширины.
+ */
+function mapPassageAt(point: [number, number]): IndoorFeature | undefined {
+  const hit = overpassLayer.pickHit(point);
+  const ground = map.unproject(point);
+  const at: LonLat = hit ? [hit.lngLat.lng, hit.lngLat.lat] : [ground.lng, ground.lat];
+  const pad = 0.0003;
+  const kx = 111320 * Math.cos(at[1] * Math.PI / 180), ky = 110540;
+  const dist = (line: LonLat[]) => {
+    let d = Infinity;
+    for (let i = 0; i + 1 < line.length; i++) {
+      const ax = (line[i][0] - at[0]) * kx, ay = (line[i][1] - at[1]) * ky, bx = (line[i + 1][0] - at[0]) * kx, by = (line[i + 1][1] - at[1]) * ky;
+      const ex = bx - ax, ey = by - ay, l2 = ex * ex + ey * ey || 1, t = Math.max(0, Math.min(1, -(ax * ex + ay * ey) / l2));
+      d = Math.min(d, Math.hypot(ax + t * ex, ay + t * ey));
+    }
+    return d;
+  };
+  let best: { p: PassageWay; d: number } | undefined;
+  for (const p0 of passagesNear([at[0] - pad, at[1] - pad, at[0] + pad, at[1] + pad])) {
+    const p = livePassage(p0);
+    if (!p || p.nodes?.length !== p.coords.length) continue;
+    // Попали в здание выше проёма — это стена над аркой, а не арка
+    if (hit && hit.altitude > (passageHeight(p.tags) ?? PASSAGE_HEIGHT) + 0.3) continue;
+    const d = dist(p.coords);
+    if (d <= passageWidth(p.tags) / 2 + 0.3 && (!best || d < best.d)) best = { p, d };
+  }
+  if (!best) return;
+  // Без попадания в здание — только если земля под курсором в контуре здания (проём), а не дорога у него
+  if (!hit && !overpass.renderedFeatures().some(({ feature: f }) => f.polygons?.some((q) => pointInRing(at, q.outer)))) return;
+  const p = best.p;
+  return { key: `way/${p.id}`, tags: p.tags, kind: 'area', line: true, passage: true, levels: [0],
+    polygons: [{ outer: p.coords, inners: [], outerIds: p.nodes, innerIds: [] }] };
+}
+
 /** Арка под курсором (стенка, потолок или земля в проёме) — режим здания и план этажа, через который она проходит. */
 function passageAt(point: [number, number]): IndoorFeature | undefined {
   if (!focus) return;
@@ -19672,7 +19713,7 @@ function uploadEditList() {
 
 // Разработка: пробная отправка в консоли — пакет собирается и проверяется, changeset не открывается, на сервер
 // ничего не уходит (await __dryRunUpload() → { count, problems, osmChange })
-if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __occl: labelOcclusion, __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __pointRaw: (p: [number, number]) => { const l = pointLevel(); return l && pointTargetOn(p, l); }, __pointLevel: () => pointLevel(), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
+if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __mapPassageAt: mapPassageAt, __passages: () => overpass.passages(), __occl: labelOcclusion, __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __pointRaw: (p: [number, number]) => { const l = pointLevel(); return l && pointTargetOn(p, l); }, __pointLevel: () => pointLevel(), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRunUpload = async () => {
   repairNewRelationRings();
   await collapseLoneOuters();

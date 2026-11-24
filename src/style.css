@@ -595,7 +595,7 @@ body.mobile #left-col > #info-panel { flex-shrink: 1; min-height: 0; }
 body.mobile #edits-panel:not(:has(#changes:not([hidden]))) { display: none; }
 /* Слои и правки — прижаты к низу экрана во всю ширину */
 body.mobile #right-col { left: 12px; width: auto; top: auto; max-height: 40%; justify-content: flex-end;
-  bottom: calc(72px + env(safe-area-inset-bottom)); }
+  bottom: calc(52px + env(safe-area-inset-bottom)); }
 
 /* Дата OpenHistoricalMap: панель внизу по центру — год, воспроизведение, шкала */
 #date-panel {

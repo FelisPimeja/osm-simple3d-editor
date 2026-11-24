@@ -1496,9 +1496,11 @@ export class BuildingsLayer implements CustomLayerInterface {
     let line: { key: string; d: number } | undefined, area: { key: string; a: number } | undefined;
     for (const p of this.contextIndoor) for (const it of p.items) for (const pg of it.polygons) {
       const outer = pg.outer.map(g.toLocal);
-      if (it.line || it.linearWall) {
-        for (let i = 0; i + 1 < outer.length; i++) {
-          const d = distToSegment(at, outer[i], outer[i + 1]);
+      // Стены — и замкнутые (контуром): по расстоянию до сторон, внутрь тонкой стены клик почти не попадает
+      if (it.line || it.linearWall || it.kind === 'wall') {
+        const closed = !it.line && outer.length > 2;
+        for (let i = 0; i + 1 < outer.length + (closed ? 1 : 0); i++) {
+          const d = distToSegment(at, outer[i], outer[(i + 1) % outer.length]);
           if (d <= LINE_REACH && (!line || d < line.d)) line = { key: it.key, d };
         }
         continue;
@@ -1515,9 +1517,12 @@ export class BuildingsLayer implements CustomLayerInterface {
       const l = e.line.map(g.toLocal);
       for (let i = 0; i + 1 < l.length; i++) {
         const d = distToSegment(at, l[i], l[i + 1]);
-        if (d <= e.width / 2 + 0.2 && (!stair || d < stair.d)) stair = { key: e.key, d };
+        // Расстояние — от края полосы: стена вплотную к лестнице выбирается, если ближе к ней
+        const edge = Math.max(0, d - e.width / 2);
+        if (d <= e.width / 2 + 0.2 && (!stair || edge < stair.d)) stair = { key: e.key, d: edge };
       }
     }
+    if (stair && line) return line.d < stair.d ? line.key : stair.key;
     return stair?.key ?? line?.key ?? area?.key;
   }
 

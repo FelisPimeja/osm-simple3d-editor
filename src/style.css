@@ -1026,3 +1026,5 @@ body:not(.mobile) #right-col > .panel:not(.collapsed):not([hidden]) { flex: 1 1 
 
 /* Кнопки масштаба — только вместе с кубом вида */
 body.zoom-hidden .maplibregl-ctrl-zoom-in, body.zoom-hidden .maplibregl-ctrl-zoom-out { display: none; }
+/* Куб и кнопки масштаба выключены — внизу справа только атрибуция: колонка панелей — почти на всю высоту */
+body.zoom-hidden:not(.mobile) #right-col { bottom: 44px; }

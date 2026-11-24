@@ -15467,7 +15467,13 @@ function levelBody(indoor: IndoorFeature[], n: number): LonLat[][] {
   // Колонны и полигональные стены — тоже тело этажа: без них в общем объёме на их месте вырезы
   if (!rings.length) {
     rings = flat(indoor.filter((f) => ['room', 'area', 'corridor'].includes(f.kind)));
-    if (rings.length) rings.push(...flat(indoor.filter((f) => f.kind === 'column' || f.kind === 'wall')));
+    if (rings.length) {
+      rings.push(...flat(indoor.filter((f) => f.kind === 'column' || f.kind === 'wall')));
+      // Замкнутая стена-линия (без area=yes) обводит площадь — её кольцо тоже тело этажа
+      const closed = (r: LonLat[]) => r.length >= 4 && r[0][0] === r.at(-1)![0] && r[0][1] === r.at(-1)![1];
+      rings.push(...indoor.filter((f) => f.kind === 'wall' && f.line && !f.point && f.levels.includes(n))
+        .flatMap((f) => f.polygons.map((p) => p.outer)).filter(closed).map((r) => r.slice(0, -1)));
+    }
   }
   if (!rings.length) return [];
   const close = (r: LonLat[]) => (r[0][0] === r.at(-1)![0] && r[0][1] === r.at(-1)![1] ? r : [...r, r[0]]) as [number, number][];

@@ -1022,4 +1022,4 @@ p.warn.warn-fix .issue-fix { flex: none; margin-left: auto; }
 .comment-field .comment-accept[hidden] { display: none; }
 
 /* Правая колонка: раскрытая панель (одна за раз) — на всю доступную высоту */
-body:not(.mobile) #right-col > .panel:not(.collapsed):not([hidden]) { flex: 1 1 auto; }
+body:not(.mobile) #right-col > .panel:not(.collapsed):not([hidden]) { flex: 1 1 auto; max-height: none; }

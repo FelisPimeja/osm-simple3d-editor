@@ -172,8 +172,16 @@ export class MinHeap {
 /** Путь через арку в здании (tunnel=building_passage): только он сам, без подходов. */
 export interface PassageWay { id: number; tags: Record<string, string>; nodes: number[]; coords: LonLat[] }
 
+/** Не путь проезда: у линии свой смысл (вода, ограда, здание…) — tunnel=building_passage её аркой не делает. */
+const NOT_PASSAGE_KEYS = ['waterway', 'barrier', 'building', 'building:part', 'natural', 'landuse', 'power', 'man_made', 'indoor'];
+
+/**
+ * Арка: tunnel=building_passage у дороги или рельсов — или у пути без другого назначения (так её создаёт редактор,
+ * тип пути — за маппером; без этого после сохранения и перезагрузки арка пропадала из модели дома).
+ */
 export function isPassageTags(tags?: Record<string, string>): boolean {
-  return tags?.tunnel === 'building_passage' && (!!tags.highway || isRailTags(tags)) && tags.area !== 'yes';
+  if (tags?.tunnel !== 'building_passage' || tags.area === 'yes') return false;
+  return !!tags.highway || isRailTags(tags) || !NOT_PASSAGE_KEYS.some((k) => tags[k] !== undefined);
 }
 
 /** Арки из ответа API или Overpass. */

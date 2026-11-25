@@ -2204,7 +2204,7 @@ overpassLayer.extraSnap = (pt, radius, opts) => {
  * встаёт в сторону под ним — от линии не отделяется. Ворота в изломе или на конце оставляют на старом месте вершину
  * (форма ограждения та же). Вставка — на любое ограждение рядом, перенос — по своему.
  */
-let gateDrag: { id: number; tags: Record<string, string>; from?: string; only?: string; reach?: number; target?: { key: string; ids: number[]; coords: LonLat[]; at: LonLat } } | undefined;
+let gateDrag: { id: number; tags: Record<string, string>; from?: string; only?: string; reach?: number; series?: boolean; target?: { key: string; ids: number[]; coords: LonLat[]; at: LonLat; short?: number } } | undefined;
 /** Скопированные ворота (теги); вставляются, пока после них не копировали другое. */
 let gateClipboard: Record<string, string> | undefined;
 
@@ -2230,9 +2230,34 @@ function startGateDrag(paste = false): boolean {
 function cancelGateDrag() {
   if (!gateDrag) return;
   gateDrag = undefined;
+  syncGateMarker();
   scheduleBarriers();
   syncEntranceTool();
 }
+
+/**
+ * «＋ Ворота» (кнопка в свойствах ограждения, X): новые ворота едут под курсором только по этому ограждению,
+ * с привязкой к его вершинам и серединам сторон; клик — поставить и открыть свойства, следующие клики — ещё ворота
+ * (пока не начали править свойства), Esc — закончить. На телефоне — прицел в центре карты.
+ */
+function startAddGate(key: string) {
+  if (mobile) { startMobileGate(); return; }
+  moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
+  drawTool.stop();
+  if (pointPick) stopPoint();
+  gateDrag = { id: nextNewId--, tags: { barrier: 'gate' }, only: key, series: true };
+  syncEntranceTool();
+  setStatus(tr('Ведите курсор вдоль ограждения — ворота едут по нему. Клик — поставить (можно несколько), Esc — закончить.'));
+  if (lastPointer) moveGate(lastPointer);
+}
+/** Привязка ворот: вершина или середина стороны своего ограждения под курсором (переключатели привязок — общие). */
+function gateSnap(point: [number, number], only: string): LonLat | undefined {
+  if (!overpassLayer.snapsEnabled || overpassLayer.snapsSuspended) return;
+  const h = overpassLayer.extraSnap?.(point, 12, { noEdge: true });
+  return h && (h.kind === 'vertex' || h.kind === 'midpoint') && h.key === only ? [h.lngLat.lng, h.lngLat.lat] : undefined;
+}
+// Ушли править свойства поставленных ворот — серия закончена
+for (const type of ['focusin', 'pointerdown'] as const) document.getElementById('info-panel')?.addEventListener(type, () => { if (gateDrag?.series && !mobileGate) cancelGateDrag(); });
 
 /** Точка на земле под курсором (в режиме здания — по его лучу, на карте — по карте). */
 function groundAt(point: [number, number]): LonLat | undefined {
@@ -2247,12 +2272,12 @@ function groundAt(point: [number, number]): LonLat | undefined {
 function moveGate(point: [number, number]) {
   const d = gateDrag;
   if (!d) return;
-  const at = groundAt(point);
+  const at = (d.only ? gateSnap(point, d.only) : undefined) ?? groundAt(point);
   if (!at) return;
   const kx = Math.cos((at[1] * Math.PI) / 180) * 111320, ky = 110540;
   const loc = (c: LonLat): [number, number] => [(c[0] - at[0]) * kx, (c[1] - at[1]) * ky];
   const half = gateWidth(d.tags) / 2;
-  let best: { key: string; ids: number[]; coords: LonLat[]; j: number; t: number; d: number } | undefined;
+  let best: { key: string; ids: number[]; coords: LonLat[]; j: number; t: number; d: number; len: number } | undefined;
   for (const raw of allBarriers()) {
     const key = `way/${raw.id}`;
     if (d.from ? key !== d.from : d.only ? key !== d.only : false) continue;
@@ -2282,7 +2307,7 @@ function moveGate(point: [number, number]) {
       const m = len > 2 * half ? half / len : 0.5;
       t = Math.max(m, Math.min(1 - m, t));
       const dist = Math.hypot(a[0] + dx * t, a[1] + dy * t);
-      if (!best || dist < best.d) best = { key, ids, coords: cs, j, t, d: dist };
+      if (!best || dist < best.d) best = { key, ids, coords: cs, j, t, d: dist, len };
     }
     if (closed && best?.key === key) best = { ...best, ids: [...best.ids], coords: [...best.coords] };
   }
@@ -2295,7 +2320,8 @@ function moveGate(point: [number, number]) {
   const live = liveBarrier({ ...raw });
   const wasClosed = !!live && live.nodes.length > 3 && live.nodes[0] === live.nodes[live.nodes.length - 1] && (live.nodes[0] !== d.id || true);
   if (wasClosed) { nIds.push(nIds[0]); nCs.push(nCs[0]); }
-  d.target = { key: best.key, ids: nIds, coords: nCs, at: p };
+  d.target = { key: best.key, ids: nIds, coords: nCs, at: p, short: best.len < 2 * half ? best.len : undefined };
+  syncGateMarker();
   barriersLayer.setBarriers(shownBarriers());
   syncBarrierSelection();
 }
@@ -2362,6 +2388,7 @@ function commitGateDrag() {
   const t = d.target;
   gateDrag = undefined;
   gateKeep = undefined;
+  syncGateMarker();
   syncEntranceTool();
   const raw = allBarriers().find((x) => `way/${x.id}` === t.key);
   const live = raw && liveBarrier(raw);
@@ -2377,7 +2404,14 @@ function commitGateDrag() {
   session.editMany(edits);
   const made = barrierFeatureFor(key);
   if (made) selectIndoor(made);
-  setStatus(d.from ? tr('Ворота {key} перенесены. Отменить — Ctrl+Z.', { key }) : d.only ? tr('Поставлены ворота {key}.', { key }) : tr('Вставлены ворота {key}. Отменить — Ctrl+Z.', { key }));
+  const short = t.short !== undefined ? ' ' + tr('Ворота ({w} м) шире стороны ограждения ({l} м) — заходят за её концы.', { w: String(Math.round(gateWidth(d.tags) * 100) / 100), l: String(Math.round(t.short * 100) / 100) }) : '';
+  setStatus((d.from ? tr('Ворота {key} перенесены. Отменить — Ctrl+Z.', { key }) : d.only ? tr('Поставлены ворота {key}.', { key }) : tr('Вставлены ворота {key}. Отменить — Ctrl+Z.', { key })) + short, !!short);
+  // Серия: следующий клик — ещё ворота с теми же тегами, пока не ушли в свойства (Esc — хватит)
+  if (d.series && d.only) {
+    gateDrag = { id: nextNewId--, tags: { ...d.tags }, only: d.only, series: true };
+    syncEntranceTool();
+    if (lastPointer) moveGate(lastPointer);
+  }
 }
 
 /** Ограждения показанных тайлов; пересборка не чаще раза в 300 мс. */
@@ -10395,6 +10429,13 @@ document.addEventListener('keydown', (e) => {
   }
   // Шорткаты режима здания — по физической клавише (e.code), чтобы работали и в русской раскладке
   // Работают и посреди другого инструмента: запуск нового выключает текущий
+  // X у выбранного ограждения — ворота на него (добавить часть к выбранному целому); иначе — «Точка»
+  if (e.code === 'KeyX' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && indoorSelection.length === 1 && indoorSelection[0].barrier && !indoorSelection[0].gate && indoorSelection[0].key.startsWith('way/')) {
+    e.preventDefault();
+    closeCtxMenu();
+    if (gateDrag) cancelGateDrag(); else startAddGate(indoorSelection[0].key);
+    return;
+  }
   if (!focus && e.code === 'KeyX' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     closeCtxMenu();
@@ -11976,9 +12017,11 @@ function renderIndoorSelection(add = false) {
     const sh = barrierShape(t), m = (v: number) => String(Math.round(v * 100) / 100);
     infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
       + `<p class="hint">${esc(tr('Высота {h} м, толщина {w} м.', { h: m(sh.top - sh.min), w: m(sh.width) }))}</p>`
+      + (f.key.startsWith('way/') ? `<p class="add-on"><button type="button" class="secondary" data-add-gate title="${esc(tr('Добавить ворота на это ограждение (X)'))}">＋ ${tr('Ворота')}</button></p>` : '')
       + indoorForm([f], barrierPlaceholders([f]))
       + renderOtherTags(key, t, indoorForm([f], barrierPlaceholders([f])), true);
     bindIndoorForm([f]);
+    infoEl.querySelector('[data-add-gate]')?.addEventListener('click', () => startAddGate(f.key));
     return;
   }
   const src = indoorCategorySource(f);
@@ -21008,7 +21051,7 @@ map.on('move', () => {
 /** Место будущих ворот под прицелом: тонкое ограждение на карте плоское, ворот в нём не видно. */
 let gateMarker: maplibregl.Marker | undefined;
 function syncGateMarker() {
-  const at = mobileGate ? gateDrag?.target?.at : undefined;
+  const at = gateDrag?.only ? gateDrag.target?.at : undefined;
   if (!at) { gateMarker?.remove(); gateMarker = undefined; return; }
   if (!gateMarker) {
     const el = document.createElement('div');

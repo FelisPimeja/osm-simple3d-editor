@@ -1781,5 +1781,7 @@
   "Новые ворота": "New gate",
   "Двигайте карту: прицел — на линию ограждения": "Move the map: put the crosshair on the barrier line",
   "Наведите прицел на линию ограждения.": "Put the crosshair on the barrier line.",
-  "Поставлены ворота {key}.": "Gate {key} placed."
+  "Поставлены ворота {key}.": "Gate {key} placed.",
+  "Распашные ворота": "Swing gate",
+  "Турникет в рост": "Full-height turnstile"
 }

@@ -11699,6 +11699,9 @@ let selectedIndoor: IndoorFeature | undefined;
 const GATE_NAMES: Record<string, string> = { gate: tr('Ворота'), swing_gate: tr('Ворота'), sliding_gate: tr('Откатные ворота'), wicket_gate: tr('Калитка'),
   entrance: tr('Проход'), lift_gate: tr('Шлагбаум'), kissing_gate: tr('Калитка-лабиринт'), turnstile: tr('Турникет'), 'full-height_turnstile': tr('Турникет'),
   stile: tr('Перелаз'), chain: tr('Цепь'), rope: tr('Верёвка') };
+/** Тип ворот в свойствах — список с подписями (у названий выше повторы: «Ворота», «Турникет»). */
+const GATE_VALUES = ['gate', 'swing_gate', 'sliding_gate', 'wicket_gate', 'entrance', 'lift_gate', 'kissing_gate', 'turnstile', 'full-height_turnstile', 'stile', 'chain', 'rope'];
+const GATE_LABELS: Record<string, string> = { ...GATE_NAMES, swing_gate: tr('Распашные ворота'), 'full-height_turnstile': tr('Турникет в рост') };
 const INDOOR_NAMES: Record<string, string> = { room: tr('Помещение'), corridor: tr('Коридор'), area: tr('Площадка'), level: tr('Этаж'), wall: tr('Стена'), column: tr('Колонна'), poi: tr('Объект') };
 
 /** Помещение, коридор или площадка показанного этажа под курсором (самое маленькое из накрывающих). */
@@ -12333,13 +12336,13 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
     const changed = fs.some((f) => session.isChanged(indoorKey(f.key), k));
     // Свой список, а не datalist: тот показывает только варианты, совпадающие с уже введённым значением
     // Тип входа — варианты и подписи из схемы iD (поле entrance пресета «Вход / выход»)
-    const options = k === 'incline' ? INCLINE_VALUES : k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : k === 'wall' ? WALL_VALUES : k === 'entrance' ? idOptions('entrance') : undefined;
+    const options = k === 'incline' ? INCLINE_VALUES : k === 'door' ? DOOR_VALUES : k === 'indoor' ? INDOOR_VALUES : k === 'room' ? ROOM_VALUES : k === 'wall' ? WALL_VALUES : k === 'entrance' ? idOptions('entrance') : k === 'barrier' && fs.every((f) => f.gate) ? GATE_VALUES : undefined;
     const label = `<span title="${esc(k)}">${esc(indoorFieldLabel(k, fs))}</span>`;
     if (k === 'handrail') return handrailRow(fs, fs.some((f) => HANDRAIL_SIDES.some((x) => session.isChanged(indoorKey(f.key), `handrail:${x}`))) || changed);
     if(k==='area')return `<label class="tag-row${changed ? ' changed' : ''}"><span title="area">area</span><select data-indoor-tag="area"${!value ? ' style="color:#888"' : ''}>${!value ? `<option value="" selected disabled hidden>${mixed ? tr('разные значения') : 'no'}</option>` : ''}<option value="yes"${value==='yes'?' selected':''}>yes</option><option value="no"${value==='no'?' selected':''}>no</option></select></label>`;
     if (options) return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : k === 'entrance' ? tr('не вход') : placeholders[k] ?? '—',
-        k === 'incline' ? INCLINE_LABELS : k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : k === 'room' ? ROOM_LABELS : k === 'wall' ? WALL_LABELS : undefined, k) + '</label>';
+        k === 'incline' ? INCLINE_LABELS : k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : k === 'room' ? ROOM_LABELS : k === 'wall' ? WALL_LABELS : k === 'barrier' ? GATE_LABELS : undefined, k) + '</label>';
     const unit = INDOOR_LENGTHS.has(k) ? lengthUnitOf(value) : undefined;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + (unit ? '<span class="length-field">' : '')

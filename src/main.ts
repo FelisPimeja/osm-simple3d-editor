@@ -279,7 +279,7 @@ const viewCube = new ViewCube({
 map.addControl(viewCube, 'top-right');
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
 // Браузер запросит доступ к местоположению при нажатии штатной кнопки MapLibre.
-map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: false }));
+map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true }));
 // В режиме здания вместо компаса — кнопка куба вида (показать / скрыть), выбор запоминается
 const cubeBtn = document.createElement('button');
 cubeBtn.type = 'button';

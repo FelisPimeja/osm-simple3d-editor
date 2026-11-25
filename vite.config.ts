@@ -23,6 +23,21 @@ function maplibreWorker(): Plugin {
   };
 }
 
+/**
+ * Номер сборки: в код (__BUILD__) и в dist/version.json. Ярлык на рабочем столе iPhone держит свой кеш index.html
+ * и не подтягивает новую версию даже после перезапуска — main.ts сверяет version.json (в обход кеша) и перезагружается.
+ */
+const BUILD = String(Date.now());
+function buildVersion(): Plugin {
+  return {
+    name: 'build-version',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ build: BUILD }) });
+    },
+  };
+}
+
 // base: './' — чтобы сборка работала из подпапки на GitHub Pages.
 // maplibre-gl исключён из pre-bundling: иначе ломается загрузка его web worker.
 // oauth.html — страница возврата из OAuth (redirect_uri), отдельная точка входа сборки.
@@ -36,5 +51,6 @@ export default defineConfig({
   // Только dev-сервер: разрешить JS Self-Profiling API (new Profiler) для замеров производительности в браузере
   server: { headers: { 'Document-Policy': 'js-profiling' } },
   build: { rollupOptions: { input: { main: 'index.html', oauth: 'oauth.html' } } },
-  plugins: [maplibreWorker(), ...(process.env.HTTPS ? [basicSsl()] : [])],
+  define: { __BUILD__: JSON.stringify(BUILD) },
+  plugins: [maplibreWorker(), buildVersion(), ...(process.env.HTTPS ? [basicSsl()] : [])],
 });

@@ -1776,5 +1776,6 @@
   "Двигайте карту: прицел — на стену здания": "Pan the map to put the crosshair on a building wall",
   "Поставить": "Place",
   "Добавить вход": "Add an entrance",
-  "Наведите прицел на стену здания.": "Put the crosshair on a building wall."
+  "Наведите прицел на стену здания.": "Put the crosshair on a building wall.",
+  "Доступна новая версия редактора — она загрузится после сохранения правок и перезапуска.": "A new version of the editor is available — it will load after you save your edits and restart."
 }

@@ -21345,3 +21345,28 @@ function cleanSection(polys: LonLat[][][]): LonLat[][][] {
   }
   return out;
 }
+
+// Новая версия на сервере: ярлык на рабочем столе iOS открывает index.html из своего кеша. При запуске и при возврате
+// в приложение сверяем version.json в обход кеша; без несохранённых правок перезагружаемся с ?v= (новый адрес — мимо кеша).
+declare const __BUILD__: string;
+let updateNotified = false;
+async function checkForUpdate(): Promise<void> {
+  if (import.meta.env.DEV) return;
+  let build: string | undefined;
+  try {
+    const r = await fetch(`./version.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    build = (await r.json()).build;
+  } catch { return; }
+  if (!build || build === __BUILD__) return;
+  if (!session.changes().length) {
+    const url = new URL(location.href);
+    url.searchParams.set('v', build);
+    location.replace(url.toString());
+  } else if (!updateNotified) {
+    updateNotified = true;
+    setStatus(tr('Доступна новая версия редактора — она загрузится после сохранения правок и перезапуска.'));
+  }
+}
+void checkForUpdate();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void checkForUpdate(); });

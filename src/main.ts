@@ -10284,6 +10284,7 @@ function stopAllTools() {
   stopPoint();
   cancelCopyPick();
   cancelEntranceDrag();
+  if (mobileGate) stopMobileGate(false); else cancelGateDrag();
   eyedropper.cancel();
   overpassLayer.clearTracking();
   trackTyped = '';

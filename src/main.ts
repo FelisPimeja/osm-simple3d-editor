@@ -21068,6 +21068,22 @@ map.on('click', (e) => {
   renderMobileCard();
 });
 
+/**
+ * Значения тегов — со строчной: клавиатура телефона не начинает с заглавной (yes, gate, brick). Имена (name, name:*,
+ * alt_name, …) — как обычно, с заглавной. Ставим до фокуса (касание) и на фокусе: iOS читает атрибут при показе клавиатуры.
+ */
+const TAG_ATTRS = ['indoorTag', 'entranceTag', 'windowTag', 'tag', 'roomWallTag', 'otherValue'] as const;
+function syncAutocap(e: Event) {
+  const el = e.target;
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
+  if (el.hasAttribute('data-other-new-key')) { el.autocapitalize = 'none'; return; }
+  const key = el.hasAttribute('data-other-new-value') ? el.form?.querySelector<HTMLInputElement>('[data-other-new-key]')?.value.trim()
+    : TAG_ATTRS.map((k) => el.dataset[k]).find((v) => v !== undefined);
+  if (key === undefined) return;
+  el.autocapitalize = /(^|_)name($|:)/.test(key) ? 'sentences' : 'none';
+}
+for (const type of ['pointerdown', 'focusin'] as const) document.addEventListener(type, syncAutocap, true);
+
 // Долгое нажатие — без контекстного меню и выделения текста
 map.getCanvasContainer().addEventListener('contextmenu', (e) => { if (mobile) e.preventDefault(); });
 applyMobile();

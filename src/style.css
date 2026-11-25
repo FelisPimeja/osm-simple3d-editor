@@ -1031,6 +1031,8 @@ body:not(.mobile) #right-col > .panel:not(.collapsed):not([hidden]) { flex: 1 1 
 /* Кнопки масштаба — только вместе с кубом вида */
 body.zoom-hidden .maplibregl-ctrl-zoom-in, body.zoom-hidden .maplibregl-ctrl-zoom-out { display: none; }
 /* Куб и кнопки масштаба выключены — внизу справа только атрибуция: колонка панелей — почти на всю высоту */
+/* Десктоп: геолокация тоже прячется вместе с кубом — блок у края исчезает целиком */
+body.zoom-hidden:not(.mobile) .maplibregl-ctrl-top-right .maplibregl-ctrl-group { display: none; }
 body.zoom-hidden:not(.mobile) #right-col { bottom: 44px; }
 /* Десктоп: колонки ближе к краям экрана */
 body:not(.mobile) .col { top: 6px; }

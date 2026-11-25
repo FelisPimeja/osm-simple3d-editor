@@ -9080,13 +9080,24 @@ function renderEntrance(id: number) {
         if (active) infoEl.querySelector<HTMLInputElement>(`[data-entrance-tag="${active}"]`)?.focus();
       });
     });
+    // Номер вводят — подсказка квартир пересчитывается сразу, без ухода из поля (на телефоне иначе её не подставить)
+    if (!many && input.dataset.entranceTag === 'ref') input.addEventListener('input', () => {
+      const flats = infoEl.querySelector<HTMLInputElement>('[data-entrance-tag="addr:flats"]');
+      if (!flats || flats.value || common('addr:flats')) return;
+      const sug = entranceSuggestion(id, (x) => x === id ? { ...tagsOf(x), ref: input.value } : tagsOf(x)).flats;
+      const btn = flats.parentElement?.querySelector<HTMLButtonElement>('[data-accept-suggest]');
+      if (sug) flats.dataset.suggest = sug; else delete flats.dataset.suggest;
+      flats.placeholder = sug ?? tr('например, 1-22');
+      flats.classList.toggle('suggested', !!sug);
+      if (btn) btn.hidden = !sug;
+    });
     // Подсказка подъезда: Tab в пустом поле или ↵ — подставить (номер и квартиры принимаются по одному)
-    if (!input.dataset.suggest) continue;
-    const accept = () => { if (input.value) return; input.value = input.dataset.suggest!; input.dispatchEvent(new Event('change')); };
+    if (!input.dataset.suggest && input.dataset.entranceTag !== 'addr:flats') continue;
+    const accept = () => { if (input.value || !input.dataset.suggest) return; input.value = input.dataset.suggest!; input.dispatchEvent(new Event('change')); };
     input.addEventListener('keydown', (e) => { if (e.key === 'Tab' && !e.shiftKey && !input.value) accept(); });
-    const btn = input.parentElement!.querySelector<HTMLButtonElement>('[data-accept-suggest]')!;
-    btn.addEventListener('mousedown', (e) => e.preventDefault());
-    btn.addEventListener('click', (e) => { e.preventDefault(); accept(); });
+    const btn = input.parentElement!.querySelector<HTMLButtonElement>('[data-accept-suggest]');
+    btn?.addEventListener('mousedown', (e) => e.preventDefault());
+    btn?.addEventListener('click', (e) => { e.preventDefault(); accept(); });
   }
 }
 

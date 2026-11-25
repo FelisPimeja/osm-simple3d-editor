@@ -10366,6 +10366,29 @@ document.addEventListener('keydown', (e) => {
     startGateDrag(true);
     return;
   }
+  // Входы на карте: Ctrl+C — теги выбранных (без этажа), Ctrl+V — «Вход» с копиями: каждый клик по фасаду — следующая
+  const mapDoors = !focus && indoorSelection.length && indoorSelection.every((f) => f.key.startsWith('node/') && !f.gate && (isDoor(f) || !!entranceOf(f.tags))) ? indoorSelection : undefined;
+  if (!focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyC' && !textSelected && !toolActive() && (selectedEntrance !== undefined || mapDoors)) {
+    e.preventDefault();
+    const src = mapDoors ? mapDoors.map((f) => f.tags) : selectedEntrances().map((id) => session.get(`node/${id}`)?.tags ?? entranceTags(id) ?? { entrance: 'yes' });
+    doorClipboard = src.map((t) => Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'level' && k !== 'repeat_on')));
+    clipboard = undefined;
+    entranceClip = undefined;
+    setStatus(tr('Скопировано входов: {n}. Ctrl+V — вставить: клик по фасаду ставит копию.', { n: doorClipboard.length }));
+    return;
+  }
+  // Скопировали на карте другое (ворота, ряд деревьев) — входы из буфера уходят
+  if (!focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyC' && !textSelected && !entranceClip) doorClipboard = undefined;
+  if (!focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyV' && doorClipboard && !entranceClip && !toolActive()) {
+    e.preventDefault();
+    closeCtxMenu();
+    startPoint();
+    if (!pointPick) return;
+    doorPaste = doorClipboard.map((t) => ({ ...t }));
+    toolHint(tr('Вставка входов ({n}): клик по фасаду у земли — копия входа. Esc — закончить.', { n: doorPaste.length }));
+    if (lastPointer) hoverPoint(lastPointer);
+    return;
+  }
   // Ряды и леса на карте: Ctrl+C / Ctrl+V — копия под курсор, M / Q — «Переместить» / «Повернуть»
   if (!focus && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyC' && !textSelected && !toolActive() && indoorSelection.some(mapMovable)) {
     e.preventDefault();
@@ -14301,6 +14324,7 @@ function stopPoint() {
   mapEntranceBtn.classList.remove('active');
   mapEntranceMarker?.remove();
   mapEntranceMarker = undefined;
+  overpassLayer.previewMapEntrance(undefined);
   document.querySelector('.indoor-pois')?.classList.remove('passthrough');
   overpassLayer.setDrawPreview(undefined);
   syncCursor();
@@ -14973,7 +14997,15 @@ function placeFacadeEntrance(t: PointTarget, copy = doorPaste?.[0]) {
  * «Вход» на карте (тот же инструмент, что в режиме здания): место на ближайшей к попаданию стороне контура здания
  * под курсором; у вершины — сама вершина. Ставит его placeFacadeEntrance, как и в режиме здания.
  */
-type MapEntranceTarget = { at: LonLat; node?: number; u?: number; v?: number; t?: number };
+/** id предпросмотра входа на карте — не пересекается с узлами (новые — отрицательные по порядку). */
+const MAP_ENTRANCE_PREVIEW_ID = -(2 ** 40);
+let previewTagsCache: { src?: Record<string, string>; tags: Record<string, string> } | undefined;
+function mapEntrancePreviewTags(): Record<string, string> {
+  const src = doorPaste?.[0];
+  if (!previewTagsCache || previewTagsCache.src !== src) previewTagsCache = { src, tags: src ? { ...src } : { entrance: 'yes', door: 'yes' } };
+  return previewTagsCache.tags;
+}
+type MapEntranceTarget = { at: LonLat; node?: number; u?: number; v?: number; t?: number; key?: string };
 /** Дальше от стороны (м) — не вход на неё (попали в крышу посередине). У вершины ближе — вход на неё. */
 const MAP_ENTRANCE_REACH = 1.5, MAP_ENTRANCE_VERTEX = 0.4;
 const mapEntranceBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="mentrance"]')!;
@@ -15031,7 +15063,7 @@ function nearestEntranceSide(f: Feature3D, q: LonLat, reach: number): (MapEntran
         : { at, u: ids[i], v: ids[j], t, d };
     }
   });
-  return best && best.d <= reach ? best : undefined;
+  return best && best.d <= reach ? { ...best, key: f.key } : undefined;
 }
 /** Цель «Входа» на карте в виде цели режима здания: local — те же градусы (вставка считает положение по ним). */
 function mapPointTarget(screen: [number, number]): PointTarget | undefined {
@@ -15044,7 +15076,10 @@ function mapPointTarget(screen: [number, number]): PointTarget | undefined {
 }
 function hoverMapEntrance(screen: [number, number]) {
   const t = mapEntranceTarget(screen);
-  toolHint(t ? tr('Вход: щелчок по фасаду у земли — узел entrance=yes на контуре здания. Shift — вести точку вдоль стены. Esc — выйти.') : tr('Вход: наведите на фасад здания у земли.'));
+  toolHint(doorPaste?.length ? tr('Вставка входов ({n}): клик по фасаду у земли — копия входа. Esc — закончить.', { n: doorPaste.length })
+    : t ? tr('Вход: щелчок по фасаду у земли — узел entrance=yes на контуре здания. Shift — вести точку вдоль стены. Esc — выйти.') : tr('Вход: наведите на фасад здания у земли.'));
+  // Сама дверь на фасаде (копия — со своими тегами: ширина, вид), а не только точка
+  overpassLayer.previewMapEntrance(t?.key ? { id: MAP_ENTRANCE_PREVIEW_ID, key: t.key, at: t.at, tags: mapEntrancePreviewTags() } : undefined);
   if (!t) { mapEntranceMarker?.remove(); mapEntranceMarker = undefined; return; }
   if (!mapEntranceMarker) {
     const el = document.createElement('div');

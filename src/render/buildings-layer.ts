@@ -6574,6 +6574,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (g) { this.applyEntrances(g); this.map?.triggerRepaint(); }
   }
 
+  /** Новый вход на карте (инструмент «Вход», вставка копии): дверь в точке at на стене здания key — до клика. */
+  private mapEntrancePreview?: { id: number; key: string; at: LonLat; tags: Record<string, string> };
+  previewMapEntrance(p: { id: number; key: string; at: LonLat; tags: Record<string, string> } | undefined) {
+    const prev = this.mapEntrancePreview;
+    if (!p && !prev) return;
+    if (p && prev && p.key === prev.key && p.at[0] === prev.at[0] && p.at[1] === prev.at[1] && p.tags === prev.tags) return;
+    this.mapEntrancePreview = p;
+    const keys = new Set([p?.key, prev?.key]);
+    for (const g of this.groups.values()) if (g.items.some((it) => keys.has(it.feature.key))) this.applyEntrances(g);
+    this.map?.triggerRepaint();
+  }
+
   previewEntrance(p: { id: number; place: Omit<EntrancePlace, 'id'> } | undefined) {
     this.entrancePreview = p;
     const g = this.groups.get(FOCUS_GROUP);
@@ -6768,6 +6780,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     g.disposeEntrances();
     const tags = new Map<number, Record<string, string>>();
     for (const it of g.items) for (const e of it.feature.entrances ?? []) tags.set(e.id, e.tags);
+    const mp = this.mapEntrancePreview, mpItem = mp && g.items.find((it) => it.feature.key === mp.key);
+    if (mp && mpItem) tags.set(mp.id, mp.tags);
     g.entrances = [];
     g.entranceTags = tags;
     // Окна по тегам (ниши рисует сам объём) — в режиме здания выбираются и правятся как входы
@@ -6829,7 +6843,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         }));
       }
       // Вход на стене, но не узел контура (дверь indoor-стены на фасаде): на ближайшей стороне, по своей точке
-      for (const e of it.feature.entrances ?? []) {
+      for (const e of [...(it.feature.entrances ?? []), ...(mp && it === mpItem ? [{ id: mp.id, at: mp.at, tags: mp.tags }] : [])]) {
         if (!e.at || (best.get(e.id)?.rank ?? Infinity) <= rank) continue;
         const q = g.toLocal(e.at);
         let near: { p: Pt; t: Pt; rings: Pt[][]; d: number } | undefined;
@@ -6890,10 +6904,12 @@ export class BuildingsLayer implements CustomLayerInterface {
         lines.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z0, b[0], b[1], z1, b[0], b[1], z1, a[0], a[1], z1, a[0], a[1], z1, a[0], a[1], z0);
         continue;
       }
-      const lift = this.entrancesSelected.includes(e.id) || lit.has(e.id) || e.id === this.entranceHovered;
+      const lift = this.entrancesSelected.includes(e.id) || lit.has(e.id) || e.id === this.entranceHovered || e.id === mp?.id;
       const tint = !lift && e.colour ? '#' + parseColour(e.colour).getHexString() : undefined;
       const out = lift ? selected : tint ? painted.get(tint) ?? painted.set(tint, []).get(tint)! : plain;
-      const w = (e.width ?? ENTRANCE_WIDTH) / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
+      // Предпросмотр нового входа — чуть перед стеной: ниши под него в стене ещё нет, в её глубине он был бы не виден
+      const off = e.id === mp?.id ? 0.05 : ENTRANCE_OFFSET;
+      const w = (e.width ?? ENTRANCE_WIDTH) / 2, ox = e.p[0] + e.n[0] * off, oy = e.p[1] + e.n[1] * off;
       const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w];
       const z0 = e.z, z1 = e.z + (e.height ?? ENTRANCE_HEIGHT);
       out.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z1, a[0], a[1], z0, b[0], b[1], z1, a[0], a[1], z1);

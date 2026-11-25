@@ -14912,7 +14912,10 @@ function mapEntranceTarget(screen: [number, number]): MapEntranceTarget | undefi
   const base = entity(hit.key) as Feature3D | undefined;
   const f = (session.get(hit.key) as Feature3D | undefined) ?? base;
   if (!f?.polygons?.length) return;
-  return nearestEntranceSide(f, [hit.lngLat.lng, hit.lngLat.lat], MAP_ENTRANCE_REACH);
+  // Привязки (S, Alt, типы): вершина или середина контура на земле — вход встаёт ровно в неё
+  const snap = snapGround(screen);
+  const q: LonLat = snap ? [snap.lngLat.lng, snap.lngLat.lat] : [hit.lngLat.lng, hit.lngLat.lat];
+  return nearestEntranceSide(f, q, MAP_ENTRANCE_REACH);
 }
 /** Ближайшая к q (не дальше reach, м) сторона контуров f: место входа на ней, у вершины — сама вершина. */
 function nearestEntranceSide(f: Feature3D, q: LonLat, reach: number): (MapEntranceTarget & { d: number }) | undefined {

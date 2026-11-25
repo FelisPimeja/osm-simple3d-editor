@@ -2204,7 +2204,7 @@ overpassLayer.extraSnap = (pt, radius, opts) => {
  * встаёт в сторону под ним — от линии не отделяется. Ворота в изломе или на конце оставляют на старом месте вершину
  * (форма ограждения та же). Вставка — на любое ограждение рядом, перенос — по своему.
  */
-let gateDrag: { id: number; tags: Record<string, string>; from?: string; target?: { key: string; ids: number[]; coords: LonLat[]; at: LonLat } } | undefined;
+let gateDrag: { id: number; tags: Record<string, string>; from?: string; only?: string; reach?: number; target?: { key: string; ids: number[]; coords: LonLat[]; at: LonLat } } | undefined;
 /** Скопированные ворота (теги); вставляются, пока после них не копировали другое. */
 let gateClipboard: Record<string, string> | undefined;
 
@@ -2255,7 +2255,7 @@ function moveGate(point: [number, number]) {
   let best: { key: string; ids: number[]; coords: LonLat[]; j: number; t: number; d: number } | undefined;
   for (const raw of allBarriers()) {
     const key = `way/${raw.id}`;
-    if (d.from ? key !== d.from : false) continue;
+    if (d.from ? key !== d.from : d.only ? key !== d.only : false) continue;
     const b = gateDrag?.target?.key === key ? { ...raw, ...(session.get(key)?.line ? { nodes: session.get(key)!.line!.ids, coords: session.get(key)!.line!.coords } : {}) } : liveBarrier(raw);
     if (!b || !isBarrierTags(b.tags)) continue;
     const closed = b.nodes.length > 3 && b.nodes[0] === b.nodes[b.nodes.length - 1];
@@ -2286,7 +2286,7 @@ function moveGate(point: [number, number]) {
     }
     if (closed && best?.key === key) best = { ...best, ids: [...best.ids], coords: [...best.coords] };
   }
-  if (!best || (!d.from && best.d > 5)) { if (d.target) { d.target = undefined; scheduleBarriers(); } return; }
+  if (!best || (!d.from && best.d > (d.reach ?? 5))) { if (d.target) { d.target = undefined; scheduleBarriers(); } return; }
   const { ids, coords, j, t } = best;
   const a = coords[j], c = coords[(j + 1) % coords.length];
   const p: LonLat = [a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t];
@@ -2377,7 +2377,7 @@ function commitGateDrag() {
   session.editMany(edits);
   const made = barrierFeatureFor(key);
   if (made) selectIndoor(made);
-  setStatus(d.from ? tr('Ворота {key} перенесены. Отменить — Ctrl+Z.', { key }) : tr('Вставлены ворота {key}. Отменить — Ctrl+Z.', { key }));
+  setStatus(d.from ? tr('Ворота {key} перенесены. Отменить — Ctrl+Z.', { key }) : d.only ? tr('Поставлены ворота {key}.', { key }) : tr('Вставлены ворота {key}. Отменить — Ctrl+Z.', { key }));
 }
 
 /** Ограждения показанных тайлов; пересборка не чаще раза в 300 мс. */
@@ -2809,7 +2809,7 @@ map.on('click', (e) => {
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
   if (pointPick) { placePoint([e.point.x, e.point.y]); return; }
   if (entranceDrag) { commitEntrance([e.point.x, e.point.y]); return; }
-  if (gateDrag) { commitGateDrag(); return; }
+  if (gateDrag) { if (!mobileGate) commitGateDrag(); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (measureTool.active) { measureTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (rotateTool.active) { rotateTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
@@ -4097,7 +4097,7 @@ window.addEventListener('blur', () => { overpassLayer.snapsSuspended = false; })
 function updateSnapMarker(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
   if (point && entranceDrag) moveEntrance(point);
-  if (point && gateDrag) moveGate(point);
+  if (point && gateDrag && !mobileGate) moveGate(point);
   if (pointPick && (toolActiveExceptPoint() || !focus !== pointOnMap)) stopPoint();
   if (point && pointPick) hoverPoint(point);
   if (point && shapeTool.active) shapeTool.move(point);
@@ -19832,7 +19832,7 @@ function uploadEditList() {
 
 // Разработка: пробная отправка в консоли — пакет собирается и проверяется, changeset не открывается, на сервер
 // ничего не уходит (await __dryRunUpload() → { count, problems, osmChange })
-if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __mapPassageAt: mapPassageAt, __passages: () => overpass.passages(), __overpass: overpass, __occl: labelOcclusion, __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __pointRaw: (p: [number, number]) => { const l = pointLevel(); return l && pointTargetOn(p, l); }, __pointLevel: () => pointLevel(), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
+if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __mapPassageAt: mapPassageAt, __barriers: () => allBarriers(), __map: map, __passages: () => overpass.passages(), __overpass: overpass, __occl: labelOcclusion, __layer: overpassLayer, __indoor: () => focus ? buildingIndoor(focus) : [], __session: session, __entity: entity, __focus: () => focus, __pointTarget: (p: [number, number]) => pointTarget(p), __pointRaw: (p: [number, number]) => { const l = pointLevel(); return l && pointTargetOn(p, l); }, __pointLevel: () => pointLevel(), __levels: () => focus ? focusLevelList() : [], __section: (z: number) => overpassLayer.focusSection(z) });
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dryRunUpload = async () => {
   repairNewRelationRings();
   await collapseLoneOuters();
@@ -20929,7 +20929,9 @@ function renderMobileCard() {
   mobileCross.hidden = !(mobile && mobilePlace);
   if (!mobile) { mobileCard.hidden = true; return; }
   if (mobilePlace) {
-    mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${tr('Новый вход')}</div><div class="mc-hint">${tr('Двигайте карту: прицел — на стену здания')}</div></div>`
+    mobileCard.innerHTML = (mobileGate
+      ? `<div class="mc-text"><div class="mc-name">${tr('Новые ворота')}</div><div class="mc-hint">${tr('Двигайте карту: прицел — на линию ограждения')}</div></div>`
+      : `<div class="mc-text"><div class="mc-name">${tr('Новый вход')}</div><div class="mc-hint">${tr('Двигайте карту: прицел — на стену здания')}</div></div>`)
       + `<button type="button" class="secondary" data-mc-cancel>${tr('Отмена')}</button><button type="button" data-mc-place>${tr('Поставить')}</button>`;
     mobileCard.hidden = false;
     return;
@@ -20938,6 +20940,14 @@ function renderMobileCard() {
   if (focus) {
     mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(groupName(focus))}</div><div class="mc-hint">${tr('Режим здания · этажи — в панели «Этажи»')}</div></div>`
       + (shownLevel ? '' : addBtn) + `<button type="button" class="secondary" data-mc-exit>${tr('К карте')}</button>`;
+    mobileCard.hidden = false;
+    return;
+  }
+  const fence = mobileFence();
+  if (fence) {
+    const len = fence.polygons[0].outer.reduce((sum, c, i, a) => i ? sum + Math.hypot((c[0] - a[i - 1][0]) * 111320 * Math.cos(c[1] * Math.PI / 180), (c[1] - a[i - 1][1]) * 110540) : 0, 0);
+    mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(fence.tags.name ?? indoorTitle(fence))}</div><div class="mc-hint">${showLength(len)} ${unitLabel()}</div></div>`
+      + `<button type="button" data-mc-gate>＋ ${tr('Ворота')}</button>`;
     mobileCard.hidden = false;
     return;
   }
@@ -20950,8 +20960,9 @@ function renderMobileCard() {
 mobileCard.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
   if (t.closest('[data-mc-entrance]')) { startMobilePlace(); return; }
-  if (t.closest('[data-mc-cancel]')) { stopPoint(); return; }
-  if (t.closest('[data-mc-place]')) { commitMobilePlace(); return; }
+  if (t.closest('[data-mc-gate]')) { startMobileGate(); return; }
+  if (t.closest('[data-mc-cancel]')) { if (mobileGate) stopMobileGate(true); else stopPoint(); return; }
+  if (t.closest('[data-mc-place]')) { if (mobileGate) commitMobileGate(); else commitMobilePlace(); return; }
   if (t.closest('[data-mc-exit]')) { closeFocus(); cardGroup = undefined; renderMobileCard(); }
   else if (t.closest('[data-mc-open]') && cardGroup) { const g = cardGroup; cardGroup = undefined; enterFocus(g); renderMobileCard(); }
 });
@@ -20987,12 +20998,69 @@ function commitMobilePlace() {
   renderMobileCard();
   if (id !== undefined) { selectEntrance(id); setCollapsed(document.getElementById('info-panel')!, false); }
 }
-map.on('move', () => { if (mobilePlace && pointPick) hoverPoint(mobileCenter()); });
+map.on('move', () => {
+  if (mobilePlace && pointPick) hoverPoint(mobileCenter());
+  if (mobileGate && gateDrag) { moveGate(mobileCenter()); syncGateMarker(); }
+});
+/** Место будущих ворот под прицелом: тонкое ограждение на карте плоское, ворот в нём не видно. */
+let gateMarker: maplibregl.Marker | undefined;
+function syncGateMarker() {
+  const at = mobileGate ? gateDrag?.target?.at : undefined;
+  if (!at) { gateMarker?.remove(); gateMarker = undefined; return; }
+  if (!gateMarker) {
+    const el = document.createElement('div');
+    el.className = 'map-entrance-marker';
+    gateMarker = new maplibregl.Marker({ element: el }).setLngLat(at).addTo(map);
+  } else gateMarker.setLngLat(at);
+}
+
+/** Выбранное ограждение (одно, не ворота) — карточка «＋ Ворота» на мобильном. */
+function mobileFence(): IndoorFeature | undefined {
+  const f = indoorSelection.length === 1 ? indoorSelection[0] : undefined;
+  return f?.barrier && !f.gate && f.key.startsWith('way/') ? f : undefined;
+}
+// Мобильные «＋ Ворота»: тот же прицел, что у входа; ворота едут только по выбранному ограждению (магнит ~40 px),
+// «Поставить» — узел barrier=gate в линию и сразу его свойства (тип — там)
+let mobileGate = false;
+function startMobileGate() {
+  const fence = mobileFence();
+  if (!fence) return;
+  setCollapsed(document.getElementById('info-panel')!, true);
+  const c = map.getCenter();
+  const reach = 40 * 40075016.7 * Math.cos(c.lat * Math.PI / 180) / (512 * 2 ** map.getZoom());
+  gateDrag = { id: nextNewId--, tags: { barrier: 'gate' }, only: fence.key, reach };
+  mobileGate = true;
+  mobilePlace = true;
+  renderMobileCard();
+  moveGate(mobileCenter());
+  syncGateMarker();
+}
+function stopMobileGate(reselect: boolean) {
+  const key = gateDrag?.only;
+  cancelGateDrag();
+  mobileGate = false;
+  mobilePlace = false;
+  syncGateMarker();
+  const f = reselect && key ? barrierFeatureFor(key) : undefined;
+  if (f) selectIndoor(f);
+  renderMobileCard();
+}
+function commitMobileGate() {
+  if (gateDrag) gateDrag.reach = 40 * 40075016.7 * Math.cos(map.getCenter().lat * Math.PI / 180) / (512 * 2 ** map.getZoom());
+  moveGate(mobileCenter());
+  if (!gateDrag?.target) { setStatus(tr('Наведите прицел на линию ограждения.'), true); return; }
+  commitGateDrag();
+  mobileGate = false;
+  mobilePlace = false;
+  syncGateMarker();
+  renderMobileCard();
+  setCollapsed(document.getElementById('info-panel')!, false);
+}
 
 // Тап по зданию — карточка; мимо — убрать
 map.on('click', (e) => {
   if (!mobile || focus || mobilePlace) return;
-  const key = overpassLayer.pick(e.point);
+  const key = mobileFence() ? undefined : overpassLayer.pick(e.point);
   cardGroup = key ? groupOf(key) ?? soloGroup(key) : undefined;
   renderMobileCard();
 });

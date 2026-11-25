@@ -1777,5 +1777,9 @@
   "Поставить": "Place",
   "Добавить вход": "Add an entrance",
   "Наведите прицел на стену здания.": "Put the crosshair on a building wall.",
-  "Доступна новая версия редактора — она загрузится после сохранения правок и перезапуска.": "A new version of the editor is available — it will load after you save your edits and restart."
+  "Доступна новая версия редактора — она загрузится после сохранения правок и перезапуска.": "A new version of the editor is available — it will load after you save your edits and restart.",
+  "Новые ворота": "New gate",
+  "Двигайте карту: прицел — на линию ограждения": "Move the map: put the crosshair on the barrier line",
+  "Наведите прицел на линию ограждения.": "Put the crosshair on the barrier line.",
+  "Поставлены ворота {key}.": "Gate {key} placed."
 }

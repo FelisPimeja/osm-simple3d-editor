@@ -12012,7 +12012,7 @@ const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.
   : fs.length && fs.every((f) => f.flora) ? ['natural', 'landuse', 'leaf_type', 'leaf_cycle', 'name'] : fs.length && fs.every((f) => f.gate) ? ['barrier', 'width', 'height', 'access', 'locked', 'opening_hours', 'material', 'colour'] : fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && !f.barrier) ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
   : fs.length && fs.every((f) => isDoor(f) && !f.tags.door && INDOOR_GATES.has(f.tags.barrier)) ? ['barrier', 'amenity', 'level', 'width', 'access']
   : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : ['width', 'height', 'material']), 'colour']
-  : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
+  : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level', ...(fs.every((f) => f.kind === 'wall' || f.kind === 'column') ? ['colour'] : [])]
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
   : [...INDOOR_EDIT_TAGS].filter((k) => (k !== 'ref' && k !== 'name') || fs.every((f) => f.kind === 'room' || f.kind === 'area')));
 
@@ -18127,6 +18127,7 @@ function toggleContext() {
 function planItem(f: IndoorFeature, fs: IndoorFeature[], l: Level): IndoorItem {
   return ({ key: f.key, kind: f.kind, polygons: f.polygons, line: f.line, linearWall: !!f.line && f.kind !== 'column' && (f.tags.area!=='yes'||f.tags.barrier==='fence'||f.tags.wall==='counter'||(f.kind==='wall'&&f.tags.material==='glass')), fence:f.tags.barrier==='fence'&&f.tags.fence_type!=='railing'&&f.tags.material!=='glass',railing:f.tags.barrier==='fence'||f.tags.wall==='counter'||(!!f.line&&f.kind==='wall'&&f.tags.material==='glass'), glass:f.tags.material==='glass', counter:f.tags.wall==='counter', railingHeight:parseLength(f.tags.height)??(f.tags.material==='glass'&&f.tags.wall!=='counter'&&!f.tags.barrier?Infinity:undefined), z: l.floor, noFloor: !floorLevels(f).includes(l.n), areaLedge: f.tags.indoor === 'area',
           ...(f.transit === 'platform' ? { colour: PLATFORM_COLOUR, platform: true } : isFloorKind(f) ? { colour: CATEGORY_COLOURS[categoryOf(f, fs)] } : {}),
+          ...((f.kind === 'wall' || f.kind === 'column') && f.tags.colour ? { paint: f.tags.colour.split(';')[0].trim() } : {}),
           ...(isToiletRoom(f) ? { doorWidth: TOILET_DOOR_WIDTH } : {}),
     ...(isPool(f) ? { pool: poolDepth(f) } : {}) });
 }

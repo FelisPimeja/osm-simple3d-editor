@@ -51,7 +51,7 @@ const HIGHLIGHT = new THREE.Color('#97beff'); // #2f7cff, смешанный с 
 const MONOCHROME = new THREE.Color('#ffffff');
 
 /** Indoor-объект выбранного этажа: контуры (lon/lat) и высота пола, м. */
-export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Платформа вокзала: снаружи здания её пол вырезает землю вокруг. */ platform?: boolean; /** Путь: ширина колеи, м (рельсы — двумя линиями). */ gauge?: number; /** Путь: ось целиком (геометрия объекта; рельсы — по кускам в здании). */ axis?: Polygon[]; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
+export interface IndoorItem { key: string; kind: IndoorKind; polygons: Polygon[]; line?: boolean; z: number; /** Платформа вокзала: снаружи здания её пол вырезает землю вокруг. */ platform?: boolean; /** Путь: ширина колеи, м (рельсы — двумя линиями). */ gauge?: number; /** Путь: ось целиком (геометрия объекта; рельсы — по кускам в здании). */ axis?: Polygon[]; /** Только явные indoor=area могут иметь объёмный свободный край. */ areaLedge?: boolean; /** Заливка по назначению (иначе — по виду). */ colour?: number; /** Свой цвет стены или колонны (colour=*), обе грани. */ paint?: string; /** Ширина дверей в стенах этого помещения, м (туалеты — уже обычных). */ doorWidth?: number;
   /** A closed way without area=yes is a linear wall. */ linearWall?: boolean;
   railing?: boolean;
   /** material=glass у стены-линии или ограждения. */ glass?: boolean;
@@ -155,6 +155,14 @@ export const DOOR_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x256
 const ENTRANCE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const ENTRANCE_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x97beff, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const ENTRANCE_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
+/** Полотно входа своего цвета (colour=*): копия ENTRANCE_MATERIAL с теми же плоскостями среза. */
+const entranceTints = new Map<string, THREE.MeshBasicMaterial>();
+function entranceTintMaterial(hex: string): THREE.MeshBasicMaterial {
+  let m = entranceTints.get(hex);
+  if (!m) { m = ENTRANCE_MATERIAL.clone(); m.color.set(hex); entranceTints.set(hex, m); }
+  m.clippingPlanes = ENTRANCE_MATERIAL.clippingPlanes;
+  return m;
+}
 // Lines have no polygonOffset; bias their depth like the entrance fill, keeping wall occlusion.
 ENTRANCE_LINE_MATERIAL.onBeforeCompile = shader => {
   shader.vertexShader = shader.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  gl_Position.z -= 2e-5 * gl_Position.w;');
@@ -3237,7 +3245,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const doorModels = [...this.doors, ...(this.level?.below ?? []).flatMap((b) => b.doorModels ?? [])]
       .filter((d) => Math.abs(d.z - floor) < 0.1).map((d) => `${d.key}@${this.doorAt(d).join(',')}:${JSON.stringify(d.tags ?? {})}`);
     const key = [objId(g), shell ? objId(shell) : 0, top, +this.graphics.edges, +glassEnabled,
-      items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.noFloor}:${+!!it.cutOnly}:${+!!it.areaLedge}:${+!!it.linearWall}:${+!!it.railing}:${it.railingHeight??1.1}:${+!!it.counter}:${+!!it.glass}:${+!!it.fence}`).join(','),
+      items.map((it) => `${it.key}:${it.kind}:${it.z}:${objId(it.polygons)}:${+!!it.line}:${it.colour ?? ''}:${it.paint ?? ''}:${it.doorWidth ?? ''}:${+!!it.shaft}:${+!!it.noFloor}:${+!!it.cutOnly}:${+!!it.areaLedge}:${+!!it.linearWall}:${+!!it.railing}:${it.railingHeight??1.1}:${+!!it.counter}:${+!!it.glass}:${+!!it.fence}`).join(','),
       doorList.map((d) => d.join(',')).join(';'), doorModels.join(';'),
       JSON.stringify([this.level?.doorCuts,...(this.level?.below??[]).map(b=>b.doorCuts),ownVoids,this.level?.items.map(it=>[it.key,it.noFloor]),g.items.filter(it=>this.openRoofInPlan(g,it)).map(it=>it.feature.key)]),
       escalators.map((e) => `${e.key}:${e.bottom}:${e.top}:${e.width}:${e.incline}:${e.noHole ? 1 : 0}:${objId(e.line)}`).join(',')].join('|');
@@ -3531,6 +3539,9 @@ export class BuildingsLayer implements CustomLayerInterface {
     /** Рёбра низких стен (стена-полигон с height ниже среза) и их верх. */
     const lowTaken: { s: PlanSeg; top: number; key: string }[] = [];
     let aboveLow = false, lowKey = '', aboveLowTint: THREE.Color | undefined;
+    /** Свой цвет рисуемой стены или колонны (colour=*): вместо цвета помещений по сторонам. */
+    let ownTint: THREE.Color | undefined;
+    const paintOf = (it: IndoorItem) => it.paint && (it.kind === 'wall' || it.kind === 'column') ? parseColour(it.paint) : undefined;
     /** Цвет пространства у низкой стены: первое цветное помещение у любого её ребра (торец прилавка — между ним и помещением). */
     const lowTints = new Map<string, THREE.Color | undefined>();
     const lowTint = (key: string) => {
@@ -3616,7 +3627,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           for (const k of [1, 4, 10, 20, 40]) for (const l of [0, 0.5, -0.5, 1, -1, 2, -2]) {
             const c = sideColour(mx + sx * k + ux * l, my + sy * k + uy * l); if (c !== WHITE_WALL) return c; }
           return WHITE_WALL; };
-        const colours = [probe(nx, ny), probe(-nx, -ny)];
+        const colours = ownTint ? [ownTint, ownTint] : [probe(nx, ny), probe(-nx, -ny)];
         const part = ts.length === 2 ? faces : [
           [px, py, z0, qx, qy, z0, qx, qy, zb, px, py, z0, qx, qy, zb, px, py, za],
           [px, py, z0, qx, qy, zb, qx, qy, z0, px, py, z0, px, py, za, qx, qy, zb],
@@ -4198,7 +4209,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const closed = !!capRing;
         for (let i = 0; i + 1 < pts.length; i++) {
           omitFloorSeam = bordersVoid(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
-          lowKey = it.key; wallFree(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], it.z, closed);
+          lowKey = it.key; ownTint = paintOf(it); wallFree(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], it.z, closed); ownTint = undefined;
         }
         omitFloorSeam = false;
         if (capRing) cap(capRing, [], it.z, it.kind === 'wall' || it.kind === 'column');
@@ -4234,7 +4245,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           if (thin) cap(rp, [], it.z, true);
           for (let i = 0; i < rp.length; i++) {
             const [ax, ay] = rp[i], [bx, by] = rp[(i + 1) % rp.length];
-            if (solid) { lowKey = it.key; wallFree(ax, ay, bx, by, it.z, true); }
+            if (solid) { lowKey = it.key; ownTint = paintOf(it); wallFree(ax, ay, bx, by, it.z, true); ownTint = undefined; }
             else if (it.kind === 'room') {
               // Стена помещения — там, где её ещё нет (периметр, indoor=wall с проёмами, соседнее помещение)
               wallFree(ax, ay, bx, by, it.z, thin);
@@ -6841,7 +6852,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const floorZ = !onMap && Number.isFinite(lv) ? this.entranceFloors.get(lv) : undefined;
         const place = { p: near.p, t: near.t, n: nrm, z: floorZ ?? entranceZ(e.tags, it.tags) };
         const h = computeHeights(it.tags), outside = !!partsHidden && (place.z < min - 0.3 || place.z >= min + h.top - h.min);
-        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: fittedDoorHeight(e.tags, it.tags), wings: doorWings(e.tags) }, rank });
+        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: fittedDoorHeight(e.tags, it.tags), wings: doorWings(e.tags), colour: e.tags.colour }, rank });
       }
     }
     for (const w of windowPlaces) if (!best.has(w.id)) best.set(w.id, { place: w, rank: Infinity });
@@ -6850,6 +6861,8 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!best.size) return;
     const root = new THREE.Group();
     const plain: number[] = [], selected: number[] = [], lines: number[] = [];
+    /** Входы со своим цветом (colour=*) — по цвету отдельным мешем. */
+    const painted = new Map<string, number[]>();
     const level = g === this.groups.get(FOCUS_GROUP) ? this.level : undefined;
     // Проём рисует план, только если у входа стоит indoor-стена (стена или сторона помещения этажа); на одном
     // абрисе оболочки (indoor-стен нет) вход — прямоугольником, как в режиме здания
@@ -6877,7 +6890,9 @@ export class BuildingsLayer implements CustomLayerInterface {
         lines.push(a[0], a[1], z0, b[0], b[1], z0, b[0], b[1], z0, b[0], b[1], z1, b[0], b[1], z1, a[0], a[1], z1, a[0], a[1], z1, a[0], a[1], z0);
         continue;
       }
-      const out = this.entrancesSelected.includes(e.id) || lit.has(e.id) || e.id === this.entranceHovered ? selected : plain;
+      const lift = this.entrancesSelected.includes(e.id) || lit.has(e.id) || e.id === this.entranceHovered;
+      const tint = !lift && e.colour ? '#' + parseColour(e.colour).getHexString() : undefined;
+      const out = lift ? selected : tint ? painted.get(tint) ?? painted.set(tint, []).get(tint)! : plain;
       const w = (e.width ?? ENTRANCE_WIDTH) / 2, ox = e.p[0] + e.n[0] * ENTRANCE_OFFSET, oy = e.p[1] + e.n[1] * ENTRANCE_OFFSET;
       const a = [ox - e.t[0] * w, oy - e.t[1] * w], b = [ox + e.t[0] * w, oy + e.t[1] * w];
       const z0 = e.z, z1 = e.z + (e.height ?? ENTRANCE_HEIGHT);
@@ -6889,7 +6904,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         lines.push(x, y, z0, x, y, z1);
       }
     }
-    for (const [pos, mat] of [[plain, ENTRANCE_MATERIAL], [selected, ENTRANCE_SELECTED_MATERIAL]] as const) {
+    for (const [pos, mat] of [[plain, ENTRANCE_MATERIAL], [selected, ENTRANCE_SELECTED_MATERIAL], ...[...painted].map(([c, pos]) => [pos, entranceTintMaterial(c)] as const)] as const) {
       if (!pos.length) continue;
       const geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -9385,7 +9400,7 @@ function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
 }
 /** Вход на стене: точка у основания (м сцены), направление стены t и наружная нормаль n (единичные), низ z. */
-export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Высота проёма входа (height), м. */ height?: number; /** Створки входа (door:wings). */ wings?: number; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number; outline?: Pt[]; /** Пол этажа окна, м сцены (подоконник — от него). */ floor?: number } }
+export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Высота проёма входа (height), м. */ height?: number; /** Створки входа (door:wings). */ wings?: number; /** Цвет полотна (colour=*). */ colour?: string; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number; outline?: Pt[]; /** Пол этажа окна, м сцены (подоконник — от него). */ floor?: number } }
 
 /**
  * Контур проёма окна по window:shape и window:top:shape (выпуклый, против часовой): вдоль стены от середины и вверх

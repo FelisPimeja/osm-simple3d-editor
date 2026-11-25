@@ -20084,13 +20084,15 @@ async function doUpload() {
     // Шаги подложек, сделанные вместе с этими правками (и не отменённые), — в ту же команду JOSM
     const underlaySteps = toJosm ? pendingJosmUnderlays.filter((p) => p.applied).map((p) => p.id) : [];
     const res = await uploadEdits(edits, toJosm ? commentSuggestion() : uploadComment.trim(), (t) => panelStatus(t), toJosm,
-      { ...sourceTags(), ...(underlaySteps.length ? { 'simple3d:underlays': underlaySteps.join(',') } : {}) });
+      { ...sourceTags(), 'editor:mode': [...usedModes].join(';'), ...(underlaySteps.length ? { 'simple3d:underlays': underlaySteps.join(',') } : {}) });
     if (toJosm) pendingJosmUnderlays = [];
     // Отправлено — источники считаем заново, с того, что включено сейчас
     usedImagery.clear();
     usedStreet.clear();
     usedUnderlay = currentUnderlays().some((u) => u.visible);
     noteSources();
+    usedModes.clear();
+    usedModes.add(uiMode());
     // Временные id узлов и путей → настоящие: в геометрии, членах отношений и в отправленных полигонах
     const nodeIdMap = new Map<number, number>(), wayIdMap = new Map<number, number>();
     for (const [from, to] of res.newKeys) {
@@ -21014,12 +21016,23 @@ renderHelp();
 const mobileQuery = matchMedia('(max-width: 768px)');
 const mobileCard = document.getElementById('mobile-card')!;
 let mobile = false;
+/**
+ * Форм-фактор для тега changeset editor:mode (статистика: что востребовано где). Планшет — сенсорный экран, у которого
+ * короткая сторона ≥ 768 px: на нём бывает и мобильный, и десктопный интерфейс, отдельный UX для него пока не сделан.
+ */
+function uiMode(): 'desktop' | 'tablet' | 'mobile' {
+  if (matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) >= 768) return 'tablet';
+  return mobile ? 'mobile' : 'desktop';
+}
+/** Режимы, в которых работали с последней отправки (переключили посреди правок — в теге оба через «;»). */
+const usedModes = new Set<string>();
 /** Здание карточки (в режиме карты). */
 let cardGroup: BuildingGroup | undefined;
 
 function applyMobile() {
   mobile = mobileQuery.matches;
   document.body.classList.toggle('mobile', mobile);
+  usedModes.add(uiMode());
   // Свойства и правки: на узком экране — под панелью приложения, на широком — в правой колонке
   const info = document.getElementById('info-panel')!, edits = document.getElementById('edits-panel')!;
   placeViewButtons(mobile);

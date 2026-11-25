@@ -20,6 +20,7 @@ Usage statistics (changesets, users, edited keys; updated daily): https://felisp
 - `type=building` relations: create them and manage their members.
 - Indoor floor plans following the [Simple Indoor Tagging](https://wiki.openstreetmap.org/wiki/Simple_Indoor_Tagging) scheme: view levels in 3D and draw and edit rooms, corridors, areas, walls (as lines or, for thick walls, as `area=yes` polygons), columns and doors. Tools include split, merge, offset, a wall buffer and tracing along existing outlines; levels come from `level` and `repeat_on`.
 - Validator with automatic fixes, and a changeset comment generator.
+- Each changeset records the interface form factor in `editor:mode` (`desktop`, `tablet` or `mobile`; several joined with `;` if the mode changed between uploads). Nothing else about the device is sent.
 - Basemaps: satellite imagery and OSM GPS traces, with imagery offset and opacity.
 - Upload via OAuth 2.0 directly to the OSM API, no backend required. Data can also be read from a locally running JOSM.
 

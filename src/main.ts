@@ -8993,8 +8993,8 @@ function selectEntrance(id: number, add = false) {
 /** Ключи секции «Другие теги» у входов: один вход — префикс и id узла, несколько выбранных — общий ключ. */
 const ENTRANCE_KEY_PREFIX = '@entrance:', ENTRANCES_KEY = '@entrances';
 /** Поля карточки входа: тип входа (варианты схемы iD), номер, квартиры (addr:flats: диапазон «1-22», через «;» — несколько) и створки. */
-/** Поля входа: свои (номер, квартиры, створки) и поля пресета двери indoor=door (тип двери, этаж, размеры, материал). */
-const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'addr:flats', 'door', 'door:wings', 'level', 'width', 'height', 'material'] as const;
+/** Поля входа: свои (номер, квартиры, створки) и поля пресета двери indoor=door (тип двери, этаж, размеры, материал, цвет). */
+const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'addr:flats', 'door', 'door:wings', 'level', 'width', 'height', 'material', 'colour'] as const;
 
 /** Поля карточки окна: вид, размеры проёма и подоконник (м), этаж. */
 const WINDOW_FORM_TAGS = ['window', 'window:shape', 'window:top:shape', 'window:material', 'window:width', 'window:height', 'window:breast', 'level'] as const;
@@ -12011,7 +12011,7 @@ const indoorFormTags = (fs: IndoorFeature[]) => (fs.length && fs.every((f) => f.
   : fs.length && fs.every((f) => f.flora === 'row') ? ['natural', 'leaf_type', 'leaf_cycle', 'genus', 'species', 'height', 'diameter_crown']
   : fs.length && fs.every((f) => f.flora) ? ['natural', 'landuse', 'leaf_type', 'leaf_cycle', 'name'] : fs.length && fs.every((f) => f.gate) ? ['barrier', 'width', 'height', 'access', 'locked', 'opening_hours', 'material', 'colour'] : fs.length && fs.every((f) => f.barrier) ? ['barrier', ...(fs.every((f) => f.tags.barrier === 'fence') ? ['fence_type'] : []), 'height', 'min_height', 'width', 'material', 'colour'] : fs.every(f=>f.tags.barrier==='fence' && !f.barrier) ? ['barrier','fence_type','level','height','material'] : fs.every((f) => f.kind === 'level') ? ['height', 'level:ref', 'name'] : fs.every((f) => f.stairs) ? ['highway', 'incline', 'level', 'width', 'step_count', 'handrail'] : fs.every((f) => f.escalator) ? ['highway', 'conveying', 'incline', 'level', 'width']
   : fs.length && fs.every((f) => isDoor(f) && !f.tags.door && INDOOR_GATES.has(f.tags.barrier)) ? ['barrier', 'amenity', 'level', 'width', 'access']
-  : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : ['width', 'height', 'material'])]
+  : fs.every(isDoor) ? [...(entranceDoors(fs) ? ['entrance', 'ref'] : []), 'door', 'level', ...(fs.every((f) => f.tags.door === 'revolving') ? ['diameter'] : ['width', 'height', 'material']), 'colour']
   : fs.some((f) => f.kind === 'wall' || f.kind === 'column' || f.kind === 'poi') ? ['indoor', 'level']
   // ref и name (номер и название, подпись на плане) — у помещений и зон, у коридоров — нет
   : [...INDOOR_EDIT_TAGS].filter((k) => (k !== 'ref' && k !== 'name') || fs.every((f) => f.kind === 'room' || f.kind === 'area')));

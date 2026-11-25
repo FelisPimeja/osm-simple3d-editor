@@ -10132,7 +10132,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
   // Стеклянный фасад: внутри видны перекрытия — плиты на границах этажей (непрозрачные, после крыши)
   const glassWalls = isGlass(roofPartWallMaterial(tags));
   const floors = [...joint, ...(glassWalls && !flat && !roofOnly ? timed('здание: перекрытия за стеклом', () => floorSlabs(polys, heights, tags, levelGridFor(f)?.map((l) => ({ z: l.z, holes: l.holes.map((p) => p.map((r) => r.map(g.toLocal))) })))) : []), ...panes];
-  // Рельеф (эксперимент): объект — на верхнюю отметку рельефа под зданием; стоящему на земле — фундамент до нижней
+  // Рельеф (эксперимент): объект — на отметку основания здания; ниже неё под зданием рельефа нет, фундамент строится, только если main задаст нижнюю отметку ниже основания
   const lift = g.focusScene ? 0 : groundFor(f);
   const foot = lift ? lift - footFor(f) : 0;
   let seam: Float32Array | undefined;

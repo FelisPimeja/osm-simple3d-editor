@@ -1649,9 +1649,11 @@ function groundRange(f: Feature3D): [number, number] {
   groundCache.set(host.key, v);
   return v;
 }
-/** Здание стоит на верхней отметке рельефа под ним (не тонет в склоне), до нижней — фундамент. */
-const buildingGround = (f: Feature3D) => groundRange(f)[1];
-const buildingFoot = (f: Feature3D) => groundRange(f)[0];
+/**
+ * Здание стоит на нижней отметке рельефа под ним: выше по склону низ стен уходит в землю. Так считают
+ * height (от нижней точки, где здание встречается с землёй) и building:levels (наибольшее число видимых этажей).
+ */
+const buildingGround = (f: Feature3D) => groundRange(f)[0];
 function groundHost(f: Feature3D): Feature3D {
   const g = groupOf(f.key);
   if (g) {
@@ -1670,7 +1672,7 @@ function groundHost(f: Feature3D): Feature3D {
   const host = groundIndex.list.find(({ f: b, box }) => c[0] >= box[0] && c[0] <= box[2] && c[1] >= box[1] && c[1] <= box[3] && pointInRing(c, b.polygons[0].outer));
   return host?.f ?? f;
 }
-setGround(buildingGround, buildingFoot);
+setGround(buildingGround);
 // Карта могла загрузиться раньше, чем модуль дошёл досюда (top-level await выше): тогда — сразу, иначе — по load
 if (mapLoaded) syncTerrain(); else map.once('load', syncTerrain);
 

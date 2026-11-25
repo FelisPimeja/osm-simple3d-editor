@@ -10429,12 +10429,16 @@ document.addEventListener('keydown', (e) => {
   }
   // Шорткаты режима здания — по физической клавише (e.code), чтобы работали и в русской раскладке
   // Работают и посреди другого инструмента: запуск нового выключает текущий
-  // X у выбранного ограждения — ворота на него (добавить часть к выбранному целому); иначе — «Точка»
-  if (e.code === 'KeyX' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && indoorSelection.length === 1 && indoorSelection[0].barrier && !indoorSelection[0].gate && indoorSelection[0].key.startsWith('way/')) {
-    e.preventDefault();
-    closeCtxMenu();
-    if (gateDrag) cancelGateDrag(); else startAddGate(indoorSelection[0].key);
-    return;
+  // X — добавить часть к выбранному целому (ворота к забору, вход к зданию); ничего не выбрано — «Точка»
+  if (e.code === 'KeyX' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    // В режиме здания X — «Точка» (вход на фасад — она же); ворота на забор окружения — и там
+    const act = childActions().find((a) => !focus || a.id === 'gate');
+    if (act || gateDrag) {
+      e.preventDefault();
+      closeCtxMenu();
+      if (gateDrag) cancelGateDrag(); else if (pointPick) stopPoint(); else act!.run();
+      return;
+    }
   }
   if (!focus && e.code === 'KeyX' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
@@ -12017,11 +12021,10 @@ function renderIndoorSelection(add = false) {
     const sh = barrierShape(t), m = (v: number) => String(Math.round(v * 100) / 100);
     infoEl.innerHTML = objectHeading(esc(kind) + (t.name ? ' ' + tr('«{name}»', { name: esc(t.name) }) : ''), `${server().web}/${type}/${id}`, esc(key))
       + `<p class="hint">${esc(tr('Высота {h} м, толщина {w} м.', { h: m(sh.top - sh.min), w: m(sh.width) }))}</p>`
-      + (f.key.startsWith('way/') ? `<p class="add-on"><button type="button" class="secondary" data-add-gate title="${esc(tr('Добавить ворота на это ограждение (X)'))}">＋ ${tr('Ворота')}</button></p>` : '')
+      + childActionsRow()
       + indoorForm([f], barrierPlaceholders([f]))
       + renderOtherTags(key, t, indoorForm([f], barrierPlaceholders([f])), true);
     bindIndoorForm([f]);
-    infoEl.querySelector('[data-add-gate]')?.addEventListener('click', () => startAddGate(f.key));
     return;
   }
   const src = indoorCategorySource(f);
@@ -14238,6 +14241,40 @@ escalatorUi.addEventListener('pointerdown', (e) => {
   el.addEventListener('pointercancel', up);
 });
 
+/**
+ * Что можно добавить к выбранному объекту как его часть: вход — к зданию, ворота — к забору или стене (дальше —
+ * переход к дороге и т. п.). Один список на обе версии: на компьютере — кнопки в свойствах и X, на телефоне — в карточке.
+ */
+interface ChildAction { id: string; label: string; title: string; run: () => void }
+/** Здание, к которому ставится вход «＋ Вход» на компьютере: стены других зданий не ловятся. */
+let entranceParent: BuildingGroup | undefined;
+function childActions(): ChildAction[] {
+  const fence = indoorSelection.length === 1 && indoorSelection[0].barrier && !indoorSelection[0].gate && indoorSelection[0].key.startsWith('way/') ? indoorSelection[0] : undefined;
+  if (fence) return [{ id: 'gate', label: tr('Ворота'), title: tr('Добавить ворота на это ограждение (X)'), run: () => startAddGate(fence.key) }];
+  // Вход — на фасад: в режиме здания — пока не открыт план этажа (там «Точка» ставит двери и объекты)
+  const building = mobile ? (focus ? (shownLevel ? undefined : focus) : cardGroup)
+    : focus ? (shownLevel ? undefined : focus)
+    : selection.length && !indoorSelection.length ? (() => { const gs = new Set(selection.map((k) => groupOf(k)?.key ?? k)); return gs.size === 1 ? groupOf(selection[0]) ?? soloGroup(selection[0]) : undefined; })() : undefined;
+  if (building) return [{ id: 'entrance', label: tr('Вход'), title: tr('Добавить вход на фасад этого здания (X)'), run: () => startAddEntrance(building) }];
+  return [];
+}
+function startAddEntrance(g: BuildingGroup) {
+  if (mobile) { startMobilePlace(); return; }
+  if (pointPick) stopPoint();
+  startPoint();
+  if (pointPick && !focus) entranceParent = g;
+}
+/** Кнопки «＋ …» в свойствах (компьютер; на телефоне они в карточке внизу). */
+function childActionsRow(): string {
+  const acts = mobile ? [] : childActions();
+  return acts.length ? `<p class="add-on">${acts.map((a) => `<button type="button" class="secondary" data-child-action="${a.id}" title="${esc(a.title)}">＋ ${esc(a.label)}</button>`).join('')}</p>` : '';
+}
+document.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-child-action]');
+  if (!b) return;
+  childActions().find((a) => a.id === b.dataset.childAction)?.run();
+});
+
 function startPoint() {
   if (!focus && map.getZoom() < 17) return setStatus(tr('Приблизьте карту (z ≥ 17), чтобы ставить входы.'), true);
   pointOnMap = !focus;
@@ -14255,6 +14292,7 @@ function startPoint() {
 function stopPoint() {
   if (!pointPick) return;
   pointPick = false;
+  entranceParent = undefined;
   doorPaste = undefined;
   entranceGroup = undefined;
   windowGroup = undefined;
@@ -14941,12 +14979,22 @@ const MAP_ENTRANCE_REACH = 1.5, MAP_ENTRANCE_VERTEX = 0.4;
 const mapEntranceBtn = mapToolbar.querySelector<HTMLButtonElement>('[data-tool="mentrance"]')!;
 mapEntranceBtn.addEventListener('click', () => (pointPick ? stopPoint() : startPoint()));
 function mapEntranceTarget(screen: [number, number]): MapEntranceTarget | undefined {
-  // Мобильный прицел: точка на земле под прицелом и ближайшая стена здания карточки (магнит ~40 px)
-  if (mobilePlace && cardGroup) {
-    const g = map.unproject(screen), q: LonLat = [g.lng, g.lat];
+  // Мобильный прицел (здание карточки) и «＋ Вход» на компьютере (выбранное здание): ближайшая стена этого здания
+  // в пределах ~40 px от точки на земле; на компьютере сначала — фасад этого здания под курсором
+  const parent = mobilePlace ? cardGroup : entranceParent;
+  if (parent) {
+    const hit = mobilePlace ? undefined : overpassLayer.pickHit(screen);
+    if (hit && parent.members.includes(hit.key)) {
+      const f = (session.get(hit.key) as Feature3D | undefined) ?? entity(hit.key) as Feature3D | undefined;
+      const snap = snapGround(screen);
+      const t = f?.polygons?.length ? nearestEntranceSide(f, snap ? [snap.lngLat.lng, snap.lngLat.lat] : [hit.lngLat.lng, hit.lngLat.lat], MAP_ENTRANCE_REACH) : undefined;
+      if (t) return t;
+    }
+    const snap = mobilePlace ? undefined : snapGround(screen);
+    const g = snap?.lngLat ?? map.unproject(screen), q: LonLat = [g.lng, g.lat];
     const reach = 40 * 40075016.7 * Math.cos(q[1] * Math.PI / 180) / (512 * 2 ** map.getZoom());
     let best: (MapEntranceTarget & { d: number }) | undefined;
-    for (const key of cardGroup.members) {
+    for (const key of parent.members) {
       const f = (session.get(key) as Feature3D | undefined) ?? entity(key) as Feature3D | undefined;
       const t = f?.polygons?.length ? nearestEntranceSide(f, q, reach) : undefined;
       if (t && (!best || t.d < best.d)) best = t;
@@ -20847,6 +20895,7 @@ function describeOsm({ feature, roofApproximated }: RenderedFeature, form?: stri
     .filter((i) => i.code !== 'above');
   return `
     ${objectHeading(f.kind === 'part' ? 'building:part' : 'building', `${server().web}/${f.key}`, f.key, f.version)}
+    ${childActionsRow()}
     ${form ? '' : summaryRows([
       [tr('Низ'), `${fmt(h.min)} m`],
       [tr('Высота'), `${fmt(h.top)} m`],
@@ -20982,7 +21031,7 @@ function renderMobileCard() {
     mobileCard.hidden = false;
     return;
   }
-  const addBtn = `<button type="button" class="secondary mc-icon" data-mc-entrance title="${tr('Добавить вход')}">＋ ${tr('Вход')}</button>`;
+  const addBtn = childActions().map((a) => `<button type="button" class="secondary mc-icon" data-child-action="${a.id}" title="${esc(a.title)}">＋ ${esc(a.label)}</button>`).join('');
   if (focus) {
     mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(groupName(focus))}</div><div class="mc-hint">${tr('Режим здания · этажи — в панели «Этажи»')}</div></div>`
       + (shownLevel ? '' : addBtn) + `<button type="button" class="secondary" data-mc-exit>${tr('К карте')}</button>`;
@@ -20993,7 +21042,7 @@ function renderMobileCard() {
   if (fence) {
     const len = fence.polygons[0].outer.reduce((sum, c, i, a) => i ? sum + Math.hypot((c[0] - a[i - 1][0]) * 111320 * Math.cos(c[1] * Math.PI / 180), (c[1] - a[i - 1][1]) * 110540) : 0, 0);
     mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(fence.tags.name ?? indoorTitle(fence))}</div><div class="mc-hint">${showLength(len)} ${unitLabel()}</div></div>`
-      + `<button type="button" data-mc-gate>＋ ${tr('Ворота')}</button>`;
+      + addBtn.replace('secondary mc-icon', 'mc-icon');
     mobileCard.hidden = false;
     return;
   }
@@ -21005,8 +21054,6 @@ function renderMobileCard() {
 
 mobileCard.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
-  if (t.closest('[data-mc-entrance]')) { startMobilePlace(); return; }
-  if (t.closest('[data-mc-gate]')) { startMobileGate(); return; }
   if (t.closest('[data-mc-cancel]')) { if (mobileGate) stopMobileGate(true); else stopPoint(); return; }
   if (t.closest('[data-mc-place]')) { if (mobileGate) commitMobileGate(); else commitMobilePlace(); return; }
   if (t.closest('[data-mc-exit]')) { closeFocus(); cardGroup = undefined; renderMobileCard(); }

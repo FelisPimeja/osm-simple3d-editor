@@ -1786,5 +1786,6 @@
   "Турникет в рост": "Full-height turnstile",
   "Ворота ({w} м) шире стороны ограждения ({l} м) — заходят за её концы.": "The gate ({w} m) is wider than the barrier side ({l} m) — it runs past its ends.",
   "Ведите курсор вдоль ограждения — ворота едут по нему. Клик — поставить (можно несколько), Esc — закончить.": "Move the cursor along the barrier — the gate slides along it. Click to place (several in a row), Esc to finish.",
-  "Добавить ворота на это ограждение (X)": "Add a gate to this barrier (X)"
+  "Добавить ворота на это ограждение (X)": "Add a gate to this barrier (X)",
+  "Добавить вход на фасад этого здания (X)": "Add an entrance on this building’s facade (X)"
 }

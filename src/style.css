@@ -978,12 +978,12 @@ body.mobile .edit-hint { display: none; } /* мобильный — только
 
 /* Десктоп и планшет: куб вида и кнопки масштаба — в правом нижнем углу (под большим пальцем), над атрибуцией;
    правая колонка панелей заканчивается над ними */
-body:not(.mobile) .maplibregl-ctrl-top-right { top: auto; bottom: 34px; right: 12px; align-items: flex-end; }
+body:not(.mobile) .maplibregl-ctrl-top-right { top: auto; bottom: 54px; right: 12px; align-items: center; }
 body:not(.mobile) .maplibregl-ctrl-top-right .view-cube { margin-top: 0; }
 body:not(.mobile) .maplibregl-ctrl-top-right .maplibregl-ctrl { margin-right: 0; }
 body:not(.mobile) .vc-settings { top: auto; bottom: calc(100% + 4px); }
-body:not(.mobile) #right-col { bottom: 104px; }
-body:not(.mobile):has(.view-cube:not([hidden])) #right-col { bottom: 158px; }
+body:not(.mobile) #right-col { bottom: 124px; }
+body:not(.mobile):has(.view-cube:not([hidden])) #right-col { bottom: 178px; }
 
 /* Главное меню: значок меню и подзаголовок — напоминание, что это редактор OpenStreetMap */
 .app-head .app-menu-icon { flex: none; color: #555; }

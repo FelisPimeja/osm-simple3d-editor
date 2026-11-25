@@ -1322,6 +1322,14 @@ map.on('load', () => {
   for (const layer of map.getStyle().layers) {
     if (layer.type === 'fill-extrusion') map.removeLayer(layer.id);
   }
+  // 3D-слои встают перед первым слоем подписей. В liberty после него (стрелки односторонних дорог) идут ещё
+  // линии мостов, контуры зданий и границы — они рисовались поверх объёмов (пешеходный мост поверх всего).
+  // Переносим такие слои под подписи
+  {
+    const all = map.getStyle().layers;
+    const first = all.find((l) => l.type === 'symbol')?.id;
+    if (first) for (const l of all.slice(all.findIndex((x) => x.id === first) + 1)) if (l.type !== 'symbol') map.moveLayer(l.id, first);
+  }
   styleLayers = map.getStyle().layers.filter((l) => l.type !== 'background' && OPACITY_PROPS[l.type])
     .map((l) => ({ id: l.id, opacity: Object.fromEntries(OPACITY_PROPS[l.type].map((p) => [p, map.getPaintProperty(l.id, p as 'fill-opacity')])) }));
 

@@ -1771,5 +1771,10 @@
   "Контур не построить: объединение контура и частей вырождено.": "Cannot build the outline: the union of the outline and parts is degenerate.",
   "Вставить предложенный комментарий": "Insert the suggested comment",
   "Слои карты": "Map layers",
-  "Куб вида и кнопки масштаба": "View cube and zoom buttons"
+  "Куб вида и кнопки масштаба": "View cube and zoom buttons",
+  "Новый вход": "New entrance",
+  "Двигайте карту: прицел — на стену здания": "Pan the map to put the crosshair on a building wall",
+  "Поставить": "Place",
+  "Добавить вход": "Add an entrance",
+  "Наведите прицел на стену здания.": "Put the crosshair on a building wall."
 }

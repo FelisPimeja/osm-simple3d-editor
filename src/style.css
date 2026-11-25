@@ -1036,3 +1036,10 @@ body.zoom-hidden:not(.mobile) #right-col { bottom: 44px; }
 body:not(.mobile) .col { top: 6px; }
 body:not(.mobile) #left-col { left: 6px; bottom: 6px; }
 body:not(.mobile) #right-col { right: 6px; }
+
+/* Мобильный прицел «＋ Вход»: в центре карты, карта двигается под ним */
+.mobile-cross { position: absolute; left: 50%; top: 50%; width: 36px; height: 36px; margin: -18px 0 0 -18px; z-index: 3; pointer-events: none; }
+.mobile-cross[hidden] { display: none; }
+.mobile-cross::before, .mobile-cross::after { content: ''; position: absolute; background: #1d4ed8; box-shadow: 0 0 0 1.5px #fff; }
+.mobile-cross::before { left: 17px; top: 0; width: 2px; height: 36px; }
+.mobile-cross::after { top: 17px; left: 0; height: 2px; width: 36px; }

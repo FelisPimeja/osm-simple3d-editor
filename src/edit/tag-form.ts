@@ -430,7 +430,7 @@ function directionField(input: string): string {
 function withBadge(input: string, hint: string, icon = ICON_INHERIT): string {
   if (!hint) return input;
   // Подсказка и умолчание: значок — кнопка «↵» подставить значение тегом (на таче нет Tab)
-  if (icon === ICON_SUGGEST || icon === ICON_DEFAULT) return `<span class="inherit-field" title="${esc(hint)}">${input}<button type="button" class="inherit-badge suggest-accept" data-accept-suggest tabindex="-1" title="${esc(tr('Подставить'))}"><span class="sa-icon">${icon}</span><span class="sa-touch">↵</span></button></span>`;
+  if (icon === ICON_SUGGEST || icon === ICON_DEFAULT) return `<span class="inherit-field" title="${esc(hint)}">${input}<button type="button" class="inherit-badge suggest-accept" data-accept-suggest tabindex="-1" title="${esc(tr('Подставить'))}"><span class="sa-icon">${icon}</span><span class="sa-touch"><svg class="sa-svg" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 3v5.5a1.5 1.5 0 0 1-1.5 1.5H3.5"/><path d="M6.5 7L3.5 10l3 3"/></svg></span></button></span>`;
   return `<span class="inherit-field" title="${esc(hint)}">${input}<span class="inherit-badge">${icon}</span></span>`;
 }
 

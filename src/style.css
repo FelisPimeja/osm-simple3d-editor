@@ -998,6 +998,8 @@ body:not(.mobile):has(.view-cube:not([hidden])) #right-col { bottom: 158px; }
 .suggest-accept:hover { color: #2563eb; }
 .suggest-accept.inherit-badge { top: 3px; bottom: 3px; right: 3px; transform: none; width: 24px; height: auto; border-radius: 4px; background: #e0e7ff; color: #1d4ed8; font-size: 14px; line-height: 1; display: flex; align-items: center; justify-content: center; }
 .suggest-accept .sa-icon { display: none; }
+.suggest-accept .sa-touch { display: flex; }
+.suggest-accept .sa-svg { display: block; }
 /* Кнопка — у правого края; остальные значки поля (единица, стрелки, раскрытие списка) сдвигаются левее неё */
 .inherit-field:has(.suggest-accept) input[type="text"] { padding-right: 32px; }
 .inherit-field:has(.suggest-accept) .length-unit { right: 32px; }

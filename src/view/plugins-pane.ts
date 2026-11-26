@@ -87,4 +87,9 @@ export function renderPluginsPane() {
   pane.append(form);
   if (error) pane.append(el('p', 'plugin-error', error));
   pane.append(el('p', 'hint', tr('Ссылка на репозиторий GitHub с файлом simple3d-plugin.json в корне (лучше с тегом: автор/репо@v1.0) или https-ссылка на манифест .json. Свои плагины — только данные (подложки), без кода: так они не получат доступа к вашему аккаунту OSM.')));
+  const doc = el('a', 'plugin-home', tr('Как сделать плагин: формат и отправка в официальный список')) as HTMLAnchorElement;
+  doc.href = 'https://github.com/FelisPimeja/osm-simple3d-editor/blob/main/docs/plugins.md';
+  doc.target = '_blank';
+  doc.rel = 'noopener noreferrer';
+  pane.append(el('p', 'hint', '').appendChild(doc).parentElement!);
 }

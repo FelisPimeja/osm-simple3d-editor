@@ -1816,5 +1816,6 @@
   "Ссылка на репозиторий GitHub с файлом simple3d-plugin.json в корне (лучше с тегом: автор/репо@v1.0) или https-ссылка на манифест .json. Свои плагины — только данные (подложки), без кода: так они не получат доступа к вашему аккаунту OSM.": "A GitHub repository link with simple3d-plugin.json at its root (preferably with a tag: user/repo@v1.0) or an https link to a .json manifest. Custom plugins are data only (imagery), no code, so they get no access to your OSM account.",
   "Плагины": "Plugins",
   "Плагины…": "Plugins…",
-  "Дополнительные подложки и источники данных.": "Extra imagery and data sources."
+  "Дополнительные подложки и источники данных.": "Extra imagery and data sources.",
+  "Как сделать плагин: формат и отправка в официальный список": "How to make a plugin: format and submitting to the official list"
 }

@@ -16,7 +16,9 @@
 import catalogJson from './plugins/catalog.json';
 import { registerImagery, unregisterImagery, type Imagery } from './view/basemaps';
 import type { PhotoService } from './view/street-photos';
-import { tr } from './i18n';
+import { lang, tr } from './i18n';
+import { Marker } from 'maplibre-gl';
+import { openPanel } from './view/plugin-panel';
 
 /** Версия API редактора для плагинов: плагин с другой не подключается. */
 export const PLUGIN_API = 1;
@@ -41,20 +43,59 @@ export interface PluginManifest {
   description?: string;
   homepage?: string;
   imagery?: PluginImagery[];
-  /** Модуль с кодом (только официальный список): src/plugins/<module>.ts, экспорт activate(api). */
+  /**
+   * Модуль с кодом (только официальный список), экспорт activate(api): имя модуля сборки src/plugins/<module>.ts
+   * или внешний — https://cdn.jsdelivr.net/gh/<автор>/<репо>@<полный SHA коммита>/<файл>.js (коммит не меняется:
+   * подключается ровно проверенный код).
+   */
   module?: string;
 }
+
+/** Плавающее окно плагина (как окно уличных фото). */
+export interface PluginPanel {
+  body: HTMLElement;
+  setTitle(title: string): void;
+  close(): void;
+  /** Окно закрыли (крестиком или плагин). */
+  onClose(cb: () => void): void;
+}
+
+export type MapClick = (lngLat: [number, number], info: { onObject: boolean }) => boolean | void;
+
+/** Конус направления взгляда на карте: точка, азимут (° от севера), раствор (°). */
+export interface ViewCone { lngLat: [number, number]; azimuth: number; fov?: number }
 
 /** API для модулей плагинов (официальный список). */
 export interface PluginApi {
   apiVersion: number;
   tr: typeof tr;
+  /** Язык интерфейса ('ru', 'en'). */
+  lang: string;
   /** Сервис уличных фото: слой в группе «Фото и панорамы». */
   registerPhotoService(s: PhotoService, label: string, title: string): void;
+  /**
+   * Своя галка в группе «Фото и панорамы» (для сервисов, показываемых своими средствами, без тайлов точек).
+   * Состояние запоминается; onChange вызывается и сразу, если галка была включена. set — переключить из плагина.
+   */
+  addPhotoToggle(id: string, label: string, title: string, onChange: (on: boolean) => void): { set(on: boolean): void };
+  /**
+   * Клик по карте (вне инструментов): true — плагин обработал клик, выбор объекта не нужен.
+   * onObject — под курсором здание или другой объект редактора (обычно такой клик стоит оставить выбору).
+   */
+  onMapClick(cb: MapClick): void;
+  openPanel(title: string): PluginPanel;
+  /** Конус взгляда на карте; undefined — убрать. */
+  setViewCone(cone?: ViewCone): void;
+  /** Источник правок для changeset: снимки (imagery_used) или уличные фото (source=streetlevel imagery). */
+  markUsed(kind: 'imagery' | 'street', name: string): void;
 }
 
 /** Что редактор делает с содержимым плагинов (задаёт main.ts после построения меню). */
 export interface PluginHost {
+  map: import('maplibre-gl').Map;
+  addPhotoToggle(id: string, label: string, title: string, on: boolean, onChange: (on: boolean) => void): (on: boolean) => void;
+  removePhotoToggle(id: string): void;
+  markUsed(kind: 'imagery' | 'street', name: string): void;
   addImagery(im: Imagery): void;
   removeImagery(id: string): void;
   addPhotoService(s: PhotoService, label: string, title: string): void;
@@ -66,11 +107,14 @@ export interface PluginEntry { source: 'catalog' | string; manifest: PluginManif
 
 const STORE_KEY = 'osm3d.plugins';
 const MANIFEST_FILE = 'simple3d-plugin.json';
-const MODULES = import.meta.glob<{ activate(api: PluginApi): void | (() => void) }>('./plugins/*.ts');
+type PluginModule = { activate(api: PluginApi): void | (() => void) };
+const MODULES = import.meta.glob<PluginModule>('./plugins/*.ts');
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const isHttps = (u: unknown): u is string => { try { return typeof u === 'string' && new URL(u).protocol === 'https:'; } catch { return false; } };
 const ID = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+/** Внешний модуль официального плагина: jsDelivr, закреплённый полным SHA коммита. */
+const EXTERNAL_MODULE = /^https:\/\/cdn\.jsdelivr\.net\/gh\/[\w.-]+\/[\w.-]+@[0-9a-f]{40}\/[\w./-]+\.m?js$/;
 const str = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
 
 /** Проверить манифест (данные со стороны): лишнее отбросить, ошибку — понятным текстом. */
@@ -102,7 +146,7 @@ export function parseManifest(raw: unknown, fromCatalog = false): PluginManifest
       viewOnly: i.viewOnly === true,
     });
   }
-  const module = fromCatalog && typeof m.module === 'string' && ID.test(m.module) ? m.module : undefined;
+  const module = fromCatalog && typeof m.module === 'string' && (ID.test(m.module) || EXTERNAL_MODULE.test(m.module)) ? m.module : undefined;
   if (!imagery.length && !module) throw new Error(tr('В плагине нечего подключать'));
   return {
     id, apiVersion: PLUGIN_API, name, imagery, module,
@@ -171,23 +215,72 @@ for (const e of entries) for (const im of imageryOf(e.manifest)) registerImagery
 
 let host: PluginHost | undefined;
 /** Что подключил модуль плагина (снять при отключении). */
-const active = new Map<string, { photos: string[]; dispose?: () => void }>();
+const active = new Map<string, Active>();
+
+type Active = { photos: string[]; toggles: string[]; clicks: MapClick[]; panels: PluginPanel[]; cone?: Marker; dispose?: () => void };
+const clickHandlers = (): MapClick[] => [...active.values()].flatMap((a) => a.clicks);
+
+/** Клик по карте — плагинам (main.ts, до выбора объекта); true — обработан. */
+export function pluginMapClick(lngLat: [number, number], onObject: boolean): boolean {
+  for (const cb of clickHandlers()) {
+    try { if (cb(lngLat, { onObject })) return true; } catch (err) { console.warn('plugin click:', err); }
+  }
+  return false;
+}
+
+const toggleKey = (id: string) => `osm3d.plugin-toggle.${id}`;
+
+function coneEl(fov: number): HTMLElement {
+  const el = document.createElement('div');
+  const r = 34, a = (fov / 2) * Math.PI / 180;
+  const x = r * Math.sin(a), y = r * Math.cos(a);
+  el.innerHTML = `<svg width="${2 * r}" height="${2 * r}" viewBox="${-r} ${-r} ${2 * r} ${2 * r}" style="display:block;pointer-events:none">
+    <path d="M0 0 L${-x} ${-y} A${r} ${r} 0 0 1 ${x} ${-y} Z" fill="rgba(220,38,38,.3)" stroke="#dc2626" stroke-width="1.5"/>
+    <circle r="5" fill="#dc2626" stroke="#fff" stroke-width="2"/></svg>`;
+  return el;
+}
 
 async function activate(m: PluginManifest) {
   if (!host || active.has(m.id)) return;
-  const state: { photos: string[]; dispose?: () => void } = { photos: [] };
+  const state: Active = { photos: [], toggles: [], clicks: [], panels: [] };
   active.set(m.id, state);
   for (const im of imageryOf(m)) { registerImagery(im); host.addImagery(im); }
-  const load = m.module && MODULES[`./plugins/${m.module}.ts`];
+  const load = !m.module ? undefined
+    : EXTERNAL_MODULE.test(m.module) ? () => import(/* @vite-ignore */ m.module!) as Promise<PluginModule>
+      : MODULES[`./plugins/${m.module}.ts`];
   if (!load) return;
   try {
     const mod = await load();
     if (active.get(m.id) !== state) return; // отключили, пока грузился
     const h = host;
-    const dispose = mod.activate({
-      apiVersion: PLUGIN_API, tr,
+    const api: PluginApi = {
+      apiVersion: PLUGIN_API, tr, lang,
       registerPhotoService: (s, label, title) => { state.photos.push(s.id); h.addPhotoService(s, label, title); },
-    });
+      addPhotoToggle: (id, label, title, onChange) => {
+        const full = `plugin-${m.id}-${id}`;
+        let on = false;
+        try { on = localStorage.getItem(toggleKey(full)) === '1'; } catch { /* без хранилища */ }
+        const change = (v: boolean) => {
+          try { if (v) localStorage.setItem(toggleKey(full), '1'); else localStorage.removeItem(toggleKey(full)); } catch { /* до перезагрузки */ }
+          try { onChange(v); } catch (err) { console.warn(`plugin ${m.id}:`, err); }
+        };
+        const set = h.addPhotoToggle(full, label, title, on, change);
+        state.toggles.push(full);
+        if (on) queueMicrotask(() => change(true));
+        return { set: (v: boolean) => { set(v); change(v); } };
+      },
+      onMapClick: (cb) => { state.clicks.push(cb); },
+      openPanel: (title) => { const p = openPanel(title, h.map); state.panels.push(p); p.onClose(() => { state.panels = state.panels.filter((x) => x !== p); }); return p; },
+      setViewCone: (cone) => {
+        state.cone?.remove();
+        state.cone = undefined;
+        if (!cone) return;
+        state.cone = new Marker({ element: coneEl(cone.fov ?? 70), rotation: cone.azimuth, rotationAlignment: 'map', pitchAlignment: 'map' })
+          .setLngLat(cone.lngLat).addTo(h.map);
+      },
+      markUsed: (kind, name) => h.markUsed(kind, name),
+    };
+    const dispose = mod.activate(api);
     if (dispose) state.dispose = dispose;
   } catch (err) {
     console.warn(`plugin ${m.id}:`, err);
@@ -200,6 +293,9 @@ function deactivate(m: PluginManifest) {
   for (const im of imageryOf(m)) { host?.removeImagery(im.id); unregisterImagery(im.id); }
   if (!state) return;
   for (const id of state.photos) host?.removePhotoService(id);
+  for (const id of state.toggles) host?.removePhotoToggle(id);
+  for (const p of [...state.panels]) p.close();
+  state.cone?.remove();
   try { state.dispose?.(); } catch (err) { console.warn(`plugin ${m.id}:`, err); }
 }
 

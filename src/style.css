@@ -1068,3 +1068,5 @@ body:not(.mobile) .maplibregl-ctrl-bottom-right > .maplibregl-ctrl { margin-bott
 .modal-close:hover { color: #111; }
 .modal-body { padding: 4px 16px 16px; overflow: auto; }
 .modal-body > .panel-sec { margin-top: 12px; }
+.plugin-panel { resize: both; overflow: hidden; }
+.plugin-panel-body { flex: 1; min-height: 0; position: relative; }

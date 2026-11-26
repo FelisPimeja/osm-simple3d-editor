@@ -51,7 +51,7 @@ import { applyBasemap, applyContours, applyGpsTraces, applyHillshade, storedCont
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
-import { applyPluginsSetting, onPluginsChange, pluginsSetting, setPluginHost } from './plugins';
+import { applyPluginsSetting, onPluginsChange, pluginMapClick, pluginsSetting, setPluginHost } from './plugins';
 import { renderPluginsPane } from './view/plugins-pane';
 import { mapillary } from './view/mapillary';
 import { fotoshi, fotoshiRequest } from './view/fotoshi';
@@ -448,6 +448,13 @@ const photoGroup = basemapCtrl?.addOverlayGroup(tr('Фото и панорамы
 // Плагины (src/plugins.ts): снимки — в меню подложек, сервисы фото — в группу «Фото и панорамы»; только у OSM
 // (снимки и фото разрешены для обводки в OSM)
 if (server().imagery) setPluginHost({
+  map,
+  addPhotoToggle: (id, label, title, on, onChange) => {
+    photoGroup?.add({ id, label, title, on, onChange: (v) => { basemapCtrl?.setOverlay(id, v); onChange(v); } });
+    return (v) => basemapCtrl?.setOverlay(id, v);
+  },
+  removePhotoToggle: (id) => photoGroup?.remove(id),
+  markUsed: (kind, name) => (kind === 'imagery' ? usedImagery : usedStreet).add(name),
   addImagery: (im) => basemapCtrl?.addImagery(im),
   removeImagery: (id) => {
     basemapCtrl?.removeImagery(id);
@@ -2924,6 +2931,7 @@ map.on('click', (e) => {
     return;
   }
   // Снимок уличных фото под курсором — открыть вместо выбора здания
+  if (pluginMapClick([e.lngLat.lng, e.lngLat.lat], !!overpassLayer.pickHit(e.point))) return;
   for (const p of photoLayers) {
     const picId = p.layer.pick(e.point);
     if (picId) { void photoViewer.open(p.layer, picId); return; }

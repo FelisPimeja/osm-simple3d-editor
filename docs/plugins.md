@@ -109,14 +109,17 @@ Invalid catalog entries are skipped, with a warning in the browser console.
 
 ## Code modules (official only)
 
-An official plugin may set `"module": "<name>"`. It then needs `src/plugins/<name>.ts`, bundled with the editor and loaded on demand when the plugin is enabled:
+An official plugin may set `module`, in one of two forms:
 
-```ts
-import type { PluginApi } from '../plugins';
+- **External module (preferred):** `https://cdn.jsdelivr.net/gh/<owner>/<repo>@<full 40-character commit SHA>/<file>.js`. The code lives in its own repository. Content at a full commit SHA never changes, so users run exactly the reviewed commit. To release a new version, push it to the plugin repository and open a pull request that updates the SHA in `catalog.json`. Example: [osm-simple3d-yandex-panoramas](https://github.com/FelisPimeja/osm-simple3d-yandex-panoramas).
+- **Bundled module:** a name, `"module": "<name>"`, for `src/plugins/<name>.ts` in the editor repository.
 
-export function activate(api: PluginApi): void | (() => void) {
-  api.registerPhotoService(service, 'Label', api.tr('Tooltip'));
-  // Optionally return a function that cleans up when the plugin is disabled.
+Either way, the module is a plain ES module loaded when the plugin is enabled:
+
+```js
+export function activate(api) {
+  // ...
+  return () => { /* optional cleanup when the plugin is disabled */ };
 }
 ```
 
@@ -125,10 +128,16 @@ export function activate(api: PluginApi): void | (() => void) {
 | Member | Purpose |
 |---|---|
 | `apiVersion` | `1` |
-| `tr(text, params?)` | Translate a UI string (Russian source strings, see `src/i18n`). |
-| `registerPhotoService(service, label, title)` | Add a street-level photo layer to the "Photos and panoramas" group. `service` implements `PhotoService` from `src/view/street-photos.ts`; see `src/view/panoramax.ts` for a complete example. |
+| `lang` | UI language: `'ru'` or `'en'`. Plugins keep their own strings. |
+| `tr(text, params?)` | Translate an editor UI string (Russian source strings, see `src/i18n`). |
+| `registerPhotoService(service, label, title)` | Add a street-level photo layer based on vector tiles of points to "Photos and panoramas". `service` implements `PhotoService` from `src/view/street-photos.ts`; see `src/view/panoramax.ts`. |
+| `addPhotoToggle(id, label, title, onChange)` | Add a checkbox to "Photos and panoramas" for a service the plugin shows by its own means. The state is remembered; `onChange(true)` is also called on start if the box was ticked. Returns `{ set(on) }`. |
+| `onMapClick(cb)` | `cb([lng, lat], { onObject })` on a map click outside tools. Return `true` if the plugin handled the click. `onObject` is true when the click hits a building or another editor object; leave those clicks to selection. |
+| `openPanel(title)` | A floating window like the photo viewer. Returns `{ body, setTitle(t), close(), onClose(cb) }`; put your content into `body`. |
+| `setViewCone({ lngLat, azimuth, fov? })` | Show the viewing direction on the map (azimuth in degrees from north). Call with no argument to remove it. |
+| `markUsed('street' \| 'imagery', name)` | Record a source for the changeset: `source=streetlevel imagery` or `imagery_used`. Call it when the user actually sees the content. |
 
-Things the editor registered for a plugin (imagery, photo layers) are removed automatically when the plugin is disabled.
+Everything a plugin registered (imagery, photo layers, toggles, click handlers, windows, the cone) is removed automatically when the plugin is disabled.
 
 ## Source of truth
 

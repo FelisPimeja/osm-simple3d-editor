@@ -1735,7 +1735,7 @@
   "Высота входа: ведите курсор вверх или вниз. Клик — применить, Esc — отмена.": "Entrance height: move the cursor up or down. Click to apply, Esc to cancel.",
   "Ширина входа: ведите курсор вдоль стены (симметрично от узла). Клик — применить, Esc — отмена.": "Entrance width: move the cursor along the wall (symmetric around the node). Click to apply, Esc to cancel.",
   "Синие ручки: по бокам — ширина (width), сверху — высота проёма (height); клик по ручке — тянуть, клик — применить.": "Blue handles: the sides set the width, the top the opening height; click a handle to drag it, click again to apply.",
-  "Козырёк": "Canopy",
+  "Козырёк": "Covered",
   "Створок": "Leaves",
   "Дороги": "Roads",
   "Прочее": "Other",

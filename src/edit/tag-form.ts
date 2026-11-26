@@ -453,7 +453,13 @@ function raiseForRoof(before: Record<string, string>, after: Record<string, stri
   after.height = writeLength(h + roofHeightOf(after), after.height);
 }
 
-export function bindTagForms(container: HTMLElement, session: () => EditSession | undefined) {
+/**
+ * Доопределить теги после правки поля (по геометрии объекта, её форма тегов не знает): before — до правки,
+ * after — после (уже с подъёмом height под крышу); вернуть исправленные after.
+ */
+export type TagEditHook = (key: string, before: Record<string, string>, after: Record<string, string>) => Record<string, string>;
+
+export function bindTagForms(container: HTMLElement, session: () => EditSession | undefined, hook?: TagEditHook) {
   const commit = (input: HTMLInputElement | HTMLSelectElement) => {
     // Поля со своим обработчиком change (indoor-объекты, входы и окна на фасаде): выбор из списка — тот же change
     if (input.dataset.indoorTag || input.dataset.entranceTag || input.dataset.windowTag) {
@@ -482,12 +488,15 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
       else if (v.trim()) tags[tag] = v.trim(); else if (empty && !('emptyRemoves' in input.dataset)) tags[tag] = empty; else delete tags[tag];
       if (tags[tag] === f.tags[tag]) return [];
       raiseForRoof(f.tags, tags);
-      return [{ key, tags }];
+      return [{ key, tags: hook ? hook(key, f.tags, tags) : tags }];
     });
     if (edits.length === 1 && keys.length === 1) {
       const { key, tags } = edits[0];
       const prev = s.get(key)!.tags;
-      s.setTags(key, tags.height !== prev.height ? { [tag]: tags[tag], height: tags.height } : { [tag]: tags[tag] });
+      // Только изменённые ключи (поле, подъём height, доопределённые хуком — roof:direction)
+      const diff: Record<string, string | undefined> = {};
+      for (const k of new Set([...Object.keys(prev), ...Object.keys(tags)])) if (tags[k] !== prev[k]) diff[k] = tags[k];
+      s.setTags(key, diff);
     }
     else if (edits.length) s.editMany(edits);
     // Формула применена — поле покажет новое значение после перерисовки; если ничего не поменялось — очистить

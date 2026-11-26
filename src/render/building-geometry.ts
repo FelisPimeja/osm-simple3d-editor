@@ -74,7 +74,7 @@ export function buildTriangles(polygons: LocalPolygon[], h: Heights, tags: Recor
     return { walls, roof, roofApproximated: false };
   }
   if (supported && shape === 'skillion') {
-    addSkillion(walls, roof, polygons[0], h, tags['roof:direction']);
+    addSkillion(walls, roof, polygons[0], skillionHeights(polygons[0].outer, h, tags), tags['roof:direction']);
     return { walls, roof, roofApproximated: false };
   }
 
@@ -781,6 +781,26 @@ function addSkillion(walls: number[], roof: number[], p: LocalPolygon, h: Height
   for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(contour, holes)) tri(roof, v(a), v(b), v(c));
 }
 
+/** Наибольший уклон односкатной крыши без своей высоты (roof:height / roof:levels), градусы. */
+export const SKILLION_MAX_PITCH = 25;
+
+/**
+ * Высота односкатной крыши по умолчанию: типичные 3 м, но не круче SKILLION_MAX_PITCH по длине ската — иначе узкая
+ * пристройка получала скат под 50–60°. Явные roof:height / roof:levels не трогаем.
+ */
+export function skillionRoofHeight(ring: Pt[], tags: Record<string, string>, roofHeight: number): number {
+  if (tags['roof:height'] !== undefined || tags['roof:levels'] !== undefined) return roofHeight;
+  const { span } = slope(ring, tags['roof:direction']);
+  return Math.min(roofHeight, span * Math.tan((SKILLION_MAX_PITCH * Math.PI) / 180));
+}
+
+/** Высоты под односкатную крышу по умолчанию: при заданной height верх стоит, стены выше; иначе стены — по этажам. */
+function skillionHeights(ring: Pt[], h: Heights, tags: Record<string, string>): Heights {
+  const rh = skillionRoofHeight(ring, tags, h.roofHeight);
+  if (rh >= h.roofHeight) return h;
+  return h.source === 'height' ? { ...h, wallTop: h.top - rh, roofHeight: rh } : { ...h, top: h.wallTop + rh, roofHeight: rh };
+}
+
 /** Направление ската (roof:direction, иначе от самой длинной стороны): проекция на него и её размах по контуру. */
 function slope(ring: Pt[], direction?: string) {
   let deg = direction === undefined ? NaN : CARDINAL[direction.toUpperCase()] ?? Number(direction);
@@ -829,7 +849,7 @@ function addSteps(walls: number[], roof: number[], p: LocalPolygon, h: Heights, 
   }
 }
 
-function longestEdgeNormal(ring: Pt[]): number {
+export function longestEdgeNormal(ring: Pt[]): number {
   let best = 0, deg = 0;
   for (let i = 0; i < ring.length; i++) {
     const a = ring[i], b = ring[(i + 1) % ring.length];

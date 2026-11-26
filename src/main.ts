@@ -39,7 +39,9 @@ import { buildingRefreshMembers, refreshBuildingFeatures } from './osm/building-
 import { BrokenRingsError, ConflictError, dryRunUpload, UploadRejectedError, uploadEdits } from './osm/upload';
 import { reportsAvailable, reportsEnabled, reportUploadFailure, setReportsEnabled } from './osm/error-report';
 import { checkWindows, type CheckOpening, type CheckPart, type WindowProblem } from './edit/window-checks';
-import { computeHeights, LEVEL_HEIGHT, parseLength } from './osm/heights';
+import { computeHeights, LEVEL_HEIGHT, parseLength, roofHeightOf, roofShapeOf } from './osm/heights';
+import { skillionDirection } from './edit/skillion-defaults';
+import { skillionRoofHeight } from './render/building-geometry';
 import { escalatorFloorHoles } from './render/escalator-openings';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indoorCategory, roomValueOf, type IndoorCategory } from './osm/indoor-categories';
 import { ViewCube } from './view/view-cube';
@@ -20798,7 +20800,35 @@ function tileSource(): TileSource {
 }
 void refreshUser();
 
-bindTagForms(infoEl, () => session);
+bindTagForms(infoEl, () => session, skillionDefaults);
+
+/**
+ * Объекту назначили односкатную крышу: сразу пишем roof:direction (скат — от примыкающего объёма, иначе как рисуется
+ * без тега), чтобы скат не перескакивал при правке контура; подъём height под крышу — по уклону не круче
+ * SKILLION_MAX_PITCH, как её и рисуем.
+ */
+function skillionDefaults(key: string, before: Record<string, string>, after: Record<string, string>): Record<string, string> {
+  if (roofShapeOf(after) !== 'skillion' || roofShapeOf(before) === 'skillion') return after;
+  const all = liveFeatures();
+  const f = all.find((x) => x.key === key);
+  if (!f || f.polygons.length !== 1) return after;
+  const [lon0, lat0] = f.polygons[0].outer[0];
+  const kx = 111320 * Math.cos((lat0 * Math.PI) / 180), ky = 110540;
+  const local = (q: LonLat): Pt => [(q[0] - lon0) * kx, (q[1] - lat0) * ky];
+  const ring = f.polygons[0].outer.map(local);
+  const c = f.polygons[0].outer.reduce<LonLat>((m, q, _, r) => [m[0] + q[0] / r.length, m[1] + q[1] / r.length], [0, 0]);
+  // Соседи — объёмы рядом, кроме своего контура здания (он охватывает часть, его стены — не соседние)
+  const others = all.filter((x) => x.key !== key && x.polygons.some((p) => !pointInRing(c, p.outer)))
+    .flatMap((x) => x.polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => r.map(local))))
+    .filter((r) => r.some(([x, y]) => Math.hypot(x, y) < 300));
+  const out = { ...after };
+  if (!out['roof:direction']?.trim()) out['roof:direction'] = String(skillionDirection(ring, others));
+  const h = parseLength(before.height);
+  if (h !== undefined && out.height !== before.height && out['roof:height'] === undefined && out['roof:levels'] === undefined) {
+    out.height = writeLength(h + skillionRoofHeight(ring, out, roofHeightOf(out)), before.height);
+  }
+  return out;
+}
 // Выбор из списка (тип крыши и т. п.) или Enter в поле завершает ввод: фокус уходит из поля, горячие клавиши
 // инструментов — снова карте. Снимаем до применения: перерисовка формы вернула бы фокус в поле, где он был
 document.addEventListener('change', (e) => { if (e.target instanceof HTMLSelectElement) e.target.blur(); }, true);

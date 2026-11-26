@@ -9044,7 +9044,7 @@ function selectEntrance(id: number, add = false) {
 const ENTRANCE_KEY_PREFIX = '@entrance:', ENTRANCES_KEY = '@entrances';
 /** Поля карточки входа: тип входа (варианты схемы iD), номер, квартиры (addr:flats: диапазон «1-22», через «;» — несколько) и створки. */
 /** Поля входа: свои (номер, квартиры, створки) и поля пресета двери indoor=door (тип двери, этаж, размеры, материал, цвет). */
-const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'addr:flats', 'door', 'door:wings', 'level', 'width', 'height', 'material', 'colour', 'covered'] as const;
+const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'addr:flats', 'covered', 'door', 'door:wings', 'level', 'width', 'height', 'material', 'colour'] as const;
 
 /** Поля карточки окна: вид, размеры проёма и подоконник (м), этаж. */
 const WINDOW_FORM_TAGS = ['window', 'window:shape', 'window:top:shape', 'window:material', 'window:width', 'window:height', 'window:breast', 'level'] as const;

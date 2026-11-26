@@ -25,6 +25,11 @@ function about(m: PluginManifest): HTMLElement {
   return box;
 }
 
+/** Предупреждение перед подключением своего плагина с кодом. */
+function confirmCode(m: PluginManifest): boolean {
+  return confirm(tr('Внимание! Плагин «{name}» не из официального списка и выполняет свой код.\n\nЕго никто не проверял. У него будет полный доступ к редактору и к вашему аккаунту OSM: он сможет править карту от вашего имени. Автор может в любой момент изменить код.\n\nПодключайте, только если доверяете автору. Подключить?', { name: m.name }));
+}
+
 let error = '';
 let busy = false;
 
@@ -59,8 +64,8 @@ export function renderPluginsPane() {
     del.addEventListener('click', () => { removePlugin(e.manifest.id); renderPluginsPane(); });
     row.append(name, e.manifest.version ? el('span', 'hint', ` ${e.manifest.version}`) : '');
     if (e.manifest.module) {
-      const b = el('span', 'plugin-trusted', tr('доверенный, с кодом'));
-      b.title = tr('Репозиторий в списке доверенных: плагин выполняет свой код в редакторе');
+      const b = el('span', 'plugin-code', tr('с кодом · полный доступ'));
+      b.title = tr('Непроверенный плагин выполняет свой код в редакторе и может править OSM от вашего имени');
       row.append(' ', b);
     }
     row.append(' · ', del);
@@ -82,7 +87,7 @@ export function renderPluginsPane() {
     busy = true; error = '';
     const v = input.value;
     renderPluginsPane();
-    try { await addCustom(v); } catch (err) { error = err instanceof Error ? err.message : String(err); }
+    try { await addCustom(v, confirmCode); } catch (err) { error = err instanceof Error ? err.message : String(err); }
     busy = false;
     renderPluginsPane();
     if (error) {
@@ -92,7 +97,7 @@ export function renderPluginsPane() {
   });
   pane.append(form);
   if (error) pane.append(el('p', 'plugin-error', error));
-  pane.append(el('p', 'hint', tr('Ссылка на репозиторий GitHub с файлом simple3d-plugin.json в корне (лучше с тегом: автор/репо@v1.0) или https-ссылка на манифест .json. Свои плагины — только данные (подложки), без кода: так они не получат доступа к вашему аккаунту OSM.')));
+  pane.append(el('p', 'hint', tr('Ссылка на репозиторий GitHub с файлом simple3d-plugin.json в корне (лучше с тегом: автор/репо@v1.0) или https-ссылка на манифест .json. Плагин с кодом получает полный доступ к вашему аккаунту OSM — перед подключением редактор предупредит.')));
   const doc = el('a', 'plugin-home', tr('Как сделать плагин: формат и отправка в официальный список')) as HTMLAnchorElement;
   doc.href = 'https://github.com/FelisPimeja/osm-simple3d-editor/blob/main/docs/plugins.md';
   doc.target = '_blank';

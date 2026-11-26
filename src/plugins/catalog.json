@@ -1,7 +1,4 @@
 {
-  "trusted": [
-    "FelisPimeja/osm-simple3d-yandex-panoramas-dev"
-  ],
   "plugins": [
     {
       "id": "swisstopo",

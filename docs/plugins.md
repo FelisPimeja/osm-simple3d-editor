@@ -8,10 +8,10 @@ Plugin API version: **1**.
 
 | Kind | Contents | Where it lives | Who can add it |
 |---|---|---|---|
-| Custom | JSON manifest only (data, no code) | Any public GitHub repository or any https URL | Any user, by link (Settings → Personal settings → Plugins… → Custom) |
+| Custom | JSON manifest, optionally plus a code module next to it | Any public GitHub repository or any https URL | Any user, by link (Settings → Personal settings → Plugins… → Custom) |
 | Official | JSON manifest, optionally plus a code module | `src/plugins/catalog.json` in the editor repository | Accepted by pull request after review |
 
-Custom plugins cannot run code, unless their repository is trusted (see [Trusted repositories](#trusted-repositories)). The OSM access token is stored in the page, so third-party code could edit OSM on the user's behalf. That is why code is accepted only in official plugins, after review.
+Only the official list is reviewed and shown in the plugins menu. Anything added by link is unreviewed. A custom plugin may still run code (see [Code in custom plugins](#code-in-custom-plugins)): this lets authors develop and test a plugin before it is accepted. The OSM access token is stored in the page, so such code has full access to the user's OSM account. Before adding a custom plugin with code, the editor shows a clear warning and asks the user to confirm.
 
 Plugins are enabled only on the OpenStreetMap server (not on OpenHistoricalMap or OpenGeofiction).
 
@@ -51,9 +51,9 @@ A plugin is a JSON object:
 | `description` | no | Up to 300 characters. Write it in English. |
 | `homepage` | no | `https://` URL, shown as a link. |
 | `imagery` | see below | Array of imagery layers (up to 20). |
-| `module` | official only | Name of a code module, see [Code modules](#code-modules-official-only). Ignored in custom plugins. |
+| `module` | no | Code module: for official plugins see [Code modules](#code-modules), for custom ones [Code in custom plugins](#code-in-custom-plugins). |
 
-A plugin must contain at least one imagery layer, or (if official) a `module`.
+A plugin must contain at least one imagery layer or a `module`.
 
 ### Imagery layer fields
 
@@ -107,7 +107,7 @@ The list of enabled plugins (official ids and custom links) is saved in the user
 
 Invalid catalog entries are skipped, with a warning in the browser console.
 
-## Code modules (official only)
+## Code modules
 
 An official plugin may set `module`, in one of two forms:
 
@@ -141,13 +141,13 @@ export function activate(api) {
 
 Everything a plugin registered (imagery, photo layers, toggles, click handlers, windows, the cone) is removed automatically when the plugin is disabled.
 
-## Trusted repositories
+## Code in custom plugins
 
-`src/plugins/catalog.json` also has a `trusted` array of GitHub repositories (`owner/repo`). They are not shown in the official list, but a user who adds one in Custom gets its code module too. Use this for development builds of official plugins.
+A custom plugin may set `"module": "plugin.js"`: a path next to the manifest (letters, digits, `-`, `_`, `/`, ending in `.js` or `.mjs`). It is loaded from the same place as the manifest: for a GitHub link, the same repository and ref, `https://cdn.jsdelivr.net/gh/owner/repo@ref/plugin.js`; for an https link to a manifest, the same directory. Code from anywhere else is ignored. The module uses the same `activate(api)` interface as official modules.
 
-- The manifest sets `"module": "plugin.js"`: a path inside the same repository. It is loaded from the same ref as the manifest: `https://cdn.jsdelivr.net/gh/owner/repo@ref/plugin.js`. Code from other places is ignored.
-- Any ref works, including a branch (`owner/repo@main`). jsDelivr caches branches for up to 7 days; to pick up a new push at once, open `https://purge.jsdelivr.net/gh/owner/repo@main/plugin.js` and `.../simple3d-plugin.json`, then re-add the plugin. Tags avoid the cache problem.
-- A trusted plugin is marked "trusted, runs code" in the list. Whoever can push to a trusted repository can run code for its users, so the list changes only by pull request.
+- Before adding such a plugin, the editor warns that it is unreviewed and gets full access to the user's OSM account, and adds it only if the user confirms. The list marks it "runs code · full access".
+- Any ref works, including a branch (`owner/repo@main`), which is convenient while developing. jsDelivr caches branches for up to 7 days; to pick up a new push at once, open `https://purge.jsdelivr.net/gh/owner/repo@main/plugin.js` and `.../simple3d-plugin.json`, then re-add the plugin. Tags avoid the cache problem.
+- When the plugin is ready, propose it for the official list (see [Adding a plugin to the official list](#adding-a-plugin-to-the-official-list)) with the module pinned to a commit SHA.
 
 ## Source of truth
 

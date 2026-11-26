@@ -36,7 +36,7 @@ import { dropPartSeams } from './part-seams';
 import { COUNTER_DEPTH, closedCounterSplit, counterRing, isClosedCounterRing } from './counter-ring';
 import { edgePass } from './edge-pass';
 import { silhouetteEdges, type SilhouetteEdges } from './silhouette-edges';
-import { bottomTriangles, buildTriangles, roofShell, shapeOf, type LocalPolygon, type Pt } from './building-geometry';
+import { bottomTriangles, buildTriangles, roofShell, shapeOf, skillionWallTopAt, type LocalPolygon, type Pt } from './building-geometry';
 import { recordMs, timed } from '../perf';
 import { orientedFrame, type LocalFrame } from './oriented-box';
 import { setTreesMonochrome, setTreesSeasonal, type TreeGroup } from './trees';
@@ -104,10 +104,11 @@ const doorHeight = (tags?: Record<string, string>) => {
  * Высота двери без своего height: обычная, но в низкой части — до низа ската (верха стен) без 10 см, иначе
  * дверь пробивала бы крышу.
  */
-export function fittedDoorHeight(tags: Record<string, string> | undefined, partTags: Record<string, string>): number {
+export function fittedDoorHeight(tags: Record<string, string> | undefined, partTags: Record<string, string>, wallTop?: number): number {
   if (looseLength(tags?.height ?? tags?.['door:height']) >= 0.5) return doorHeight(tags);
   const h = computeHeights(partTags);
-  return Math.max(0.5, Math.min(DOOR_HEIGHT, h.wallTop - h.min - 0.1));
+  // wallTop — верх стены у самой двери (под скатом односкатной крыши он выше низкой стороны)
+  return Math.max(0.5, Math.min(DOOR_HEIGHT, (wallTop ?? h.wallTop) - h.min - 0.1));
 }
 /** Перемычка во всю толщину — только в просвете размером с дверь (до двустворчатой) в стене толщиной до 0,5 м:
  * шире или глубже — это проход или узкое место коридора, над ним ничего нет. */
@@ -6843,7 +6844,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           // Так же и вход у земли под поднятой видимой частью (узел её контура над входом нижней): при изоляции его нет
           const h = computeHeights(it.tags), z = place?.z ?? floorZ;
           const outside = !!partsHidden && z !== undefined && (z < min - 0.3 || z >= min + h.top - h.min);
-          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: fittedDoorHeight(tags.get(id), it.tags), wings: doorWings(tags.get(id)), canopy: canopyHeight(tags.get(id), it.tags, fittedDoorHeight(tags.get(id), it.tags)) }, rank });
+          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) { const dh = fittedDoorHeight(tags.get(id), it.tags, skillionWallTopAt(rings[0], h, it.tags, place.p)); best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: dh, wings: doorWings(tags.get(id)), canopy: canopyHeight(tags.get(id), it.tags, dh) }, rank }); }
         }));
       }
       // Вход на стене, но не узел контура (дверь indoor-стены на фасаде): на ближайшей стороне, по своей точке
@@ -6870,7 +6871,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const floorZ = !onMap && Number.isFinite(lv) ? this.entranceFloors.get(lv) : undefined;
         const place = { p: near.p, t: near.t, n: nrm, z: floorZ ?? entranceZ(e.tags, it.tags) };
         const h = computeHeights(it.tags), outside = !!partsHidden && (place.z < min - 0.3 || place.z >= min + h.top - h.min);
-        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: fittedDoorHeight(e.tags, it.tags), wings: doorWings(e.tags), colour: e.tags.colour, canopy: canopyHeight(e.tags, it.tags, fittedDoorHeight(e.tags, it.tags)) }, rank });
+        if (!(offstage || outside) || onShownWall(place.p, place.z)) { const dh = fittedDoorHeight(e.tags, it.tags, skillionWallTopAt(near.rings[0], h, it.tags, place.p)); best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: dh, wings: doorWings(e.tags), colour: e.tags.colour, canopy: canopyHeight(e.tags, it.tags, dh) }, rank }); }
       }
     }
     for (const w of windowPlaces) if (!best.has(w.id)) best.set(w.id, { place: w, rank: Infinity });

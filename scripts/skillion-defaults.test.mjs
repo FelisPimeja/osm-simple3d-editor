@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { before, after, test } from 'node:test';
 import { createServer } from 'vite';
 
-let vite, skillionDirection, skillionRoofHeight, buildTriangles, computeHeights;
+let vite, skillionDirection, skillionRoofHeight, skillionWallTopAt, buildTriangles, computeHeights;
 before(async () => {
   vite = await createServer({ configFile: false, server: { middlewareMode: true, ws: false, watch: null }, appType: 'custom' });
   ({ skillionDirection } = await vite.ssrLoadModule('/src/edit/skillion-defaults.ts'));
-  ({ skillionRoofHeight, buildTriangles } = await vite.ssrLoadModule('/src/render/building-geometry.ts'));
+  ({ skillionRoofHeight, skillionWallTopAt, buildTriangles } = await vite.ssrLoadModule('/src/render/building-geometry.ts'));
   ({ computeHeights } = await vite.ssrLoadModule('/src/osm/heights.ts'));
 });
 after(async () => { await vite.close(); });
@@ -39,4 +39,13 @@ test('при заданной height верх стоит, стены — до н
   for (let i = 2; i < walls.length; i += 3) zs.push(walls[i]);
   assert.ok(Math.abs(Math.max(...zs) - 4) < 1e-9);
   assert.ok(Math.abs(Math.min(...zs.filter((z) => z > 0)) - (4 - 2 * Math.tan(25 * Math.PI / 180))) < 1e-9);
+});
+
+test('высота стены под скатом в точке двери (relation/19630035: height 2.52, roof:height 2)', () => {
+  const tags = { 'building:part': 'yes', height: '2.52', 'roof:height': '2', 'roof:shape': 'skillion', 'roof:direction': '270' };
+  const h = computeHeights(tags);
+  // Скат на запад: восточная стена (x = 0) — высокая, западная (x = -2) — низкая
+  assert.ok(Math.abs(skillionWallTopAt(annex, h, tags, [0, 3]) - 2.52) < 1e-9);
+  assert.ok(Math.abs(skillionWallTopAt(annex, h, tags, [-2, 3]) - 0.52) < 1e-9);
+  assert.equal(skillionWallTopAt(annex, computeHeights({ height: '3' }), { height: '3' }, [0, 3]), undefined);
 });

@@ -781,6 +781,14 @@ function addSkillion(walls: number[], roof: number[], p: LocalPolygon, h: Height
   for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(contour, holes)) tri(roof, v(a), v(b), v(c));
 }
 
+/** Высота стены односкатного объёма в точке q его контура ring (под скатом), м от земли; не односкатная — undefined. */
+export function skillionWallTopAt(ring: Pt[], h: Heights, tags: Record<string, string>, q: Pt): number | undefined {
+  if (h.roofShape !== 'skillion') return undefined;
+  const hh = skillionHeights(ring, h, tags);
+  const { proj, lo, span } = slope(ring, tags['roof:direction']);
+  return hh.wallTop + hh.roofHeight * (1 - Math.max(0, Math.min(1, (proj(q) - lo) / span)));
+}
+
 /** Наибольший уклон односкатной крыши без своей высоты (roof:height / roof:levels), градусы. */
 export const SKILLION_MAX_PITCH = 25;
 

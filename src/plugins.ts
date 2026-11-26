@@ -207,6 +207,17 @@ async function fetchManifest(input: string): Promise<PluginManifest> {
   return parseManifest(json, false, trustedBase(input));
 }
 
+/** Репозиторий без версии: jsDelivr берёт последний тег; если тегов нет — ветка main. Возвращает и итоговую ссылку. */
+async function fetchWithFallback(input: string): Promise<{ manifest: PluginManifest; source: string }> {
+  const s = input.trim();
+  try { return { manifest: await fetchManifest(s), source: s }; } catch (err) {
+    const g = ghRepo(s);
+    if (!g || g.ref) throw err;
+    const alt = `${g.owner}/${g.repo}@main`;
+    try { return { manifest: await fetchManifest(alt), source: alt }; } catch { throw err; }
+  }
+}
+
 // --- Подключённые ---
 
 let entries: PluginEntry[] = [];
@@ -270,7 +281,7 @@ async function activate(m: PluginManifest) {
   active.set(m.id, state);
   for (const im of imageryOf(m)) { registerImagery(im); host.addImagery(im); }
   const load = !m.module ? undefined
-    : EXTERNAL_MODULE.test(m.module) ? () => import(/* @vite-ignore */ m.module!) as Promise<PluginModule>
+    : /^https:\/\//.test(m.module) ? () => import(/* @vite-ignore */ m.module!) as Promise<PluginModule>
       : MODULES[`./plugins/${m.module}.ts`];
   if (!load) return;
   try {
@@ -358,9 +369,9 @@ export function enableCatalog(id: string, on: boolean) {
 
 /** Свой плагин по ссылке; ошибка — исключением с понятным текстом. */
 export async function addCustom(input: string): Promise<PluginManifest> {
-  const manifest = await fetchManifest(input);
+  const { manifest, source } = await fetchWithFallback(input);
   if (CATALOG.some((c) => c.id === manifest.id)) throw new Error(tr('Плагин «{name}» есть в официальном списке — включите его там', { name: manifest.name }));
-  add({ source: input.trim(), manifest });
+  add({ source, manifest });
   onChange();
   return manifest;
 }

@@ -3750,18 +3750,24 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
   if (isComplex(g)) return; // комплекс без здания — не объект OSM, проверять на сервере нечего
   const api = server().api;
   try {
-    const root = isSolo(g) ? g.members[0] : g.key;
+    let root = isSolo(g) ? g.members[0] : g.key;
     // Здание создано в сессии (например, разрезом отдельного здания) — на сервере его ещё нет
     if (Number(root.split('/')[1]) < 0) return;
+    const focusedNow = () => requestId === focusRefreshId && focus?.key === g.key;
+    if (focusedNow() && !background) setStatus(tr('Проверяем актуальность здания…'));
+    // Отдельное здание могли включить в отношение type=building — тогда открываем его (иначе редактор не узнает)
+    const joined = isSolo(g) ? (await fetchElementRelations(root, api)).find((r) => r.tags?.type === 'building')?.id : undefined;
+    if (joined !== undefined) root = `relation/${joined}`;
+    const solo = isSolo(g) && joined === undefined;
     const elements = await fetchBuildingElements(root, api);
     const parsed = parseBuildings(elements);
     if (api !== server().api) return;
-    const freshGroup = isSolo(g) ? { ...g } : parsed.groups.find((item) => item.key === g.key);
+    const freshGroup = solo ? { ...g } : parsed.groups.find((item) => item.key === root);
     if (!freshGroup) throw new Error(`OSM: ${g.key} отсутствует в ответе API`);
     // fetchBuildingElements checks the download, including nested relations and way nodes.
     // Parsing may legitimately omit members that are not building volumes.
     // A standalone outline only fetches its own data; inferred parts are refreshed via tiles.
-    const { features, unrendered } = isSolo(g)
+    const { features, unrendered } = solo
       ? { features: parsed.features.filter((f) => freshGroup.members.includes(f.key)), unrendered: [] }
       : buildingRefreshMembers(freshGroup, parsed, elements);
     const warning = unrendered.length ? tr('Загружены, но не отображаются члены {building}: {members}', {
@@ -3775,15 +3781,15 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
         // Входы — теги узлов: новая дверь на старом узле контура не меняет ни тегов, ни геометрии пути
         || JSON.stringify((old.entrances ?? []).filter((e) => !e.at)) !== JSON.stringify((f.entrances ?? []).filter((e) => !e.at));
     });
-    const oldGroup = overpass.groupOf(g.key);
-    const groupChanged = !isSolo(g) && JSON.stringify(oldGroup) !== JSON.stringify(freshGroup);
+    const oldGroup = overpass.groupOf(freshGroup.key);
+    const groupChanged = !solo && JSON.stringify(oldGroup) !== JSON.stringify(freshGroup);
     const cacheChanged = changed.length > 0 || groupChanged;
     // Кеш тайлов (память и IndexedDB) хранит данные сервера, а не правки сессии — обновляем его всегда,
     // иначе после выхода в режим карты снова покажется старое здание
     const saved = new Map(changed.map((f) => [f.key, { version: f.version, tags: f.tags, polygons: f.polygons, ways: f.ways,
       // Входы на стене (узлы не на контуре) знают только тайлы — из ответа /full их нет
       entrances: [...(f.entrances ?? []), ...(overpass.cachedFeature(f.key)?.entrances ?? []).filter((e) => e.at && !f.entrances?.some((x) => x.id === e.id))] }]));
-    if (cacheChanged) await overpass.applySaved(saved, isSolo(g) ? [] : [freshGroup], changed);
+    if (cacheChanged) await overpass.applySaved(saved, solo ? [] : [freshGroup], changed);
     // В режиме здания тайлы карты не пересобираются (их сборка откладывается) — пересобрать эти объекты при выходе
     if (cacheChanged && focus) { tilesStale = true; for (const f of changed) staleKeys.add(f.key); if (groupChanged) staleKeys.add(freshGroup.key); }
     // Свежие версии запоминаем как отправленные: отстающий Overpass или старая запись IndexedDB не вернут прежнее здание
@@ -3800,23 +3806,26 @@ async function refreshFocusedBuilding(g: BuildingGroup, requestId: number, manua
     // A tile reload may already have updated the cache while the session still holds older copies.
     // Refresh the clean session even when the API response matches the tile cache.
     refreshBuildingFeatures(session, features);
-    if (!isSolo(g)) {
+    if (!solo) {
       const copy = { ...freshGroup, tags: { ...freshGroup.tags }, members: [...freshGroup.members], roles: [...freshGroup.roles],
         relMembers: freshGroup.members.map((key, i) => { const [type, ref] = key.split('/'); return { type: type as 'way' | 'relation', ref: Number(ref), role: freshGroup.roles[i] ?? '' }; }) };
-      if (session.has(g.key)) session.refresh(copy);
-      if (editGroups.has(g.key)) { editGroups.set(g.key, copy); rebuildGroupIndex(); }
+      if (session.has(freshGroup.key)) session.refresh(copy);
+      if (editGroups.has(freshGroup.key) || joined !== undefined) { editGroups.set(freshGroup.key, copy); rebuildGroupIndex(); }
     }
     if (!focused) return cacheChanged ? 'updated' : 'fresh';
     drill = focus = withStrayParts(freshGroup);
     setFocusScene(focus);
+    // Окружение прячет члены открытого здания по списку на входе: новые части иначе рисовались бы и в нём (z-fighting)
+    if (overpassLayer.contextShown) overpassLayer.setContext(focusContextHidden(focus));
     syncFocusHidden();
     // Сцена пересобрана без плана этажа — нарисовать его заново (подпись та же)
     levelSignature = '';
     renderLevels();
     paintSelection();
     renderSelected();
-    if (cacheChanged || manual || warning) {
-      const message = cacheChanged ? tr('Данные здания обновлены до актуальной версии OSM.') : tr('Данные здания актуальны.');
+    {
+      const message = joined !== undefined ? tr('Здание входит в отношение {key} — открыто оно.', { key: root })
+        : cacheChanged ? tr('Данные здания обновлены до актуальной версии OSM.') : tr('Данные здания актуальны.');
       setStatus(warning ? `${message} ${warning}` : message, !!warning);
     }
     return cacheChanged ? 'updated' : 'fresh';

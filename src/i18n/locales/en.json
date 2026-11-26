@@ -1739,6 +1739,8 @@
   "скат не круче {deg}°": "slope no steeper than {deg}°",
   "Цвет": "Color",
   "Цвет крыши": "Roof color",
+  "Проверяем актуальность здания…": "Checking the building is up to date…",
+  "Здание входит в отношение {key} — открыто оно.": "The building is now part of {key} — opened it instead.",
   "Створок": "Leaves",
   "Дороги": "Roads",
   "Прочее": "Other",

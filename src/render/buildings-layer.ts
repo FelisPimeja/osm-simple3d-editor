@@ -6844,7 +6844,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           // Так же и вход у земли под поднятой видимой частью (узел её контура над входом нижней): при изоляции его нет
           const h = computeHeights(it.tags), z = place?.z ?? floorZ;
           const outside = !!partsHidden && z !== undefined && (z < min - 0.3 || z >= min + h.top - h.min);
-          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) { const dh = fittedDoorHeight(tags.get(id), it.tags, skillionWallTopAt(rings[0], h, it.tags, place.p)); best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: dh, wings: doorWings(tags.get(id)), canopy: canopyHeight(tags.get(id), it.tags, dh) }, rank }); }
+          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) { const dh = fittedDoorHeight(tags.get(id), it.tags, skillionWallTopAt(rings[0], h, it.tags, place.p)); best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: dh, wings: doorWings(tags.get(id)), colour: tags.get(id)!.colour, canopy: canopyHeight(tags.get(id), it.tags, dh) }, rank }); }
         }));
       }
       // Вход на стене, но не узел контура (дверь indoor-стены на фасаде): на ближайшей стороне, по своей точке
@@ -6910,7 +6910,8 @@ export class BuildingsLayer implements CustomLayerInterface {
         continue;
       }
       const lift = this.entrancesSelected.includes(e.id) || lit.has(e.id) || e.id === this.entranceHovered || e.id === mp?.id;
-      const tint = !lift && e.colour ? '#' + parseColour(e.colour).getHexString() : undefined;
+      // Монохром — двери белые, как и всё здание
+      const tint = !lift && e.colour && !this.monochrome ? '#' + parseColour(e.colour).getHexString() : undefined;
       const out = lift ? selected : tint ? painted.get(tint) ?? painted.set(tint, []).get(tint)! : plain;
       // Предпросмотр нового входа — чуть перед стеной: ниши под него в стене ещё нет, в её глубине он был бы не виден
       const off = e.id === mp?.id ? 0.05 : ENTRANCE_OFFSET;
@@ -7234,7 +7235,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     ESCALATOR_PALE_BALUSTRADE.color.setHex(on ? 0xffffff : 0xdce9ed);
     setTreesMonochrome(on);
     for (const t of this.trees.values()) t.recolour();
-    for (const g of this.groups.values()) this.paintGroup(g);
+    for (const g of this.groups.values()) { this.paintGroup(g); if (g.entrances.length) this.applyEntrances(g); }
     this.map?.triggerRepaint();
   }
 

@@ -977,14 +977,11 @@ body.mobile .edit-hint { display: none; } /* мобильный — только
 #view-tools button svg { width: 22px; height: 22px; margin: 0; }
 #view-tools button.active, #view-tools button.panel-open { background: #dbeafe; border-color: #93c5fd; color: #333; }
 
-/* Десктоп и планшет: куб вида и кнопки масштаба — в правом нижнем углу (под большим пальцем), над атрибуцией;
-   правая колонка панелей заканчивается над ними */
-body:not(.mobile) .maplibregl-ctrl-top-right { top: auto; bottom: 54px; right: 12px; align-items: center; }
-body:not(.mobile) .maplibregl-ctrl-top-right .view-cube { margin-top: 0; }
+/* Десктоп и планшет: куб вида и кнопки масштаба — в правом верхнем углу, слева от правой колонки панелей;
+   колонка — до низа экрана */
+body:not(.mobile) .maplibregl-ctrl-top-right { top: 6px; right: 334px; }
 body:not(.mobile) .maplibregl-ctrl-top-right .maplibregl-ctrl { margin-right: 0; }
-body:not(.mobile) .vc-settings { top: auto; bottom: calc(100% + 4px); }
-body:not(.mobile) #right-col { bottom: 124px; }
-body:not(.mobile):has(.view-cube:not([hidden])) #right-col { bottom: 178px; }
+body:not(.mobile) #right-col { bottom: 6px; }
 
 /* Главное меню: значок меню и подзаголовок — напоминание, что это редактор OpenStreetMap */
 .app-head .app-menu-icon { flex: none; color: #555; }
@@ -1034,8 +1031,6 @@ body.zoom-hidden .maplibregl-ctrl-zoom-in, body.zoom-hidden .maplibregl-ctrl-zoo
 /* Куб и кнопки масштаба выключены — внизу справа только атрибуция: колонка панелей — почти на всю высоту */
 /* Десктоп: геолокация тоже прячется вместе с кубом — блок у края исчезает целиком */
 body.zoom-hidden:not(.mobile) .maplibregl-ctrl-top-right .maplibregl-ctrl-group { display: none; }
-/* …и до низа экрана, поверх атрибуции (колонка выше неё по z-index) */
-body.zoom-hidden:not(.mobile) #right-col { bottom: 6px; }
 /* Десктоп: колонки ближе к краям экрана */
 body:not(.mobile) .col { top: 6px; }
 body:not(.mobile) #left-col { left: 6px; bottom: 6px; }
@@ -1071,3 +1066,11 @@ body:not(.mobile) .maplibregl-ctrl-bottom-right > .maplibregl-ctrl { margin-bott
 .modal-body > .panel-sec { margin-top: 12px; }
 .plugin-panel { resize: both; overflow: hidden; }
 .plugin-panel-body { flex: 1; min-height: 0; position: relative; }
+/* Десктопная вёрстка (планшет): карточка прицела — по ширине правой колонки, прижата к низу; зум, куб и колонка — над ней */
+body:not(.mobile) #mobile-card { left: auto; right: 6px; width: 320px; box-sizing: border-box; bottom: 6px; }
+body:not(.mobile):has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(--mobile-card-h, 60px) + 12px); }
+/* Карточка внизу: мелкие «＋ …» под текстом, главная кнопка справа — почти квадратная, текст в две строки */
+#mobile-card .mc-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+#mobile-card .mc-actions button { padding: 4px 10px; font-size: 13px; border-radius: 6px; }
+#mobile-card button.mc-main { align-self: stretch; max-width: 96px; white-space: normal; line-height: 1.2; }
+#mobile-card .mc-actions.mc-side { margin-top: 0; flex: none; }

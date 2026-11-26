@@ -2276,6 +2276,7 @@ function startGateDrag(paste = false): boolean {
 function cancelGateDrag() {
   if (!gateDrag) return;
   gateDrag = undefined;
+  endAim();
   syncGateMarker();
   scheduleBarriers();
   syncEntranceTool();
@@ -2287,23 +2288,29 @@ function cancelGateDrag() {
  * (пока не начали править свойства), Esc — закончить. На телефоне — прицел в центре карты.
  */
 function startAddGate(key: string) {
-  if (mobile) { startMobileGate(); return; }
   moveTool.stop(); shapeTool.stop(); pushTool.stop(); splitTool.stop(); measureTool.stop(); rotateTool.stop(); scaleTool.stop(); paintTool.stop(); offsetTool.stop();
   drawTool.stop();
   if (pointPick) stopPoint();
-  gateDrag = { id: nextNewId--, tags: { barrier: 'gate' }, only: key, series: true };
+  // Прицел — по одним воротам за раз (после «Поставить» — их свойства)
+  const cross = crossPlace();
+  gateDrag = { id: nextNewId--, tags: { barrier: 'gate' }, only: key, series: !cross };
   syncEntranceTool();
+  if (cross) { startAim(); return; }
   setStatus(tr('Ведите курсор вдоль ограждения — ворота едут по нему. Клик — поставить (можно несколько), Esc — закончить.'));
   if (lastPointer) moveGate(lastPointer);
 }
 /** Привязка ворот: вершина или середина стороны своего ограждения под курсором (переключатели привязок — общие). */
-function gateSnap(point: [number, number], only: string): LonLat | undefined {
+function gateSnapHit(point: [number, number], only: string) {
   if (!overpassLayer.snapsEnabled || overpassLayer.snapsSuspended) return;
   const h = overpassLayer.extraSnap?.(point, 12, { noEdge: true });
-  return h && (h.kind === 'vertex' || h.kind === 'midpoint') && h.key === only ? [h.lngLat.lng, h.lngLat.lat] : undefined;
+  return h && (h.kind === 'vertex' || h.kind === 'midpoint') && h.key === only ? h : undefined;
+}
+function gateSnap(point: [number, number], only: string): LonLat | undefined {
+  const h = gateSnapHit(point, only);
+  return h ? [h.lngLat.lng, h.lngLat.lat] : undefined;
 }
 // Ушли править свойства поставленных ворот — серия закончена
-for (const type of ['focusin', 'pointerdown'] as const) document.getElementById('info-panel')?.addEventListener(type, () => { if (gateDrag?.series && !mobileGate) cancelGateDrag(); });
+for (const type of ['focusin', 'pointerdown'] as const) document.getElementById('info-panel')?.addEventListener(type, () => { if (gateDrag?.series) cancelGateDrag(); });
 
 /** Точка на земле под курсором (в режиме здания — по его лучу, на карте — по карте). */
 function groundAt(point: [number, number]): LonLat | undefined {
@@ -2889,7 +2896,7 @@ map.on('click', (e) => {
   if (copyPick) { pickCopyBase([e.point.x, e.point.y]); return; }
   if (pointPick) { placePoint([e.point.x, e.point.y]); return; }
   if (entranceDrag) { commitEntrance([e.point.x, e.point.y]); return; }
-  if (gateDrag) { if (!mobileGate) commitGateDrag(); return; }
+  if (gateDrag) { if (!aim) commitGateDrag(); return; }
   if (drawTool.active) { drawTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (measureTool.active) { measureTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
   if (rotateTool.active) { rotateTool.click([e.point.x, e.point.y]); updateSnap([e.point.x, e.point.y]); return; }
@@ -4187,7 +4194,7 @@ window.addEventListener('blur', () => { overpassLayer.snapsSuspended = false; })
 function updateSnapMarker(point: [number, number] | undefined) {
   if (point && moveTool.state === 'move') moveTool.move(point);
   if (point && entranceDrag) moveEntrance(point);
-  if (point && gateDrag && !mobileGate) moveGate(point);
+  if (point && gateDrag && !aim) moveGate(point);
   if (pointPick && (toolActiveExceptPoint() || !focus !== pointOnMap)) stopPoint();
   if (point && pointPick) hoverPoint(point);
   if (point && shapeTool.active) shapeTool.move(point);
@@ -4234,6 +4241,21 @@ function updateSnapMarker(point: [number, number] | undefined) {
       snapEl.dataset.label = currentSnap.label ?? SNAP_LABELS[currentSnap.kind];
       snapEl.style.left = `${currentSnap.point[0]}px`;
       snapEl.style.top = `${currentSnap.point[1]}px`;
+    }
+    return;
+  }
+  // Ворота (курсор и прицел): вершина или середина своего ограждения, иначе — «на ребре» в месте ворот
+  if (gateDrag) {
+    const h = point && gateDrag.only ? gateSnapHit(point, gateDrag.only) : undefined;
+    const at = gateDrag.target?.at;
+    const px = h ? h.point : at ? ((p) => [p.x, p.y] as [number, number])(map.project(at)) : undefined;
+    snapEl.hidden = !px;
+    if (px) {
+      const kind = h ? h.kind : 'edge';
+      snapEl.className = `snap-marker ${kind}`;
+      snapEl.dataset.label = SNAP_LABELS[kind];
+      snapEl.style.left = `${px[0]}px`;
+      snapEl.style.top = `${px[1]}px`;
     }
     return;
   }
@@ -10345,7 +10367,7 @@ function stopAllTools() {
   stopPoint();
   cancelCopyPick();
   cancelEntranceDrag();
-  if (mobileGate) stopMobileGate(false); else cancelGateDrag();
+  cancelGateDrag();
   eyedropper.cancel();
   overpassLayer.clearTracking();
   trackTyped = '';
@@ -14331,7 +14353,7 @@ escalatorUi.addEventListener('pointerdown', (e) => {
  * Что можно добавить к выбранному объекту как его часть: вход — к зданию, ворота — к забору или стене (дальше —
  * переход к дороге и т. п.). Один список на обе версии: на компьютере — кнопки в свойствах и X, на телефоне — в карточке.
  */
-interface ChildAction { id: string; label: string; title: string; run: () => void }
+interface ChildAction { id: string; label: string; title: string; /** Здание «＋ Входа» — для «Открыть здание» в карточке. */ group?: BuildingGroup; run: () => void }
 /** Здание, к которому ставится вход «＋ Вход» на компьютере: стены других зданий не ловятся. */
 let entranceParent: BuildingGroup | undefined;
 function childActions(): ChildAction[] {
@@ -14342,18 +14364,19 @@ function childActions(): ChildAction[] {
     : focus ? (shownLevel ? undefined : focus)
     // Выделено само отношение type=building (карточка группы) — оно и есть здание
     : selection.length && !indoorSelection.length ? (() => { const gs = new Set(selection.map((k) => groupOf(k)?.key ?? k)); return gs.size === 1 ? groupOf(selection[0]) ?? editGroups.get(selection[0]) ?? soloGroup(selection[0]) : undefined; })() : undefined;
-  if (building) return [{ id: 'entrance', label: tr('Вход'), title: tr('Добавить вход на фасад этого здания (X)'), run: () => startAddEntrance(building) }];
+  if (building) return [{ id: 'entrance', label: tr('Вход'), title: tr('Добавить вход на фасад этого здания (X)'), group: building, run: () => startAddEntrance(building) }];
   return [];
 }
 function startAddEntrance(g: BuildingGroup) {
-  if (mobile) { startMobilePlace(); return; }
   if (pointPick) stopPoint();
   startPoint();
   if (pointPick && !focus) entranceParent = g;
+  if (pointPick && crossPlace()) startAim();
 }
-/** Кнопки «＋ …» в свойствах (компьютер; на телефоне они в карточке внизу). */
+/** Кнопки «＋ …» в свойствах (компьютер с мышью; на телефоне и при вводе пальцем — в карточке внизу). */
 function childActionsRow(): string {
-  const acts = mobile ? [] : childActions();
+  queueMicrotask(renderMobileCard);
+  const acts = crossPlace() ? [] : childActions();
   return acts.length ? `<p class="add-on">${acts.map((a) => `<button type="button" class="secondary" data-child-action="${a.id}" title="${esc(a.title)}">＋ ${esc(a.label)}</button>`).join('')}</p>` : '';
 }
 document.addEventListener('click', (e) => {
@@ -14395,7 +14418,7 @@ function stopPoint() {
   overpassLayer.setDrawPreview(undefined);
   syncCursor();
   toolHint('');
-  if (mobilePlace) { mobilePlace = false; renderMobileCard(); }
+  endAim();
 }
 
 /** Куда встанет точка: место, вид и стороны (indoor-пути и пути здания), в которые войдёт узел. */
@@ -14482,7 +14505,7 @@ function pointTargetOn(screen: [number, number], lvl: Level): PointTarget | unde
     const a = px(r.loc[i]), b = px(r.loc[(i + 1) % r.loc.length]);
     if (!a || !b) continue;
     const d = segDist2(screen, a, b);
-    if (d < (mobilePlace ? MOBILE_SIDE_PX : POINT_SIDE_PX) && (!best || d < best.d)) best = { r, edge: i, d };
+    if (d < (aim ? MOBILE_SIDE_PX : POINT_SIDE_PX) && (!best || d < best.d)) best = { r, edge: i, d };
   }
   if (!best) return { at: overpassLayer.focusToLngLat(p[0], p[1])! as LonLat, local: p, kind: 'poi', indoor: [], building: [] };
   const a = best.r.loc[best.edge], b = best.r.loc[(best.edge + 1) % best.r.loc.length];
@@ -15084,16 +15107,16 @@ mapEntranceBtn.addEventListener('click', () => (pointPick ? stopPoint() : startP
 function mapEntranceTarget(screen: [number, number]): MapEntranceTarget | undefined {
   // Мобильный прицел (здание карточки) и «＋ Вход» на компьютере (выбранное здание): ближайшая стена этого здания
   // в пределах ~40 px от точки на земле; на компьютере сначала — фасад этого здания под курсором
-  const parent = mobilePlace ? cardGroup : entranceParent;
+  const parent = entranceParent ?? (aim ? cardGroup : undefined);
   if (parent) {
-    const hit = mobilePlace ? undefined : overpassLayer.pickHit(screen);
+    const hit = aim ? undefined : overpassLayer.pickHit(screen);
     if (hit && parent.members.includes(hit.key)) {
       const f = (session.get(hit.key) as Feature3D | undefined) ?? entity(hit.key) as Feature3D | undefined;
       const snap = snapGround(screen);
       const t = f?.polygons?.length ? nearestEntranceSide(f, snap ? [snap.lngLat.lng, snap.lngLat.lat] : [hit.lngLat.lng, hit.lngLat.lat], MAP_ENTRANCE_REACH) : undefined;
       if (t) return t;
     }
-    const snap = mobilePlace ? undefined : snapGround(screen);
+    const snap = aim ? undefined : snapGround(screen);
     const g = snap?.lngLat ?? map.unproject(screen), q: LonLat = [g.lng, g.lat];
     const reach = 40 * 40075016.7 * Math.cos(q[1] * Math.PI / 180) / (512 * 2 ** map.getZoom());
     let best: (MapEntranceTarget & { d: number }) | undefined;
@@ -18982,6 +19005,7 @@ function focusContextHidden(g: BuildingGroup): string[] {
 
 /** Снято выделение: в режиме здания — его свойства (на выбранном этаже — свойства этажа), иначе пусто. */
 function clearInfo() {
+  queueMicrotask(renderMobileCard);
   if (focus) renderSelected();
   else infoEl.innerHTML = '';
 }
@@ -21156,6 +21180,13 @@ renderHelp();
 const mobileQuery = matchMedia('(max-width: 768px)');
 const mobileCard = document.getElementById('mobile-card')!;
 let mobile = false;
+/** Последний ввод — палец: на планшете с десктопной вёрсткой ставить вход/ворота прицелом, тапы там двигают карту. */
+let lastTouch = touchDevice;
+window.addEventListener('pointerdown', (e: PointerEvent) => {
+  const t = e.pointerType === 'touch' || e.pointerType === 'pen';
+  if (t !== lastTouch) { lastTouch = t; queueMicrotask(renderMobileCard); }
+}, { capture: true });
+const crossPlace = () => mobile || lastTouch;
 /**
  * Форм-фактор для тега changeset editor:mode (статистика: что востребовано где). Планшет — сенсорный экран, у которого
  * короткая сторона ≥ 768 px: на нём бывает и мобильный, и десктопный интерфейс, отдельный UX для него пока не сделан.
@@ -21209,49 +21240,57 @@ statusbarObserver.observe(rightCol);
 for (const c of rightCol.children) statusbarObserver.observe(c);
 addEventListener('resize', placeStatusbar);
 
+/** Здание в карточке (для «Открыть здание»): на телефоне — по тапу, на планшете — выделенное. */
+let cardShown: BuildingGroup | undefined;
 function renderMobileCard() {
-  mobileCross.hidden = !(mobile && mobilePlace);
-  if (!mobile) { mobileCard.hidden = true; return; }
-  if (mobilePlace) {
-    mobileCard.innerHTML = (mobileGate
+  mobileCross.hidden = !aim;
+  if (!aim && !gateDrag && !pointPick) snapEl.hidden = true;
+  // Одна карточка для телефона и планшета (десктопная вёрстка, ввод пальцем); с мышью — её нет
+  if (!mobile && !lastTouch && !aim) { mobileCard.hidden = true; return; }
+  if (aim) {
+    mobileCard.innerHTML = (gateDrag
       ? `<div class="mc-text"><div class="mc-name">${tr('Новые ворота')}</div><div class="mc-hint">${tr('Двигайте карту: прицел — на линию ограждения')}</div></div>`
       : `<div class="mc-text"><div class="mc-name">${tr('Новый вход')}</div><div class="mc-hint">${tr('Двигайте карту: прицел — на стену здания')}</div></div>`)
       + `<button type="button" class="secondary" data-mc-cancel>${tr('Отмена')}</button><button type="button" data-mc-place>${tr('Поставить')}</button>`;
     mobileCard.hidden = false;
     return;
   }
-  const addBtn = childActions().map((a) => `<button type="button" class="secondary mc-icon" data-child-action="${a.id}" title="${esc(a.title)}">＋ ${esc(a.label)}</button>`).join('');
-  if (focus) {
-    mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(groupName(focus))}</div><div class="mc-hint">${tr('Режим здания · этажи — в панели «Этажи»')}</div></div>`
-      + (shownLevel ? '' : addBtn) + `<button type="button" class="secondary" data-mc-exit>${tr('К карте')}</button>`;
+  // Слева — название, подсказка и под ними мелкие «＋ …»; справа — одна главная кнопка (текст в две строки)
+  const acts = childActions().map((a) => `<button type="button" class="secondary" data-child-action="${a.id}" title="${esc(a.title)}">＋ ${esc(a.label)}</button>`).join('');
+  const card = (name: string, hint: string, add: string, main = '') => {
+    mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(name)}</div><div class="mc-hint">${esc(hint)}</div>`
+      // Главной кнопки нет (ограждение) — «＋ …» в один ряд с текстом, по правому краю
+      + (add && main ? `<div class="mc-actions">${add}</div>` : '') + `</div>` + (main || (add ? `<div class="mc-actions mc-side">${add}</div>` : ''));
     mobileCard.hidden = false;
+  };
+  if (focus) {
+    card(groupName(focus), tr('Режим здания · этажи — в панели «Этажи»'), shownLevel ? '' : acts,
+      `<button type="button" class="mc-main secondary" data-mc-exit>${tr('К карте')}</button>`);
     return;
   }
   const fence = mobileFence();
   if (fence) {
     const len = fence.polygons[0].outer.reduce((sum, c, i, a) => i ? sum + Math.hypot((c[0] - a[i - 1][0]) * 111320 * Math.cos(c[1] * Math.PI / 180), (c[1] - a[i - 1][1]) * 110540) : 0, 0);
-    mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(fence.tags.name ?? indoorTitle(fence))}</div><div class="mc-hint">${showLength(len)} ${unitLabel()}</div></div>`
-      + addBtn.replace('secondary mc-icon', 'mc-icon');
-    mobileCard.hidden = false;
+    card(fence.tags.name ?? indoorTitle(fence), `${showLength(len)} ${unitLabel()}`, acts);
     return;
   }
-  if (!cardGroup) { mobileCard.hidden = true; return; }
-  mobileCard.innerHTML = `<div class="mc-text"><div class="mc-name">${esc(groupName(cardGroup))}</div><div class="mc-hint">${tr('Здание в 3D, этажи')}</div></div>`
-    + addBtn + `<button type="button" data-mc-open>${tr('Открыть здание')}</button>`;
-  mobileCard.hidden = false;
+  cardShown = mobile ? cardGroup : childActions().find((a) => a.group)?.group;
+  if (!cardShown) { mobileCard.hidden = true; return; }
+  card(groupName(cardShown), tr('Здание в 3D, этажи'), acts, `<button type="button" class="mc-main" data-mc-open>${tr('Открыть здание')}</button>`);
 }
 
 mobileCard.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
-  if (t.closest('[data-mc-cancel]')) { if (mobileGate) stopMobileGate(true); else stopPoint(); return; }
-  if (t.closest('[data-mc-place]')) { if (mobileGate) commitMobileGate(); else commitMobilePlace(); return; }
+  if (t.closest('[data-mc-cancel]')) { aimCancel(); return; }
+  if (t.closest('[data-mc-place]')) { aimCommit(); return; }
   if (t.closest('[data-mc-exit]')) { closeFocus(); cardGroup = undefined; renderMobileCard(); }
-  else if (t.closest('[data-mc-open]') && cardGroup) { const g = cardGroup; cardGroup = undefined; enterFocus(g); renderMobileCard(); }
+  else if (t.closest('[data-mc-open]') && cardShown) { const g = cardShown; cardGroup = undefined; enterFocus(g); renderMobileCard(); }
 });
 
-// Мобильный «＋ Вход»: прицел в центре карты, карта двигается под ним; точка примагничена к ближайшей стене
-// (тот же инструмент «Точка», что на компьютере), «Поставить» — вход в прицел и сразу его свойства.
-let mobilePlace = false;
+// Прицел — второй способ указать точку для «Входа» и «Ворот»: та же механика (hoverPoint/placePoint, moveGate/
+// commitGateDrag), только точка — центр карты, карта двигается под ним, а ставит кнопка «Поставить» в карточке.
+// Включается на телефоне и при вводе пальцем (планшет), см. crossPlace.
+let aim = false;
 const mobileCross = document.createElement('div');
 mobileCross.className = 'mobile-cross';
 mobileCross.hidden = true;
@@ -21260,18 +21299,45 @@ function mobileCenter(): [number, number] {
   const c = map.getCanvas();
   return [c.clientWidth / 2, c.clientHeight / 2];
 }
-function startMobilePlace() {
-  // Свойства сверху закрывают карту — свернуть, пока наводим прицел
+/** Радиус магнита ворот под прицелом: ~40 px экрана, в метрах. */
+const aimReach = () => 40 * 40075016.7 * Math.cos(map.getCenter().lat * Math.PI / 180) / (512 * 2 ** map.getZoom());
+/** Инструмент («Точка» или ворота) уже запущен — перевести его на прицел. */
+function startAim() {
+  // Свойства закрывают карту — свернуть, пока наводим прицел
   setCollapsed(document.getElementById('info-panel')!, true);
-  startPoint();
-  mobilePlace = true;
+  aim = true;
   renderMobileCard();
-  hoverPoint(mobileCenter());
+  aimMove();
 }
-function commitMobilePlace() {
+function aimMove() {
+  if (!aim) return;
+  const c = mobileCenter();
+  if (pointPick) hoverPoint(c);
+  if (gateDrag) { gateDrag.reach = aimReach(); moveGate(c); syncGateMarker(); }
+  // Значок привязки — тот же, что под курсором
+  updateSnapMarker(c);
+}
+/** Инструмент закончен (поставили, отменили, Esc) — прицел убрать. */
+function endAim() {
+  if (!aim) return;
+  aim = false;
+  syncGateMarker();
+  renderMobileCard();
+}
+function aimCommit() {
+  const c = mobileCenter();
+  if (gateDrag) {
+    gateDrag.reach = aimReach();
+    moveGate(c);
+    if (!gateDrag.target) { setStatus(tr('Наведите прицел на линию ограждения.'), true); return; }
+    commitGateDrag();
+    endAim();
+    setCollapsed(document.getElementById('info-panel')!, false);
+    return;
+  }
   const rev = facadeEntranceRev;
-  if (!pointTarget(mobileCenter())) { setStatus(tr('Наведите прицел на стену здания.'), true); return; }
-  placePoint(mobileCenter());
+  if (!pointTarget(c)) { setStatus(tr('Наведите прицел на стену здания.'), true); return; }
+  placePoint(c);
   // Не поставлен — причину уже сказал placeFacadeEntrance
   if (facadeEntranceRev === rev) return;
   const id = lastPlacedEntrance;
@@ -21280,10 +21346,16 @@ function commitMobilePlace() {
   renderMobileCard();
   if (id !== undefined) { selectEntrance(id); setCollapsed(document.getElementById('info-panel')!, false); }
 }
-map.on('move', () => {
-  if (mobilePlace && pointPick) hoverPoint(mobileCenter());
-  if (mobileGate && gateDrag) { moveGate(mobileCenter()); syncGateMarker(); }
-});
+function aimCancel() {
+  if (gateDrag) {
+    const key = gateDrag.only;
+    cancelGateDrag();
+    const f = key ? barrierFeatureFor(key) : undefined;
+    if (f) selectIndoor(f);
+  } else stopPoint();
+  endAim();
+}
+map.on('move', aimMove);
 /** Место будущих ворот под прицелом: тонкое ограждение на карте плоское, ворот в нём не видно. */
 let gateMarker: maplibregl.Marker | undefined;
 function syncGateMarker() {
@@ -21301,47 +21373,10 @@ function mobileFence(): IndoorFeature | undefined {
   const f = indoorSelection.length === 1 ? indoorSelection[0] : undefined;
   return f?.barrier && !f.gate && f.key.startsWith('way/') ? f : undefined;
 }
-// Мобильные «＋ Ворота»: тот же прицел, что у входа; ворота едут только по выбранному ограждению (магнит ~40 px),
-// «Поставить» — узел barrier=gate в линию и сразу его свойства (тип — там)
-let mobileGate = false;
-function startMobileGate() {
-  const fence = mobileFence();
-  if (!fence) return;
-  setCollapsed(document.getElementById('info-panel')!, true);
-  const c = map.getCenter();
-  const reach = 40 * 40075016.7 * Math.cos(c.lat * Math.PI / 180) / (512 * 2 ** map.getZoom());
-  gateDrag = { id: nextNewId--, tags: { barrier: 'gate' }, only: fence.key, reach };
-  mobileGate = true;
-  mobilePlace = true;
-  renderMobileCard();
-  moveGate(mobileCenter());
-  syncGateMarker();
-}
-function stopMobileGate(reselect: boolean) {
-  const key = gateDrag?.only;
-  cancelGateDrag();
-  mobileGate = false;
-  mobilePlace = false;
-  syncGateMarker();
-  const f = reselect && key ? barrierFeatureFor(key) : undefined;
-  if (f) selectIndoor(f);
-  renderMobileCard();
-}
-function commitMobileGate() {
-  if (gateDrag) gateDrag.reach = 40 * 40075016.7 * Math.cos(map.getCenter().lat * Math.PI / 180) / (512 * 2 ** map.getZoom());
-  moveGate(mobileCenter());
-  if (!gateDrag?.target) { setStatus(tr('Наведите прицел на линию ограждения.'), true); return; }
-  commitGateDrag();
-  mobileGate = false;
-  mobilePlace = false;
-  syncGateMarker();
-  renderMobileCard();
-  setCollapsed(document.getElementById('info-panel')!, false);
-}
 
 // Тап по зданию — карточка; мимо — убрать
 map.on('click', (e) => {
-  if (!mobile || focus || mobilePlace) return;
+  if (!mobile || focus || aim) return;
   const key = mobileFence() ? undefined : overpassLayer.pick(e.point);
   cardGroup = key ? groupOf(key) ?? soloGroup(key) : undefined;
   renderMobileCard();

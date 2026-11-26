@@ -10075,7 +10075,7 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
           const z = entranceZ(door, tags);
           if (!crosses(z)) return;
           const place = entrancePlace(rings, r, i, z);
-          if (place) places.push({ ...place, width: tagWidth(door), height: fittedDoorHeight(door, tags) });
+          if (place) places.push({ ...place, width: tagWidth(door), height: fittedDoorHeight(door, tags, skillionWallTopAt(rings[0], heights, tags, place.p)) });
         }));
       });
       // Дверь indoor-стены на фасаде (не вершина контура) — на ближайшей стене, как прямоугольник входа
@@ -10084,7 +10084,8 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
       for (const e of f.entrances ?? []) {
         const door = doors.get(e.id);
         if (!door || !e.at || onRing.has(e.id)) continue;
-        probes.push({ q: g.toLocal(e.at), z: entranceZ(door, tags), width: tagWidth(door), height: fittedDoorHeight(door, tags) });
+        const q = g.toLocal(e.at);
+        probes.push({ q, z: entranceZ(door, tags), width: tagWidth(door), height: fittedDoorHeight(door, tags, allRings[0] && skillionWallTopAt(allRings[0][0], heights, tags, q)) });
       }
       // Чужие — только точно на линии стены (не дверь соседней части рядом)
       for (const d of foreignDoors) probes.push({ q: d.p, z: d.z, width: d.width, strict: true });
@@ -10109,7 +10110,8 @@ function buildItem(g: MeshGroup, f: Feature3D): Item {
         if (crosses(pr.z)) places.push({ p: near.p, t: near.t, n, z: pr.z, width: pr.width, height: pr.height });
       }
       doorPlaces.push(...places);
-      const cut = recessEntrances(tri.walls, places, { width: ENTRANCE_WIDTH, height: ENTRANCE_HEIGHT, min: heights.min, top: heights.wallTop });
+      // Односкатная: стены выше низкой стороны — ниша по высоте двери, не по низу ската
+      const cut = recessEntrances(tri.walls, places, { width: ENTRANCE_WIDTH, height: ENTRANCE_HEIGHT, min: heights.min, top: heights.roofShape === 'skillion' ? heights.top : heights.wallTop });
       if (cut) tri.walls = cut;
       // Проём уходит выше плоского верха части (цоколь под стеклянной частью): верх и плита перекрытия над нишей
       // перегородили бы её срезом на стыке — вырезаем прямоугольник ниши из них

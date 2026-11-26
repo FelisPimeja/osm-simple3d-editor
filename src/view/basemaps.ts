@@ -18,6 +18,10 @@ export interface Imagery {
   attribution: string;
   /** Esri Wayback: дата показанного выпуска. */
   release?: string;
+  /** Из плагина (src/plugins.ts): id плагина. */
+  plugin?: string;
+  /** Лицензия не разрешает обводку для OSM — только для просмотра (подпись в меню). */
+  viewOnly?: boolean;
 }
 
 const ESRI_ATTRIBUTION = 'Esri, Maxar, Earthstar Geographics, GIS User Community · '
@@ -69,6 +73,15 @@ export const WAYBACK: Imagery = {
 
 const ALL_IMAGERY = [...IMAGERY, WAYBACK];
 export const findImagery = (id: string) => ALL_IMAGERY.find((i) => i.id === id);
+
+/** Снимки из плагинов (src/plugins.ts): добавляются в общий список; меню и слой — по событиям плагинов. */
+export function registerImagery(im: Imagery) {
+  if (!findImagery(im.id)) ALL_IMAGERY.push(im);
+}
+export function unregisterImagery(id: string) {
+  const i = ALL_IMAGERY.findIndex((im) => im.id === id && im.plugin);
+  if (i >= 0) ALL_IMAGERY.splice(i, 1);
+}
 
 /** 'map' — векторная карта без снимков. */
 export const MAP_BASEMAP = 'map';
@@ -331,6 +344,9 @@ export const FOLD_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentCol
 /** Значок инструмента смещения снимка: стрелки во все стороны. */
 export const MOVE_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5v13M1.5 8h13M6 3.5 8 1.5l2 2M6 12.5l2 2 2-2M3.5 6 1.5 8l2 2M12.5 6l2 2-2 2"/></svg>';
 
+/** Слой в группе меню (уличные фото). */
+export interface OverlayItem { id: string; label: string; title: string; on: boolean; onChange: (on: boolean) => void }
+
 export class BasemapButton {
   private readonly btn: HTMLButtonElement;
   private readonly menu: HTMLDivElement;
@@ -364,34 +380,10 @@ export class BasemapButton {
     const menu = this.menu = document.createElement('div');
     menu.className = 'basemap-menu';
     menu.hidden = true;
+    this.onOffset = onOffset;
+    this.onImageryEdit = onImageryEdit;
     const items: [string, string][] = [[NO_BASEMAP, tr('Нет')], [MAP_BASEMAP, tr('Карта')], ...list.map((i): [string, string] => [i.id, i.name])];
-    for (const [id, label] of items) {
-      const row = document.createElement('label');
-      const input = document.createElement('input');
-      input.type = 'radio';
-      input.name = 'basemap';
-      input.value = id;
-      input.addEventListener('change', () => { if (input.checked) this.select(id); });
-      const text = document.createElement('span');
-      text.textContent = ` ${label}`;
-      this.labels.set(id, text);
-      row.append(input, text);
-      let section: HTMLElement | undefined;
-      if (id !== MAP_BASEMAP && id !== NO_BASEMAP) {
-        // Настройки снимка — раскрывающаяся секция под строкой (стрелка видна у выбранного)
-        const sec = this.imagerySection(id, onOffset, onImageryEdit);
-        section = sec.el;
-        this.imagerySections.set(id, sec);
-        const fold = this.foldBtn(tr('Настройки подложки: смещение и прозрачность'), () => {
-          this.imageryOpen = !this.imageryOpen;
-          this.sync();
-        });
-        this.offsetBtns.set(id, fold);
-        row.append(fold);
-      }
-      menu.append(row);
-      if (section) menu.append(section);
-    }
+    for (const [id, label] of items) for (const el of this.imageryRow(id, label)) menu.append(el);
     // 3D-здания: показать или скрыть; шестерёнка — прозрачность (видна подложка сквозь здания)
     const bRow = document.createElement('label');
     bRow.className = list.length ? 'basemap-overlay' : '';
@@ -457,6 +449,59 @@ export class BasemapButton {
       if (!this.dockShow && !this.menu.hidden && !this.menu.contains(e.target as Node)) this.toggleMenu(false);
     });
   }
+
+
+  private readonly onOffset: (id: string) => void;
+  private readonly onImageryEdit: (id: string, edit: () => void) => void;
+  /** Строки подложек по id (строка и секция настроек) — для удаления снимков плагина. */
+  private readonly imageryEls = new Map<string, HTMLElement[]>();
+
+  private imageryRow(id: string, label: string): HTMLElement[] {
+    const row = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'basemap';
+    input.value = id;
+    input.addEventListener('change', () => { if (input.checked) this.select(id); });
+    const text = document.createElement('span');
+    text.textContent = ` ${label}`;
+    this.labels.set(id, text);
+    row.append(input, text);
+    const els: HTMLElement[] = [row];
+    if (id !== MAP_BASEMAP && id !== NO_BASEMAP) {
+      // Настройки снимка — раскрывающаяся секция под строкой (стрелка видна у выбранного)
+      const sec = this.imagerySection(id, this.onOffset, this.onImageryEdit);
+      this.imagerySections.set(id, sec);
+      const fold = this.foldBtn(tr('Настройки подложки: смещение и прозрачность'), () => {
+        this.imageryOpen = !this.imageryOpen;
+        this.sync();
+      });
+      this.offsetBtns.set(id, fold);
+      row.append(fold);
+      els.push(sec.el);
+    }
+    this.imageryEls.set(id, els);
+    return els;
+  }
+
+  /** Снимок из плагина: строка — после последней подложки. */
+  addImagery(im: Imagery) {
+    if (this.imageryEls.has(im.id)) return;
+    const els = this.imageryRow(im.id, im.viewOnly ? `${im.name} ${tr('(только просмотр)')}` : im.name);
+    const last = [...this.imageryEls.values()].filter((e) => !els.includes(e[0])).at(-1)?.at(-1);
+    if (last) last.after(...els); else this.menu.prepend(...els);
+    this.sync();
+  }
+
+  /** Плагин отключили: убрать строку снимка. */
+  removeImagery(id: string) {
+    for (const el of this.imageryEls.get(id) ?? []) el.remove();
+    this.imageryEls.delete(id);
+    this.imagerySections.delete(id);
+    this.offsetBtns.delete(id);
+    this.labels.delete(id);
+  }
+
 
   /** Строка слоя зданий — перед ней встают секции (addSection). */
   private buildingsRow?: HTMLElement;
@@ -580,7 +625,7 @@ export class BasemapButton {
    * Группа дополнительных слоёв с общими настройками: заголовок с шестерёнкой, под ним настройки и галки слоёв.
    */
   addOverlayGroup(label: string, title: string, settings: { el: HTMLElement; title: string; filtered: () => boolean },
-    items: { id: string; label: string; title: string; on: boolean; onChange: (on: boolean) => void }[]) {
+    items: OverlayItem[]): { add(it: OverlayItem): void; remove(id: string): void } {
     const head = document.createElement('div');
     head.className = 'basemap-overlay basemap-overlay-head';
     head.title = title;
@@ -588,22 +633,48 @@ export class BasemapButton {
     this.groupGears.push({ gear, filtered: settings.filtered });
     head.append(label, gear);
     const els: HTMLElement[] = [head, settings.el];
-    for (const it of items) {
-      const row = document.createElement('label');
-      row.className = 'basemap-overlay-sub';
-      row.title = it.title;
+    const rows = new Map<string, HTMLElement>();
+    const row = (it: OverlayItem) => {
+      const el = document.createElement('label');
+      el.className = 'basemap-overlay-sub';
+      el.title = it.title;
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.checked = it.on;
       const o = { input, on: it.on };
       this.overlays.set(it.id, o);
       input.addEventListener('change', () => { o.on = input.checked; this.sync(); it.onChange(input.checked); });
-      row.append(input, ` ${it.label}`);
-      els.push(row);
-    }
+      el.append(input, ` ${it.label}`);
+      rows.set(it.id, el);
+      return el;
+    };
+    for (const it of items) els.push(row(it));
     if (this.overlaysAt) this.overlaysAt.after(...els); else this.menu.append(...els);
-    this.overlaysAt = els[els.length - 1];
+    let end = els[els.length - 1];
+    this.overlaysAt = end;
     this.sync();
+    return {
+      // Слой из плагина — в конце группы
+      add: (it) => {
+        if (rows.has(it.id)) return;
+        const el = row(it);
+        const wasEnd = this.overlaysAt === end;
+        end.after(el);
+        end = el;
+        if (wasEnd) this.overlaysAt = el;
+        this.sync();
+      },
+      remove: (id) => {
+        const el = rows.get(id);
+        if (!el) return;
+        if (end === el) end = (el.previousElementSibling as HTMLElement | null) ?? head;
+        if (this.overlaysAt === el) this.overlaysAt = end;
+        el.remove();
+        rows.delete(id);
+        this.overlays.delete(id);
+        this.sync();
+      },
+    };
   }
 
   /**

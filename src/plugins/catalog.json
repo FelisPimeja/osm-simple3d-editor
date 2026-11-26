@@ -1,0 +1,48 @@
+{
+  "plugins": [
+    {
+      "id": "swisstopo",
+      "apiVersion": 1,
+      "version": "1.0.0",
+      "name": "swisstopo SWISSIMAGE",
+      "description": "Switzerland orthophoto, 10 cm (swisstopo); permitted for tracing in OSM.",
+      "homepage": "https://wiki.openstreetmap.org/wiki/Switzerland/swisstopo",
+      "imagery": [
+        {
+          "id": "swissimage",
+          "name": "swisstopo SWISSIMAGE",
+          "tiles": [
+            "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg"
+          ],
+          "maxzoom": 20,
+          "attribution": {
+            "text": "© swisstopo",
+            "url": "https://www.swisstopo.admin.ch/"
+          }
+        }
+      ]
+    },
+    {
+      "id": "pdok",
+      "apiVersion": 1,
+      "version": "1.0.0",
+      "name": "PDOK Luchtfoto",
+      "description": "Netherlands aerial imagery (PDOK, current, high resolution); permitted for tracing in OSM.",
+      "homepage": "https://www.pdok.nl/",
+      "imagery": [
+        {
+          "id": "luchtfoto",
+          "name": "PDOK Luchtfoto (Actueel HR)",
+          "tiles": [
+            "https://service.pdok.nl/hwh/luchtfotorgb/wmts/v1_0/Actueel_orthoHR/EPSG:3857/{z}/{x}/{y}.jpeg"
+          ],
+          "maxzoom": 20,
+          "attribution": {
+            "text": "© PDOK, Beeldmateriaal.nl",
+            "url": "https://www.pdok.nl/"
+          }
+        }
+      ]
+    }
+  ]
+}

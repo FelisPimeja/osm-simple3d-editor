@@ -51,6 +51,8 @@ import { applyBasemap, applyContours, applyGpsTraces, applyHillshade, storedCont
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
+import { applyPluginsSetting, onPluginsChange, pluginsSetting, setPluginHost } from './plugins';
+import { renderPluginsPane } from './view/plugins-pane';
 import { mapillary } from './view/mapillary';
 import { fotoshi, fotoshiRequest } from './view/fotoshi';
 import { centroid, entranceOf, facadeEntranceOf, isWallWindow, floorLevels, incompleteIndoorRelations, INDOOR_GATES, isBareOutlineTags, isOutlinePart, kindOf, markOutlinesWithParts, parseBuildings, parseLevels, withIndoorTags, pointInRing, pointInRingFast, pointOnSurface, type BuildingGroup, type Feature3D, type IndoorFeature, type IndoorKind, type LonLat, type MemberWay, type Polygon } from './osm/model';
@@ -433,7 +435,7 @@ basemapCtrl?.addOverlay('contours', tr('Горизонтали'), tr('Линии
   showContours();
 });
 if (contours) showContours();
-basemapCtrl?.addOverlayGroup(tr('Фото и панорамы'), tr('Уличные фото и панорамы 360°, разрешённые для OSM'), {
+const photoGroup = basemapCtrl?.addOverlayGroup(tr('Фото и панорамы'), tr('Уличные фото и панорамы 360°, разрешённые для OSM'), {
   title: tr('Фильтр снимков: тип и даты съёмки'),
   filtered: () => isPhotoFiltered(photoFilter),
   el: photoFilterSettings(photoFilter, (f) => {
@@ -443,6 +445,40 @@ basemapCtrl?.addOverlayGroup(tr('Фото и панорамы'), tr('Уличн�
     if (mapLoaded) for (const p of photoLayers) p.layer.setFilter(f);
   }),
 }, photoLayers.map((p) => ({ id: p.service.id, label: p.label, title: p.title, on: p.on, onChange: (on: boolean) => setPhotos(p, on) })));
+// Плагины (src/plugins.ts): снимки — в меню подложек, сервисы фото — в группу «Фото и панорамы»; только у OSM
+// (снимки и фото разрешены для обводки в OSM)
+if (server().imagery) setPluginHost({
+  addImagery: (im) => basemapCtrl?.addImagery(im),
+  removeImagery: (id) => {
+    basemapCtrl?.removeImagery(id);
+    if (basemap === id) setBasemap(MAP_BASEMAP);
+  },
+  addPhotoService: (service, label, title) => {
+    if (photoLayers.some((p) => p.service.id === service.id)) return;
+    const p: PhotoLayerState = { service, label, title, layer: new PhotoLayer(map, service), on: storedOn(service) };
+    photoLayers.push(p);
+    photoGroup?.add({ id: service.id, label, title, on: p.on, onChange: (on) => setPhotos(p, on) });
+    syncPhotos();
+  },
+  removePhotoService: (id) => {
+    const i = photoLayers.findIndex((p) => p.service.id === id);
+    if (i < 0) return;
+    const [p] = photoLayers.splice(i, 1);
+    photoViewer.drop(p.layer);
+    if (mapLoaded) p.layer.apply(false, photoFilter);
+    photoGroup?.remove(id);
+  },
+});
+registerSetting({
+  key: 'plugins',
+  local: pluginsSetting,
+  apply: (v) => {
+    if (!applyPluginsSetting(v)) return 'same';
+    renderPluginsPane();
+    return 'live';
+  },
+});
+onPluginsChange(() => { void saveSetting('plugins'); });
 function setPhotos(p: PhotoLayerState, on: boolean) {
   p.on = on;
   storeOn(p.service, on);
@@ -2594,6 +2630,7 @@ function selectPanelTab(id: string) {
   }
   if (id === 'advanced') void showCacheInfo();
   if (id === 'map') renderPersonalSettings();
+  if (id === 'plugins') renderPluginsPane();
   try { localStorage.setItem('osm3d.panel-tab', id); } catch { /* нет хранилища */ }
 }
 for (const t of panelTabs) t.addEventListener('click', () => selectPanelTab(t.dataset.tab!));
@@ -20498,7 +20535,7 @@ function renderPersonalSettings() {
 }
 renderPersonalSettings();
 // Выбранная вкладка панели запоминается
-try { selectPanelTab(['appearance', 'advanced'].find((id) => id === localStorage.getItem('osm3d.panel-tab')) ?? 'map'); } catch { /* нет хранилища */ }
+try { selectPanelTab(['appearance', 'advanced', 'plugins'].find((id) => id === localStorage.getItem('osm3d.panel-tab')) ?? 'map'); } catch { /* нет хранилища */ }
 settingsSyncEl.addEventListener('click', async (e) => {
   const t = e.target as HTMLElement;
   if (t.closest('[data-settings-relogin]')) { allowPrefsScope(); logout(); osmUser = undefined; renderGraphicsSync(); }

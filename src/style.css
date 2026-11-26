@@ -1050,3 +1050,11 @@ body:not(.mobile) #right-col { right: 6px; }
 /* Десктоп: низ строки состояния и атрибуции — по низу колонок панелей (6px от края) */
 body:not(.mobile) #statusbar { bottom: 6px; }
 body:not(.mobile) .maplibregl-ctrl-bottom-right > .maplibregl-ctrl { margin-bottom: 6px; }
+
+/* Вкладка «Плагины» */
+.plugin-row { margin-top: 6px; }
+.plugin-about { margin: 2px 0 6px 22px; font-size: 12px; }
+.plugin-home { font-size: 12px; color: #2563eb; word-break: break-all; }
+.plugin-add { display: flex; gap: 6px; margin-top: 8px; }
+.plugin-add input { flex: 1; min-width: 0; font: inherit; padding: 3px 6px; }
+.plugin-error { color: #b91c1c; font-size: 12px; margin: 6px 0; }

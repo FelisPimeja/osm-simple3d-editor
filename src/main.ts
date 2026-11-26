@@ -19735,6 +19735,8 @@ function renderChanges() {
   editsCount.textContent = changes.length ? `(${changes.length})` : osmUser ? '' : tr('· не выполнен вход').replace(/^·\s*/, '');
   // Список правок нужен редко — сама панель не раскрывается; правок не осталось — сворачиваем, в остальное время решает пользователь
   if (show !== editsHadContent && !show) setCollapsed(editsPanel, true);
+  // Правок нет (и нечего отменять) — панели нет
+  editsPanel.hidden = !show;
   editsHadContent = show;
   if (!show) { changesEl.innerHTML = ''; return; }
   const list = changes.map((c) => {
@@ -19781,6 +19783,8 @@ function renderJosmChanges() {
   changesEl.hidden = !show;
   editsCount.textContent = josmChanges.length ? `(${josmChanges.length})` : '';
   if (show !== editsHadContent && !show) setCollapsed(editsPanel, true);
+  // Правок нет (и нечего отменять) — панели нет
+  editsPanel.hidden = !show;
   editsHadContent = show;
   if (!show) { changesEl.innerHTML = ''; return; }
   const label = { new: tr('новый'), modify: '', delete: tr('удалён') };

@@ -85,7 +85,7 @@ body:not(.mobile) #toolbars::-webkit-scrollbar { display: none; }
 #info-panel:has(#info:empty) { display: none; }
 /* Свойства — главное в колонке: не хватает места — сначала сжимаются остальные панели (до min-height), потом они */
 #right-col > .panel:not(#info-panel):not(.collapsed) { flex-shrink: 1000; }
-#outliner-panel[hidden], #help-panel[hidden], #levels-panel[hidden], #issues-panel[hidden] { display: none; }
+#edits-panel[hidden], #outliner-panel[hidden], #help-panel[hidden], #levels-panel[hidden], #issues-panel[hidden] { display: none; }
 /* Контекстное меню списка частей */
 .ctx-menu { position: fixed; z-index: 20; min-width: 180px; padding: 4px; margin: 0; list-style: none; background: #fff;
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 13px; }
@@ -1026,8 +1026,8 @@ p.warn.warn-fix .issue-fix { flex: none; margin-left: auto; }
 .comment-field .comment-accept { position: absolute; top: 4px; right: 4px; bottom: auto; height: 24px; }
 .comment-field .comment-accept[hidden] { display: none; }
 
-/* Правая колонка: раскрытая панель (одна за раз) — на всю доступную высоту */
-body:not(.mobile) #right-col > .panel:not(.collapsed):not([hidden]) { flex: 1 1 auto; max-height: none; }
+/* Правая колонка: раскрытая панель — по высоте содержимого, не больше доступной (дальше — прокрутка внутри) */
+body:not(.mobile) #right-col > .panel:not(.collapsed):not([hidden]) { flex: 0 1 auto; max-height: none; }
 
 /* Кнопки масштаба — только вместе с кубом вида */
 body.zoom-hidden .maplibregl-ctrl-zoom-in, body.zoom-hidden .maplibregl-ctrl-zoom-out { display: none; }

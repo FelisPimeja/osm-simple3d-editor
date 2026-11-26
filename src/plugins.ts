@@ -115,10 +115,12 @@ const isHttps = (u: unknown): u is string => { try { return typeof u === 'string
 const ID = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 /** Внешний модуль официального плагина: jsDelivr, закреплённый полным SHA коммита. */
 const EXTERNAL_MODULE = /^https:\/\/cdn\.jsdelivr\.net\/gh\/[\w.-]+\/[\w.-]+@[0-9a-f]{40}\/[\w./-]+\.m?js$/;
+/** Путь модуля внутри репозитория доверенного плагина. */
+const RELATIVE_MODULE = /^[\w-]+(\/[\w-]+)*\.m?js$/;
 const str = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
 
 /** Проверить манифест (данные со стороны): лишнее отбросить, ошибку — понятным текстом. */
-export function parseManifest(raw: unknown, fromCatalog = false): PluginManifest {
+export function parseManifest(raw: unknown, fromCatalog = false, trustedBase?: string): PluginManifest {
   if (!raw || typeof raw !== 'object') throw new Error(tr('Манифест плагина — не объект JSON'));
   const m = raw as Record<string, unknown>;
   const id = typeof m.id === 'string' && ID.test(m.id) ? m.id : undefined;
@@ -146,7 +148,12 @@ export function parseManifest(raw: unknown, fromCatalog = false): PluginManifest
       viewOnly: i.viewOnly === true,
     });
   }
-  const module = fromCatalog && typeof m.module === 'string' && (ID.test(m.module) || EXTERNAL_MODULE.test(m.module)) ? m.module : undefined;
+  const mod = typeof m.module === 'string' ? m.module.trim() : '';
+  // Доверенный репозиторий: модуль только из того же репо и ref, что и манифест (относительный путь или уже разрешённый)
+  const module = fromCatalog ? (ID.test(mod) || EXTERNAL_MODULE.test(mod) ? mod : undefined)
+    : trustedBase && RELATIVE_MODULE.test(mod) ? trustedBase + mod
+      : trustedBase && mod.startsWith(trustedBase) && RELATIVE_MODULE.test(mod.slice(trustedBase.length)) ? mod
+        : undefined;
   if (!imagery.length && !module) throw new Error(tr('В плагине нечего подключать'));
   return {
     id, apiVersion: PLUGIN_API, name, imagery, module,
@@ -160,15 +167,31 @@ export const CATALOG: PluginManifest[] = (catalogJson.plugins as unknown[]).flat
   try { return [parseManifest(p, true)]; } catch (err) { console.warn('plugins/catalog.json:', err); return []; }
 });
 
+/** Доверенные репозитории (owner/repo): свои плагины оттуда могут выполнять код. Меняется только PR-ом в редактор. */
+export const TRUSTED: string[] = ((catalogJson as { trusted?: unknown }).trusted as unknown[] ?? [])
+  .filter((t): t is string => typeof t === 'string' && /^[\w.-]+\/[\w.-]+$/.test(t)).map((t) => t.toLowerCase());
+
+function ghRepo(s: string): { owner: string; repo: string; ref?: string } | undefined {
+  const gh = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/tree\/([\w.\/-]+?))?\/?$/.exec(s)
+    ?? /^([\w.-]+)\/([\w.-]+?)(?:@([\w.\/-]+))?$/.exec(s);
+  return gh ? { owner: gh[1], repo: gh[2], ref: gh[3] } : undefined;
+}
+
+/** Базовый адрес jsDelivr для кода доверенного плагина; undefined — репо не доверенный. */
+export function trustedBase(input: string): string | undefined {
+  const g = ghRepo(input.trim());
+  if (!g || !TRUSTED.includes(`${g.owner}/${g.repo}`.toLowerCase())) return undefined;
+  return `https://cdn.jsdelivr.net/gh/${g.owner}/${g.repo}${g.ref ? `@${g.ref}` : ''}/`;
+}
+
 /**
  * Ссылка пользователя → адрес манифеста: github.com/owner/repo[/tree/ref], owner/repo[@ref] — через jsDelivr;
  * https-ссылка на .json — как есть.
  */
 export function manifestUrl(input: string): string {
   const s = input.trim();
-  const gh = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/tree\/([\w.\/-]+?))?\/?$/.exec(s)
-    ?? /^([\w.-]+)\/([\w.-]+?)(?:@([\w.\/-]+))?$/.exec(s);
-  if (gh) return `https://cdn.jsdelivr.net/gh/${gh[1]}/${gh[2]}${gh[3] ? `@${gh[3]}` : ''}/${MANIFEST_FILE}`;
+  const gh = ghRepo(s);
+  if (gh) return `https://cdn.jsdelivr.net/gh/${gh.owner}/${gh.repo}${gh.ref ? `@${gh.ref}` : ''}/${MANIFEST_FILE}`;
   if (isHttps(s) && /\.json(\?.*)?$/i.test(s)) return s;
   throw new Error(tr('Нужна ссылка на репозиторий GitHub (github.com/автор/репо или автор/репо@тег) или https-ссылка на манифест .json'));
 }
@@ -180,7 +203,7 @@ async function fetchManifest(input: string): Promise<PluginManifest> {
   if (!res.ok) throw new Error(tr('Не удалось загрузить {url}: {status}', { url, status: res.status }));
   let json: unknown;
   try { json = await res.json(); } catch { throw new Error(tr('{url} — не JSON', { url })); }
-  return parseManifest(json);
+  return parseManifest(json, false, trustedBase(input));
 }
 
 // --- Подключённые ---
@@ -191,7 +214,7 @@ try {
   for (const e of Array.isArray(raw) ? raw : []) {
     try {
       // Официальные — по текущему списку (манифест мог обновиться), свои — проверить заново
-      const manifest = e.source === 'catalog' ? CATALOG.find((c) => c.id === e.manifest?.id) : parseManifest(e.manifest);
+      const manifest = e.source === 'catalog' ? CATALOG.find((c) => c.id === e.manifest?.id) : parseManifest(e.manifest, false, trustedBase(e.source));
       if (manifest && !entries.some((x) => x.manifest.id === manifest.id)) entries.push({ source: e.source, manifest });
     } catch { /* сломанная запись — пропустить */ }
   }

@@ -57,7 +57,13 @@ export function renderPluginsPane() {
     const del = el('button', 'link-btn', tr('Отключить')) as HTMLButtonElement;
     del.type = 'button';
     del.addEventListener('click', () => { removePlugin(e.manifest.id); renderPluginsPane(); });
-    row.append(name, e.manifest.version ? el('span', 'hint', ` ${e.manifest.version}`) : '', ' · ', del);
+    row.append(name, e.manifest.version ? el('span', 'hint', ` ${e.manifest.version}`) : '');
+    if (e.manifest.module) {
+      const b = el('span', 'plugin-trusted', tr('доверенный, с кодом'));
+      b.title = tr('Репозиторий в списке доверенных: плагин выполняет свой код в редакторе');
+      row.append(' ', b);
+    }
+    row.append(' · ', del);
     pane.append(row, about(e.manifest));
   }
   const form = el('form', 'plugin-add') as HTMLFormElement;

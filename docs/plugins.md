@@ -11,7 +11,7 @@ Plugin API version: **1**.
 | Custom | JSON manifest only (data, no code) | Any public GitHub repository or any https URL | Any user, by link (Settings → Personal settings → Plugins… → Custom) |
 | Official | JSON manifest, optionally plus a code module | `src/plugins/catalog.json` in the editor repository | Accepted by pull request after review |
 
-Custom plugins cannot run code. The OSM access token is stored in the page, so third-party code could edit OSM on the user's behalf. That is why code is accepted only in official plugins, after review.
+Custom plugins cannot run code, unless their repository is trusted (see [Trusted repositories](#trusted-repositories)). The OSM access token is stored in the page, so third-party code could edit OSM on the user's behalf. That is why code is accepted only in official plugins, after review.
 
 Plugins are enabled only on the OpenStreetMap server (not on OpenHistoricalMap or OpenGeofiction).
 
@@ -138,6 +138,14 @@ export function activate(api) {
 | `markUsed('street' \| 'imagery', name)` | Record a source for the changeset: `source=streetlevel imagery` or `imagery_used`. Call it when the user actually sees the content. |
 
 Everything a plugin registered (imagery, photo layers, toggles, click handlers, windows, the cone) is removed automatically when the plugin is disabled.
+
+## Trusted repositories
+
+`src/plugins/catalog.json` also has a `trusted` array of GitHub repositories (`owner/repo`). They are not shown in the official list, but a user who adds one in Custom gets its code module too. Use this for development builds of official plugins.
+
+- The manifest sets `"module": "plugin.js"`: a path inside the same repository. It is loaded from the same ref as the manifest: `https://cdn.jsdelivr.net/gh/owner/repo@ref/plugin.js`. Code from other places is ignored.
+- Any ref works, including a branch (`owner/repo@main`). jsDelivr caches branches for up to 7 days; to pick up a new push at once, open `https://purge.jsdelivr.net/gh/owner/repo@main/plugin.js` and `.../simple3d-plugin.json`, then re-add the plugin. Tags avoid the cache problem.
+- A trusted plugin is marked "trusted, runs code" in the list. Whoever can push to a trusted repository can run code for its users, so the list changes only by pull request.
 
 ## Source of truth
 

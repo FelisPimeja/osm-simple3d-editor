@@ -107,7 +107,7 @@ import { onSkeletons } from './render/skeleton';
 import { recordMs, timed } from './perf';
 import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmStatus, josmUndo, josmUnderlayHistory, josmUnderlayStep, watchJosmUnderlays, minElementId, refreshJosmStatus, sendJosmSelection, watchJosmSelection, type JosmChange, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
 import { deprecations, idFieldLabel, idOptions, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
-import { bindTagForms, renderValueCombo, renderMultiTagForm, renderTagForm, setDateFields, type InheritSource } from './edit/tag-form';
+import { bindTagForms, setRingOf, renderValueCombo, renderMultiTagForm, renderTagForm, setDateFields, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
 import { fromInputUnit, showLength, unitLabel, hasOwnUnit, lengthUnitOf, setUnitSystem, unitSystem, withUnit, writeLength, type LengthUnit, type UnitSystem } from './osm/units';
@@ -20807,14 +20807,22 @@ bindTagForms(infoEl, () => session, skillionDefaults);
  * без тега), чтобы скат не перескакивал при правке контура; подъём height под крышу — по уклону не круче
  * SKILLION_MAX_PITCH, как её и рисуем.
  */
+/** Перевод lon/lat в метры от точки o (x — восток, y — север): для небольших объектов. */
+function localMetres([lon0, lat0]: LonLat): (q: LonLat) => Pt {
+  const kx = 111320 * Math.cos((lat0 * Math.PI) / 180), ky = 110540;
+  return (q) => [(q[0] - lon0) * kx, (q[1] - lat0) * ky];
+}
+setRingOf((key) => {
+  const f = liveFeatures().find((x) => x.key === key);
+  return f?.polygons.length === 1 ? f.polygons[0].outer.map(localMetres(f.polygons[0].outer[0])) : undefined;
+});
+
 function skillionDefaults(key: string, before: Record<string, string>, after: Record<string, string>): Record<string, string> {
   if (roofShapeOf(after) !== 'skillion' || roofShapeOf(before) === 'skillion') return after;
   const all = liveFeatures();
   const f = all.find((x) => x.key === key);
   if (!f || f.polygons.length !== 1) return after;
-  const [lon0, lat0] = f.polygons[0].outer[0];
-  const kx = 111320 * Math.cos((lat0 * Math.PI) / 180), ky = 110540;
-  const local = (q: LonLat): Pt => [(q[0] - lon0) * kx, (q[1] - lat0) * ky];
+  const local = localMetres(f.polygons[0].outer[0]);
   const ring = f.polygons[0].outer.map(local);
   const c = f.polygons[0].outer.reduce<LonLat>((m, q, _, r) => [m[0] + q[0] / r.length, m[1] + q[1] / r.length], [0, 0]);
   // Соседи — объёмы рядом, кроме своего контура здания (он охватывает часть, его стены — не соседние)

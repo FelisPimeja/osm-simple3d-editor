@@ -795,7 +795,7 @@ export function skillionRoofHeight(ring: Pt[], tags: Record<string, string>, roo
 }
 
 /** Высоты под односкатную крышу по умолчанию: при заданной height верх стоит, стены выше; иначе стены — по этажам. */
-function skillionHeights(ring: Pt[], h: Heights, tags: Record<string, string>): Heights {
+export function skillionHeights(ring: Pt[], h: Heights, tags: Record<string, string>): Heights {
   const rh = skillionRoofHeight(ring, tags, h.roofHeight);
   if (rh >= h.roofHeight) return h;
   return h.source === 'height' ? { ...h, wallTop: h.top - rh, roofHeight: rh } : { ...h, top: h.wallTop + rh, roofHeight: rh };

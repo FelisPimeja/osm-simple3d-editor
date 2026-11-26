@@ -1736,6 +1736,7 @@
   "Ширина входа: ведите курсор вдоль стены (симметрично от узла). Клик — применить, Esc — отмена.": "Entrance width: move the cursor along the wall (symmetric around the node). Click to apply, Esc to cancel.",
   "Синие ручки: по бокам — ширина (width), сверху — высота проёма (height); клик по ручке — тянуть, клик — применить.": "Blue handles: the sides set the width, the top the opening height; click a handle to drag it, click again to apply.",
   "Козырёк": "Covered",
+  "скат не круче {deg}°": "slope no steeper than {deg}°",
   "Створок": "Leaves",
   "Дороги": "Roads",
   "Прочее": "Other",

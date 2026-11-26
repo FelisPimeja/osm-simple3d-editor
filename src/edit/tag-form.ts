@@ -3,6 +3,7 @@ import { computeHeights, FOOT, LEVEL_HEIGHT, parseLength, roofHeightOf, roofShap
 import type { EditSession } from './session';
 import { hasOwnUnit, lengthNumber, lengthUnitOf, withUnit, writeLength, type LengthUnit } from '../osm/units';
 import { tr, trn } from '../i18n';
+import { SKILLION_MAX_PITCH, skillionHeights, type Pt } from '../render/building-geometry';
 import { idFieldLabel, idOptions, valueLabels } from '../osm/presets';
 import { parseDate } from '../osm/dates';
 import { placeCombo } from './combo-place';
@@ -209,12 +210,20 @@ const num = (v: number) => String(Math.round(v * 100) / 100);
  * Значения, которые редактор подставляет при рисовании, когда тега нет (ни своего, ни унаследованного):
  * тег → значение и откуда оно. Повторяет умолчания computeHeights и раскраски.
  */
-function defaultValues(effective: Record<string, string>): Record<string, { value: string; why: string }> {
+/** Контур объекта в метрах (x — восток, y — север) — для умолчаний, зависящих от геометрии (уклон односкатной крыши). */
+let ringOf: (key: string) => Pt[] | undefined = () => undefined;
+export function setRingOf(fn: (key: string) => Pt[] | undefined) { ringOf = fn; }
+
+function defaultValues(effective: Record<string, string>, key?: string): Record<string, { value: string; why: string }> {
   const out: Record<string, { value: string; why: string }> = {};
-  const h = computeHeights(effective);
+  const h0 = computeHeights(effective);
+  // Односкатная без своей высоты рисуется не круче SKILLION_MAX_PITCH — подсказки те же
+  const ring = h0.roofShape === 'skillion' && key ? ringOf(key) : undefined;
+  const h = ring ? skillionHeights(ring, h0, effective) : h0;
+  const pitchLimited = h.roofHeight < h0.roofHeight - 1e-6;
   const roofLevels = Number(effective['roof:levels']);
   const nominal = roofLevels > 0 ? roofLevels * LEVEL_HEIGHT : 3;
-  const roofWhy = h.roofHeight < nominal - 1e-6 ? tr('не выше высоты части')
+  const roofWhy = pitchLimited ? tr('скат не круче {deg}°', { deg: SKILLION_MAX_PITCH }) : h.roofHeight < nominal - 1e-6 ? tr('не выше высоты части')
     : roofLevels > 0 ? tr('roof:levels × {m} м', { m: LEVEL_HEIGHT }) : tr('по умолчанию {m} м', { m: 3 });
   if (effective.height === undefined) {
     const roof = h.roofHeight ? tr(' + крыша {m} м', { m: num(h.roofHeight) }) : '';
@@ -254,7 +263,7 @@ export function renderTagForm(key: string, session: EditSession, sources: Inheri
   const inheritedAny: string[] = [];
   // Форма крыши (не наследуется): от неё зависит, нужны ли направление ската и конёк
   const shape = f.tags['roof:shape'];
-  const defaults = defaultValues({ ...f.tags, ...inheritedTags(f.tags, sources.map((s) => s.tags)) });
+  const defaults = defaultValues({ ...f.tags, ...inheritedTags(f.tags, sources.map((s) => s.tags)) }, key);
   const rows = FIELDS.filter((field) => {
     if (opts.only && !opts.only(field.tag)) return false;
     // Только у частей; у контура здания (outline) — всегда: building:part делает его и частью (рисуется объёмом)

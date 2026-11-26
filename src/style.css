@@ -1049,3 +1049,6 @@ body:not(.mobile) #right-col { right: 6px; }
 .mobile-cross::before, .mobile-cross::after { content: ''; position: absolute; background: #1d4ed8; box-shadow: 0 0 0 1.5px #fff; }
 .mobile-cross::before { left: 17px; top: 0; width: 2px; height: 36px; }
 .mobile-cross::after { top: 17px; left: 0; height: 2px; width: 36px; }
+/* Десктоп: низ строки состояния и атрибуции — по низу колонок панелей (6px от края) */
+body:not(.mobile) #statusbar { bottom: 6px; }
+body:not(.mobile) .maplibregl-ctrl-bottom-right > .maplibregl-ctrl { margin-bottom: 6px; }

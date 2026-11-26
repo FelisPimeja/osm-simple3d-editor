@@ -51,7 +51,7 @@
       "name": "Yandex Panoramas",
       "description": "Yandex street panoramas in a floating window: tick the layer and click a street. Yandex permitted the imagery for OSM (not the data drawn over it).",
       "homepage": "https://github.com/FelisPimeja/osm-simple3d-yandex-panoramas",
-      "module": "https://cdn.jsdelivr.net/gh/FelisPimeja/osm-simple3d-yandex-panoramas@19a377d0517057eb193ff6001e542aac483faa11/plugin.js"
+      "module": "https://cdn.jsdelivr.net/gh/FelisPimeja/osm-simple3d-yandex-panoramas@c39c6e9c6558361a937d4927a686b0bf9255a6a3/plugin.js"
     }
   ]
 }

@@ -358,6 +358,15 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
     const k = `${payload[i].element.type}/${payload[i].element.id}`;
     if (once.has(k)) { console.warn(`[upload] ${k} дважды в пакете — второй раз не отправляем`); payload.splice(i--, 1); } else once.add(k);
   }
+  // Узел дважды подряд в пути (дверь, вставленная в стену трижды, issue #89) — сервер отклонит, а смысл тот же: один раз
+  for (const p of payload) {
+    if (p.deleted || p.element.type !== 'way') continue;
+    const nodes = p.element.nodes.filter((n, i, a) => !i || n !== a[i - 1]);
+    if (nodes.length !== p.element.nodes.length) {
+      console.warn(`[upload] way/${p.element.id}: повторы узлов подряд убраны`);
+      p.element = { ...p.element, nodes };
+    }
+  }
   // Пакет, который сервер точно отклонит, — до открытия changeset (иначе остался бы пустой)
   // В JOSM отрицательные id — объекты его слоя (новые, но уже существующие): плагин находит их сам
   const problems = payloadProblems(payload, !!target);

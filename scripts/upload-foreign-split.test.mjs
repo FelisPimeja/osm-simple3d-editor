@@ -69,3 +69,14 @@ test('a deleted tagged way still needed by a foreign multipolygon is kept as bar
  assert.ok(w,'way 101 is modified');
  assert.doesNotMatch(w[1],/<tag /,'its own tags are removed');
 });
+
+test('a node repeated in a row in a way is sent once (issue #89)',async()=>{
+ const sent=[];
+ globalThis.fetch=mockFetch(sent);
+ globalThis.DOMParser=class{parseFromString(){return {documentElement:{children:[]}};}};
+ const door={key:'node/-42',before:{},after:{indoor:'door',door:'yes'},created:{type:'node',id:-42,version:0,lat:55,lon:37,tags:{}}};
+ await uploadEdits([door,{key:'way/101',before:{},after:{},wayNodes:{before:[4,5,1],after:[4,-42,-42,-42,5,1]}}],'test',()=>{},API);
+ const w=sent[0]?.match(/<way id="101"[^>]*>([^]*?)<\/way>/);
+ assert.ok(w,'way 101 uploaded');
+ assert.deepEqual([...w[1].matchAll(/<nd ref="(-?\d+)"/g)].map(m=>Number(m[1])),[4,-42,5,1]);
+});

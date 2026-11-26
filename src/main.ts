@@ -107,7 +107,7 @@ import { onSkeletons } from './render/skeleton';
 import { recordMs, timed } from './perf';
 import { JOSM_URL, josmApi, josmLayer, josmMode, josmPlugin, josmStatus, josmUndo, josmUnderlayHistory, josmUnderlayStep, watchJosmUnderlays, minElementId, refreshJosmStatus, sendJosmSelection, watchJosmSelection, type JosmChange, pollJosmLayer, writeJosmParam, type JosmLayer } from './osm/josm';
 import { deprecations, idFieldLabel, idOptions, loadDeprecated, loadPresets, matchPreset, type PresetGeometry } from './osm/presets';
-import { bindTagForms, setRingOf, renderValueCombo, renderMultiTagForm, renderTagForm, setDateFields, type InheritSource } from './edit/tag-form';
+import { bindTagForms, setRingOf, colourField, COLOUR_TEXT, renderValueCombo, renderMultiTagForm, renderTagForm, setDateFields, type InheritSource } from './edit/tag-form';
 import { computeOutlineRemainders, inPolygon, interiorPoint, polygonsOf } from './tiles/outlines';
 import { LANGS, lang, localizeDom, tr, trn, locale, type Lang } from './i18n';
 import { fromInputUnit, showLength, unitLabel, hasOwnUnit, lengthUnitOf, setUnitSystem, unitSystem, withUnit, writeLength, type LengthUnit, type UnitSystem } from './osm/units';
@@ -5472,7 +5472,7 @@ infoEl.addEventListener('change', (e) => {
 
 /** Записать цвет в поле свойств (через текстовое поле — как ввод руками). */
 function putFieldColour(tag: string, c: string) {
-  const text = infoEl.querySelector<HTMLInputElement>(`.colour-field [data-tag="${CSS.escape(tag)}"]`);
+  const text = infoEl.querySelector<HTMLInputElement>(COLOUR_TEXT(tag));
   if (!text) return;
   text.value = c;
   text.dispatchEvent(new Event('change', { bubbles: true }));
@@ -9100,7 +9100,8 @@ function renderEntrance(id: number) {
     const shownW = k === 'width' && !many ? overpassLayer.focusEntrance(id)?.width : undefined;
     const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : k === 'door:wings' ? String(doorWings(t)) : k === 'covered' ? 'no' : k === 'addr:flats' ? tr('например, 1-22') : k === 'height' ? (shownH !== undefined ? String(Math.round(shownH * 100) / 100) : String(ENTRANCE_HEIGHT)) : k === 'width' ? String(Math.round((shownW ?? ((t.entrance === 'garage' || t.amenity === 'parking_entrance') ? GARAGE_WIDTH : ENTRANCE_WIDTH)) * 100) / 100) : '—';
     const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : k === 'door:wings' ? tr('Створок') : k === 'covered' ? tr('Козырёк') : k === 'addr:flats' ? tr('Квартиры') : k === 'height' ? tr('Высота, м') : k === 'width' ? tr('Ширина, м') : k === 'ref' ? tr('Номер') : indoorFieldLabel(k, []))}</span>`;
-    const input = k === 'entrance' || k === 'door:wings' || k === 'door' || k === 'covered' ? renderValueCombo(k === 'entrance' ? idOptions('entrance') ?? [] : k === 'door' ? DOOR_VALUES : k === 'covered' ? ['yes', 'no'] : ['1', '2'], `data-entrance-tag="${k}"`, value ?? '', hint, k === 'door' ? DOOR_LABELS : undefined, k)
+    const input = k === 'colour' ? colourField(k, `data-entrance-tag="${k}"`, value ?? '', hint)
+      : k === 'entrance' || k === 'door:wings' || k === 'door' || k === 'covered' ? renderValueCombo(k === 'entrance' ? idOptions('entrance') ?? [] : k === 'door' ? DOOR_VALUES : k === 'covered' ? ['yes', 'no'] : ['1', '2'], `data-entrance-tag="${k}"`, value ?? '', hint, k === 'door' ? DOOR_LABELS : undefined, k)
       : `<input type="text" data-entrance-tag="${k}" ${entranceKeyboard(k)} value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}${input}</label>`;
   }).join('');
@@ -12354,7 +12355,7 @@ function indoorFieldLabel(k: string, fs: IndoorFeature[]): string {
     // У iD и indoor, и room — «Тип»: рядом не различить
     indoor: tr('Вид'), room: tr('Назначение'), width: tr('Ширина'), diameter: tr('Диаметр'), material: tr('Материал'),
     // У iD — «Тип»: рядом с типом двери не различить
-    entrance: tr('Тип входа'), wall: tr('Тип стены'),
+    entrance: tr('Тип входа'), wall: tr('Тип стены'), colour: tr('Цвет'),
   };
   return own[k] ?? idFieldLabel(k) ?? k;
 }
@@ -12419,6 +12420,7 @@ function indoorForm(fs: IndoorFeature[], placeholders: Record<string, string> = 
     if (options) return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + renderValueCombo(options, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : k === 'entrance' ? tr('не вход') : placeholders[k] ?? '—',
         k === 'incline' ? INCLINE_LABELS : k === 'door' ? DOOR_LABELS : k === 'indoor' ? INDOOR_LABELS : k === 'room' ? ROOM_LABELS : k === 'wall' ? WALL_LABELS : k === 'barrier' ? GATE_LABELS : undefined, k) + '</label>';
+    if (k === 'colour') return `<label class="tag-row${changed ? ' changed' : ''}">${label}${colourField(k, `data-indoor-tag="${k}"`, value, mixed ? tr('разные значения') : placeholders[k] ?? '—')}</label>`;
     const unit = INDOOR_LENGTHS.has(k) ? lengthUnitOf(value) : undefined;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}`
       + (unit ? '<span class="length-field">' : '')

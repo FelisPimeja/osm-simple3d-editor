@@ -110,7 +110,7 @@ const FIELDS = ([
   { tag: 'roof:direction', label: tr('Направление ската'), type: 'direction', placeholder: tr('0–360 или N, SE…') },
   { tag: 'roof:orientation', label: tr('Конёк'), type: 'select', options: ['along', 'across'] },
   { tag: 'building:colour', label: tr('Цвет стен'), type: 'colour' },
-  { tag: 'roof:colour', type: 'colour' },
+  { tag: 'roof:colour', label: tr('Цвет крыши'), type: 'colour' },
   { tag: 'start_date', label: tr('Существует с'), type: 'date', placeholder: tr('ГГГГ-ММ-ДД'), dated: true, suggest: true },
   { tag: 'start_date:edtf', label: tr('Существует с (EDTF)'), type: 'edtf', placeholder: tr('1850~, 1850/1855, 185X'), dated: true, suggest: true },
   { tag: 'end_date', label: tr('Существует до'), type: 'date', placeholder: tr('ГГГГ-ММ-ДД'), dated: true, suggest: true },
@@ -176,6 +176,18 @@ function toHex(v: string | undefined): string {
 }
 
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+
+/**
+ * Цветовое поле вне формы тегов (входы, indoor-объекты): тот же виджет, что «Цвет стен» — плашка (палитра, недавние,
+ * пипетка) и текст. attrs — атрибуты текстового поля (data-entrance-tag="colour" и т. п.), через него и пишется цвет.
+ */
+export function colourField(tag: string, attrs: string, value: string, placeholder: string): string {
+  return `<span class="colour-field"><input type="color" value="${toHex(value || undefined)}" data-picker-for="${esc(tag)}" />`
+    + `<input type="text" ${attrs} value="${esc(value)}" placeholder="${esc(placeholder)}" spellcheck="false" autocomplete="off" /></span>`;
+}
+
+/** Текстовое поле цвета tag внутри .colour-field — у формы тегов, входа или indoor-объекта. */
+export const COLOUR_TEXT = (tag: string) => ['data-tag', 'data-entrance-tag', 'data-indoor-tag'].map((a) => `.colour-field [${a}="${CSS.escape(tag)}"]`).join(', ');
 
 const INHERITABLE_SET = new Set<string>(INHERITABLE);
 
@@ -518,7 +530,7 @@ export function bindTagForms(container: HTMLElement, session: () => EditSession 
     // Палитра: пишем hex в текстовое поле и применяем
     const pickerFor = (el as HTMLInputElement).dataset.pickerFor;
     if (pickerFor) {
-      const text = el.closest('.colour-field')?.querySelector<HTMLInputElement>(`[data-tag="${CSS.escape(pickerFor)}"]`);
+      const text = el.closest('.colour-field')?.querySelector<HTMLInputElement>(`[data-tag="${CSS.escape(pickerFor)}"], [data-entrance-tag="${CSS.escape(pickerFor)}"], [data-indoor-tag="${CSS.escape(pickerFor)}"]`);
       if (text) { text.value = el.value; commit(text); }
     }
   });

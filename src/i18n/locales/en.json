@@ -1737,6 +1737,8 @@
   "Синие ручки: по бокам — ширина (width), сверху — высота проёма (height); клик по ручке — тянуть, клик — применить.": "Blue handles: the sides set the width, the top the opening height; click a handle to drag it, click again to apply.",
   "Козырёк": "Covered",
   "скат не круче {deg}°": "slope no steeper than {deg}°",
+  "Цвет": "Color",
+  "Цвет крыши": "Roof color",
   "Створок": "Leaves",
   "Дороги": "Roads",
   "Прочее": "Other",

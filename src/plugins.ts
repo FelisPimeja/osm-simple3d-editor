@@ -19,6 +19,7 @@ import type { PhotoService } from './view/street-photos';
 import { lang, tr } from './i18n';
 import { Marker } from 'maplibre-gl';
 import { openPanel } from './view/plugin-panel';
+import { pluginRaster, type PluginRaster } from './view/plugin-raster';
 
 /** Версия API редактора для плагинов: плагин с другой не подключается. */
 export const PLUGIN_API = 1;
@@ -71,6 +72,8 @@ export interface PluginApi {
   tr: typeof tr;
   /** Язык интерфейса ('ru', 'en'). */
   lang: string;
+  /** A raster coverage overlay; automatically removed when the plugin is disabled. */
+  addRasterOverlay(options: PluginRaster): { setVisible(on: boolean): void };
   /** Сервис уличных фото: слой в группе «Фото и панорамы». */
   registerPhotoService(s: PhotoService, label: string, title: string): void;
   /**
@@ -172,6 +175,7 @@ export const TRUSTED: string[] = ((catalogJson as { trusted?: unknown }).trusted
   .filter((t): t is string => typeof t === 'string' && /^[\w.-]+\/[\w.-]+$/.test(t)).map((t) => t.toLowerCase());
 
 function ghRepo(s: string): { owner: string; repo: string; ref?: string } | undefined {
+  s = s.replace(/^(?:https?:\/\/)?(?:www\.)?(github\.com|raw\.githubusercontent\.com)\//i, 'https://$1/');
   const gh = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/tree\/([\w.\/-]+?))?\/?$/.exec(s)
     ?? /^https:\/\/(?:github\.com\/([\w.-]+)\/([\w.-]+)\/(?:blob|raw)|raw\.githubusercontent\.com\/([\w.-]+)\/([\w.-]+))\/([\w.-]+)\/simple3d-plugin\.json$/.exec(s)?.filter(Boolean)
     ?? /^([\w.-]+)\/([\w.-]+?)(?:@([\w.\/-]+))?$/.exec(s);
@@ -252,7 +256,7 @@ let host: PluginHost | undefined;
 /** Что подключил модуль плагина (снять при отключении). */
 const active = new Map<string, Active>();
 
-type Active = { photos: string[]; toggles: string[]; clicks: MapClick[]; panels: PluginPanel[]; cone?: Marker; dispose?: () => void };
+type Active = { photos: string[]; toggles: string[]; clicks: MapClick[]; panels: PluginPanel[]; overlays: (() => void)[]; cone?: Marker; dispose?: () => void };
 const clickHandlers = (): MapClick[] => [...active.values()].flatMap((a) => a.clicks);
 
 /** Клик по карте — плагинам (main.ts, до выбора объекта); true — обработан. */
@@ -277,7 +281,7 @@ function coneEl(fov: number): HTMLElement {
 
 async function activate(m: PluginManifest) {
   if (!host || active.has(m.id)) return;
-  const state: Active = { photos: [], toggles: [], clicks: [], panels: [] };
+  const state: Active = { photos: [], toggles: [], clicks: [], panels: [], overlays: [] };
   active.set(m.id, state);
   for (const im of imageryOf(m)) { registerImagery(im); host.addImagery(im); }
   const load = !m.module ? undefined
@@ -290,6 +294,11 @@ async function activate(m: PluginManifest) {
     const h = host;
     const api: PluginApi = {
       apiVersion: PLUGIN_API, tr, lang,
+      addRasterOverlay: (options) => {
+        const overlay = pluginRaster(h.map, options);
+        state.overlays.push(() => overlay.dispose());
+        return overlay;
+      },
       registerPhotoService: (s, label, title) => { state.photos.push(s.id); h.addPhotoService(s, label, title); },
       addPhotoToggle: (id, label, title, onChange) => {
         const full = `plugin-${m.id}-${id}`;
@@ -329,6 +338,7 @@ function deactivate(m: PluginManifest) {
   if (!state) return;
   for (const id of state.photos) host?.removePhotoService(id);
   for (const id of state.toggles) host?.removePhotoToggle(id);
+  for (const dispose of state.overlays) dispose();
   for (const p of [...state.panels]) p.close();
   state.cone?.remove();
   try { state.dispose?.(); } catch (err) { console.warn(`plugin ${m.id}:`, err); }

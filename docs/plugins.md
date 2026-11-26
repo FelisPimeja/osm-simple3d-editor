@@ -135,6 +135,7 @@ export function activate(api) {
 | `onMapClick(cb)` | `cb([lng, lat], { onObject })` on a map click outside tools. Return `true` if the plugin handled the click. `onObject` is true when the click hits a building or another editor object; leave those clicks to selection. |
 | `openPanel(title)` | A floating window like the photo viewer. Returns `{ body, setTitle(t), close(), onClose(cb) }`; put your content into `body`. |
 | `setViewCone({ lngLat, azimuth, fov? })` | Show the viewing direction on the map (azimuth in degrees from north). Call with no argument to remove it. |
+| `addRasterOverlay({ attribution, minzoom?, maxzoom, loadTile })` | Add a raster coverage overlay. `loadTile(z, x, y, signal)` returns a PNG/JPEG `ArrayBuffer` in Web Mercator (256 px). Returns `{ setVisible(on) }`; initially hidden, restored after style changes, removed when the plugin is disabled. Requests are aborted through `signal`. |
 | `markUsed('street' \| 'imagery', name)` | Record a source for the changeset: `source=streetlevel imagery` or `imagery_used`. Call it when the user actually sees the content. |
 
 Everything a plugin registered (imagery, photo layers, toggles, click handlers, windows, the cone) is removed automatically when the plugin is disabled.

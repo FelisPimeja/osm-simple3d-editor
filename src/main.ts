@@ -20806,8 +20806,11 @@ if (josmMode) setTimeout(pollJosm, 2000);
 const statusbar = document.getElementById('statusbar')!;
 // В одной системе координат со строкой состояния (контейнер карты бывает выше окна)
 statusbar.after(...map.getContainer().querySelectorAll<HTMLElement>(':scope > .vcb, :scope > .tool-bar'));
-/** По центру экрана; мешают панели на этой высоте — сдвиг ровно настолько, а не хватает места — перенос текста. */
-function fitBetweenPanels(el: HTMLElement) {
+/**
+ * По центру экрана (строка состояния — слева, сразу правее тулбара: статус — ответ инструмента); мешают панели на этой
+ * высоте — сдвиг ровно настолько, а не хватает места — перенос текста.
+ */
+function fitBetweenPanels(el: HTMLElement, alignLeft = false) {
   const s = el.style;
   if (document.body.classList.contains('mobile')) { s.left = s.transform = s.maxWidth = s.visibility = ''; return; }
   if (!el.offsetWidth) return;
@@ -20818,18 +20821,21 @@ function fitBetweenPanels(el: HTMLElement) {
   const attrib = map.getContainer().querySelector('.maplibregl-ctrl-bottom-right')?.getBoundingClientRect();
   const blocks = [...panels('right-col'), ...(attrib && attrib.top < rect.bottom ? [attrib] : [])];
   const gap = 12;
-  const left = Math.max(0, ...panels('left-col').map((r) => r.right - box.left)) + gap;
+  // Строка состояния — правее тулбара, даже если он кончается выше неё (одна линия на любой высоте окна)
+  const tools = alignLeft ? [...document.querySelectorAll('#toolbars > .toolbar:not([hidden])')].map((t) => t.getBoundingClientRect()).filter((r) => r.width) : [];
+  const left = Math.max(0, ...panels('left-col').map((r) => r.right - box.left), ...tools.map((r) => r.right - box.left)) + gap;
   const right = Math.min(box.width, ...blocks.map((r) => r.left - box.left)) - gap;
   s.transform = 'none';
   s.maxWidth = `${right - left}px`;
-  s.left = `${Math.max(left, Math.min((box.width - el.offsetWidth) / 2, right - el.offsetWidth))}px`;
+  s.left = `${alignLeft ? left : Math.max(left, Math.min((box.width - el.offsetWidth) / 2, right - el.offsetWidth))}px`;
   s.visibility = right - left < 200 ? 'hidden' : '';
 }
 // Плашки инструментов (строка ввода с опциями) и отдельные строки ввода вне плашек (трек)
 const vcbs = [...document.querySelectorAll<HTMLElement>('.tool-bar, .vcb:not(.tool-bar > .vcb)')];
 const statusbarWatch = new ResizeObserver(() => {
   document.body.style.setProperty('--statusbar-h', `${statusbar.offsetHeight}px`);
-  for (const el of [statusbar, ...vcbs]) fitBetweenPanels(el);
+  fitBetweenPanels(statusbar, true);
+  for (const el of vcbs) fitBetweenPanels(el);
   document.body.style.setProperty('--vcb-h', `${Math.max(0, ...vcbs.filter((v) => !v.classList.contains('vcb-track')).map((v) => v.offsetHeight))}px`);
 });
 for (const el of [statusbar, ...vcbs, map.getContainer(), ...document.querySelectorAll('#left-col > *, #right-col > *, .maplibregl-ctrl-bottom-right')]) statusbarWatch.observe(el);

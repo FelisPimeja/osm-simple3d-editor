@@ -41,7 +41,7 @@ import { reportsAvailable, reportsEnabled, reportUploadFailure, setReportsEnable
 import { checkWindows, type CheckOpening, type CheckPart, type WindowProblem } from './edit/window-checks';
 import { computeHeights, LEVEL_HEIGHT, parseLength, roofHeightOf, roofShapeOf } from './osm/heights';
 import { skillionDirection } from './edit/skillion-defaults';
-import { skillionRoofHeight } from './render/building-geometry';
+import { skillionHeights, skillionRoofHeight } from './render/building-geometry';
 import { escalatorFloorHoles } from './render/escalator-openings';
 import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indoorCategory, roomValueOf, type IndoorCategory } from './osm/indoor-categories';
 import { ViewCube } from './view/view-cube';
@@ -4794,7 +4794,9 @@ window.addEventListener('blur', () => { shiftHeld = false; if (pushTool.state ==
  * в слое) — инструменты меряют от её основания, а не от высоты по умолчанию.
  */
 function drawnHeights(f: Feature3D) {
-  const h = computeHeights(f.tags);
+  const h0 = computeHeights(f.tags);
+  // Односкатная без своей высоты нарисована не круче 25° (skillionHeights) — ручки и упоры по ней же
+  const h = h0.roofShape === 'skillion' && f.polygons?.length === 1 ? skillionHeights(f.polygons[0].outer.map(localMetres(f.polygons[0].outer[0])), h0, f.tags) : h0;
   if (!focus || f.kind !== 'part' || h.source !== 'default') return h;
   return { ...h, wallTop: h.min, top: h.min, roofHeight: 0, roofShape: 'flat' };
 }

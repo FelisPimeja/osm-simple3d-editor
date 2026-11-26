@@ -20819,7 +20819,9 @@ function fitBetweenPanels(el: HTMLElement, alignLeft = false) {
     .filter((r) => r.width && r.bottom > rect.top && r.top < rect.bottom);
   // Атрибуция (короткая ссылка OSM и ⓘ, раскрытая — шире) — такое же препятствие; совсем не оставила места — строка прячется
   const attrib = map.getContainer().querySelector('.maplibregl-ctrl-bottom-right')?.getBoundingClientRect();
-  const blocks = [...panels('right-col'), ...(attrib && attrib.top < rect.bottom ? [attrib] : [])];
+  // Строка состояния — не правее левого края правой колонки панелей (на любой высоте: колонка бывает до низа экрана)
+  const rightCol = alignLeft ? [...document.getElementById('right-col')!.children].map((c) => c.getBoundingClientRect()).filter((r) => r.width) : [];
+  const blocks = [...panels('right-col'), ...rightCol, ...(attrib && attrib.top < rect.bottom ? [attrib] : [])];
   const gap = 12;
   // Строка состояния — правее тулбара, даже если он кончается выше неё (одна линия на любой высоте окна)
   const tools = alignLeft ? [...document.querySelectorAll('#toolbars > .toolbar:not([hidden])')].map((t) => t.getBoundingClientRect()).filter((r) => r.width) : [];

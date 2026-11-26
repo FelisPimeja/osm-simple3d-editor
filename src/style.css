@@ -1036,7 +1036,8 @@ body.zoom-hidden .maplibregl-ctrl-zoom-in, body.zoom-hidden .maplibregl-ctrl-zoo
 /* Куб и кнопки масштаба выключены — внизу справа только атрибуция: колонка панелей — почти на всю высоту */
 /* Десктоп: геолокация тоже прячется вместе с кубом — блок у края исчезает целиком */
 body.zoom-hidden:not(.mobile) .maplibregl-ctrl-top-right .maplibregl-ctrl-group { display: none; }
-body.zoom-hidden:not(.mobile) #right-col { bottom: 44px; }
+/* …и до низа экрана, поверх атрибуции (колонка выше неё по z-index) */
+body.zoom-hidden:not(.mobile) #right-col { bottom: 6px; }
 /* Десктоп: колонки ближе к краям экрана */
 body:not(.mobile) .col { top: 6px; }
 body:not(.mobile) #left-col { left: 6px; bottom: 6px; }

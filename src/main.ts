@@ -9038,7 +9038,7 @@ function selectEntrance(id: number, add = false) {
 const ENTRANCE_KEY_PREFIX = '@entrance:', ENTRANCES_KEY = '@entrances';
 /** Поля карточки входа: тип входа (варианты схемы iD), номер, квартиры (addr:flats: диапазон «1-22», через «;» — несколько) и створки. */
 /** Поля входа: свои (номер, квартиры, створки) и поля пресета двери indoor=door (тип двери, этаж, размеры, материал, цвет). */
-const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'addr:flats', 'door', 'door:wings', 'level', 'width', 'height', 'material', 'colour'] as const;
+const ENTRANCE_FORM_TAGS = ['entrance', 'ref', 'addr:flats', 'door', 'door:wings', 'level', 'width', 'height', 'material', 'colour', 'covered'] as const;
 
 /** Поля карточки окна: вид, размеры проёма и подоконник (м), этаж. */
 const WINDOW_FORM_TAGS = ['window', 'window:shape', 'window:top:shape', 'window:material', 'window:width', 'window:height', 'window:breast', 'level'] as const;
@@ -9092,9 +9092,9 @@ function renderEntrance(id: number) {
     // Высота: по умолчанию — как дверь нарисована (в низкой части — по её верху без 10 см)
     const shownH = k === 'height' && !many ? overpassLayer.focusEntrance(id)?.height : undefined;
     const shownW = k === 'width' && !many ? overpassLayer.focusEntrance(id)?.width : undefined;
-    const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : k === 'door:wings' ? String(doorWings(t)) : k === 'addr:flats' ? tr('например, 1-22') : k === 'height' ? (shownH !== undefined ? String(Math.round(shownH * 100) / 100) : String(ENTRANCE_HEIGHT)) : k === 'width' ? String(Math.round((shownW ?? ((t.entrance === 'garage' || t.amenity === 'parking_entrance') ? GARAGE_WIDTH : ENTRANCE_WIDTH)) * 100) / 100) : '—';
-    const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : k === 'door:wings' ? tr('Створок') : k === 'addr:flats' ? tr('Квартиры') : k === 'height' ? tr('Высота, м') : k === 'width' ? tr('Ширина, м') : k === 'ref' ? tr('Номер') : indoorFieldLabel(k, []))}</span>`;
-    const input = k === 'entrance' || k === 'door:wings' || k === 'door' ? renderValueCombo(k === 'entrance' ? idOptions('entrance') ?? [] : k === 'door' ? DOOR_VALUES : ['1', '2'], `data-entrance-tag="${k}"`, value ?? '', hint, k === 'door' ? DOOR_LABELS : undefined, k)
+    const hint = value === undefined ? tr('разные значения') : k === 'entrance' ? tr('не вход') : k === 'door:wings' ? String(doorWings(t)) : k === 'covered' ? 'no' : k === 'addr:flats' ? tr('например, 1-22') : k === 'height' ? (shownH !== undefined ? String(Math.round(shownH * 100) / 100) : String(ENTRANCE_HEIGHT)) : k === 'width' ? String(Math.round((shownW ?? ((t.entrance === 'garage' || t.amenity === 'parking_entrance') ? GARAGE_WIDTH : ENTRANCE_WIDTH)) * 100) / 100) : '—';
+    const label = `<span title="${esc(k)}">${esc(k === 'entrance' ? tr('Тип входа') : k === 'door:wings' ? tr('Створок') : k === 'covered' ? tr('Козырёк') : k === 'addr:flats' ? tr('Квартиры') : k === 'height' ? tr('Высота, м') : k === 'width' ? tr('Ширина, м') : k === 'ref' ? tr('Номер') : indoorFieldLabel(k, []))}</span>`;
+    const input = k === 'entrance' || k === 'door:wings' || k === 'door' || k === 'covered' ? renderValueCombo(k === 'entrance' ? idOptions('entrance') ?? [] : k === 'door' ? DOOR_VALUES : k === 'covered' ? ['yes', 'no'] : ['1', '2'], `data-entrance-tag="${k}"`, value ?? '', hint, k === 'door' ? DOOR_LABELS : undefined, k)
       : `<input type="text" data-entrance-tag="${k}" ${entranceKeyboard(k)} value="${esc(value ?? '')}" placeholder="${esc(hint)}" spellcheck="false" autocomplete="off">`;
     return `<label class="tag-row${changed ? ' changed' : ''}">${label}${input}</label>`;
   }).join('');

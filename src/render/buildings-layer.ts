@@ -155,6 +155,8 @@ export const DOOR_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x256
 const ENTRANCE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const ENTRANCE_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x97beff, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const ENTRANCE_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
+/** Козырёк над входом (covered=yes) — светло-серая плита. */
+const CANOPY_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xc8c5c0, side: THREE.DoubleSide });
 /** Полотно входа своего цвета (colour=*): копия ENTRANCE_MATERIAL с теми же плоскостями среза. */
 const entranceTints = new Map<string, THREE.MeshBasicMaterial>();
 function entranceTintMaterial(hex: string): THREE.MeshBasicMaterial {
@@ -6839,7 +6841,7 @@ export class BuildingsLayer implements CustomLayerInterface {
           // Так же и вход у земли под поднятой видимой частью (узел её контура над входом нижней): при изоляции его нет
           const h = computeHeights(it.tags), z = place?.z ?? floorZ;
           const outside = !!partsHidden && z !== undefined && (z < min - 0.3 || z >= min + h.top - h.min);
-          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: fittedDoorHeight(tags.get(id), it.tags), wings: doorWings(tags.get(id)) }, rank });
+          if (place && (!(offstage || outside) || onShownWall(place.p, place.z))) best.set(id, { place: { id, ...place, z: place.z + gz, width: tagWidth(tags.get(id)), height: fittedDoorHeight(tags.get(id), it.tags), wings: doorWings(tags.get(id)), canopy: canopyHeight(tags.get(id), it.tags, fittedDoorHeight(tags.get(id), it.tags)) }, rank });
         }));
       }
       // Вход на стене, но не узел контура (дверь indoor-стены на фасаде): на ближайшей стороне, по своей точке
@@ -6866,7 +6868,7 @@ export class BuildingsLayer implements CustomLayerInterface {
         const floorZ = !onMap && Number.isFinite(lv) ? this.entranceFloors.get(lv) : undefined;
         const place = { p: near.p, t: near.t, n: nrm, z: floorZ ?? entranceZ(e.tags, it.tags) };
         const h = computeHeights(it.tags), outside = !!partsHidden && (place.z < min - 0.3 || place.z >= min + h.top - h.min);
-        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: fittedDoorHeight(e.tags, it.tags), wings: doorWings(e.tags), colour: e.tags.colour }, rank });
+        if (!(offstage || outside) || onShownWall(place.p, place.z)) best.set(e.id, { place: { id: e.id, ...place, z: place.z + gz, width: tagWidth(e.tags), height: fittedDoorHeight(e.tags, it.tags), wings: doorWings(e.tags), colour: e.tags.colour, canopy: canopyHeight(e.tags, it.tags, fittedDoorHeight(e.tags, it.tags)) }, rank });
       }
     }
     for (const w of windowPlaces) if (!best.has(w.id)) best.set(w.id, { place: w, rank: Infinity });
@@ -6919,6 +6921,33 @@ export class BuildingsLayer implements CustomLayerInterface {
         const f = k / (e.wings ?? 1), x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
         lines.push(x, y, z0, x, y, z1);
       }
+    }
+    // Козырьки (covered=yes): плита над дверью наружу от стены; не рисуем, если вход уже накрыт отдельной крышей
+    // (building=roof / building:part=roof над точкой перед дверью) — иначе два козырька один в другом
+    const roofs = g.items.filter((it) => it.tags.building === 'roof' || it.tags['building:part'] === 'roof')
+      .flatMap((it) => it.feature.polygons.map((p) => p.outer.map(g.toLocal)));
+    const canopy: number[] = [];
+    for (const e of g.entrances) {
+      if (e.canopy === undefined || e.window) continue;
+      const probe: Pt = [e.p[0] + e.n[0] * CANOPY_DEPTH / 2, e.p[1] + e.n[1] * CANOPY_DEPTH / 2];
+      if (roofs.some((r) => pointInLocalRing(probe, r))) continue;
+      const w = ((e.width ?? ENTRANCE_WIDTH) + CANOPY_EXTRA_WIDTH) / 2, z0 = e.z + e.canopy, z1 = z0 + CANOPY_THICKNESS;
+      const c = (s: number, d: number): Pt => [e.p[0] + e.t[0] * s * w + e.n[0] * d, e.p[1] + e.t[1] * s * w + e.n[1] * d];
+      const q = [c(-1, 0), c(1, 0), c(1, CANOPY_DEPTH), c(-1, CANOPY_DEPTH)];
+      const quad = (a: number[], b: number[], cc: number[], d: number[]) => canopy.push(...a, ...b, ...cc, ...a, ...cc, ...d);
+      const v = (i: number, z: number) => [q[i][0], q[i][1], z];
+      quad(v(0, z1), v(1, z1), v(2, z1), v(3, z1));
+      quad(v(3, z0), v(2, z0), v(1, z0), v(0, z0));
+      for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; quad(v(i, z0), v(j, z0), v(j, z1), v(i, z1)); }
+    }
+    if (canopy.length) {
+      CANOPY_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(canopy, 3));
+      geom.computeVertexNormals();
+      const mesh = new THREE.Mesh(geom, CANOPY_MATERIAL);
+      mesh.frustumCulled = false;
+      root.add(mesh);
     }
     for (const [pos, mat] of [[plain, ENTRANCE_MATERIAL], [selected, ENTRANCE_SELECTED_MATERIAL], ...[...painted].map(([c, pos]) => [pos, entranceTintMaterial(c)] as const)] as const) {
       if (!pos.length) continue;
@@ -9416,7 +9445,7 @@ function strokeOnly(g: MeshGroup, it: Item): boolean {
   return it.feature.hasParts || g.flat.has(it.feature.key);
 }
 /** Вход на стене: точка у основания (м сцены), направление стены t и наружная нормаль n (единичные), низ z. */
-export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Высота проёма входа (height), м. */ height?: number; /** Створки входа (door:wings). */ wings?: number; /** Цвет полотна (colour=*). */ colour?: string; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number; outline?: Pt[]; /** Пол этажа окна, м сцены (подоконник — от него). */ floor?: number } }
+export interface EntrancePlace { id: number; p: Pt; t: Pt; n: Pt; z: number; width?: number; /** Высота проёма входа (height), м. */ height?: number; /** Створки входа (door:wings). */ wings?: number; /** Цвет полотна (colour=*). */ colour?: string; /** Низ козырька над входом (covered=yes) от порога, м. */ canopy?: number; /** Окно по тегам (window=*): z — подоконник, высота проёма. */ window?: { height: number; outline?: Pt[]; /** Пол этажа окна, м сцены (подоконник — от него). */ floor?: number } }
 
 /**
  * Контур проёма окна по window:shape и window:top:shape (выпуклый, против часовой): вдоль стены от середины и вверх
@@ -9482,6 +9511,19 @@ export function windowSize(w: Record<string, string>, tags: Record<string, strin
  * Высота входа, м: у земли; вход с level≠0 — на отметке этого этажа. building:levels считают от земли,
  * вместе с пропущенными building:min_level, — этажи объекта поровну по высоте его стен от земли; без этажности — по 3 м.
  */
+/** Козырёк над входом (covered=yes): вынос от стены, толщина, запас по ширине (на обе стороны вместе), м. */
+const CANOPY_DEPTH = 1, CANOPY_THICKNESS = 0.2, CANOPY_EXTRA_WIDTH = 0.5, CANOPY_HEIGHT = 2.5;
+/**
+ * Низ козырька от порога: 2,5 м, но не выше двери + 0,3 м (высокие ворота — над ними, низкая дверь — козырёк ниже)
+ * и не выше этажа без 0,2 м (не на окнах второго); не ниже верха двери. Без covered=yes — нет козырька.
+ */
+export function canopyHeight(door: Record<string, string> | undefined, partTags: Record<string, string>, doorH: number): number | undefined {
+  // indoor=yes — вход уже внутри (терминал, галерея): накрыт зданием, козырёк не нужен
+  if (door?.covered?.trim().toLowerCase() !== 'yes' || door.tunnel || door.indoor === 'yes') return undefined;
+  const { levelH } = levelGrid(partTags);
+  return Math.max(doorH + 0.05, Math.min(CANOPY_HEIGHT, doorH + 0.3, levelH - 0.2));
+}
+
 export function entranceZ(door: Record<string, string>, tags: Record<string, string>): number {
   const level = parseFloat((door.level ?? '').split(';')[0]);
   if (!Number.isFinite(level) || level === 0) return 0;

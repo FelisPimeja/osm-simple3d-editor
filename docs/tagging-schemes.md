@@ -28,8 +28,13 @@
 
 - Вход на контуре: `entrance=*`, `amenity=parking_entrance` (как `garage`), `indoor=door` на стене
   (как `entrance=yes`) — `src/osm/model.ts`, `facadeEntranceOf`.
-- Карточка входа: `entrance`, `ref`, `addr:flats`, `door`, `door:wings`, `level`, `width`, `height`, `material`.
+- Карточка входа: `entrance`, `ref`, `addr:flats`, `door`, `door:wings`, `level`, `width`, `height`, `material`, `colour`, `covered`.
 - Также читаются `door:width`, `door:height`.
+- `covered=yes` на входе — наша интерпретация (другие 3D-рендеры её не знают): козырёк над дверью шириной
+  на 0,5 м больше входа, вынос 1 м, толщина 0,2 м. Низ — 2,5 м от порога, но не выше двери + 0,3 м и не выше
+  этажа − 0,2 м; не ниже верха двери. Не рисуется, если перед дверью уже есть отдельная крыша
+  (`building=roof` / `building:part=roof`), у входа `indoor=yes` (вход внутри здания) или `tunnel=*`.
+  Своих ключей для размеров козырька не вводим.
 
 ### Окна
 

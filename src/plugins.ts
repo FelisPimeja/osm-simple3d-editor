@@ -173,6 +173,7 @@ export const TRUSTED: string[] = ((catalogJson as { trusted?: unknown }).trusted
 
 function ghRepo(s: string): { owner: string; repo: string; ref?: string } | undefined {
   const gh = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/tree\/([\w.\/-]+?))?\/?$/.exec(s)
+    ?? /^https:\/\/(?:github\.com\/([\w.-]+)\/([\w.-]+)\/(?:blob|raw)|raw\.githubusercontent\.com\/([\w.-]+)\/([\w.-]+))\/([\w.-]+)\/simple3d-plugin\.json$/.exec(s)?.filter(Boolean)
     ?? /^([\w.-]+)\/([\w.-]+?)(?:@([\w.\/-]+))?$/.exec(s);
   return gh ? { owner: gh[1], repo: gh[2], ref: gh[3] } : undefined;
 }

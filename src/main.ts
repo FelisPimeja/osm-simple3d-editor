@@ -9751,7 +9751,7 @@ let shapePreviewed: string[] = [];
 
 /** Теги для ручки крыши (высота крыши) или верха стен (высота стен — как «Вытянуть» за верх, крыша не меняется). */
 function shapeHeightTags(f: Feature3D, t: ShapeTarget, dz: number): Record<string, string> {
-  return t.roof ? roofHeightTags(f.tags, dz) : pushHeightTags(f.tags, 'top', dz, 'm', false, drawnHeights(f));
+  return t.roof ? roofHeightTags(f.tags, dz, drawnHeights(f)) : pushHeightTags(f.tags, 'top', dz, 'm', false, drawnHeights(f));
 }
 
 /** Ширина марша после сдвига ручки ширины t на offset. */

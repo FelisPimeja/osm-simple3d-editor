@@ -62,8 +62,9 @@ export const MIN_ROOF_HEIGHT = 0;
  * Высота крыши на dz (ручка крыши «Формы»): верх стен стоит, height (если задан) растёт вместе с крышей.
  * Изменение формы задаёт roof:height в метрах, сохраняя roof:levels.
  */
-export function roofHeightTags(tags: Record<string, string>, dz: number): Record<string, string> {
-  const h = computeHeights(tags), out = { ...tags };
+/** h — высоты, как объект нарисован (у односкатной без roof:height крыша положе, чем по тегам). */
+export function roofHeightTags(tags: Record<string, string>, dz: number, h: Heights = computeHeights(tags)): Record<string, string> {
+  const out = { ...tags };
   const fmt = (n: number) => String(Math.round(n * 100) / 100);
   const roof = Math.max(MIN_ROOF_HEIGHT, h.roofHeight + dz);
   out['roof:height'] = writeLength(roof, tags['roof:height'] ?? tags.height);

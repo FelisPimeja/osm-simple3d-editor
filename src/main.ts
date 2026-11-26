@@ -14284,7 +14284,8 @@ function childActions(): ChildAction[] {
   // Вход — на фасад: в режиме здания — пока не открыт план этажа (там «Точка» ставит двери и объекты)
   const building = mobile ? (focus ? (shownLevel ? undefined : focus) : cardGroup)
     : focus ? (shownLevel ? undefined : focus)
-    : selection.length && !indoorSelection.length ? (() => { const gs = new Set(selection.map((k) => groupOf(k)?.key ?? k)); return gs.size === 1 ? groupOf(selection[0]) ?? soloGroup(selection[0]) : undefined; })() : undefined;
+    // Выделено само отношение type=building (карточка группы) — оно и есть здание
+    : selection.length && !indoorSelection.length ? (() => { const gs = new Set(selection.map((k) => groupOf(k)?.key ?? k)); return gs.size === 1 ? groupOf(selection[0]) ?? editGroups.get(selection[0]) ?? soloGroup(selection[0]) : undefined; })() : undefined;
   if (building) return [{ id: 'entrance', label: tr('Вход'), title: tr('Добавить вход на фасад этого здания (X)'), run: () => startAddEntrance(building) }];
   return [];
 }
@@ -19539,6 +19540,7 @@ function describeGroup(g: BuildingGroup): string {
     ${objectHeading('type=building', `${server().web}/${g.key}`, g.key, g.version)}
     <p class="hint">${tr('Членов: {n}. Двойной клик по зданию — режим одного здания.', { n: g.members.length })}
       ${tr('Отношение — контейнер: теги здания (высота, крыша, адрес) ставятся на контур и части.')}</p>
+    ${childActionsRow()}
     ${focusEnterButton(g.key)}
     <p><button type="button" data-add-parts>${tr('Добавить части')}</button></p>
     ${form}

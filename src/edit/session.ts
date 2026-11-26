@@ -618,6 +618,8 @@ export class EditSession {
         this.features.set(key, f);
       }
       f.version = version;
+      // Удалённый у нас путь, который сервер сохранил для чужого отношения (теги сняты), — больше не удалён
+      this.deleted.delete(key);
       this.original.set(key, { ...tags });
       if (f.relMembers) this.originalMembers.set(key, f.relMembers.map((m) => ({ ...m })));
       if (f.polygons) this.originalGeometry.set(key, f.polygons);

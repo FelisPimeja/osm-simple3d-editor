@@ -52,3 +52,20 @@ test('a split shared way deleted in the session stays (as its remainder) while a
  assert.ok(r,'foreign multipolygon gets the new pieces');
  assert.deepEqual([...r[1].matchAll(/<member type="way" ref="(-?\d+)"/g)].map(m=>Number(m[1])),[100,-10,-11,101]);
 });
+
+test('a deleted tagged way still needed by a foreign multipolygon is kept as bare geometry (way/144413328)',async()=>{
+ const sent=[];
+ globalThis.fetch=mockFetch(sent);
+ globalThis.DOMParser=class{parseFromString(){return {documentElement:{children:[]}};}};
+ const wall={barrier:'wall',height:'0.5'};
+ ways[101]={...ways[101],version:2,tags:wall};
+ try{
+  await uploadEdits([{key:'way/101',before:wall,after:{},deleted:true}],'test',()=>{},API);
+ }finally{ways[101]={...ways[101],version:1,tags:{}};}
+ const xml=sent[0];
+ assert.ok(xml,'changeset uploaded');
+ assert.doesNotMatch(xml,/<delete[^>]*>[^]*<way id="101"/,'way 101 is not deleted');
+ const w=xml.match(/<way id="101"[^>]*>([^]*?)<\/way>/);
+ assert.ok(w,'way 101 is modified');
+ assert.doesNotMatch(w[1],/<tag /,'its own tags are removed');
+});

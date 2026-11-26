@@ -230,7 +230,7 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
   }
   // Удалённый у нас серверный путь, который ещё нужен чужому отношению (его нет в данных редактора: пешеходная зона
   // вокруг здания, relation/4167975), не удаляем, а записываем с узлами из сессии (кусок, оставшийся после разрезания):
-  // иначе кольцо того отношения разомкнётся. Чужое — не среди наших правок или наша правка оставляет путь в составе
+  // иначе кольцо того отношения разомкнётся (внешний контур мультиполигона с barrier=wall, way/144413328). Чужое — не среди наших правок или наша правка оставляет путь в составе
   const editMembers = new Map(edits.filter((e) => e.members && !e.deleted).map((e) => [e.key, e.members!] as const));
   const deletedServerWays = edits.filter((e) => e.deleted && /^way\/\d+$/.test(e.key) && fresh.get(e.key)?.type === 'way');
   if (deletedServerWays.length) onStatus(tr('Проверяем отношения удаляемых путей…'));
@@ -244,8 +244,10 @@ async function uploadInner(edits: TagEdit[], comment: string, onStatus: (s: stri
     });
     if (!needed) return;
     const w = fresh.get(e.key) as OsmWay;
+    // Путь остаётся только геометрией чужого отношения: его собственные теги (ограда, стена) снимаем —
+    // иначе «удалённый» объект оставался бы на карте, а правка — в стеке
     e.deleted = false;
-    e.after = { ...(w.tags ?? {}) };
+    e.after = {};
     e.before = { ...(w.tags ?? {}) };
     e.wayNodes ??= { before: w.nodes, after: w.nodes };
   });

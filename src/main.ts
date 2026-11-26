@@ -518,17 +518,19 @@ const syncWireBtn = () => {
 syncWireBtn();
 
 /**
- * Частые кнопки вида (слои, каркас, куб) — полноразмерной группой «Вид» в левом тулбаре; в блоке у края
+ * Частые кнопки вида (каркас, куб) — полноразмерной группой «Вид» в левом тулбаре; в блоке у края
  * остаются редкие (масштаб, компас, геолокация). На мобильном тулбара нет — кнопки возвращаются в блок.
  */
 const viewTools = document.getElementById('view-tools')!;
 const layersBtn = navGroup?.querySelector<HTMLElement>('.maplibregl-ctrl-basemap:not(.maplibregl-ctrl-wireframe)');
 function placeViewButtons(toMobile: boolean) {
-  const btns = [layersBtn, wireBtn, cubeBtn].filter((b): b is HTMLElement => !!b);
+  // Кнопка слоёв не нужна: слои — постоянная панель правой колонки
+  layersBtn?.remove();
+  const btns = [wireBtn, cubeBtn];
   if (!toMobile) { viewTools.append(...btns); return; }
   if (!navGroup) return;
   const compass = navGroup.querySelector('.maplibregl-ctrl-compass');
-  compass?.after(cubeBtn, ...(layersBtn ? [layersBtn] : []));
+  compass?.after(cubeBtn);
   navGroup.append(wireBtn);
 }
 
@@ -728,12 +730,11 @@ for (const panel of document.querySelectorAll<HTMLElement>('.panel')) {
 {
   const panel = document.getElementById('layers-panel')!;
   const key = 'osm3d.layers-panel';
-  const show = (open: boolean) => {
-    panel.hidden = !open;
-    if (open) setCollapsed(panel, false);
-    try { localStorage.setItem(key, open ? '1' : '0'); localStorage.setItem(`osm3d.collapsed.${panel.id}`, '0'); } catch { /* до перезагрузки */ }
-  };
-  try { panel.hidden = localStorage.getItem(key) !== '1'; } catch { /* скрыта */ }
+  // Кнопки слоёв больше нет: панель видна всегда, сворачивается заголовком; show — развернуть или свернуть
+  // (после инструмента сдвига снимка — развернуть с его настройками)
+  const show = (open: boolean) => setCollapsed(panel, !open);
+  panel.hidden = false;
+  try { localStorage.removeItem(key); } catch { /* нет хранилища */ }
   basemapCtrl?.dock(document.getElementById('layers-body')!, show, () => !panel.hidden && !panel.classList.contains('collapsed'));
   new MutationObserver(() => basemapCtrl?.syncButton()).observe(panel, { attributes: true, attributeFilter: ['hidden', 'class'] });
 }

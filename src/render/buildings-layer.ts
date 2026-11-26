@@ -155,8 +155,8 @@ export const DOOR_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x256
 const ENTRANCE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const ENTRANCE_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x97beff, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const ENTRANCE_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
-/** Козырёк над входом (covered=yes) — светло-серая плита. */
-const CANOPY_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xc8c5c0, side: THREE.DoubleSide });
+/** Козырёк над входом (covered=yes) — белая плита, как здания. */
+const CANOPY_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 /** Полотно входа своего цвета (colour=*): копия ENTRANCE_MATERIAL с теми же плоскостями среза. */
 const entranceTints = new Map<string, THREE.MeshBasicMaterial>();
 function entranceTintMaterial(hex: string): THREE.MeshBasicMaterial {
@@ -6931,7 +6931,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (e.canopy === undefined || e.window) continue;
       const probe: Pt = [e.p[0] + e.n[0] * CANOPY_DEPTH / 2, e.p[1] + e.n[1] * CANOPY_DEPTH / 2];
       if (roofs.some((r) => pointInLocalRing(probe, r))) continue;
-      const w = ((e.width ?? ENTRANCE_WIDTH) + CANOPY_EXTRA_WIDTH) / 2, z0 = e.z + e.canopy, z1 = z0 + CANOPY_THICKNESS;
+      const extra = entranceOf(g.entranceTags.get(e.id)) === 'staircase' ? CANOPY_EXTRA_WIDTH_STAIRCASE : CANOPY_EXTRA_WIDTH;
+      const w = ((e.width ?? ENTRANCE_WIDTH) + extra) / 2, z0 = e.z + e.canopy, z1 = z0 + CANOPY_THICKNESS;
       const c = (s: number, d: number): Pt => [e.p[0] + e.t[0] * s * w + e.n[0] * d, e.p[1] + e.t[1] * s * w + e.n[1] * d];
       const q = [c(-1, 0), c(1, 0), c(1, CANOPY_DEPTH), c(-1, CANOPY_DEPTH)];
       const quad = (a: number[], b: number[], cc: number[], d: number[]) => canopy.push(...a, ...b, ...cc, ...a, ...cc, ...d);
@@ -9511,8 +9512,8 @@ export function windowSize(w: Record<string, string>, tags: Record<string, strin
  * Высота входа, м: у земли; вход с level≠0 — на отметке этого этажа. building:levels считают от земли,
  * вместе с пропущенными building:min_level, — этажи объекта поровну по высоте его стен от земли; без этажности — по 3 м.
  */
-/** Козырёк над входом (covered=yes): вынос от стены, толщина, запас по ширине (на обе стороны вместе), м. */
-const CANOPY_DEPTH = 1, CANOPY_THICKNESS = 0.2, CANOPY_EXTRA_WIDTH = 0.5, CANOPY_HEIGHT = 2.5;
+/** Козырёк над входом (covered=yes): вынос от стены, толщина, запас по ширине (на обе стороны вместе; у подъезда entrance=staircase — шире), м. */
+const CANOPY_DEPTH = 1, CANOPY_THICKNESS = 0.2, CANOPY_EXTRA_WIDTH = 0.5, CANOPY_EXTRA_WIDTH_STAIRCASE = 1, CANOPY_HEIGHT = 2.5;
 /**
  * Низ козырька от порога: 2,5 м, но не выше двери + 0,3 м (высокие ворота — над ними, низкая дверь — козырёк ниже)
  * и не выше этажа без 0,2 м (не на окнах второго); не ниже верха двери. Без covered=yes — нет козырька.

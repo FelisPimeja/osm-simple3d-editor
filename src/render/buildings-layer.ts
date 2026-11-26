@@ -6940,6 +6940,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       quad(v(0, z1), v(1, z1), v(2, z1), v(3, z1));
       quad(v(3, z0), v(2, z0), v(1, z0), v(0, z0));
       for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; quad(v(i, z0), v(j, z0), v(j, z1), v(i, z1)); }
+      // Рёбра — той же линией, что обводка входа: 4 сверху, 4 снизу, 4 вертикальных
+      for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; lines.push(...v(i, z0), ...v(j, z0), ...v(i, z1), ...v(j, z1), ...v(i, z0), ...v(i, z1)); }
     }
     if (canopy.length) {
       CANOPY_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;

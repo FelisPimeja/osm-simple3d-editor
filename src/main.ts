@@ -4160,12 +4160,14 @@ function updateSnapMarker(point: [number, number] | undefined) {
       : splitTool.active ? (point ? splitTool.hover(point) ?? overpassLayer.snapAt(point) : undefined)
       : point ? overpassLayer.snapAt(point) : undefined;
     if (currentSnap?.kind === 'center') currentSnap = undefined;
-    snapEl.hidden = !currentSnap;
-    if (currentSnap) {
-      snapEl.className = `snap-marker ${currentSnap.kind}`;
-      snapEl.dataset.label = currentSnap.kind === 'tracking' ? `${showLength(Math.abs(currentSnap.dist ?? 0))} ${unitLabel()}` : currentSnap.label ?? SNAP_LABELS[currentSnap.kind];
-      snapEl.style.left = `${currentSnap.point[0]}px`;
-      snapEl.style.top = `${currentSnap.point[1]}px`;
+    // «Вход» / «Точка»: значок привязки места (в режиме здания и на карте одинаково), без привязки — «на ребре»
+    const cursor = pointPick && !entranceGroup && !windowGroup ? (point ? pointCursor(point) : undefined) : currentSnap;
+    snapEl.hidden = !cursor;
+    if (cursor) {
+      snapEl.className = `snap-marker ${cursor.kind}`;
+      snapEl.dataset.label = cursor.kind === 'tracking' ? `${showLength(Math.abs(cursor.dist ?? 0))} ${unitLabel()}` : cursor.label ?? SNAP_LABELS[cursor.kind];
+      snapEl.style.left = `${cursor.point[0]}px`;
+      snapEl.style.top = `${cursor.point[1]}px`;
     }
     return;
   }
@@ -14330,6 +14332,8 @@ function stopPoint() {
   mapEntranceMarker?.remove();
   mapEntranceMarker = undefined;
   overpassLayer.previewMapEntrance(undefined);
+  // Значок привязки «Входа» — до следующего движения мыши висел бы
+  snapEl.hidden = true;
   document.querySelector('.indoor-pois')?.classList.remove('passthrough');
   overpassLayer.setDrawPreview(undefined);
   syncCursor();
@@ -14346,6 +14350,8 @@ interface PointTarget {
   building: { u: number; v: number; cu: LonLat; cv: LonLat }[];
   /** Сторона стены, на которой точка (метры сцены): Shift держит точку на ней. */
   side?: [[number, number], [number, number]];
+  /** Объём здания, на фасаде которого вход (для превью двери). */
+  key?: string;
 }
 
 /** Shift в «Точке»: сторона стены, вдоль которой ходит точка (курсор и привязки проецируются на неё). */
@@ -14433,11 +14439,12 @@ function pointTargetOn(screen: [number, number], lvl: Level): PointTarget | unde
   const at = node !== undefined ? (t === 0 ? best.r.coords[best.edge] : best.r.coords[(best.edge + 1) % best.r.coords.length]) : overpassLayer.focusToLngLat(q[0], q[1])! as LonLat;
   // Все стороны через эту точку (общая стена двух помещений, контур этажа, путь здания)
   const indoor: PointTarget['indoor'] = [], building: PointTarget['building'] = [];
+  let key: string | undefined;
   for (const r of rings) for (let i = 0; i < r.edges; i++) {
     const j = (i + 1) % r.loc.length;
     if (segDist2(q, r.loc[i], r.loc[j]) > 0.02) continue;
     if (r.indoor) indoor.push({ f: r.f as IndoorFeature, polygon: r.polygon, ring: r.ring, edge: i });
-    else building.push({ u: r.ids[i], v: r.ids[j], cu: r.coords[i], cv: r.coords[j] });
+    else { building.push({ u: r.ids[i], v: r.ids[j], cu: r.coords[i], cv: r.coords[j] }); key ??= r.f.key; }
   }
   // Наружная стена — сторона контура этажа (indoor=level) или контура сечения здания на этаже
   const onLevel = node !== undefined ? best.r.indoor && (best.r.f as IndoorFeature).kind === 'level' : indoor.some((s) => s.f.kind === 'level');
@@ -14445,7 +14452,7 @@ function pointTargetOn(screen: [number, number], lvl: Level): PointTarget | unde
   // Не на стене этажа и не на фасаде — точка внутри
   if (!outside && (node !== undefined ? !best.r.indoor : !indoor.length)) return { at: overpassLayer.focusToLngLat(p[0], p[1])! as LonLat, local: p, kind: 'poi', indoor: [], building: [] };
   // Внутри здания вход не ставим в пути частей (общая стена двух частей — не фасад)
-  return { at, local: q, kind: outside ? 'entrance' : 'door', node, indoor, building: outside ? building : [], side: [a, b] };
+  return { at, local: q, kind: outside ? 'entrance' : 'door', node, indoor, building: outside ? building : [], side: [a, b], key: outside ? key : undefined };
 }
 
 /** Вставка входов группой: место каждого входа — курсор плюс его смещение, прижатое к ближайшему фасаду. */
@@ -14500,7 +14507,7 @@ function hoverPoint(screen: [number, number]) {
   // Shift: стена под точкой — зафиксирована, пока клавиша зажата
   if (shiftHeld && !pointLock && t?.side) pointLock = t.side;
   const lvl = pointLevel();
-  if (!t || !lvl) { overpassLayer.setDrawPreview(undefined); if (!shownLevel) toolHint(tr('Вход: наведите на фасад здания у земли.')); return; }
+  if (!t || !lvl) { previewEntranceAt(undefined); overpassLayer.setDrawPreview(undefined); if (!shownLevel) toolHint(tr('Вход: наведите на фасад здания у земли.')); return; }
   const solid=t.indoor.find(s=>solidWall(s.f))?.f;
   if(solid){
     try{
@@ -14512,8 +14519,10 @@ function hoverPoint(screen: [number, number]) {
     }catch(err){overpassLayer.setDrawPreview(undefined);toolHint((err as Error).message,true);}
     return;
   }
+  // Вход на фасаде — превью самой двери (как на карте); дверь и объект этажа — квадрат на полу
+  previewEntranceAt(t);
   const s = 0.25, [x, y] = t.local, z = lvl.floor;
-  overpassLayer.setDrawPreview([[x - s, y - s], [x + s, y - s], [x + s, y + s], [x - s, y + s]].map(([a, b]) => new THREE.Vector3(a, b, z)), true);
+  overpassLayer.setDrawPreview(t.kind === 'entrance' && t.key ? undefined : [[x - s, y - s], [x + s, y - s], [x + s, y + s], [x - s, y + s]].map(([a, b]) => new THREE.Vector3(a, b, z)), true);
   toolHint(t.kind === 'entrance' ? tr('Вход в здание (entrance=yes): щелчок — поставить.')
     : t.kind === 'door' ? tr('Дверь (door=yes) — узел войдёт в стороны: {n}. Щелчок — поставить.', { n: t.node !== undefined ? 1 : t.indoor.length + t.building.length })
     : tr('Объект этажа: щелчок — поставить, вид задаётся в свойствах.'));
@@ -15076,21 +15085,39 @@ function mapPointTarget(screen: [number, number]): PointTarget | undefined {
   if (!m) return;
   const at = (id: number) => nodeCoordsOf(liveFeatures()).get(id);
   const cu = m.u !== undefined ? at(m.u) : undefined, cv = m.v !== undefined ? at(m.v) : undefined;
-  return { at: m.at, local: [m.at[0], m.at[1]], kind: 'entrance', node: m.node, indoor: [],
+  return { at: m.at, local: [m.at[0], m.at[1]], kind: 'entrance', node: m.node, indoor: [], key: m.key,
     building: m.node === undefined && cu && cv ? [{ u: m.u!, v: m.v!, cu, cv }] : [] };
 }
 function hoverMapEntrance(screen: [number, number]) {
   const t = mapEntranceTarget(screen);
   toolHint(doorPaste?.length ? tr('Вставка входов ({n}): клик по фасаду у земли — копия входа. Esc — закончить.', { n: doorPaste.length })
     : t ? tr('Вход: щелчок по фасаду у земли — узел entrance=yes на контуре здания. Shift — вести точку вдоль стены. Esc — выйти.') : tr('Вход: наведите на фасад здания у земли.'));
-  // Сама дверь на фасаде (копия — со своими тегами: ширина, вид), а не только точка
-  overpassLayer.previewMapEntrance(t?.key ? { id: MAP_ENTRANCE_PREVIEW_ID, key: t.key, at: t.at, tags: mapEntrancePreviewTags() } : undefined);
-  if (!t) { mapEntranceMarker?.remove(); mapEntranceMarker = undefined; return; }
-  if (!mapEntranceMarker) {
-    const el = document.createElement('div');
-    el.className = 'map-entrance-marker';
-    mapEntranceMarker = new maplibregl.Marker({ element: el }).setLngLat(t.at).addTo(map);
-  } else mapEntranceMarker.setLngLat(t.at);
+  // Сама дверь на фасаде (копия — со своими тегами: ширина, вид), а не только точка; курсор — значок привязки
+  previewEntranceAt(t?.key ? { at: t.at, kind: 'entrance', key: t.key } : undefined);
+}
+/**
+ * Превью входа на фасаде — одно для карты и режима здания: дверь (копия — со своими тегами) в том месте, куда
+ * встанет вход. Не вход (дверь внутри, объект этажа) — превью нет.
+ */
+function previewEntranceAt(t: Pick<PointTarget, 'at' | 'kind' | 'key'> | undefined) {
+  overpassLayer.previewMapEntrance(t?.kind === 'entrance' && t.key ? { id: MAP_ENTRANCE_PREVIEW_ID, key: t.key, at: t.at, tags: mapEntrancePreviewTags() } : undefined);
+}
+/**
+ * Значок под курсором «Входа» / «Точки» — одинаковый на карте и в режиме здания: вид привязки (вершина, середина…)
+ * в месте, куда встанет точка; без привязки — «на ребре» на стене или просто точка.
+ */
+function pointCursor(screen: [number, number]): { kind: SnapKind; point: [number, number]; label?: string; dist?: number } | undefined {
+  if (focus) {
+    const s = overpassLayer.snapAt(screen);
+    if (s && s.kind !== 'center' && s.kind !== 'grid') return s;
+    const t = pointTarget(screen), lvl = pointLevel();
+    const px = t && lvl ? overpassLayer.focusProject(new THREE.Vector3(t.local[0], t.local[1], lvl.floor)) : undefined;
+    return px && t ? { kind: t.side ? 'edge' : 'vertex', point: px } : undefined;
+  }
+  const t = mapEntranceTarget(screen);
+  if (!t) return;
+  const g = snapGround(screen), q = map.project(t.at);
+  return { kind: t.node !== undefined ? 'vertex' : (g?.kind as SnapKind | undefined) ?? 'edge', point: [q.x, q.y] };
 }
 /** Счётчик входов, поставленных на фасад: по нему вставка входов берёт следующую копию. */
 let facadeEntranceRev = 0;

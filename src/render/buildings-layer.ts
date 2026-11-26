@@ -157,6 +157,8 @@ const ENTRANCE_SELECTED_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x97beff
 const ENTRANCE_LINE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x57534e });
 /** Козырёк над входом (covered=yes) — белая плита, как здания. */
 const CANOPY_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+/** Козырёк выделенного здания (или выбранного входа) — цветом выделения, как и сам объём. */
+const CANOPY_SELECTED_MATERIAL = new THREE.MeshLambertMaterial({ color: HIGHLIGHT, side: THREE.DoubleSide });
 /** Полотно входа своего цвета (colour=*): копия ENTRANCE_MATERIAL с теми же плоскостями среза. */
 const entranceTints = new Map<string, THREE.MeshBasicMaterial>();
 function entranceTintMaterial(hex: string): THREE.MeshBasicMaterial {
@@ -6926,7 +6928,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     // (building=roof / building:part=roof над точкой перед дверью) — иначе два козырька один в другом
     const roofs = g.items.filter((it) => it.tags.building === 'roof' || it.tags['building:part'] === 'roof')
       .flatMap((it) => it.feature.polygons.map((p) => p.outer.map(g.toLocal)));
-    const canopy: number[] = [];
+    const canopy: number[] = [], canopySel: number[] = [];
     for (const e of g.entrances) {
       if (e.canopy === undefined || e.window) continue;
       const probe: Pt = [e.p[0] + e.n[0] * CANOPY_DEPTH / 2, e.p[1] + e.n[1] * CANOPY_DEPTH / 2];
@@ -6935,7 +6937,9 @@ export class BuildingsLayer implements CustomLayerInterface {
       const w = ((e.width ?? ENTRANCE_WIDTH) + extra) / 2, z0 = e.z + e.canopy, z1 = z0 + CANOPY_THICKNESS;
       const c = (s: number, d: number): Pt => [e.p[0] + e.t[0] * s * w + e.n[0] * d, e.p[1] + e.t[1] * s * w + e.n[1] * d];
       const q = [c(-1, 0), c(1, 0), c(1, CANOPY_DEPTH), c(-1, CANOPY_DEPTH)];
-      const quad = (a: number[], b: number[], cc: number[], d: number[]) => canopy.push(...a, ...b, ...cc, ...a, ...cc, ...d);
+      const lift = this.entrancesSelected.includes(e.id) || lit.has(e.id) || e.id === this.entranceHovered;
+      const buf = lift ? canopySel : canopy;
+      const quad = (a: number[], b: number[], cc: number[], d: number[]) => buf.push(...a, ...b, ...cc, ...a, ...cc, ...d);
       const v = (i: number, z: number) => [q[i][0], q[i][1], z];
       quad(v(0, z1), v(1, z1), v(2, z1), v(3, z1));
       quad(v(3, z0), v(2, z0), v(1, z0), v(0, z0));
@@ -6943,12 +6947,13 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Рёбра — той же линией, что обводка входа: 4 сверху, 4 снизу, 4 вертикальных
       for (let i = 0; i < 4; i++) { const j = (i + 1) % 4; lines.push(...v(i, z0), ...v(j, z0), ...v(i, z1), ...v(j, z1), ...v(i, z0), ...v(i, z1)); }
     }
-    if (canopy.length) {
-      CANOPY_MATERIAL.clippingPlanes = MATERIAL.clippingPlanes;
+    for (const [pos, mat] of [[canopy, CANOPY_MATERIAL], [canopySel, CANOPY_SELECTED_MATERIAL]] as const) {
+      if (!pos.length) continue;
+      mat.clippingPlanes = MATERIAL.clippingPlanes;
       const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.Float32BufferAttribute(canopy, 3));
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
       geom.computeVertexNormals();
-      const mesh = new THREE.Mesh(geom, CANOPY_MATERIAL);
+      const mesh = new THREE.Mesh(geom, mat);
       mesh.frustumCulled = false;
       root.add(mesh);
     }

@@ -269,11 +269,10 @@ export function storeHillshade(on: boolean) {
 export function applyHillshade(map: MlMap, on: boolean, tiles: string, attribution: string, maxzoom: number) {
   if (map.getLayer(HILLSHADE_LAYER)) map.removeLayer(HILLSHADE_LAYER);
   if (!on) return;
-  // Многонаправленная (несколько источников света): склоны читаются одинаково при любом повороте камеры
   // Свой источник, не общий с terrain: MapLibre советует так (разные тайлы для меша и для отмывки)
   if (!map.getSource(HILLSHADE_LAYER)) map.addSource(HILLSHADE_LAYER, { type: 'raster-dem', tiles: [tiles], tileSize: 512, encoding: 'terrarium', maxzoom, attribution });
   const before = map.getLayer(GPS_LAYER) ? GPS_LAYER : firstSymbol(map);
-  map.addLayer({ id: HILLSHADE_LAYER, type: 'hillshade', source: HILLSHADE_LAYER, paint: { 'hillshade-method': 'multidirectional', 'hillshade-illumination-anchor': 'map', 'hillshade-exaggeration': 0.4, 'hillshade-shadow-color': '#473b24', 'hillshade-highlight-color': '#ffffff' } }, before);
+  map.addLayer({ id: HILLSHADE_LAYER, type: 'hillshade', source: HILLSHADE_LAYER, paint: { 'hillshade-illumination-anchor': 'map', 'hillshade-exaggeration': 0.4, 'hillshade-shadow-color': '#473b24', 'hillshade-highlight-color': '#ffffff' } }, before);
 }
 
 /** Горизонтали (maplibre-contour из тайлов Mapterhorn) — над отмывкой, под GPS-треками и подписями. */

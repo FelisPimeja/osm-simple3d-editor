@@ -1058,3 +1058,13 @@ body:not(.mobile) .maplibregl-ctrl-bottom-right > .maplibregl-ctrl { margin-bott
 .plugin-add { display: flex; gap: 6px; margin-top: 8px; }
 .plugin-add input { flex: 1; min-width: 0; font: inherit; padding: 3px 6px; }
 .plugin-error { color: #b91c1c; font-size: 12px; margin: 6px 0; }
+.modal { width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 64px); padding: 0; border: 0; border-radius: 8px;
+  background: #fff; color: inherit; font: inherit; font-size: 13px; box-shadow: 0 8px 32px rgba(0,0,0,.3); }
+.modal::backdrop { background: rgba(0,0,0,.35); }
+.modal[open] { display: flex; flex-direction: column; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 4px; }
+.modal-head h2 { margin: 0; font-size: 16px; }
+.modal-close { border: 0; background: none; font-size: 22px; line-height: 1; cursor: pointer; color: #6b7280; padding: 2px 6px; }
+.modal-close:hover { color: #111; }
+.modal-body { padding: 4px 16px 16px; overflow: auto; }
+.modal-body > .panel-sec { margin-top: 12px; }

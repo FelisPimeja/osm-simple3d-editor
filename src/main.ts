@@ -2630,7 +2630,6 @@ function selectPanelTab(id: string) {
   }
   if (id === 'advanced') void showCacheInfo();
   if (id === 'map') renderPersonalSettings();
-  if (id === 'plugins') renderPluginsPane();
   try { localStorage.setItem('osm3d.panel-tab', id); } catch { /* нет хранилища */ }
 }
 for (const t of panelTabs) t.addEventListener('click', () => selectPanelTab(t.dataset.tab!));
@@ -20535,7 +20534,7 @@ function renderPersonalSettings() {
 }
 renderPersonalSettings();
 // Выбранная вкладка панели запоминается
-try { selectPanelTab(['appearance', 'advanced', 'plugins'].find((id) => id === localStorage.getItem('osm3d.panel-tab')) ?? 'map'); } catch { /* нет хранилища */ }
+try { selectPanelTab(['appearance', 'advanced'].find((id) => id === localStorage.getItem('osm3d.panel-tab')) ?? 'map'); } catch { /* нет хранилища */ }
 settingsSyncEl.addEventListener('click', async (e) => {
   const t = e.target as HTMLElement;
   if (t.closest('[data-settings-relogin]')) { allowPrefsScope(); logout(); osmUser = undefined; renderGraphicsSync(); }
@@ -20543,6 +20542,13 @@ settingsSyncEl.addEventListener('click', async (e) => {
   await doLogin();
   renderSettingsSync();
 });
+
+// Плагины — модальным окном из «Личных настроек»
+const pluginsDialog = document.getElementById('plugins-dialog') as HTMLDialogElement;
+document.getElementById('plugins-open')!.addEventListener('click', () => { renderPluginsPane(); pluginsDialog.showModal(); });
+pluginsDialog.querySelector('.modal-close')!.addEventListener('click', () => pluginsDialog.close());
+// Клик по затемнению вокруг окна — закрыть
+pluginsDialog.addEventListener('click', (e) => { if (e.target === pluginsDialog) pluginsDialog.close(); });
 
 // Язык применяется перезагрузкой страницы
 langSelect.addEventListener('change', async () => {

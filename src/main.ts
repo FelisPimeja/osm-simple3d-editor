@@ -2931,7 +2931,7 @@ map.on('click', (e) => {
     return;
   }
   // Снимок уличных фото под курсором — открыть вместо выбора здания
-  if (pluginMapClick([e.lngLat.lng, e.lngLat.lat], !!overpassLayer.pickHit(e.point))) return;
+  if (pluginMapClick([e.lngLat.lng, e.lngLat.lat], !!overpassLayer.pickHit(e.point), [e.point.x, e.point.y])) return;
   for (const p of photoLayers) {
     const picId = p.layer.pick(e.point);
     if (picId) { void photoViewer.open(p.layer, picId); return; }

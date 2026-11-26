@@ -20,6 +20,7 @@ import { lang, tr } from './i18n';
 import { Marker } from 'maplibre-gl';
 import { openPanel } from './view/plugin-panel';
 import { pluginRaster, type PluginRaster } from './view/plugin-raster';
+import { pluginPoints, type PluginPoints } from './view/plugin-points';
 
 /** Версия API редактора для плагинов: плагин с другой не подключается. */
 export const PLUGIN_API = 1;
@@ -61,7 +62,7 @@ export interface PluginPanel {
   onClose(cb: () => void): void;
 }
 
-export type MapClick = (lngLat: [number, number], info: { onObject: boolean }) => boolean | void;
+export type MapClick = (lngLat: [number, number], info: { onObject: boolean; zoom?: number }) => boolean | void;
 
 /** Конус направления взгляда на карте: точка, азимут (° от севера), раствор (°). */
 export interface ViewCone { lngLat: [number, number]; azimuth: number; fov?: number }
@@ -74,6 +75,8 @@ export interface PluginApi {
   lang: string;
   /** A raster coverage overlay; automatically removed when the plugin is disabled. */
   addRasterOverlay(options: PluginRaster): { setVisible(on: boolean): void };
+  /** Upright point symbols with height offsets; clicks are picked at the rendered screen position. */
+  addPointOverlay(options: PluginPoints): { setVisible(on: boolean): void };
   /** Сервис уличных фото: слой в группе «Фото и панорамы». */
   registerPhotoService(s: PhotoService, label: string, title: string): void;
   /**
@@ -256,13 +259,16 @@ let host: PluginHost | undefined;
 /** Что подключил модуль плагина (снять при отключении). */
 const active = new Map<string, Active>();
 
-type Active = { photos: string[]; toggles: string[]; clicks: MapClick[]; panels: PluginPanel[]; overlays: (() => void)[]; cone?: Marker; dispose?: () => void };
+type Active = { photos: string[]; toggles: string[]; clicks: MapClick[]; pointPicks: ((point: [number, number]) => boolean)[]; panels: PluginPanel[]; overlays: (() => void)[]; cone?: Marker; dispose?: () => void };
 const clickHandlers = (): MapClick[] => [...active.values()].flatMap((a) => a.clicks);
 
 /** Клик по карте — плагинам (main.ts, до выбора объекта); true — обработан. */
-export function pluginMapClick(lngLat: [number, number], onObject: boolean): boolean {
+export function pluginMapClick(lngLat: [number, number], onObject: boolean, point: [number, number]): boolean {
+  for (const state of active.values()) for (const pick of state.pointPicks) {
+    try { if (pick(point)) return true; } catch (err) { console.warn('plugin point click:', err); }
+  }
   for (const cb of clickHandlers()) {
-    try { if (cb(lngLat, { onObject })) return true; } catch (err) { console.warn('plugin click:', err); }
+    try { if (cb(lngLat, { onObject, zoom: host?.map.getZoom() })) return true; } catch (err) { console.warn('plugin click:', err); }
   }
   return false;
 }
@@ -281,7 +287,7 @@ function coneEl(fov: number): HTMLElement {
 
 async function activate(m: PluginManifest) {
   if (!host || active.has(m.id)) return;
-  const state: Active = { photos: [], toggles: [], clicks: [], panels: [], overlays: [] };
+  const state: Active = { photos: [], toggles: [], clicks: [], pointPicks: [], panels: [], overlays: [] };
   active.set(m.id, state);
   for (const im of imageryOf(m)) { registerImagery(im); host.addImagery(im); }
   const load = !m.module ? undefined
@@ -294,6 +300,12 @@ async function activate(m: PluginManifest) {
     const h = host;
     const api: PluginApi = {
       apiVersion: PLUGIN_API, tr, lang,
+      addPointOverlay: (options) => {
+        const overlay = pluginPoints(h.map, options);
+        state.overlays.push(() => overlay.dispose());
+        state.pointPicks.push(overlay.pick);
+        return overlay;
+      },
       addRasterOverlay: (options) => {
         const overlay = pluginRaster(h.map, options);
         state.overlays.push(() => overlay.dispose());

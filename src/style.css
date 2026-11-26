@@ -85,7 +85,7 @@ body:not(.mobile) #toolbars::-webkit-scrollbar { display: none; }
 #info-panel:has(#info:empty) { display: none; }
 /* Свойства — главное в колонке: не хватает места — сначала сжимаются остальные панели (до min-height), потом они */
 #right-col > .panel:not(#info-panel):not(.collapsed) { flex-shrink: 1000; }
-#edits-panel[hidden], #outliner-panel[hidden], #help-panel[hidden], #levels-panel[hidden], #issues-panel[hidden] { display: none; }
+#outliner-panel[hidden], #help-panel[hidden], #levels-panel[hidden], #issues-panel[hidden] { display: none; }
 /* Контекстное меню списка частей */
 .ctx-menu { position: fixed; z-index: 20; min-width: 180px; padding: 4px; margin: 0; list-style: none; background: #fff;
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 13px; }

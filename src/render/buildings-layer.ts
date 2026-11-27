@@ -1933,16 +1933,29 @@ export class BuildingsLayer implements CustomLayerInterface {
       ...this.doors.map(d => ({ d, pale: false, items: this.level!.items, cut: this.level!.cut })),
       ...(this.level.below ?? []).flatMap(b => (b.doorModels ?? []).map(d => ({ d, pale: true, items: b.items, cut: b.cut }))),
     ];
+    // Рёбра стен, помещений и фасада в локальных координатах — один раз на список, а не на каждую дверь
+    const shell = g.items.map((it) => it.feature);
+    const segsOf = new Map<readonly IndoorItem[], [Pt, Pt][]>();
+    const segments = (items: readonly IndoorItem[]) => {
+      let segs = segsOf.get(items);
+      if (!segs) {
+        segs = [];
+        for (const item of [...items, ...shell]) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
+          const loc = ring.map(g.toLocal);
+          for (let i = 1; i < loc.length; i++) segs.push([loc[i - 1], loc[i]]);
+        }
+        segsOf.set(items, segs);
+      }
+      return segs;
+    };
     for (const { d, pale, items, cut } of visible) {
       const at = this.doorAt(d);
       const [x, y] = g.toLocal(at);
       const sel = this.indoorSelected.includes(d.key) || this.indoorIssueHighlighted.includes(d.key);
       // Направление ближайшей стены (включая границы помещений и фасад: вход на здании без indoor-стен)
       let nearest = Infinity, angle = 0;
-      const shell = g.items.map((it) => it.feature);
-      for (const item of [...items, ...shell]) for (const polygon of item.polygons) for (const ring of [polygon.outer, ...polygon.inners]) {
-        for (let i = 1; i < ring.length; i++) {
-          const a = g.toLocal(ring[i - 1]), b = g.toLocal(ring[i]);
+      {
+        for (const [a, b] of segments(items)) {
           const dx = b[0] - a[0], dy = b[1] - a[1], length2 = dx * dx + dy * dy;
           if (!length2) continue;
           const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / length2));

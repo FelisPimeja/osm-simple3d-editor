@@ -85,7 +85,9 @@ const BILLBOARD_GEO = (() => {
 })();
 
 /** Атлас: слева лиственная крона, справа хвойная (оттенки серого, свет сверху слева). */
-const BILLBOARD_TEXTURE = (() => {
+// Лениво: при импорте модуля (тесты в Node) document нет
+let billboardTexture: THREE.CanvasTexture | undefined;
+const billboardTex = () => billboardTexture ??= (() => {
   const W = 128, c = document.createElement('canvas');
   c.width = W * 2; c.height = W;
   const ctx = c.getContext('2d')!;
@@ -146,7 +148,7 @@ void main() {
 /** Материал билбордов тайла (eye — своё у каждого тайла: локальные координаты). atlasX — 0 лиственные, 0.5 хвойные. */
 function billboardMaterial(atlasX: number, colour: THREE.Color) {
   return new THREE.ShaderMaterial({
-    uniforms: { map: { value: BILLBOARD_TEXTURE }, eye: { value: new THREE.Vector3() }, colour: { value: colour }, atlasX: { value: atlasX } },
+    uniforms: { map: { value: billboardTex() }, eye: { value: new THREE.Vector3() }, colour: { value: colour }, atlasX: { value: atlasX } },
     vertexShader: BILLBOARD_VERTEX, fragmentShader: BILLBOARD_FRAGMENT,
   });
 }

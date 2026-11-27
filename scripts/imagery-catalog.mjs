@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Каталог подложек из editor-layer-index (osmlab): только снимки, которые разрешено обводить для OSM
- * (permission_osm explicit или implicit), по https, в Web Mercator, с зумом от 16 (подробные — для зданий). Покрытие упрощено — меню слоёв показывает
+ * (permission_osm explicit или implicit, либо проверено вручную — VERIFIED), по https, в Web Mercator, с зумом от 16 (подробные — для зданий). Покрытие упрощено — меню слоёв показывает
  * подложку, только когда вид карты в её покрытии (src/view/imagery-catalog.ts).
  *
  *   npm run imagery:catalog                     — собрать public/imagery-catalog.json (docs/maintenance.md)
@@ -10,7 +10,7 @@
  * Проверка тайлов: запрос одного тайла внутри покрытия с заголовком Origin; без Access-Control-Allow-Origin
  * браузер тайл не покажет — такие подложки не берём.
  */
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 const ELI = 'https://osmlab.github.io/editor-layer-index/imagery.geojson';
 const OUT = new URL('../public/imagery-catalog.json', import.meta.url);
@@ -22,6 +22,16 @@ const SKIP_ID = /^(EsriWorldImagery|EsriWorldImageryClarity|Mapbox|Bing)/i;
 const COARSE_ID = /^EOXAT\d{4}CLOUDLESS$/;
 /** Меньший последний зум — снимки не для зданий (Landsat, Sentinel, ASTER). */
 const MIN_MAX_ZOOM = 16;
+/**
+ * Разрешение на обводку проверено вручную, а в editor-layer-index permission_osm не заполнен:
+ * id подложки → где подтверждено (docs/maintenance.md).
+ */
+const VERIFIED = {
+  // Обводка по ортофото не ограничена; в списке Contributors: «SWISSIMAGE (orthofotos) … ©swisstopo»
+  swisstopo_swissimage: 'https://wiki.openstreetmap.org/wiki/Swisstopo_data_use',
+  // CC BY 4.0, разрешение Kadaster / Beeldmateriaal в списке Contributors
+  Actueel_orthoHR_WMTS: 'https://wiki.openstreetmap.org/wiki/Contributors#Beeldmateriaal/Kadaster',
+};
 /** Допуск упрощения покрытия, градусы (~200 м). */
 const TOLERANCE = 0.002;
 
@@ -129,7 +139,7 @@ const reject = (why, id) => (rejected[why] ??= []).push(id);
 for (const f of eli.features) {
   const p = f.properties;
   if (p.category !== 'photo' || p.overlay || !['tms', 'wms'].includes(p.type)) continue;
-  if (!['explicit', 'implicit'].includes(p.permission_osm)) continue;
+  if (!['explicit', 'implicit'].includes(p.permission_osm) && !VERIFIED[p.id]) continue;
   if (SKIP_ID.test(p.id)) continue;
   if (COARSE_ID.test(p.id) || (p.max_zoom ?? 19) < MIN_MAX_ZOOM) { reject('coarse', p.id); continue; }
   const conv = convert(p);
@@ -146,15 +156,21 @@ for (const f of eli.features) {
 }
 
 if (CHECK) {
-  const bad = new Set();
+  // Сеть подводит (таймаут, сброс): повторить; не ответил и со второго раза, но был в прошлом каталоге — оставить
+  const transient = /TIMEOUT|TimeoutError|ECONNRESET/;
+  const before = new Set(existsSync(OUT) ? JSON.parse(readFileSync(OUT, 'utf8')).imagery.map((im) => im.id) : []);
+  const bad = new Set(), kept = [];
   let i = 0;
-  await Promise.all(Array.from({ length: 16 }, async () => {
+  await Promise.all(Array.from({ length: 8 }, async () => {
     while (i < out.length) {
       const im = out[i++];
-      const why = await check(im, im.coverage);
+      let why = await check(im, im.coverage);
+      if (transient.test(why)) why = await check(im, im.coverage);
+      if (why && transient.test(why) && before.has(im.id)) { kept.push(`${im.id.slice(4)} ${why}`); continue; }
       if (why) { bad.add(im.id); reject(why.replace(/\(.*\)/, '').trim(), `${im.id.slice(4)} ${why}`); }
     }
   }));
+  if (kept.length) console.log(`kept from the previous catalog (no answer now): ${kept.length}${process.argv.includes('-v') ? '\n  ' + kept.join('\n  ') : ''}`);
   for (let k = out.length - 1; k >= 0; k--) if (bad.has(out[k].id)) out.splice(k, 1);
 }
 

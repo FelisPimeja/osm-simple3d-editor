@@ -13,7 +13,9 @@ automatically: run the matching command from time to time, review the diff, and 
 
 `scripts/imagery-catalog.mjs` downloads editor-layer-index and keeps aerial imagery that:
 
-- may be traced for OSM (`permission_osm` is `explicit` or `implicit`);
+- may be traced for OSM: `permission_osm` is `explicit` or `implicit`, or the layer is in `VERIFIED` in the script
+  (permission checked by hand, with a link to where it is confirmed; currently swisstopo SWISSIMAGE and PDOK
+  Luchtfoto, which have no `permission_osm` in the index);
 - is served over https in Web Mercator (WMS only with EPSG:3857);
 - is detailed enough for buildings (`max_zoom` 16 or more; EOX cloudless is excluded);
 - actually works in a browser: one tile inside the coverage is requested with an `Origin` header, and layers
@@ -22,8 +24,8 @@ automatically: run the matching command from time to time, review the diff, and 
 Coverage polygons are simplified to about 200 m. The script prints how many layers were kept and why the
 others were rejected (`-v` lists them). `--no-check` skips the tile requests.
 
-Layers that fail only temporarily (timeouts) drop out of the catalog until the next run, so compare the count
-with the previous one before committing. The editor loads the catalog lazily and shows a layer in the layers
+A layer that times out is asked again; if it still does not answer but was in the previous catalog, it is kept
+(the script prints how many). Compare the layer count with the previous one before committing. The editor loads the catalog lazily and shows a layer in the layers
 menu only while the map centre is inside its coverage (`src/view/imagery-catalog.ts`).
 
 ## iD tagging schema

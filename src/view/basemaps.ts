@@ -22,6 +22,12 @@ export interface Imagery {
   plugin?: string;
   /** Лицензия не разрешает обводку для OSM — только для просмотра (подпись в меню). */
   viewOnly?: boolean;
+  /** Нумерация рядов TMS (y снизу), как {-y} в editor-layer-index. */
+  scheme?: 'tms';
+  /** Первый зум со снимками. */
+  minzoom?: number;
+  /** Из каталога editor-layer-index (src/view/imagery-catalog.ts): строка в меню — только в зоне покрытия. */
+  catalog?: boolean;
 }
 
 const ESRI_ATTRIBUTION = 'Esri, Maxar, Earthstar Geographics, GIS User Community · '
@@ -79,7 +85,7 @@ export function registerImagery(im: Imagery) {
   if (!findImagery(im.id)) ALL_IMAGERY.push(im);
 }
 export function unregisterImagery(id: string) {
-  const i = ALL_IMAGERY.findIndex((im) => im.id === id && im.plugin);
+  const i = ALL_IMAGERY.findIndex((im) => im.id === id && (im.plugin || im.catalog));
   if (i >= 0) ALL_IMAGERY.splice(i, 1);
 }
 
@@ -94,7 +100,10 @@ export const GPS_LAYER = 'gps-traces';
 const STORE_KEY = 'osm3d.basemap';
 const GPS_KEY = 'osm3d.gps-traces';
 
-export const isBasemap = (id: string | undefined | null): id is string => id === MAP_BASEMAP || id === NO_BASEMAP || ALL_IMAGERY.some((i) => i.id === id);
+/** Подложки каталога (eli:…) загружаются позже — их выбор сохраняем, слой появится после загрузки каталога. */
+export const isBasemap = (id: string | undefined | null): id is string => id === MAP_BASEMAP || id === NO_BASEMAP || ALL_IMAGERY.some((i) => i.id === id)
+  || (!!id && id.startsWith(CATALOG_PREFIX));
+export const CATALOG_PREFIX = 'eli:';
 
 /** scope — свой выбор у серверов с другим набором снимков (OHM: '.ohm'). */
 export function storedBasemap(scope = ''): string {
@@ -176,8 +185,14 @@ function sourceTile(url: string): Promise<ImageBitmap | null> {
   return p;
 }
 
-const tileUrl = (im: Imagery, z: number, x: number, y: number) =>
-  im.tiles[(x + y) % im.tiles.length].replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
+const tileUrl = (im: Imagery, z: number, x: number, y: number) => {
+  const n = 2 ** z, R = 20037508.342789244, size = 2 * R / n;
+  let q = '';
+  for (let i = z; i > 0; i--) { const m = 1 << (i - 1); q += ((x & m) ? 1 : 0) + ((y & m) ? 2 : 0); }
+  return im.tiles[(x + y) % im.tiles.length].replace('{z}', String(z)).replace('{x}', String(x))
+    .replace('{y}', String(im.scheme === 'tms' ? n - 1 - y : y)).replace('{quadkey}', q)
+    .replace('{bbox-epsg-3857}', [-R + x * size, R - (y + 1) * size, -R + (x + 1) * size, R - y * size].join(','));
+};
 
 maplibregl.addProtocol(PROTOCOL, async (params) => {
   const u = new URL(params.url);
@@ -258,6 +273,8 @@ export function applyBasemap(map: MlMap, id: string, bounds?: Bounds): boolean {
   if (!im?.tiles.length) return false;
   map.addSource(IMAGERY_LAYER, {
     type: 'raster', tiles: imageryTiles(im), tileSize: im.tileSize, maxzoom: im.maxzoom,
+    // Смещённые тайлы (imgoffset) — уже в схеме XYZ
+    ...(im.scheme && !isOffset(getOffset(im.id)) && { scheme: im.scheme }), ...(im.minzoom && { minzoom: im.minzoom }),
     attribution: im.release ? `${im.attribution} · Wayback ${im.release}` : im.attribution,
     ...(bounds && { bounds }),
   });

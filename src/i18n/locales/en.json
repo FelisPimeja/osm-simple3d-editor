@@ -1808,6 +1808,7 @@
   "{url} — не JSON": "{url} is not JSON",
   "Плагин «{name}» есть в официальном списке — включите его там": "“{name}” is in the official list — enable it there",
   "(только просмотр)": "(view only)",
+  "(вне покрытия)": "(outside coverage)",
   "Плагины добавляют подложки и источники данных вне ядра редактора. Подключаются сразу; выбор сохраняется в профиле.": "Plugins add imagery and data sources outside the editor core. They take effect immediately; your choice is saved to your profile.",
   "Официальные": "Official",
   "Свои": "Custom",

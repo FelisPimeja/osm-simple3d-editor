@@ -47,10 +47,11 @@ import { CATEGORY_COLOURS, CATEGORY_LABELS, CATEGORY_ORDER, categorySource, indo
 import { ViewCube } from './view/view-cube';
 import { loadCamera, saveCamera } from './view/camera-store';
 import { ImageryOffsetPanel, type OffsetSnap } from './view/imagery-offset';
-import { applyBasemap, applyContours, applyGpsTraces, applyHillshade, storedContours, storeContours, storedHillshade, storeHillshade, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, NO_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity } from './view/basemaps';
+import { applyBasemap, applyContours, applyGpsTraces, applyHillshade, storedContours, storeContours, storedHillshade, storeHillshade, BasemapButton, IMAGERY, storeBuildings, storedBuildings, GPS_LAYER, IMAGERY_LAYER, isBasemap, MAP_BASEMAP, NO_BASEMAP, storeBasemap, storedBasemap, storedGps, storeGps, WAYBACK, findImagery, getOpacity, refreshImagery, setImageryOpacity, CATALOG_PREFIX } from './view/basemaps';
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
+import { coveringAt, loadCatalog, type CatalogImagery } from './view/imagery-catalog';
 import { applyPluginsSetting, onPluginsChange, pluginMapClick, pluginPointClick, pluginsSetting, setPluginHost } from './plugins';
 import { renderPluginsPane } from './view/plugins-pane';
 import { mapillary } from './view/mapillary';
@@ -337,6 +338,32 @@ const basemapCtrl = navGroup ? new BasemapButton(navGroup, basemap, (id) => {
   setImageryOpacity(map, getOpacity(id));
   basemapCtrl?.sync();
 }) : undefined;
+
+// Каталог подложек editor-layer-index (только OSM): грузится, когда карта готова; в меню — подложки, в покрытии
+// которых центр карты. Выбранная остаётся в меню и вне покрытия (с пометкой), пока не выбрали другую
+let catalog: CatalogImagery[] = [];
+let catalogShown: string[] = [];
+function syncCatalog() {
+  if (!basemapCtrl || !catalog.length) return;
+  const c = map.getCenter();
+  const here = coveringAt(catalog, [c.lng, c.lat]);
+  const rows = here.map((im) => ({ im, away: false }));
+  const current = catalog.find((im) => im.id === basemap);
+  if (current && !here.includes(current)) rows.push({ im: current, away: true });
+  const key = rows.map((r) => r.im.id + (r.away ? '!' : '')).join();
+  if (key === catalogShown.join()) return;
+  for (const id of catalogShown) basemapCtrl.removeImagery(id.replace(/!$/, ''));
+  for (const { im, away } of rows) basemapCtrl.addImagery(away ? { ...im, name: `${im.name} ${tr('(вне покрытия)')}` } : im);
+  catalogShown = key ? key.split(',') : [];
+}
+if (server().imagery && basemapCtrl) {
+  map.on('moveend', syncCatalog);
+  map.once('idle', () => void loadCatalog().then((list) => {
+    catalog = list;
+    syncCatalog();
+    if (basemap.startsWith(CATALOG_PREFIX)) syncBasemapLayers();
+  }));
+}
 
 // Уличные фото Panoramax и Mapillary (только OSM): слои точек снимков — группой с общим фильтром — и одно окно
 // просмотра. Окно открывается кликом по снимку на карте; закрыли окно — слои остаются, выключили слой его снимка — окно закрывается
@@ -704,6 +731,7 @@ function setBasemap(id: string) {
   basemap = id;
   storeBasemap(id, basemapScope);
   syncBasemapLayers();
+  syncCatalog();
 }
 
 if (server().imagery) registerSetting({

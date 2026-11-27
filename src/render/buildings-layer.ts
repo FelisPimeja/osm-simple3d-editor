@@ -20,6 +20,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { AO_STRENGTH, buildShade, CAST_MATERIAL, COMPOSITE_MATERIAL, SHADE_MATERIAL, SHADOW_STRENGTH, type ShadeCasters, type ShadeSource } from './ground-shade';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, looseLength, LEVEL_HEIGHT, type Heights } from '../osm/heights';
@@ -369,6 +370,14 @@ export interface GraphicsOptions {
   groundAO: boolean;
   /** Контуры рёбер. */
   edges: boolean;
+  /** Тени от солнца на земле (только на карте, без рельефа). */
+  shadows?: boolean;
+  /** Мягкое затемнение земли у стен (там же). */
+  groundContact?: boolean;
+  /** Размытые края теней и затенения (буфер в полразмера); иначе — чёткие, в полном размере со сглаживанием. */
+  softShadows?: boolean;
+  /** Рельеф включён: земля не плоскость — затенение земли не рисуется. */
+  terrain?: boolean;
   /** Не рисовать стыки соседних частей, чьи грани у стыка лежат в одной плоскости (заметно дороже сборка рёбер). */
   partSeams?: boolean;
   /** Не выделять стекло: стеклянные стены и крыши — как обычные. */
@@ -389,6 +398,8 @@ export interface GraphicsOptions {
   windowsNeighbours?: boolean;
 }
 
+/** Дальность теней на земле: радиус вокруг центра карты в половинах ширины кадра. */
+const SHADE_RADIUS = 1.3;
 /** Высота, на которой затемнение у земли сходит на нет, м (для зданий выше AO_HEIGHT). */
 const AO_HEIGHT = 6;
 /** Доля высоты здания, на которой затемнение сходит на нет, — для низких зданий. */
@@ -813,6 +824,8 @@ class MeshGroup {
     return [ll.lng, ll.lat];
   };
 
+  /** Затенение земли группы (ground-shade.ts) и по какой геометрии посчитано. */
+  shade?: { of: THREE.BufferGeometry; sig: string; mesh?: THREE.Mesh };
   /** Стекло группы — прозрачное, поэтому отдельно от непрозрачной слитой геометрии. */
   glass?: THREE.Mesh;
   /** Рельсы под арками с railway=*. */
@@ -830,7 +843,13 @@ class MeshGroup {
     this.entranceObj = undefined;
   }
 
+  disposeShade() {
+    this.shade?.mesh?.geometry.dispose();
+    this.shade = undefined;
+  }
+
   disposeMesh() {
+    this.disposeShade();
     this.disposeEntrances();
     this.disposeEdges();
     this.disposeStrokes();
@@ -915,6 +934,8 @@ export class BuildingsLayer implements CustomLayerInterface {
    * нарисованные после деревья легли бы поверх; так деревья перед моделью её закрывают, за ней — просвечивают.
    */
   drawLate?: (renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain: THREE.Matrix4) => number;
+  /** Свои объекты, отбрасывающие тень на землю (ограждения, модели 3dmr). */
+  shadeExtra?: () => ShadeCasters[];
   private drawMain(options: CustomRenderMethodInput): THREE.Matrix4 {
     return this.plainDepth() ? new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]) : depthMain(options);
   }
@@ -936,9 +957,12 @@ export class BuildingsLayer implements CustomLayerInterface {
     this.underlays.attach(this.renderer);
     this.renderer.autoClear = false;
     this.renderer.localClippingEnabled = true; // срез здания выше выбранного этажа
+    this.shadeQuad.frustumCulled = false;
   }
 
   onRemove() {
+    this.shadeTarget?.dispose();
+    this.shadeTarget = undefined;
     if (this.composite) { this.composite.target.dispose(); this.composite.material.dispose(); this.composite = undefined; }
     this.renderer?.dispose();
     this.renderer = undefined;
@@ -956,6 +980,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const overFirst = this.visible && this.wireframe;
     const split = overFirst && underlays && this.underlays.hasOver();
     if (underlays) this.underlays.render(this.drawMain(options), 'under');
+    if (this.visible && !this.wireframe && !this.focused && !this.sketching && (this.graphics.shadows || this.graphics.groundContact) && !this.graphics.terrain && this.opacity > 0) this.renderShade(options);
     if (split) {
       timed(`${this.id}: кадр (CPU)`, () => this.renderWire(options, 'wire-fills'), () => `${this.groups.size} групп`);
       this.underlays.render(this.drawMain(options), 'over');
@@ -973,6 +998,106 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.renderer.resetState();
       this.renderer.render(this.toolOverlay, this.toolCamera);
     }
+  }
+
+  private shadeTarget?: THREE.WebGLRenderTarget;
+  private readonly shadeScene = new THREE.Scene();
+  private readonly shadeCamera = new THREE.Camera();
+  private readonly shadeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), COMPOSITE_MATERIAL);
+  private readonly shadeQuadScene = new THREE.Scene().add(this.shadeQuad);
+
+  /** Затенение земли (ground-shade.ts): в буфер меньше холста, затем умножить на карту — до зданий. */
+  private renderShade(options: CustomRenderMethodInput) {
+    const renderer = this.renderer!;
+    const gl = renderer.getContext();
+    // Мягкие — в полразмера (размытие всё равно съест детали); чёткие — в CSS-пикселях со сглаживанием: на ретине
+    // вчетверо меньше пикселей, чем у холста, а край остаётся резким
+    const soft = this.graphics.softShadows !== false, scale = soft ? 0.5 : 1 / Math.max(1, devicePixelRatio);
+    const w = Math.max(1, Math.round(gl.drawingBufferWidth * scale)), h = Math.max(1, Math.round(gl.drawingBufferHeight * scale));
+    const meshes = this.activeGroups().map((g) => this.shadeMesh(g)).filter((m): m is THREE.Mesh => !!m);
+    const casters: ShadeCasters[] = [];
+    if (this.graphics.shadows) {
+      if (this.graphics.trees !== false) for (const t of this.trees.values()) casters.push({ objects: t.shadowCasters(), model: t.model });
+      if (this.shadeExtra) casters.push(...this.shadeExtra());
+    }
+    if (!meshes.length && !casters.some((c) => c.objects.length)) return;
+    if (this.shadeTarget && this.shadeTarget.samples !== (soft ? 0 : 4)) { this.shadeTarget.dispose(); this.shadeTarget = undefined; }
+    const target = this.shadeTarget ??= new THREE.WebGLRenderTarget(w, h, { depthBuffer: false, samples: soft ? 0 : 4 });
+    if (target.width !== w || target.height !== h) target.setSize(w, h);
+    const main = this.drawMain(options);
+    // Дальность теней: радиус вокруг центра карты — чуть больше половины ширины кадра (сверху тени до краёв,
+    // при наклоне дальние гаснут)
+    const map = this.map!, c = map.getCenter(), mc = MercatorCoordinate.fromLngLat(c, 0);
+    const mpp = 40075016.686 * Math.cos((c.lat * Math.PI) / 180) / (512 * 2 ** map.getZoom());
+    const radius = SHADE_RADIUS * (map.getCanvas().clientWidth / 2) * mpp;
+    const inv = new THREE.Matrix4(), local = new THREE.Vector3();
+    const focusOn = (mat: THREE.ShaderMaterial, model: THREE.Matrix4) => {
+      local.set(mc.x, mc.y, 0).applyMatrix4(inv.copy(model).invert());
+      mat.uniforms.center.value.set(local.x, local.y);
+      mat.uniforms.radius.value = radius;
+    };
+    SHADE_MATERIAL.uniforms.shadow.value = this.graphics.shadows ? SHADOW_STRENGTH : 0;
+    SHADE_MATERIAL.uniforms.ao.value = this.graphics.groundContact ? AO_STRENGTH : 0;
+    renderer.resetState();
+    renderer.setRenderTarget(target);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, false, false);
+    for (const m of meshes) {
+      this.shadeCamera.projectionMatrix = main.clone().multiply(m.userData.model as THREE.Matrix4);
+      focusOn(SHADE_MATERIAL, m.userData.model as THREE.Matrix4);
+      this.shadeScene.add(m);
+      renderer.render(this.shadeScene, this.shadeCamera);
+      this.shadeScene.remove(m);
+    }
+    CAST_MATERIAL.uniforms.shadow.value = SHADOW_STRENGTH;
+    this.shadeScene.overrideMaterial = CAST_MATERIAL;
+    for (const c of casters) {
+      if (!c.objects.length) continue;
+      this.shadeCamera.projectionMatrix = main.clone().multiply(c.model);
+      focusOn(CAST_MATERIAL, c.model);
+      // Объект временно в сцене тени (add снимает его с родителя) — потом на прежнее место и с прежней видимостью
+      const saved = c.objects.map((o) => ({ o, parent: o.parent, at: o.parent?.children.indexOf(o) ?? -1, visible: o.visible, culled: o.frustumCulled }));
+      for (const o of c.objects) { this.shadeScene.add(o); o.visible = true; o.frustumCulled = false; }
+      try { renderer.render(this.shadeScene, this.shadeCamera); } finally {
+        for (const s of saved) {
+          this.shadeScene.remove(s.o);
+          s.o.visible = s.visible; s.o.frustumCulled = s.culled;
+          if (s.parent) { s.parent.children.splice(s.at, 0, s.o); s.o.parent = s.parent; }
+        }
+      }
+    }
+    this.shadeScene.overrideMaterial = null;
+    renderer.setRenderTarget(null);
+    COMPOSITE_MATERIAL.uniforms.map.value = target.texture;
+    COMPOSITE_MATERIAL.uniforms.texel.value.set(1 / w, 1 / h);
+    COMPOSITE_MATERIAL.uniforms.blur.value = soft ? 1.5 : 0;
+    renderer.resetState();
+    renderer.render(this.shadeQuadScene, this.shadeCamera);
+  }
+
+  /** Меш затенения группы: пересчитывается, когда пересобрана слитая геометрия или сменились скрытые. */
+  private shadeMesh(g: MeshGroup): THREE.Mesh | undefined {
+    const of = g.mesh?.geometry;
+    if (!of || g.focusScene) return;
+    const opts = { shadow: !!this.graphics.shadows, ao: !!this.graphics.groundContact };
+    const sig = `${opts.shadow}|${opts.ao}|${[...g.hidden].join()}|${[...g.flat].join()}`;
+    if (g.shade?.of === of && g.shade.sig === sig) return g.shade.mesh;
+    g.disposeShade();
+    const sources: ShadeSource[] = [];
+    for (const it of g.items) {
+      const key = it.feature.key;
+      if (it.pending || g.hidden.has(key) || g.flat.has(key) || it.feature.hasParts || it.top <= g.footprint + 0.05) continue;
+      const polygons = it.feature.polygons;
+      sources.push({
+        positions: it.positions, vertices: it.positions.length / 3 - it.floorVertices,
+        rings: it.box.min.z < 0.5 ? () => polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => r.map(g.toLocal))) : undefined,
+      });
+    }
+    const geo = buildShade(sources, opts);
+    const mesh = geo ? new THREE.Mesh(geo, SHADE_MATERIAL) : undefined;
+    if (mesh) { mesh.frustumCulled = false; mesh.userData.model = g.model; }
+    g.shade = { of, sig, mesh };
+    return mesh;
   }
 
   /** Куда рисуются группы: буфер прозрачного слоя или сама карта. */

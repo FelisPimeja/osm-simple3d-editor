@@ -62,6 +62,11 @@ const broadCrown = (detail: number) => {
 };
 const BROAD_GEO = broadCrown(1);
 
+/** Заместитель кроны для тени на земле: плоский 12-угольник по размеру и высоте кроны — тень та же, вершин в десятки раз меньше. */
+const shadowDisc = (r: number, z: number) => new THREE.CircleGeometry(r, 12).translate(0, 0, z);
+const BROAD_SHADOW_GEO = shadowDisc(1, 0.5);
+const NEEDLE_SHADOW_GEO = shadowDisc(0.75, 0.3);
+
 /** Хвойная крона — три яруса конусов от z = 0 до z = 1; донья не нужны — снизу (pitch ≤ 85°) их не видно. */
 const NEEDLE_GEO = (() => {
   const tiers = [[1, 0, 0.5], [0.78, 0.28, 0.45], [0.55, 0.55, 0.45]].map(([r, z, h]) =>
@@ -413,6 +418,23 @@ export class TreeGroup {
    * кадра, не рисовать. Иначе выбирается детализация: если 15-метровое дерево хоть где-то в тайле (углы,
    * центр) крупнее FAR_PX — подробные модели.
    */
+  /** Тайл в прошлом кадре был в кадре и вблизи (модели, не спрайты) — только тогда деревья отбрасывают тень. */
+  nearShown = false;
+
+  /** Тень на земле: стволы и кроны (ближний вид; стволы лесов — нет). */
+  shadowCasters(): THREE.Object3D[] {
+    if (!this.nearShown) return [];
+    // Заместители крон делят с кронами матрицы экземпляров (и скрытые экземпляры тоже)
+    this.shadowProxies ??= this.near.map((crown) => {
+      const proxy = new THREE.InstancedMesh(crown.geometry === BROAD_GEO ? BROAD_SHADOW_GEO : NEEDLE_SHADOW_GEO, crown.material, crown.instanceMatrix.count);
+      proxy.instanceMatrix = crown.instanceMatrix;
+      return [crown, proxy] as const;
+    });
+    for (const [crown, proxy] of this.shadowProxies) proxy.count = crown.count;
+    return this.shadowProxies.map(([, proxy]) => proxy);
+  }
+  private shadowProxies?: (readonly [THREE.InstancedMesh, THREE.InstancedMesh])[];
+
   prepare(viewportHeight: number): boolean {
     const pm = this.camera.projectionMatrix;
     let far = true, trunks = false;
@@ -437,7 +459,8 @@ export class TreeGroup {
       }
     }
     const all = this.probes.length * 3;
-    if (left === all || right === all || below === all || above === all || behind === all) return false;
+    if (left === all || right === all || below === all || above === all || behind === all) { this.nearShown = false; return false; }
+    this.nearShown = !far;
     this.setFar(far);
     this.woodTrunks.visible = trunks;
     if (far) {

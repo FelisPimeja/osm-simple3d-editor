@@ -168,7 +168,7 @@ const GFX_KEY = 'osm3d.graphics';
 const touchDevice = matchMedia('(pointer: coarse)').matches;
 /** Радиус попадания по входу пальцем, px экрана. */
 const ENTRANCE_TOUCH_PX = 24;
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: !touchDevice, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: true, windowTuner: false, showKeys: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, groundAO: false, shadows: false, groundContact: false, softShadows: true, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: !touchDevice, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: true, windowTuner: false, showKeys: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {
@@ -953,6 +953,7 @@ modelsLayer.onShown = (keys) => {
 };
 overpassLayer.drawExtra = (renderer, main, plain) => barriersLayer.draw(renderer, main, plain);
 overpassLayer.drawLate = (renderer, main, plain) => modelsLayer.draw(renderer, main, plain);
+overpassLayer.shadeExtra = () => [...(gfx.barriers ? [barriersLayer.shadowCasters()] : []), ...modelsLayer.shadowCasters()];
 // Глубина MapLibre без сжатия: рядом мосты (их глубина — MapLibre) или рельеф (склон перед зданием должен его закрывать)
 overpassLayer.plainDepth = () => (roadsLayer.isEnabled && !roadsLayer.hidden()) || terrainShown;
 /**
@@ -2628,6 +2629,8 @@ function syncGraphicsDeps() {
   if (seasons) seasons.disabled = !gfx.trees;
   const raster = document.querySelector<HTMLInputElement>('[data-gfx="contoursRaster"]');
   if (raster) raster.disabled = !gfx.terrain;
+  const soft = document.querySelector<HTMLInputElement>('[data-gfx="softShadows"]');
+  if (soft) soft.disabled = !gfx.shadows;
 }
 
 // Постоянный кеш тайлов OSM API (IndexedDB)

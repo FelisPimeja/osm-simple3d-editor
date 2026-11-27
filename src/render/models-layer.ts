@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { MercatorCoordinate, type Map as MlMap } from 'maplibre-gl';
 import type { LonLat } from '../osm/model';
+import type { ShadeCasters } from './ground-shade';
 import SNAPSHOT from './3dmr-transforms.json';
 
 /** Репозиторий 3D-моделей OSM: .glb по id (и ревизии), описание модели (CORS открыт). */
@@ -360,6 +361,12 @@ export class ModelsLayer {
   depthOf(lngLat: { lng: number; lat: number }, altitude: number): number {
     const c = MercatorCoordinate.fromLngLat(lngLat, 0);
     return new THREE.Vector3(c.x, c.y, altitude * c.meterInMercatorCoordinateUnits()).applyMatrix4(this.plain ?? new THREE.Matrix4()).z;
+  }
+
+  /** Тень на земле: каждая размещённая модель — в своей локальной системе. */
+  shadowCasters(): ShadeCasters[] {
+    if (!this.enabled || this.hidden()) return [];
+    return this.placed().map((inst) => ({ objects: [inst], model: inst.userData.world as THREE.Matrix4 }));
   }
 
   draw(renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain?: THREE.Matrix4): number {

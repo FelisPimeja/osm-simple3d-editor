@@ -2,6 +2,7 @@ import { ground } from './ground';
 import * as THREE from 'three';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import type { ShadeCasters } from './ground-shade';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { MercatorCoordinate, type Map as MlMap } from 'maplibre-gl';
 import { barrierShape, gateColour, gateWidth, type BarrierGate, type BarrierWay } from '../osm/barriers';
@@ -152,6 +153,9 @@ export class BarriersLayer {
   }
 
   /** Отрисовка в проходе слоя зданий: main — его матрица (глубина как у зданий), plain — матрица MapLibre. */
+  /** Тень на земле: стены, заборы и изгороди. */
+  shadowCasters(): ShadeCasters { return { objects: this.meshes, model: this.model }; }
+
   draw(renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain: THREE.Matrix4): number {
     if (!this.enabled || (!this.meshes.length && !this.openingMesh && !this.gateDots.length) || this.hidden()) return 0;
     this.pickMatrix = plain.clone().multiply(this.model);

@@ -59,6 +59,8 @@ npm run dev     # local dev server (Vite)
 npm run build   # type check and production build
 ```
 
+Bundled data from other projects (imagery catalog, iD tagging schema, 3dmr transforms) is refreshed by hand: see [docs/maintenance.md](docs/maintenance.md).
+
 ## AI assistance
 
 This project is developed with AI assistance. Most of the code, documentation and translations were written with [Claude](https://claude.ai/) (Anthropic) via Claude Code, under the direction of the project maintainer, who designs the features, reviews and tests the changes, and is responsible for every commit. Commits made with AI help carry a `Co-authored-by: Claude <noreply@anthropic.com>` trailer.

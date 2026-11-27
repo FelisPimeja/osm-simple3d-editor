@@ -4,7 +4,7 @@
  * (permission_osm explicit или implicit), по https, в Web Mercator, с зумом от 16 (подробные — для зданий). Покрытие упрощено — меню слоёв показывает
  * подложку, только когда вид карты в её покрытии (src/view/imagery-catalog.ts).
  *
- *   node scripts/imagery-catalog.mjs            — собрать public/imagery-catalog.json
+ *   npm run imagery:catalog                     — собрать public/imagery-catalog.json (docs/maintenance.md)
  *   node scripts/imagery-catalog.mjs --no-check — без проверки тайлов (CORS)
  *
  * Проверка тайлов: запрос одного тайла внутри покрытия с заголовком Origin; без Access-Control-Allow-Origin

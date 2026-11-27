@@ -12,7 +12,8 @@
     "i18n:check": "node scripts/i18n-check.mjs",
     "i18n:extract": "node scripts/i18n-check.mjs --write",
     "presets:extract": "node scripts/presets-extract.mjs",
-    "3dmr:snapshot": "node scripts/3dmr-snapshot.mjs"
+    "3dmr:snapshot": "node scripts/3dmr-snapshot.mjs",
+    "imagery:catalog": "node scripts/imagery-catalog.mjs"
   },
   "dependencies": {
     "@mapbox/maki": "^8.2.0",

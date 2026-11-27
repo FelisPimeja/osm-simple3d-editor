@@ -86,7 +86,7 @@ export interface PluginApi {
    */
   addPhotoToggle(id: string, label: string, title: string, onChange: (on: boolean) => void): { set(on: boolean): void };
   /**
-   * Клик по карте (вне инструментов): true — плагин обработал клик, выбор объекта не нужен.
+   * Клик по карте (вне инструментов, после проверки значков фото всех сервисов): true — плагин обработал клик, выбор объекта не нужен.
    * onObject — под курсором здание или другой объект редактора (обычно такой клик стоит оставить выбору).
    */
   onMapClick(cb: MapClick): void;
@@ -258,11 +258,16 @@ const active = new Map<string, Active>();
 type Active = { photos: string[]; toggles: string[]; clicks: MapClick[]; pointPicks: ((point: [number, number]) => boolean)[]; panels: PluginPanel[]; overlays: (() => void)[]; cone?: Marker; dispose?: () => void };
 const clickHandlers = (): MapClick[] => [...active.values()].flatMap((a) => a.clicks);
 
-/** Клик по карте — плагинам (main.ts, до выбора объекта); true — обработан. */
-export function pluginMapClick(lngLat: [number, number], onObject: boolean, point: [number, number]): boolean {
+/** Explicit rendered plugin symbols, before generic coordinate-based panorama searches. */
+export function pluginPointClick(point: [number, number]): boolean {
   for (const state of active.values()) for (const pick of state.pointPicks) {
     try { if (pick(point)) return true; } catch (err) { console.warn('plugin point click:', err); }
   }
+  return false;
+}
+
+/** Coordinate-based plugin handlers run after all rendered photo points have been checked. */
+export function pluginMapClick(lngLat: [number, number], onObject: boolean): boolean {
   for (const cb of clickHandlers()) {
     try { if (cb(lngLat, { onObject, zoom: host?.map.getZoom() })) return true; } catch (err) { console.warn('plugin click:', err); }
   }

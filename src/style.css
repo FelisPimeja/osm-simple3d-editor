@@ -1064,7 +1064,6 @@ body:not(.mobile) .maplibregl-ctrl-bottom-right > .maplibregl-ctrl { margin-bott
 .modal-close:hover { color: #111; }
 .modal-body { padding: 4px 16px 16px; overflow: auto; }
 .modal-body > .panel-sec { margin-top: 12px; }
-.plugin-panel { resize: both; overflow: hidden; }
 .plugin-panel-body { flex: 1; min-height: 0; position: relative; }
 /* Десктопная вёрстка (планшет): карточка прицела — по ширине правой колонки, прижата к низу; зум, куб и колонка — над ней */
 body:not(.mobile) #mobile-card { left: auto; right: 6px; width: 320px; box-sizing: border-box; bottom: 6px; }

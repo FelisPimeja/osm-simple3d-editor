@@ -51,7 +51,7 @@ import { applyBasemap, applyContours, applyGpsTraces, applyHillshade, storedCont
 import { pickRelease, setWaybackRelease, waybackReleases } from './view/wayback';
 import { isPhotoFiltered, PhotoLayer, PhotoViewer, photoFilterSettings, storedFilter, storedOn, storeFilter, storeOn } from './view/street-photos';
 import { panoramax } from './view/panoramax';
-import { applyPluginsSetting, onPluginsChange, pluginMapClick, pluginsSetting, setPluginHost } from './plugins';
+import { applyPluginsSetting, onPluginsChange, pluginMapClick, pluginPointClick, pluginsSetting, setPluginHost } from './plugins';
 import { renderPluginsPane } from './view/plugins-pane';
 import { mapillary } from './view/mapillary';
 import { fotoshi, fotoshiRequest } from './view/fotoshi';
@@ -2938,11 +2938,13 @@ map.on('click', (e) => {
     return;
   }
   // Снимок уличных фото под курсором — открыть вместо выбора здания
-  if (pluginMapClick([e.lngLat.lng, e.lngLat.lat], !!overpassLayer.pickHit(e.point), [e.point.x, e.point.y])) return;
+  if (pluginPointClick([e.point.x, e.point.y])) return;
   for (const p of photoLayers) {
     const picId = p.layer.pick(e.point);
     if (picId) { void photoViewer.open(p.layer, picId); return; }
   }
+  // Поиск плагина по координатам — только когда не попали в значок фото ни одного сервиса.
+  if (pluginMapClick([e.lngLat.lng, e.lngLat.lat], !!overpassLayer.pickHit(e.point))) return;
   // Окружение: клик по соседу (мимо своих частей) — его теги для просмотра
   // План этажа: объект indoor соседа или комплекса без здания (приямок, переход) — выбрать его самого: id и теги
   if (focus && shownLevel && overpassLayer.contextShown && !toolActive() && !e.originalEvent.altKey) {

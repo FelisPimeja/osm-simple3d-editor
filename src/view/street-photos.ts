@@ -10,6 +10,8 @@ import * as THREE from 'three';
 import { tr } from '../i18n';
 import { glPixels } from '../edit/eyedropper';
 import { icon } from './icons';
+import { openPanel } from './plugin-panel';
+import type { PluginPanel } from '../plugins';
 
 /** Выражение MapLibre (собираем из частей — типы спецификации тут не помогают). */
 export type Expr = ExpressionSpecification;
@@ -475,11 +477,11 @@ const ARROW_SVG = ARROW_LAYER('shadow', -14)
   + Array.from({ length: 10 }, (_, i) => ARROW_LAYER('side', -10 + i)).join('')
   + ARROW_LAYER('face', 0);
 /** Края окна для изменения размера: n, s, e, w и углы. */
-const EDGES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
 
 /** Окно просмотра снимка (одно на все сервисы): перетаскивается за заголовок, размер — за края и углы. */
 export class PhotoViewer {
-  private readonly el: HTMLDivElement;
+  private readonly content = document.createElement('div');
+  private panel?: PluginPanel;
   private readonly stage: HTMLDivElement;
   private readonly info: HTMLDivElement;
   private readonly arrows: { prev: HTMLButtonElement; next: HTMLButtonElement };
@@ -500,31 +502,14 @@ export class PhotoViewer {
   private blobUrl?: string;
   /** Раствор конуса на карте, ° — перерисовываем значок, когда угол обзора заметно изменился. */
   private coneFov = 70;
-  /** Окно двигали или меняли его размер — больше не прижимаем его к панелям инструментов сами. */
-  private userPlaced = false;
   /** Холст с пикселями обычного фото (для пипетки) — по blob: URL. */
   private flatPixels?: { url: string; ctx: CanvasRenderingContext2D };
   /** Слой показанного снимка (его сервис и конус на карте). */
   private layer?: PhotoLayer;
-  private readonly title: HTMLHeadingElement;
 
   /** onOpen — снимок показан (сервис — в источники правок). */
   constructor(private readonly map: MlMap, private readonly onOpen: (service: PhotoService) => void = () => {}) {
-    const el = this.el = document.createElement('div');
-    el.className = 'panoramax-viewer';
-    el.hidden = true;
-    // Заголовок — как у остальных панелей
-    const head = document.createElement('header');
-    head.className = 'panel-head panoramax-head';
-    const title = this.title = document.createElement('h1');
-    title.textContent = tr('Уличные фото');
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'panoramax-close';
-    close.innerHTML = icon('close', 16);
-    close.title = tr('Закрыть');
-    close.addEventListener('click', () => this.close());
-    head.append(title, close);
+    this.content.style.cssText = 'display:flex;flex-direction:column;flex:1;min-height:0';
     this.stage = document.createElement('div');
     this.stage.className = 'panoramax-stage';
     this.img = document.createElement('img');
@@ -550,109 +535,18 @@ export class PhotoViewer {
     };
     this.info = document.createElement('div');
     this.info.className = 'panoramax-info';
-    el.append(head, this.stage, this.info);
-    for (const d of EDGES) {
-      const h = document.createElement('div');
-      h.className = `panoramax-rs panoramax-rs-${d}`;
-      el.append(h);
-      this.bindResize(h, d);
-    }
-    document.body.append(el);
-    this.bindMove(head);
-    // Не налезать на вертикальные панели инструментов (в режиме здания они длинные)
-    const toolbars = document.getElementById('toolbars');
-    if (toolbars) {
-      new MutationObserver(() => this.place()).observe(toolbars, { attributes: true, subtree: true, attributeFilter: ['hidden'] });
-      new ResizeObserver(() => this.place()).observe(toolbars);
-    }
-    addEventListener('resize', () => this.place());
+    this.content.append(this.stage, this.info);
     this.resize.observe(this.stage);
     this.bindDrag();
   }
 
-  get shown() { return !this.el.hidden; }
+  get shown() { return !!this.panel; }
 
   /** Сервис снимка, показанного сейчас (окно открыто). */
-  get service(): PhotoService | undefined { return !this.el.hidden && this.pic ? this.layer?.service : undefined; }
+  get service(): PhotoService | undefined { return this.panel && this.pic ? this.layer?.service : undefined; }
 
   /** Область фото — источник растра для пипетки (src/edit/eyedropper.ts). */
   get photoEl(): HTMLElement { return this.stage; }
-
-  /**
-   * Пока окно не двигали — слева внизу, правее панелей инструментов, если они видны; если открыто окно другого
-   * сервиса — над ним. Иначе — там, куда поставили, но в пределах окна браузера.
-   */
-  private place() {
-    if (this.el.hidden) return;
-    if (!this.userPlaced) {
-      const tb = document.getElementById('toolbars');
-      const r = tb && tb.offsetParent ? tb.getBoundingClientRect() : undefined;
-      const left = r && r.width ? r.right + 8 : 10;
-      // Окна, открытые раньше и стоящие на месте по умолчанию, — ниже этого
-      let bottom = 34;
-      for (const o of document.querySelectorAll<HTMLElement>('.panoramax-viewer')) {
-        if (o === this.el) break;
-        if (!o.hidden && o.style.bottom) bottom = Math.max(bottom, innerHeight - o.getBoundingClientRect().top + 8);
-      }
-      Object.assign(this.el.style, { left: `${left}px`, top: '', bottom: `${bottom}px`,
-        maxWidth: `${innerWidth - left - 10}px`, maxHeight: `${innerHeight - bottom - 26}px` });
-      return;
-    }
-    const r = this.el.getBoundingClientRect();
-    const w = Math.min(r.width, innerWidth), h = Math.min(r.height, innerHeight);
-    this.setRect(Math.max(0, Math.min(r.left, innerWidth - w)), Math.max(0, Math.min(r.top, innerHeight - h)), w, h);
-  }
-
-  private setRect(left: number, top: number, width: number, height: number) {
-    Object.assign(this.el.style, { left: `${left}px`, top: `${top}px`, bottom: '', width: `${width}px`, height: `${height}px`,
-      maxWidth: '', maxHeight: '' });
-  }
-
-  /** Перетаскивание за заголовок (кроме кнопок). */
-  private bindMove(head: HTMLElement) {
-    let start: { x: number; y: number; r: DOMRect } | undefined;
-    head.addEventListener('pointerdown', (e) => {
-      if ((e.target as HTMLElement).closest('button')) return;
-      e.preventDefault();
-      start = { x: e.clientX, y: e.clientY, r: this.el.getBoundingClientRect() };
-      head.setPointerCapture(e.pointerId);
-    });
-    head.addEventListener('pointermove', (e) => {
-      if (!start) return;
-      const { r } = start;
-      this.userPlaced = true;
-      this.setRect(Math.max(0, Math.min(r.left + e.clientX - start.x, innerWidth - r.width)),
-        Math.max(0, Math.min(r.top + e.clientY - start.y, innerHeight - r.height)), r.width, r.height);
-    });
-    const up = () => { start = undefined; };
-    head.addEventListener('pointerup', up);
-    head.addEventListener('pointercancel', up);
-  }
-
-  /** Изменение размера за край или угол d: двигается только эта сторона. */
-  private bindResize(h: HTMLElement, d: typeof EDGES[number]) {
-    const MIN_W = 240, MIN_H = 180;
-    let start: { x: number; y: number; r: DOMRect } | undefined;
-    h.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      start = { x: e.clientX, y: e.clientY, r: this.el.getBoundingClientRect() };
-      h.setPointerCapture(e.pointerId);
-    });
-    h.addEventListener('pointermove', (e) => {
-      if (!start) return;
-      const { r } = start, dx = e.clientX - start.x, dy = e.clientY - start.y;
-      let { left, top, right, bottom } = r;
-      if (d.includes('w')) left = Math.max(0, Math.min(left + dx, right - MIN_W));
-      if (d.includes('e')) right = Math.min(innerWidth, Math.max(right + dx, left + MIN_W));
-      if (d.includes('n')) top = Math.max(0, Math.min(top + dy, bottom - MIN_H));
-      if (d.includes('s')) bottom = Math.min(innerHeight, Math.max(bottom + dy, top + MIN_H));
-      this.userPlaced = true;
-      this.setRect(left, top, right - left, bottom - top);
-    });
-    const up = () => { start = undefined; };
-    h.addEventListener('pointerup', up);
-    h.addEventListener('pointercancel', up);
-  }
 
   /**
    * Стрелки к соседним снимкам — как на сайте Panoramax: всегда внизу кадра, обе сразу, на «земле» (круг в
@@ -679,9 +573,11 @@ export class PhotoViewer {
       this.syncCone();
       this.layer = layer;
     }
-    this.title.textContent = layer.service.name;
-    this.el.hidden = false;
-    this.place();
+    if (!this.panel) {
+      this.panel = openPanel(layer.service.name, this.map);
+      this.panel.body.append(this.content);
+      this.panel.onClose(() => this.close());
+    } else this.panel.setTitle(layer.service.name);
     this.info.textContent = tr('Загрузка…');
     let pic: Picture;
     try { pic = await layer.service.fetchPicture(id); } catch { if (load === this.loadId) this.info.textContent = tr('Не удалось загрузить снимок'); return; }
@@ -711,7 +607,9 @@ export class PhotoViewer {
 
   close() {
     this.loadId++;
-    this.el.hidden = true;
+    const panel = this.panel;
+    this.panel = undefined;
+    panel?.close();
     this.pic = undefined;
     this.syncCone();
   }

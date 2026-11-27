@@ -96,8 +96,9 @@ test('indoor wall opening follows the off-wall revolving door during preview',()
  layer.setLevel({floor:0,cut:3,items:[{key:'way/2',kind:'wall',line:true,z:0,polygons:[{outer:[ll(0,2),ll(6,2)],inners:[]}]}],doors:[door.at]});
  assert.ok(layer.doorOpeningEdges.has('node/1'));
  // Preview is normally scheduled by requestAnimationFrame; rebuild synchronously here.
- // 1.1 m from the wall axis the 2 m drum still clips the near face of the thick wall line (0.2 m off the axis)
- layer.doorPreview={key:door.key,at:ll(3,3.1)};
+ // 0.95 m from the wall axis the 2 m drum still reaches the wall line (radius 1 m). Earlier 1.1 m passed only
+ // because the shell facade 0.9 m away was drawn on the plan; since 5beacb8 the shell is not part of the plan
+ layer.doorPreview={key:door.key,at:ll(3,2.95)};
  layer.applyLevel();
  assert.ok(layer.doorOpeningEdges.has('node/1'));
  // Clear of the wall and of the facades: no opening
@@ -129,7 +130,7 @@ test('Move supports door anchors with snaps off, horizontal snaps, numeric dista
  const {Vector3}=await import('three');
  const {MoveTool}=await vite.ssrLoadModule('/src/edit/move-tool.ts');
  const previous=globalThis.document;
- globalThis.document={createElement:()=>({hidden:true,addEventListener(){}})};
+ globalThis.document={createElement:()=>({hidden:true,addEventListener(){},appendChild(){}})};
  try {
   let target, committed, preview;
   const layer={focusAxes:{x:[1,0],y:[0,1]},snapAt:()=>target,pickHit:()=>undefined,pickDoor:()=> 'node/1',doorAnchor:()=>new Vector3(0,0,.04),setMoveGuide(){},setMovePreview:(keys,offset)=>{preview=offset?.clone();},focusRay:()=>({}),focusProject:p=>[p.x*10,p.y*10]};

@@ -73,10 +73,10 @@ test('same room on the floor below does not add a dark horizontal seam at the up
   return count;
  },0);
  layer.setLevel(spec);assert.ok(floorEdges()>0);
- // Комната сквозная: её низ — не шов; низ фасада (пол между ним и комнатой есть) остаётся
+ // Комната сквозная: её низ — не шов. 4 ребра у пола — пунктирный абрис оболочки (с 5beacb8 вместо низа фасада)
  layer.setLevel({...spec,below:[{cut:0,items:[{...room,z:-3}],doors:[]}]});
  assert.equal(floorEdges(),4);
- assert.ok(layer.indoorObj.children.filter(o=>o.isLineSegments&&o.name!=='indoor-floor-contact').every(o=>{const p=o.geometry.getAttribute('position');for(let i=0;i+1<p.count;i+=2)if(Math.abs(p.getZ(i)-p.getZ(i+1))<1e-6&&p.getZ(i)>=0&&p.getZ(i)<.1)return false;return true;}));
+ assert.ok(layer.indoorObj.children.filter(o=>o.isLineSegments&&o.name!=='indoor-floor-contact'&&o.name!=='level-shell-outline').every(o=>{const p=o.geometry.getAttribute('position');for(let i=0;i+1<p.count;i+=2)if(Math.abs(p.getZ(i)-p.getZ(i+1))<1e-6&&p.getZ(i)>=0&&p.getZ(i)<.1)return false;return true;}));
  layer.setLevel(spec);assert.ok(floorEdges()>0);
 });
 
@@ -103,6 +103,6 @@ test('a facade bounding a room that continues from the floor below has no floor 
  layer.setFocus([{key:'way/1',type:'way',id:1,version:1,kind:'part',hasParts:false,tags:{'building:part':'yes',height:'6'},polygons:[{outer,inners:[]}]}]);
  const room={key:'relation/1',kind:'room',z:3,polygons:[{outer,inners:[]}]};
  layer.setLevel({floor:3,cut:6,items:[room],doors:[],below:[{cut:3,items:[{...room,z:0}],doors:[]}]});
- const seam=layer.indoorObj.children.filter(o=>o.isLineSegments).some(o=>{const p=o.geometry.getAttribute('position');for(let i=0;i+1<p.count;i+=2)if(Math.abs(p.getZ(i)-p.getZ(i+1))<1e-6&&p.getZ(i)>=3&&p.getZ(i)<3.1)return true;return false;});
+ const seam=layer.indoorObj.children.filter(o=>o.isLineSegments&&o.name!=='level-shell-outline').some(o=>{const p=o.geometry.getAttribute('position');for(let i=0;i+1<p.count;i+=2)if(Math.abs(p.getZ(i)-p.getZ(i+1))<1e-6&&p.getZ(i)>=3&&p.getZ(i)<3.1)return true;return false;});
  assert.equal(seam,false);
 });

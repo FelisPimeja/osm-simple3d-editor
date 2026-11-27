@@ -23,7 +23,7 @@ for (const floor of [-3, -6, -9]) test(`short nearly straight wall segments at $
       : { floor, cut: floor + 3, items: [item], voids: [] });
     let verticals = 0;
     layer.indoorObj.traverse(o => {
-      if (o.type !== 'LineSegments') return;
+      if (o.type !== 'LineSegments' || o.name === 'level-shell-outline') return; // абрис оболочки (5beacb8) — не стена
       const p = o.geometry.getAttribute('position').array;
       for (let i = 0; i < p.length; i += 6) if (Math.abs(p[i]-p[i+3]) < 1e-6 && Math.abs(p[i+1]-p[i+4]) < 1e-6 && Math.abs(p[i+2]-p[i+5]) > .1) verticals++;
     });
@@ -201,7 +201,9 @@ test('door move preview reuses models without rebuilding the floor, openings or 
   assert.equal(outline.position.length(),0);
 });
 
-test('solid indoor walls below an atrium do not duplicate the opaque facade', async () => {
+// С 5beacb8 оболочка на плане не рисуется (только пунктирный абрис), так что дублировать нечего:
+// сплошная indoor-стена на фасаде под атриумом рисует свои грани сама
+test('solid indoor walls below an atrium draw their own faces on the facade (the shell is hidden on a plan)', async () => {
   const THREE=await import('three');
   const layer=new BuildingsLayer('test');
   const polygon={outer:[[0,0],[4,0],[4,1],[0,1]],inners:[]};
@@ -218,7 +220,7 @@ test('solid indoor walls below an atrium do not duplicate the opaque facade', as
     const p=o.geometry.getAttribute('position').array;
     for(let i=0;i<p.length;i+=9)if(Math.max(p[i+2],p[i+5],p[i+8])-Math.min(p[i+2],p[i+5],p[i+8])>.01)verticalTriangles++;
   });
-  assert.equal(verticalTriangles,0);
+  assert.ok(verticalTriangles>0);
 });
 
 // Like node/12083650193: a door in the gap between two thick wall polygons (0.24 m), a corridor on one side only.

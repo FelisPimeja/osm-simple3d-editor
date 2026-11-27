@@ -26,8 +26,12 @@ test('facade entrance stays visible on the map while floor mode uses the door op
  const fills=map.entranceObj.children.filter(o=>o.isMesh),line=map.entranceObj.children.find(o=>o.isLineSegments);
  assert.ok(fills.length);assert.ok(line.geometry.getAttribute('position').count>0);
  for(const fill of fills){assert.equal(fill.material.depthWrite,false);assert.equal(fill.material.depthTest,true);assert.ok(line.renderOrder>fill.renderOrder);}
+ // С 5beacb8: без indoor-стены у входа план проём не рисует — вход остаётся прямоугольником; со стеной — проём плана
  layer.setFocus([f]);layer.setLevel({floor:0,cut:3,items:[],doors:[]});
- assert.equal(layer.groups.get('@focus').entranceObj.children.filter(o=>o.isMesh).length,0);
+ assert.equal(layer.groups.get('@focus').entranceObj.children.filter(o=>o.isMesh).length,1);
+ const wall={key:'way/9',kind:'wall',line:true,z:0,polygons:[{outer:[ll([0,0]),ll([10,0])],inners:[]}]};
+ layer.setLevel({floor:0,cut:3,items:[wall],doors:[]});
+ assert.equal(layer.groups.get('@focus').entranceObj?.children.filter(o=>o.isMesh).length??0,0);
  layer.setFocus(undefined);
  assert.equal(fills[0].material.clippingPlanes,null);
  assert.equal(line.material.clippingPlanes,null);

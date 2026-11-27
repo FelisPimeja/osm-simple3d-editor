@@ -62,6 +62,9 @@ function fixture() {
   const voids = [[poly(rectangle(6, 2, 8, 6)).outer]];
   const walls = [{ key: 'way/3', kind: 'wall', line: true, z: 3, polygons: [{ outer: [ll(6, 2), ll(6, 6)], inners: [] }] }];
   const ledges = () => layer.indoorObj.children.filter((o) => o.name === 'indoor-area-underside');
+  // Ниже этажа 3 в здании есть этаж 0 (коробка нижнего этажа): самый нижний этаж здания торца плиты не получает (7dc8932)
+  const setLevel = layer.setLevel.bind(layer);
+  layer.setLevel = (lv) => setLevel(lv && !lv.boxes ? { ...lv, boxes: [{ bottom: 0, top: 3, polygons: [], seen: false, cover: [] }] } : lv);
   return { layer, area, voids, walls, ledges, poly };
 }
 
@@ -253,4 +256,10 @@ test('a low polygon wall against a collinear side of a tall one: junction vertic
  });
  assert.ok(found>0,'junction verticals are drawn');
  assert.ok(top<4.05,`vertical goes up to ${top}`);
+});
+
+test('the lowest floor of the building has no slab ledge under it', () => {
+  const { layer, area, voids, ledges } = fixture();
+  layer.setLevel({ floor: 3, cut: 6, items: [area], voids, boxes: [] });
+  assert.equal(ledges().length, 0);
 });

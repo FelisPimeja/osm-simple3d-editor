@@ -4,7 +4,7 @@ import {createServer} from 'vite';
 let vite, EditSession, ShapeTool, MoveTool, THREE, editIndoorGeometry;
 before(async()=>{
  globalThis.localStorage={getItem:()=> 'en'};
- globalThis.document={documentElement:{},createElement:()=>({addEventListener(){}})};
+ globalThis.document={documentElement:{},createElement:()=>({addEventListener(){},appendChild(){}})};
  vite=await createServer({configFile:false,server:{middlewareMode:true,ws:false,watch:null},appType:'custom'});
  ({EditSession}=await vite.ssrLoadModule('/src/edit/session.ts'));
  ({ShapeTool}=await vite.ssrLoadModule('/src/edit/shape-tool.ts'));

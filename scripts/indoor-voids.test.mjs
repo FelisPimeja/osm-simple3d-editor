@@ -112,7 +112,7 @@ test('opening outline skips walls, retains exposed slab edges, and clips partial
  const length=(items,below=[])=>{
   layer.setLevel({floor:3,cut:6,items,doors:[],voids:[[hole.map(ll)]],below});
   let length=0;
-  for(const o of layer.indoorObj.children.filter(o=>o.isLineSegments&&o.name!=='indoor-floor-contact')){
+  for(const o of layer.indoorObj.children.filter(o=>o.isLineSegments&&o.name!=='indoor-floor-contact'&&o.name!=='level-shell-outline')){
    const p=o.geometry.getAttribute('position');
    for(let i=0;i+1<p.count;i+=2)if(Math.abs(p.getZ(i)-3)<.0001&&Math.abs(p.getZ(i+1)-3)<.0001)
     length+=Math.hypot(p.getX(i+1)-p.getX(i),p.getY(i+1)-p.getY(i));

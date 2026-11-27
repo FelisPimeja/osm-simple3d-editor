@@ -5,7 +5,7 @@ import { createServer } from 'vite';
 let vite, ShapeTool, THREE;
 before(async () => {
   globalThis.localStorage = { getItem: () => 'en', setItem() {} };
-  globalThis.document = { documentElement: {}, createElement: () => ({ addEventListener() {} }) };
+  globalThis.document = { documentElement: {}, createElement:()=>({addEventListener(){},appendChild(){}}) };
   vite = await createServer({ configFile: false, server: { middlewareMode: true, ws: false, watch: null }, appType: 'custom' });
   ({ ShapeTool } = await vite.ssrLoadModule('/src/edit/shape-tool.ts'));
   THREE = await import('three');

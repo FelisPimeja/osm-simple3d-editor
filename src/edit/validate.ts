@@ -910,6 +910,7 @@ export const ROOM_PAIRED_AMENITY: Record<string, string> = { reception: 'recepti
 const OWN_DEPRECATED: readonly Deprecation[] = [
   { old: { room: 'service' }, replace: { room: 'utility' } },
   { old: { room: 'technical' }, replace: { room: 'utility' } },
+  { old: { room: 'class' }, replace: { room: 'classroom' } }, // вики Key:room: class → classroom (issue #90)
 ];
 
 /**

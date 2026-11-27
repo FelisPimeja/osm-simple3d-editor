@@ -12410,7 +12410,7 @@ const WALL_LABELS: Record<string, string> = { counter: tr('Прилавок') };
 const COUNTER_HEIGHT = 1.1;
 /** Высота нового ограждения, м: типичная высота перил. */
 const RAILING_HEIGHT = 1.1;
-const ROOM_VALUES = ['corridor', 'shop', 'office', 'toilets', 'toilet', 'stairs', 'elevator', 'restaurant', 'storage', 'class', 'conference', 'kitchen', 'waiting', 'entrance', 'auditorium', 'bedroom', 'living_room', 'bathroom', 'reception', 'classroom', 'laboratory', 'utility', 'hall', 'lobby', 'lecture_hall', 'workshop', 'library', 'lounge', 'computer', 'dressing', 'dining', 'foodcourt', 'archive', 'security', 'sports', 'yes'];
+const ROOM_VALUES = ['corridor', 'shop', 'office', 'toilets', 'toilet', 'stairs', 'elevator', 'restaurant', 'storage', 'conference', 'kitchen', 'waiting', 'entrance', 'auditorium', 'bedroom', 'living_room', 'bathroom', 'reception', 'classroom', 'laboratory', 'utility', 'hall', 'lobby', 'lecture_hall', 'workshop', 'library', 'lounge', 'computer', 'dressing', 'dining', 'foodcourt', 'archive', 'security', 'sports', 'yes'];
 const ROOM_LABELS: Record<string, string> = {
   corridor: tr('Коридор'), shop: tr('Магазин'), office: tr('Офис'), toilets: tr('Туалеты'), toilet: tr('Туалет'), stairs: tr('Лестница'),
   elevator: tr('Лифт'), restaurant: tr('Ресторан'), technical: tr('Техническое помещение'), storage: tr('Кладовая'),

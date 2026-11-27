@@ -20,7 +20,8 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
-import { AO_STRENGTH, buildShade, CAST_MATERIAL, COMPOSITE_MATERIAL, SHADE_MATERIAL, SHADOW_STRENGTH, type ShadeCasters, type ShadeSource } from './ground-shade';
+import { AO_STRENGTH, buildShade, CAST_MATERIAL, CAST_ON_MAP, COMPOSITE_MATERIAL, SHADE_MATERIAL, SHADE_ON_MAP, SHADOW_STRENGTH, type ShadeCasters, type ShadeSource } from './ground-shade';
+import { ground } from './ground';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
 import { computeHeights, looseLength, LEVEL_HEIGHT, type Heights } from '../osm/heights';
@@ -370,14 +371,12 @@ export interface GraphicsOptions {
   groundAO: boolean;
   /** Контуры рёбер. */
   edges: boolean;
-  /** Тени от солнца на земле (только на карте, без рельефа). */
+  /** Тени от солнца на земле (только на карте; на рельефе — на плоскости, вписанной в рельеф у объекта). */
   shadows?: boolean;
   /** Мягкое затемнение земли у стен (там же). */
   groundContact?: boolean;
-  /** Размытые края теней и затенения (буфер в полразмера); иначе — чёткие, в полном размере со сглаживанием. */
+  /** Размытые края теней и затенения (буфер в полразмера); иначе — чёткие, в CSS-пикселях со сглаживанием. */
   softShadows?: boolean;
-  /** Рельеф включён: земля не плоскость — затенение земли не рисуется. */
-  terrain?: boolean;
   /** Не рисовать стыки соседних частей, чьи грани у стыка лежат в одной плоскости (заметно дороже сборка рёбер). */
   partSeams?: boolean;
   /** Не выделять стекло: стеклянные стены и крыши — как обычные. */
@@ -980,7 +979,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const overFirst = this.visible && this.wireframe;
     const split = overFirst && underlays && this.underlays.hasOver();
     if (underlays) this.underlays.render(this.drawMain(options), 'under');
-    if (this.visible && !this.wireframe && !this.focused && !this.sketching && (this.graphics.shadows || this.graphics.groundContact) && !this.graphics.terrain && this.opacity > 0) this.renderShade(options);
+    if (this.visible && !this.wireframe && !this.focused && !this.sketching && (this.graphics.shadows || this.graphics.groundContact) && this.opacity > 0) this.renderShade(options);
     if (split) {
       timed(`${this.id}: кадр (CPU)`, () => this.renderWire(options, 'wire-fills'), () => `${this.groups.size} групп`);
       this.underlays.render(this.drawMain(options), 'over');
@@ -1012,15 +1011,18 @@ export class BuildingsLayer implements CustomLayerInterface {
     const gl = renderer.getContext();
     // Мягкие — в полразмера (размытие всё равно съест детали); чёткие — в CSS-пикселях со сглаживанием: на ретине
     // вчетверо меньше пикселей, чем у холста, а край остаётся резким
-    const soft = this.graphics.softShadows !== false, scale = soft ? 0.5 : 1 / Math.max(1, devicePixelRatio);
+    const soft = !!this.graphics.softShadows, scale = soft ? 0.5 : 1 / Math.max(1, devicePixelRatio);
     const w = Math.max(1, Math.round(gl.drawingBufferWidth * scale)), h = Math.max(1, Math.round(gl.drawingBufferHeight * scale));
     const meshes = this.activeGroups().map((g) => this.shadeMesh(g)).filter((m): m is THREE.Mesh => !!m);
     const casters: ShadeCasters[] = [];
     if (this.graphics.shadows) {
-      if (this.graphics.trees !== false) for (const t of this.trees.values()) casters.push({ objects: t.shadowCasters(), model: t.model });
+      if (this.graphics.trees !== false) for (const t of this.trees.values()) for (const c of t.shadowCasters()) casters.push({ ...c, model: t.model });
       if (this.shadeExtra) casters.push(...this.shadeExtra());
     }
     if (!meshes.length && !casters.some((c) => c.objects.length)) return;
+    // На рельефе — прямо на карту с проверкой глубины: бровка перед тенью закрывает её (в буфере глубины нет)
+    const direct = ground.on;
+    const shadeMat = direct ? SHADE_ON_MAP : SHADE_MATERIAL, castMat = direct ? CAST_ON_MAP : CAST_MATERIAL;
     if (this.shadeTarget && this.shadeTarget.samples !== (soft ? 0 : 4)) { this.shadeTarget.dispose(); this.shadeTarget = undefined; }
     const target = this.shadeTarget ??= new THREE.WebGLRenderTarget(w, h, { depthBuffer: false, samples: soft ? 0 : 4 });
     if (target.width !== w || target.height !== h) target.setSize(w, h);
@@ -1035,26 +1037,34 @@ export class BuildingsLayer implements CustomLayerInterface {
       local.set(mc.x, mc.y, 0).applyMatrix4(inv.copy(model).invert());
       mat.uniforms.center.value.set(local.x, local.y);
       mat.uniforms.radius.value = radius;
+      // Глаз в координатах группы — для сдвига тени к камере (на рельефе)
+      if (direct) cameraEye(main.clone().multiply(model), mat.uniforms.eye.value);
     };
-    SHADE_MATERIAL.uniforms.shadow.value = this.graphics.shadows ? SHADOW_STRENGTH : 0;
-    SHADE_MATERIAL.uniforms.ao.value = this.graphics.groundContact ? AO_STRENGTH : 0;
+    shadeMat.uniforms.shadow.value = this.graphics.shadows ? SHADOW_STRENGTH : 0;
+    shadeMat.uniforms.ao.value = this.graphics.groundContact ? AO_STRENGTH : 0;
     renderer.resetState();
-    renderer.setRenderTarget(target);
-    renderer.setClearColor(0x000000, 0);
-    renderer.clear(true, false, false);
+    const clearStencil = () => { gl.stencilMask(0xff); gl.clearStencil(0); gl.clear(gl.STENCIL_BUFFER_BIT); };
+    if (direct) { renderer.setRenderTarget(null); clearStencil(); } else {
+      renderer.setRenderTarget(target);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, false, false);
+    }
     for (const m of meshes) {
+      m.material = shadeMat;
       this.shadeCamera.projectionMatrix = main.clone().multiply(m.userData.model as THREE.Matrix4);
-      focusOn(SHADE_MATERIAL, m.userData.model as THREE.Matrix4);
+      focusOn(shadeMat, m.userData.model as THREE.Matrix4);
       this.shadeScene.add(m);
       renderer.render(this.shadeScene, this.shadeCamera);
       this.shadeScene.remove(m);
     }
-    CAST_MATERIAL.uniforms.shadow.value = SHADOW_STRENGTH;
-    this.shadeScene.overrideMaterial = CAST_MATERIAL;
+    castMat.uniforms.shadow.value = SHADOW_STRENGTH;
+    castMat.uniforms.onBase.value = ground.on ? 1 : 0;
+    this.shadeScene.overrideMaterial = castMat;
     for (const c of casters) {
       if (!c.objects.length) continue;
       this.shadeCamera.projectionMatrix = main.clone().multiply(c.model);
-      focusOn(CAST_MATERIAL, c.model);
+      focusOn(castMat, c.model);
+      castMat.uniforms.groundZ.value = c.groundZ ?? 0;
       // Объект временно в сцене тени (add снимает его с родителя) — потом на прежнее место и с прежней видимостью
       const saved = c.objects.map((o) => ({ o, parent: o.parent, at: o.parent?.children.indexOf(o) ?? -1, visible: o.visible, culled: o.frustumCulled }));
       for (const o of c.objects) { this.shadeScene.add(o); o.visible = true; o.frustumCulled = false; }
@@ -1067,6 +1077,14 @@ export class BuildingsLayer implements CustomLayerInterface {
       }
     }
     this.shadeScene.overrideMaterial = null;
+    if (direct) {
+      // Трафарет — общий с MapLibre (маски тайлов): очистить и попросить нарисовать маски заново
+      clearStencil();
+      (this.map as unknown as { painter?: { frameRenderContext?: { invalidateTileClippingMasks?: () => void } } })
+        .painter?.frameRenderContext?.invalidateTileClippingMasks?.();
+      renderer.resetState();
+      return;
+    }
     renderer.setRenderTarget(null);
     COMPOSITE_MATERIAL.uniforms.map.value = target.texture;
     COMPOSITE_MATERIAL.uniforms.texel.value.set(1 / w, 1 / h);
@@ -1080,17 +1098,19 @@ export class BuildingsLayer implements CustomLayerInterface {
     const of = g.mesh?.geometry;
     if (!of || g.focusScene) return;
     const opts = { shadow: !!this.graphics.shadows, ao: !!this.graphics.groundContact };
-    const sig = `${opts.shadow}|${opts.ao}|${[...g.hidden].join()}|${[...g.flat].join()}`;
+    const sig = `${opts.shadow}|${opts.ao}|${ground.on ? ground.rev : '-'}|${[...g.hidden].join()}|${[...g.flat].join()}`;
     if (g.shade?.of === of && g.shade.sig === sig) return g.shade.mesh;
     g.disposeShade();
     const sources: ShadeSource[] = [];
     for (const it of g.items) {
       const key = it.feature.key;
       if (it.pending || g.hidden.has(key) || g.flat.has(key) || it.feature.hasParts || it.top <= g.footprint + 0.05) continue;
-      const polygons = it.feature.polygons;
+      const polygons = it.feature.polygons, base = it.lift ?? 0;
       sources.push({
         positions: it.positions, vertices: it.positions.length / 3 - it.floorVertices,
-        rings: it.box.min.z < 0.5 ? () => polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => r.map(g.toLocal))) : undefined,
+        rings: it.box.min.z < base + 0.5 ? () => polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => r.map(g.toLocal))) : undefined,
+        // Рельеф: тень ложится на отметки DEM
+        ...(ground.on && { ground: ground.rev, height: (x: number, y: number) => ground.at(g.fromLocal([x, y])) }),
       });
     }
     const geo = buildShade(sources, opts);
@@ -8291,14 +8311,16 @@ export class BuildingsLayer implements CustomLayerInterface {
     const colors = attr.array as Float32Array;
     const selected = this.selected.has(it.feature.key) || this.hovered === it.feature.key;
     const ao = this.graphics.groundAO;
-    const fade = Math.max(0.5, Math.min(AO_HEIGHT, AO_FADE_SHARE * it.top));
-    const depth = (1 - AO_MIN) * Math.min(1, it.top / AO_HEIGHT);
+    // Рельеф: top и z — абсолютные отметки, высота здания — от его основания
+    const foot = it.lift ?? 0, tall = it.top - foot;
+    const fade = Math.max(0.5, Math.min(AO_HEIGHT, AO_FADE_SHARE * tall));
+    const depth = (1 - AO_MIN) * Math.min(1, tall / AO_HEIGHT);
     const n = it.positions.length / 3;
     for (let v = 0; v < n; v++) {
       const base = selected ? HIGHLIGHT : v >= n - (it.paneVertices ?? 0) ? (this.graphics.windowFill === false ? (this.monochrome ? MONOCHROME : it.wall) : this.monochrome ? WINDOW_PANE_MONO : WINDOW_PANE) : this.monochrome ? MONOCHROME : v < it.wallVertices ? it.wall : v >= n - (it.paneVertices ?? 0) ? WINDOW_PANE : v >= n - it.floorVertices ? FLOOR_SLAB : it.roof;
       let k = 1;
       if (ao) {
-        const t = Math.min(1, Math.max(0, it.positions[v * 3 + 2] / fade));
+        const t = Math.min(1, Math.max(0, (it.positions[v * 3 + 2] - foot) / fade));
         k = 1 - depth * (1 - t * t * (3 - 2 * t));
       }
       const o = (it.start + v) * 3;

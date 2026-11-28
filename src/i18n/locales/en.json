@@ -1835,5 +1835,8 @@
   "Насыщенность": "Strength",
   "Градиент": "Gradient",
   "Насколько тень бледнеет вдали от объекта": "How much the shadow fades away from the object",
-  "Где тень бледнеет полностью: доля полной длины тени объекта (зависит от его высоты)": "Where the fade is complete, as a share of the object's full shadow length (depends on its height)"
+  "Где тень бледнеет полностью: доля полной длины тени объекта (зависит от его высоты)": "Where the fade is complete, as a share of the object's full shadow length (depends on its height)",
+  "Источник рельефа": "Terrain source",
+  "Откуда брать высоты для рельефа, отмывки и горизонталей. Esri — только для показа: высоты не попадают в правки": "Where heights for terrain, hillshade and contours come from. Esri is view only: its heights never go into edits",
+  "У рельефа «{name}» нет атрибуции": "Terrain “{name}” has no attribution"
 }

@@ -4,6 +4,7 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { ContourJob, ContourResult } from './contours-worker';
+import { demSourceId } from '../view/dem-tiles';
 
 /** Шаг горизонталей по зуму карты: [основной, утолщённый], м (как у 2D-слоя). */
 export type ContourThresholds = Record<number, [number, number]>;
@@ -169,13 +170,13 @@ function labelMesh(labels: Float64Array, uniforms: Uniforms): THREE.Mesh | undef
 let worker: Worker | undefined;
 let nextJob = 1;
 const jobs = new Map<number, (r: ContourResult) => void>();
-function contourJob(job: Omit<ContourJob, 'id'>): Promise<ContourResult> {
+function contourJob(job: Omit<ContourJob, 'id' | 'dem'>): Promise<ContourResult> {
   if (!worker) {
     worker = new Worker(new URL('./contours-worker.ts', import.meta.url), { type: 'module' });
     worker.onmessage = (ev: MessageEvent<ContourResult>) => { jobs.get(ev.data.id)?.(ev.data); jobs.delete(ev.data.id); };
   }
   const id = nextJob++;
-  return new Promise((resolve) => { jobs.set(id, resolve); worker!.postMessage({ ...job, id }); });
+  return new Promise((resolve) => { jobs.set(id, resolve); worker!.postMessage({ ...job, id, dem: demSourceId() }); });
 }
 
 /**
@@ -214,6 +215,13 @@ export class ContoursLayer implements CustomLayerInterface {
     this.clear();
     this.renderer?.dispose();
     this.renderer = undefined;
+  }
+
+  /** Сменился источник высот: построить горизонтали заново. */
+  reload() {
+    this.clear();
+    if (this.enabled) this.update();
+    this.map?.triggerRepaint();
   }
 
   setEnabled(on: boolean) {

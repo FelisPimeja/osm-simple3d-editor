@@ -33,6 +33,12 @@ export class Dem {
     this.revision++;
   }
 
+  /** Сменился источник высот: забыть тайлы. */
+  reset() {
+    this.tiles.clear();
+    this.revision++;
+  }
+
   /** Отметка точки, м над уровнем моря (билинейно); тайла ещё нет или рельеф выключен — 0 (тайл запрашивается). */
   at(p: LonLat): number {
     return this.sample(p) ?? 0;

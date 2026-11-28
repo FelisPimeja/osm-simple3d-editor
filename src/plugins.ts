@@ -52,7 +52,14 @@ export interface PluginManifest {
    * подключается ровно проверенный код).
    */
   module?: string;
+  /**
+   * Источник высот для рельефа, отмывки и горизонталей (только официальный список): декодер — модуль сборки
+   * src/plugins/dem-<id>.ts (см. view/dem-tiles.ts). Выбирается в настройках под «3D рельеф»; только показ.
+   */
+  dem?: PluginDem;
 }
+
+export interface PluginDem { id: string; name: string; attribution: string | { text: string; url?: string } }
 
 /** Плавающее окно плагина (как окно уличных фото). */
 export interface PluginPanel {
@@ -107,6 +114,8 @@ export interface PluginHost {
   removeImagery(id: string): void;
   addPhotoService(s: PhotoService, label: string, title: string): void;
   removePhotoService(id: string): void;
+  addDem(id: string, name: string, attribution: string): void;
+  removeDem(id: string): void;
 }
 
 /** Подключённый плагин: источник — 'catalog' или ссылка, которую ввёл пользователь. */
@@ -161,9 +170,18 @@ export function parseManifest(raw: unknown, fromCatalog = false, base?: string):
     : base && RELATIVE_MODULE.test(mod) ? base + mod
       : base && mod.startsWith(base) && RELATIVE_MODULE.test(mod.slice(base.length)) ? mod
         : undefined;
-  if (!imagery.length && !module) throw new Error(tr('В плагине нечего подключать'));
+  let dem: PluginDem | undefined;
+  const d = m.dem as Record<string, unknown> | undefined;
+  if (fromCatalog && d && typeof d === 'object' && typeof d.id === 'string' && ID.test(d.id) && str(d.name, 80)) {
+    const a = d.attribution as PluginImagery['attribution'] | undefined;
+    const text = str(typeof a === 'object' && a ? a.text : a, 300);
+    if (!text) throw new Error(tr('У рельефа «{name}» нет атрибуции', { name: String(d.name) }));
+    const url = typeof a === 'object' && a && isHttps(a.url) ? a.url : undefined;
+    dem = { id: d.id, name: str(d.name, 80)!, attribution: url ? { text, url } : text };
+  }
+  if (!imagery.length && !module && !dem) throw new Error(tr('В плагине нечего подключать'));
   return {
-    id, apiVersion: PLUGIN_API, name, imagery, module,
+    id, apiVersion: PLUGIN_API, name, imagery, module, dem,
     version: str(m.version, 20), description: str(m.description, 300),
     homepage: isHttps(m.homepage) ? m.homepage : undefined,
   };
@@ -241,6 +259,9 @@ function store() {
 
 export const pluginEntries = (): readonly PluginEntry[] => entries;
 
+const linkHtml = (a: string | { text: string; url?: string }) => typeof a === 'string' ? esc(a)
+  : a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.text)}</a>` : esc(a.text);
+
 const imageryOf = (m: PluginManifest): Imagery[] => (m.imagery ?? []).map((i) => ({
   id: `plugin-${m.id}-${i.id}`, name: i.name, tiles: i.tiles, tileSize: i.tileSize ?? 256, maxzoom: i.maxzoom ?? 19,
   attribution: typeof i.attribution === 'string' ? esc(i.attribution)
@@ -291,6 +312,7 @@ async function activate(m: PluginManifest) {
   const state: Active = { photos: [], toggles: [], clicks: [], pointPicks: [], panels: [], overlays: [] };
   active.set(m.id, state);
   for (const im of imageryOf(m)) { registerImagery(im); host.addImagery(im); }
+  if (m.dem) host.addDem(m.dem.id, m.dem.name, linkHtml(m.dem.attribution));
   const load = !m.module ? undefined
     : /^https:\/\//.test(m.module) ? () => import(/* @vite-ignore */ m.module!) as Promise<PluginModule>
       : MODULES[`./plugins/${m.module}.ts`];
@@ -348,6 +370,7 @@ function deactivate(m: PluginManifest) {
   const state = active.get(m.id);
   active.delete(m.id);
   for (const im of imageryOf(m)) { host?.removeImagery(im.id); unregisterImagery(im.id); }
+  if (m.dem) host?.removeDem(m.dem.id);
   if (!state) return;
   for (const id of state.photos) host?.removePhotoService(id);
   for (const id of state.toggles) host?.removePhotoToggle(id);

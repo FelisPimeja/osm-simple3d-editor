@@ -7,7 +7,7 @@ import { demHeights, DEM_SIZE } from '../view/dem-tiles';
  * отрезки в локальных метрах тайла (от северо-западного угла: x — восток, y — север, z — отметка).
  * В основном потоке это десятки миллисекунд на тайл — подвисания при движении карты.
  */
-export interface ContourJob { id: number; z: number; x: number; y: number; minor: number; major: number }
+export interface ContourJob { id: number; z: number; x: number; y: number; minor: number; major: number; dem: string }
 /**
  * labels — по 4 числа на подпись: x, y (локальные метры тайла), отметка, направление линии (градусы, против часовой от
  * востока в локальных осях).
@@ -130,19 +130,19 @@ function labelled(l: number[]): [number[], number[], [number, number, number][]]
   return [segs, owner, labels];
 }
 
-async function heightTile(z: number, x: number, y: number) {
-  const h = await demHeights(z, x, y);
+async function heightTile(z: number, x: number, y: number, dem: string) {
+  const h = await demHeights(z, x, y, undefined, dem);
   return h && new mlcontour.HeightTile(DEM_SIZE, DEM_SIZE, (px, py) => h[py * DEM_SIZE + px]);
 }
 
 self.onmessage = async (ev: MessageEvent<ContourJob>) => {
-  const { id, z, x, y, minor, major } = ev.data;
+  const { id, z, x, y, minor, major, dem } = ev.data;
   try {
     const n = 2 ** z;
     const near: Promise<InstanceType<typeof mlcontour.HeightTile> | undefined>[] = [];
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       const yy = y + dy, xx = (((x + dx) % n) + n) % n;
-      near.push(yy < 0 || yy >= n ? Promise.resolve(undefined) : heightTile(z, xx, yy).catch(() => undefined));
+      near.push(yy < 0 || yy >= n ? Promise.resolve(undefined) : heightTile(z, xx, yy, dem).catch(() => undefined));
     }
     const combined = mlcontour.HeightTile.combineNeighbors(await Promise.all(near));
     if (!combined) { self.postMessage({ id, minor: new Float32Array(0), major: new Float32Array(0), majorMask: new Float32Array(0), metre: 1, labels: new Float64Array(0) }); return; }

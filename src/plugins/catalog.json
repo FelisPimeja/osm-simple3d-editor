@@ -52,6 +52,22 @@
       "description": "Yandex street panoramas in a floating window: tick the layer and click a street. Yandex permitted the imagery for OSM (not the data drawn over it).",
       "homepage": "https://github.com/FelisPimeja/osm-simple3d-yandex-panoramas",
       "module": "https://cdn.jsdelivr.net/gh/FelisPimeja/osm-simple3d-yandex-panoramas@d8582eae78fa911d7ae85c743cb380cfdb8f7349/plugin.js"
+    },
+    {
+      "id": "esri-elevation",
+      "apiVersion": 1,
+      "version": "0.1.0",
+      "name": "Esri World Elevation",
+      "description": "Esri World Elevation 3D terrain as an alternative to Mapterhorn for 3D terrain, hillshade and contours (choose it under 3D terrain in settings). View only: the heights are not used in edits.",
+      "homepage": "https://elevation3d.arcgis.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer",
+      "dem": {
+        "id": "esri",
+        "name": "Esri World Elevation",
+        "attribution": {
+          "text": "Esri World Elevation. Sources: Vantor, Airbus DS, USGS, NGA, NASA, CGIAR, GEBCO, N Robinson, NCEAS, NLS, OS, NMA, Geodatastyrelsen and the GIS User Community",
+          "url": "https://elevation3d.arcgis.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer"
+        }
+      }
     }
   ]
 }

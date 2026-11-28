@@ -1,18 +1,46 @@
 /**
- * Тайлы высот Mapterhorn с подстановкой: подробные зумы (до z17) есть только там, где есть открытый лидар
- * (Швейцария, часть Европы, США, Япония), в остальном мире — до z12, выше сервер отвечает 404. На 404 берём
- * родительский тайл, вырезаем нужную часть и растягиваем (билинейно по высотам, не по байтам цвета) —
- * так один источник с maxzoom 17 работает везде без дыр в рельефе.
+ * Тайлы высот (terrarium, 512 px) для рельефа, отмывки и горизонталей. Источник по умолчанию — Mapterhorn;
+ * плагин может добавить другой (src/plugins/dem-<id>.ts, экспорт dem: DemProvider), выбор — в настройках под «3D рельеф».
+ *
+ * Mapterhorn: подробные зумы (до z17) есть только там, где есть открытый лидар (Швейцария, часть Европы, США,
+ * Япония), в остальном мире — до z12, выше сервер отвечает 404. На 404 берём родительский тайл, вырезаем нужную
+ * часть и растягиваем (билинейно по высотам, не по байтам цвета) — так один источник с maxzoom 17 работает везде.
+ * Другие источники устроены так же: тайла нет — из родителя.
+ *
+ * Адрес тайла (для maplibre-contour и кешей): dem://<источник>/{z}/{x}/{y}.webp — у источников разные ключи кеша.
  */
-export const DEM_URL = 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp';
+const MAPTERHORN = 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp';
 /** Глобальное покрытие: до этого зума тайлы есть везде. */
 export const DEM_BASE_ZOOM = 12;
-/** Самый подробный зум Mapterhorn (лидар 0,5–1 м). */
+/** Самый подробный зум источников (Mapterhorn — лидар 0,5–1 м); подробнее — из родителя. */
 export const DEM_MAX_ZOOM = 17;
 export const DEM_SIZE = 512;
 
-const urlOf = (z: number, x: number, y: number) => DEM_URL.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
+/** Источник высот из плагина: высоты тайла z/x/y (DEM_SIZE², построчно с севера), undefined — тайла нет. */
+export interface DemProvider {
+  heights(z: number, x: number, y: number, signal?: AbortSignal): Promise<Float32Array | undefined>;
+}
+const PROVIDERS = import.meta.glob<{ dem: DemProvider }>('../plugins/dem-*.ts');
+const providers = new Map<string, Promise<DemProvider | undefined>>();
+function provider(id: string): Promise<DemProvider | undefined> {
+  let p = providers.get(id);
+  if (!p) {
+    const load = PROVIDERS[`../plugins/dem-${id}.ts`];
+    p = load ? load().then((m) => m.dem) : Promise.resolve(undefined);
+    providers.set(id, p);
+  }
+  return p;
+}
 
+let current = 'mapterhorn';
+/** Сменить источник (в основном потоке и в каждом воркере). Неизвестный — Mapterhorn. */
+export function setDemSource(id: string) { current = id === 'mapterhorn' || PROVIDERS[`../plugins/dem-${id}.ts`] ? id : 'mapterhorn'; }
+export const demSourceId = () => current;
+/** Шаблон адреса тайлов текущего источника (getTile — demTileBlob). */
+export const demUrl = (id = current) => `dem://${id}/{z}/{x}/{y}.webp`;
+export const DEM_URL = demUrl('mapterhorn');
+
+const urlOf = (z: number, x: number, y: number) => MAPTERHORN.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
 /** Тайлы, которых нет (404): ключ z/x/y — чтобы не спрашивать сервер снова. */
 const missing = new Set<string>();
 /** Декодированные высоты недавних тайлов (для подстановки детям). */
@@ -69,16 +97,22 @@ async function fetchBlob(z: number, x: number, y: number, signal?: AbortSignal):
   return res.blob();
 }
 
-/** Высоты тайла z/x/y (с подстановкой из родителя). */
-export function demHeights(z: number, x: number, y: number, signal?: AbortSignal): Promise<Float32Array | undefined> {
-  const key = `${z}/${x}/${y}`;
+/** Высоты тайла источника как есть (без подстановки); undefined — тайла нет. */
+async function ownHeights(id: string, z: number, x: number, y: number, signal?: AbortSignal): Promise<Float32Array | undefined> {
+  if (id === 'mapterhorn') { const blob = await fetchBlob(z, x, y, signal); return blob && decode(blob); }
+  return (await provider(id))?.heights(z, x, y, signal);
+}
+
+/** Высоты тайла z/x/y текущего источника (с подстановкой из родителя). */
+export function demHeights(z: number, x: number, y: number, signal?: AbortSignal, id = current): Promise<Float32Array | undefined> {
+  const key = `${id}/${z}/${x}/${y}`;
   let p = heights.get(key);
   if (!p) {
     p = (async () => {
-      const blob = await fetchBlob(z, x, y, signal);
-      if (blob) return decode(blob);
+      const own = await ownHeights(id, z, x, y, signal);
+      if (own) return own;
       if (z <= DEM_BASE_ZOOM) return;
-      const parent = await demHeights(z - 1, x >> 1, y >> 1, signal);
+      const parent = await demHeights(z - 1, x >> 1, y >> 1, signal, id);
       return parent && upsample(parent, x & 1, y & 1);
     })();
     p.catch(() => heights.delete(key));
@@ -88,14 +122,13 @@ export function demHeights(z: number, x: number, y: number, signal?: AbortSignal
   return p;
 }
 
-/** Тайл для maplibre-contour (getTile): настоящий — как есть, отсутствующий — из родителя, PNG terrarium. */
+/** Тайл для maplibre-contour (getTile): Mapterhorn — как есть, иначе (и отсутствующий) — PNG terrarium из высот. */
 export async function demTileBlob(url: string, abort: AbortController): Promise<{ data: Blob }> {
-  const m = /\/(\d+)\/(\d+)\/(\d+)\.webp$/.exec(url);
+  const m = /^dem:\/\/([\w-]+)\/(\d+)\/(\d+)\/(\d+)\.webp$/.exec(url);
   if (!m) throw new Error(`DEM url ${url}`);
-  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const blob = await fetchBlob(z, x, y, abort.signal);
-  if (blob) return { data: blob };
-  const h = z > DEM_BASE_ZOOM ? await demHeights(z - 1, x >> 1, y >> 1, abort.signal) : undefined;
+  const id = m[1], [z, x, y] = [Number(m[2]), Number(m[3]), Number(m[4])];
+  if (id === 'mapterhorn') { const blob = await fetchBlob(z, x, y, abort.signal); if (blob) return { data: blob }; }
+  const h = await demHeights(z, x, y, abort.signal, id);
   if (!h) throw new Error(`DEM нет тайла ${z}/${x}/${y}`);
-  return { data: await encode(upsample(h, x & 1, y & 1)) };
+  return { data: await encode(h) };
 }

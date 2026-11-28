@@ -91,6 +91,7 @@
       <label class="toggle" title="Эксперимент: тоннели по тегам tunnel и layer; подходы к ним плавно опускаются (уклон дорог 8 %, шаг уровня 6 м)"><input type="checkbox" data-gfx="tunnels3d" /> Показывать тоннели</label>
       <h3 class="panel-group">Рельеф</h3>
       <label class="toggle" title="Эксперимент: объёмный рельеф (Mapterhorn) на карте; здания стоят на минимальной отметке под контуром. В режиме здания рельеф снимается"><input type="checkbox" data-gfx="terrain" /> 3D рельеф</label>
+      <label class="toggle dem-source" id="dem-source-row" hidden title="Откуда брать высоты для рельефа, отмывки и горизонталей. Esri — только для показа: высоты не попадают в правки">Источник рельефа <select id="dem-source"><option value="mapterhorn">Mapterhorn</option></select></label>
       <label class="toggle" title="С рельефом горизонтали натягиваются на него картинкой: появляются быстрее, но на крутых склонах размываются. Без галочки — линиями на своей высоте"><input type="checkbox" data-gfx="contoursRaster" /> Растровые контурные линии</label>
       <h3 class="panel-group">Прочее</h3>
       <label class="toggle" title="Не рисовать ребро между соседними частями, если их грани у него продолжают друг друга (фасад через две части, часть на части с тем же контуром). Сборка рёбер заметно дольше"><input type="checkbox" data-gfx="partSeams" /> Скрывать стыки частей</label>

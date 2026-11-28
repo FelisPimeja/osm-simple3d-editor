@@ -79,8 +79,8 @@ import { BuildingsLayer, setNodeExists, doorWings, ENTRANCE_HEIGHT, ENTRANCE_WID
 import { CONTRAST, setContrastValues } from './render/look';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
-import { Dem, DEM_ATTRIBUTION } from './view/dem';
-import { DEM_MAX_ZOOM, DEM_URL, demTileBlob } from './view/dem-tiles';
+import { Dem, DEM_ATTRIBUTION as MAPTERHORN_ATTRIBUTION } from './view/dem';
+import { DEM_MAX_ZOOM, DEM_URL, demTileBlob, demUrl, setDemSource, demSourceId } from './view/dem-tiles';
 import mlcontour from 'maplibre-contour';
 import { convexHull } from './render/oriented-box';
 import { ContoursLayer } from './render/contours-layer';
@@ -389,6 +389,12 @@ const demSource = new mlcontour.DemSource({ url: DEM_URL, encoding: 'terrarium',
 (demSource.manager as unknown as { getTile: typeof demTileBlob }).getTile = demTileBlob;
 demSource.setupMaplibre(maplibregl);
 const DEM_SHARED = demSource.sharedDemProtocolUrl;
+// Источники высот: Mapterhorn и из плагинов (выбор — под «3D рельеф»)
+const demSources = new Map<string, { name: string; attribution: string }>([['mapterhorn', { name: 'Mapterhorn', attribution: MAPTERHORN_ATTRIBUTION }]]);
+const DEM_CHOICE_KEY = 'osm3d.demSource';
+let demChoice = 'mapterhorn';
+try { demChoice = localStorage.getItem(DEM_CHOICE_KEY) ?? 'mapterhorn'; } catch { /* без хранилища */ }
+const demAttribution = () => demSources.get(demSourceId())!.attribution;
 // Векторные тайлы горизонталей — в своём воркере (изолинии в основном потоке подтормаживали карту)
 {
   let w: Worker | undefined, next = 1;
@@ -406,7 +412,7 @@ const DEM_SHARED = demSource.sharedDemProtocolUrl;
         abort.signal.removeEventListener('abort', onAbort);
         if (r.data) resolve({ arrayBuffer: r.data }); else reject(new Error(r.error));
       });
-      worker.postMessage({ id, z, x, y, options } satisfies ContourTileJob);
+      worker.postMessage({ id, z, x, y, options, dem: demSourceId() } satisfies ContourTileJob);
     });
   };
 }
@@ -436,7 +442,7 @@ function syncContours3d() {
   if (map.getLayer('contours')) map.setLayoutProperty('contours', 'visibility', on ? 'none' : 'visible');
 }
 const showContours = () => {
-  if (mapLoaded) { applyContours(map, contours, CONTOUR_TILES, DEM_ATTRIBUTION); syncContours3d(); return; }
+  if (mapLoaded) { applyContours(map, contours, CONTOUR_TILES, demAttribution()); syncContours3d(); return; }
   if (contoursWait) return;
   contoursWait = true;
   map.once('load', () => queueMicrotask(() => { contoursWait = false; showContours(); }));
@@ -445,7 +451,7 @@ const showContours = () => {
 let hillshade = storedHillshade();
 let hillshadeWaits = false;
 const showHillshade = () => {
-  if (mapLoaded) { applyHillshade(map, hillshade, DEM_SHARED, DEM_ATTRIBUTION, DEM_MAX_ZOOM); return; }
+  if (mapLoaded) { applyHillshade(map, hillshade, DEM_SHARED, demAttribution(), DEM_MAX_ZOOM); return; }
   // Карта ещё грузится: показать после load (после обработчика, который выставит mapLoaded)
   if (hillshadeWaits) return;
   hillshadeWaits = true;
@@ -494,6 +500,15 @@ if (server().imagery) setPluginHost({
     photoLayers.push(p);
     photoGroup?.add({ id: service.id, label, title, on: p.on, onChange: (on) => setPhotos(p, on) });
     syncPhotos();
+  },
+  // Плагины подключаются раньше, чем ниже объявлены список и switchDem: применить после разбора модуля
+  addDem: (id, name, attribution) => {
+    demSources.set(id, { name, attribution });
+    queueMicrotask(() => { if (demChoice === id) switchDem(id); syncDemSelect(); });
+  },
+  removeDem: (id) => {
+    demSources.delete(id);
+    queueMicrotask(() => { if (demSourceId() === id) switchDem('mapterhorn'); syncDemSelect(); });
   },
   removePhotoService: (id) => {
     const i = photoLayers.findIndex((p) => p.service.id === id);
@@ -1694,7 +1709,7 @@ function syncTerrain() {
   terrainShown = want;
   dem.setActive(want);
   if (want) {
-    if (!map.getSource(DEM_SOURCE)) map.addSource(DEM_SOURCE, { type: 'raster-dem', tiles: [DEM_SHARED], tileSize: 512, encoding: 'terrarium', maxzoom: DEM_MAX_ZOOM, attribution: DEM_ATTRIBUTION });
+    if (!map.getSource(DEM_SOURCE)) map.addSource(DEM_SOURCE, { type: 'raster-dem', tiles: [DEM_SHARED], tileSize: 512, encoding: 'terrarium', maxzoom: DEM_MAX_ZOOM, attribution: demAttribution() });
     map.setTerrain({ source: DEM_SOURCE, exaggeration: 1 });
     setGroundSampler((p) => dem.at(p), dem.revision);
   } else {
@@ -1704,6 +1719,40 @@ function syncTerrain() {
   syncContours3d();
   refreshGround();
 }
+/** Источник высот (Mapterhorn или из плагина): кеши у источников свои, источники карты — пересоздать. */
+function switchDem(id: string) {
+  if (!demSources.has(id)) id = 'mapterhorn';
+  if (demSourceId() === id) return;
+  setDemSource(id);
+  (demSource.manager as unknown as { demUrlPattern: string }).demUrlPattern = demUrl();
+  dem.reset();
+  if (mapLoaded) {
+    if (terrainShown) map.setTerrain(null);
+    if (map.getSource(DEM_SOURCE)) map.removeSource(DEM_SOURCE);
+    if (terrainShown) {
+      map.addSource(DEM_SOURCE, { type: 'raster-dem', tiles: [DEM_SHARED], tileSize: 512, encoding: 'terrarium', maxzoom: DEM_MAX_ZOOM, attribution: demAttribution() });
+      map.setTerrain({ source: DEM_SOURCE, exaggeration: 1 });
+    }
+    if (map.getLayer('hillshade')) map.removeLayer('hillshade');
+    if (map.getSource('hillshade')) map.removeSource('hillshade');
+    if (hillshade) showHillshade();
+    for (const l of ['contour-labels', 'contours']) if (map.getLayer(l)) map.removeLayer(l);
+    if (map.getSource('contours')) map.removeSource('contours');
+    if (contours) showContours();
+    contours3d.reload();
+  }
+  if (dem.active) { setGroundSampler((p) => dem.at(p), dem.revision); refreshGround(); }
+}
+const demSelect = document.getElementById('dem-source') as HTMLSelectElement;
+function syncDemSelect() {
+  demSelect.replaceChildren(...[...demSources].map(([id, s]) => new Option(s.name, id, false, id === demSourceId())));
+  document.getElementById('dem-source-row')!.hidden = demSources.size < 2;
+}
+demSelect.addEventListener('change', () => {
+  demChoice = demSelect.value;
+  try { localStorage.setItem(DEM_CHOICE_KEY, demChoice); } catch { /* до перезагрузки */ }
+  switchDem(demChoice);
+});
 /** Отметки поменялись (пришли тайлы DEM, рельеф включён или снят): пересобрать то, что стоит на земле. */
 function refreshGround() {
   groundCache.clear();

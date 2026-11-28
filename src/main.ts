@@ -1753,9 +1753,9 @@ setGround(buildingGround);
 // Карта могла загрузиться раньше, чем модуль дошёл досюда (top-level await выше): тогда — сразу, иначе — по load
 if (mapLoaded) syncTerrain(); else map.once('load', syncTerrain);
 
-// Подстройка контрастного света: ползунки под «Контрастный свет», значения — на этом устройстве
+// Подстройка света: ползунки под «Контрастный свет» и насыщенность теней на земле, значения — на этом устройстве
 {
-  const KEY = 'osm3d.lightTuner';
+  const KEY = 'osm3d.lightTuner2'; // 2: новые значения по умолчанию, старые подстройки сброшены
   let saved: Partial<typeof CONTRAST> = {};
   try { saved = JSON.parse(localStorage.getItem(KEY) ?? '{}'); } catch { /* нет хранилища */ }
   setContrastValues(saved);
@@ -1774,6 +1774,7 @@ if (mapLoaded) syncTerrain(); else map.once('load', syncTerrain);
 
 function applyGraphics() {
   document.getElementById('light-tuner')!.hidden = !gfx.contrastLight;
+  document.getElementById('shadow-tuner')!.hidden = !gfx.shadows;
   syncTerrain();
   syncContours3d();
   overpassLayer.setGraphics(gfx);

@@ -5,8 +5,9 @@
  */
 import * as THREE from 'three';
 
-/** Множитель яркости в контрастном режиме: рассеянный свет слабее, солнце сильнее. */
-export const CONTRAST = { ambient: 0.7, sun: 1.45, exposure: 1 };
+/** Множители яркости в контрастном режиме (рассеянный слабее, солнце сильнее), экспозиция тонмаппинга;
+ *  shadow — насыщенность теней на земле (от режима не зависит). */
+export const CONTRAST = { ambient: 0.8, sun: 1.35, exposure: 1.6, shadow: 0.35 };
 
 let on = false;
 const lights = new Set<WeakRef<THREE.Light>>();

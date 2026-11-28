@@ -15,13 +15,13 @@ import { estimatedPartLevels, generateWindows, partWindowSize, wantsGeneratedWin
 /** Ниши входов: по умолчанию включены (localStorage entranceNiches=0 и перезагрузка — выключить). */
 const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') !== '0'; } catch { return true; } })();
 import * as THREE from 'three';
-import { lit, setContrastLight, toneMapping } from './look';
+import { CONTRAST, lit, setContrastLight, toneMapping } from './look';
 import polygonClipping, { type MultiPolygon as ClipMulti } from 'polygon-clipping';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
-import { AO_STRENGTH, buildShade, CAST_MATERIAL, CAST_ON_MAP, COMPOSITE_MATERIAL, SHADE_MATERIAL, SHADE_ON_MAP, SHADOW_STRENGTH, type ShadeCasters, type ShadeSource } from './ground-shade';
+import { AO_STRENGTH, buildShade, CAST_MATERIAL, CAST_ON_MAP, COMPOSITE_MATERIAL, SHADE_MATERIAL, SHADE_ON_MAP, type ShadeCasters, type ShadeSource } from './ground-shade';
 import { ground } from './ground';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
@@ -1044,7 +1044,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Глаз в координатах группы — для сдвига тени к камере (на рельефе)
       if (direct) cameraEye(main.clone().multiply(model), mat.uniforms.eye.value);
     };
-    shadeMat.uniforms.shadow.value = this.graphics.shadows ? SHADOW_STRENGTH : 0;
+    shadeMat.uniforms.shadow.value = this.graphics.shadows ? CONTRAST.shadow : 0;
     shadeMat.uniforms.ao.value = this.graphics.groundContact ? AO_STRENGTH : 0;
     renderer.resetState();
     const clearStencil = () => { gl.stencilMask(0xff); gl.clearStencil(0); gl.clear(gl.STENCIL_BUFFER_BIT); };
@@ -1061,7 +1061,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       renderer.render(this.shadeScene, this.shadeCamera);
       this.shadeScene.remove(m);
     }
-    castMat.uniforms.shadow.value = SHADOW_STRENGTH;
+    castMat.uniforms.shadow.value = CONTRAST.shadow;
     castMat.uniforms.onBase.value = ground.on ? 1 : 0;
     this.shadeScene.overrideMaterial = castMat;
     for (const c of casters) {

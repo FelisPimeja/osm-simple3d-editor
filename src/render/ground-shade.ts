@@ -1,45 +1,31 @@
 /**
- * Затенение земли вокруг зданий: мягкая окклюзия у стен и тени от солнца, спроецированные на землю.
- * Идея — как у AOShadowLayer (github.com/wallabyway/maplibre-building-shadows), своя реализация без поля
- * расстояний: окклюзия — полосы вдоль рёбер следа и круги в вершинах с затемнением по расстоянию, тень — грани
- * здания, сплющенные на землю вдоль луча солнца. Всё рисуется в буфер с наложением по максимуму (перекрытия не
- * темнеют дважды), буфер чуть размывается и умножается на карту до отрисовки зданий — они закрывают свои следы.
+ * Тени от солнца на земле: грани здания, сплющенные на землю вдоль луча солнца. Рисуются в буфер с наложением
+ * по максимуму (перекрытия не темнеют дважды), буфер умножается на карту до отрисовки зданий — они закрывают свои следы.
  */
 import * as THREE from 'three';
 
 /** Направление на солнце в локальных метрах (x — восток, y — север, z — вверх): то же, что у света зданий. */
 export const SUN = new THREE.Vector3(-0.5, -1, 1.5).normalize();
-/** Ширина окклюзии у стены, м. */
-export const AO_RADIUS = 4;
-/** Затемнение у самой стены (0 — нет, 1 — чёрное). */
-export const AO_STRENGTH = 0.35;
 /** Затемнение в тени. */
 export const SHADOW_STRENGTH = 0.35;
-const DISC = 12;
 
 export interface ShadeSource {
   /** Треугольники здания (xyz, локальные метры), без перекрытий. */
   positions: Float32Array;
   vertices: number;
-  /** Кольца следа (локальные метры) для окклюзии; нет — здание не стоит на земле. Зовётся, только если окклюзия нужна. */
-  rings?: () => [number, number][][];
   /** Отметка рельефа в точке (локальные метры); нет — земля z = 0. ground — версия отметок (пришли тайлы DEM — пересобрать). */
   height?: (x: number, y: number) => number;
   ground?: number;
 }
 
-export interface ShadeOptions { shadow: boolean; ao: boolean }
-
-/** Вершина затенения — четвёрка (x, y, z, d): z — земля, d — расстояние от стены в долях AO_RADIUS (0…1),
- *  у тени −1 − (насколько вершина отнесена от своей точки объекта, в долях полной длины его тени) — для градиента. */
+/** Вершина тени — четвёрка (x, y, z, d): z — земля, d = −1 − (насколько вершина отнесена от своей точки объекта, в долях полной длины его тени) — для градиента. */
 const STRIDE = 4;
 const cache = new WeakMap<Float32Array, { key: string; part: Float32Array }>();
 
-export function shadePart(s: ShadeSource, o: ShadeOptions): Float32Array {
-  const key = `${s.vertices}|${o.shadow}|${o.ao}|${!!s.rings}|${s.height ? s.ground ?? 0 : '-'}`;
+export function shadePart(s: ShadeSource): Float32Array {
+  const key = `${s.vertices}|${s.height ? s.ground ?? 0 : '-'}`;
   const hit = cache.get(s.positions);
   if (hit?.key === key) return hit.part;
-  const rings = o.ao && s.rings ? s.rings() : [];
   // Отметки в одной точке нужны многим вершинам (стены делят их) — запоминаем по точке (до мм)
   const memo = new Map<string, number>();
   const h = !s.height ? () => 0 : (x: number, y: number) => {
@@ -48,13 +34,10 @@ export function shadePart(s: ShadeSource, o: ShadeOptions): Float32Array {
     if (v === undefined) memo.set(k, v = s.height!(x, y));
     return v;
   };
-  let edges = 0;
-  for (const r of rings) edges += r.length;
-  const out = new Float32Array(((o.shadow ? s.vertices * 2 : 0) + edges * (12 + DISC * 3)) * STRIDE);
+  const out = new Float32Array(s.vertices * 2 * STRIDE);
   let n = 0;
   const v = (x: number, y: number, z: number, d: number) => { out[n++] = x; out[n++] = y; out[n++] = z; out[n++] = d; };
-  const g = (x: number, y: number, d: number) => v(x, y, h(x, y), d);
-  if (o.shadow) {
+  {
     // Тень даёт только надземная часть грани: треугольник обрезается по земле (высота над землёй в вершинах —
     // линейно по рёбрам), остаток (3–4 вершины) — лучом от каждой вершины на рельеф: (x − kx·t, y − ky·t, z − t),
     // t — где луч встречает землю, t = z − h(луч(t)), несколько итераций с затуханием (на ровной сходится сразу).
@@ -95,37 +78,14 @@ export function shadePart(s: ShadeSource, o: ShadeOptions): Float32Array {
       }
     }
   }
-  for (const ring of rings) {
-    const m = ring.length - (ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1] ? 1 : 0);
-    for (let i = 0; i < m; i++) {
-      const [ax, ay] = ring[i], [bx, by] = ring[(i + 1) % m];
-      const len = Math.hypot(bx - ax, by - ay);
-      if (len < 1e-3) continue;
-      const nx = -(by - ay) / len * AO_RADIUS, ny = (bx - ax) / len * AO_RADIUS;
-      // Полосы по обе стороны ребра: внутренняя закрыта самим зданием (обход колец знать не нужно)
-      for (const s2 of [1, -1]) {
-        const ox = nx * s2, oy = ny * s2;
-        g(ax, ay, 0); g(bx, by, 0); g(bx + ox, by + oy, 1);
-        g(ax, ay, 0); g(bx + ox, by + oy, 1); g(ax + ox, ay + oy, 1);
-      }
-      // Круг в вершине — скругляет внешние углы
-      for (let k = 0; k < DISC; k++) {
-        g(ax, ay, 0);
-        g(ax + COS[k] * AO_RADIUS, ay + SIN[k] * AO_RADIUS, 1);
-        g(ax + COS[k + 1] * AO_RADIUS, ay + SIN[k + 1] * AO_RADIUS, 1);
-      }
-    }
-  }
   const part = n === out.length ? out : out.slice(0, n);
   cache.set(s.positions, { key, part });
   return part;
 }
-const COS = Array.from({ length: DISC + 1 }, (_, k) => Math.cos((k / DISC) * Math.PI * 2));
-const SIN = Array.from({ length: DISC + 1 }, (_, k) => Math.sin((k / DISC) * Math.PI * 2));
 
 /** Геометрия затенения группы: части зданий (из кеша) одним буфером; position — (x, y, z), d — отдельно. */
-export function buildShade(sources: ShadeSource[], o: ShadeOptions = { shadow: true, ao: true }): THREE.BufferGeometry | undefined {
-  const parts = sources.map((s) => shadePart(s, o));
+export function buildShade(sources: ShadeSource[]): THREE.BufferGeometry | undefined {
+  const parts = sources.map((s) => shadePart(s));
   let total = 0;
   for (const p of parts) total += p.length;
   if (!total) return;
@@ -164,15 +124,15 @@ const FADE = `float fade(vec2 p) {
 
 /** Материал буфера затенения: в красный канал — затемнение, наложение по максимуму. */
 export const SHADE_MATERIAL = new THREE.ShaderMaterial({
-  uniforms: { eye: { value: new THREE.Vector3() }, ao: { value: AO_STRENGTH }, shadow: { value: SHADOW_STRENGTH }, grad: { value: 0 }, gradLen: { value: 1 }, center: { value: new THREE.Vector2() }, radius: { value: 1e9 } },
+  uniforms: { eye: { value: new THREE.Vector3() }, shadow: { value: SHADOW_STRENGTH }, grad: { value: 0 }, gradLen: { value: 1 }, center: { value: new THREE.Vector2() }, radius: { value: 1e9 } },
   vertexShader: `attribute float d; varying float vD; varying vec2 vXY;
     ${TO_EYE}
     void main() { vD = d; vXY = position.xy; gl_Position = projectionMatrix * vec4(toEye(position), 1.0); }`,
-  fragmentShader: `uniform float ao; uniform float shadow; uniform vec2 center; uniform float radius; varying float vD; varying vec2 vXY;
+  fragmentShader: `uniform float shadow; uniform vec2 center; uniform float radius; varying float vD; varying vec2 vXY;
     uniform float grad; uniform float gradLen;
     float gradient(float dist) { return 1.0 - grad * clamp(dist / gradLen, 0.0, 1.0); }
     ${FADE}
-    void main() { float f = fade(vXY); float t = clamp(1.0 - vD, 0.0, 1.0); float v = (vD < -0.5 ? shadow * gradient(-1.0 - vD) : ao * t * t) * f; gl_FragColor = vec4(v, v, v, 1.0); }`,
+    void main() { float v = shadow * gradient(-1.0 - vD) * fade(vXY); gl_FragColor = vec4(v, v, v, 1.0); }`,
   blending: THREE.CustomBlending,
   blendEquation: THREE.MaxEquation,
   blendSrc: THREE.OneFactor,

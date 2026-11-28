@@ -169,7 +169,7 @@ const GFX_KEY = 'osm3d.graphics';
 const touchDevice = matchMedia('(pointer: coarse)').matches;
 /** Радиус попадания по входу пальцем, px экрана. */
 const ENTRANCE_TOUCH_PX = 24;
-const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, contrastLight: true, groundAO: true, shadows: true, groundContact: false, softShadows: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: !touchDevice, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: true, windowTuner: false, showKeys: false, ...loadGraphics() };
+const gfx: GraphicsSettings = { antialias: true, monochrome: false, hemisphere: false, contrastLight: true, groundAO: true, shadows: true, softShadows: false, edges: true, partSeams: false, noGlass: false, defaultHeight: true, trees: !touchDevice, seasons: false, tileBorders: false, bridges3d: false, tunnels3d: false, terrain: false, contoursRaster: false, barriers: true, models3dmr: true, windows: false, windowsAuto: false, windowFill: true, windowsNeighbours: false, labelOcclusion: true, windowTuner: false, showKeys: false, ...loadGraphics() };
 
 function loadGraphics(): Partial<GraphicsSettings> {
   try {

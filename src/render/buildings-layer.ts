@@ -21,7 +21,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
-import { AO_STRENGTH, buildShade, CAST_MATERIAL, CAST_ON_MAP, COMPOSITE_MATERIAL, SHADE_MATERIAL, SHADE_ON_MAP, type ShadeCasters, type ShadeSource } from './ground-shade';
+import { buildShade, CAST_MATERIAL, CAST_ON_MAP, COMPOSITE_MATERIAL, SHADE_MATERIAL, SHADE_ON_MAP, type ShadeCasters, type ShadeSource } from './ground-shade';
 import { ground } from './ground';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
@@ -376,8 +376,6 @@ export interface GraphicsOptions {
   shadows?: boolean;
   /** Контрастный свет: тонмаппинг Neutral, слабее рассеянный свет, сильнее солнце (look.ts). */
   contrastLight?: boolean;
-  /** Мягкое затемнение земли у стен (там же). */
-  groundContact?: boolean;
   /** Размытые края теней и затенения (буфер в полразмера); иначе — чёткие, в CSS-пикселях со сглаживанием. */
   softShadows?: boolean;
   /** Не рисовать стыки соседних частей, чьи грани у стыка лежат в одной плоскости (заметно дороже сборка рёбер). */
@@ -983,7 +981,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const overFirst = this.visible && this.wireframe;
     const split = overFirst && underlays && this.underlays.hasOver();
     if (underlays) this.underlays.render(this.drawMain(options), 'under');
-    if (this.visible && !this.wireframe && !this.focused && !this.sketching && (this.graphics.shadows || this.graphics.groundContact) && this.opacity > 0) this.renderShade(options);
+    if (this.visible && !this.wireframe && !this.focused && !this.sketching && this.graphics.shadows && this.opacity > 0) this.renderShade(options);
     if (split) {
       timed(`${this.id}: кадр (CPU)`, () => this.renderWire(options, 'wire-fills'), () => `${this.groups.size} групп`);
       this.underlays.render(this.drawMain(options), 'over');
@@ -1046,7 +1044,6 @@ export class BuildingsLayer implements CustomLayerInterface {
     };
     shadeMat.uniforms.shadow.value = this.graphics.shadows ? CONTRAST.shadow : 0;
     shadeMat.uniforms.grad.value = CONTRAST.grad; shadeMat.uniforms.gradLen.value = CONTRAST.gradLen;
-    shadeMat.uniforms.ao.value = this.graphics.groundContact ? AO_STRENGTH : 0;
     renderer.resetState();
     const clearStencil = () => { gl.stencilMask(0xff); gl.clearStencil(0); gl.clear(gl.STENCIL_BUFFER_BIT); };
     if (direct) { renderer.setRenderTarget(null); clearStencil(); } else {
@@ -1105,23 +1102,20 @@ export class BuildingsLayer implements CustomLayerInterface {
   private shadeMesh(g: MeshGroup): THREE.Mesh | undefined {
     const of = g.mesh?.geometry;
     if (!of || g.focusScene) return;
-    const opts = { shadow: !!this.graphics.shadows, ao: !!this.graphics.groundContact };
-    const sig = `${opts.shadow}|${opts.ao}|${ground.on ? ground.rev : '-'}|${[...g.hidden].join()}|${[...g.flat].join()}`;
+    const sig = `${ground.on ? ground.rev : '-'}|${[...g.hidden].join()}|${[...g.flat].join()}`;
     if (g.shade?.of === of && g.shade.sig === sig) return g.shade.mesh;
     g.disposeShade();
     const sources: ShadeSource[] = [];
     for (const it of g.items) {
       const key = it.feature.key;
       if (it.pending || g.hidden.has(key) || g.flat.has(key) || it.feature.hasParts || it.top <= g.footprint + 0.05) continue;
-      const polygons = it.feature.polygons, base = it.lift ?? 0;
       sources.push({
         positions: it.positions, vertices: it.positions.length / 3 - it.floorVertices,
-        rings: it.box.min.z < base + 0.5 ? () => polygons.flatMap((p) => [p.outer, ...p.inners].map((r) => r.map(g.toLocal))) : undefined,
         // Рельеф: тень ложится на отметки DEM
         ...(ground.on && { ground: ground.rev, height: (x: number, y: number) => ground.at(g.fromLocal([x, y])) }),
       });
     }
-    const geo = buildShade(sources, opts);
+    const geo = buildShade(sources);
     const mesh = geo ? new THREE.Mesh(geo, SHADE_MATERIAL) : undefined;
     if (mesh) { mesh.frustumCulled = false; mesh.userData.model = g.model; }
     g.shade = { of, sig, mesh };

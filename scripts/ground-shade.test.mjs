@@ -12,11 +12,11 @@ function box(h) {
     const [ax, ay] = ring[i], [bx, by] = ring[(i + 1) % 4];
     p.push(ax, ay, 0, bx, by, 0, bx, by, h, ax, ay, 0, bx, by, h, ax, ay, h);
   }
-  return { positions: new Float32Array(p), vertices: p.length / 3, rings: () => [[...ring, ring[0]]] };
+  return { positions: new Float32Array(p), vertices: p.length / 3 };
 }
 
 test('shadow is cast away from the sun and lies on the ground', () => {
-  const geo = m.buildShade([{ ...box(10), rings: undefined }]);
+  const geo = m.buildShade([box(10)]);
   const pos = geo.getAttribute('position'), d = geo.getAttribute('d');
   let maxX = -Infinity, maxY = -Infinity;
   for (let i = 0; i < pos.count; i++) {
@@ -29,30 +29,18 @@ test('shadow is cast away from the sun and lies on the ground', () => {
   assert.ok(Math.abs(maxY - (10 - m.SUN.y / m.SUN.z * 10)) < 1e-4);
 });
 
-test('ground occlusion bands reach AO_RADIUS from the footprint, only for grounded buildings', () => {
-  const geo = m.buildShade([box(10)]);
-  const pos = geo.getAttribute('position'), d = geo.getAttribute('d');
-  let minX = Infinity, bands = 0;
-  for (let i = 0; i < pos.count; i++) if (d.getX(i) >= 0) { bands++; minX = Math.min(minX, pos.getX(i)); }
-  assert.ok(bands > 0);
-  assert.ok(Math.abs(minX + m.AO_RADIUS) < 1e-4);
-  assert.equal(m.buildShade([]), undefined);
-});
-
-test('only enabled parts are built, and a building is built once per options', () => {
+test('a building is built once until its ground changes', () => {
   const b = box(10);
-  const shadowOnly = m.shadePart(b, { shadow: true, ao: false });
-  for (let i = 3; i < shadowOnly.length; i += 4) assert.ok(shadowOnly[i] <= -1);
-  const aoOnly = m.shadePart(b, { shadow: false, ao: true });
-  for (let i = 3; i < aoOnly.length; i += 4) assert.ok(aoOnly[i] >= 0);
-  assert.equal(m.shadePart(b, { shadow: false, ao: true }), aoOnly);
-  assert.equal(m.buildShade([b], { shadow: false, ao: false }), undefined);
+  const part = m.shadePart(b);
+  for (let i = 3; i < part.length; i += 4) assert.ok(part[i] <= -1);
+  assert.equal(m.shadePart(b), part);
+  assert.equal(m.buildShade([]), undefined);
 });
 
 test('on terrain the shadow lies on the ground: longer downhill', () => {
   const slope = (x, y) => -0.2 * x - 0.4 * y; // вниз к северо-востоку
   const reach = (src) => {
-    const part = m.shadePart(src, { shadow: true, ao: false });
+    const part = m.shadePart(src);
     let far = -Infinity;
     for (let i = 0; i < part.length; i += 4) {
       far = Math.max(far, part[i + 1]);
@@ -60,21 +48,21 @@ test('on terrain the shadow lies on the ground: longer downhill', () => {
     }
     return far;
   };
-  const flat = reach({ ...box(10), rings: undefined });
-  const down = reach({ ...box(10), rings: undefined, height: slope, ground: 1 });
+  const flat = reach(box(10));
+  const down = reach({ ...box(10), height: slope, ground: 1 });
   assert.ok(down > flat + 1, `${down} > ${flat}`);
 });
 
 test('underground vertices are lifted onto the ground, not left below it', () => {
   const b = box(10);
   for (let i = 2; i < b.positions.length; i += 3) if (b.positions[i] === 0) b.positions[i] = -3; // подвал 3 м
-  const part = m.shadePart({ ...b, rings: undefined }, { shadow: true, ao: false });
+  const part = m.shadePart(b);
   for (let i = 0; i < part.length; i += 4) assert.equal(part[i + 2], 0);
   // Засыпанное склоном здание: земля выше крыши — тени нет
-  assert.equal(m.shadePart({ ...box(10), rings: undefined, height: () => 20, ground: 2 }, { shadow: true, ao: false }).length, 0);
+  assert.equal(m.shadePart({ ...box(10), height: () => 20, ground: 2 }).length, 0);
   // Склон до середины стен: тень только от того, что над землёй, и вся — на земле
   const half = (x) => 5 - 0.5 * x;
-  const sloped = m.shadePart({ ...box(10), rings: undefined, height: half, ground: 3 }, { shadow: true, ao: false });
+  const sloped = m.shadePart({ ...box(10), height: half, ground: 3 });
   assert.ok(sloped.length > 0);
   for (let i = 0; i < sloped.length; i += 4) assert.ok(Math.abs(sloped[i + 2] - half(sloped[i])) < 1e-3);
 });
@@ -82,7 +70,7 @@ test('underground vertices are lifted onto the ground, not left below it', () =>
 test('a roof half buried by a slope casts a shadow only from its part above the ground', () => {
   // Склон 5 м → 0 м с запада на восток; крыша на 3 м над землёй только при x > 4
   const slope = (x) => 5 - 0.5 * x;
-  const part = m.shadePart({ ...box(3), rings: undefined, height: slope, ground: 4 }, { shadow: true, ao: false });
+  const part = m.shadePart({ ...box(3), height: slope, ground: 4 });
   assert.ok(part.length > 0);
   for (let i = 0; i < part.length; i += 4) {
     assert.ok(part[i] >= 4 - 1e-3, `shadow at x=${part[i]} — over the buried part`);
@@ -93,12 +81,12 @@ test('a roof half buried by a slope casts a shadow only from its part above the 
 test('clipped shadow vertices stay next to the building', () => {
   // Склон по y: точки пересечения рёбер с землёй должны лежать на рёбрах, а не улетать
   const slope = (x, y) => 5 - 0.5 * y;
-  const part = m.shadePart({ ...box(3), rings: undefined, height: slope, ground: 5 }, { shadow: true, ao: false });
+  const part = m.shadePart({ ...box(3), height: slope, ground: 5 });
   for (let i = 0; i < part.length; i += 4) assert.ok(part[i] > -1 && part[i] < 15 && part[i + 1] > -1 && part[i + 1] < 15, `${part[i]}, ${part[i + 1]}`);
 });
 
 test('shadow vertices carry their share of the object shadow length for the gradient', () => {
-  const part = m.shadePart({ ...box(10), rings: undefined }, { shadow: true, ao: false });
+  const part = m.shadePart(box(10));
   let near = 0, far = 0;
   for (let i = 3; i < part.length; i += 4) {
     const dist = -1 - part[i];

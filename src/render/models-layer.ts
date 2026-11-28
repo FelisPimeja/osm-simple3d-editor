@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { lit } from './look';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { MercatorCoordinate, type Map as MlMap } from 'maplibre-gl';
@@ -118,8 +119,8 @@ export class ModelsLayer {
   hidden: () => boolean = () => false;
 
   constructor() {
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 2.2));
-    const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+    this.scene.add(lit(new THREE.HemisphereLight(0xffffff, 0x888888, 2.2)));
+    const sun = lit(new THREE.DirectionalLight(0xffffff, 1.2));
     sun.position.set(0.5, -0.7, 1);
     this.scene.add(sun);
   }

@@ -1,5 +1,6 @@
 import { ground } from './ground';
 import * as THREE from 'three';
+import { lit } from './look';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import type { ShadeCasters } from './ground-shade';
@@ -102,9 +103,9 @@ export class BarriersLayer {
   drawnWays = 0;
 
   constructor() {
-    const hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
+    const hemi = lit(new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6));
     hemi.position.set(0, 0, 1);
-    const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+    const sun = lit(new THREE.DirectionalLight(0xffffff, 1.8));
     sun.position.set(-0.5, -1, 1.5);
     this.scene.add(hemi, sun);
   }

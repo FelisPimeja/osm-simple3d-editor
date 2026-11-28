@@ -15,6 +15,7 @@ import { estimatedPartLevels, generateWindows, partWindowSize, wantsGeneratedWin
 /** Ниши входов: по умолчанию включены (localStorage entranceNiches=0 и перезагрузка — выключить). */
 const entranceNiches = (() => { try { return localStorage.getItem('entranceNiches') !== '0'; } catch { return true; } })();
 import * as THREE from 'three';
+import { lit, setContrastLight, toneMapping } from './look';
 import polygonClipping, { type MultiPolygon as ClipMulti } from 'polygon-clipping';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
@@ -373,6 +374,8 @@ export interface GraphicsOptions {
   edges: boolean;
   /** Тени от солнца на земле (только на карте; на рельефе — на плоскости, вписанной в рельеф у объекта). */
   shadows?: boolean;
+  /** Контрастный свет: тонмаппинг Neutral, слабее рассеянный свет, сильнее солнце (look.ts). */
+  contrastLight?: boolean;
   /** Мягкое затемнение земли у стен (там же). */
   groundContact?: boolean;
   /** Размытые края теней и затенения (буфер в полразмера); иначе — чёткие, в CSS-пикселях со сглаживанием. */
@@ -790,9 +793,9 @@ class MeshGroup {
   };
   /** Сечения оболочки по высоте (см. sectionAt): те же, пока не менялись объёмы частей. */
   sections?: { solids: PreparedSolid[]; at: Map<number, ClipMulti> };
-  private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
+  private readonly ambient = lit(new THREE.AmbientLight(0xffffff, 1.6));
   // Цвет «земли» — посередине между белым и 0x8a8478: контраст неба и земли вдвое меньше
-  private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
+  private readonly hemi = lit(new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6));
 
   constructor(center: LonLat) {
     this.origin = MercatorCoordinate.fromLngLat({ lng: center[0], lat: center[1] }, 0);
@@ -802,7 +805,7 @@ class MeshGroup {
     this.model = new THREE.Matrix4().makeTranslation(this.origin.x, this.origin.y, 0).scale(new THREE.Vector3(s, -s, s));
     // HemisphereLight светит вдоль оси up — у нас вверх z
     this.hemi.position.set(0, 0, 1);
-    const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+    const sun = lit(new THREE.DirectionalLight(0xffffff, 1.8));
     sun.position.set(-0.5, -1, 1.5);
     this.scene.add(this.ambient, this.hemi, sun);
   }
@@ -969,6 +972,7 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   render(_gl: WebGL2RenderingContext, options: CustomRenderMethodInput) {
     if (!this.renderer) return;
+    toneMapping(this.renderer);
     // Проекция кадра — и для инструментов, когда слой зданий скрыт (подгонка подложки на карте)
     this.lastMain = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
     // Подложки: в режиме здания — его и общие, на карте (и в наброске на ней) — общие; список задаёт main.ts
@@ -7368,6 +7372,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     }
     this.userEdges = o.edges;
     this.graphics = { ...o, edges: o.edges || this.wireframe };
+    setContrastLight(!!o.contrastLight);
     // Стекло — отдельный меш: при переключении пересобираем слитую геометрию
     if (glassChanged) for (const g of this.groups.values()) if (g.mesh) this.rebuildGeometry(g);
     for (const g of this.groups.values()) {

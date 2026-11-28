@@ -1,5 +1,6 @@
 import { ground } from './ground';
 import * as THREE from 'three';
+import { lit } from './look';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MercatorCoordinate } from 'maplibre-gl';
 import type { LonLat } from '../osm/model';
@@ -280,8 +281,8 @@ export class TreeGroup {
   private readonly c = new THREE.Vector4();
   private isFar?: boolean;
   // Свет — как у зданий (MeshGroup)
-  private readonly ambient = new THREE.AmbientLight(0xffffff, 1.6);
-  private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
+  private readonly ambient = lit(new THREE.AmbientLight(0xffffff, 1.6));
+  private readonly hemi = lit(new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6));
 
   /** signature — подпись набора лесов и данных тайла: пересобираем, только если она поменялась. */
   /** sources — ключи рядов и лесов по полю SRC (см. TreeField): клик по их дереву выбирает ряд или лес. */
@@ -386,7 +387,7 @@ export class TreeGroup {
     }
     this.ambient.position.set(0, 0, 1);
     this.hemi.position.set(0, 0, 1);
-    const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+    const sun = lit(new THREE.DirectionalLight(0xffffff, 1.8));
     sun.position.set(-0.5, -1, 1.5);
     this.scene.add(this.ambient, this.hemi, sun);
     this.setFar(false);

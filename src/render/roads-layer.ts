@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { lit, toneMapping } from './look';
 import { MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap } from 'maplibre-gl';
 import type { LonLat } from '../osm/model';
 import { isBridge, isTunnel, roadLevel, type RoadWay } from '../osm/roads';
@@ -80,9 +81,9 @@ export class RoadsLayer implements CustomLayerInterface {
   private selectedIds = new Set<number>();
 
   constructor(readonly id: string) {
-    const hemi = new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6);
+    const hemi = lit(new THREE.HemisphereLight(0xffffff, 0xc4c2bc, 1.6));
     hemi.position.set(0, 0, 1);
-    const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+    const sun = lit(new THREE.DirectionalLight(0xffffff, 1.8));
     sun.position.set(-0.5, -1, 1.5);
     this.scene.add(hemi, sun);
   }
@@ -104,6 +105,7 @@ export class RoadsLayer implements CustomLayerInterface {
     const main = new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]);
     this.camera.projectionMatrix = main.multiply(this.model);
     this.renderer.resetState();
+    toneMapping(this.renderer);
     this.renderer.render(this.scene, this.camera);
   }
 

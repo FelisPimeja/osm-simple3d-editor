@@ -1006,6 +1006,12 @@ export class BuildingsLayer implements CustomLayerInterface {
   private readonly shadeCamera = new THREE.Camera();
   private readonly shadeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), COMPOSITE_MATERIAL);
   private readonly shadeQuadScene = new THREE.Scene().add(this.shadeQuad);
+  /** Силуэт зданий в трафарет (1): тень на рельефе, прошедшем сквозь здание, не рисуется. */
+  private readonly shadeMask = Object.assign(new THREE.Mesh(undefined, new THREE.MeshBasicMaterial({
+    colorWrite: false, depthTest: false, depthWrite: false, side: THREE.DoubleSide,
+    stencilWrite: true, stencilRef: 1, stencilFunc: THREE.AlwaysStencilFunc, stencilZPass: THREE.ReplaceStencilOp,
+    stencilFail: THREE.KeepStencilOp, stencilZFail: THREE.KeepStencilOp, stencilWriteMask: 0xff, stencilFuncMask: 0xff,
+  })), { frustumCulled: false });
 
   /** Затенение земли (ground-shade.ts): в буфер меньше холста, затем умножить на карту — до зданий. */
   private renderShade(options: CustomRenderMethodInput) {
@@ -1046,7 +1052,19 @@ export class BuildingsLayer implements CustomLayerInterface {
     shadeMat.uniforms.grad.value = CONTRAST.grad; shadeMat.uniforms.gradLen.value = CONTRAST.gradLen;
     renderer.resetState();
     const clearStencil = () => { gl.stencilMask(0xff); gl.clearStencil(0); gl.clear(gl.STENCIL_BUFFER_BIT); };
-    if (direct) { renderer.setRenderTarget(null); clearStencil(); } else {
+    if (direct) {
+      renderer.setRenderTarget(null); clearStencil();
+      // Здание стоит на нижней отметке под контуром, и на склоне рельеф проходит сквозь его низкие части: тени на
+      // этом рельефе ложились пятнами поверх здания. Силуэт зданий — в трафарет (без глубины): там тень не рисуется
+      for (const g of this.activeGroups()) {
+        if (!g.mesh || g.focusScene) continue;
+        this.shadeMask.geometry = g.mesh.geometry;
+        this.shadeCamera.projectionMatrix = main.clone().multiply(g.model);
+        this.shadeScene.add(this.shadeMask);
+        renderer.render(this.shadeScene, this.shadeCamera);
+        this.shadeScene.remove(this.shadeMask);
+      }
+    } else {
       renderer.setRenderTarget(target);
       renderer.setClearColor(0x000000, 0);
       renderer.clear(true, false, false);

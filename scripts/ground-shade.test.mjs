@@ -90,7 +90,28 @@ test('shadow vertices carry their share of the object shadow length for the grad
   let near = 0, far = 0;
   for (let i = 3; i < part.length; i += 4) {
     const dist = -1 - part[i];
-    if (Math.abs(dist) < 1e-4) near++; else { assert.ok(Math.abs(dist - 1) < 1e-3, `${dist}`); far++; } // доля полной тени: верх куба — её конец
+    // Доля полной длины тени — от контура куба: у стен 0, дальше — не больше конца тени
+    if (Math.abs(dist) < 1e-4) near++; else { assert.ok(dist > 0 && dist <= 1 + 1e-3, `${dist}`); far++; }
   }
   assert.ok(near > 0 && far > 0);
+});
+
+test('under a canopy the shadow is solid: the gradient runs from the outline, not from the canopy', () => {
+  // Навес 10×10 на высоте 10 (две грани плиты) и колонна в углу: тень под навесом — у самого контура
+  const p = [0, 0, 10, 10, 0, 10, 10, 10, 10, 0, 0, 10, 10, 10, 10, 0, 10, 10];
+  const part = m.shadePart({ positions: new Float32Array(p), vertices: 6 });
+  let under = 0;
+  for (let i = 0; i < part.length; i += 4) {
+    const x = part[i], y = part[i + 1], dist = -1 - part[i + 3];
+    if (x >= 0 && x <= 10 && y >= 0 && y <= 10) { under++; assert.ok(Math.abs(dist) < 1e-4, `${x}, ${y}: ${dist}`); }
+  }
+  assert.ok(under > 0);
+  assert.equal(m.distToHull(m.hull2d(new Float32Array(p), 6), 15, 5), 5);
+});
+
+test('glass casts a pale shadow: its vertices are marked for the shader', () => {
+  const b = box(10);
+  const part = m.shadePart({ ...b, positions: b.positions.slice(), glass: [[0, b.vertices]] });
+  for (let i = 3; i < part.length; i += 4) assert.ok(part[i] <= -10 + 1e-6 && part[i] > -12, `${part[i]}`);
+  assert.ok(m.GLASS_SHADOW < 0.5);
 });

@@ -21,7 +21,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
-import { buildShade, CAST_MATERIAL, CAST_ON_MAP, COMPOSITE_MATERIAL, SHADE_MATERIAL, SHADE_ON_MAP, type ShadeCasters, type ShadeSource } from './ground-shade';
+import { buildShade, CAST_MATERIAL, CAST_ON_MAP, CAST_TO_BUF, COMPOSITE_MATERIAL, SHADE_MATERIAL, SHADE_ON_MAP, SHADE_TO_BUF, type ShadeCasters, type ShadeSource } from './ground-shade';
 import { ground } from './ground';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LngLat, MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap, type PointLike } from 'maplibre-gl';
@@ -826,6 +826,8 @@ class MeshGroup {
 
   /** Затенение земли группы (ground-shade.ts) и по какой геометрии посчитано. */
   shade?: { of: THREE.BufferGeometry; sig: string; mesh?: THREE.Mesh };
+  /** Силуэт для трафарета теней на рельефе (buildings-layer maskGeometry). */
+  shadeMaskGeo?: { of: THREE.BufferGeometry; rev: number; geo: THREE.BufferGeometry };
   /** Стекло группы — прозрачное, поэтому отдельно от непрозрачной слитой геометрии. */
   glass?: THREE.Mesh;
   /** Рельсы под арками с railway=*. */
@@ -850,6 +852,7 @@ class MeshGroup {
 
   disposeMesh() {
     this.disposeShade();
+    this.shadeMaskGeo?.geo.dispose(); this.shadeMaskGeo = undefined;
     this.disposeEntrances();
     this.disposeEdges();
     this.disposeStrokes();
@@ -936,6 +939,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   drawLate?: (renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain: THREE.Matrix4) => number;
   /** Свои объекты, отбрасывающие тень на землю (ограждения, модели 3dmr). */
   shadeExtra?: () => ShadeCasters[];
+  /** Готовые тени на рельефе (userData.model — матрица): ограждения. */
+  shadeDraped?: () => THREE.Mesh[];
   private drawMain(options: CustomRenderMethodInput): THREE.Matrix4 {
     return this.plainDepth() ? new THREE.Matrix4().fromArray(options.defaultProjectionData.mainMatrix as unknown as number[]) : depthMain(options);
   }
@@ -962,6 +967,7 @@ export class BuildingsLayer implements CustomLayerInterface {
 
   onRemove() {
     this.shadeTarget?.dispose();
+    this.shadeBuf?.dispose(); this.shadeBuf = undefined;
     this.shadeTarget = undefined;
     if (this.composite) { this.composite.target.dispose(); this.composite.material.dispose(); this.composite = undefined; }
     this.renderer?.dispose();
@@ -1004,6 +1010,8 @@ export class BuildingsLayer implements CustomLayerInterface {
   private shadeTarget?: THREE.WebGLRenderTarget;
   private readonly shadeScene = new THREE.Scene();
   private readonly shadeCamera = new THREE.Camera();
+  /** Буфер теней на рельефе (по максимуму), размером с холст. */
+  private shadeBuf?: THREE.WebGLRenderTarget;
   private readonly shadeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), COMPOSITE_MATERIAL);
   private readonly shadeQuadScene = new THREE.Scene().add(this.shadeQuad);
   /** Силуэт зданий в трафарет (1): тень на рельефе, прошедшем сквозь здание, не рисуется. */
@@ -1022,6 +1030,7 @@ export class BuildingsLayer implements CustomLayerInterface {
     const soft = !!this.graphics.softShadows, scale = soft ? 0.5 : 1 / Math.max(1, devicePixelRatio);
     const w = Math.max(1, Math.round(gl.drawingBufferWidth * scale)), h = Math.max(1, Math.round(gl.drawingBufferHeight * scale));
     const meshes = this.activeGroups().map((g) => this.shadeMesh(g)).filter((m): m is THREE.Mesh => !!m);
+    if (this.graphics.shadows && ground.on && this.shadeDraped) meshes.push(...this.shadeDraped());
     const casters: ShadeCasters[] = [];
     if (this.graphics.shadows) {
       if (this.graphics.trees !== false) for (const t of this.trees.values()) for (const c of t.shadowCasters()) casters.push({ ...c, model: t.model });
@@ -1030,7 +1039,6 @@ export class BuildingsLayer implements CustomLayerInterface {
     if (!meshes.length && !casters.some((c) => c.objects.length)) return;
     // На рельефе — прямо на карту с проверкой глубины: бровка перед тенью закрывает её (в буфере глубины нет)
     const direct = ground.on;
-    const shadeMat = direct ? SHADE_ON_MAP : SHADE_MATERIAL, castMat = direct ? CAST_ON_MAP : CAST_MATERIAL;
     if (this.shadeTarget && this.shadeTarget.samples !== (soft ? 0 : 4)) { this.shadeTarget.dispose(); this.shadeTarget = undefined; }
     const target = this.shadeTarget ??= new THREE.WebGLRenderTarget(w, h, { depthBuffer: false, samples: soft ? 0 : 4 });
     if (target.width !== w || target.height !== h) target.setSize(w, h);
@@ -1048,59 +1056,70 @@ export class BuildingsLayer implements CustomLayerInterface {
       // Глаз в координатах группы — для сдвига тени к камере (на рельефе)
       if (direct) cameraEye(main.clone().multiply(model), mat.uniforms.eye.value);
     };
-    shadeMat.uniforms.shadow.value = this.graphics.shadows ? CONTRAST.shadow : 0;
-    shadeMat.uniforms.grad.value = CONTRAST.grad; shadeMat.uniforms.gradLen.value = CONTRAST.gradLen;
+    // Все тени одним проходом заданными материалами (у клонов материалов свои uniforms — ставим каждому)
+    const drawAll = (shadeMat: THREE.ShaderMaterial, castMat: THREE.ShaderMaterial) => {
+      shadeMat.uniforms.shadow.value = this.graphics.shadows ? CONTRAST.shadow : 0;
+      shadeMat.uniforms.grad.value = CONTRAST.grad; shadeMat.uniforms.gradLen.value = CONTRAST.gradLen;
+      for (const m of meshes) {
+        m.material = shadeMat;
+        this.shadeCamera.projectionMatrix = main.clone().multiply(m.userData.model as THREE.Matrix4);
+        focusOn(shadeMat, m.userData.model as THREE.Matrix4);
+        this.shadeScene.add(m);
+        renderer.render(this.shadeScene, this.shadeCamera);
+        this.shadeScene.remove(m);
+      }
+      castMat.uniforms.shadow.value = CONTRAST.shadow;
+      castMat.uniforms.grad.value = CONTRAST.grad; castMat.uniforms.gradLen.value = CONTRAST.gradLen;
+      castMat.uniforms.onBase.value = ground.on ? 1 : 0;
+      this.shadeScene.overrideMaterial = castMat;
+      for (const c of casters) {
+        if (!c.objects.length) continue;
+        this.shadeCamera.projectionMatrix = main.clone().multiply(c.model);
+        focusOn(castMat, c.model);
+        castMat.uniforms.groundZ.value = c.groundZ ?? 0;
+        castMat.uniforms.top.value = c.top ?? 1;
+        castMat.uniforms.height.value = c.height ?? 0;
+        // Объект временно в сцене тени (add снимает его с родителя) — потом на прежнее место и с прежней видимостью
+        const saved = c.objects.map((o) => ({ o, parent: o.parent, at: o.parent?.children.indexOf(o) ?? -1, visible: o.visible, culled: o.frustumCulled }));
+        for (const o of c.objects) { this.shadeScene.add(o); o.visible = true; o.frustumCulled = false; }
+        try { renderer.render(this.shadeScene, this.shadeCamera); } finally {
+          for (const s of saved) {
+            this.shadeScene.remove(s.o);
+            s.o.visible = s.visible; s.o.frustumCulled = s.culled;
+            if (s.parent) { s.parent.children.splice(s.at, 0, s.o); s.o.parent = s.parent; }
+          }
+        }
+      }
+      this.shadeScene.overrideMaterial = null;
+    };
     renderer.resetState();
     const clearStencil = () => { gl.stencilMask(0xff); gl.clearStencil(0); gl.clear(gl.STENCIL_BUFFER_BIT); };
     if (direct) {
+      // Сначала в буфер размером с холст по максимуму (перекрытия — самое тёмное), затем та же геометрия — на карту
+      // с глубиной и трафаретом, цвет — из буфера
+      const fw = gl.drawingBufferWidth, fh = gl.drawingBufferHeight;
+      const buf = this.shadeBuf ??= new THREE.WebGLRenderTarget(fw, fh, { depthBuffer: false });
+      if (buf.width !== fw || buf.height !== fh) buf.setSize(fw, fh);
+      renderer.setRenderTarget(buf);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, false, false);
+      drawAll(SHADE_TO_BUF, CAST_TO_BUF);
+      renderer.resetState();
       renderer.setRenderTarget(null); clearStencil();
       // Здание стоит на нижней отметке под контуром, и на склоне рельеф проходит сквозь его низкие части: тени на
       // этом рельефе ложились пятнами поверх здания. Силуэт зданий — в трафарет (без глубины): там тень не рисуется
       for (const g of this.activeGroups()) {
         if (!g.mesh || g.focusScene) continue;
-        this.shadeMask.geometry = g.mesh.geometry;
+        const geo = this.maskGeometry(g);
+        if (!geo) continue;
+        this.shadeMask.geometry = geo;
         this.shadeCamera.projectionMatrix = main.clone().multiply(g.model);
         this.shadeScene.add(this.shadeMask);
         renderer.render(this.shadeScene, this.shadeCamera);
         this.shadeScene.remove(this.shadeMask);
       }
-    } else {
-      renderer.setRenderTarget(target);
-      renderer.setClearColor(0x000000, 0);
-      renderer.clear(true, false, false);
-    }
-    for (const m of meshes) {
-      m.material = shadeMat;
-      this.shadeCamera.projectionMatrix = main.clone().multiply(m.userData.model as THREE.Matrix4);
-      focusOn(shadeMat, m.userData.model as THREE.Matrix4);
-      this.shadeScene.add(m);
-      renderer.render(this.shadeScene, this.shadeCamera);
-      this.shadeScene.remove(m);
-    }
-    castMat.uniforms.shadow.value = CONTRAST.shadow;
-    castMat.uniforms.grad.value = CONTRAST.grad; castMat.uniforms.gradLen.value = CONTRAST.gradLen;
-    castMat.uniforms.onBase.value = ground.on ? 1 : 0;
-    this.shadeScene.overrideMaterial = castMat;
-    for (const c of casters) {
-      if (!c.objects.length) continue;
-      this.shadeCamera.projectionMatrix = main.clone().multiply(c.model);
-      focusOn(castMat, c.model);
-      castMat.uniforms.groundZ.value = c.groundZ ?? 0;
-      castMat.uniforms.top.value = c.top ?? 1;
-      castMat.uniforms.height.value = c.height ?? 0;
-      // Объект временно в сцене тени (add снимает его с родителя) — потом на прежнее место и с прежней видимостью
-      const saved = c.objects.map((o) => ({ o, parent: o.parent, at: o.parent?.children.indexOf(o) ?? -1, visible: o.visible, culled: o.frustumCulled }));
-      for (const o of c.objects) { this.shadeScene.add(o); o.visible = true; o.frustumCulled = false; }
-      try { renderer.render(this.shadeScene, this.shadeCamera); } finally {
-        for (const s of saved) {
-          this.shadeScene.remove(s.o);
-          s.o.visible = s.visible; s.o.frustumCulled = s.culled;
-          if (s.parent) { s.parent.children.splice(s.at, 0, s.o); s.o.parent = s.parent; }
-        }
-      }
-    }
-    this.shadeScene.overrideMaterial = null;
-    if (direct) {
+      for (const m of [SHADE_ON_MAP, CAST_ON_MAP]) { m.uniforms.buf.value = buf.texture; m.uniforms.bufTexel.value.set(1 / fw, 1 / fh); }
+      drawAll(SHADE_ON_MAP, CAST_ON_MAP);
       // Трафарет — общий с MapLibre (маски тайлов): очистить и попросить нарисовать маски заново
       clearStencil();
       (this.map as unknown as { painter?: { frameRenderContext?: { invalidateTileClippingMasks?: () => void } } })
@@ -1108,6 +1127,10 @@ export class BuildingsLayer implements CustomLayerInterface {
       renderer.resetState();
       return;
     }
+    renderer.setRenderTarget(target);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, false, false);
+    drawAll(SHADE_MATERIAL, CAST_MATERIAL);
     renderer.setRenderTarget(null);
     COMPOSITE_MATERIAL.uniforms.map.value = target.texture;
     COMPOSITE_MATERIAL.uniforms.texel.value.set(1 / w, 1 / h);
@@ -1116,11 +1139,34 @@ export class BuildingsLayer implements CustomLayerInterface {
     renderer.render(this.shadeQuadScene, this.shadeCamera);
   }
 
+  /**
+   * Силуэт группы для трафарета теней на рельефе: вершины ниже земли в своей точке подняты на неё. Здание стоит
+   * на нижней отметке, и его засыпанная склоном часть иначе вырезала тень у видимого основания.
+   */
+  private maskGeometry(g: MeshGroup): THREE.BufferGeometry | undefined {
+    const of = g.mesh?.geometry, pos = of?.getAttribute('position');
+    if (!of || !pos) return;
+    if (g.shadeMaskGeo?.of === of && g.shadeMaskGeo.rev === ground.rev) return g.shadeMaskGeo.geo;
+    g.shadeMaskGeo?.geo.dispose();
+    const out = new Float32Array(pos.count * 3), memo = new Map<string, number>();
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), k = `${Math.round(x * 100)},${Math.round(y * 100)}`;
+      let h = memo.get(k);
+      if (h === undefined) memo.set(k, h = ground.at(g.fromLocal([x, y])));
+      out[i * 3] = x; out[i * 3 + 1] = y; out[i * 3 + 2] = Math.max(pos.getZ(i), h);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(out, 3));
+    if (of.index) geo.setIndex(of.index);
+    g.shadeMaskGeo = { of, rev: ground.rev, geo };
+    return geo;
+  }
+
   /** Меш затенения группы: пересчитывается, когда пересобрана слитая геометрия или сменились скрытые. */
   private shadeMesh(g: MeshGroup): THREE.Mesh | undefined {
     const of = g.mesh?.geometry;
     if (!of || g.focusScene) return;
-    const sig = `${ground.on ? ground.rev : '-'}|${[...g.hidden].join()}|${[...g.flat].join()}`;
+    const sig = `${ground.on ? ground.rev : '-'}|${+glassEnabled}|${[...g.hidden].join()}|${[...g.flat].join()}`;
     if (g.shade?.of === of && g.shade.sig === sig) return g.shade.mesh;
     g.disposeShade();
     const sources: ShadeSource[] = [];
@@ -1128,7 +1174,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       const key = it.feature.key;
       if (it.pending || g.hidden.has(key) || g.flat.has(key) || it.feature.hasParts || it.top <= g.footprint + 0.05) continue;
       sources.push({
-        positions: it.positions, vertices: it.positions.length / 3 - it.floorVertices,
+        positions: it.positions, vertices: it.positions.length / 3 - it.floorVertices, glass: glassRanges(it),
         // Рельеф: тень ложится на отметки DEM
         ...(ground.on && { ground: ground.rev, height: (x: number, y: number) => ground.at(g.fromLocal([x, y])) }),
       });

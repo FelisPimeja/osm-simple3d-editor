@@ -971,6 +971,7 @@ overpassLayer.drawExtra = (renderer, main, plain) => barriersLayer.draw(renderer
 overpassLayer.drawLate = (renderer, main, plain) => modelsLayer.draw(renderer, main, plain);
 // Ограждения на рельефе поднимаются повершинно — плоскости их основания нет, тень от них там не рисуем
 overpassLayer.shadeExtra = () => [...(gfx.barriers && !terrainShown ? [barriersLayer.shadowCasters()] : []), ...modelsLayer.shadowCasters()];
+overpassLayer.shadeDraped = () => { const m = gfx.barriers && terrainShown ? barriersLayer.shadeDraped() : undefined; return m ? [m] : []; };
 // Глубина MapLibre без сжатия: рядом мосты (их глубина — MapLibre) или рельеф (склон перед зданием должен его закрывать)
 overpassLayer.plainDepth = () => (roadsLayer.isEnabled && !roadsLayer.hidden()) || terrainShown;
 /**

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { lit } from './look';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
-import type { ShadeCasters } from './ground-shade';
+import { buildShade, SHADE_MATERIAL, type ShadeCasters } from './ground-shade';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { MercatorCoordinate, type Map as MlMap } from 'maplibre-gl';
 import { barrierShape, gateColour, gateWidth, type BarrierGate, type BarrierWay } from '../osm/barriers';
@@ -156,6 +156,21 @@ export class BarriersLayer {
   /** Отрисовка в проходе слоя зданий: main — его матрица (глубина как у зданий), plain — матрица MapLibre. */
   /** Тень на земле: стены, заборы и изгороди. */
   shadowCasters(): ShadeCasters { return { objects: this.meshes, model: this.model, height: 2 }; }
+
+  /** Тень на рельефе: вершины ограждений стоят каждая на своей отметке — тень раскладывается по DEM, как у зданий. */
+  shadeDraped(): THREE.Mesh | undefined {
+    const d = this.drape;
+    if (!d || !d.positions.length) return;
+    if (!d.mesh) {
+      const geo = buildShade([{ positions: d.positions, vertices: d.positions.length / 3, height: d.height, ground: d.rev }]);
+      if (!geo) return;
+      d.mesh = new THREE.Mesh(geo, SHADE_MATERIAL);
+      d.mesh.frustumCulled = false;
+    }
+    d.mesh.userData.model = this.model;
+    return d.mesh;
+  }
+  private drape?: { positions: Float32Array; height: (x: number, y: number) => number; rev: number; mesh?: THREE.Mesh };
 
   draw(renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain: THREE.Matrix4): number {
     if (!this.enabled || (!this.meshes.length && !this.openingMesh && !this.gateDots.length) || this.hidden()) return 0;
@@ -444,6 +459,7 @@ export class BarriersLayer {
       };
       for (const arr of [buf.solid.p, buf.see.p, gateBuf.p, openBuf.p, lines, ...axes]) for (let i = 0; i + 2 < arr.length; i += 3) arr[i + 2] += gz(arr[i], arr[i + 1]);
       for (const g of gateList) g.z += gz(g.at[0], g.at[1]);
+      this.drape = { positions: new Float32Array([...buf.solid.p, ...buf.see.p, ...gateBuf.p]), height: gz, rev: ground.rev };
     }
     this.gates = gateList;
     // Проёмы проходов: в выборе — как треугольники, на экране — только выбранные (подсветка)
@@ -481,6 +497,7 @@ export class BarriersLayer {
   }
 
   private clearMeshes() {
+    this.drape?.mesh?.geometry.dispose(); this.drape = undefined;
     for (const mesh of this.meshes) { mesh.geometry.dispose(); this.scene.remove(mesh); }
     if (this.ghostMesh) { this.ghostMesh.geometry.dispose(); this.scene.remove(this.ghostMesh); this.ghostMesh = undefined; }
     if (this.ghostAxis) { this.ghostAxis.geometry.dispose(); this.scene.remove(this.ghostAxis); this.ghostAxis = undefined; }

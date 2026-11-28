@@ -1071,6 +1071,8 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.shadeCamera.projectionMatrix = main.clone().multiply(c.model);
       focusOn(castMat, c.model);
       castMat.uniforms.groundZ.value = c.groundZ ?? 0;
+      castMat.uniforms.top.value = c.top ?? 1;
+      castMat.uniforms.height.value = c.height ?? 0;
       // Объект временно в сцене тени (add снимает его с родителя) — потом на прежнее место и с прежней видимостью
       const saved = c.objects.map((o) => ({ o, parent: o.parent, at: o.parent?.children.indexOf(o) ?? -1, visible: o.visible, culled: o.frustumCulled }));
       for (const o of c.objects) { this.shadeScene.add(o); o.visible = true; o.frustumCulled = false; }

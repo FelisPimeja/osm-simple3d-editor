@@ -6,8 +6,8 @@
 import * as THREE from 'three';
 
 /** Множители яркости в контрастном режиме (рассеянный слабее, солнце сильнее), экспозиция тонмаппинга;
- *  shadow — насыщенность теней на земле, grad — насколько тень бледнеет к gradLen метрам от объекта (от режима не зависят). */
-export const CONTRAST = { ambient: 0.8, sun: 1.35, exposure: 1.6, shadow: 0.35, grad: 0.6, gradLen: 40 };
+ *  shadow — насыщенность теней на земле, grad — насколько тень бледнеет к концу gradLen (в долях полной длины тени объекта) (от режима не зависят). */
+export const CONTRAST = { ambient: 0.8, sun: 1.35, exposure: 1.6, shadow: 0.35, grad: 0.6, gradLen: 1 };
 
 let on = false;
 const lights = new Set<WeakRef<THREE.Light>>();

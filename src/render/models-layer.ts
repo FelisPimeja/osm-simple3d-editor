@@ -367,7 +367,7 @@ export class ModelsLayer {
   /** Тень на земле: каждая размещённая модель — в своей локальной системе. */
   shadowCasters(): ShadeCasters[] {
     if (!this.enabled || this.hidden()) return [];
-    return this.placed().map((inst) => ({ objects: [inst], model: inst.userData.world as THREE.Matrix4 }));
+    return this.placed().map((inst) => ({ objects: [inst], model: inst.userData.world as THREE.Matrix4, height: (inst.userData.shadeHeight ??= Math.max(new THREE.Box3().setFromObject(inst).max.z, 0.5)) as number }));
   }
 
   draw(renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain?: THREE.Matrix4): number {

@@ -155,7 +155,7 @@ export class BarriersLayer {
 
   /** Отрисовка в проходе слоя зданий: main — его матрица (глубина как у зданий), plain — матрица MapLibre. */
   /** Тень на земле: стены, заборы и изгороди. */
-  shadowCasters(): ShadeCasters { return { objects: this.meshes, model: this.model }; }
+  shadowCasters(): ShadeCasters { return { objects: this.meshes, model: this.model, height: 2 }; }
 
   draw(renderer: THREE.WebGLRenderer, main: THREE.Matrix4, plain: THREE.Matrix4): number {
     if (!this.enabled || (!this.meshes.length && !this.openingMesh && !this.gateDots.length) || this.hidden()) return 0;

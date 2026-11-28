@@ -1836,7 +1836,6 @@
   "Экспозиция": "Exposure",
   "Насыщенность": "Strength",
   "Градиент": "Gradient",
-  "Длина, м": "Length, m",
   "Насколько тень бледнеет вдали от объекта": "How much the shadow fades away from the object",
-  "На каком расстоянии от объекта тень бледнеет полностью, м": "Distance from the object at which the fade is complete, m"
+  "Где тень бледнеет полностью: доля полной длины тени объекта (зависит от его высоты)": "Where the fade is complete, as a share of the object's full shadow length (depends on its height)"
 }

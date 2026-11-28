@@ -97,13 +97,12 @@ test('clipped shadow vertices stay next to the building', () => {
   for (let i = 0; i < part.length; i += 4) assert.ok(part[i] > -1 && part[i] < 15 && part[i + 1] > -1 && part[i + 1] < 15, `${part[i]}, ${part[i + 1]}`);
 });
 
-test('shadow vertices carry their distance from the object for the gradient', () => {
+test('shadow vertices carry their share of the object shadow length for the gradient', () => {
   const part = m.shadePart({ ...box(10), rings: undefined }, { shadow: true, ao: false });
-  const reach = Math.hypot(m.SUN.x, m.SUN.y) / m.SUN.z * 10;
   let near = 0, far = 0;
   for (let i = 3; i < part.length; i += 4) {
     const dist = -1 - part[i];
-    if (Math.abs(dist) < 1e-4) near++; else { assert.ok(Math.abs(dist - reach) < 1e-3, `${dist}`); far++; }
+    if (Math.abs(dist) < 1e-4) near++; else { assert.ok(Math.abs(dist - 1) < 1e-3, `${dist}`); far++; } // доля полной тени: верх куба — её конец
   }
   assert.ok(near > 0 && far > 0);
 });

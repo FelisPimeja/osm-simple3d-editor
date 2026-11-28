@@ -426,7 +426,7 @@ export class TreeGroup {
   nearShown = false;
 
   /** Тень на земле: стволы и заместители крон (ближний вид; стволы лесов — нет). */
-  shadowCasters(): { objects: THREE.Object3D[]; groundZ?: number }[] {
+  shadowCasters(): { objects: THREE.Object3D[]; groundZ?: number; top?: number }[] {
     if (!this.nearShown) return [];
     // Заместители крон делят с кронами матрицы экземпляров (и скрытые экземпляры тоже)
     this.shadowProxies ??= this.near.map((crown) => {
@@ -437,7 +437,8 @@ export class TreeGroup {
     for (const [crown, proxy] of this.shadowProxies) proxy.count = crown.count;
     // Стволы — как есть (открытый цилиндр в 5 граней); стволы лесов — без тени. Земля у кроны — ниже её начала:
     // крона с доли k высоты, масштаб по z — (1 − k)·высота
-    return [{ objects: [this.trunks] }, ...this.shadowProxies.map(([crown, proxy]) => {
+    // Высота дерева в долях ствола (ствол — основание кроны + 30 % кроны; лиственное ≈ 1,83, хвойное ≈ 2,5)
+    return [{ objects: [this.trunks], top: 1 / (BROAD_CROWN_BASE + 0.3 * (1 - BROAD_CROWN_BASE)) }, ...this.shadowProxies.map(([crown, proxy]) => {
       const k = crown.geometry === BROAD_GEO ? BROAD_CROWN_BASE : NEEDLE_CROWN_BASE;
       return { objects: [proxy], groundZ: -k / (1 - k) };
     })];

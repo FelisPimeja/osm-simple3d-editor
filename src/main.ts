@@ -1755,7 +1755,7 @@ if (mapLoaded) syncTerrain(); else map.once('load', syncTerrain);
 
 // Подстройка света: ползунки под «Контрастный свет» и насыщенность теней на земле, значения — на этом устройстве
 {
-  const KEY = 'osm3d.lightTuner2'; // 2: новые значения по умолчанию, старые подстройки сброшены
+  const KEY = 'osm3d.lightTuner3'; // 3: длина градиента теней — в долях тени объекта, старые подстройки сброшены
   let saved: Partial<typeof CONTRAST> = {};
   try { saved = JSON.parse(localStorage.getItem(KEY) ?? '{}'); } catch { /* нет хранилища */ }
   setContrastValues(saved);

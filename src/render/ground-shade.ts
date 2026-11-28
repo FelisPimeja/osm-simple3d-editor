@@ -31,7 +31,7 @@ export interface ShadeSource {
 export interface ShadeOptions { shadow: boolean; ao: boolean }
 
 /** Вершина затенения — четвёрка (x, y, z, d): z — земля, d — расстояние от стены в долях AO_RADIUS (0…1),
- *  у тени −1 − (насколько вершина тени отнесена от своей точки объекта по горизонтали, м) — для градиента. */
+ *  у тени −1 − (насколько вершина отнесена от своей точки объекта, в долях полной длины его тени) — для градиента. */
 const STRIDE = 4;
 const cache = new WeakMap<Float32Array, { key: string; part: Float32Array }>();
 
@@ -65,9 +65,13 @@ export function shadePart(s: ShadeSource, o: ShadeOptions): Float32Array {
       let t = above;
       if (s.height) for (let it = 0; it < 4; it++) t = Math.max(0, 0.5 * t + 0.5 * (z - h(x - kx * t, y - ky * t)));
       const sx = x - kx * t, sy = y - ky * t;
-      out.push(sx, sy, s.height ? h(sx, sy) : z - t, t * Math.hypot(kx, ky));
+      out.push(sx, sy, s.height ? h(sx, sy) : z - t, t * Math.hypot(kx, ky) / full);
     };
     const poly: number[] = [], shadow: number[] = [];
+    // Полная длина тени объекта — от его высшей точки над землёй: градиент тени — в её долях
+    let top = 0;
+    for (let i = 0; i < s.vertices * 3; i += 3) top = Math.max(top, p[i + 2] - h(p[i], p[i + 1]));
+    const full = Math.max(top, 0.1) * Math.hypot(kx, ky);
     for (let i = 0; i < s.vertices * 3; i += 9) {
       poly.length = 0;
       const a = [0, 3, 6].map((k) => p[i + k + 2] - h(p[i + k], p[i + k + 1]));
@@ -160,7 +164,7 @@ const FADE = `float fade(vec2 p) {
 
 /** Материал буфера затенения: в красный канал — затемнение, наложение по максимуму. */
 export const SHADE_MATERIAL = new THREE.ShaderMaterial({
-  uniforms: { eye: { value: new THREE.Vector3() }, ao: { value: AO_STRENGTH }, shadow: { value: SHADOW_STRENGTH }, grad: { value: 0 }, gradLen: { value: 40 }, center: { value: new THREE.Vector2() }, radius: { value: 1e9 } },
+  uniforms: { eye: { value: new THREE.Vector3() }, ao: { value: AO_STRENGTH }, shadow: { value: SHADOW_STRENGTH }, grad: { value: 0 }, gradLen: { value: 1 }, center: { value: new THREE.Vector2() }, radius: { value: 1e9 } },
   vertexShader: `attribute float d; varying float vD; varying vec2 vXY;
     ${TO_EYE}
     void main() { vD = d; vXY = position.xy; gl_Position = projectionMatrix * vec4(toEye(position), 1.0); }`,
@@ -184,19 +188,21 @@ export const SHADE_MATERIAL = new THREE.ShaderMaterial({
  * На рельефе (onBase = 1) земля — плоскость на отметке основания объекта.
  */
 export const CAST_MATERIAL = new THREE.ShaderMaterial({
-  uniforms: { eye: { value: new THREE.Vector3() }, shadow: { value: SHADOW_STRENGTH }, grad: { value: 0 }, gradLen: { value: 40 }, k: { value: new THREE.Vector2(SUN.x / SUN.z, SUN.y / SUN.z) }, center: { value: new THREE.Vector2() }, radius: { value: 1e9 }, onBase: { value: 0 }, groundZ: { value: 0 } },
-  vertexShader: `uniform vec2 k; uniform float onBase; uniform float groundZ; varying vec2 vXY; varying float vDist;
+  uniforms: { eye: { value: new THREE.Vector3() }, shadow: { value: SHADOW_STRENGTH }, grad: { value: 0 }, gradLen: { value: 1 }, top: { value: 1 }, height: { value: 0 }, k: { value: new THREE.Vector2(SUN.x / SUN.z, SUN.y / SUN.z) }, center: { value: new THREE.Vector2() }, radius: { value: 1e9 }, onBase: { value: 0 }, groundZ: { value: 0 } },
+  vertexShader: `uniform vec2 k; uniform float onBase; uniform float groundZ; uniform float top; uniform float height; varying vec2 vXY; varying float vDist;
     ${TO_EYE}
     void main() {
-      vec4 w = vec4(position, 1.0), o = vec4(0.0, 0.0, groundZ, 1.0);
+      vec4 w = vec4(position, 1.0), o = vec4(0.0, 0.0, groundZ, 1.0), t = vec4(0.0, 0.0, top, 1.0);
       #ifdef USE_INSTANCING
-      w = instanceMatrix * w; o = instanceMatrix * o;
+      w = instanceMatrix * w; o = instanceMatrix * o; t = instanceMatrix * t;
       #endif
-      w = modelMatrix * w; o = modelMatrix * o;
+      w = modelMatrix * w; o = modelMatrix * o; t = modelMatrix * t;
+      // Высота объекта: задана (модели, ограждения) или от земли до верха экземпляра (деревья)
+      float full = height > 0.0 ? height : max(t.z - o.z, 0.1);
       // Земля — z = 0, а на рельефе — отметка основания объекта (начало его координат: дерево, модель)
       float base = onBase * o.z;
       float up = max(w.z - base, 0.0);
-      vDist = length(k) * up;
+      vDist = up / full;
       w.xy -= k * up;
       w.z = base;
       w.xyz = toEye(w.xyz);
@@ -221,7 +227,8 @@ export const CAST_MATERIAL = new THREE.ShaderMaterial({
  * Объекты, отбрасывающие тень, и матрица их группы (локальные метры → Mercator). groundZ — где у объекта (экземпляра)
  * в его собственных координатах земля: у кроны дерева начало — низ кроны, а земля ниже (на рельефе тень — на ней).
  */
-export interface ShadeCasters { objects: THREE.Object3D[]; model: THREE.Matrix4; groundZ?: number }
+/** groundZ — земля, top — верх объекта (в координатах экземпляра); height — высота объекта, м (вместо top). */
+export interface ShadeCasters { objects: THREE.Object3D[]; model: THREE.Matrix4; groundZ?: number; top?: number; height?: number }
 
 /**
  * Те же материалы — прямо на карту, с проверкой глубины (рельеф: бровка перед тенью её закрывает): цвет карты

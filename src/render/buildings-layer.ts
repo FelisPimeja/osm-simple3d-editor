@@ -1045,6 +1045,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       if (direct) cameraEye(main.clone().multiply(model), mat.uniforms.eye.value);
     };
     shadeMat.uniforms.shadow.value = this.graphics.shadows ? CONTRAST.shadow : 0;
+    shadeMat.uniforms.grad.value = CONTRAST.grad; shadeMat.uniforms.gradLen.value = CONTRAST.gradLen;
     shadeMat.uniforms.ao.value = this.graphics.groundContact ? AO_STRENGTH : 0;
     renderer.resetState();
     const clearStencil = () => { gl.stencilMask(0xff); gl.clearStencil(0); gl.clear(gl.STENCIL_BUFFER_BIT); };
@@ -1062,6 +1063,7 @@ export class BuildingsLayer implements CustomLayerInterface {
       this.shadeScene.remove(m);
     }
     castMat.uniforms.shadow.value = CONTRAST.shadow;
+    castMat.uniforms.grad.value = CONTRAST.grad; castMat.uniforms.gradLen.value = CONTRAST.gradLen;
     castMat.uniforms.onBase.value = ground.on ? 1 : 0;
     this.shadeScene.overrideMaterial = castMat;
     for (const c of casters) {

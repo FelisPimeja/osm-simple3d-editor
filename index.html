@@ -114,6 +114,8 @@
       <label class="toggle sub" title="Размытые края теней на земле; без этого — чёткий силуэт"><input type="checkbox" data-gfx="softShadows" /> Мягкие тени</label>
       <div class="light-tuner sub" id="shadow-tuner">
         <label>Насыщенность <input type="range" min="0.05" max="0.8" step="0.05" data-light="shadow" /> <output></output></label>
+        <label title="Насколько тень бледнеет вдали от объекта">Градиент <input type="range" min="0" max="1" step="0.05" data-light="grad" /> <output></output></label>
+        <label title="На каком расстоянии от объекта тень бледнеет полностью, м">Длина, м <input type="range" min="5" max="150" step="5" data-light="gradLen" /> <output></output></label>
       </div>
       <label class="toggle" title="Мягкое затемнение земли вдоль стен зданий (на карте и на рельефе)"><input type="checkbox" data-gfx="groundContact" /> Затемнение земли у стен</label>
       <h2 class="panel-sec">Диагностика</h2>

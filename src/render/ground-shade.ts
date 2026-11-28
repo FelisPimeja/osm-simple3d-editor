@@ -30,7 +30,8 @@ export interface ShadeSource {
 
 export interface ShadeOptions { shadow: boolean; ao: boolean }
 
-/** Вершина затенения — четвёрка (x, y, z, d): z — земля, d — расстояние от стены в долях AO_RADIUS (0…1), у тени −1. */
+/** Вершина затенения — четвёрка (x, y, z, d): z — земля, d — расстояние от стены в долях AO_RADIUS (0…1),
+ *  у тени −1 − (насколько вершина тени отнесена от своей точки объекта по горизонтали, м) — для градиента. */
 const STRIDE = 4;
 const cache = new WeakMap<Float32Array, { key: string; part: Float32Array }>();
 
@@ -60,11 +61,11 @@ export function shadePart(s: ShadeSource, o: ShadeOptions): Float32Array {
     // Иначе засыпанная склоном крыша красила бы тенью рельеф над собой
     const kx = SUN.x / SUN.z, ky = SUN.y / SUN.z, p = s.positions;
     const cast = (x: number, y: number, z: number, above: number, out: number[]) => {
-      if (above <= 1e-6) { out.push(x, y, h(x, y)); return; }
+      if (above <= 1e-6) { out.push(x, y, h(x, y), 0); return; }
       let t = above;
       if (s.height) for (let it = 0; it < 4; it++) t = Math.max(0, 0.5 * t + 0.5 * (z - h(x - kx * t, y - ky * t)));
       const sx = x - kx * t, sy = y - ky * t;
-      out.push(sx, sy, s.height ? h(sx, sy) : z - t);
+      out.push(sx, sy, s.height ? h(sx, sy) : z - t, t * Math.hypot(kx, ky));
     };
     const poly: number[] = [], shadow: number[] = [];
     for (let i = 0; i < s.vertices * 3; i += 9) {
@@ -83,10 +84,10 @@ export function shadePart(s: ShadeSource, o: ShadeOptions): Float32Array {
       shadow.length = 0;
       for (let k = 0; k < poly.length; k += 4) cast(poly[k], poly[k + 1], poly[k + 2], poly[k + 3], shadow);
       // Веер из первой вершины; сплющенные в отрезок треугольники (стены вдоль луча) ничего не закрывают
-      for (let k = 3; k + 3 < shadow.length; k += 3) {
-        const ax = shadow[0], ay = shadow[1], bx = shadow[k], by = shadow[k + 1], cx = shadow[k + 3], cy = shadow[k + 4];
+      for (let k = 4; k + 4 < shadow.length; k += 4) {
+        const ax = shadow[0], ay = shadow[1], bx = shadow[k], by = shadow[k + 1], cx = shadow[k + 4], cy = shadow[k + 5];
         if (Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) < 1e-4) continue;
-        v(ax, ay, shadow[2], -1); v(bx, by, shadow[k + 2], -1); v(cx, cy, shadow[k + 5], -1);
+        v(ax, ay, shadow[2], -1 - shadow[3]); v(bx, by, shadow[k + 2], -1 - shadow[k + 3]); v(cx, cy, shadow[k + 6], -1 - shadow[k + 7]);
       }
     }
   }
@@ -159,13 +160,15 @@ const FADE = `float fade(vec2 p) {
 
 /** Материал буфера затенения: в красный канал — затемнение, наложение по максимуму. */
 export const SHADE_MATERIAL = new THREE.ShaderMaterial({
-  uniforms: { eye: { value: new THREE.Vector3() }, ao: { value: AO_STRENGTH }, shadow: { value: SHADOW_STRENGTH }, center: { value: new THREE.Vector2() }, radius: { value: 1e9 } },
+  uniforms: { eye: { value: new THREE.Vector3() }, ao: { value: AO_STRENGTH }, shadow: { value: SHADOW_STRENGTH }, grad: { value: 0 }, gradLen: { value: 40 }, center: { value: new THREE.Vector2() }, radius: { value: 1e9 } },
   vertexShader: `attribute float d; varying float vD; varying vec2 vXY;
     ${TO_EYE}
     void main() { vD = d; vXY = position.xy; gl_Position = projectionMatrix * vec4(toEye(position), 1.0); }`,
   fragmentShader: `uniform float ao; uniform float shadow; uniform vec2 center; uniform float radius; varying float vD; varying vec2 vXY;
+    uniform float grad; uniform float gradLen;
+    float gradient(float dist) { return 1.0 - grad * clamp(dist / gradLen, 0.0, 1.0); }
     ${FADE}
-    void main() { float f = fade(vXY); float t = clamp(1.0 - vD, 0.0, 1.0); float v = (vD < -0.5 ? shadow : ao * t * t) * f; gl_FragColor = vec4(v, v, v, 1.0); }`,
+    void main() { float f = fade(vXY); float t = clamp(1.0 - vD, 0.0, 1.0); float v = (vD < -0.5 ? shadow * gradient(-1.0 - vD) : ao * t * t) * f; gl_FragColor = vec4(v, v, v, 1.0); }`,
   blending: THREE.CustomBlending,
   blendEquation: THREE.MaxEquation,
   blendSrc: THREE.OneFactor,
@@ -181,8 +184,8 @@ export const SHADE_MATERIAL = new THREE.ShaderMaterial({
  * На рельефе (onBase = 1) земля — плоскость на отметке основания объекта.
  */
 export const CAST_MATERIAL = new THREE.ShaderMaterial({
-  uniforms: { eye: { value: new THREE.Vector3() }, shadow: { value: SHADOW_STRENGTH }, k: { value: new THREE.Vector2(SUN.x / SUN.z, SUN.y / SUN.z) }, center: { value: new THREE.Vector2() }, radius: { value: 1e9 }, onBase: { value: 0 }, groundZ: { value: 0 } },
-  vertexShader: `uniform vec2 k; uniform float onBase; uniform float groundZ; varying vec2 vXY;
+  uniforms: { eye: { value: new THREE.Vector3() }, shadow: { value: SHADOW_STRENGTH }, grad: { value: 0 }, gradLen: { value: 40 }, k: { value: new THREE.Vector2(SUN.x / SUN.z, SUN.y / SUN.z) }, center: { value: new THREE.Vector2() }, radius: { value: 1e9 }, onBase: { value: 0 }, groundZ: { value: 0 } },
+  vertexShader: `uniform vec2 k; uniform float onBase; uniform float groundZ; varying vec2 vXY; varying float vDist;
     ${TO_EYE}
     void main() {
       vec4 w = vec4(position, 1.0), o = vec4(0.0, 0.0, groundZ, 1.0);
@@ -192,15 +195,19 @@ export const CAST_MATERIAL = new THREE.ShaderMaterial({
       w = modelMatrix * w; o = modelMatrix * o;
       // Земля — z = 0, а на рельефе — отметка основания объекта (начало его координат: дерево, модель)
       float base = onBase * o.z;
-      w.xy -= k * max(w.z - base, 0.0);
+      float up = max(w.z - base, 0.0);
+      vDist = length(k) * up;
+      w.xy -= k * up;
       w.z = base;
       w.xyz = toEye(w.xyz);
       vXY = w.xy;
       gl_Position = projectionMatrix * viewMatrix * w;
     }`,
-  fragmentShader: `uniform float shadow; uniform vec2 center; uniform float radius; varying vec2 vXY;
+  fragmentShader: `uniform float shadow; uniform vec2 center; uniform float radius; varying vec2 vXY; varying float vDist;
+    uniform float grad; uniform float gradLen;
+    float gradient(float dist) { return 1.0 - grad * clamp(dist / gradLen, 0.0, 1.0); }
     ${FADE}
-    void main() { float v = shadow * fade(vXY); gl_FragColor = vec4(v, v, v, 1.0); }`,
+    void main() { float v = shadow * gradient(vDist) * fade(vXY); gl_FragColor = vec4(v, v, v, 1.0); }`,
   blending: THREE.CustomBlending,
   blendEquation: THREE.MaxEquation,
   blendSrc: THREE.OneFactor,

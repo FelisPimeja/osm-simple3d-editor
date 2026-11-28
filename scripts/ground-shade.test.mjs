@@ -21,7 +21,7 @@ test('shadow is cast away from the sun and lies on the ground', () => {
   let maxX = -Infinity, maxY = -Infinity;
   for (let i = 0; i < pos.count; i++) {
     assert.equal(pos.getZ(i), 0);
-    assert.equal(d.getX(i), -1);
+    assert.ok(d.getX(i) <= -1);
     maxX = Math.max(maxX, pos.getX(i)); maxY = Math.max(maxY, pos.getY(i));
   }
   // Солнце на юго-западе — тень на северо-восток, длина h · горизонталь/вертикаль
@@ -42,7 +42,7 @@ test('ground occlusion bands reach AO_RADIUS from the footprint, only for ground
 test('only enabled parts are built, and a building is built once per options', () => {
   const b = box(10);
   const shadowOnly = m.shadePart(b, { shadow: true, ao: false });
-  for (let i = 3; i < shadowOnly.length; i += 4) assert.equal(shadowOnly[i], -1);
+  for (let i = 3; i < shadowOnly.length; i += 4) assert.ok(shadowOnly[i] <= -1);
   const aoOnly = m.shadePart(b, { shadow: false, ao: true });
   for (let i = 3; i < aoOnly.length; i += 4) assert.ok(aoOnly[i] >= 0);
   assert.equal(m.shadePart(b, { shadow: false, ao: true }), aoOnly);
@@ -95,4 +95,15 @@ test('clipped shadow vertices stay next to the building', () => {
   const slope = (x, y) => 5 - 0.5 * y;
   const part = m.shadePart({ ...box(3), rings: undefined, height: slope, ground: 5 }, { shadow: true, ao: false });
   for (let i = 0; i < part.length; i += 4) assert.ok(part[i] > -1 && part[i] < 15 && part[i + 1] > -1 && part[i + 1] < 15, `${part[i]}, ${part[i + 1]}`);
+});
+
+test('shadow vertices carry their distance from the object for the gradient', () => {
+  const part = m.shadePart({ ...box(10), rings: undefined }, { shadow: true, ao: false });
+  const reach = Math.hypot(m.SUN.x, m.SUN.y) / m.SUN.z * 10;
+  let near = 0, far = 0;
+  for (let i = 3; i < part.length; i += 4) {
+    const dist = -1 - part[i];
+    if (Math.abs(dist) < 1e-4) near++; else { assert.ok(Math.abs(dist - reach) < 1e-3, `${dist}`); far++; }
+  }
+  assert.ok(near > 0 && far > 0);
 });

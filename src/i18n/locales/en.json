@@ -1834,5 +1834,9 @@
   "Рассеянный": "Ambient",
   "Солнце": "Sun",
   "Экспозиция": "Exposure",
-  "Насыщенность": "Strength"
+  "Насыщенность": "Strength",
+  "Градиент": "Gradient",
+  "Длина, м": "Length, m",
+  "Насколько тень бледнеет вдали от объекта": "How much the shadow fades away from the object",
+  "На каком расстоянии от объекта тень бледнеет полностью, м": "Distance from the object at which the fade is complete, m"
 }

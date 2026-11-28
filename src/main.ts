@@ -76,6 +76,7 @@ import { isWood, ringsFromMembers, rowFromWay, treeFromNode, woodFromRings, wood
 import { isBridge, isRailTags, isTunnel, PASSAGE_HEIGHT, passageHeight, passageWidth, roadLevel, type PassageWay, type RoadWay } from './osm/roads';
 import { indoorLevelInfo, partLevels, withIndoorLevels, MAX_LEVEL_STEP, MIN_LEVEL_STEP, type Level, type LevelInfo } from './osm/levels';
 import { BuildingsLayer, setNodeExists, doorWings, ENTRANCE_HEIGHT, ENTRANCE_WIDTH, GARAGE_WIDTH, TOILET_DOOR_WIDTH, entranceZ, entrancePlace, levelGrid, windowOutline, windowSize, type WindowHandle, isHiddenUnderground, setGround, setInheritance, setLevelGrid, setPassages, type EntrancePlace, type GraphicsOptions, type IndoorItem, type ContextPlan, type EscalatorItem, type StairsRails, type RenderedFeature, type SnapHit, type SnapKind } from './render/buildings-layer';
+import { CONTRAST, setContrastValues } from './render/look';
 import { gridKeyOfPoint, queryTileBuildings, tileFeatureIdsByTile, type TileBuildingFeature } from './tiles/tile-features';
 import { OverpassTiles, type TileSource } from './view/overpass-tiles';
 import { Dem, DEM_ATTRIBUTION } from './view/dem';
@@ -1752,7 +1753,27 @@ setGround(buildingGround);
 // Карта могла загрузиться раньше, чем модуль дошёл досюда (top-level await выше): тогда — сразу, иначе — по load
 if (mapLoaded) syncTerrain(); else map.once('load', syncTerrain);
 
+// Подстройка контрастного света: ползунки под «Контрастный свет», значения — на этом устройстве
+{
+  const KEY = 'osm3d.lightTuner';
+  let saved: Partial<typeof CONTRAST> = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) ?? '{}'); } catch { /* нет хранилища */ }
+  setContrastValues(saved);
+  for (const input of document.querySelectorAll<HTMLInputElement>('[data-light]')) {
+    const k = input.dataset.light as keyof typeof CONTRAST;
+    const out = input.nextElementSibling as HTMLOutputElement;
+    input.value = String(CONTRAST[k]); out.value = CONTRAST[k].toFixed(2);
+    input.addEventListener('input', () => {
+      setContrastValues({ [k]: Number(input.value) });
+      out.value = Number(input.value).toFixed(2);
+      try { localStorage.setItem(KEY, JSON.stringify(CONTRAST)); } catch { /* нет хранилища */ }
+      map.triggerRepaint();
+    });
+  }
+}
+
 function applyGraphics() {
+  document.getElementById('light-tuner')!.hidden = !gfx.contrastLight;
   syncTerrain();
   syncContours3d();
   overpassLayer.setGraphics(gfx);

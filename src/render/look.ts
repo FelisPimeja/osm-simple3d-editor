@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 
 /** Множитель яркости в контрастном режиме: рассеянный свет слабее, солнце сильнее. */
-export const CONTRAST = { ambient: 0.7, sun: 1.45 };
+export const CONTRAST = { ambient: 0.7, sun: 1.45, exposure: 1 };
 
 let on = false;
 const lights = new Set<WeakRef<THREE.Light>>();
@@ -33,7 +33,14 @@ export function setContrastLight(v: boolean) {
 
 export const contrastLight = () => on;
 
+/** Подстройка из настроек: множители рассеянного света и солнца, экспозиция тонмаппинга. */
+export function setContrastValues(v: Partial<typeof CONTRAST>) {
+  Object.assign(CONTRAST, v);
+  for (const r of lights) { const l = r.deref(); if (l) apply(l); else lights.delete(r); }
+}
+
 /** Тонмаппинг для рендерера слоя — вызывать перед отрисовкой кадра. */
 export function toneMapping(renderer: THREE.WebGLRenderer) {
   renderer.toneMapping = on ? THREE.NeutralToneMapping : THREE.NoToneMapping;
+  renderer.toneMappingExposure = CONTRAST.exposure;
 }

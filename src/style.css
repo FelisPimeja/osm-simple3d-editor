@@ -1075,3 +1075,9 @@ body:not(.mobile):has(#mobile-card:not([hidden])) #right-col { bottom: calc(var(
 #mobile-card .mc-actions button { padding: 4px 10px; font-size: 13px; border-radius: 6px; }
 #mobile-card button.mc-main { align-self: stretch; max-width: 96px; white-space: normal; line-height: 1.2; }
 #mobile-card .mc-actions.mc-side { margin-top: 0; flex: none; }
+
+/* Подстройка контрастного света (Качество) */
+.light-tuner { display: grid; gap: 2px; padding: 2px 0 6px 24px; font-size: 12px; }
+.light-tuner[hidden] { display: none; }
+.light-tuner label { display: grid; grid-template-columns: 80px 1fr 36px; align-items: center; gap: 6px; }
+.light-tuner input { width: 100%; }
